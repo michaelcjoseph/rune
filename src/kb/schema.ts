@@ -16,13 +16,22 @@ This knowledge base is a personal wiki compiled by an AI assistant from raw sour
 
 ## Page Templates
 
+Every wiki page MUST begin with a YAML frontmatter block. This frontmatter enables structured search filtering and temporal tracking.
+
 ### Entity Page (wiki/entities/)
 
 \`\`\`
+---
+type: entity
+tags: [tag1, tag2]
+related: [other-entity, topic-page]
+created: YYYY-MM-DD
+last-verified: YYYY-MM-DD
+valid-until: YYYY-MM-DD  # optional — only for time-sensitive facts
+---
 # [Entity Name]
 
 **Type:** person | company | project | product
-**Tags:** #tag1 #tag2
 
 ## Overview
 [2-3 sentence summary]
@@ -41,9 +50,14 @@ This knowledge base is a personal wiki compiled by an AI assistant from raw sour
 ### Concept Page (wiki/concepts/)
 
 \`\`\`
+---
+type: concept
+tags: [tag1, tag2]
+related: [concept-a, concept-b]
+created: YYYY-MM-DD
+last-verified: YYYY-MM-DD
+---
 # [Concept Name]
-
-**Tags:** #tag1 #tag2
 
 ## Definition
 [Clear, concise definition]
@@ -64,9 +78,14 @@ This knowledge base is a personal wiki compiled by an AI assistant from raw sour
 ### Topic Page (wiki/topics/)
 
 \`\`\`
+---
+type: topic
+tags: [tag1, tag2]
+related: [entity-1, concept-a]
+created: YYYY-MM-DD
+last-verified: YYYY-MM-DD
+---
 # [Topic Name]
-
-**Tags:** #tag1 #tag2
 
 ## Overview
 [3-5 sentence synthesis of current understanding]
@@ -87,6 +106,16 @@ This knowledge base is a personal wiki compiled by an AI assistant from raw sour
 
 ## Conventions
 
+### Frontmatter
+- Every wiki page MUST start with a YAML frontmatter block (between \`---\` delimiters)
+- Required fields: \`type\`, \`tags\`, \`related\`, \`created\`, \`last-verified\`
+- \`type\`: one of \`entity\`, \`concept\`, \`topic\`, \`comparison\`
+- \`tags\`: array of topic tags (see Tags section below), without # prefix
+- \`related\`: array of kebab-case page names this page links to (no [[ ]] brackets)
+- \`created\`: date the page was first created (YYYY-MM-DD)
+- \`last-verified\`: date the page content was last reviewed/updated (YYYY-MM-DD) — set to today on every edit
+- \`valid-until\`: (optional) expiry date for time-sensitive facts (e.g., someone's current role, active projects). Omit for evergreen content.
+
 ### Wikilinks
 - Use [[page-name]] for all internal links
 - Page names are kebab-case: [[onchain-identity]], [[vitalik-buterin]]
@@ -94,9 +123,9 @@ This knowledge base is a personal wiki compiled by an AI assistant from raw sour
 - When creating a new page, always add a link from at least one existing page
 
 ### Tags
-Use #topic tags from this list:
-#ai #crypto #energy #demographics #governance #health #productivity
-#investing #psychology #writing #engineering #product #design
+Use tags from this list (in frontmatter as plain strings, in body text with # prefix):
+ai, crypto, energy, demographics, governance, health, productivity,
+investing, psychology, writing, engineering, product, design
 
 Pages can have multiple tags.
 

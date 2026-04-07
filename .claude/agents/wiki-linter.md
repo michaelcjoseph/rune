@@ -26,13 +26,15 @@ You are operating inside an Obsidian vault. The knowledge base lives at `knowled
 
 Run these checks in order:
 
-1. **Index integrity**: Every file in `knowledge/wiki/` should have an entry in `knowledge/index.md`, and vice versa.
-2. **Dead wikilinks**: Find `[[links]]` in wiki pages that point to nonexistent pages.
-3. **Orphan pages**: Pages with no inbound links from other wiki pages.
-4. **Missing cross-references**: Pages that discuss the same topics but don't link to each other.
-5. **Contradictions**: Statements in one page that conflict with statements in another.
-6. **Missing pages**: Concepts or entities mentioned frequently across multiple pages but lacking their own dedicated page.
-7. **Stale content**: Pages with outdated claims that newer sources may have superseded.
+1. **Frontmatter integrity**: Every wiki page must have valid YAML frontmatter with required fields (`type`, `tags`, `related`, `created`, `last-verified`). Report pages missing frontmatter or required fields.
+2. **Temporal validity**: Check `valid-until` dates — flag pages where the date has passed as "expired facts" (critical). Check `last-verified` dates — flag pages with `valid-until` set where `last-verified` is older than 90 days as "verification overdue" (warning).
+3. **Index integrity**: Every file in `knowledge/wiki/` should have an entry in `knowledge/index.md`, and vice versa.
+4. **Dead wikilinks**: Find `[[links]]` in wiki pages that point to nonexistent pages.
+5. **Orphan pages**: Pages with no inbound links from other wiki pages.
+6. **Missing cross-references**: Pages that discuss the same topics but don't link to each other. Cross-check against the `related` field in frontmatter — if `related` lists a page but the body doesn't link it, that's a missing cross-reference.
+7. **Contradictions**: Statements in one page that conflict with statements in another.
+8. **Missing pages**: Concepts or entities mentioned frequently across multiple pages but lacking their own dedicated page.
+9. **Stale content**: Pages with outdated claims that newer sources may have superseded.
 
 ## Output Format
 
@@ -55,6 +57,9 @@ Produce a structured report:
 - Index entries: X
 - Orphan pages: X
 - Dead links: X
+- Pages missing frontmatter: X
+- Expired facts (past valid-until): X
+- Verification overdue: X
 ```
 
 After producing the report, append a LINT entry to `knowledge/log.md`.

@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config from '../config.js';
 
@@ -6,6 +7,19 @@ interface SearchResult {
   file: string;
   line: number;
   content: string;
+}
+
+interface WikiFrontmatter {
+  type?: string;
+  tags?: string[];
+  related?: string[];
+  created?: string;
+  'last-verified'?: string;
+  'valid-until'?: string;
+}
+
+interface FilteredSearchResult extends SearchResult {
+  frontmatter?: WikiFrontmatter;
 }
 
 /**
@@ -63,4 +77,87 @@ export function searchVault(
   } catch {
     return []; // No matches or rg not available
   }
+}
+
+/**
+ * Parse YAML frontmatter from a markdown file.
+ * Returns undefined if no frontmatter found.
+ */
+export function parseFrontmatter(filePath: string): WikiFrontmatter | undefined {
+  try {
+    const fullPath = filePath.startsWith('/')
+      ? filePath
+      : join(config.VAULT_DIR, filePath);
+    const content = readFileSync(fullPath, 'utf-8');
+
+    if (!content.startsWith('---')) return undefined;
+    const endIdx = content.indexOf('---', 3);
+    if (endIdx === -1) return undefined;
+
+    const yaml = content.slice(3, endIdx).trim();
+    const fm: WikiFrontmatter = {};
+
+    for (const line of yaml.split('\n')) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const key = line.slice(0, colonIdx).trim();
+      const rawVal = line.slice(colonIdx + 1).trim();
+
+      if (key === 'type') {
+        fm.type = rawVal;
+      } else if (key === 'tags' || key === 'related') {
+        // Parse YAML array: [a, b, c]
+        const match = rawVal.match(/^\[(.+)\]$/);
+        if (match) {
+          fm[key] = match[1]!.split(',').map((s) => s.trim());
+        }
+      } else if (key === 'created' || key === 'last-verified' || key === 'valid-until') {
+        fm[key] = rawVal;
+      }
+    }
+
+    return fm;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Search the wiki with optional metadata filtering.
+ * Filters results by type and/or tags using YAML frontmatter.
+ */
+export function searchWithFilter(
+  query: string,
+  filters?: { type?: string; tags?: string[] },
+  options?: { maxResults?: number },
+): FilteredSearchResult[] {
+  // Search only within the wiki directory
+  const results = searchVault(query, {
+    directory: 'knowledge/wiki',
+    maxResults: (options?.maxResults ?? 20) * 3, // Over-fetch to account for filtering
+  });
+
+  if (!filters?.type && !filters?.tags?.length) {
+    return results.slice(0, options?.maxResults ?? 20);
+  }
+
+  const filtered: FilteredSearchResult[] = [];
+
+  for (const result of results) {
+    const fm = parseFrontmatter(result.file);
+    if (!fm) continue;
+
+    if (filters.type && fm.type !== filters.type) continue;
+
+    if (filters.tags?.length) {
+      const pageTags = fm.tags || [];
+      const hasMatchingTag = filters.tags.some((t) => pageTags.includes(t));
+      if (!hasMatchingTag) continue;
+    }
+
+    filtered.push({ ...result, frontmatter: fm });
+    if (filtered.length >= (options?.maxResults ?? 20)) break;
+  }
+
+  return filtered;
 }

@@ -13,17 +13,21 @@ export async function lintKB(): Promise<{ success: boolean; report: string }> {
   const prompt = `Run a health check on the knowledge base.
 
 Follow the lint workflow:
-1. Read knowledge/index.md to get the full page inventory
-2. Read wiki pages and check for:
+1. Read knowledge/schema.md for conventions (especially frontmatter requirements)
+2. Read knowledge/index.md to get the full page inventory
+3. Read wiki pages and check for:
+   - Missing/invalid YAML frontmatter (every page needs type, tags, related, created, last-verified)
+   - Expired temporal facts (valid-until date has passed — critical issue)
+   - Verification overdue (last-verified >90 days old on pages with valid-until set — warning)
    - Orphan pages (exist in wiki/ but not in index.md)
    - Dead wikilinks (link to pages that don't exist)
-   - Missing cross-references (pages that should link to each other)
+   - Missing cross-references (pages that should link to each other; check related field vs body links)
    - Stale content (pages not updated in >90 days with time-sensitive info)
    - Contradictions between pages
    - Missing pages (concepts mentioned frequently but lacking a dedicated page)
    - Index drift (index summary doesn't match page content)
-3. Produce a structured report with findings and recommendations
-4. Append a LINT entry to knowledge/log.md`;
+4. Produce a structured report with findings and recommendations
+5. Append a LINT entry to knowledge/log.md`;
 
   const result = await runAgent('wiki-linter', prompt);
 

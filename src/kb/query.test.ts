@@ -5,20 +5,22 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
-vi.mock('./search.js', () => ({ searchVault: vi.fn() }));
+vi.mock('./search.js', () => ({ searchVault: vi.fn(), searchWithFilter: vi.fn() }));
 vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
 
 const { runAgent } = await import('../ai/claude.js');
-const { searchVault } = await import('./search.js');
+const { searchVault, searchWithFilter } = await import('./search.js');
 const { queryKB } = await import('./query.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const searchMock = searchVault as unknown as ReturnType<typeof vi.fn>;
+const filterMock = searchWithFilter as unknown as ReturnType<typeof vi.fn>;
 
 describe('kb/query', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('returns synthesized answer on success', async () => {
+    filterMock.mockReturnValue([{ file: 'wiki/ai.md', line: 1, content: 'AI is cool' }]);
     searchMock.mockReturnValue([{ file: 'wiki/ai.md', line: 1, content: 'AI is cool' }]);
     agentMock.mockResolvedValue({ text: 'Here is the answer', error: null });
 
@@ -27,6 +29,7 @@ describe('kb/query', () => {
   });
 
   it('includes search context in agent prompt', async () => {
+    filterMock.mockReturnValue([{ file: 'wiki/test.md', line: 5, content: 'relevant' }]);
     searchMock.mockReturnValue([{ file: 'wiki/test.md', line: 5, content: 'relevant' }]);
     agentMock.mockResolvedValue({ text: 'answer', error: null });
 
@@ -34,7 +37,21 @@ describe('kb/query', () => {
     expect(agentMock).toHaveBeenCalledWith('kb-query', expect.stringContaining('relevant'));
   });
 
+  it('infers entity type filter for "who is" questions', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('who is Vitalik Buterin?');
+    expect(filterMock).toHaveBeenCalledWith(
+      'who is Vitalik Buterin?',
+      { type: 'entity' },
+      { maxResults: 10 },
+    );
+  });
+
   it('works with no search results', async () => {
+    filterMock.mockReturnValue([]);
     searchMock.mockReturnValue([]);
     agentMock.mockResolvedValue({ text: 'no info', error: null });
 
@@ -43,6 +60,7 @@ describe('kb/query', () => {
   });
 
   it('returns error when agent fails', async () => {
+    filterMock.mockReturnValue([]);
     searchMock.mockReturnValue([]);
     agentMock.mockResolvedValue({ text: null, error: 'timeout' });
 

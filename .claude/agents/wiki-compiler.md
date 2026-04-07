@@ -50,6 +50,27 @@ When asked to ingest a source:
 8. Update `knowledge/index.md` with new/changed entries (one line per page)
 9. Append an entry to `knowledge/log.md` recording what was done
 
+## Frontmatter Rules
+
+Every wiki page MUST begin with a YAML frontmatter block. This is critical for search filtering and temporal tracking.
+
+- **New pages**: set `created` and `last-verified` to today's date
+- **Updated pages**: update `last-verified` to today's date, preserve `created`
+- **Time-sensitive facts** (e.g., someone's current role, an active project, a price claim): set `valid-until` to a reasonable expiry date. Omit for evergreen content.
+- **`related` field**: list kebab-case page names (without `[[ ]]` brackets) for pages this content links to
+- **`tags` field**: use tags from the schema tag list as plain strings (no # prefix)
+
+Example frontmatter for a new entity page:
+```yaml
+---
+type: entity
+tags: [ai, engineering]
+related: [transformer-architecture, openai]
+created: 2026-04-07
+last-verified: 2026-04-07
+---
+```
+
 ## Quality Standards
 
 - Neutral, factual, concise tone

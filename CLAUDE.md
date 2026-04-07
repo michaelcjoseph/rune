@@ -34,6 +34,9 @@ src/
 │   ├── queue.ts             # JSON-file ingestion queue (enqueue/dequeue/clear)
 │   └── schema.ts            # Default schema.md content for new knowledge bases
 ├── jobs/                    # Scheduled cron jobs (morning-prep, whoop, nightly, nudges)
+├── mcp/
+│   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
+│   └── index.ts             # Standalone stdio entry point for Claude Code
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
 │   ├── whoop/               # OAuth2 + Whoop API (future)
@@ -61,6 +64,7 @@ src/
 - Git commits happen at key moments (morning prep, /fresh, nightly), not on timers
 - Vault files use `readVaultFile`/`writeVaultFile` from `src/vault/files.ts` — paths are relative to vault root
 - KB agents **must not** write outside `knowledge/`
+- Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
 
 ## Running
 
@@ -103,6 +107,23 @@ Required:
 | architecture-reviewer | `.claude/agents/architecture-reviewer.md` | Review for system-level architectural issues |
 | code-simplifier | `.claude/agents/code-simplifier.md` | Check for dead code, over-abstraction, duplication |
 | docs-sync | `.claude/agents/docs-sync.md` | Update CLAUDE.md and docs after structural changes |
+
+## MCP Server
+
+The knowledge base is exposed as an MCP server so any Claude Code session can query, search, ingest, and lint the KB.
+
+**Config**: `.claude/settings.json` registers `jarvis-kb` MCP server.
+
+**Tools exposed**:
+| Tool | Description |
+|---|---|
+| `kb_query` | Synthesized answer from KB with wikilink citations |
+| `kb_search` | Search wiki with optional type/tag filtering |
+| `kb_ingest` | Ingest a vault file into the KB |
+| `kb_stats` | Page counts and recent log entries |
+| `kb_lint` | Health check report |
+
+**Running standalone**: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`
 
 ## Reference
 
