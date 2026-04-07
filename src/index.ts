@@ -1,3 +1,10 @@
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import dotenv from 'dotenv';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '..', '.env.local') });
+
 import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { restoreSessions, persistSessions } from './vault/sessions.js';

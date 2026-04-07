@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -12,8 +12,8 @@ const execOpts = {
 
 export function gitCommitAndPush(message: string): void {
   try {
-    execSync('git add -A', execOpts);
-    execSync(`git commit -m "${message}"`, execOpts);
+    execFileSync('git', ['add', '-A'], execOpts);
+    execFileSync('git', ['commit', '-m', message], execOpts);
   } catch (err) {
     const stderr = (err as { stderr?: Buffer })?.stderr?.toString() || '';
     if (!stderr.includes('nothing to commit')) {
@@ -23,7 +23,7 @@ export function gitCommitAndPush(message: string): void {
   }
 
   try {
-    execSync('git push', execOpts);
+    execFileSync('git', ['push'], execOpts);
   } catch (err) {
     log.error('Git push error', { error: (err as Error).message });
   }

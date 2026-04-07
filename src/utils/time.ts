@@ -27,10 +27,3 @@ export function getTimestamp(): string {
   });
 }
 
-export function getISODate(): string {
-  return new Date().toISOString();
-}
-
-export function getLocalDate(): string {
-  return new Date().toLocaleDateString('en-CA', { timeZone: tz });
-}

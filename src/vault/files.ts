@@ -32,7 +32,7 @@ export function vaultFileExists(relativePath: string): boolean {
 }
 
 /** List markdown files in a vault directory. Returns relative paths. */
-export function listVaultFiles(relativeDir: string, pattern = '*.md'): string[] {
+export function listVaultFiles(relativeDir: string): string[] {
   const fullDir = join(config.VAULT_DIR, relativeDir);
   if (!existsSync(fullDir)) return [];
 
@@ -45,7 +45,7 @@ export function listVaultFiles(relativeDir: string, pattern = '*.md'): string[] 
       if (entry.isDirectory()) {
         walk(fullPath);
       } else if (entry.isFile()) {
-        if (pattern === '*' || entry.name.endsWith('.md')) {
+        if (entry.name.endsWith('.md')) {
           results.push(relative(config.VAULT_DIR, fullPath));
         }
       }

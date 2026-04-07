@@ -2,7 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import config from '../config.js';
 import { getAllSessions, deleteSession } from '../vault/sessions.js';
 import { summarizeSession } from '../ai/claude.js';
-import { appendToJournal, getTimestamp } from '../vault/journal.js';
+import { appendToJournal } from '../vault/journal.js';
+import { getTimestamp } from '../utils/time.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -19,7 +20,16 @@ async function handleHealth(_req: IncomingMessage, res: ServerResponse): Promise
   );
 }
 
-async function handleCaptureSessions(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleCaptureSessions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const secret = process.env['JARVIS_HTTP_SECRET'];
+  if (secret) {
+    const auth = req.headers['authorization'];
+    if (auth !== `Bearer ${secret}`) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+  }
   const sessions = getAllSessions();
   let captured = 0;
 
@@ -56,7 +66,7 @@ export function startHttpServer(): Server {
       if (req.method === 'GET' && req.url === '/health') {
         return await handleHealth(req, res);
       }
-      if (req.method === 'GET' && req.url === '/capture-sessions') {
+      if (req.method === 'POST' && req.url === '/capture-sessions') {
         return await handleCaptureSessions(req, res);
       }
       res.writeHead(404);

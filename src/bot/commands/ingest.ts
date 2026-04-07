@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { ingestSource } from '../../kb/engine.js';
+import { ingestSource, processIngestionQueue } from '../../kb/engine.js';
 import { getQueue } from '../../kb/queue.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 
@@ -16,18 +16,7 @@ export async function handleIngest(bot: TelegramBot, chatId: number, args: strin
 
     await bot.sendMessage(chatId, `Processing ${queue.length} queued source(s)...`);
     const typing = startTyping(bot, chatId);
-
-    let processed = 0;
-    let errors = 0;
-    for (const entry of queue) {
-      const result = await ingestSource(entry.source, { guidance: entry.guidance });
-      if (result.success) {
-        processed++;
-      } else {
-        errors++;
-      }
-    }
-
+    const { processed, errors } = await processIngestionQueue();
     stopTyping(typing);
     await bot.sendMessage(chatId, `Ingestion complete. Processed: ${processed}, Errors: ${errors}`);
     return;

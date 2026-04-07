@@ -1,7 +1,8 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { getSession, deleteSession } from '../../vault/sessions.js';
 import { summarizeSession } from '../../ai/claude.js';
-import { appendToJournal, getTimestamp } from '../../vault/journal.js';
+import { appendToJournal } from '../../vault/journal.js';
+import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
 import { startTyping, stopTyping } from '../../integrations/telegram/client.js';
 

@@ -1,8 +1,8 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import config from '../config.js';
 
-export interface SearchResult {
+interface SearchResult {
   file: string;
   line: number;
   content: string;
@@ -23,8 +23,9 @@ export function searchVault(
   const maxResults = options?.maxResults ?? 20;
 
   try {
-    const output = execSync(
-      `rg --json -i --max-count 3 --glob "*.md" ${JSON.stringify(query)} ${JSON.stringify(searchDir)}`,
+    const output = execFileSync(
+      'rg',
+      ['--json', '-i', '--max-count', '3', '--glob', '*.md', query, searchDir],
       { timeout: 10_000, maxBuffer: 1024 * 1024 },
     ).toString();
 

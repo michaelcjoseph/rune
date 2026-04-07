@@ -1,11 +1,9 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config from '../config.js';
-import { getTodayFilename, getTimestamp } from '../utils/time.js';
+import { getTodayFilename } from '../utils/time.js';
 
-export { getTimestamp };
-
-export function getTodayPath(): string {
+function getTodayPath(): string {
   return join(config.VAULT_DIR, 'journals', getTodayFilename());
 }
 

@@ -17,7 +17,7 @@ function execClaude(args: string[]): Promise<ClaudeResult> {
     const child = spawn('claude', args, {
       cwd: config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PATH: process.env['PATH'] },
+      env: { ...process.env },
     });
 
     let stdout = '';

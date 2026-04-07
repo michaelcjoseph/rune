@@ -1,7 +1,7 @@
 import { ingestSource } from './ingest.js';
 import { queryKB } from './query.js';
 import { lintKB } from './lint.js';
-import { getQueue, dequeue } from './queue.js';
+import { getQueue } from './queue.js';
 import { readVaultFile, listVaultFiles } from '../vault/files.js';
 import { createLogger } from '../utils/logger.js';
 

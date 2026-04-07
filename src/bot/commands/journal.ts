@@ -1,5 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { appendToJournal, getTimestamp } from '../../vault/journal.js';
+import { appendToJournal } from '../../vault/journal.js';
+import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
 
 export async function handleJournal(bot: TelegramBot, chatId: number, text: string): Promise<void> {

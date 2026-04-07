@@ -5,7 +5,6 @@ import { runAgent } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile, vaultFileExists, getVaultPath } from '../vault/files.js';
 import { dequeue } from './queue.js';
 import { createLogger } from '../utils/logger.js';
-import { getLocalDate, getTimestamp } from '../utils/time.js';
 
 const log = createLogger('kb-ingest');
 
