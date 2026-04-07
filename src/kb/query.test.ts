@@ -1,0 +1,53 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../config.js', () => ({
+  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago' },
+}));
+
+vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
+vi.mock('./search.js', () => ({ searchVault: vi.fn() }));
+vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
+
+const { runAgent } = await import('../ai/claude.js');
+const { searchVault } = await import('./search.js');
+const { queryKB } = await import('./query.js');
+
+const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
+const searchMock = searchVault as unknown as ReturnType<typeof vi.fn>;
+
+describe('kb/query', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns synthesized answer on success', async () => {
+    searchMock.mockReturnValue([{ file: 'wiki/ai.md', line: 1, content: 'AI is cool' }]);
+    agentMock.mockResolvedValue({ text: 'Here is the answer', error: null });
+
+    const result = await queryKB('what is AI?');
+    expect(result).toEqual({ success: true, answer: 'Here is the answer' });
+  });
+
+  it('includes search context in agent prompt', async () => {
+    searchMock.mockReturnValue([{ file: 'wiki/test.md', line: 5, content: 'relevant' }]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('test query');
+    expect(agentMock).toHaveBeenCalledWith('kb-query', expect.stringContaining('relevant'));
+  });
+
+  it('works with no search results', async () => {
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'no info', error: null });
+
+    const result = await queryKB('obscure');
+    expect(result.success).toBe(true);
+  });
+
+  it('returns error when agent fails', async () => {
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: null, error: 'timeout' });
+
+    const result = await queryKB('test');
+    expect(result.success).toBe(false);
+    expect(result.answer).toContain('timeout');
+  });
+});
