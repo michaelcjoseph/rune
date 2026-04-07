@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
+    "start": "tsx --env-file-if-exists=.env.local src/index.ts",
     "build": "tsc --noEmit",
-    "cli": "tsx cli/jarvis.ts",
+    "cli": "tsx --env-file-if-exists=.env.local cli/jarvis.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -14,7 +14,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "dotenv": "^17.4.1",
     "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.67.0"
   },

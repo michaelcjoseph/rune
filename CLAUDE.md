@@ -72,13 +72,14 @@ npm run cli    # Local CLI interface (future)
 
 ## Environment Variables
 
+Loaded from `.env.local` via `--env-file-if-exists` in npm scripts (no dotenv dependency).
+
 Required:
 - `TELEGRAM_BOT_TOKEN` — from @BotFather
 - `TELEGRAM_USER_ID` — numeric ID from @userinfobot
+- `VAULT_DIR` — path to Obsidian vault
 
-Optional:
-- `VAULT_DIR` — defaults to `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/your-vault-name`
-- `LOGS_DIR` — defaults to `~/logs`
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored).
 
 ## Agents
 

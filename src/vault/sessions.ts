@@ -11,6 +11,7 @@ interface Session {
   lastActivity: string;
   messageCount: number;
   firstMessage: string;
+  model: string;
 }
 
 const sessions = new Map<number, Session>();
@@ -25,6 +26,7 @@ export function createSession(chatId: number, firstMessage: string): Session {
     lastActivity: new Date().toISOString(),
     messageCount: 1,
     firstMessage: (firstMessage || '').slice(0, 100),
+    model: config.DEFAULT_CHAT_MODEL,
   };
   sessions.set(chatId, session);
   persistSessions();
@@ -36,6 +38,13 @@ export function updateSession(chatId: number): void {
   if (!session) return;
   session.lastActivity = new Date().toISOString();
   session.messageCount++;
+  persistSessions();
+}
+
+export function setSessionModel(chatId: number, model: string): void {
+  const session = sessions.get(chatId);
+  if (!session) return;
+  session.model = model;
   persistSessions();
 }
 

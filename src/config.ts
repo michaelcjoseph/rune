@@ -1,23 +1,22 @@
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function required(name: string): string {
   const val = process.env[name];
   if (!val) throw new Error(`Missing required env var: ${name}`);
-  return val;
+  return val.startsWith('~/') ? join(homedir(), val.slice(2)) : val;
 }
 
-const home = homedir();
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const config = {
   TELEGRAM_BOT_TOKEN: required('TELEGRAM_BOT_TOKEN'),
   TELEGRAM_USER_ID: Number(required('TELEGRAM_USER_ID')),
 
-  VAULT_DIR:
-    process.env['VAULT_DIR'] ||
-    join(home, 'Library/Mobile Documents/iCloud~md~obsidian/Documents/your-vault-name'),
+  VAULT_DIR: required('VAULT_DIR'),
 
-  LOGS_DIR: process.env['LOGS_DIR'] || join(home, 'logs'),
+  LOGS_DIR: join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {
     return join(this.LOGS_DIR, 'tg-sessions.json');
@@ -35,6 +34,9 @@ const config = {
   HTTP_HOST: '127.0.0.1',
 
   CLAUDE_TIMEOUT_MS: 120_000,
+  DEFAULT_CHAT_MODEL: 'haiku',
+  ONESHOT_MODEL: 'sonnet',
+  AGENT_MODEL: 'opus',
   TG_MAX_MESSAGE_LENGTH: 4096,
   TIMEZONE: 'America/Chicago',
 } as const;

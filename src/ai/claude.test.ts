@@ -5,16 +5,26 @@ vi.mock('../config.js', () => ({
   default: {
     VAULT_DIR: '/tmp/test-vault',
     CLAUDE_TIMEOUT_MS: 100,
+    DEFAULT_CHAT_MODEL: 'haiku',
+    ONESHOT_MODEL: 'sonnet',
+    AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
   },
 }));
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
+  execFileSync: vi.fn(() => '/usr/local/bin/claude\n'),
 }));
 
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return { ...actual, existsSync: vi.fn(() => false) };
+});
+
 const { spawn } = await import('node:child_process');
-const { askClaude, askClaudeOneShot, runAgent, summarizeSession } = await import('./claude.js');
+const { askClaude, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated } =
+  await import('./claude.js');
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
 
@@ -44,12 +54,12 @@ describe('ai/claude', () => {
       expect(result).toEqual({ text: 'hello world', error: null });
     });
 
-    it('passes correct args', async () => {
+    it('uses sonnet model', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       expect(spawnMock).toHaveBeenCalledWith(
-        'claude',
-        ['-p', 'test prompt', '--no-session-persistence'],
+        '/usr/local/bin/claude',
+        ['-p', 'test prompt', '--no-session-persistence', '--model', 'sonnet'],
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
     });
@@ -79,12 +89,60 @@ describe('ai/claude', () => {
   });
 
   describe('askClaude (session)', () => {
-    it('includes session-id in args', async () => {
+    it('uses --session-id and haiku for new sessions', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
-      await askClaude('hello', 'sess-123');
+      await askClaude('hello', 'new-sess');
       expect(spawnMock).toHaveBeenCalledWith(
-        'claude',
-        ['-p', 'hello', '--session-id', 'sess-123'],
+        '/usr/local/bin/claude',
+        ['-p', 'hello', '--session-id', 'new-sess', '--model', 'haiku'],
+        expect.any(Object),
+      );
+    });
+
+    it('uses --resume after first successful call', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'first' }));
+      await askClaude('msg1', 'resume-test');
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'second' }));
+      const result = await askClaude('msg2', 'resume-test');
+      expect(result.text).toBe('second');
+      expect(spawnMock).toHaveBeenLastCalledWith(
+        '/usr/local/bin/claude',
+        ['-p', 'msg2', '--resume', 'resume-test', '--model', 'haiku'],
+        expect.any(Object),
+      );
+    });
+
+    it('uses --resume for sessions marked as created (restored)', async () => {
+      markSessionCreated('restored-sess');
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaude('hello', 'restored-sess');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        ['-p', 'hello', '--resume', 'restored-sess', '--model', 'haiku'],
+        expect.any(Object),
+      );
+    });
+
+    it('passes custom model when specified', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaude('hello', 'opus-sess', 'opus');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        ['-p', 'hello', '--session-id', 'opus-sess', '--model', 'opus'],
+        expect.any(Object),
+      );
+    });
+
+    it('does not mark session as created on error', async () => {
+      spawnMock.mockReturnValue(createChild({ stderr: 'fail', code: 1 }));
+      await askClaude('msg', 'fail-sess');
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaude('retry', 'fail-sess');
+      expect(spawnMock).toHaveBeenLastCalledWith(
+        '/usr/local/bin/claude',
+        ['-p', 'retry', '--session-id', 'fail-sess', '--model', 'haiku'],
         expect.any(Object),
       );
     });
@@ -107,11 +165,9 @@ describe('ai/claude', () => {
       const p1 = askClaude('msg1', 'lock-test');
       const p2 = askClaude('msg2', 'lock-test');
 
-      // Only first spawn should have fired
       await new Promise((r) => setTimeout(r, 10));
       expect(spawnMock).toHaveBeenCalledTimes(1);
 
-      // Complete first — second should then spawn
       resolvers[0]!();
       await new Promise((r) => setTimeout(r, 10));
       expect(spawnMock).toHaveBeenCalledTimes(2);
@@ -124,12 +180,12 @@ describe('ai/claude', () => {
   });
 
   describe('runAgent', () => {
-    it('passes agent flag and name', async () => {
+    it('uses opus model', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'agent result' }));
       const result = await runAgent('wiki-compiler', 'do stuff');
       expect(spawnMock).toHaveBeenCalledWith(
-        'claude',
-        ['--agent', 'wiki-compiler', '-p', 'do stuff', '--no-session-persistence'],
+        '/usr/local/bin/claude',
+        ['--agent', 'wiki-compiler', '-p', 'do stuff', '--no-session-persistence', '--model', 'opus'],
         expect.any(Object),
       );
       expect(result.text).toBe('agent result');
@@ -153,13 +209,18 @@ describe('ai/claude', () => {
   });
 
   describe('summarizeSession', () => {
-    it('uses session id and returns summary text', async () => {
+    it('always uses haiku model', async () => {
+      // First call creates the session with opus
+      spawnMock.mockReturnValue(createChild({ stdout: 'first reply' }));
+      await askClaude('hello', 'sum-sess', 'opus');
+
+      // summarizeSession should use haiku regardless
       spawnMock.mockReturnValue(createChild({ stdout: 'Topic: test\nDiscussion: stuff' }));
-      const result = await summarizeSession('sess-sum');
+      const result = await summarizeSession('sum-sess');
       expect(result.text).toBe('Topic: test\nDiscussion: stuff');
-      expect(spawnMock).toHaveBeenCalledWith(
-        'claude',
-        expect.arrayContaining(['--session-id', 'sess-sum']),
+      expect(spawnMock).toHaveBeenLastCalledWith(
+        '/usr/local/bin/claude',
+        expect.arrayContaining(['--resume', 'sum-sess', '--model', 'haiku']),
         expect.any(Object),
       );
     });

@@ -2,6 +2,9 @@ import TelegramBot from 'node-telegram-bot-api';
 import { ingestSource, processIngestionQueue } from '../../kb/engine.js';
 import { getQueue } from '../../kb/queue.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
+import { createLogger } from '../../utils/logger.js';
+
+const log = createLogger('cmd-ingest');
 
 export async function handleIngest(bot: TelegramBot, chatId: number, args: string): Promise<void> {
   const trimmed = args.trim();
@@ -43,6 +46,7 @@ export async function handleIngest(bot: TelegramBot, chatId: number, args: strin
     }
   } catch (err) {
     stopTyping(typing);
+    log.error('Ingest error', { error: (err as Error).message, source: sourcePath });
     await bot.sendMessage(chatId, `Ingest error: ${(err as Error).message}`);
   }
 }

@@ -1,6 +1,9 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { queryKB, getKBStats } from '../../kb/engine.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
+import { createLogger } from '../../utils/logger.js';
+
+const log = createLogger('cmd-kb');
 
 export async function handleKB(bot: TelegramBot, chatId: number, args: string): Promise<void> {
   const [subcommand, ...rest] = args.split(' ');
@@ -41,6 +44,7 @@ async function handleKBQuery(bot: TelegramBot, chatId: number, question: string)
     await sendLongMessage(bot, chatId, result.answer);
   } catch (err) {
     stopTyping(typing);
+    log.error('KB query error', { error: (err as Error).message });
     await bot.sendMessage(chatId, `KB query error: ${(err as Error).message}`);
   }
 }

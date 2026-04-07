@@ -16,41 +16,41 @@ Full manual test plan covering all implementation phases (0-12).
 
 ## 1. Server Startup
 
-- [ ] 🔴 `npm run dev` starts without errors, logs show HTTP + Telegram bot initialized
-- [ ] 🔴 `curl http://localhost:3847/health` returns `{"status":"ok","uptime":...,"activeSessions":0}`
-- [ ] 🟡 Server recovers gracefully if vault directory doesn't exist (clear error, not crash)
-- [ ] 🟢 Logs are structured JSON with component tags
+- [x] 🔴 `npm run dev` starts without errors, logs show HTTP + Telegram bot initialized
+- [x] 🔴 `curl http://localhost:3847/health` returns `{"status":"ok","uptime":...,"activeSessions":0}`
+- [x] 🟡 Server recovers gracefully if vault directory doesn't exist (clear error, not crash)
+- [x] 🟢 Logs are structured JSON with component tags
 
 ## 2. Telegram Bot — Auth & Basics
 
-- [ ] 🔴 Send a message from your authorized Telegram account — bot responds
+- [x] 🔴 Send a message from your authorized Telegram account — bot responds
 - [ ] 🔴 Send a message from a different Telegram account — bot ignores it (no response)
-- [ ] 🔴 `/start` — bot replies with command help listing all available commands
-- [ ] 🟡 Bot shows typing indicator while processing
+- [x] 🔴 `/start` — bot replies with command help listing all available commands
+- [x] 🟡 Bot shows typing indicator while processing
 
 ## 3. Multi-Turn Conversation
 
-- [ ] 🔴 Send a plain text message — bot creates a session and responds via Claude
-- [ ] 🔴 Send a follow-up message — bot remembers context from the first message (same session)
-- [ ] 🟡 Send a very long message (~4000+ chars) — bot responds without truncation issues
-- [ ] 🟡 Bot response that exceeds 4096 chars is split into multiple Telegram messages
-- [ ] 🟢 `/status` — shows `Active sessions: 1` after a conversation
+- [x] 🔴 Send a plain text message — bot creates a session and responds via Claude
+- [x] 🔴 Send a follow-up message — bot remembers context from the first message (same session)
+- [x] 🟡 Send a very long message (~4000+ chars) — bot responds without truncation issues
+- [x] 🟡 Bot response that exceeds 4096 chars is split into multiple Telegram messages
+- [x] 🟢 `/status` — shows `Active sessions: 1` after a conversation
 
 ## 4. /fresh — Session Logging
 
-- [ ] 🔴 Start a conversation, then send `/fresh` — bot summarizes the conversation
-- [ ] 🔴 Summary is appended to today's journal file (`journals/YYYY_MM_DD.md`)
-- [ ] 🔴 Session is reset — next message starts a new conversation
+- [x] 🔴 Start a conversation, then send `/fresh` — bot summarizes the conversation
+- [x] 🔴 Summary is appended to today's journal file (`journals/YYYY_MM_DD.md`)
+- [x] 🔴 Session is reset — next message starts a new conversation
 - [ ] 🟡 Git commit is created with message "TG conversation logged"
-- [ ] 🟡 `/fresh` with no active session — bot replies "No active conversation to summarize."
-- [ ] 🟢 Summary follows the format: `Topic: ... Prompt: ... Discussion: ... Conclusion: ...`
+- [x] 🟡 `/fresh` with no active session — bot replies "No active conversation to summarize."
+- [x] 🟢 Summary follows the format: `Topic: ... Prompt: ... Discussion: ... Conclusion: ...`
 
 ## 5. /journal — Quick Entries
 
-- [ ] 🔴 `/journal bought groceries` — bot replies "Logged to journal."
-- [ ] 🔴 Entry appears in today's journal as `HH:MM - [tg] bought groceries`
+- [x] 🔴 `/journal bought groceries` — bot replies "Logged to journal."
+- [x] 🔴 Entry appears in today's journal as `HH:MM - [tg] bought groceries`
 - [ ] 🟡 Git commit is created with message "TG journal entry"
-- [ ] 🟡 Multiple entries in a row append correctly (no missing newlines)
+- [x] 🟡 Multiple entries in a row append correctly (no missing newlines)
 
 ## 6. /ask — One-Shot Queries
 

@@ -1,8 +1,11 @@
 import TelegramBot from 'node-telegram-bot-api';
 import config from '../../config.js';
-import { getSession, createSession, updateSession } from '../../vault/sessions.js';
+import { getSession, createSession, updateSession, setSessionModel } from '../../vault/sessions.js';
 import { askClaude } from '../../ai/claude.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
+import { createLogger } from '../../utils/logger.js';
+
+const log = createLogger('text-handler');
 import { handleFresh } from '../commands/fresh.js';
 import { handleJournal } from '../commands/journal.js';
 import { handleAsk } from '../commands/ask.js';
@@ -24,6 +27,9 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
   if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
+  if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
+  if (text.startsWith('/sonnet')) return handleModelSwitch(bot, chatId, 'sonnet');
+  if (text.startsWith('/haiku')) return handleModelSwitch(bot, chatId, 'haiku');
   if (text.startsWith('/status')) return handleStatus(bot, chatId);
   if (text.startsWith('/start')) return handleStart(bot, chatId);
 
@@ -39,10 +45,11 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
 
   const typing = startTyping(bot, chatId);
   try {
-    const result = await askClaude(text, session.sessionId);
+    const result = await askClaude(text, session.sessionId, session.model);
     stopTyping(typing);
 
     if (result.error) {
+      log.error('Conversation error', { error: result.error, sessionId: session.sessionId });
       await bot.sendMessage(chatId, `Error: ${result.error}`);
       return;
     }
@@ -51,6 +58,7 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
     await sendLongMessage(bot, chatId, result.text!);
   } catch (err) {
     stopTyping(typing);
+    log.error('Conversation exception', { error: (err as Error).message });
     await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
   }
 }
@@ -64,8 +72,21 @@ async function handleLint(bot: TelegramBot, chatId: number): Promise<void> {
     await sendLongMessage(bot, chatId, result.report);
   } catch (err) {
     stopTyping(typing);
+    log.error('Lint error', { error: (err as Error).message });
     await bot.sendMessage(chatId, `Lint error: ${(err as Error).message}`);
   }
+}
+
+async function handleModelSwitch(bot: TelegramBot, chatId: number, model: string): Promise<void> {
+  const session = getSession(chatId);
+  if (!session) {
+    const newSession = createSession(chatId, `/${model}`);
+    setSessionModel(chatId, model);
+    await bot.sendMessage(chatId, `Switched to ${model}. New session started.`);
+    return;
+  }
+  setSessionModel(chatId, model);
+  await bot.sendMessage(chatId, `Switched to ${model}.`);
 }
 
 async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
@@ -83,6 +104,11 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/ingest [path] — ingest source into knowledge base',
     '/lint — run wiki health check',
     '/status — show uptime and session info',
+    '',
+    'Model:',
+    '/haiku — fast responses (default)',
+    '/sonnet — balanced',
+    '/opus — max capability',
   ];
 
   await bot.sendMessage(chatId, lines.join('\n'));

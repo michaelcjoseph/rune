@@ -1,13 +1,7 @@
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import dotenv from 'dotenv';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: join(__dirname, '..', '.env.local') });
-
 import { mkdirSync } from 'node:fs';
 import config from './config.js';
-import { restoreSessions, persistSessions } from './vault/sessions.js';
+import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
+import { markSessionCreated } from './ai/claude.js';
 import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { createLogger } from './utils/logger.js';
@@ -19,6 +13,9 @@ mkdirSync(config.LOGS_DIR, { recursive: true });
 
 // Restore sessions from previous run
 restoreSessions();
+for (const [, session] of getAllSessions()) {
+  markSessionCreated(session.sessionId);
+}
 
 // Start services
 const bot = createBot();

@@ -104,12 +104,13 @@ describe('text handler routing', () => {
       lastActivity: new Date().toISOString(),
       messageCount: 1,
       firstMessage: 'hello',
+      model: 'haiku',
     });
     askClaudeMock.mockResolvedValue({ text: 'hi there!', error: null });
 
     await handleTextMessage(mockBot(), msg('hello'));
     expect(createSessionMock).toHaveBeenCalled();
-    expect(askClaudeMock).toHaveBeenCalledWith('hello', 'test-sess');
+    expect(askClaudeMock).toHaveBeenCalledWith('hello', 'test-sess', 'haiku');
   });
 
   it('ignores empty text', async () => {

@@ -5,7 +5,7 @@ import { gitCommitAndPush } from '../../vault/git.js';
 
 export async function handleJournal(bot: TelegramBot, chatId: number, text: string): Promise<void> {
   const ts = getTimestamp();
-  const entry = `${ts} - [tg] ${text}`;
+  const entry = `- ${ts} [[jarvis]] telegram chat\n\t- ${text}`;
   appendToJournal(entry);
   gitCommitAndPush('TG journal entry');
   await bot.sendMessage(chatId, 'Logged to journal.');

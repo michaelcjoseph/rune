@@ -38,7 +38,8 @@ async function handleCaptureSessions(req: IncomingMessage, res: ServerResponse):
       const result = await summarizeSession(session.sessionId);
       if (result.text) {
         const ts = getTimestamp();
-        const entry = `${ts} - [tg] ${result.text}`;
+        const summaryLines = result.text.split('\n').map((l) => `\t- ${l}`).join('\n');
+        const entry = `- ${ts} [[jarvis]] telegram chat\n${summaryLines}`;
         appendToJournal(entry);
         captured++;
       }
