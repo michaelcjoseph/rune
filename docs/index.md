@@ -1,5 +1,9 @@
 # Jarvis — Docs
 
+## Blueprint
+
+- [idea.md](idea.md) — Self-contained prompt to recreate Jarvis from scratch with an AI coding agent
+
 ## Projects
 
 Active projects with specs, tasks, and test plans.

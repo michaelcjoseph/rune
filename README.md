@@ -228,6 +228,10 @@ Phases 0-3 are complete (server, bot, knowledge base). Currently building vault 
 
 See `docs/projects/01-mvp/` for the full spec and task breakdown.
 
+## Build Your Own
+
+Want to build something like Jarvis without cloning this repo? See [`docs/idea.md`](docs/idea.md) — a self-contained blueprint you can hand to an AI coding agent to recreate the entire system from scratch.
+
 ## License
 
 MIT
