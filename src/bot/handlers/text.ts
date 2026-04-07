@@ -1,0 +1,89 @@
+import TelegramBot from 'node-telegram-bot-api';
+import config from '../../config.js';
+import { getSession, createSession, updateSession } from '../../vault/sessions.js';
+import { askClaude } from '../../ai/claude.js';
+import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
+import { handleFresh } from '../commands/fresh.js';
+import { handleJournal } from '../commands/journal.js';
+import { handleAsk } from '../commands/ask.js';
+import { handleStatus } from '../commands/status.js';
+import { handleKB } from '../commands/kb.js';
+import { handleIngest } from '../commands/ingest.js';
+
+export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
+  // Security gate
+  if (msg.from?.id !== config.TELEGRAM_USER_ID) return;
+
+  const chatId = msg.chat.id;
+  const text = (msg.text || '').trim();
+  if (!text) return;
+
+  if (text.startsWith('/fresh')) return handleFresh(bot, chatId);
+  if (text.startsWith('/journal ')) return handleJournal(bot, chatId, text.slice('/journal '.length).trim());
+  if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
+  if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
+  if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
+  if (text.startsWith('/lint')) return handleLint(bot, chatId);
+  if (text.startsWith('/status')) return handleStatus(bot, chatId);
+  if (text.startsWith('/start')) return handleStart(bot, chatId);
+
+  // Default: multi-turn conversation
+  return handleConversation(bot, chatId, text);
+}
+
+async function handleConversation(bot: TelegramBot, chatId: number, text: string): Promise<void> {
+  let session = getSession(chatId);
+  if (!session) {
+    session = createSession(chatId, text);
+  }
+
+  const typing = startTyping(bot, chatId);
+  try {
+    const result = await askClaude(text, session.sessionId);
+    stopTyping(typing);
+
+    if (result.error) {
+      await bot.sendMessage(chatId, `Error: ${result.error}`);
+      return;
+    }
+
+    updateSession(chatId);
+    await sendLongMessage(bot, chatId, result.text!);
+  } catch (err) {
+    stopTyping(typing);
+    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+  }
+}
+
+async function handleLint(bot: TelegramBot, chatId: number): Promise<void> {
+  const { lintKB } = await import('../../kb/engine.js');
+  const typing = startTyping(bot, chatId);
+  try {
+    const result = await lintKB();
+    stopTyping(typing);
+    await sendLongMessage(bot, chatId, result.report);
+  } catch (err) {
+    stopTyping(typing);
+    await bot.sendMessage(chatId, `Lint error: ${(err as Error).message}`);
+  }
+}
+
+async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
+  const lines = [
+    'Jarvis — Second Brain',
+    '',
+    'Send any message to chat with your vault.',
+    '',
+    'Commands:',
+    '/fresh — log conversation to journal, reset session',
+    '/journal <text> — append entry to today\'s journal',
+    '/ask <question> — one-shot vault query',
+    '/kb <question> — query the knowledge base',
+    '/kb stats — knowledge base statistics',
+    '/ingest [path] — ingest source into knowledge base',
+    '/lint — run wiki health check',
+    '/status — show uptime and session info',
+  ];
+
+  await bot.sendMessage(chatId, lines.join('\n'));
+}
