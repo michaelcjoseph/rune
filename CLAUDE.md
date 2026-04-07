@@ -82,11 +82,26 @@ Optional:
 
 ## Agents
 
+### Runtime Agents (spawned by Jarvis via `runAgent()`)
+
 | Agent | File | Purpose |
 |---|---|---|
 | wiki-compiler | `.claude/agents/wiki-compiler.md` | Ingest raw sources → create/update wiki pages |
 | kb-query | `.claude/agents/kb-query.md` | Search wiki + vault → synthesized answer |
 | wiki-linter | `.claude/agents/wiki-linter.md` | Health-check wiki for issues |
+| morning-prep | `.claude/agents/morning-prep.md` | Gather vault data → structured morning journal section |
+| session-summarizer | `.claude/agents/session-summarizer.md` | Rich session summaries with vault context |
+| release-notes | `.claude/agents/release-notes.md` | Generate changelog from git history |
+
+### Dev Tooling Agents (used by `/work` skill)
+
+| Agent | File | Purpose |
+|---|---|---|
+| test-specialist | `.claude/agents/test-specialist.md` | Bootstrap vitest, write tests, run them |
+| code-reviewer | `.claude/agents/code-reviewer.md` | Review for bugs, security, convention violations |
+| architecture-reviewer | `.claude/agents/architecture-reviewer.md` | Review for system-level architectural issues |
+| code-simplifier | `.claude/agents/code-simplifier.md` | Check for dead code, over-abstraction, duplication |
+| docs-sync | `.claude/agents/docs-sync.md` | Update CLAUDE.md and docs after structural changes |
 
 ## Reference
 

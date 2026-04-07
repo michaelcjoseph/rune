@@ -128,6 +128,7 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 8: Content Triage + Photos
 
+- [ ] Design content-triager agent — classify incoming URLs/text (KB-worthy, journal entry, Readwise save, action item) and route accordingly
 - [ ] content-triager agent definition
 - [ ] photo-classifier agent definition
 - [ ] URL handler — detect URLs in messages, fetch content, spawn triage agent
