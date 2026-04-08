@@ -27,3 +27,16 @@ export function getTimestamp(): string {
   });
 }
 
+/** Standardized date context string for agent and one-shot prompts. */
+export function getDateContext(): string {
+  const now = new Date();
+  const formatted = now.toLocaleDateString('en-US', {
+    timeZone: tz,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  return `Today is ${formatted} (${tz}). Today's journal file: ${getTodayFilename()}`;
+}
+

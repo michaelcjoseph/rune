@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { getDateContext } from '../utils/time.js';
 
 const log = createLogger('claude');
 
@@ -95,13 +96,15 @@ export async function askClaude(message: string, sessionId: string, model?: stri
 
 /** One-shot query with no session persistence */
 export async function askClaudeOneShot(message: string): Promise<ClaudeResult> {
-  const args = ['-p', message, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
+  const dateCtx = getDateContext();
+  const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
   return execClaude(args);
 }
 
 /** Run a named agent (defined in .claude/agents/) */
 export async function runAgent(agentName: string, prompt: string): Promise<ClaudeResult> {
-  const args = ['--agent', agentName, '-p', prompt, '--no-session-persistence', '--model', config.AGENT_MODEL];
+  const dateCtx = getDateContext();
+  const args = ['--agent', agentName, '-p', `${dateCtx}\n\n${prompt}`, '--no-session-persistence', '--model', config.AGENT_MODEL];
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
   return execClaude(args);
 }

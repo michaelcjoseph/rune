@@ -54,14 +54,16 @@ describe('ai/claude', () => {
       expect(result).toEqual({ text: 'hello world', error: null });
     });
 
-    it('uses sonnet model', async () => {
+    it('uses sonnet model and prepends date context', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'test prompt', '--no-session-persistence', '--model', 'sonnet'],
+        ['-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'sonnet'],
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
+      const prompt = spawnMock.mock.calls[0]![1][1] as string;
+      expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);
     });
 
     it('returns error on non-zero exit', async () => {
@@ -180,14 +182,17 @@ describe('ai/claude', () => {
   });
 
   describe('runAgent', () => {
-    it('uses opus model', async () => {
+    it('uses opus model and prepends date context', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'agent result' }));
       const result = await runAgent('wiki-compiler', 'do stuff');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['--agent', 'wiki-compiler', '-p', 'do stuff', '--no-session-persistence', '--model', 'opus'],
+        ['--agent', 'wiki-compiler', '-p', expect.stringContaining('do stuff'), '--no-session-persistence', '--model', 'opus'],
         expect.any(Object),
       );
+      const prompt = spawnMock.mock.calls[0]![1][3] as string;
+      expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);
+      expect(prompt).toContain('do stuff');
       expect(result.text).toBe('agent result');
     });
   });

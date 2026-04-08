@@ -8,7 +8,7 @@ vi.mock('../config.js', () => ({
   },
 }));
 
-const { getTodayFilename, getTimestamp } = await import('./time.js');
+const { getTodayFilename, getTimestamp, getDateContext } = await import('./time.js');
 
 describe('time utils', () => {
   beforeEach(() => {
@@ -33,5 +33,13 @@ describe('time utils', () => {
     // 2026-04-08 04:00 UTC = 2026-04-07 23:00 Chicago (CDT)
     vi.setSystemTime(new Date('2026-04-08T04:00:00.000Z'));
     expect(getTodayFilename()).toBe('2026_04_07.md');
+  });
+
+  it('getDateContext includes day of week, date, timezone, and journal filename', () => {
+    const ctx = getDateContext();
+    expect(ctx).toContain('Tuesday');
+    expect(ctx).toContain('April 7, 2026');
+    expect(ctx).toContain('America/Chicago');
+    expect(ctx).toContain('2026_04_07.md');
   });
 });
