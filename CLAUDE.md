@@ -104,6 +104,7 @@ Required:
 |---|---|---|
 | test-specialist | `.claude/agents/test-specialist.md` | Bootstrap vitest, write tests, run them |
 | code-reviewer | `.claude/agents/code-reviewer.md` | Review for bugs, security, convention violations |
+| security-auditor | `.claude/agents/security-auditor.md` | Audit for secrets, PII exposure, vault leaks, server security |
 | architecture-reviewer | `.claude/agents/architecture-reviewer.md` | Review for system-level architectural issues |
 | code-simplifier | `.claude/agents/code-simplifier.md` | Check for dead code, over-abstraction, duplication |
 | docs-sync | `.claude/agents/docs-sync.md` | Update CLAUDE.md and docs after structural changes |

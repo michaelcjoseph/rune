@@ -128,6 +128,17 @@ changed: [list changed files]. Check for bugs, security issues, TypeScript
 strict mode violations, and jarvis convention violations per CLAUDE.md.
 ```
 
+**Always run security-auditor** (every change needs security & exposure review):
+
+Use the `Agent` tool with `subagent_type: "security-auditor"`:
+
+```
+Audit the changes made for the [task name] task. The following files were
+changed: [list changed files]. Check for: hardcoded secrets, personal info
+exposure, vault content leaks, path traversal risks, unsanitized input in
+shell commands, and anything unsafe for the public GitHub remote.
+```
+
 **Run architecture-reviewer when applicable:**
 
 Use the `Agent` tool with `subagent_type: "architecture-reviewer"` **if** the task involves new modules, changes to `src/ai/claude.ts`, changes to session management, new cron jobs, changes to `src/index.ts` startup/shutdown, new agent definitions, or changes to vault file operation patterns.
@@ -236,6 +247,7 @@ Output a completion summary:
 ### Review Summary
 
 - Code: [PASS or N issues found, N fixed]
+- Security: [PASS or N issues found, N fixed]
 - Architecture: [PASS or N/A or N issues found, N fixed]
 
 ### Simplification
