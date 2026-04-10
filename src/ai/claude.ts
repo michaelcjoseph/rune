@@ -35,7 +35,8 @@ export function markSessionCreated(sessionId: string): void {
   createdSessions.add(sessionId);
 }
 
-function execClaude(args: string[]): Promise<ClaudeResult> {
+function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
+  const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, args, {
       cwd: config.VAULT_DIR,
@@ -47,7 +48,7 @@ function execClaude(args: string[]): Promise<ClaudeResult> {
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-    }, config.CLAUDE_TIMEOUT_MS);
+    }, timeout);
 
     child.stdout.on('data', (data: Buffer) => {
       stdout += data;
@@ -60,7 +61,7 @@ function execClaude(args: string[]): Promise<ClaudeResult> {
       clearTimeout(timer);
       if (signal === 'SIGTERM') {
         log.error('Claude CLI timed out', { args: args.slice(0, 3) });
-        resolve({ text: null, error: `Claude timed out after ${config.CLAUDE_TIMEOUT_MS / 1000}s` });
+        resolve({ text: null, error: `Claude timed out after ${timeout / 1000}s` });
       } else if (code !== 0) {
         const error = stderr.trim() || `Claude exited with code ${code}`;
         log.error('Claude CLI failed', { code, error, args: args.slice(0, 3) });
@@ -95,18 +96,18 @@ export async function askClaude(message: string, sessionId: string, model?: stri
 }
 
 /** One-shot query with no session persistence */
-export async function askClaudeOneShot(message: string): Promise<ClaudeResult> {
+export async function askClaudeOneShot(message: string, timeoutMs?: number): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
-  return execClaude(args);
+  return execClaude(args, timeoutMs);
 }
 
 /** Run a named agent (defined in .claude/agents/) */
-export async function runAgent(agentName: string, prompt: string): Promise<ClaudeResult> {
+export async function runAgent(agentName: string, prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   const args = ['--agent', agentName, '-p', `${dateCtx}\n\n${prompt}`, '--no-session-persistence', '--model', config.AGENT_MODEL];
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
-  return execClaude(args);
+  return execClaude(args, timeoutMs);
 }
 
 /** Summarize a session for journal logging */

@@ -1,9 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { ingestSource, queryKB, lintKB, getKBStats } from '../kb/engine.js';
+import { initKB, ingestSource, queryKB, lintKB, getKBStats } from '../kb/engine.js';
 import { searchWithFilter } from '../kb/search.js';
 
 export function createKBServer(): McpServer {
+  initKB();
+
   const server = new McpServer({
     name: 'jarvis-kb',
     version: '1.0.0',

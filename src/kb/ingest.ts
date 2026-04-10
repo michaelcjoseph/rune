@@ -2,8 +2,9 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import config from '../config.js';
 import { runAgent } from '../ai/claude.js';
-import { readVaultFile, writeVaultFile, vaultFileExists, getVaultPath } from '../vault/files.js';
+import { readVaultFile, vaultFileExists, getVaultPath } from '../vault/files.js';
 import { dequeue } from './queue.js';
+import { initKB } from './init.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-ingest');
@@ -38,7 +39,7 @@ export async function ingestSource(
   }
 
   // Ensure knowledge base structure exists
-  ensureKBStructure();
+  initKB();
 
   // Build the ingestion prompt
   const guidanceNote = options?.guidance
@@ -76,34 +77,4 @@ function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('Readwise/')) return 'knowledge/raw/articles';
   if (sourcePath.includes('conversation')) return 'knowledge/raw/conversations';
   return 'knowledge/raw/notes';
-}
-
-/** Ensure the knowledge base directory structure exists. */
-function ensureKBStructure(): void {
-  const dirs = [
-    'knowledge/raw/articles',
-    'knowledge/raw/conversations',
-    'knowledge/raw/notes',
-    'knowledge/wiki/entities',
-    'knowledge/wiki/concepts',
-    'knowledge/wiki/topics',
-    'knowledge/wiki/comparisons',
-  ];
-
-  for (const dir of dirs) {
-    mkdirSync(join(config.VAULT_DIR, dir), { recursive: true });
-  }
-
-  // Create index.md if it doesn't exist
-  if (!vaultFileExists('knowledge/index.md')) {
-    writeVaultFile(
-      'knowledge/index.md',
-      '# Knowledge Base Index\n\n## Entities\n\n## Concepts\n\n## Topics\n\n## Comparisons\n',
-    );
-  }
-
-  // Create log.md if it doesn't exist
-  if (!vaultFileExists('knowledge/log.md')) {
-    writeVaultFile('knowledge/log.md', '# Knowledge Base Log\n\n');
-  }
 }

@@ -12,6 +12,7 @@ import { handleAsk } from '../commands/ask.js';
 import { handleStatus } from '../commands/status.js';
 import { handleKB } from '../commands/kb.js';
 import { handleIngest } from '../commands/ingest.js';
+import { handlePrep } from '../commands/prep.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
   // Security gate
@@ -26,6 +27,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
   if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
   if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
+  if (text.startsWith('/prep')) return handlePrep(bot, chatId);
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
   if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
   if (text.startsWith('/sonnet')) return handleModelSwitch(bot, chatId, 'sonnet');
@@ -103,6 +105,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/kb stats — knowledge base statistics',
     '/ingest [path] — ingest source into knowledge base',
     '/lint — run wiki health check',
+    '/prep — run morning prep now',
     '/status — show uptime and session info',
     '',
     'Model:',

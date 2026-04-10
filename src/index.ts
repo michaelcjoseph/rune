@@ -1,15 +1,20 @@
 import { mkdirSync } from 'node:fs';
 import config from './config.js';
+import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
 import { markSessionCreated } from './ai/claude.js';
 import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
+import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { createLogger } from './utils/logger.js';
 
 const log = createLogger('main');
 
 // Ensure logs directory exists
 mkdirSync(config.LOGS_DIR, { recursive: true });
+
+// Ensure knowledge base structure exists
+initKB();
 
 // Restore sessions from previous run
 restoreSessions();
@@ -20,6 +25,7 @@ for (const [, session] of getAllSessions()) {
 // Start services
 const bot = createBot();
 const server = startHttpServer();
+startScheduler(bot);
 
 log.info('Jarvis started', {
   vault: config.VAULT_DIR,
@@ -29,6 +35,7 @@ log.info('Jarvis started', {
 // Graceful shutdown
 function shutdown() {
   log.info('Shutting down...');
+  stopScheduler();
   persistSessions();
   bot.stopPolling();
   server.close();

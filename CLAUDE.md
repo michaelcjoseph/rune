@@ -33,7 +33,10 @@ src/
 │   ├── search.ts            # ripgrep-based full-text search across vault + wiki
 │   ├── queue.ts             # JSON-file ingestion queue (enqueue/dequeue/clear)
 │   └── schema.ts            # Default schema.md content for new knowledge bases
-├── jobs/                    # Scheduled cron jobs (morning-prep, whoop, nightly, nudges)
+├── jobs/
+│   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
+│   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
+│   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
 │   └── index.ts             # Standalone stdio entry point for Claude Code
@@ -43,12 +46,12 @@ src/
 │   └── readwise/            # Readwise API (future)
 ├── vault/
 │   ├── files.ts             # Read/write/list vault markdown files
-│   ├── journal.ts           # Today's journal file creation + append
+│   ├── journal.ts           # Journal file creation, append, writeMorningPrep, parseTag
 │   ├── git.ts               # git add/commit/push helpers
 │   ├── sessions.ts          # TG session Map with JSON persistence + crash recovery
 │   └── watcher.ts           # FSWatcher for Readwise article detection (future)
 └── utils/
-    ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getTimestamp)
+    ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, etc.)
     ├── logger.ts            # Structured JSON logging with component tags
     └── markdown.ts          # Markdown parsing utilities (future)
 ```

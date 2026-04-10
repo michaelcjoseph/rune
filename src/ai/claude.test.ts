@@ -211,6 +211,119 @@ describe('ai/claude', () => {
       expect(result.text).toBeNull();
       expect(result.error).toContain('timed out');
     });
+
+    it('uses config.CLAUDE_TIMEOUT_MS when timeoutMs is not provided', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn(() => {
+          child.emit('close', null, 'SIGTERM');
+        });
+        spawnMock.mockReturnValue(child);
+
+        const promise = askClaudeOneShot('test prompt');
+
+        // Advance to just before the config default (100ms in test config)
+        await vi.advanceTimersByTimeAsync(99);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        // Advance past the config default
+        await vi.advanceTimersByTimeAsync(1);
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+        const result = await promise;
+        expect(result.error).toBe('Claude timed out after 0.1s');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('uses custom timeoutMs when provided to askClaudeOneShot', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn(() => {
+          child.emit('close', null, 'SIGTERM');
+        });
+        spawnMock.mockReturnValue(child);
+
+        const promise = askClaudeOneShot('test prompt', 5000);
+
+        // Should not fire at the config default (100ms)
+        await vi.advanceTimersByTimeAsync(100);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        // Advance to just before custom timeout
+        await vi.advanceTimersByTimeAsync(4899);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        // Advance past custom timeout
+        await vi.advanceTimersByTimeAsync(1);
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+        const result = await promise;
+        expect(result.error).toBe('Claude timed out after 5s');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('uses custom timeoutMs when provided to runAgent', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn(() => {
+          child.emit('close', null, 'SIGTERM');
+        });
+        spawnMock.mockReturnValue(child);
+
+        const promise = runAgent('wiki-compiler', 'ingest', 30000);
+
+        // Should not fire at config default
+        await vi.advanceTimersByTimeAsync(100);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        // Advance to just before custom timeout
+        await vi.advanceTimersByTimeAsync(29899);
+        expect(child.kill).not.toHaveBeenCalled();
+
+        // Advance past custom timeout
+        await vi.advanceTimersByTimeAsync(1);
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+        const result = await promise;
+        expect(result.error).toBe('Claude timed out after 30s');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('timeout error message reflects the actual timeout value used', async () => {
+      vi.useFakeTimers();
+      try {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn(() => {
+          child.emit('close', null, 'SIGTERM');
+        });
+        spawnMock.mockReturnValue(child);
+
+        const promise = askClaudeOneShot('test', 90000);
+
+        await vi.advanceTimersByTimeAsync(90000);
+        const result = await promise;
+        expect(result.error).toBe('Claude timed out after 90s');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('summarizeSession', () => {

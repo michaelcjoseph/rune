@@ -1,0 +1,2 @@
+- quarterly and annual SEC reports ingestion of companies I'm following
+- send morning prep as telegram message

@@ -78,8 +78,8 @@ Full manual test plan covering all implementation phases (0-12).
 
 ## 9. KB Structure Setup
 
-- [ ] 🔴 After first ingestion, `knowledge/` directory exists with `schema.md`, `index.md`, `log.md`
-- [ ] 🔴 Directory tree created: `raw/{articles,conversations,notes}`, `wiki/{entities,concepts,topics,comparisons}`
+- [x] 🔴 After first ingestion, `knowledge/` directory exists with `schema.md`, `index.md`, `log.md`
+- [x] 🔴 Directory tree created: `raw/{articles,conversations,notes}`, `wiki/{entities,concepts,topics,comparisons}`
 
 ## 10. Source Ingestion
 

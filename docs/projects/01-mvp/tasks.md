@@ -46,18 +46,18 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 4: Morning Prep + Scheduler Foundation
 
-- [ ] Extend `src/utils/time.ts` — add `getYesterdayFilename()` and `getDayOfWeek()`
-- [ ] Extend `src/vault/journal.ts` — add `writeMorningPrep(sections)` with idempotent `## Morning Prep` marker check
-- [ ] Extend `src/vault/journal.ts` — add `parseTag(content, tag)` to extract lines after `#tag` markers
-- [ ] Extend `src/ai/claude.ts` — add optional `timeoutMs` parameter to `execClaude`
-- [ ] Create `src/jobs/scheduler.ts` — register cron jobs via node-cron with `America/Chicago` timezone, export `startScheduler(bot)` / `stopScheduler()`
-- [ ] Create `src/jobs/morning-prep.ts` — gather data from vault (yesterday's #priorities, health/plan.md workout, study/syllabus.md + progress.json, writing/topics.md)
-- [ ] Morning prep: Claude synthesis prompt — pass gathered data to `askClaudeOneShot()`, fallback to raw formatting on failure
-- [ ] Morning prep: write structured journal section, git commit, send TG notification
-- [ ] Create `src/jobs/nudges.ts` — stub for review reminders (Friday + end-of-month)
-- [ ] Wire `startScheduler(bot)` into `src/index.ts` startup, `stopScheduler()` into shutdown
-- [ ] Add manual trigger for testing (HTTP endpoint `/morning-prep` or `/prep` bot command)
-- [ ] Test end-to-end: verify journal file created with correct sections, TG notification received
+- [x] Extend `src/utils/time.ts` — add `getYesterdayFilename()` and `getDayOfWeek()`
+- [x] Extend `src/vault/journal.ts` — add `writeMorningPrep(sections)` with idempotent `## Morning Prep` marker check
+- [x] Extend `src/vault/journal.ts` — add `parseTag(content, tag)` to extract lines after `#tag` markers
+- [x] Extend `src/ai/claude.ts` — add optional `timeoutMs` parameter to `execClaude`
+- [x] Create `src/jobs/scheduler.ts` — register cron jobs via node-cron with `America/Chicago` timezone, export `startScheduler(bot)` / `stopScheduler()`
+- [x] Create `src/jobs/morning-prep.ts` — gather data from vault (yesterday's #priorities, health/plan.md workout, study/syllabus.md + progress.json, writing/topics.md)
+- [x] Morning prep: Claude synthesis prompt — pass gathered data to `askClaudeOneShot()`, fallback to raw formatting on failure
+- [x] Morning prep: write structured journal section, git commit, send TG notification
+- [x] Create `src/jobs/nudges.ts` — stub for review reminders (Friday + end-of-month)
+- [x] Wire `startScheduler(bot)` into `src/index.ts` startup, `stopScheduler()` into shutdown
+- [x] Add manual trigger for testing (HTTP endpoint `/morning-prep` or `/prep` bot command)
+- [x] Test end-to-end: verify journal file created with correct sections, TG notification received
 
 ## Phase 5: Review Commands via Telegram
 
