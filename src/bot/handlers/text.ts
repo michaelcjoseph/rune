@@ -15,6 +15,9 @@ import { handleIngest } from '../commands/ingest.js';
 import { handlePrep } from '../commands/prep.js';
 import { handleDaily } from '../commands/daily.js';
 import { handleWeekly } from '../commands/weekly.js';
+import { handleMonthly } from '../commands/monthly.js';
+import { handleQuarterly } from '../commands/quarterly.js';
+import { handleYearly } from '../commands/yearly.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
@@ -32,6 +35,9 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
   if (text.startsWith('/daily')) return handleDaily(bot, chatId, text.slice('/daily'.length).trim());
   if (text.startsWith('/weekly')) return handleWeekly(bot, chatId, text.slice('/weekly'.length).trim());
+  if (text.startsWith('/monthly')) return handleMonthly(bot, chatId, text.slice('/monthly'.length).trim());
+  if (text.startsWith('/quarterly')) return handleQuarterly(bot, chatId, text.slice('/quarterly'.length).trim());
+  if (text.startsWith('/yearly')) return handleYearly(bot, chatId, text.slice('/yearly'.length).trim());
   if (text.startsWith('/prep')) return handlePrep(bot, chatId);
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
   if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
@@ -110,11 +116,17 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/journal <text> — append entry to today\'s journal',
     '/ask <question> — one-shot vault query',
     '/kb <question> — query the knowledge base',
-    '/kb stats — knowledge base statistics',
     '/ingest [path] — ingest source into knowledge base',
     '/lint — run wiki health check',
     '/prep — run morning prep now',
     '/status — show uptime and session info',
+    '',
+    'Reviews:',
+    '/daily [date] — process journal tags into JSON updates',
+    '/weekly [date] — end-of-week review interview',
+    '/monthly [month] — monthly review interview',
+    '/quarterly [Q1-Q4] — quarterly review interview',
+    '/yearly [year] — yearly review (7 Questions)',
     '',
     'Model:',
     '/haiku — fast responses (default)',

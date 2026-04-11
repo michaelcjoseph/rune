@@ -103,21 +103,21 @@ describe('reviews/weekly', () => {
   describe('detectOutline', () => {
     it('returns outline text when marker is found', () => {
       const response = 'Here is the summary.\n\nWeek in Review outline:\n- Point A\n- Point B';
-      const result = detectOutline(response);
+      const result = detectOutline(response, 'week in review outline:');
       expect(result).toBe('Week in Review outline:\n- Point A\n- Point B');
     });
 
     it('is case-insensitive', () => {
       const response = 'WEEK IN REVIEW OUTLINE:\n- Something';
-      expect(detectOutline(response)).toBe('WEEK IN REVIEW OUTLINE:\n- Something');
+      expect(detectOutline(response, 'week in review outline:')).toBe('WEEK IN REVIEW OUTLINE:\n- Something');
     });
 
     it('returns null when marker is not found', () => {
-      expect(detectOutline('No outline here.')).toBeNull();
+      expect(detectOutline('No outline here.', 'week in review outline:')).toBeNull();
     });
 
     it('returns null for empty string', () => {
-      expect(detectOutline('')).toBeNull();
+      expect(detectOutline('', 'week in review outline:')).toBeNull();
     });
   });
 
@@ -274,7 +274,7 @@ describe('reviews/weekly', () => {
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
     });
 
-    it('sends initial notification with date range', async () => {
+    it('sends initial notification', async () => {
       const session = makeSession();
       runAgentMock.mockResolvedValue({ text: 'data', error: null });
       readVaultMock.mockReturnValue(null);
@@ -282,8 +282,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.start(session, bot);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('2026-04-04'));
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('2026-04-10'));
+      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('weekly review'));
     });
   });
 

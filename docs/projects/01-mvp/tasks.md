@@ -87,11 +87,11 @@ In progress. See [spec.md](spec.md) for details.
 
 ### Remaining reviews
 
-- [ ] Create `src/reviews/monthly.ts` — monthly orchestrator (30-day journal scan, all systems, theme-based interview)
-- [ ] Create `src/reviews/quarterly.ts` — quarterly orchestrator (3x monthly journal scans in parallel, pattern-focused interview)
-- [ ] Create `src/reviews/yearly.ts` — yearly orchestrator (4x quarterly scans, 7 Questions framework)
-- [ ] Create command handlers for /monthly, /quarterly, /yearly
-- [ ] Update `/start` help text with all review commands
+- [x] Create `src/reviews/monthly.ts` — monthly orchestrator (30-day journal scan, all systems, theme-based interview)
+- [x] Create `src/reviews/quarterly.ts` — quarterly orchestrator (3x monthly journal scans in parallel, pattern-focused interview)
+- [x] Create `src/reviews/yearly.ts` — yearly orchestrator (4x quarterly scans, 7 Questions framework)
+- [x] Create command handlers for /monthly, /quarterly, /yearly
+- [x] Update `/start` help text with all review commands
 
 ## Phase 6: Scheduled Automation + Nightly
 

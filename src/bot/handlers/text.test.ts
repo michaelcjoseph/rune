@@ -24,10 +24,14 @@ vi.mock('../commands/ingest.js', () => ({ handleIngest: vi.fn() }));
 vi.mock('../commands/prep.js', () => ({ handlePrep: vi.fn() }));
 vi.mock('../commands/daily.js', () => ({ handleDaily: vi.fn() }));
 vi.mock('../commands/weekly.js', () => ({ handleWeekly: vi.fn() }));
+vi.mock('../commands/monthly.js', () => ({ handleMonthly: vi.fn() }));
+vi.mock('../commands/quarterly.js', () => ({ handleQuarterly: vi.fn() }));
+vi.mock('../commands/yearly.js', () => ({ handleYearly: vi.fn() }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
   handleReviewMessage: vi.fn(),
+  registerReviewHandler: vi.fn(),
 }));
 
 const { handleFresh } = await import('../commands/fresh.js');
