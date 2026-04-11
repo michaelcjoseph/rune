@@ -26,6 +26,11 @@ export function getTodayFilename(): string {
   return formatDateFilename(new Date());
 }
 
+export function getTodayDate(): string {
+  const { year, month, day } = getLocalDate(new Date());
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 export function getTimestamp(): string {
   return new Date().toLocaleTimeString('en-US', {
     timeZone: tz,

@@ -13,6 +13,9 @@ import { handleStatus } from '../commands/status.js';
 import { handleKB } from '../commands/kb.js';
 import { handleIngest } from '../commands/ingest.js';
 import { handlePrep } from '../commands/prep.js';
+import { handleDaily } from '../commands/daily.js';
+import { handleWeekly } from '../commands/weekly.js';
+import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
   // Security gate
@@ -27,6 +30,8 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
   if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
   if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
+  if (text.startsWith('/daily')) return handleDaily(bot, chatId, text.slice('/daily'.length).trim());
+  if (text.startsWith('/weekly')) return handleWeekly(bot, chatId, text.slice('/weekly'.length).trim());
   if (text.startsWith('/prep')) return handlePrep(bot, chatId);
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
   if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
@@ -34,6 +39,9 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/haiku')) return handleModelSwitch(bot, chatId, 'haiku');
   if (text.startsWith('/status')) return handleStatus(bot, chatId);
   if (text.startsWith('/start')) return handleStart(bot, chatId);
+
+  // Active review session takes priority over default conversation
+  if (hasActiveReview(chatId)) return handleReviewMessage(chatId, text, bot);
 
   // Default: multi-turn conversation
   return handleConversation(bot, chatId, text);

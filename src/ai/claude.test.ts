@@ -23,8 +23,10 @@ vi.mock('node:fs', async () => {
 });
 
 const { spawn } = await import('node:child_process');
-const { askClaude, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated } =
+const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated } =
   await import('./claude.js');
+// Type import — verifies ClaudeResult is exported (TS compile error if not)
+import type { ClaudeResult } from './claude.js';
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
 
@@ -178,6 +180,170 @@ describe('ai/claude', () => {
       const [r1, r2] = await Promise.all([p1, p2]);
       expect(r1.text).toBe('ok');
       expect(r2.text).toBe('ok');
+    });
+  });
+
+  describe('ClaudeResult type export', () => {
+    it('is usable as a type with text and error fields', () => {
+      const result: ClaudeResult = { text: 'hello', error: null };
+      expect(result.text).toBe('hello');
+      expect(result.error).toBeNull();
+    });
+  });
+
+  describe('askClaudeWithContext', () => {
+    it('passes --append-system-prompt flag with the system prompt', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'response' }));
+
+      await askClaudeWithContext('hello', 'ctx-sess-1', 'You are a helpful assistant.');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--append-system-prompt');
+      const sysIdx = args.indexOf('--append-system-prompt');
+      expect(args[sysIdx + 1]).toBe('You are a helpful assistant.');
+    });
+
+    it('uses --session-id for new sessions', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'response' }));
+
+      await askClaudeWithContext('hello', 'ctx-new-sess', 'system prompt');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--session-id');
+      expect(args).toContain('ctx-new-sess');
+      expect(args).not.toContain('--resume');
+    });
+
+    it('uses --resume for already-created sessions', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'first' }));
+      await askClaudeWithContext('hello', 'ctx-resume-sess', 'sys');
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'second' }));
+      await askClaudeWithContext('follow up', 'ctx-resume-sess', 'sys');
+
+      const secondArgs = spawnMock.mock.calls[1]![1] as string[];
+      expect(secondArgs).toContain('--resume');
+      expect(secondArgs).toContain('ctx-resume-sess');
+      expect(secondArgs).not.toContain('--session-id');
+    });
+
+    it('uses --resume for sessions marked via markSessionCreated', async () => {
+      markSessionCreated('ctx-restored');
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaudeWithContext('hello', 'ctx-restored', 'sys');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--resume');
+      expect(args).toContain('ctx-restored');
+    });
+
+    it('passes custom model when specified', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaudeWithContext('hello', 'ctx-opus-sess', 'sys', 'opus');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--model');
+      expect(args).toContain('opus');
+    });
+
+    it('uses default model when none specified', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
+      await askClaudeWithContext('hello', 'ctx-default-model', 'sys');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--model');
+      expect(args).toContain('haiku');
+    });
+
+    it('does not mark session as created on error', async () => {
+      spawnMock.mockReturnValue(createChild({ stderr: 'fail', code: 1 }));
+      await askClaudeWithContext('msg', 'ctx-fail-sess', 'sys');
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeWithContext('retry', 'ctx-fail-sess', 'sys');
+
+      const retryArgs = spawnMock.mock.calls[1]![1] as string[];
+      expect(retryArgs).toContain('--session-id');
+      expect(retryArgs).not.toContain('--resume');
+    });
+
+    it('serializes concurrent calls to the same session', async () => {
+      const resolvers: (() => void)[] = [];
+
+      spawnMock.mockImplementation(() => {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn();
+        resolvers.push(() => {
+          child.stdout.emit('data', Buffer.from('ok'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      });
+
+      const p1 = askClaudeWithContext('msg1', 'ctx-lock-test', 'sys1');
+      const p2 = askClaudeWithContext('msg2', 'ctx-lock-test', 'sys2');
+
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      resolvers[0]!();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+
+      resolvers[1]!();
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1.text).toBe('ok');
+      expect(r2.text).toBe('ok');
+    });
+
+    it('shares session lock queue with askClaude', async () => {
+      const resolvers: (() => void)[] = [];
+
+      spawnMock.mockImplementation(() => {
+        const child = new EventEmitter() as any;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = vi.fn();
+        resolvers.push(() => {
+          child.stdout.emit('data', Buffer.from('ok'));
+          child.emit('close', 0, null);
+        });
+        return child;
+      });
+
+      // Mix askClaude and askClaudeWithContext on the same session
+      const p1 = askClaude('msg1', 'shared-lock-sess');
+      const p2 = askClaudeWithContext('msg2', 'shared-lock-sess', 'sys');
+
+      await new Promise((r) => setTimeout(r, 10));
+      // Only first should have spawned
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      resolvers[0]!();
+      await new Promise((r) => setTimeout(r, 10));
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+
+      resolvers[1]!();
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1.text).toBe('ok');
+      expect(r2.text).toBe('ok');
+
+      // Second call (askClaudeWithContext) should have --resume since first succeeded
+      const secondArgs = spawnMock.mock.calls[1]![1] as string[];
+      expect(secondArgs).toContain('--resume');
+      expect(secondArgs).toContain('--append-system-prompt');
+    });
+  });
+
+  describe('askClaude does not include system prompt', () => {
+    it('does not pass --append-system-prompt flag', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaude('hello', 'no-sys-sess');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--append-system-prompt');
     });
   });
 

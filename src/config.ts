@@ -30,6 +30,10 @@ const config = {
     return join(this.LOGS_DIR, 'kb-ingestion-queue.json');
   },
 
+  get REVIEW_SESSIONS_FILE() {
+    return join(this.LOGS_DIR, 'review-sessions.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

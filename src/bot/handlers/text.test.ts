@@ -21,7 +21,14 @@ vi.mock('../commands/ask.js', () => ({ handleAsk: vi.fn() }));
 vi.mock('../commands/status.js', () => ({ handleStatus: vi.fn() }));
 vi.mock('../commands/kb.js', () => ({ handleKB: vi.fn() }));
 vi.mock('../commands/ingest.js', () => ({ handleIngest: vi.fn() }));
+vi.mock('../commands/prep.js', () => ({ handlePrep: vi.fn() }));
+vi.mock('../commands/daily.js', () => ({ handleDaily: vi.fn() }));
+vi.mock('../commands/weekly.js', () => ({ handleWeekly: vi.fn() }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
+vi.mock('../../reviews/orchestrator.js', () => ({
+  hasActiveReview: vi.fn(() => false),
+  handleReviewMessage: vi.fn(),
+}));
 
 const { handleFresh } = await import('../commands/fresh.js');
 const { handleJournal } = await import('../commands/journal.js');
@@ -31,6 +38,7 @@ const { handleKB } = await import('../commands/kb.js');
 const { handleIngest } = await import('../commands/ingest.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaude } = await import('../../ai/claude.js');
+const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { handleTextMessage } = await import('./text.js');
 
 function mockBot() {
@@ -117,5 +125,57 @@ describe('text handler routing', () => {
     const bot = mockBot();
     await handleTextMessage(bot, msg(''));
     expect(bot.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes to review handler when review is active and message is not a command', async () => {
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(true);
+    handleReviewMessageMock.mockResolvedValue(undefined);
+
+    const bot = mockBot();
+    await handleTextMessage(bot, msg('looks good to me'));
+
+    expect(hasActiveReviewMock).toHaveBeenCalledWith(100);
+    expect(handleReviewMessageMock).toHaveBeenCalledWith(100, 'looks good to me', bot);
+    // Should NOT fall through to conversation
+    const askClaudeMock = askClaude as unknown as ReturnType<typeof vi.fn>;
+    expect(askClaudeMock).not.toHaveBeenCalled();
+  });
+
+  it('falls through to conversation when no active review', async () => {
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askClaudeMock = askClaude as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'test-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'some text',
+      model: 'haiku',
+    });
+    askClaudeMock.mockResolvedValue({ text: 'reply', error: null });
+
+    await handleTextMessage(mockBot(), msg('some text'));
+
+    const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(handleReviewMessageMock).not.toHaveBeenCalled();
+    expect(askClaudeMock).toHaveBeenCalledWith('some text', 'test-sess', 'haiku');
+  });
+
+  it('routes /fresh to command handler even during active review', async () => {
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(true);
+
+    await handleTextMessage(mockBot(), msg('/fresh'));
+
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
+    const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
+    expect(handleReviewMessageMock).not.toHaveBeenCalled();
   });
 });

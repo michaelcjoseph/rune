@@ -19,7 +19,7 @@ function resolveClaudePath(): string {
 
 const CLAUDE_BIN = resolveClaudePath();
 
-interface ClaudeResult {
+export interface ClaudeResult {
   text: string | null;
   error: string | null;
 }
@@ -79,20 +79,30 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   });
 }
 
-/** Multi-turn conversation with session persistence */
-export async function askClaude(message: string, sessionId: string, model?: string): Promise<ClaudeResult> {
-  // Queue requests per session to avoid concurrent writes
+function askClaudeSession(message: string, sessionId: string, model?: string, systemPrompt?: string): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
     const args = createdSessions.has(sessionId)
-      ? ['-p', message, '--resume', sessionId, '--model', model || config.DEFAULT_CHAT_MODEL]
-      : ['-p', message, '--session-id', sessionId, '--model', model || config.DEFAULT_CHAT_MODEL];
+      ? ['-p', message, '--resume', sessionId]
+      : ['-p', message, '--session-id', sessionId];
+    if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+    args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const result = await execClaude(args);
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
   sessionLocks.set(sessionId, current.catch(() => {}));
   return current;
+}
+
+/** Multi-turn conversation with session persistence */
+export async function askClaude(message: string, sessionId: string, model?: string): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model);
+}
+
+/** Multi-turn conversation with session persistence and appended system prompt */
+export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model, systemPrompt);
 }
 
 /** One-shot query with no session persistence */
