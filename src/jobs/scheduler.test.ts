@@ -37,6 +37,10 @@ vi.mock('./nudges.js', () => ({
   runReviewNudge: vi.fn(async () => {}),
 }));
 
+vi.mock('./whoop-sync.js', () => ({
+  runWhoopSleepSync: vi.fn(async () => {}),
+}));
+
 const { startScheduler, stopScheduler } = await import('./scheduler.js');
 
 describe('jobs/scheduler', () => {
@@ -55,10 +59,10 @@ describe('jobs/scheduler', () => {
     expect(options.timezone).toBe('America/Chicago');
   });
 
-  it('startScheduler registers the expected number of jobs (4)', () => {
+  it('startScheduler registers the expected number of jobs (5)', () => {
     startScheduler({} as any);
 
-    expect(mockSchedule).toHaveBeenCalledTimes(4);
+    expect(mockSchedule).toHaveBeenCalledTimes(5);
   });
 
   it('startScheduler passes the morning-prep cron expression', () => {
@@ -72,7 +76,7 @@ describe('jobs/scheduler', () => {
     startScheduler({} as any);
     stopScheduler();
 
-    expect(mockStop).toHaveBeenCalledTimes(4);
+    expect(mockStop).toHaveBeenCalledTimes(5);
   });
 
   it('stopScheduler clears the task list — second call does not error or re-stop', () => {
@@ -91,9 +95,9 @@ describe('jobs/scheduler', () => {
     vi.clearAllMocks();
 
     startScheduler({} as any);
-    expect(mockSchedule).toHaveBeenCalledTimes(4);
+    expect(mockSchedule).toHaveBeenCalledTimes(5);
 
     stopScheduler();
-    expect(mockStop).toHaveBeenCalledTimes(4);
+    expect(mockStop).toHaveBeenCalledTimes(5);
   });
 });

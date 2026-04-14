@@ -5,6 +5,7 @@ import { createLogger } from '../utils/logger.js';
 import { runMorningPrep } from './morning-prep.js';
 import { runNightly } from './nightly.js';
 import { runWeeklyNudge, runReviewNudge } from './nudges.js';
+import { runWhoopSleepSync } from './whoop-sync.js';
 
 const log = createLogger('scheduler');
 
@@ -27,6 +28,11 @@ function registerJobs(bot: TelegramBot): JobDefinition[] {
       name: 'nightly',
       schedule: '30 23 * * *', // 11:30 PM daily
       handler: () => { void runNightly(bot); },
+    },
+    {
+      name: 'whoop-sleep',
+      schedule: '0 8 * * *', // 8:00 AM daily
+      handler: () => { void runWhoopSleepSync(bot); },
     },
     {
       name: 'weekly-nudge',

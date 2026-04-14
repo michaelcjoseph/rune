@@ -45,6 +45,13 @@ export function getYesterdayFilename(): string {
   return formatDateFilename(new Date(year, month, day - 1));
 }
 
+export function getYesterdayDate(): string {
+  const { year, month, day } = getLocalDate(new Date());
+  const d = new Date(year, month, day - 1);
+  const { year: y, month: m, day: dd } = getLocalDate(d);
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+
 export function getDayOfWeek(): string {
   return new Date().toLocaleDateString('en-US', {
     timeZone: tz,

@@ -1,5 +1,6 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { captureSessions } from './capture.js';
+import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB } from '../kb/engine.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
@@ -112,6 +113,11 @@ Date context: ${date}`;
   return { step: 'Daily tags', status: 'success', detail: 'Tags processed and applied' };
 }
 
+async function stepWhoopActivity(): Promise<NightlyStepResult> {
+  const result = await executeActivitySync();
+  return { step: 'Whoop activity', status: result.status === 'synced' ? 'success' : result.status, detail: result.detail };
+}
+
 async function stepLint(): Promise<NightlyStepResult> {
   if (getDayOfWeek() !== 'Sunday') {
     return { step: 'KB lint', status: 'skipped', detail: 'Not Sunday' };
@@ -145,6 +151,7 @@ export async function executeNightly(): Promise<NightlyResult> {
   await run('Session capture', stepCaptureSession);
   await run('KB queue', stepKBQueue);
   await run('Daily tags', stepDailyTags);
+  await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);
 
   // Final commit for any residual uncommitted changes

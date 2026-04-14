@@ -18,6 +18,9 @@ const config = {
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
 
+  WHOOP_CLIENT_ID: process.env['WHOOP_CLIENT_ID'] || '',
+  WHOOP_CLIENT_SECRET: process.env['WHOOP_CLIENT_SECRET'] || '',
+
   LOGS_DIR: join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {

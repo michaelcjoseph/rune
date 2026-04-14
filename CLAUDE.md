@@ -38,15 +38,18 @@ src/
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
-│   ├── nightly.ts           # Nightly orchestrator: capture → KB queue → daily tags → lint → commit
+│   ├── nightly.ts           # Nightly orchestrator: capture → KB queue → daily tags → whoop → lint → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
+│   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
 │   └── index.ts             # Standalone stdio entry point for Claude Code
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
-│   ├── whoop/               # OAuth2 + Whoop API (future)
+│   ├── whoop/types.ts       # Whoop API response types and daily data format
+│   ├── whoop/keychain.ts    # macOS Keychain token storage via security CLI
+│   ├── whoop/client.ts      # OAuth2 token management + Whoop API calls
 │   └── readwise/client.ts   # Save articles to Readwise Reader API
 ├── vault/
 │   ├── files.ts             # Read/write/list vault markdown files

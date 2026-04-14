@@ -111,12 +111,12 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 8: Whoop Integration
 
-- [ ] Whoop API client — OAuth2 with token refresh
-- [ ] macOS Keychain helpers — store/retrieve Whoop tokens
-- [ ] Whoop types (sleep, recovery, strain, workout, body measurement)
-- [ ] Sleep sync job — pull sleep + recovery data at 8am
-- [ ] Write daily JSON file (health/whoop/YYYY-MM-DD.json)
-- [ ] Generate trends.md with 7-day and 30-day averages
+- [x] Whoop API client — OAuth2 with token refresh
+- [x] macOS Keychain helpers — store/retrieve Whoop tokens
+- [x] Whoop types (sleep, recovery, strain, workout, body measurement)
+- [x] Sleep sync job — pull sleep + recovery data at 8am
+- [x] Write daily JSON file (health/whoop/YYYY-MM-DD.json)
+- [x] Generate trends.md with 7-day and 30-day averages
 
 ## Phase 9: Conversation-to-KB Pipeline
 
