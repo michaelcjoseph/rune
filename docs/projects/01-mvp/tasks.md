@@ -120,19 +120,19 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 9: Conversation-to-KB Pipeline
 
-- [ ] Enhance /fresh to classify conversation as KB-worthy or not
-- [ ] Copy worthy conversation summaries to knowledge/raw/conversations/
-- [ ] Add to ingestion queue for nightly processing
-- [ ] Test end-to-end: conversation → /fresh → raw source → nightly ingest → wiki pages
+- [x] Enhance /fresh to classify conversation as KB-worthy or not
+- [x] Copy worthy conversation summaries to knowledge/raw/conversations/
+- [x] Add to ingestion queue for nightly processing
+- [x] Test end-to-end: conversation → /fresh → raw source → nightly ingest → wiki pages
 
 ## Phase 10: CLI Interface
 
-- [ ] CLI entry point (cli/jarvis.ts)
-- [ ] query command — query KB from terminal
-- [ ] ingest command — trigger ingestion from terminal
-- [ ] lint command — run wiki health check
-- [ ] status command — show system state
-- [ ] search command — search vault + wiki
+- [x] CLI entry point (cli/jarvis.ts)
+- [x] query command — query KB from terminal
+- [x] ingest command — trigger ingestion from terminal
+- [x] lint command — run wiki health check
+- [x] status command — show system state
+- [x] search command — search vault + wiki
 
 ## Phase 11: Additional Vault Commands
 

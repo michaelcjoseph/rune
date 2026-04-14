@@ -61,6 +61,8 @@ src/
     ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, etc.)
     ├── logger.ts            # Structured JSON logging with component tags
     └── markdown.ts          # Markdown parsing utilities (future)
+cli/
+└── jarvis.ts                # CLI entry point for local interactive use
 ```
 
 ## Key Conventions
@@ -81,7 +83,7 @@ src/
 ```bash
 npm run dev    # Development with tsx watch mode
 npm run start  # Production
-npm run cli    # Local CLI interface (future)
+npm run cli    # Local CLI interface
 ```
 
 ## Environment Variables

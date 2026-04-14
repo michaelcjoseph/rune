@@ -126,7 +126,10 @@ export async function summarizeSession(sessionId: string): Promise<ClaudeResult>
 Topic: <brief topic in 5-10 words>
 Prompt: <the user's original question/request>
 Discussion: <2-4 sentence summary of what was discussed>
-Conclusion: <what was decided, learned, or resolved>`;
+Conclusion: <what was decided, learned, or resolved>
+KB-worthy: <yes or no>
+
+KB-worthy means this conversation produced insights worth ingesting into the knowledge base. Answer yes if it produced a new insight, framework, mental model, factual information worth preserving, or explored a topic in depth. Answer no if it was purely operational, casual chat, or covered topics already well-documented.`;
 
   return askClaude(prompt, sessionId, config.DEFAULT_CHAT_MODEL);
 }
