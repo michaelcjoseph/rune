@@ -76,13 +76,13 @@ function transformWorkout(w: WhoopWorkout): NonNullable<WhoopDailyData['workouts
 
 // --- Sleep Sync (8am) ---
 
-export interface SleepSyncResult {
+interface WhoopSyncResult {
   status: 'synced' | 'skipped' | 'error';
   date?: string;
   detail?: string;
 }
 
-export async function executeSleepSync(): Promise<SleepSyncResult> {
+export async function executeSleepSync(): Promise<WhoopSyncResult> {
   if (!isConfigured()) {
     return { status: 'skipped', detail: 'Whoop not configured' };
   }
@@ -112,7 +112,7 @@ export async function executeSleepSync(): Promise<SleepSyncResult> {
   if (recovery) data.recovery = transformRecovery(recovery);
   writeDailyData(data);
 
-  generateTrends();
+  try { generateTrends(); } catch (err) { log.error('Trends generation failed', { error: String(err) }); }
   gitCommitAndPush(`Whoop sleep sync: ${date}`);
 
   const parts: string[] = [];
@@ -135,7 +135,7 @@ export async function runWhoopSleepSync(bot: TelegramBot): Promise<void> {
 
 // --- Activity Sync (nightly) ---
 
-export async function executeActivitySync(): Promise<{ status: 'synced' | 'skipped' | 'error'; detail?: string }> {
+export async function executeActivitySync(): Promise<WhoopSyncResult> {
   if (!isConfigured()) {
     return { status: 'skipped', detail: 'Whoop not configured' };
   }
@@ -164,7 +164,7 @@ export async function executeActivitySync(): Promise<{ status: 'synced' | 'skipp
   if (workouts.length > 0) data.workouts = workouts.map(transformWorkout);
   writeDailyData(data);
 
-  generateTrends();
+  try { generateTrends(); } catch (err) { log.error('Trends generation failed', { error: String(err) }); }
 
   return { status: 'synced', detail: `Strain: ${data.strain?.score ?? 'N/A'}` };
 }
@@ -172,13 +172,13 @@ export async function executeActivitySync(): Promise<{ status: 'synced' | 'skipp
 // --- Trends Generation ---
 
 function generateTrends(): void {
-  const today = new Date();
+  const todayStr = getTodayDate();
+  const [y, m, d] = todayStr.split('-').map(Number);
   const days: WhoopDailyData[] = [];
 
   for (let i = 0; i < 30; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().slice(0, 10);
+    const date = new Date(y, m - 1, d - i);
+    const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const content = readVaultFile(dataFilePath(dateStr));
     if (content) {
       try {
@@ -216,7 +216,7 @@ function generateTrends(): void {
   const lines = [
     '# Whoop Trends',
     '',
-    `Updated: ${today.toISOString().slice(0, 10)}`,
+    `Updated: ${todayStr}`,
     `Data points: ${days.length} days`,
     '',
     '## 7-Day Averages',

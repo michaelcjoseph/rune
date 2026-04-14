@@ -96,8 +96,7 @@ async function refreshAccessToken(refreshToken: string): Promise<string | null> 
     });
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      log.error('Token refresh failed', { status: response.status, body: text });
+      log.error('Token refresh failed', { status: response.status });
       return null;
     }
 
