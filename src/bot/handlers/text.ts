@@ -20,6 +20,9 @@ import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
+import { isConfigured, getAuthorizationURL } from '../../integrations/whoop/client.js';
+import { WHOOP_REDIRECT_URI } from '../../server/http.js';
+import { getStoredTokens } from '../../integrations/whoop/keychain.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
   // Security gate
@@ -45,6 +48,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/sonnet')) return handleModelSwitch(bot, chatId, 'sonnet');
   if (text.startsWith('/haiku')) return handleModelSwitch(bot, chatId, 'haiku');
   if (text.startsWith('/status')) return handleStatus(bot, chatId);
+  if (text.startsWith('/whoop')) return handleWhoop(bot, chatId);
   if (text.startsWith('/start')) return handleStart(bot, chatId);
 
   // URL detection — messages containing URLs go to content triage
@@ -97,6 +101,23 @@ async function handleLint(bot: TelegramBot, chatId: number): Promise<void> {
   }
 }
 
+async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
+  if (!isConfigured()) {
+    await bot.sendMessage(chatId, 'Whoop not configured. Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET in .env.local.');
+    return;
+  }
+
+  const { accessToken, expiresAt } = getStoredTokens();
+  if (accessToken && expiresAt > Date.now()) {
+    const expiresIn = Math.round((expiresAt - Date.now()) / 3_600_000);
+    await bot.sendMessage(chatId, `Whoop is connected. Token expires in ~${expiresIn}h.`);
+    return;
+  }
+
+  const url = getAuthorizationURL(WHOOP_REDIRECT_URI);
+  await bot.sendMessage(chatId, `Whoop needs authorization. Open this link:\n\n${url}`);
+}
+
 async function handleModelSwitch(bot: TelegramBot, chatId: number, model: string): Promise<void> {
   const session = getSession(chatId);
   if (!session) {
@@ -131,6 +152,9 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/monthly [month] — monthly review interview',
     '/quarterly [Q1-Q4] — quarterly review interview',
     '/yearly [year] — yearly review (7 Questions)',
+    '',
+    'Health:',
+    '/whoop — Whoop connection status or auth link',
     '',
     'Model:',
     '/haiku — fast responses (default)',
