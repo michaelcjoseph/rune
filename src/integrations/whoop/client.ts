@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import config from '../../config.js';
 import { createLogger } from '../../utils/logger.js';
 import { getStoredTokens, storeTokens } from './keychain.js';
@@ -17,18 +18,28 @@ const AUTH_URL = 'https://api.prod.whoop.com/oauth/oauth2/auth';
 const TIMEOUT_MS = 15_000;
 const TOKEN_BUFFER_MS = 5 * 60 * 1000; // Refresh 5 minutes before expiry
 
+let pendingOAuthState: string | null = null;
+
 export function isConfigured(): boolean {
   return !!(config.WHOOP_CLIENT_ID && config.WHOOP_CLIENT_SECRET);
 }
 
 export function getAuthorizationURL(redirectUri: string): string {
+  pendingOAuthState = randomBytes(16).toString('hex');
   const params = new URLSearchParams({
     client_id: config.WHOOP_CLIENT_ID,
     redirect_uri: redirectUri,
     response_type: 'code',
+    state: pendingOAuthState,
     scope: 'read:recovery read:cycles read:sleep read:workout read:body_measurement read:profile',
   });
   return `${AUTH_URL}?${params.toString()}`;
+}
+
+export function verifyOAuthState(state: string): boolean {
+  if (!pendingOAuthState || state !== pendingOAuthState) return false;
+  pendingOAuthState = null;
+  return true;
 }
 
 export async function exchangeCode(code: string, redirectUri: string): Promise<boolean> {

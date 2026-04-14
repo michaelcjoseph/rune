@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import config from '../config.js';
 import { getAllSessions } from '../vault/sessions.js';
 import { captureSessions } from '../jobs/capture.js';
-import { isConfigured, exchangeCode } from '../integrations/whoop/client.js';
+import { isConfigured, exchangeCode, verifyOAuthState } from '../integrations/whoop/client.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('http');
@@ -51,6 +51,14 @@ async function handleWhoopOAuth(req: IncomingMessage, res: ServerResponse): Prom
     log.error('Whoop OAuth error', { error });
     res.writeHead(400, { 'Content-Type': 'text/plain' });
     res.end(`OAuth error: ${error}`);
+    return;
+  }
+
+  const state = url.searchParams.get('state');
+  if (!state || !verifyOAuthState(state)) {
+    log.error('Whoop OAuth state mismatch');
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('OAuth state mismatch. Please try /whoop again.');
     return;
   }
 
