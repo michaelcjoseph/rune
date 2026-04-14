@@ -101,13 +101,13 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 7: Content Triage + Photos
 
-- [ ] Design content-triager agent — classify incoming URLs/text (KB-worthy, journal entry, Readwise save, action item) and route accordingly
-- [ ] content-triager agent definition
-- [ ] photo-classifier agent definition
-- [ ] URL handler — detect URLs in messages, fetch content, spawn triage agent
-- [ ] Photo handler — download photo, spawn classifier, route based on type
+- [x] Design content-triager agent — classify incoming URLs/text (KB-worthy, journal entry, Readwise save, action item) and route accordingly
+- [x] content-triager agent definition
+- [x] photo-classifier agent definition
+- [x] URL handler — detect URLs in messages, fetch content, spawn triage agent
+- [x] Photo handler — download photo, spawn classifier, route based on type
 - [ ] Readwise API client — save articles programmatically
-- [ ] Wire URL and photo handlers into Telegram message dispatch
+- [x] Wire URL and photo handlers into Telegram message dispatch
 
 ## Phase 8: Whoop Integration
 

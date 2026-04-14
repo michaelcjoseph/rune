@@ -19,6 +19,7 @@ import { handleMonthly } from '../commands/monthly.js';
 import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
+import { containsURL, handleURLMessage } from './url.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
   // Security gate
@@ -45,6 +46,9 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/haiku')) return handleModelSwitch(bot, chatId, 'haiku');
   if (text.startsWith('/status')) return handleStatus(bot, chatId);
   if (text.startsWith('/start')) return handleStart(bot, chatId);
+
+  // URL detection — messages containing URLs go to content triage
+  if (containsURL(text)) return handleURLMessage(bot, chatId, text);
 
   // Active review session takes priority over default conversation
   if (hasActiveReview(chatId)) return handleReviewMessage(chatId, text, bot);

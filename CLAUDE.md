@@ -24,6 +24,8 @@ src/
 ├── bot/
 │   ├── telegram.ts          # Bot init and message dispatch
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler
+│   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
+│   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
 │   └── commands/            # One file per command: fresh, journal, ask, kb, ingest, status
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
@@ -102,6 +104,8 @@ Required:
 | morning-prep | `.claude/agents/morning-prep.md` | Gather vault data → structured morning journal section |
 | session-summarizer | `.claude/agents/session-summarizer.md` | Rich session summaries with vault context |
 | release-notes | `.claude/agents/release-notes.md` | Generate changelog from git history |
+| content-triager | `.claude/agents/content-triager.md` | Classify URLs/text → kb-ingest, readwise, journal, or skip |
+| photo-classifier | `.claude/agents/photo-classifier.md` | Classify photos → book, receipt, whiteboard, etc. with routing |
 
 ### Dev Tooling Agents (used by `/work` skill)
 
