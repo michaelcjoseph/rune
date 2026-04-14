@@ -52,6 +52,41 @@ export function getDayOfWeek(): string {
   });
 }
 
+/**
+ * Get the Saturday-through-Friday week range for the current week.
+ * Returns journal filenames and formatted display labels.
+ */
+export function getWeekRange(): { start: string; end: string; filenames: string[] } {
+  const now = new Date();
+  const { year, month, day } = getLocalDate(now);
+  // Use UTC to avoid local-TZ reinterpretation of Chicago-local date components
+  const dow = new Date(Date.UTC(year, month, day)).getUTCDay(); // 0=Sun, 6=Sat
+  // Days since last Saturday: Saturday=0, Sunday=1, Monday=2, ..., Friday=6
+  const daysSinceSat = dow === 6 ? 0 : dow + 1;
+
+  const filenames: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(year, month, day - daysSinceSat + i);
+    filenames.push(formatDateFilename(d));
+  }
+
+  const satDate = new Date(Date.UTC(year, month, day - daysSinceSat));
+  const friDate = new Date(Date.UTC(year, month, day - daysSinceSat + 6));
+  const fmt = (d: Date): string => d.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' });
+
+  return { start: fmt(satDate), end: fmt(friDate), filenames };
+}
+
+/** Get current month info in the configured timezone. */
+export function getMonthInfo(): { month: number; monthName: string; day: number; lastDay: number } {
+  const now = new Date();
+  const { year, month, day } = getLocalDate(now);
+  const monthName = now.toLocaleDateString('en-US', { timeZone: tz, month: 'long' });
+  // Last day of the current month: day 0 of next month = last day of this month
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return { month: month + 1, monthName, day, lastDay };
+}
+
 /** Standardized date context string for agent and one-shot prompts. */
 export function getDateContext(): string {
   const now = new Date();

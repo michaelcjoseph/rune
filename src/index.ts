@@ -6,6 +6,7 @@ import { markSessionCreated } from './ai/claude.js';
 import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
+import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { createLogger } from './utils/logger.js';
 
 const log = createLogger('main');
@@ -26,6 +27,7 @@ for (const [, session] of getAllSessions()) {
 const bot = createBot();
 const server = startHttpServer();
 startScheduler(bot);
+startWatcher(bot);
 
 log.info('Jarvis started', {
   vault: config.VAULT_DIR,
@@ -35,6 +37,7 @@ log.info('Jarvis started', {
 // Graceful shutdown
 function shutdown() {
   log.info('Shutting down...');
+  stopWatcher();
   stopScheduler();
   persistSessions();
   bot.stopPolling();

@@ -28,6 +28,10 @@ vi.mock('./morning-prep.js', () => ({
   runMorningPrep: vi.fn(async () => {}),
 }));
 
+vi.mock('./nightly.js', () => ({
+  runNightly: vi.fn(async () => {}),
+}));
+
 vi.mock('./nudges.js', () => ({
   runWeeklyNudge: vi.fn(async () => {}),
   runReviewNudge: vi.fn(async () => {}),
@@ -51,10 +55,10 @@ describe('jobs/scheduler', () => {
     expect(options.timezone).toBe('America/Chicago');
   });
 
-  it('startScheduler registers the expected number of jobs (3)', () => {
+  it('startScheduler registers the expected number of jobs (4)', () => {
     startScheduler({} as any);
 
-    expect(mockSchedule).toHaveBeenCalledTimes(3);
+    expect(mockSchedule).toHaveBeenCalledTimes(4);
   });
 
   it('startScheduler passes the morning-prep cron expression', () => {
@@ -68,7 +72,7 @@ describe('jobs/scheduler', () => {
     startScheduler({} as any);
     stopScheduler();
 
-    expect(mockStop).toHaveBeenCalledTimes(3);
+    expect(mockStop).toHaveBeenCalledTimes(4);
   });
 
   it('stopScheduler clears the task list — second call does not error or re-stop', () => {
@@ -87,9 +91,9 @@ describe('jobs/scheduler', () => {
     vi.clearAllMocks();
 
     startScheduler({} as any);
-    expect(mockSchedule).toHaveBeenCalledTimes(3);
+    expect(mockSchedule).toHaveBeenCalledTimes(4);
 
     stopScheduler();
-    expect(mockStop).toHaveBeenCalledTimes(3);
+    expect(mockStop).toHaveBeenCalledTimes(4);
   });
 });

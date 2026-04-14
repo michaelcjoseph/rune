@@ -83,7 +83,6 @@ In progress. See [spec.md](spec.md) for details.
   - Post: spawn project-updater, json-updater, psychology-updater agents as needed
 - [x] Create `src/bot/commands/weekly.ts` — /weekly [date] command handler
 - [x] Modify `src/bot/handlers/text.ts` — check for active review session before default conversation routing; if active, route to `orchestrator.handleMessage()`
-- [ ] Test multi-turn weekly review through Telegram end-to-end
 
 ### Remaining reviews
 
@@ -95,10 +94,10 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 6: Scheduled Automation + Nightly
 
-- [ ] Create `src/jobs/nightly.ts` — orchestrate: TG session capture → KB queue processing → /daily tag processing → lint (Sunday) → git commit
-- [ ] Flesh out `src/jobs/nudges.ts` — Friday 3pm weekly review nudge with week stats
-- [ ] Nudges: end-of-month review reminders with cadence logic (monthly vs quarterly vs yearly based on month)
-- [ ] Readwise file watcher — FSWatch on Readwise/Articles/, TG notify + add to ingestion queue
+- [x] Create `src/jobs/nightly.ts` — orchestrate: TG session capture → KB queue processing → /daily tag processing → lint (Sunday) → git commit
+- [x] Flesh out `src/jobs/nudges.ts` — Friday 3pm weekly review nudge with week stats
+- [x] Nudges: end-of-month review reminders with cadence logic (monthly vs quarterly vs yearly based on month)
+- [x] Readwise file watcher — FSWatch on Readwise/Articles/, TG notify + add to ingestion queue
 
 ## Phase 7: Content Triage + Photos
 

@@ -3,6 +3,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { runMorningPrep } from './morning-prep.js';
+import { runNightly } from './nightly.js';
 import { runWeeklyNudge, runReviewNudge } from './nudges.js';
 
 const log = createLogger('scheduler');
@@ -21,6 +22,11 @@ function registerJobs(bot: TelegramBot): JobDefinition[] {
       name: 'morning-prep',
       schedule: '30 5 * * *', // 5:30 AM daily
       handler: () => { void runMorningPrep(bot); },
+    },
+    {
+      name: 'nightly',
+      schedule: '30 23 * * *', // 11:30 PM daily
+      handler: () => { void runNightly(bot); },
     },
     {
       name: 'weekly-nudge',
