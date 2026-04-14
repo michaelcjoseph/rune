@@ -16,6 +16,8 @@ const config = {
 
   VAULT_DIR: required('VAULT_DIR'),
 
+  READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
+
   LOGS_DIR: join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {

@@ -5,6 +5,7 @@ import { appendToJournal } from '../../vault/journal.js';
 import { enqueue } from '../../kb/queue.js';
 import { getTimestamp } from '../../utils/time.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
+import { saveToReadwise } from '../../integrations/readwise/client.js';
 import { createLogger } from '../../utils/logger.js';
 import config from '../../config.js';
 
@@ -123,7 +124,10 @@ async function routeReadwise(url: string, title: string, content: string, bot: T
   const filename = `${sanitizeFilename(title)}.md`;
   const vaultPath = `Readwise/Articles/${filename}`;
   writeVaultFile(vaultPath, formatAsMarkdown(url, title, content));
-  await bot.sendMessage(chatId, `Saved to Readwise: ${title}`);
+
+  const apiResult = await saveToReadwise(url, title);
+  const apiNote = apiResult.success ? ' + Readwise API' : '';
+  await bot.sendMessage(chatId, `Saved to Readwise${apiNote}: ${title}`);
 }
 
 async function routeJournal(url: string, title: string, reasoning: string, bot: TelegramBot, chatId: number): Promise<void> {

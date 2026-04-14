@@ -47,7 +47,7 @@ src/
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
 │   ├── whoop/               # OAuth2 + Whoop API (future)
-│   └── readwise/            # Readwise API (future)
+│   └── readwise/client.ts   # Save articles to Readwise Reader API
 ├── vault/
 │   ├── files.ts             # Read/write/list vault markdown files
 │   ├── journal.ts           # Journal file creation, append, writeMorningPrep, parseTag
