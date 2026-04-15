@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
-const mockSetThinkTopic = vi.fn();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
 
 vi.mock('../../reviews/orchestrator.js', () => ({
   startReview: mockStartReview,
-}));
-
-vi.mock('../../reviews/think.js', () => ({
-  setThinkTopic: mockSetThinkTopic,
 }));
 
 vi.mock('../../utils/time.js', () => ({
@@ -43,7 +38,6 @@ describe('handleThink', () => {
 
     expect(bot.sendMessage).toHaveBeenCalledWith(CHAT_ID, 'Usage: /think <topic>');
     expect(mockStartReview).not.toHaveBeenCalled();
-    expect(mockSetThinkTopic).not.toHaveBeenCalled();
   });
 
   it('sets topic and calls startReview with correct args', async () => {
@@ -52,9 +46,8 @@ describe('handleThink', () => {
 
     await handleThink(bot, CHAT_ID, 'career next steps');
 
-    expect(mockSetThinkTopic).toHaveBeenCalledWith('career next steps');
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'think', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'think', '2026-04-14', bot, 'career next steps');
     expect(bot.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -64,7 +57,6 @@ describe('handleThink', () => {
 
     await handleThink(bot, CHAT_ID, 'should I switch to Rust?');
 
-    expect(mockSetThinkTopic).toHaveBeenCalledWith('should I switch to Rust?');
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'think', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'think', '2026-04-14', bot, 'should I switch to Rust?');
   });
 });

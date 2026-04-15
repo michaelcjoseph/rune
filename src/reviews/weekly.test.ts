@@ -16,6 +16,7 @@ vi.mock('./orchestrator.js', () => ({
 
 vi.mock('./session.js', () => ({
   updateReviewSession: vi.fn(),
+  onReviewSessionDeleted: vi.fn(),
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -76,6 +77,7 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
     targetDate: '2026-04-10', // Friday
     phase: 'prep',
     claudeSessionId: 'claude-weekly-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-10T08:00:00',

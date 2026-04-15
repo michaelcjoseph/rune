@@ -11,7 +11,7 @@ import config from '../../config.js';
 
 const log = createLogger('url-handler');
 
-const URL_REGEX = /https?:\/\/[^\s)>\]]+/g;
+const URL_REGEX = /https?:\/\/[^\s)>\]]+/;
 const MAX_CONTENT_LENGTH = 10_000;
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -27,7 +27,7 @@ export function containsURL(text: string): boolean {
 }
 
 export function extractURLs(text: string): string[] {
-  return [...text.matchAll(new RegExp(URL_REGEX))].map((m) => m[0]);
+  return [...text.matchAll(new RegExp(URL_REGEX, 'g'))].map((m) => m[0]);
 }
 
 function sanitizeFilename(title: string): string {

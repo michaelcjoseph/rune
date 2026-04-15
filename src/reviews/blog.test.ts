@@ -17,6 +17,7 @@ vi.mock('./orchestrator.js', () => ({
 vi.mock('./session.js', () => ({
   updateReviewSession: vi.fn(),
   deleteReviewSession: vi.fn(),
+  onReviewSessionDeleted: vi.fn(),
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -50,7 +51,7 @@ const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
 const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
-const { setBlogTopic } = await import('./blog.js');
+await import('./blog.js');
 
 // Capture registration call before beforeEach clears mocks
 const registrationCalls = [...registerMock.mock.calls];
@@ -68,6 +69,7 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
     targetDate: '2026-04-14',
     phase: 'prep',
     claudeSessionId: 'claude-blog-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-14T08:00:00',
@@ -99,8 +101,7 @@ describe('reviews/blog', () => {
 
   describe('start', () => {
     it('reads skill file and writing context, sends first message', async () => {
-      const session = makeSession();
-      setBlogTopic('why testing matters');
+      const session = makeSession({ topic: 'why testing matters' });
       readVaultMock.mockImplementation((path: string) => {
         if (path === '.claude/skills/blog/SKILL.md') return 'Custom blog skill instructions';
         if (path === 'writing/voice.md') return 'Conversational, direct tone';
@@ -138,8 +139,7 @@ describe('reviews/blog', () => {
     });
 
     it('uses default instructions when skill file is missing', async () => {
-      const session = makeSession();
-      setBlogTopic('productivity systems');
+      const session = makeSession({ topic: 'productivity systems' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Tell me more about what you mean.', error: null });
 
@@ -158,8 +158,7 @@ describe('reviews/blog', () => {
     });
 
     it('includes voice.md in system prompt when available', async () => {
-      const session = makeSession();
-      setBlogTopic('some topic');
+      const session = makeSession({ topic: 'some topic' });
       readVaultMock.mockImplementation((path: string) => {
         if (path === 'writing/voice.md') return 'My voice: plain English, no jargon';
         return null;
@@ -184,8 +183,7 @@ describe('reviews/blog', () => {
   describe('handleMessage', () => {
     it('forwards messages to Claude with system prompt', async () => {
       // Start a session first to populate sessionPrompts
-      const session = makeSession();
-      setBlogTopic('test topic');
+      const session = makeSession({ topic: 'test topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial response', error: null });
       await blogHandler.start(session, bot);
@@ -208,8 +206,7 @@ describe('reviews/blog', () => {
 
     it('ends the session on /done', async () => {
       // Start a session first
-      const session = makeSession();
-      setBlogTopic('wrap up topic');
+      const session = makeSession({ topic: 'wrap up topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial', error: null });
       await blogHandler.start(session, bot);

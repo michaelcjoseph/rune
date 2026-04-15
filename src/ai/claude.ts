@@ -35,6 +35,21 @@ export function markSessionCreated(sessionId: string): void {
   createdSessions.add(sessionId);
 }
 
+/** Clean up session tracking state when a session is deleted */
+export function cleanupSession(sessionId: string): void {
+  sessionLocks.delete(sessionId);
+  createdSessions.delete(sessionId);
+}
+
+const activeProcesses = new Set<ReturnType<typeof spawn>>();
+
+/** Kill all active Claude CLI child processes (for graceful shutdown) */
+export function killActiveProcesses(): void {
+  for (const child of activeProcesses) {
+    child.kill('SIGTERM');
+  }
+}
+
 function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   return new Promise((resolve) => {
@@ -43,6 +58,8 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
     });
+
+    activeProcesses.add(child);
 
     let stdout = '';
     let stderr = '';
@@ -59,6 +76,7 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
 
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      activeProcesses.delete(child);
       if (signal === 'SIGTERM') {
         log.error('Claude CLI timed out', { args: args.slice(0, 3) });
         resolve({ text: null, error: `Claude timed out after ${timeout / 1000}s` });
@@ -73,6 +91,7 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
 
     child.on('error', (err) => {
       clearTimeout(timer);
+      activeProcesses.delete(child);
       log.error('Claude CLI spawn error', { error: err.message, args: args.slice(0, 3) });
       resolve({ text: null, error: err.message });
     });

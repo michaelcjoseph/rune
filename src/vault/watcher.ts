@@ -11,6 +11,7 @@ const READWISE_DIR = 'Readwise/Articles';
 
 let watcher: FSWatcher | null = null;
 const seen = new Set<string>();
+let clearTimer: ReturnType<typeof setInterval> | null = null;
 
 function extractTitle(filepath: string): string | null {
   try {
@@ -67,10 +68,27 @@ export function startWatcher(bot: TelegramBot): void {
     });
   });
 
+  clearTimer = setInterval(() => {
+    const before = seen.size;
+    seen.clear();
+    try {
+      for (const file of readdirSync(dir)) {
+        if (file.endsWith('.md')) seen.add(file);
+      }
+    } catch {
+      // read error — cleared set will re-seed on next event
+    }
+    log.info('Watcher seen-set refreshed', { before, after: seen.size });
+  }, 24 * 60 * 60 * 1000);
+
   log.info('Readwise watcher started', { dir, existingFiles: seen.size });
 }
 
 export function stopWatcher(): void {
+  if (clearTimer) {
+    clearInterval(clearTimer);
+    clearTimer = null;
+  }
   if (watcher) {
     watcher.close();
     watcher = null;

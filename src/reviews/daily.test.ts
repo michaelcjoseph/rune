@@ -74,6 +74,7 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
     targetDate: '2026-04-10',
     phase: 'prep',
     claudeSessionId: 'claude-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-10T08:00:00',

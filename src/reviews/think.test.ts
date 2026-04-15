@@ -17,6 +17,7 @@ vi.mock('./orchestrator.js', () => ({
 vi.mock('./session.js', () => ({
   updateReviewSession: vi.fn(),
   deleteReviewSession: vi.fn(),
+  onReviewSessionDeleted: vi.fn(),
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -50,7 +51,7 @@ const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
 const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
-const { setThinkTopic } = await import('./think.js');
+await import('./think.js');
 
 // Capture registration call before beforeEach clears mocks
 const registrationCalls = [...registerMock.mock.calls];
@@ -68,6 +69,7 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
     targetDate: '2026-04-14',
     phase: 'prep',
     claudeSessionId: 'claude-think-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-14T08:00:00',
@@ -99,8 +101,7 @@ describe('reviews/think', () => {
 
   describe('start', () => {
     it('reads skill file and sends first message via askClaudeWithContext', async () => {
-      const session = makeSession();
-      setThinkTopic('career planning');
+      const session = makeSession({ topic: 'career planning' });
       readVaultMock.mockReturnValue('Custom skill instructions here');
       askClaudeMock.mockResolvedValue({ text: 'What aspects of your career are you thinking about?', error: null });
 
@@ -120,8 +121,7 @@ describe('reviews/think', () => {
     });
 
     it('uses default instructions when skill file is missing', async () => {
-      const session = makeSession();
-      setThinkTopic('productivity systems');
+      const session = makeSession({ topic: 'productivity systems' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Tell me more about what you mean.', error: null });
 
@@ -140,8 +140,7 @@ describe('reviews/think', () => {
     });
 
     it('handles Claude error on start', async () => {
-      const session = makeSession();
-      setThinkTopic('test topic');
+      const session = makeSession({ topic: 'test topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: null, error: 'Claude unavailable' });
 
@@ -156,8 +155,7 @@ describe('reviews/think', () => {
   describe('handleMessage', () => {
     it('forwards messages to Claude with system prompt', async () => {
       // First start a session to populate sessionPrompts
-      const session = makeSession();
-      setThinkTopic('test topic');
+      const session = makeSession({ topic: 'test topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial response', error: null });
       await thinkHandler.start(session, bot);
@@ -180,8 +178,7 @@ describe('reviews/think', () => {
 
     it('ends the session on /done', async () => {
       // Start a session first
-      const session = makeSession();
-      setThinkTopic('wrap up topic');
+      const session = makeSession({ topic: 'wrap up topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial', error: null });
       await thinkHandler.start(session, bot);

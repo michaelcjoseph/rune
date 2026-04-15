@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
-const mockSetHealthFocus = vi.fn();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
 
 vi.mock('../../reviews/orchestrator.js', () => ({
   startReview: mockStartReview,
-}));
-
-vi.mock('../../reviews/health.js', () => ({
-  setHealthFocus: mockSetHealthFocus,
 }));
 
 vi.mock('../../utils/time.js', () => ({
@@ -42,29 +37,26 @@ describe('handleHealth', () => {
 
     await handleHealth(bot, CHAT_ID, '');
 
-    expect(mockSetHealthFocus).not.toHaveBeenCalled();
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, undefined);
   });
 
-  it('sets focus and calls startReview when args provided', async () => {
+  it('passes focus as topic when args provided', async () => {
     mockStartReview.mockResolvedValue(undefined);
     const bot = mockBot();
 
     await handleHealth(bot, CHAT_ID, 'sleep optimization');
 
-    expect(mockSetHealthFocus).toHaveBeenCalledWith('sleep optimization');
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, 'sleep optimization');
   });
 
-  it('does not call setHealthFocus when no args', async () => {
+  it('passes undefined topic when no args', async () => {
     mockStartReview.mockResolvedValue(undefined);
     const bot = mockBot();
 
     await handleHealth(bot, CHAT_ID, '');
 
-    expect(mockSetHealthFocus).not.toHaveBeenCalled();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, undefined);
   });
 });

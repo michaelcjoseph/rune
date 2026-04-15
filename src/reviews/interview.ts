@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { updateReviewSession } from './session.js';
+import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession, ReviewType } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import { askClaudeWithContext, askClaudeOneShot, runAgent } from '../ai/claude.js';
@@ -51,6 +51,8 @@ export function detectOutline(response: string, marker: string): string | null {
 
 // Store the system prompt per session for multi-turn reuse
 const sessionPrompts = new Map<string, string>();
+
+onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
 function buildSystemPrompt(session: ReviewSession, prepContext: string, skillInstructions: string, promptHeader: string): string {
   return `${promptHeader}
@@ -282,7 +284,7 @@ Reply ONLY with the JSON object, nothing else.`);
       }
 
       try {
-        gitCommitAndPush(`${capitalize(config.type)} review: ${session.targetDate}`);
+        await gitCommitAndPush(`${capitalize(config.type)} review: ${session.targetDate}`);
       } catch (err) {
         log.error('Git commit failed', { error: (err as Error).message });
       }

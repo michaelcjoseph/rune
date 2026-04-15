@@ -7,6 +7,6 @@ export async function handleJournal(bot: TelegramBot, chatId: number, text: stri
   const ts = getTimestamp();
   const entry = `- ${ts} [[jarvis]] telegram chat\n\t- ${text}`;
   appendToJournal(entry);
-  gitCommitAndPush('TG journal entry');
+  await gitCommitAndPush('TG journal entry');
   await bot.sendMessage(chatId, 'Logged to journal.');
 }

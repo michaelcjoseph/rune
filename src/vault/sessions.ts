@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import config from '../config.js';
+import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('sessions');
@@ -49,6 +50,8 @@ export function setSessionModel(chatId: number, model: string): void {
 }
 
 export function deleteSession(chatId: number): void {
+  const session = sessions.get(chatId);
+  if (session) cleanupSession(session.sessionId);
   sessions.delete(chatId);
   persistSessions();
 }

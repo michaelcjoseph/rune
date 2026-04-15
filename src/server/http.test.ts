@@ -2,20 +2,23 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 import type { Server } from 'node:http';
 
+const mockConfig = {
+  HTTP_PORT: 0,
+  HTTP_HOST: '127.0.0.1',
+  TIMEZONE: 'America/Chicago',
+  VAULT_DIR: '/test/vault',
+  JARVIS_HTTP_SECRET: 'test-secret',
+};
+
 vi.mock('../config.js', () => ({
-  default: {
-    HTTP_PORT: 0,
-    HTTP_HOST: '127.0.0.1',
-    TIMEZONE: 'America/Chicago',
-    VAULT_DIR: '/test/vault',
-  },
+  default: mockConfig,
 }));
 
 vi.mock('../vault/sessions.js', () => ({
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),
 }));
-vi.mock('../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
+vi.mock('../ai/claude.js', () => ({ summarizeSession: vi.fn(), cleanupSession: vi.fn() }));
 vi.mock('../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
 vi.mock('../utils/time.js', () => ({ getTimestamp: vi.fn(() => '14:30') }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
@@ -65,7 +68,7 @@ describe('server/http', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getAllMock.mockReturnValue([]);
-    delete process.env['JARVIS_HTTP_SECRET'];
+    mockConfig.JARVIS_HTTP_SECRET = 'test-secret';
   });
 
   it('GET /health returns status, uptime, session count', async () => {
@@ -77,7 +80,10 @@ describe('server/http', () => {
   });
 
   it('POST /capture-sessions with no sessions returns 0', async () => {
-    const res = await req('/capture-sessions', { method: 'POST' });
+    const res = await req('/capture-sessions', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-secret' },
+    });
     expect(res.status).toBe(200);
     expect(res.body.captured).toBe(0);
   });
@@ -88,18 +94,25 @@ describe('server/http', () => {
     ]);
     summaryMock.mockResolvedValue({ text: 'Topic: test', error: null });
 
-    const res = await req('/capture-sessions', { method: 'POST' });
+    const res = await req('/capture-sessions', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-secret' },
+    });
     expect(res.body.captured).toBe(1);
     expect(appendToJournal).toHaveBeenCalled();
     expect(deleteSession).toHaveBeenCalledWith(123);
     expect(gitCommitAndPush).toHaveBeenCalled();
   });
 
-  it('POST /capture-sessions enforces auth when secret is set', async () => {
-    process.env['JARVIS_HTTP_SECRET'] = 'test-secret';
-
+  it('POST /capture-sessions returns 401 without auth', async () => {
     const noAuth = await req('/capture-sessions', { method: 'POST' });
     expect(noAuth.status).toBe(401);
+
+    const wrongAuth = await req('/capture-sessions', {
+      method: 'POST',
+      headers: { authorization: 'Bearer wrong' },
+    });
+    expect(wrongAuth.status).toBe(401);
 
     const withAuth = await req('/capture-sessions', {
       method: 'POST',

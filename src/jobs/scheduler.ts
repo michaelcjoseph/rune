@@ -10,6 +10,7 @@ import { runWhoopSleepSync } from './whoop-sync.js';
 const log = createLogger('scheduler');
 
 const tasks: ScheduledTask[] = [];
+const running = new Set<string>();
 
 interface JobDefinition {
   name: string;
@@ -17,32 +18,43 @@ interface JobDefinition {
   handler: (now: Date | 'manual' | 'init') => void;
 }
 
+function guarded(name: string, fn: () => Promise<void>): () => void {
+  return () => {
+    if (running.has(name)) {
+      log.warn(`Skipping ${name}: previous run still in progress`);
+      return;
+    }
+    running.add(name);
+    void fn().finally(() => running.delete(name));
+  };
+}
+
 function registerJobs(bot: TelegramBot): JobDefinition[] {
   return [
     {
       name: 'morning-prep',
       schedule: '30 5 * * *', // 5:30 AM daily
-      handler: () => { void runMorningPrep(bot); },
+      handler: guarded('morning-prep', () => runMorningPrep(bot)),
     },
     {
       name: 'nightly',
       schedule: '30 23 * * *', // 11:30 PM daily
-      handler: () => { void runNightly(bot); },
+      handler: guarded('nightly', () => runNightly(bot)),
     },
     {
       name: 'whoop-sleep',
       schedule: '0 8 * * *', // 8:00 AM daily
-      handler: () => { void runWhoopSleepSync(bot); },
+      handler: guarded('whoop-sleep', () => runWhoopSleepSync(bot)),
     },
     {
       name: 'weekly-nudge',
       schedule: '0 15 * * 5', // Friday 3 PM
-      handler: () => { void runWeeklyNudge(bot); },
+      handler: guarded('weekly-nudge', () => runWeeklyNudge(bot)),
     },
     {
       name: 'review-nudge',
       schedule: '0 15 28-31 * *', // Last days of month, 3 PM — Phase 7 adds last-day check
-      handler: () => { void runReviewNudge(bot); },
+      handler: guarded('review-nudge', () => runReviewNudge(bot)),
     },
   ];
 }

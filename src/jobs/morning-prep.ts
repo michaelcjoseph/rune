@@ -117,7 +117,7 @@ export async function executeMorningPrep(): Promise<MorningPrepResult> {
     return { status: 'skipped', filepath };
   }
 
-  gitCommitAndPush('Morning prep');
+  await gitCommitAndPush('Morning prep');
   log.info('Morning prep complete', { filepath });
   return { status: 'written', filepath };
 }

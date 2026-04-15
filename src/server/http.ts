@@ -19,14 +19,11 @@ async function handleHealth(_req: IncomingMessage, res: ServerResponse): Promise
 }
 
 async function handleCaptureSessions(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const secret = process.env['JARVIS_HTTP_SECRET'];
-  if (secret) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${secret}`) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-      return;
-    }
+  const auth = req.headers['authorization'];
+  if (!config.JARVIS_HTTP_SECRET || auth !== `Bearer ${config.JARVIS_HTTP_SECRET}`) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'unauthorized' }));
+    return;
   }
 
   const result = await captureSessions('http');

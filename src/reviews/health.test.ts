@@ -17,6 +17,7 @@ vi.mock('./orchestrator.js', () => ({
 vi.mock('./session.js', () => ({
   updateReviewSession: vi.fn(),
   deleteReviewSession: vi.fn(),
+  onReviewSessionDeleted: vi.fn(),
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -50,7 +51,7 @@ const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
 const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
-const { setHealthFocus } = await import('./health.js');
+await import('./health.js');
 
 // Capture registration call before beforeEach clears mocks
 const registrationCalls = [...registerMock.mock.calls];
@@ -68,6 +69,7 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
     targetDate: '2026-04-14',
     phase: 'prep',
     claudeSessionId: 'claude-health-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-14T08:00:00',
@@ -99,8 +101,7 @@ describe('reviews/health', () => {
 
   describe('start', () => {
     it('reads skill file and health context, sends first message', async () => {
-      const session = makeSession();
-      setHealthFocus('sleep optimization');
+      const session = makeSession({ topic: 'sleep optimization' });
       readVaultMock.mockImplementation((path: string) => {
         if (path === '.claude/skills/health/SKILL.md') return 'Custom health skill instructions';
         if (path === 'health/whoop/trends.md') return 'HRV trending up';
@@ -127,8 +128,7 @@ describe('reviews/health', () => {
     });
 
     it('uses default instructions when skill file is missing', async () => {
-      const session = makeSession();
-      setHealthFocus('nutrition');
+      const session = makeSession({ topic: 'nutrition' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'What are your nutrition goals?', error: null });
 
@@ -147,8 +147,7 @@ describe('reviews/health', () => {
     });
 
     it('includes Whoop trends in system prompt when available', async () => {
-      const session = makeSession();
-      setHealthFocus('recovery');
+      const session = makeSession({ topic: 'recovery' });
       readVaultMock.mockImplementation((path: string) => {
         if (path === 'health/whoop/trends.md') return 'Recovery score: 85%, HRV: 65ms';
         if (path === 'health/plan.md') return null;
@@ -171,8 +170,7 @@ describe('reviews/health', () => {
     });
 
     it('handles Claude error on start', async () => {
-      const session = makeSession();
-      setHealthFocus('test');
+      const session = makeSession({ topic: 'test' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: null, error: 'Claude unavailable' });
 
@@ -187,8 +185,7 @@ describe('reviews/health', () => {
   describe('handleMessage', () => {
     it('forwards messages to Claude with system prompt', async () => {
       // First start a session to populate sessionPrompts
-      const session = makeSession();
-      setHealthFocus('sleep');
+      const session = makeSession({ topic: 'sleep' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial response', error: null });
       await healthHandler.start(session, bot);
@@ -211,8 +208,7 @@ describe('reviews/health', () => {
 
     it('ends the session on /done', async () => {
       // Start a session first
-      const session = makeSession();
-      setHealthFocus('exercise');
+      const session = makeSession({ topic: 'exercise' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial', error: null });
       await healthHandler.start(session, bot);

@@ -5,6 +5,7 @@ vi.mock('./session.js', () => ({
   createReviewSession: vi.fn(),
   getActiveReviewSession: vi.fn(),
   deleteReviewSession: vi.fn(),
+  onReviewSessionDeleted: vi.fn(),
 }));
 
 // Mock the logger
@@ -34,6 +35,7 @@ function makeFakeSession(overrides: Partial<ReviewSession> = {}): ReviewSession 
     targetDate: '2026-04-10',
     phase: 'prep',
     claudeSessionId: 'claude-001',
+    topic: null,
     prepContext: null,
     outline: null,
     createdAt: '2026-04-10T08:00:00',
@@ -84,7 +86,7 @@ describe('reviews/orchestrator', () => {
       registerReviewHandler('daily', handler);
       await startReview(100, 'daily', '2026-04-10', bot);
 
-      expect(createMock).toHaveBeenCalledWith(100, 'daily', '2026-04-10');
+      expect(createMock).toHaveBeenCalledWith(100, 'daily', '2026-04-10', undefined);
       expect(handler.start).toHaveBeenCalledWith(session, bot);
     });
 

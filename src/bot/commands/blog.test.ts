@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
-const mockSetBlogTopic = vi.fn();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
 
 vi.mock('../../reviews/orchestrator.js', () => ({
   startReview: mockStartReview,
-}));
-
-vi.mock('../../reviews/blog.js', () => ({
-  setBlogTopic: mockSetBlogTopic,
 }));
 
 vi.mock('../../utils/time.js', () => ({
@@ -43,7 +38,6 @@ describe('handleBlog', () => {
 
     expect(bot.sendMessage).toHaveBeenCalledWith(CHAT_ID, 'Usage: /blog <topic>');
     expect(mockStartReview).not.toHaveBeenCalled();
-    expect(mockSetBlogTopic).not.toHaveBeenCalled();
   });
 
   it('sets topic and calls startReview with correct args', async () => {
@@ -52,9 +46,8 @@ describe('handleBlog', () => {
 
     await handleBlog(bot, CHAT_ID, 'why testing matters');
 
-    expect(mockSetBlogTopic).toHaveBeenCalledWith('why testing matters');
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'blog', '2026-04-14', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'blog', '2026-04-14', bot, 'why testing matters');
     expect(bot.sendMessage).not.toHaveBeenCalled();
   });
 });

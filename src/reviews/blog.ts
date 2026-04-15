@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { updateReviewSession } from './session.js';
+import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import { registerReviewHandler } from './orchestrator.js';
@@ -21,11 +21,8 @@ Rules:
 - No artifacts or documents until I approve the outline`;
 
 const sessionPrompts = new Map<string, string>();
-let pendingTopic: string | null = null;
 
-export function setBlogTopic(topic: string): void {
-  pendingTopic = topic;
-}
+onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
 function gatherWritingContext(): string {
   const sections: string[] = [];
@@ -57,8 +54,7 @@ function buildSystemPrompt(topic: string): string {
 
 const blogHandler: ReviewTypeHandler = {
   async start(session: ReviewSession, bot: TelegramBot): Promise<void> {
-    const topic = pendingTopic || 'untitled';
-    pendingTopic = null;
+    const topic = session.topic || 'untitled';
 
     const systemPrompt = buildSystemPrompt(topic);
     sessionPrompts.set(session.claudeSessionId, systemPrompt);

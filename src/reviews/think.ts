@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { updateReviewSession } from './session.js';
+import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import { registerReviewHandler } from './orchestrator.js';
@@ -19,11 +19,8 @@ Rules:
 - No artifacts or documents, just dialogue`;
 
 const sessionPrompts = new Map<string, string>();
-let pendingTopic: string | null = null;
 
-export function setThinkTopic(topic: string): void {
-  pendingTopic = topic;
-}
+onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
 function buildSystemPrompt(topic: string): string {
   const skill = readVaultFile(SKILL_PATH);
@@ -35,8 +32,7 @@ ${instructions}`;
 
 const thinkHandler: ReviewTypeHandler = {
   async start(session: ReviewSession, bot: TelegramBot): Promise<void> {
-    const topic = pendingTopic || 'general thinking';
-    pendingTopic = null;
+    const topic = session.topic || 'general thinking';
 
     const systemPrompt = buildSystemPrompt(topic);
     sessionPrompts.set(session.claudeSessionId, systemPrompt);

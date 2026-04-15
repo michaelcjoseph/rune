@@ -117,7 +117,7 @@ Date context: ${session.targetDate}`;
         return;
       }
 
-      gitCommitAndPush(`Daily review: ${session.targetDate}`);
+      await gitCommitAndPush(`Daily review: ${session.targetDate}`);
       updateReviewSession(session.chatId, { phase: 'done' });
       await sendLongMessage(bot, session.chatId, `Daily review complete.\n\n${result.text || 'Updates applied.'}`);
     } catch (err) {

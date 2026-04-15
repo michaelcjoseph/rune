@@ -66,7 +66,7 @@ export async function handleFresh(bot: TelegramBot, chatId: number): Promise<voi
       enqueue(sourcePath);
     }
 
-    gitCommitAndPush('TG conversation logged');
+    await gitCommitAndPush('TG conversation logged');
 
     deleteSession(chatId);
 

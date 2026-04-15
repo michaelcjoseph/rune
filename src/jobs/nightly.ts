@@ -109,7 +109,7 @@ Date context: ${date}`;
     return { step: 'Daily tags', status: 'error', detail: result.error };
   }
 
-  gitCommitAndPush(`Daily tag processing: ${date}`);
+  await gitCommitAndPush(`Daily tag processing: ${date}`);
   return { step: 'Daily tags', status: 'success', detail: 'Tags processed and applied' };
 }
 
@@ -155,7 +155,7 @@ export async function executeNightly(): Promise<NightlyResult> {
   await run('KB lint', stepLint);
 
   // Final commit for any residual uncommitted changes
-  gitCommitAndPush('Nightly processing');
+  await gitCommitAndPush('Nightly processing');
 
   log.info('Nightly processing complete', { steps: steps.length });
   return { steps };

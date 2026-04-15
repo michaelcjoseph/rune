@@ -113,7 +113,7 @@ export async function executeSleepSync(): Promise<WhoopSyncResult> {
   writeDailyData(data);
 
   try { generateTrends(); } catch (err) { log.error('Trends generation failed', { error: String(err) }); }
-  gitCommitAndPush(`Whoop sleep sync: ${date}`);
+  await gitCommitAndPush(`Whoop sleep sync: ${date}`);
 
   const parts: string[] = [];
   if (data.sleep) parts.push(`Sleep: ${data.sleep.duration_hours}h (${data.sleep.performance}%)`);

@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { updateReviewSession } from './session.js';
+import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import { registerReviewHandler } from './orchestrator.js';
@@ -20,11 +20,8 @@ Rules:
 - No artifacts or documents, just dialogue`;
 
 const sessionPrompts = new Map<string, string>();
-let pendingFocus: string | null = null;
 
-export function setHealthFocus(focus: string): void {
-  pendingFocus = focus;
-}
+onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
 function gatherHealthContext(): string {
   const sections: string[] = [];
@@ -56,8 +53,7 @@ function buildSystemPrompt(focus: string): string {
 
 const healthHandler: ReviewTypeHandler = {
   async start(session: ReviewSession, bot: TelegramBot): Promise<void> {
-    const focus = pendingFocus || 'general health coaching';
-    pendingFocus = null;
+    const focus = session.topic || 'general health coaching';
 
     const systemPrompt = buildSystemPrompt(focus);
     sessionPrompts.set(session.claudeSessionId, systemPrompt);

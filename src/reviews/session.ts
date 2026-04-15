@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import config from '../config.js';
+import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('review-session');
@@ -16,6 +17,7 @@ export interface ReviewSession {
   targetDate: string;
   phase: ReviewPhase;
   claudeSessionId: string;
+  topic: string | null;
   prepContext: string | null;
   outline: string | null;
   createdAt: string;
@@ -34,7 +36,7 @@ export function getActiveReviewSession(chatId: number): ReviewSession | null {
   return session;
 }
 
-export function createReviewSession(chatId: number, type: ReviewType, targetDate: string): ReviewSession {
+export function createReviewSession(chatId: number, type: ReviewType, targetDate: string, topic?: string): ReviewSession {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
     throw new Error(`Invalid targetDate format: ${targetDate} (expected YYYY-MM-DD)`);
   }
@@ -50,6 +52,7 @@ export function createReviewSession(chatId: number, type: ReviewType, targetDate
     targetDate,
     phase: 'prep',
     claudeSessionId: randomUUID(),
+    topic: topic ?? null,
     prepContext: null,
     outline: null,
     createdAt: now,
@@ -68,7 +71,18 @@ export function updateReviewSession(chatId: number, updates: Partial<Pick<Review
   persistReviewSessions();
 }
 
+const sessionDeletedCallbacks: ((claudeSessionId: string) => void)[] = [];
+
+export function onReviewSessionDeleted(cb: (claudeSessionId: string) => void): void {
+  sessionDeletedCallbacks.push(cb);
+}
+
 export function deleteReviewSession(chatId: number): void {
+  const session = sessions.get(chatId);
+  if (session) {
+    cleanupSession(session.claudeSessionId);
+    for (const cb of sessionDeletedCallbacks) cb(session.claudeSessionId);
+  }
   sessions.delete(chatId);
   persistReviewSessions();
 }

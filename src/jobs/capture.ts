@@ -38,7 +38,7 @@ export async function captureSessions(source = 'nightly'): Promise<{ captured: n
   }
 
   if (captured > 0) {
-    gitCommitAndPush(`TG sessions captured (${source})`);
+    await gitCommitAndPush(`TG sessions captured (${source})`);
   }
 
   return { captured };

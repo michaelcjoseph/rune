@@ -141,7 +141,7 @@ async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
 async function handleModelSwitch(bot: TelegramBot, chatId: number, model: string): Promise<void> {
   const session = getSession(chatId);
   if (!session) {
-    const newSession = createSession(chatId, `/${model}`);
+    createSession(chatId, `/${model}`);
     setSessionModel(chatId, model);
     await bot.sendMessage(chatId, `Switched to ${model}. New session started.`);
     return;
