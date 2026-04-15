@@ -19,7 +19,7 @@ export function registerReviewHandler(type: ReviewType, handler: ReviewTypeHandl
 }
 
 /** Start a new review — creates session, calls handler.start() */
-export async function startReview(chatId: number, type: ReviewType, targetDate: string, bot: TelegramBot): Promise<void> {
+export async function startReview(chatId: number, type: ReviewType, targetDate: string, bot: TelegramBot, topic?: string): Promise<void> {
   const handler = handlers.get(type);
   if (!handler) {
     log.error('No handler registered for review type', { type });
@@ -30,9 +30,10 @@ export async function startReview(chatId: number, type: ReviewType, targetDate: 
   const existing = getActiveReviewSession(chatId);
   if (existing) {
     await bot.sendMessage(chatId, `Cancelling your in-progress ${existing.type} review to start a new one.`);
+    deleteReviewSession(chatId);
   }
 
-  const session = createReviewSession(chatId, type, targetDate);
+  const session = createReviewSession(chatId, type, targetDate, topic);
   log.info('Starting review', { chatId, type, targetDate, sessionId: session.id });
 
   try {

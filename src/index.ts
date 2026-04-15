@@ -2,7 +2,8 @@ import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
-import { markSessionCreated } from './ai/claude.js';
+import { markSessionCreated, killActiveProcesses } from './ai/claude.js';
+import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
 import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
@@ -22,6 +23,7 @@ restoreSessions();
 for (const [, session] of getAllSessions()) {
   markSessionCreated(session.sessionId);
 }
+restoreReviewSessions();
 
 // Start services
 const bot = createBot();
@@ -39,7 +41,9 @@ function shutdown() {
   log.info('Shutting down...');
   stopWatcher();
   stopScheduler();
+  killActiveProcesses();
   persistSessions();
+  persistReviewSessions();
   bot.stopPolling();
   server.close();
   process.exit(0);
@@ -51,6 +55,8 @@ process.on('SIGINT', shutdown);
 process.on('uncaughtException', (err) => {
   log.error('Uncaught exception', { error: err.message, stack: err.stack });
   persistSessions();
+  persistReviewSessions();
+  process.exit(1);
 });
 
 process.on('unhandledRejection', (err) => {
