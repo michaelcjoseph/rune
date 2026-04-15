@@ -8,6 +8,7 @@ Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
 - **HTTP server** (localhost:3847) — health endpoint, session capture for nightly
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
+- **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + think/health/blog sessions
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages)
 
 All AI operations use Claude Code CLI (Max subscription, no API key needed). Custom agents in `.claude/agents/` handle structured KB operations (wiki-compiler, kb-query, wiki-linter).
@@ -26,9 +27,46 @@ src/
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
-│   └── commands/            # One file per command: fresh, journal, ask, kb, ingest, status
+│   └── commands/
+│       ├── fresh.ts         # /fresh — clear session, git commit
+│       ├── journal.ts       # /journal — append to today's journal
+│       ├── ask.ts           # /ask — freeform Claude question
+│       ├── kb.ts            # /kb — knowledge base query
+│       ├── ingest.ts        # /ingest — enqueue vault file for KB ingestion
+│       ├── status.ts        # /status — system health overview
+│       ├── prep.ts          # /prep — trigger morning prep
+│       ├── priorities.ts    # /priorities — review/set daily priorities
+│       ├── daily.ts         # /daily — daily review session
+│       ├── weekly.ts        # /weekly — weekly review session
+│       ├── monthly.ts       # /monthly — monthly review session
+│       ├── quarterly.ts     # /quarterly — quarterly review session
+│       ├── yearly.ts        # /yearly — yearly review session
+│       ├── think.ts         # /think — open-ended thinking session
+│       ├── health.ts        # /health — health review session
+│       ├── blog.ts          # /blog — blog post drafting session
+│       ├── workout.ts       # /workout — workout planning/review
+│       ├── study.ts         # /study — study session planning
+│       ├── family.ts        # /family — family planning/review
+│       ├── career.ts        # /career — career reflection/planning
+│       ├── lenny.ts         # /lenny — library search (Lenny's Newsletter)
+│       └── pg.ts            # /pg — library search (Paul Graham essays)
+├── reviews/
+│   ├── session.ts           # ReviewSession type, persistence, lifecycle management
+│   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
+│   ├── interview.ts         # Interactive interview phase for review sessions
+│   ├── daily.ts             # Daily review handler
+│   ├── weekly.ts            # Weekly review handler
+│   ├── monthly.ts           # Monthly review handler
+│   ├── quarterly.ts         # Quarterly review handler
+│   ├── yearly.ts            # Yearly review handler
+│   ├── think.ts             # Think session handler
+│   ├── health.ts            # Health review handler
+│   └── blog.ts              # Blog drafting handler
+├── server/
+│   └── http.ts              # HTTP server: health, session capture, Whoop OAuth callback
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
+│   ├── init.ts              # KB directory scaffolding and schema initialization
 │   ├── ingest.ts            # Copy source to raw/ → spawn wiki-compiler agent
 │   ├── query.ts             # Build context → spawn kb-query agent → synthesized answer
 │   ├── lint.ts              # Spawn wiki-linter agent → health report
@@ -58,7 +96,7 @@ src/
 │   ├── sessions.ts          # TG session Map with JSON persistence + crash recovery
 │   └── watcher.ts           # FSWatcher for Readwise article detection, TG notify + enqueue
 └── utils/
-    ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, etc.)
+    ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, getRecentFilenames, etc.)
     ├── logger.ts            # Structured JSON logging with component tags
     └── markdown.ts          # Markdown parsing utilities (future)
 cli/
@@ -122,6 +160,7 @@ Required:
 | architecture-reviewer | `.claude/agents/architecture-reviewer.md` | Review for system-level architectural issues |
 | code-simplifier | `.claude/agents/code-simplifier.md` | Check for dead code, over-abstraction, duplication |
 | docs-sync | `.claude/agents/docs-sync.md` | Update CLAUDE.md and docs after structural changes |
+| json-updater | `.claude/agents/json-updater.md` | Update JSON config files programmatically |
 
 ## MCP Server
 

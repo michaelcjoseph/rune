@@ -12,12 +12,22 @@ import { handleAsk } from '../commands/ask.js';
 import { handleStatus } from '../commands/status.js';
 import { handleKB } from '../commands/kb.js';
 import { handleIngest } from '../commands/ingest.js';
+import { handlePriorities } from '../commands/priorities.js';
+import { handleWorkout } from '../commands/workout.js';
+import { handleStudy } from '../commands/study.js';
+import { handleFamily } from '../commands/family.js';
+import { handleCareer } from '../commands/career.js';
 import { handlePrep } from '../commands/prep.js';
 import { handleDaily } from '../commands/daily.js';
 import { handleWeekly } from '../commands/weekly.js';
 import { handleMonthly } from '../commands/monthly.js';
 import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
+import { handleThink } from '../commands/think.js';
+import { handleHealth } from '../commands/health.js';
+import { handleBlog } from '../commands/blog.js';
+import { handleLenny } from '../commands/lenny.js';
+import { handlePG } from '../commands/pg.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL } from '../../integrations/whoop/client.js';
@@ -42,6 +52,16 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/monthly')) return handleMonthly(bot, chatId, text.slice('/monthly'.length).trim());
   if (text.startsWith('/quarterly')) return handleQuarterly(bot, chatId, text.slice('/quarterly'.length).trim());
   if (text.startsWith('/yearly')) return handleYearly(bot, chatId, text.slice('/yearly'.length).trim());
+  if (text.startsWith('/priorities')) return handlePriorities(bot, chatId);
+  if (text.startsWith('/workout')) return handleWorkout(bot, chatId);
+  if (text.startsWith('/study')) return handleStudy(bot, chatId);
+  if (text.startsWith('/family')) return handleFamily(bot, chatId);
+  if (text.startsWith('/career')) return handleCareer(bot, chatId);
+  if (text.startsWith('/think')) return handleThink(bot, chatId, text.slice('/think'.length).trim());
+  if (text.startsWith('/health')) return handleHealth(bot, chatId, text.slice('/health'.length).trim());
+  if (text.startsWith('/blog')) return handleBlog(bot, chatId, text.slice('/blog'.length).trim());
+  if (text.startsWith('/lenny')) return handleLenny(bot, chatId, text.slice('/lenny'.length).trim());
+  if (text.startsWith('/pg')) return handlePG(bot, chatId, text.slice('/pg'.length).trim());
   if (text.startsWith('/prep')) return handlePrep(bot, chatId);
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
   if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
@@ -137,6 +157,11 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     'Send any message to chat with your vault.',
     '',
     'Commands:',
+    '/priorities — yesterday\'s priorities',
+    '/workout — today\'s workout prescription',
+    '/study — current study progress and assignments',
+    '/family — 14-day family mention scan',
+    '/career — active job applications',
     '/fresh — log conversation to journal, reset session',
     '/journal <text> — append entry to today\'s journal',
     '/ask <question> — one-shot vault query',
@@ -145,6 +170,15 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/lint — run wiki health check',
     '/prep — run morning prep now',
     '/status — show uptime and session info',
+    '',
+    'Sessions:',
+    '/think <topic> — thinking partner mode',
+    '/health [focus] — health coaching session',
+    '/blog <topic> — blog writing session',
+    '',
+    'Library:',
+    '/lenny <topic> — search Lenny\'s Podcast transcripts',
+    '/pg <topic> — search Paul Graham essays',
     '',
     'Reviews:',
     '/daily [date] — process journal tags into JSON updates',

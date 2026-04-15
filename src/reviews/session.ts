@@ -6,7 +6,7 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('review-session');
 
-export type ReviewType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type ReviewType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'think' | 'health' | 'blog';
 export type ReviewPhase = 'prep' | 'interview' | 'outline' | 'approval' | 'writeup' | 'updates' | 'done';
 
 export interface ReviewSession {

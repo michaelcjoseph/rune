@@ -8,7 +8,7 @@ vi.mock('../config.js', () => ({
   },
 }));
 
-const { getTodayFilename, getTimestamp, getDateContext, getYesterdayFilename, getDayOfWeek } = await import('./time.js');
+const { getTodayFilename, getTimestamp, getDateContext, getYesterdayFilename, getDayOfWeek, getRecentFilenames } = await import('./time.js');
 
 describe('time utils', () => {
   beforeEach(() => {
@@ -93,6 +93,42 @@ describe('time utils', () => {
       // 2026-04-06 12:00 Chicago (17:00 UTC) is a Monday
       vi.setSystemTime(new Date('2026-04-06T17:00:00.000Z'));
       expect(getDayOfWeek()).toBe('Monday');
+    });
+  });
+
+  describe('getRecentFilenames', () => {
+    it('returns the correct number of filenames', () => {
+      const result = getRecentFilenames(5);
+      expect(result).toHaveLength(5);
+    });
+
+    it('returns filenames in reverse chronological order (today first)', () => {
+      const result = getRecentFilenames(3);
+      expect(result).toEqual([
+        '2026_04_07.md',
+        '2026_04_06.md',
+        '2026_04_05.md',
+      ]);
+    });
+
+    it('returns only today when days is 1', () => {
+      expect(getRecentFilenames(1)).toEqual(['2026_04_07.md']);
+    });
+
+    it('handles month boundary correctly', () => {
+      // Set to 2026-05-02 12:00 Chicago (17:00 UTC)
+      vi.setSystemTime(new Date('2026-05-02T17:00:00.000Z'));
+      const result = getRecentFilenames(4);
+      expect(result).toEqual([
+        '2026_05_02.md',
+        '2026_05_01.md',
+        '2026_04_30.md',
+        '2026_04_29.md',
+      ]);
+    });
+
+    it('returns empty array when days is 0', () => {
+      expect(getRecentFilenames(0)).toEqual([]);
     });
   });
 });

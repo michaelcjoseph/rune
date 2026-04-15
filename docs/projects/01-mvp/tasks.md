@@ -138,27 +138,27 @@ In progress. See [spec.md](spec.md) for details.
 
 ### One-shot commands (no state machine)
 
-- [ ] `/priorities` — extract #priorities from yesterday's journal
-- [ ] `/workout` — today's prescription from health/plan.md
-- [ ] `/study` — current progress, this week's assignments, overdue items
-- [ ] `/family` — 14-day journal scan for Sam/Jude mentions, flag imbalance
-- [ ] `/career` — active applications with staleness flags
+- [x] `/priorities` — extract #priorities from yesterday's journal
+- [x] `/workout` — today's prescription from health/plan.md
+- [x] `/study` — current progress, this week's assignments, overdue items
+- [x] `/family` — 14-day journal scan for Sam/Jude mentions, flag imbalance
+- [x] `/career` — active applications with staleness flags
 
 ### Session-based commands (reuse review session infrastructure)
 
-- [ ] `/think [topic]` — thinking partner mode with think skill as system prompt
-- [ ] `/health` — health coaching session with health skill
-- [ ] `/blog [topic]` — interview-based blog writing session
+- [x] `/think [topic]` — thinking partner mode with think skill as system prompt
+- [x] `/health` — health coaching session with health skill
+- [x] `/blog [topic]` — interview-based blog writing session
 
 ### Library search commands
 
-- [ ] `/lenny [topic]` — search Lenny's Podcast transcripts, synthesize with quotes
-- [ ] `/pg [topic]` — search Paul Graham essays, synthesize with quotes
+- [x] `/lenny [topic]` — search Lenny's Podcast transcripts, synthesize with quotes
+- [x] `/pg [topic]` — search Paul Graham essays, synthesize with quotes
 
 ### Wiring
 
-- [ ] Wire all new commands into `text.ts` command routing
-- [ ] Update `/start` help text with all commands
+- [x] Wire all new commands into `text.ts` command routing
+- [x] Update `/start` help text with all commands
 
 ## Phase 12: Mac Mini Deployment
 

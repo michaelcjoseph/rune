@@ -84,6 +84,15 @@ export function getWeekRange(): { start: string; end: string; filenames: string[
   return { start: fmt(satDate), end: fmt(friDate), filenames };
 }
 
+export function getRecentFilenames(days: number): string[] {
+  const { year, month, day } = getLocalDate(new Date());
+  const filenames: string[] = [];
+  for (let i = 0; i < days; i++) {
+    filenames.push(formatDateFilename(new Date(year, month, day - i)));
+  }
+  return filenames;
+}
+
 /** Get current month info in the configured timezone. */
 export function getMonthInfo(): { month: number; monthName: string; day: number; lastDay: number } {
   const now = new Date();
