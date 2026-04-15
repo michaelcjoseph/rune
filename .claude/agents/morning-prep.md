@@ -39,7 +39,7 @@ Gather data from each source. If a source file doesn't exist or the expected con
 ### 4. Writing Focus
 
 - **File**: `writing/topics.md`
-- **What to find**: The current writing topic or next topic in the queue
+- **What to find**: The first topic in the queue
 - **Fallback**: "No writing topic set."
 
 ## Output Format
@@ -58,6 +58,9 @@ Return structured markdown — no fences, no extra commentary. This will be inse
 
 ### Writing Focus
 <current topic and any relevant context>
+
+## Notes
+- 
 ```
 
 ## Guidelines

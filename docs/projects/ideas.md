@@ -4,3 +4,6 @@
 - impove lenny's library setup with connection to mcp and link directly to kb
 - move pg essays to kb as well
 - set up child developmental agent support to help with monitoring progress and planning weekly
+- figure out how to merge pkms playbook with kb
+- Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook
+- link Jarvis to multiple vaults so entire family can have access to Jarvis
