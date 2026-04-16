@@ -7,3 +7,4 @@
 - figure out how to merge pkms playbook with kb
 - Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook
 - link Jarvis to multiple vaults so entire family can have access to Jarvis
+- Monitor and ingest research papers on topics of interest for my KB

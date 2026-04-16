@@ -7,6 +7,11 @@ vi.mock('../src/kb/engine.js', () => ({
   ingestSource: vi.fn(),
   lintKB: vi.fn(),
   getKBStats: vi.fn(),
+  processIngestionQueue: vi.fn().mockResolvedValue({ processed: 0, errors: 0 }),
+}));
+
+vi.mock('../src/kb/queue.js', () => ({
+  getQueue: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../src/kb/search.js', () => ({
@@ -14,9 +19,12 @@ vi.mock('../src/kb/search.js', () => ({
 }));
 
 // Import the mocked modules to configure return values per test
-const { initKB, queryKB, ingestSource, lintKB, getKBStats } = await import('../src/kb/engine.js');
+const { initKB, queryKB, ingestSource, lintKB, getKBStats, processIngestionQueue } = await import('../src/kb/engine.js');
 const initKBMock = initKB as unknown as ReturnType<typeof vi.fn>;
+const processQueueMock = processIngestionQueue as unknown as ReturnType<typeof vi.fn>;
 const { searchWithFilter } = await import('../src/kb/search.js');
+const { getQueue } = await import('../src/kb/queue.js');
+const getQueueMock = getQueue as unknown as ReturnType<typeof vi.fn>;
 
 const queryMock = queryKB as unknown as ReturnType<typeof vi.fn>;
 const ingestMock = ingestSource as unknown as ReturnType<typeof vi.fn>;
@@ -58,6 +66,10 @@ async function runCLI(...args: string[]): Promise<void> {
     ingestSource: ingestMock,
     lintKB: lintMock,
     getKBStats: statsMock,
+    processIngestionQueue: processQueueMock,
+  }));
+  vi.doMock('../src/kb/queue.js', () => ({
+    getQueue: getQueueMock,
   }));
   vi.doMock('../src/kb/search.js', () => ({
     searchWithFilter: searchMock,
@@ -162,13 +174,12 @@ describe('cli/jarvis', () => {
   });
 
   describe('ingest command', () => {
-    it('prints usage error when no path is provided', async () => {
+    it('shows empty queue message when no path and queue is empty', async () => {
       await runCLI('ingest');
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        'Usage: jarvis ingest <vault-relative-path> [--guidance "..."]',
+      expect(logSpy).toHaveBeenCalledWith(
+        'Ingestion queue is empty. Usage: jarvis ingest <vault-relative-path> [--guidance "..."]',
       );
-      expect(process.exitCode).toBe(1);
     });
 
     it('calls ingestSource with path and prints output on success', async () => {

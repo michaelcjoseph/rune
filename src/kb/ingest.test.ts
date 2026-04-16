@@ -43,7 +43,15 @@ describe('kb/ingest', () => {
   });
 
   it('runs wiki-compiler agent on valid source', async () => {
-    readMock.mockReturnValue('content');
+    // Simulate log.md changing after agent runs (agent wrote to it)
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested notes/test.md';
+      }
+      return 'content';
+    });
     agentMock.mockResolvedValue({ text: 'Done', error: null });
 
     const result = await ingestSource('notes/test.md');
@@ -52,7 +60,14 @@ describe('kb/ingest', () => {
   });
 
   it('includes guidance in agent prompt', async () => {
-    readMock.mockReturnValue('content');
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+      }
+      return 'content';
+    });
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('notes/test.md', { guidance: 'focus on APIs' });
@@ -60,7 +75,14 @@ describe('kb/ingest', () => {
   });
 
   it('dequeues source after success', async () => {
-    readMock.mockReturnValue('content');
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+      }
+      return 'content';
+    });
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('raw/test.md');
@@ -76,8 +98,26 @@ describe('kb/ingest', () => {
     expect(result.output).toBe('agent crashed');
   });
 
-  it('copies Readwise files to raw/articles/', async () => {
+  it('returns error when agent succeeds but writes nothing to log.md', async () => {
+    // log.md unchanged before and after agent run = agent did nothing
     readMock.mockReturnValue('content');
+    agentMock.mockResolvedValue({ text: 'Done', error: null });
+
+    const result = await ingestSource('notes/test.md');
+    expect(result.success).toBe(false);
+    expect(result.output).toContain('produced no output');
+    expect(dequeueMock).not.toHaveBeenCalled();
+  });
+
+  it('copies Readwise files to raw/articles/', async () => {
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+      }
+      return 'content';
+    });
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('Readwise/article.md');
@@ -88,7 +128,14 @@ describe('kb/ingest', () => {
   });
 
   it('skips copy when source already in knowledge/raw/', async () => {
-    readMock.mockReturnValue('content');
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+      }
+      return 'content';
+    });
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('knowledge/raw/notes/existing.md');

@@ -58,11 +58,21 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
 5. Update knowledge/index.md with new/changed entries
 6. Append an entry to knowledge/log.md${guidanceNote}`;
 
+  // Snapshot log.md before agent runs to verify it wrote something
+  const logBefore = readVaultFile('knowledge/log.md') || '';
+
   const result = await runAgent('wiki-compiler', prompt);
 
   if (result.error) {
     log.error('Ingestion failed', { source: sourcePath, error: result.error });
     return { success: false, output: result.error };
+  }
+
+  // Verify the agent actually wrote to the log — if not, it ran but did nothing
+  const logAfter = readVaultFile('knowledge/log.md') || '';
+  if (logAfter === logBefore) {
+    log.error('Agent completed but wrote nothing to log.md', { source: sourcePath });
+    return { success: false, output: 'Agent completed but produced no output — wiki-compiler may not have found the knowledge base.' };
   }
 
   // Remove from queue if it was queued
@@ -73,7 +83,7 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
 }
 
 /** Determine which raw/ subdirectory a source belongs in based on its path. */
-function determineRawDir(sourcePath: string): string {
+export function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('Readwise/')) return 'knowledge/raw/articles';
   if (sourcePath.includes('conversation')) return 'knowledge/raw/conversations';
   return 'knowledge/raw/notes';

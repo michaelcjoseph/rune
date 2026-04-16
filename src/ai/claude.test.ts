@@ -10,6 +10,7 @@ vi.mock('../config.js', () => ({
     AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
   },
+  PROJECT_ROOT: '/tmp/test-project',
 }));
 
 vi.mock('node:child_process', () => ({
@@ -17,13 +18,34 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(() => '/usr/local/bin/claude\n'),
 }));
 
+const MOCK_AGENT_FILE = `---
+name: wiki-compiler
+model: sonnet
+tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+---
+
+You are the wiki compiler for a personal knowledge base.`;
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
-  return { ...actual, existsSync: vi.fn(() => false) };
+  return {
+    ...actual,
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn((path: string) => {
+      if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
+      throw new Error(`ENOENT: ${path}`);
+    }),
+  };
 });
 
 const { spawn } = await import('node:child_process');
-const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated } =
+const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef } =
   await import('./claude.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
@@ -347,19 +369,87 @@ describe('ai/claude', () => {
     });
   });
 
+  describe('loadAgentDef', () => {
+    it('parses frontmatter tools and body from agent file', () => {
+      const def = loadAgentDef('wiki-compiler');
+      expect(def.tools).toEqual(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']);
+      expect(def.prompt).toContain('wiki compiler');
+    });
+  });
+
   describe('runAgent', () => {
-    it('uses opus model and prepends date context', async () => {
+    it('loads agent def inline and passes --agents JSON, --allowedTools, and date context', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'agent result' }));
       const result = await runAgent('wiki-compiler', 'do stuff');
-      expect(spawnMock).toHaveBeenCalledWith(
-        '/usr/local/bin/claude',
-        ['--agent', 'wiki-compiler', '-p', expect.stringContaining('do stuff'), '--no-session-persistence', '--model', 'opus'],
-        expect.any(Object),
-      );
-      const prompt = spawnMock.mock.calls[0]![1][3] as string;
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+
+      // Passes --agent and --agents with inline definition
+      expect(args).toContain('--agent');
+      expect(args[args.indexOf('--agent') + 1]).toBe('wiki-compiler');
+      expect(args).toContain('--agents');
+      const agentsJson = JSON.parse(args[args.indexOf('--agents') + 1]!);
+      expect(agentsJson['wiki-compiler'].prompt).toContain('wiki compiler');
+
+      // Passes --allowedTools from frontmatter
+      expect(args).toContain('--allowedTools');
+      const toolsIdx = args.indexOf('--allowedTools');
+      expect(args.slice(toolsIdx + 1)).toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']));
+
+      // Passes model and date context
+      expect(args).toContain('--model');
+      expect(args[args.indexOf('--model') + 1]).toBe('opus');
+      const promptIdx = args.indexOf('-p');
+      const prompt = args[promptIdx + 1]!;
       expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);
       expect(prompt).toContain('do stuff');
+
       expect(result.text).toBe('agent result');
+    });
+
+    it('does NOT use --add-dir (which resets cwd)', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'ingest something');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--add-dir');
+    });
+
+    it('runs from VAULT_DIR so agent relative paths resolve to vault', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'ingest something');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/tmp/test-vault' }),
+      );
+    });
+  });
+
+  describe('cwd routing', () => {
+    it('all calls use VAULT_DIR as cwd', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaude('hello', 'cwd-test-sess');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/tmp/test-vault' }),
+      );
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/tmp/test-vault' }),
+      );
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'classify this');
+      expect(spawnMock).toHaveBeenCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/tmp/test-vault' }),
+      );
     });
   });
 

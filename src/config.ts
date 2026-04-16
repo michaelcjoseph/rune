@@ -8,7 +8,7 @@ function required(name: string): string {
   return val.startsWith('~/') ? join(homedir(), val.slice(2)) : val;
 }
 
-const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+export const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const config = {
   TELEGRAM_BOT_TOKEN: required('TELEGRAM_BOT_TOKEN'),

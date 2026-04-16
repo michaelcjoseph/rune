@@ -28,6 +28,7 @@ import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
 import { handleLenny } from '../commands/lenny.js';
 import { handlePG } from '../commands/pg.js';
+import { handleSeed } from '../commands/seed.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL } from '../../integrations/whoop/client.js';
@@ -63,6 +64,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/lenny')) return handleLenny(bot, chatId, text.slice('/lenny'.length).trim());
   if (text.startsWith('/pg')) return handlePG(bot, chatId, text.slice('/pg'.length).trim());
   if (text.startsWith('/prep')) return handlePrep(bot, chatId);
+  if (text.startsWith('/seed')) return handleSeed(bot, chatId, text.slice('/seed'.length).trim());
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
   if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
   if (text.startsWith('/sonnet')) return handleModelSwitch(bot, chatId, 'sonnet');
@@ -167,6 +169,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/ask <question> — one-shot vault query',
     '/kb <question> — query the knowledge base',
     '/ingest [path] — ingest source into knowledge base',
+    '/seed [--dry-run] — bulk-seed KB from vault content',
     '/lint — run wiki health check',
     '/prep — run morning prep now',
     '/status — show uptime and session info',

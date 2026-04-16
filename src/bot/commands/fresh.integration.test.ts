@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdirSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,6 +67,11 @@ beforeEach(() => {
   const journalsDir = join(tmpDir, 'journals');
   if (existsSync(journalsDir)) rmSync(journalsDir, { recursive: true });
   mkdirSync(journalsDir, { recursive: true });
+
+  // Set up knowledge base structure so log.md verification works
+  const kbDir = join(tmpDir, 'knowledge');
+  mkdirSync(kbDir, { recursive: true });
+  writeFileSync(join(kbDir, 'log.md'), '# Knowledge Base Log\n');
 });
 
 describe('conversation-to-KB pipeline (e2e)', () => {
@@ -80,7 +85,13 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     ].join('\n');
 
     mockSummarizeSession.mockResolvedValue({ text: summaryText, error: null });
-    mockRunAgent.mockResolvedValue({ text: 'Ingested successfully. Created 2 wiki pages.', error: null });
+    mockRunAgent.mockImplementation(async () => {
+      // Simulate wiki-compiler writing to log.md (verifies ingestion actually happened)
+      const logPath = join(tmpDir, 'knowledge', 'log.md');
+      const existing = readFileSync(logPath, 'utf8');
+      writeFileSync(logPath, existing + '[2026-04-14] Ingested conversation\n');
+      return { text: 'Ingested successfully. Created 2 wiki pages.', error: null };
+    });
 
     const bot = makeBotMock();
     await handleFresh(bot, 123);

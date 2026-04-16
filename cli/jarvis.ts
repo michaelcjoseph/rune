@@ -3,6 +3,7 @@
 const COMMANDS: Record<string, string> = {
   query: 'Query the knowledge base',
   ingest: 'Trigger ingestion of a source file',
+  seed: 'Bulk-seed KB from vault content (playbook, worldview, Readwise)',
   lint: 'Run wiki health check',
   status: 'Show KB stats and system state',
   search: 'Search vault and wiki',
@@ -22,11 +23,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Record<strin
   const positional: string[] = [];
   const flags: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith('--')) {
-      flags[args[i].slice(2)] = args[i + 1] ?? '';
+    const arg = args[i]!;
+    if (arg.startsWith('--')) {
+      flags[arg.slice(2)] = args[i + 1] ?? '';
       i++;
     } else {
-      positional.push(args[i]);
+      positional.push(arg);
     }
   }
   return { positional, flags };
@@ -63,6 +65,9 @@ async function main(): Promise<void> {
       break;
     case 'ingest':
       await cmdIngest(args, ingestSource);
+      break;
+    case 'seed':
+      await cmdSeed(args);
       break;
     case 'lint':
       await cmdLint(lintKB);
@@ -104,11 +109,21 @@ async function cmdIngest(
 ): Promise<void> {
   const { positional, flags } = parseFlags(args);
   const sourcePath = positional[0];
+
   if (!sourcePath) {
-    console.error('Usage: jarvis ingest <vault-relative-path> [--guidance "..."]');
-    process.exitCode = 1;
+    const { processIngestionQueue } = await import('../src/kb/engine.js');
+    const { getQueue } = await import('../src/kb/queue.js');
+    const queue = getQueue();
+    if (queue.length === 0) {
+      console.log('Ingestion queue is empty. Usage: jarvis ingest <vault-relative-path> [--guidance "..."]');
+      return;
+    }
+    console.log(`Processing ${queue.length} queued source(s)...`);
+    const { processed, errors } = await processIngestionQueue();
+    console.log(`Done. Processed: ${processed}, Errors: ${errors}`);
     return;
   }
+
   const guidance = flags['guidance'] || undefined;
 
   const result = await ingestSource(sourcePath, { guidance });
@@ -153,6 +168,28 @@ function cmdStatus(
     for (const entry of stats.recentLog) {
       console.log(`  ${entry}`);
     }
+  }
+}
+
+async function cmdSeed(args: string[]): Promise<void> {
+  const { flags } = parseFlags(args);
+  const dryRun = 'dry-run' in flags;
+  const enqueueOnly = 'enqueue-only' in flags;
+  const force = 'force' in flags;
+
+  const { seedAndProcess } = await import('../src/kb/seed.js');
+  const result = await seedAndProcess(
+    undefined,
+    (msg) => console.log(msg),
+    { dryRun, processAfter: !dryRun && !enqueueOnly, force },
+  );
+
+  console.log(`\nDiscovered: ${result.seed.discovered}`);
+  console.log(`Already ingested: ${result.seed.skippedAlreadyIngested}`);
+  console.log(`Enqueued: ${result.seed.enqueued}`);
+  if (!dryRun && !enqueueOnly) {
+    console.log(`Processed: ${result.processed}`);
+    console.log(`Errors: ${result.errors}`);
   }
 }
 

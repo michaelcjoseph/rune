@@ -1,8 +1,8 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import config from '../config.js';
+import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDateContext } from '../utils/time.js';
 
@@ -131,10 +131,56 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
   return execClaude(args, timeoutMs);
 }
 
+interface AgentDef {
+  prompt: string;
+  tools: string[];
+}
+
+const agentDefCache = new Map<string, AgentDef>();
+
+/** Load an agent definition from .claude/agents/<name>.md, parsing frontmatter and body. */
+export function loadAgentDef(agentName: string): AgentDef {
+  const cached = agentDefCache.get(agentName);
+  if (cached) return cached;
+
+  const filePath = join(PROJECT_ROOT, '.claude', 'agents', `${agentName}.md`);
+  const raw = readFileSync(filePath, 'utf8');
+
+  // Split frontmatter (between --- markers) from body
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) throw new Error(`Agent file ${filePath} has no valid frontmatter`);
+
+  const frontmatter = match[1]!;
+  const body = match[2]!.trim();
+
+  // Parse tools from frontmatter (simple YAML list extraction)
+  const tools: string[] = [];
+  const toolsMatch = frontmatter.match(/tools:\n((?:\s+-\s+\S+\n?)*)/);
+  if (toolsMatch) {
+    for (const line of toolsMatch[1]!.split('\n')) {
+      const tool = line.match(/^\s+-\s+(\S+)/);
+      if (tool) tools.push(tool[1]!);
+    }
+  }
+
+  const def = { prompt: body, tools };
+  agentDefCache.set(agentName, def);
+  return def;
+}
+
 /** Run a named agent (defined in .claude/agents/) */
 export async function runAgent(agentName: string, prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
-  const args = ['--agent', agentName, '-p', `${dateCtx}\n\n${prompt}`, '--no-session-persistence', '--model', config.AGENT_MODEL];
+  const def = loadAgentDef(agentName);
+  const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
+  const args = [
+    '--agent', agentName,
+    '--agents', agentsJson,
+    '-p', `${dateCtx}\n\n${prompt}`,
+    '--no-session-persistence',
+    '--model', config.AGENT_MODEL,
+    '--allowedTools', ...def.tools,
+  ];
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
   return execClaude(args, timeoutMs);
 }
