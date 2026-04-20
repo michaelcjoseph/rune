@@ -54,10 +54,10 @@ describe('whoop/client', () => {
   });
 
   describe('getAccessToken', () => {
-    it('returns null when not configured', async () => {
+    it('returns not_configured when client id is empty', async () => {
       config.WHOOP_CLIENT_ID = '';
-      const token = await getAccessToken();
-      expect(token).toBeNull();
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: false, reason: 'not_configured' });
     });
 
     it('returns cached token when not expired', async () => {
@@ -67,19 +67,19 @@ describe('whoop/client', () => {
         expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour from now
       });
 
-      const token = await getAccessToken();
-      expect(token).toBe('valid-token');
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: true, token: 'valid-token' });
     });
 
-    it('returns null when no refresh token available', async () => {
+    it('returns no_refres_token when refresh token is missing', async () => {
       getTokensMock.mockReturnValue({
         accessToken: 'expired-token',
         refreshToken: null,
         expiresAt: Date.now() - 1000, // expired
       });
 
-      const token = await getAccessToken();
-      expect(token).toBeNull();
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: false, reason: 'no_refresh_token' });
     });
 
     it('refreshes token when expired', async () => {
@@ -99,13 +99,13 @@ describe('whoop/client', () => {
         }), { status: 200 }),
       );
 
-      const token = await getAccessToken();
-      expect(token).toBe('new-access');
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: true, token: 'new-access' });
       expect(storeTokensMock).toHaveBeenCalledWith('new-access', 'new-refresh', expect.any(Number));
       fetchSpy.mockRestore();
     });
 
-    it('returns null when refresh fails with non-OK response', async () => {
+    it('returns refresh_rejected with status on 4xx (no retry)', async () => {
       getTokensMock.mockReturnValue({
         accessToken: 'expired',
         refreshToken: 'bad-refresh',
@@ -116,12 +116,13 @@ describe('whoop/client', () => {
         new Response('Unauthorized', { status: 401 }),
       );
 
-      const token = await getAccessToken();
-      expect(token).toBeNull();
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: false, reason: 'refresh_rejected', status: 401 });
+      expect(fetchSpy).toHaveBeenCalledTimes(1); // no retries on 4xx
       fetchSpy.mockRestore();
     });
 
-    it('returns null when refresh throws network error', async () => {
+    it('returns network_error and retries when fetch throws', async () => {
       getTokensMock.mockReturnValue({
         accessToken: 'expired',
         refreshToken: 'rt',
@@ -130,10 +131,57 @@ describe('whoop/client', () => {
 
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'));
 
-      const token = await getAccessToken();
-      expect(token).toBeNull();
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: false, reason: 'network_error', detail: 'Network error' });
+      expect(fetchSpy).toHaveBeenCalledTimes(3); // initial + 2 retries
+      fetchSpy.mockRestore();
+    }, 10_000);
+
+    it('preserves existing refresh token when Whoop omits it from response', async () => {
+      getTokensMock.mockReturnValue({
+        accessToken: 'expired',
+        refreshToken: 'existing-refresh',
+        expiresAt: Date.now() - 1000,
+      });
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({
+          access_token: 'new-access',
+          // NOTE: no refresh_token field
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'read:recovery',
+        }), { status: 200 }),
+      );
+
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: true, token: 'new-access' });
+      expect(storeTokensMock).toHaveBeenCalledWith('new-access', 'existing-refresh', expect.any(Number));
       fetchSpy.mockRestore();
     });
+
+    it('retries on 5xx then succeeds', async () => {
+      getTokensMock.mockReturnValue({
+        accessToken: 'expired',
+        refreshToken: 'rt',
+        expiresAt: Date.now() - 1000,
+      });
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response('boom', { status: 503 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: 'read:recovery',
+        }), { status: 200 }));
+
+      const result = await getAccessToken();
+      expect(result).toEqual({ ok: true, token: 'new-access' });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      fetchSpy.mockRestore();
+    }, 10_000);
   });
 
   describe('fetchSleep', () => {

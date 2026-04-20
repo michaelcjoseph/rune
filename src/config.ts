@@ -45,6 +45,7 @@ const config = {
   HTTP_HOST: '127.0.0.1',
 
   CLAUDE_TIMEOUT_MS: 120_000,
+  CLAUDE_LINT_TIMEOUT_MS: 300_000,
   DEFAULT_CHAT_MODEL: 'haiku',
   CONVERSATION_MODEL: 'opus',
   ONESHOT_MODEL: 'sonnet',

@@ -31,7 +31,7 @@ import { handlePG } from '../commands/pg.js';
 import { handleSeed } from '../commands/seed.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
-import { isConfigured, getAuthorizationURL } from '../../integrations/whoop/client.js';
+import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
 import { WHOOP_REDIRECT_URI } from '../../server/http.js';
 import { getStoredTokens } from '../../integrations/whoop/keychain.js';
 
@@ -163,15 +163,44 @@ async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
     return;
   }
 
-  const { accessToken, expiresAt } = getStoredTokens();
-  if (accessToken && expiresAt > Date.now()) {
-    const expiresIn = Math.round((expiresAt - Date.now()) / 3_600_000);
-    await bot.sendMessage(chatId, `Whoop is connected. Token expires in ~${expiresIn}h.`);
+  const stored = getStoredTokens();
+  const hasRefresh = !!stored.refreshToken;
+  const now = Date.now();
+
+  // Cached access token still valid → no network call needed
+  if (stored.accessToken && stored.expiresAt > now) {
+    const hours = Math.floor((stored.expiresAt - now) / 3_600_000);
+    const minutes = Math.floor(((stored.expiresAt - now) % 3_600_000) / 60_000);
+    const expiresIn = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+    const expiryStr = new Date(stored.expiresAt).toLocaleString('en-US', { timeZone: config.TIMEZONE });
+    await bot.sendMessage(
+      chatId,
+      `Whoop connected.\nAccess token expires in ${expiresIn} (${expiryStr} ${config.TIMEZONE}).\nRefresh token present: ${hasRefresh ? 'yes' : 'no'}`,
+    );
     return;
   }
 
-  const url = getAuthorizationURL(WHOOP_REDIRECT_URI);
-  await bot.sendMessage(chatId, `Whoop needs authorization. Open this link:\n\n${url}`);
+  // Expired or missing — attempt a live refresh to diagnose
+  const result = await getAccessToken();
+  if (result.ok) {
+    const { expiresAt } = getStoredTokens();
+    const hours = Math.floor((expiresAt - Date.now()) / 3_600_000);
+    const minutes = Math.floor(((expiresAt - Date.now()) % 3_600_000) / 60_000);
+    const expiryStr = new Date(expiresAt).toLocaleString('en-US', { timeZone: config.TIMEZONE });
+    await bot.sendMessage(
+      chatId,
+      `Whoop connected (refreshed).\nAccess token expires in ${hours}h ${minutes}m (${expiryStr} ${config.TIMEZONE}).`,
+    );
+    return;
+  }
+
+  const detail = describeTokenError(result);
+  if (result.reason === 'no_refresh_token' || result.reason === 'refresh_rejected') {
+    const url = getAuthorizationURL(WHOOP_REDIRECT_URI);
+    await bot.sendMessage(chatId, `${detail}\n\nOpen this link to re-authorize:\n\n${url}`);
+  } else {
+    await bot.sendMessage(chatId, detail);
+  }
 }
 
 async function handleModelSwitch(bot: TelegramBot, chatId: number, model: string): Promise<void> {

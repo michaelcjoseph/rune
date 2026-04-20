@@ -76,6 +76,21 @@ describe('whoop/keychain', () => {
 
       expect(() => setKeychainValue('key', 'val')).not.toThrow();
     });
+
+    it('refuses to store empty string (would corrupt keychain)', () => {
+      expect(() => setKeychainValue('refresh-token', '')).toThrow(/refused/);
+      expect(execMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses to store the literal "undefined" string', () => {
+      expect(() => setKeychainValue('refresh-token', 'undefined')).toThrow(/refused/);
+      expect(execMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses to store the literal "null" string', () => {
+      expect(() => setKeychainValue('refresh-token', 'null')).toThrow(/refused/);
+      expect(execMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('deleteKeychainValue', () => {
@@ -120,9 +135,33 @@ describe('whoop/keychain', () => {
         expiresAt: 0,
       });
     });
+
+    it('treats legacy "undefined" string values as missing', () => {
+      execMock
+        .mockReturnValueOnce('good-access\n')
+        .mockReturnValueOnce('undefined\n')
+        .mockReturnValueOnce('1700000000000\n');
+
+      const tokens = getStoredTokens();
+      expect(tokens).toEqual({
+        accessToken: 'good-access',
+        refreshToken: null,
+        expiresAt: 1700000000000,
+      });
+    });
   });
 
   describe('storeTokens', () => {
+    it('throws when refresh token is empty (prevents silent corruption)', () => {
+      expect(() => storeTokens('at-123', '', 1700000000000)).toThrow(/refused/);
+      expect(execMock).not.toHaveBeenCalled();
+    });
+
+    it('throws when access token is empty', () => {
+      expect(() => storeTokens('', 'rt-456', 1700000000000)).toThrow(/refused/);
+      expect(execMock).not.toHaveBeenCalled();
+    });
+
     it('writes all three values to keychain', () => {
       execMock.mockReturnValue('');
       storeTokens('at-123', 'rt-456', 1700000000000);

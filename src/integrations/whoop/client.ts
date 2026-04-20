@@ -17,6 +17,27 @@ const TOKEN_URL = 'https://api.prod.whoop.com/oauth/oauth2/token';
 const AUTH_URL = 'https://api.prod.whoop.com/oauth/oauth2/auth';
 const TIMEOUT_MS = 15_000;
 const TOKEN_BUFFER_MS = 5 * 60 * 1000; // Refresh 5 minutes before expiry
+const REFRESH_RETRY_DELAYS_MS = [1000, 3000]; // Retry transient refresh failures only
+
+export type TokenResult =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'not_configured' }
+  | { ok: false; reason: 'no_refresh_token' }
+  | { ok: false; reason: 'refresh_rejected'; status: number }
+  | { ok: false; reason: 'network_error'; detail: string };
+
+export function describeTokenError(result: Extract<TokenResult, { ok: false }>): string {
+  switch (result.reason) {
+    case 'not_configured':
+      return 'Whoop not configured';
+    case 'no_refresh_token':
+      return 'Whoop: re-auth required (no stored token). Run /whoop';
+    case 'refresh_rejected':
+      return `Whoop: re-auth required (refresh rejected: HTTP ${result.status}). Run /whoop`;
+    case 'network_error':
+      return `Whoop: transient failure (${result.detail}). Will retry next cycle.`;
+  }
+}
 
 let pendingOAuthState: string | null = null;
 
@@ -31,7 +52,7 @@ export function getAuthorizationURL(redirectUri: string): string {
     redirect_uri: redirectUri,
     response_type: 'code',
     state: pendingOAuthState,
-    scope: 'read:recovery read:cycles read:sleep read:workout read:body_measurement read:profile',
+    scope: 'offline read:recovery read:cycles read:sleep read:workout read:body_measurement read:profile',
   });
   return `${AUTH_URL}?${params.toString()}`;
 }
@@ -71,54 +92,78 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<b
   }
 }
 
-export async function getAccessToken(): Promise<string | null> {
+export async function getAccessToken(): Promise<TokenResult> {
   if (!isConfigured()) {
     log.info('Whoop not configured, skipping');
-    return null;
+    return { ok: false, reason: 'not_configured' };
   }
 
   const { accessToken, refreshToken, expiresAt } = getStoredTokens();
 
   if (accessToken && expiresAt > Date.now() + TOKEN_BUFFER_MS) {
-    return accessToken;
+    return { ok: true, token: accessToken };
   }
 
   if (!refreshToken) {
     log.error('No refresh token available — re-authentication required');
-    return null;
+    return { ok: false, reason: 'no_refresh_token' };
   }
 
   log.info('Access token expired, refreshing');
-  const refreshed = await refreshAccessToken(refreshToken);
-  return refreshed;
+  return refreshAccessToken(refreshToken);
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<string | null> {
-  try {
-    const response = await fetchWithTimeout(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: config.WHOOP_CLIENT_ID,
-        client_secret: config.WHOOP_CLIENT_SECRET,
-      }).toString(),
-    });
+async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
+  let lastNetworkError: TokenResult & { ok: false; reason: 'network_error' } = {
+    ok: false,
+    reason: 'network_error',
+    detail: 'unknown',
+  };
 
-    if (!response.ok) {
-      log.error('Token refresh failed', { status: response.status });
-      return null;
+  for (let attempt = 0; attempt <= REFRESH_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const response = await fetchWithTimeout(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
+          client_id: config.WHOOP_CLIENT_ID,
+          client_secret: config.WHOOP_CLIENT_SECRET,
+        }).toString(),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as WhoopTokenResponse;
+        const expiresAt = Date.now() + data.expires_in * 1000;
+        // Whoop may omit refresh_token when it doesn't rotate — keep the existing one
+        const nextRefreshToken = data.refresh_token || refreshToken;
+        storeTokens(data.access_token, nextRefreshToken, expiresAt);
+        return { ok: true, token: data.access_token };
+      }
+
+      // 4xx means the refresh token is truly dead — no point retrying
+      if (response.status >= 400 && response.status < 500) {
+        log.error('Token refresh rejected', { status: response.status });
+        return { ok: false, reason: 'refresh_rejected', status: response.status };
+      }
+
+      // 5xx — treat as transient
+      log.error('Token refresh failed (5xx)', { status: response.status, attempt });
+      lastNetworkError = { ok: false, reason: 'network_error', detail: `HTTP ${response.status}` };
+    } catch (err) {
+      const detail = (err as Error).message;
+      log.error('Token refresh error', { error: detail, attempt });
+      lastNetworkError = { ok: false, reason: 'network_error', detail };
     }
 
-    const data = await response.json() as WhoopTokenResponse;
-    const expiresAt = Date.now() + data.expires_in * 1000;
-    storeTokens(data.access_token, data.refresh_token, expiresAt);
-    return data.access_token;
-  } catch (err) {
-    log.error('Token refresh error', { error: (err as Error).message });
-    return null;
+    const delay = REFRESH_RETRY_DELAYS_MS[attempt];
+    if (delay !== undefined) {
+      await new Promise((r) => setTimeout(r, delay));
+    }
   }
+
+  return lastNetworkError;
 }
 
 // --- API Fetch Helpers ---

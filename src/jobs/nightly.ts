@@ -126,7 +126,7 @@ async function stepLint(): Promise<NightlyStepResult> {
   const { success, report } = await lintKB();
 
   if (!success) {
-    return { step: 'KB lint', status: 'error', detail: 'Lint agent failed' };
+    return { step: 'KB lint', status: 'error', detail: report.slice(0, 250) };
   }
 
   return { step: 'KB lint', status: 'success', detail: report.slice(0, 200) };

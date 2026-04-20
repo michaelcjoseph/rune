@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../config.js', () => ({
-  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago' },
+  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', CLAUDE_LINT_TIMEOUT_MS: 300_000 },
 }));
 
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
@@ -20,10 +20,10 @@ describe('kb/lint', () => {
     expect(result).toEqual({ success: true, report: 'All good' });
   });
 
-  it('uses wiki-linter agent', async () => {
+  it('uses wiki-linter agent with extended timeout', async () => {
     agentMock.mockResolvedValue({ text: 'ok', error: null });
     await lintKB();
-    expect(agentMock).toHaveBeenCalledWith('wiki-linter', expect.any(String));
+    expect(agentMock).toHaveBeenCalledWith('wiki-linter', expect.any(String), 300_000);
   });
 
   it('returns error when agent fails', async () => {

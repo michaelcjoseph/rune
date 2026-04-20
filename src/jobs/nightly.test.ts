@@ -196,11 +196,12 @@ describe('jobs/nightly', () => {
 
     it('reports lint error when agent fails on Sunday', async () => {
       dayMock.mockReturnValue('Sunday');
-      lintMock.mockResolvedValue({ success: false, report: '' });
+      lintMock.mockResolvedValue({ success: false, report: 'Lint error: Claude timed out after 300s' });
 
       const result = await executeNightly();
       const step = result.steps.find((s) => s.step === 'KB lint')!;
       expect(step.status).toBe('error');
+      expect(step.detail).toContain('timed out');
     });
 
     // -- Error isolation --

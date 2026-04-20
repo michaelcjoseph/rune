@@ -20,6 +20,10 @@ export function getKeychainValue(key: string): string | null {
 }
 
 export function setKeychainValue(key: string, value: string): void {
+  if (typeof value !== 'string' || value.length === 0 || value === 'undefined' || value === 'null') {
+    throw new Error(`setKeychainValue refused: empty/invalid value for key "${key}"`);
+  }
+
   // Delete existing entry first (update not supported directly)
   try {
     execFileSync('security', [
@@ -55,15 +59,24 @@ export function deleteKeychainValue(key: string): void {
   }
 }
 
+function sanitize(v: string | null): string | null {
+  // Guard against previously-corrupted entries that stored literal "undefined"/"null"
+  if (v === null || v === 'undefined' || v === 'null' || v === '') return null;
+  return v;
+}
+
 export function getStoredTokens(): { accessToken: string | null; refreshToken: string | null; expiresAt: number } {
-  const accessToken = getKeychainValue('access-token');
-  const refreshToken = getKeychainValue('refresh-token');
-  const expiresAtStr = getKeychainValue('token-expiry');
+  const accessToken = sanitize(getKeychainValue('access-token'));
+  const refreshToken = sanitize(getKeychainValue('refresh-token'));
+  const expiresAtStr = sanitize(getKeychainValue('token-expiry'));
   const expiresAt = expiresAtStr ? Number(expiresAtStr) : 0;
   return { accessToken, refreshToken, expiresAt };
 }
 
 export function storeTokens(accessToken: string, refreshToken: string, expiresAt: number): void {
+  if (!accessToken || !refreshToken) {
+    throw new Error(`storeTokens refused: missing accessToken=${!!accessToken} refreshToken=${!!refreshToken}`);
+  }
   setKeychainValue('access-token', accessToken);
   setKeychainValue('refresh-token', refreshToken);
   setKeychainValue('token-expiry', String(expiresAt));

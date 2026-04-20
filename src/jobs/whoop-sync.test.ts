@@ -20,6 +20,15 @@ vi.mock('../integrations/whoop/client.js', () => ({
   fetchRecovery: vi.fn(),
   fetchCycles: vi.fn(),
   fetchWorkouts: vi.fn(),
+  describeTokenError: (r: { reason: string; status?: number; detail?: string }) => {
+    switch (r.reason) {
+      case 'not_configured': return 'Whoop not configured';
+      case 'no_refresh_token': return 'Whoop: re-auth required (no stored token). Run /whoop';
+      case 'refresh_rejected': return `Whoop: re-auth required (refresh rejected: HTTP ${r.status}). Run /whoop`;
+      case 'network_error': return `Whoop: transient failure (${r.detail}). Will retry next cycle.`;
+      default: return 'unknown';
+    }
+  },
 }));
 
 vi.mock('../vault/files.js', () => ({
@@ -132,7 +141,7 @@ describe('jobs/whoop-sync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     isConfiguredMock.mockReturnValue(true);
-    getTokenMock.mockResolvedValue('test-token');
+    getTokenMock.mockResolvedValue({ ok: true, token: 'test-token' });
     readMock.mockReturnValue(null); // no existing data files
   });
 
@@ -144,10 +153,18 @@ describe('jobs/whoop-sync', () => {
       expect(getTokenMock).not.toHaveBeenCalled();
     });
 
-    it('returns error when no valid access token', async () => {
-      getTokenMock.mockResolvedValue(null);
+    it('returns error with actionable detail when refresh token missing', async () => {
+      getTokenMock.mockResolvedValue({ ok: false, reason: 'no_refresh_token' });
       const result = await executeSleepSync();
-      expect(result).toEqual({ status: 'error', detail: 'No valid access token' });
+      expect(result.status).toBe('error');
+      expect(result.detail).toContain('re-auth required');
+    });
+
+    it('returns error with status when refresh rejected', async () => {
+      getTokenMock.mockResolvedValue({ ok: false, reason: 'refresh_rejected', status: 401 });
+      const result = await executeSleepSync();
+      expect(result.status).toBe('error');
+      expect(result.detail).toContain('HTTP 401');
     });
 
     it('returns skipped when no sleep or recovery data', async () => {
@@ -248,10 +265,11 @@ describe('jobs/whoop-sync', () => {
       expect(result).toEqual({ status: 'skipped', detail: 'Whoop not configured' });
     });
 
-    it('returns error when no valid access token', async () => {
-      getTokenMock.mockResolvedValue(null);
+    it('returns error with transient detail on network error', async () => {
+      getTokenMock.mockResolvedValue({ ok: false, reason: 'network_error', detail: 'Network error' });
       const result = await executeActivitySync();
-      expect(result).toEqual({ status: 'error', detail: 'No valid access token' });
+      expect(result.status).toBe('error');
+      expect(result.detail).toContain('transient');
     });
 
     it('returns skipped when no strain or workout data', async () => {
@@ -408,6 +426,15 @@ describe('jobs/whoop-sync', () => {
       await runWhoopSleepSync(bot);
 
       expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('sends Telegram alert when sync errors due to bad token', async () => {
+      getTokenMock.mockResolvedValue({ ok: false, reason: 'refresh_rejected', status: 401 });
+      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      await runWhoopSleepSync(bot);
+
+      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('Whoop sync failed'));
+      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('HTTP 401'));
     });
 
     it('does not throw when sync errors', async () => {

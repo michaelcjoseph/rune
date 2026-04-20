@@ -1,5 +1,6 @@
 import { runAgent } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
+import config from '../config.js';
 
 const log = createLogger('kb-lint');
 
@@ -29,7 +30,7 @@ Follow the lint workflow:
 4. Produce a structured report with findings and recommendations
 5. Append a LINT entry to knowledge/log.md`;
 
-  const result = await runAgent('wiki-linter', prompt);
+  const result = await runAgent('wiki-linter', prompt, config.CLAUDE_LINT_TIMEOUT_MS);
 
   if (result.error) {
     log.error('Lint failed', { error: result.error });

@@ -1,5 +1,5 @@
 import type TelegramBot from 'node-telegram-bot-api';
-import { getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts, isConfigured } from '../integrations/whoop/client.js';
+import { getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts, isConfigured, describeTokenError } from '../integrations/whoop/client.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { getYesterdayDate, getTodayDate } from '../utils/time.js';
@@ -87,10 +87,11 @@ export async function executeSleepSync(): Promise<WhoopSyncResult> {
     return { status: 'skipped', detail: 'Whoop not configured' };
   }
 
-  const token = await getAccessToken();
-  if (!token) {
-    return { status: 'error', detail: 'No valid access token' };
+  const tokenResult = await getAccessToken();
+  if (!tokenResult.ok) {
+    return { status: 'error', detail: describeTokenError(tokenResult) };
   }
+  const token = tokenResult.token;
 
   const date = getYesterdayDate();
   log.info('Syncing sleep data', { date });
@@ -127,6 +128,8 @@ export async function runWhoopSleepSync(bot: TelegramBot): Promise<void> {
     const result = await executeSleepSync();
     if (result.status === 'synced' && result.detail) {
       await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop: ${result.detail}`);
+    } else if (result.status === 'error' && result.detail) {
+      await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop sync failed — ${result.detail}`);
     }
   } catch (err) {
     log.error('Sleep sync failed', { error: String(err) });
@@ -140,10 +143,11 @@ export async function executeActivitySync(): Promise<WhoopSyncResult> {
     return { status: 'skipped', detail: 'Whoop not configured' };
   }
 
-  const token = await getAccessToken();
-  if (!token) {
-    return { status: 'error', detail: 'No valid access token' };
+  const tokenResult = await getAccessToken();
+  if (!tokenResult.ok) {
+    return { status: 'error', detail: describeTokenError(tokenResult) };
   }
+  const token = tokenResult.token;
 
   const date = getTodayDate();
   log.info('Syncing activity data', { date });
