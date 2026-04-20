@@ -52,7 +52,7 @@ export function parseTag(content: string, tag: string): string | null {
 
   let startIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (tagPattern.test(lines[i])) {
+    if (tagPattern.test(lines[i]!)) {
       startIdx = i + 1;
       break;
     }
@@ -62,7 +62,7 @@ export function parseTag(content: string, tag: string): string | null {
 
   const collected: string[] = [];
   for (let i = startIdx; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i]!;
     // Stop at line-leading #tag (section divider) or markdown heading
     if (/^#\w/.test(line) || /^#{1,6}\s/.test(line)) break;
     collected.push(line);

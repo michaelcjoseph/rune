@@ -209,9 +209,9 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
       expect(result.steps).toHaveLength(5);
-      expect(result.steps[0].status).toBe('error');
+      expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
-      expect(result.steps[1].step).toBe('KB queue');
+      expect(result.steps[1]!.step).toBe('KB queue');
       expect(queueMock).toHaveBeenCalled();
     });
 
@@ -220,9 +220,9 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
       expect(result.steps).toHaveLength(5);
-      expect(result.steps[1].status).toBe('error');
+      expect(result.steps[1]!.status).toBe('error');
       // Daily tags step still ran
-      expect(result.steps[2].step).toBe('Daily tags');
+      expect(result.steps[2]!.step).toBe('Daily tags');
     });
 
     it('continues when daily tags throws', async () => {
@@ -230,9 +230,9 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
       expect(result.steps).toHaveLength(5);
-      expect(result.steps[2].status).toBe('error');
+      expect(result.steps[2]!.status).toBe('error');
       // Lint step still ran
-      expect(result.steps[4].step).toBe('KB lint');
+      expect(result.steps[4]!.step).toBe('KB lint');
     });
   });
 

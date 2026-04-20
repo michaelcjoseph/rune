@@ -26,9 +26,9 @@ vi.mock('../utils/time.js', () => ({
   getDateContext: () => 'Today is Wednesday, April 9, 2026 (America/Chicago). Today\'s journal file: 2026_04_09.md',
 }));
 
-const mockAskClaudeOneShot = vi.fn<[], Promise<{ text: string | null; error: string | null }>>();
+const mockAskClaudeOneShot = vi.fn<(...args: unknown[]) => Promise<{ text: string | null; error: string | null }>>();
 vi.mock('../ai/claude.js', () => ({
-  askClaudeOneShot: (...args: unknown[]) => mockAskClaudeOneShot(...(args as [])),
+  askClaudeOneShot: (...args: unknown[]) => mockAskClaudeOneShot(...args),
 }));
 
 const mockGitCommitAndPush = vi.fn();
@@ -151,7 +151,7 @@ describe('morning-prep integration', () => {
 
     // Claude was called with gathered data
     expect(mockAskClaudeOneShot).toHaveBeenCalledOnce();
-    const prompt = mockAskClaudeOneShot.mock.calls[0][0] as string;
+    const prompt = mockAskClaudeOneShot.mock.calls[0]![0] as string;
     expect(prompt).toContain('Ship feature X');
     expect(prompt).toContain('Bench press');
     expect(prompt).toContain('Wednesday');
@@ -172,7 +172,7 @@ describe('morning-prep integration', () => {
 
     // Claude was still called but with fallback data
     expect(mockAskClaudeOneShot).toHaveBeenCalledOnce();
-    const prompt = mockAskClaudeOneShot.mock.calls[0][0] as string;
+    const prompt = mockAskClaudeOneShot.mock.calls[0]![0] as string;
     expect(prompt).toContain('No priorities logged yesterday');
     expect(prompt).toContain('No workout plan found');
     expect(prompt).toContain('No active study assignments');

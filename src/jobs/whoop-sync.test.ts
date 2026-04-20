@@ -206,7 +206,7 @@ describe('jobs/whoop-sync', () => {
 
       const written = JSON.parse(writeMock.mock.calls.find(
         (c: unknown[]) => (c[0] as string).includes('2026-04-10.json'),
-      )[1]);
+      )![1]);
 
       expect(written.sleep).toBeDefined();
       // total_in_bed - total_awake = 25_200_000ms = 7 hours
@@ -232,7 +232,7 @@ describe('jobs/whoop-sync', () => {
 
       const written = JSON.parse(writeMock.mock.calls.find(
         (c: unknown[]) => (c[0] as string).includes('2026-04-10.json'),
-      )[1]);
+      )![1]);
 
       // Existing strain preserved, sleep + recovery added
       expect(written.strain).toBeDefined();
@@ -284,7 +284,7 @@ describe('jobs/whoop-sync', () => {
 
       const written = JSON.parse(writeMock.mock.calls.find(
         (c: unknown[]) => (c[0] as string).includes('2026-04-11.json'),
-      )[1]);
+      )![1]);
 
       // Existing sleep/recovery preserved
       expect(written.sleep).toBeDefined();
@@ -307,7 +307,7 @@ describe('jobs/whoop-sync', () => {
       expect(result.status).toBe('synced');
       const written = JSON.parse(writeMock.mock.calls.find(
         (c: unknown[]) => (c[0] as string).includes('2026-04-11.json'),
-      )[1]);
+      )![1]);
       expect(written.strain).toBeDefined();
       expect(written.workouts).toBeUndefined();
     });
@@ -361,7 +361,7 @@ describe('jobs/whoop-sync', () => {
       );
       expect(trendsCall).toBeDefined();
 
-      const content = trendsCall[1] as string;
+      const content = trendsCall![1] as string;
       expect(content).toContain('# Whoop Trends');
       expect(content).toContain('7-Day Averages');
       expect(content).toContain('30-Day Averages');

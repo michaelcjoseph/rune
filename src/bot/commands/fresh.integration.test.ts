@@ -27,11 +27,11 @@ vi.mock('../../utils/time.js', () => ({
     "Today is Monday, April 14, 2026 (America/Chicago). Today's journal file: 2026_04_14.md",
 }));
 
-const mockSummarizeSession = vi.fn<[], Promise<{ text: string | null; error: string | null }>>();
-const mockRunAgent = vi.fn<[], Promise<{ text: string | null; error: string | null }>>();
+const mockSummarizeSession = vi.fn<(...args: unknown[]) => Promise<{ text: string | null; error: string | null }>>();
+const mockRunAgent = vi.fn<(...args: unknown[]) => Promise<{ text: string | null; error: string | null }>>();
 vi.mock('../../ai/claude.js', () => ({
-  summarizeSession: (...args: unknown[]) => mockSummarizeSession(...(args as [])),
-  runAgent: (...args: unknown[]) => mockRunAgent(...(args as [])),
+  summarizeSession: (...args: unknown[]) => mockSummarizeSession(...args),
+  runAgent: (...args: unknown[]) => mockRunAgent(...args),
 }));
 
 vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
@@ -104,7 +104,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     expect(files[0]).toMatch(/^conversation-2026-04-14-1430\d{2}\.md$/);
 
     // 2. File content is the summary (without KB-worthy line)
-    const content = readFileSync(join(conversationsDir, files[0]), 'utf8');
+    const content = readFileSync(join(conversationsDir, files[0]!), 'utf8');
     expect(content).toContain('Topic: Transformer architecture deep dive');
     expect(content).toContain('Discussion: Covered self-attention');
     expect(content).not.toContain('KB-worthy');
@@ -112,7 +112,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     // 3. File is in the ingestion queue
     const queue = getQueue();
     expect(queue).toHaveLength(1);
-    expect(queue[0].source).toContain('knowledge/raw/conversations/');
+    expect(queue[0]!.source).toContain('knowledge/raw/conversations/');
 
     // 4. Nightly processing picks up the queued file
     const result = await processIngestionQueue();

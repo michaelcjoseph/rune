@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockStop = vi.fn();
-const mockSchedule = vi.fn(() => ({ stop: mockStop }));
+const mockSchedule = vi.fn((..._args: unknown[]) => ({ stop: mockStop }));
 
 vi.mock('node-cron', () => ({
   default: { schedule: mockSchedule },
@@ -41,7 +41,15 @@ vi.mock('./whoop-sync.js', () => ({
   runWhoopSleepSync: vi.fn(async () => {}),
 }));
 
-const { startScheduler, stopScheduler } = await import('./scheduler.js');
+// Mock fs to avoid writing real state files in tests
+vi.mock('node:fs', () => ({
+  readFileSync: vi.fn(() => { throw new Error('ENOENT'); }),
+  writeFileSync: vi.fn(),
+}));
+
+const { startScheduler, stopScheduler, recordJobRun } = await import('./scheduler.js');
+const { readFileSync, writeFileSync } = await import('node:fs');
+const { runMorningPrep } = await import('./morning-prep.js');
 
 describe('jobs/scheduler', () => {
   beforeEach(() => {
@@ -49,13 +57,25 @@ describe('jobs/scheduler', () => {
     // Ensure clean state — stop any lingering tasks from prior tests
     stopScheduler();
     vi.clearAllMocks();
+    // Reset fs mock to return empty state by default (no missed jobs)
+    vi.mocked(readFileSync).mockImplementation(() => {
+      // Return state with all jobs run "just now" so nothing is missed
+      const now = Date.now();
+      return JSON.stringify({
+        'morning-prep': now,
+        'nightly': now,
+        'whoop-sleep': now,
+        'weekly-nudge': now,
+        'review-nudge': now,
+      });
+    });
   });
 
   it('startScheduler calls cron.schedule with the correct timezone', () => {
     startScheduler({} as any);
 
     expect(mockSchedule).toHaveBeenCalled();
-    const options = mockSchedule.mock.calls[0]![2] as { timezone: string };
+    const options = mockSchedule.mock.calls[0]![2] as unknown as { timezone: string };
     expect(options.timezone).toBe('America/Chicago');
   });
 
@@ -68,7 +88,7 @@ describe('jobs/scheduler', () => {
   it('startScheduler passes the morning-prep cron expression', () => {
     startScheduler({} as any);
 
-    const cronExpr = mockSchedule.mock.calls[0]![0] as string;
+    const cronExpr = mockSchedule.mock.calls[0]![0] as unknown as string;
     expect(cronExpr).toBe('30 5 * * *');
   });
 
@@ -99,5 +119,49 @@ describe('jobs/scheduler', () => {
 
     stopScheduler();
     expect(mockStop).toHaveBeenCalledTimes(5);
+  });
+
+  it('recordJobRun persists the timestamp to state file', () => {
+    recordJobRun('morning-prep');
+
+    expect(writeFileSync).toHaveBeenCalled();
+    const written = JSON.parse(vi.mocked(writeFileSync).mock.calls[0]![1] as string);
+    expect(written['morning-prep']).toBeGreaterThan(0);
+  });
+
+  it('catches up missed jobs on startup when state file shows stale last run', () => {
+    // State shows morning-prep last ran 2 days ago
+    vi.mocked(readFileSync).mockImplementation(() =>
+      JSON.stringify({
+        'morning-prep': Date.now() - 48 * 60 * 60 * 1000,
+        'nightly': Date.now(),
+        'whoop-sleep': Date.now(),
+        'weekly-nudge': Date.now(),
+        'review-nudge': Date.now(),
+      }),
+    );
+
+    startScheduler({} as any);
+
+    // morning-prep's guarded handler should have been called
+    // The handler is wrapped by guarded(), which calls runMorningPrep
+    expect(runMorningPrep).toHaveBeenCalled();
+  });
+
+  it('does not catch up jobs that ran recently', () => {
+    // All jobs ran just now
+    vi.mocked(readFileSync).mockImplementation(() =>
+      JSON.stringify({
+        'morning-prep': Date.now(),
+        'nightly': Date.now(),
+        'whoop-sleep': Date.now(),
+        'weekly-nudge': Date.now(),
+        'review-nudge': Date.now(),
+      }),
+    );
+
+    startScheduler({} as any);
+
+    expect(runMorningPrep).not.toHaveBeenCalled();
   });
 });

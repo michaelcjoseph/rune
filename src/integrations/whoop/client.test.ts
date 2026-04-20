@@ -150,14 +150,14 @@ describe('whoop/client', () => {
 
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
       expect(result).toHaveLength(1);
-      expect(result[0].id).toBe(1);
+      expect(result[0]!.id).toBe(1);
 
-      const url = fetchSpy.mock.calls[0][0] as string;
+      const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/activity/sleep');
       expect(url).toContain('start=2026-04-10T00%3A00%3A00.000Z');
       expect(url).toContain('end=2026-04-10T23%3A59%3A59.999Z');
 
-      const opts = fetchSpy.mock.calls[0][1] as RequestInit;
+      const opts = fetchSpy.mock.calls[0]![1] as RequestInit;
       expect(opts.headers).toEqual({ Authorization: 'Bearer tok' });
       fetchSpy.mockRestore();
     });
@@ -194,7 +194,7 @@ describe('whoop/client', () => {
 
       const result = await fetchRecovery('tok', '2026-04-10', '2026-04-10');
       expect(result).toHaveLength(1);
-      expect(result[0].cycle_id).toBe(1);
+      expect(result[0]!.cycle_id).toBe(1);
       fetchSpy.mockRestore();
     });
 
@@ -222,7 +222,7 @@ describe('whoop/client', () => {
       const result = await fetchCycles('tok', '2026-04-10', '2026-04-10');
       expect(result).toHaveLength(1);
 
-      const url = fetchSpy.mock.calls[0][0] as string;
+      const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/cycle');
       fetchSpy.mockRestore();
     });
@@ -241,7 +241,7 @@ describe('whoop/client', () => {
       const result = await fetchWorkouts('tok', '2026-04-10', '2026-04-10');
       expect(result).toHaveLength(1);
 
-      const url = fetchSpy.mock.calls[0][0] as string;
+      const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/activity/workout');
       fetchSpy.mockRestore();
     });

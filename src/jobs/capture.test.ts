@@ -104,7 +104,7 @@ describe('jobs/capture', () => {
 
     await captureSessions();
 
-    const entry = appendMock.mock.calls[0][0] as string;
+    const entry = appendMock.mock.calls[0]![0] as string;
     expect(entry).toContain('23:00');
     expect(entry).toContain('[[jarvis]]');
     expect(entry).toContain('\t- Line A');

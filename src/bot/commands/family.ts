@@ -29,13 +29,13 @@ export async function handleFamily(bot: TelegramBot, chatId: number): Promise<vo
       for (const name of NAMES) {
         const n = countMentions(content, name);
         if (n > 0) {
-          counts[name].total += n;
-          counts[name].days += 1;
+          counts[name]!.total += n;
+          counts[name]!.days += 1;
         }
       }
     }
 
-    const allZero = NAMES.every((name) => counts[name].total === 0);
+    const allZero = NAMES.every((name) => counts[name]!.total === 0);
     if (allZero) {
       await bot.sendMessage(chatId, `No mentions of ${NAMES.join(' or ')} in the last ${SCAN_DAYS} days.`);
       return;
@@ -43,15 +43,15 @@ export async function handleFamily(bot: TelegramBot, chatId: number): Promise<vo
 
     const lines = [`Family mentions (last ${SCAN_DAYS} days):`, ''];
     for (const name of NAMES) {
-      const { total, days } = counts[name];
+      const { total, days } = counts[name]!;
       lines.push(`${name}: ${total} mention${total !== 1 ? 's' : ''} across ${days} day${days !== 1 ? 's' : ''}`);
     }
 
-    const [a, b] = NAMES;
-    if (counts[a].total > 0 && counts[b].total > 0) {
-      const ratio = Math.max(counts[a].total, counts[b].total) / Math.min(counts[a].total, counts[b].total);
+    const [a, b] = NAMES as [string, string];
+    if (counts[a]!.total > 0 && counts[b]!.total > 0) {
+      const ratio = Math.max(counts[a]!.total, counts[b]!.total) / Math.min(counts[a]!.total, counts[b]!.total);
       if (ratio >= 2) {
-        const more = counts[a].total > counts[b].total ? a : b;
+        const more = counts[a]!.total > counts[b]!.total ? a : b;
         const less = more === a ? b : a;
         lines.push('', `Imbalance: ${more} mentioned ${ratio.toFixed(1)}x more than ${less}`);
       }

@@ -207,7 +207,7 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
 
     await synthesizeMorningPrep(sampleData);
 
-    const prompt = mockAskClaudeOneShot.mock.calls[0][0];
+    const prompt = mockAskClaudeOneShot.mock.calls[0]![0];
     expect(prompt).toContain('Wednesday');
     expect(prompt).toContain('2026_04_08.md');
   });
@@ -281,7 +281,7 @@ describe('jobs/morning-prep — runMorningPrep', () => {
     await runMorningPrep(mockBot);
 
     expect(mockGitCommitAndPush).toHaveBeenCalledOnce();
-    expect(mockGitCommitAndPush.mock.calls[0][0]).toBe('Morning prep');
+    expect(mockGitCommitAndPush.mock.calls[0]![0]).toBe('Morning prep');
   });
 
   it('TG notification sent to config.TELEGRAM_USER_ID', async () => {

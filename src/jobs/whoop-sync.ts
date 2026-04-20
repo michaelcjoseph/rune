@@ -173,7 +173,7 @@ export async function executeActivitySync(): Promise<WhoopSyncResult> {
 
 function generateTrends(): void {
   const todayStr = getTodayDate();
-  const [y, m, d] = todayStr.split('-').map(Number);
+  const [y, m, d] = todayStr.split('-').map(Number) as [number, number, number];
   const days: WhoopDailyData[] = [];
 
   for (let i = 0; i < 30; i++) {

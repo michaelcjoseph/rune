@@ -86,7 +86,7 @@ describe('jobs/nudges — runWeeklyNudge', () => {
     await runWeeklyNudge(bot);
 
     expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('Friday');
     expect(msg).toContain('Apr 5');
     expect(msg).toContain('3 journal entries');
@@ -103,7 +103,7 @@ describe('jobs/nudges — runWeeklyNudge', () => {
 
     await runWeeklyNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('1 journal entry');
     expect(msg).toContain('1 active session');
   });
@@ -116,7 +116,7 @@ describe('jobs/nudges — runWeeklyNudge', () => {
 
     await runWeeklyNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('2 queued for ingestion');
   });
 
@@ -124,7 +124,7 @@ describe('jobs/nudges — runWeeklyNudge', () => {
     vi.mocked(getAllSessions).mockReturnValue([]);
     await runWeeklyNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('0 active sessions');
     expect(msg).not.toContain('messages');
   });
@@ -147,7 +147,7 @@ describe('jobs/nudges — runReviewNudge', () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 5, monthName: 'May', day: 31, lastDay: 31 });
     await runReviewNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('May');
     expect(msg).toContain('monthly');
     expect(msg).toContain('/monthly');
@@ -157,7 +157,7 @@ describe('jobs/nudges — runReviewNudge', () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 3, monthName: 'March', day: 31, lastDay: 31 });
     await runReviewNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('quarterly');
     expect(msg).toContain('/quarterly');
   });
@@ -166,7 +166,7 @@ describe('jobs/nudges — runReviewNudge', () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 6, monthName: 'June', day: 30, lastDay: 30 });
     await runReviewNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('quarterly');
     expect(msg).toContain('/quarterly');
   });
@@ -175,7 +175,7 @@ describe('jobs/nudges — runReviewNudge', () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 9, monthName: 'September', day: 30, lastDay: 30 });
     await runReviewNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('quarterly');
   });
 
@@ -183,7 +183,7 @@ describe('jobs/nudges — runReviewNudge', () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 12, monthName: 'December', day: 31, lastDay: 31 });
     await runReviewNudge(bot);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
     expect(msg).toContain('yearly');
     expect(msg).toContain('/yearly');
   });

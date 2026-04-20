@@ -197,7 +197,7 @@ describe('bot/commands/fresh', () => {
 
       await handleFresh(bot, 123);
 
-      const entry = appendMock.mock.calls[0][0] as string;
+      const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('14:30');
       expect(entry).toContain('[[jarvis]]');
       expect(entry).toContain('\t- Summary line');

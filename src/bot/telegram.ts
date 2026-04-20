@@ -21,8 +21,14 @@ export function createBot(): TelegramBot {
     }
   });
 
-  bot.on('polling_error', (err) => {
-    log.error('Polling error', { error: err.message });
+  bot.on('polling_error', (err: any) => {
+    const cause = err.cause;
+    log.error('Polling error', {
+      code: err.code,
+      causeCode: cause?.code,
+      causeMessage: cause?.message,
+      statusCode: err.response?.statusCode,
+    });
   });
 
   log.info('Telegram bot started (polling mode)');
