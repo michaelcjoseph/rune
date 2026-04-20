@@ -2,11 +2,13 @@ import TelegramBot from 'node-telegram-bot-api';
 import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession, ReviewType } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
-import { askClaudeWithContext, askClaudeOneShot, runAgent } from '../ai/claude.js';
+import { askClaudeWithContext, askClaudeOneShot, runAgent, AGENT_NOT_FOUND_PREFIX, type ClaudeResult } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
+import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
+import { enqueue as enqueueKB } from '../kb/queue.js';
 
 const log = createLogger('interview-review');
 
@@ -23,6 +25,9 @@ export interface InterviewReviewConfig {
   defaultInstructions: string;
   buildPromptHeader: (session: ReviewSession) => string;
   prepAgents: (session: ReviewSession) => PrepAgentCall[];
+  /** Optional synchronous prep — appended to prepContext after agent results.
+   *  Use for local computations (changelog scans, queue dumps) that don't need an LLM. */
+  extraPrepContext?: (session: ReviewSession) => string | null;
   postAgents: 'dynamic' | 'psychology-only';
   psychologyScope: string;
 }
@@ -93,10 +98,25 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         return;
       }
 
-      const prepContext = results.map((r, i) => {
+      const prepSections = results.map((r, i) => {
         const call = prepCalls[i]!;
         return `# ${call.label}\n${r.text || `(${call.agent} failed: ${r.error})`}`;
-      }).join('\n\n');
+      });
+
+      if (config.postAgents === 'dynamic') {
+        const drafts = getPendingPlaybookDrafts();
+        if (drafts.length > 0) {
+          const draftList = drafts.map(d =>
+            `- **${d.slug}** (${d.domain}, from [[${d.sourceJournal}]]):\n${d.entryMarkdown}`
+          ).join('\n\n');
+          prepSections.push(`# Pending Playbook Drafts (${drafts.length})\n${draftList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved drafts will be appended to pages/playbook.md after outline approval.*`);
+        }
+      }
+
+      const extra = config.extraPrepContext?.(session);
+      if (extra) prepSections.push(extra);
+
+      const prepContext = prepSections.join('\n\n');
 
       updateReviewSession(session.chatId, { prepContext });
 
@@ -222,15 +242,40 @@ conversation_context: ${session.prepContext}`);
 
       updateReviewSession(session.chatId, { phase: 'updates' });
 
-      const agentResults: Record<string, boolean> = {};
+      type AgentStatus = 'ok' | 'failed' | 'missing';
+      const agentResults: Record<string, AgentStatus> = {};
       const agentPromises: Promise<void>[] = [];
 
+      const runPostAgent = (key: string, agentName: string, prompt: string, onSuccess?: (r: ClaudeResult) => void): Promise<void> =>
+        runAgent(agentName, prompt).then(r => {
+          if (!r.error) {
+            agentResults[key] = 'ok';
+            try { onSuccess?.(r); } catch (err) { log.error(`${agentName} onSuccess failed`, { error: (err as Error).message }); }
+          } else if (r.error.startsWith(AGENT_NOT_FOUND_PREFIX)) {
+            agentResults[key] = 'missing';
+            log.warn(`Post-agent missing: ${agentName}`, { key });
+          } else {
+            agentResults[key] = 'failed';
+            log.error(`${agentName} failed`, { error: r.error });
+          }
+        });
+
+      const enqueueTouchedFiles = (output: string, pattern: RegExp, filter?: (path: string) => boolean): void => {
+        const matches = output.match(pattern) || [];
+        const unique = [...new Set(matches)];
+        for (const file of unique) {
+          if (!filter || filter(file)) enqueueKB(file);
+        }
+      };
+
       if (config.postAgents === 'dynamic') {
-        const analysisResult = await askClaudeOneShot(`Based on this ${config.type} review prep context and approved outline, determine which post-interview updates are needed. Reply with a JSON object containing boolean fields: "projects", "psychology", "json_updates".
+        const analysisResult = await askClaudeOneShot(`Based on this ${config.type} review prep context and approved outline, determine which post-interview updates are needed. Reply with a JSON object containing boolean fields: "projects", "psychology", "json_updates", "worldview", "playbook".
 
 Set "projects" to true if active projects were discussed with meaningful updates (thesis changes, new risks, decisions).
 Set "psychology" to true if psychological patterns were observed or challenged.
 Set "json_updates" to true if trackable items were mentioned (#workout, #book, #crm, #place, etc.).
+Set "worldview" to true if the outline proposes specific changes to world-view/*.md files (belief shifts the user approved applying).
+Set "playbook" to true if the outline approves applying playbook drafts from the queue or proposes new tactical patterns to add.
 
 Prep context:
 ${session.prepContext}
@@ -240,43 +285,48 @@ ${session.outline}
 
 Reply ONLY with the JSON object, nothing else.`);
 
-        let updates = { projects: false, psychology: false, json_updates: false };
+        let updates = { projects: false, psychology: false, json_updates: false, worldview: false, playbook: false };
         if (analysisResult.text) {
           try {
             const parsed = JSON.parse(analysisResult.text.replace(/```json?\n?|\n?```/g, '').trim());
             updates = { ...updates, ...parsed };
           } catch {
             log.warn('Failed to parse update analysis, running all agents', { text: analysisResult.text });
-            updates = { projects: true, psychology: true, json_updates: true };
+            updates = { projects: true, psychology: true, json_updates: true, worldview: true, playbook: true };
           }
         }
 
         if (updates.projects) {
-          agentPromises.push(
-            runAgent('project-updater', `Update project pages based on this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`)
-              .then(r => { agentResults.projects = !r.error; if (r.error) log.error('project-updater failed', { error: r.error }); })
-          );
+          agentPromises.push(runPostAgent('projects', 'project-updater',
+            `Update project pages based on this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            r => enqueueTouchedFiles(r.text || '', /projects\/[a-z0-9-]+\.md/g, f => !f.startsWith('projects/archive/'))));
         }
 
         if (updates.psychology) {
-          agentPromises.push(
-            runAgent('psychology-updater', `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`)
-              .then(r => { agentResults.psychology = !r.error; if (r.error) log.error('psychology-updater failed', { error: r.error }); })
-          );
+          agentPromises.push(runPostAgent('psychology', 'psychology-updater',
+            `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
         }
 
         if (updates.json_updates) {
-          agentPromises.push(
-            runAgent('json-updater', `Apply any JSON data updates from this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`)
-              .then(r => { agentResults.json_updates = !r.error; if (r.error) log.error('json-updater failed', { error: r.error }); })
-          );
+          agentPromises.push(runPostAgent('json_updates', 'json-updater',
+            `Apply any JSON data updates from this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
+        }
+
+        if (updates.worldview) {
+          agentPromises.push(runPostAgent('worldview', 'worldview-updater',
+            `Apply approved worldview diffs from this ${config.type} review outline to world-view/*.md. Only apply changes explicitly present in the outline.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            r => enqueueTouchedFiles(r.text || '', /world-view\/[a-z0-9-]+\.md/g)));
+        }
+
+        if (updates.playbook) {
+          agentPromises.push(runPostAgent('playbook', 'playbook-updater',
+            `Apply approved playbook drafts from logs/playbook-queue.json. Only apply drafts the outline approves; leave the rest in the queue.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            () => enqueueKB('pages/playbook.md')));
         }
       } else {
         // psychology-only mode
-        agentPromises.push(
-          runAgent('psychology-updater', `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`)
-            .then(r => { agentResults.psychology = !r.error; if (r.error) log.error('psychology-updater failed', { error: r.error }); })
-        );
+        agentPromises.push(runPostAgent('psychology', 'psychology-updater',
+          `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
       }
 
       if (agentPromises.length > 0) {
@@ -291,11 +341,21 @@ Reply ONLY with the JSON object, nothing else.`);
 
       stopTyping(typing);
 
+      const summarize = (key: string, ok: string, failed: string, missing: string): string | null => {
+        const state = agentResults[key];
+        if (state === 'ok') return ok;
+        if (state === 'failed') return failed;
+        if (state === 'missing') return missing;
+        return null;
+      };
+
       const agentSummary = [
         writerResult.text ? 'Review written to journal.' : null,
-        agentResults.projects === true ? 'Project pages updated.' : agentResults.projects === false ? 'Project update failed.' : null,
-        agentResults.psychology === true ? 'Psychology profile updated.' : agentResults.psychology === false ? 'Psychology update failed.' : null,
-        agentResults.json_updates === true ? 'JSON data updated.' : agentResults.json_updates === false ? 'JSON update failed.' : null,
+        summarize('projects', 'Project pages updated.', 'Project update failed.', 'Projects skipped (agent missing).'),
+        summarize('psychology', 'Psychology profile updated.', 'Psychology update failed.', 'Psychology skipped (agent missing).'),
+        summarize('json_updates', 'JSON data updated.', 'JSON update failed.', 'JSON updates skipped (agent missing).'),
+        summarize('worldview', 'Worldview updated.', 'Worldview update failed.', 'Worldview skipped (agent missing).'),
+        summarize('playbook', 'Playbook entries added.', 'Playbook update failed.', 'Playbook skipped (agent missing).'),
       ].filter(Boolean).join('\n');
 
       updateReviewSession(session.chatId, { phase: 'done' });

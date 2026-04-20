@@ -2,6 +2,7 @@ import { registerReviewHandler } from './orchestrator.js';
 import { createInterviewHandler, toScannerDate, detectOutline } from './interview.js';
 import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
+import { detectWorldviewDrift, formatDriftFlags } from './worldview-drift.js';
 
 // Re-export for tests and backward compatibility
 export { detectOutline };
@@ -34,6 +35,12 @@ const weeklyConfig: InterviewReviewConfig = {
       { agent: 'journal-scanner', prompt: `start_date: ${toScannerDate(saturday)}, end_date: ${toScannerDate(friday)}, focus_areas: [family, projects, tags, emotions, study, health, ideas, playbook, psychology, reading, unresolved]`, label: 'Journal Scanner Results' },
       { agent: 'system-scanner', prompt: 'systems: [health, study, psychology]', label: 'System Scanner Results' },
     ];
+  },
+  extraPrepContext: (session: ReviewSession) => {
+    const friday = session.targetDate;
+    const saturday = getWeekSaturday(friday);
+    const flags = detectWorldviewDrift(toScannerDate(saturday), toScannerDate(friday));
+    return formatDriftFlags(flags);
   },
   postAgents: 'dynamic',
   psychologyScope: 'observation',

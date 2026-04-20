@@ -133,11 +133,6 @@ Reference `docs/design/design-brief.md` and `docs/design/style.md` for:
 - 8px spacing grid
 - Border radius scale (sm: 12px, md: 16px, lg: 20px)
 
-### Aura-Specific Considerations
-
-- [How the feature adapts to pre-aura vs post-aura states]
-- [Aura-specific theming or visual treatment]
-
 ---
 
 ## Implementation Phases

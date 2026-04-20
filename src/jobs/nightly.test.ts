@@ -6,6 +6,9 @@ vi.mock('../config.js', () => ({
 
 vi.mock('./capture.js', () => ({ captureSessions: vi.fn() }));
 vi.mock('./whoop-sync.js', () => ({ executeActivitySync: vi.fn(() => ({ status: 'skipped', detail: 'Whoop not configured' })) }));
+vi.mock('./playbook-extract.js', () => ({
+  extractPlaybookDrafts: vi.fn(() => ({ status: 'skipped', detail: 'No #playbook tag' })),
+}));
 vi.mock('../kb/engine.js', () => ({
   processIngestionQueue: vi.fn(),
   lintKB: vi.fn(),
@@ -53,13 +56,14 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 5 steps and returns results', async () => {
+    it('runs all 6 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(6);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'KB queue',
         'Daily tags',
+        'Playbook extract',
         'Whoop activity',
         'KB lint',
       ]);
@@ -209,7 +213,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(6);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('KB queue');
@@ -220,7 +224,7 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(6);
       expect(result.steps[1]!.status).toBe('error');
       // Daily tags step still ran
       expect(result.steps[2]!.step).toBe('Daily tags');
@@ -230,10 +234,10 @@ describe('jobs/nightly', () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(6);
       expect(result.steps[2]!.status).toBe('error');
-      // Lint step still ran
-      expect(result.steps[4]!.step).toBe('KB lint');
+      // Lint step still ran (now at index 5)
+      expect(result.steps[5]!.step).toBe('KB lint');
     });
   });
 

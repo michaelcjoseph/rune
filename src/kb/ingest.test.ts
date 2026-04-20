@@ -21,7 +21,7 @@ const { runAgent } = await import('../ai/claude.js');
 const { readVaultFile, vaultFileExists } = await import('../vault/files.js');
 const { dequeue } = await import('./queue.js');
 const { copyFileSync } = await import('node:fs');
-const { ingestSource } = await import('./ingest.js');
+const { ingestSource, determineRawDir, isMutableSource } = await import('./ingest.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
@@ -140,5 +140,67 @@ describe('kb/ingest', () => {
 
     await ingestSource('knowledge/raw/notes/existing.md');
     expect(copyMock).not.toHaveBeenCalled();
+  });
+
+  describe('determineRawDir', () => {
+    it('routes Readwise articles', () => {
+      expect(determineRawDir('Readwise/foo.md')).toBe('knowledge/raw/articles');
+    });
+
+    it('routes world-view files', () => {
+      expect(determineRawDir('world-view/ai.md')).toBe('knowledge/raw/world-view');
+      expect(determineRawDir('world-view/crypto.md')).toBe('knowledge/raw/world-view');
+    });
+
+    it('routes playbook.md', () => {
+      expect(determineRawDir('pages/playbook.md')).toBe('knowledge/raw/playbook');
+    });
+
+    it('routes active projects', () => {
+      expect(determineRawDir('projects/project-alpha.md')).toBe('knowledge/raw/projects');
+      expect(determineRawDir('projects/project-beta.md')).toBe('knowledge/raw/projects');
+    });
+
+    it('routes archived projects to notes', () => {
+      expect(determineRawDir('projects/archive/old.md')).toBe('knowledge/raw/notes');
+    });
+
+    it('falls back to notes for unknown paths', () => {
+      expect(determineRawDir('misc/something.md')).toBe('knowledge/raw/notes');
+    });
+  });
+
+  describe('isMutableSource', () => {
+    it('marks world-view / playbook / active projects as mutable', () => {
+      expect(isMutableSource('world-view/ai.md')).toBe(true);
+      expect(isMutableSource('pages/playbook.md')).toBe(true);
+      expect(isMutableSource('projects/project-alpha.md')).toBe(true);
+    });
+
+    it('marks Readwise and archived projects as immutable', () => {
+      expect(isMutableSource('Readwise/foo.md')).toBe(false);
+      expect(isMutableSource('projects/archive/old.md')).toBe(false);
+      expect(isMutableSource('misc/notes.md')).toBe(false);
+    });
+  });
+
+  it('overwrites raw copy when ingesting a mutable source that already exists', async () => {
+    existsMock.mockReturnValue(true);
+    let logCallCount = 0;
+    readMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/log.md') {
+        logCallCount++;
+        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+      }
+      return 'content';
+    });
+    agentMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await ingestSource('world-view/ai.md');
+
+    expect(copyMock).toHaveBeenCalledWith(
+      '/test/vault/world-view/ai.md',
+      '/test/vault/knowledge/raw/world-view/ai.md',
+    );
   });
 });

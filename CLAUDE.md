@@ -54,6 +54,7 @@ src/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
 │   ├── interview.ts         # Interactive interview phase for review sessions
+│   ├── worldview-drift.ts   # Detect world-view changelog entries affecting active projects
 │   ├── daily.ts             # Daily review handler
 │   ├── weekly.ts            # Weekly review handler
 │   ├── monthly.ts           # Monthly review handler
@@ -76,9 +77,10 @@ src/
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
-│   ├── nightly.ts           # Nightly orchestrator: capture → KB queue → daily tags → whoop → lint → commit
+│   ├── nightly.ts           # Nightly orchestrator: capture → KB queue → daily tags → playbook extract → whoop → lint → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
 │   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
+│   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
@@ -133,6 +135,12 @@ Required:
 - `TELEGRAM_USER_ID` — numeric ID from @userinfobot
 - `VAULT_DIR` — path to Obsidian vault
 
+Optional:
+- `FAMILY_NAMES` — comma-separated names scanned by `/family` (e.g. `Alice,Bob`). Empty disables the command.
+- `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` — Whoop OAuth credentials
+- `READWISE_TOKEN` — Readwise Reader API
+- `JARVIS_HTTP_SECRET` — shared secret for authenticated HTTP endpoints
+
 `LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored).
 
 ## Agents
@@ -149,6 +157,23 @@ Required:
 | release-notes | `.claude/agents/release-notes.md` | Generate changelog from git history |
 | content-triager | `.claude/agents/content-triager.md` | Classify URLs/text → kb-ingest, readwise, journal, or skip |
 | photo-classifier | `.claude/agents/photo-classifier.md` | Classify photos → book, receipt, whiteboard, etc. with routing |
+| system-scanner | `.claude/agents/system-scanner.md` | Review prep: summarize current state of health/study/psychology/etc. |
+| project-updater | `.claude/agents/project-updater.md` | Post-review: apply approved updates to projects/*.md |
+| playbook-proposer | `.claude/agents/playbook-proposer.md` | Nightly: draft playbook entries from `#playbook`-tagged journals |
+| playbook-updater | `.claude/agents/playbook-updater.md` | Post-review: append approved drafts to pages/playbook.md |
+| worldview-updater | `.claude/agents/worldview-updater.md` | Post-review: apply approved diffs to world-view/*.md with changelog entry |
+| psychology-updater | `.claude/agents/psychology-updater.md` | Post-review: apply scoped updates to pages/psychology.md |
+| json-updater | `.claude/agents/json-updater.md` | Post-review / nightly: apply updates to JSON data stores |
+
+### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
+
+`loadAgentDef` in `src/ai/claude.ts` checks Jarvis's agents dir first, then falls back to the vault. The following agents live only in the vault because their instructions encode personal specifics (family names, employer, project codenames) that don't belong in a public repo:
+
+| Agent | Purpose |
+|---|---|
+| journal-scanner | Review prep: scan journals by date range + focus areas |
+| project-scanner | Review prep: compare project pages against recent journal activity |
+| review-writer | Review writeup: append formatted review to journal |
 
 ### Dev Tooling Agents (used by `/work` skill)
 

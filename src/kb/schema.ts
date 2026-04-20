@@ -119,7 +119,7 @@ last-verified: YYYY-MM-DD
 ### Wikilinks
 - Use [[page-name]] for all internal links
 - Page names are kebab-case: [[onchain-identity]], [[vitalik-buterin]]
-- Link to both wiki pages AND personal vault pages (e.g., [[UNO]], [[playbook]])
+- Link to both wiki pages AND personal vault pages (e.g., [[project-slug]], [[playbook]])
 - When creating a new page, always add a link from at least one existing page
 
 ### Tags

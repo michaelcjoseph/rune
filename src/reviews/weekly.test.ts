@@ -23,10 +23,12 @@ vi.mock('../ai/claude.js', () => ({
   askClaudeWithContext: vi.fn(),
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
+  AGENT_NOT_FOUND_PREFIX: 'Agent not found:',
 }));
 
 vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
+  listVaultFiles: vi.fn(() => []),
 }));
 
 vi.mock('../vault/git.js', () => ({
@@ -39,6 +41,19 @@ vi.mock('../integrations/telegram/client.js', () => ({
   stopTyping: vi.fn(),
 }));
 
+vi.mock('../jobs/playbook-extract.js', () => ({
+  getPendingPlaybookDrafts: vi.fn(() => []),
+  extractPlaybookDrafts: vi.fn(),
+  clearApprovedPlaybookDrafts: vi.fn(),
+}));
+
+vi.mock('../kb/queue.js', () => ({
+  enqueue: vi.fn(),
+  dequeue: vi.fn(),
+  clearQueue: vi.fn(),
+  getQueue: vi.fn(() => []),
+}));
+
 // --- Imports ---
 
 const { registerReviewHandler } = await import('./orchestrator.js');
@@ -47,6 +62,7 @@ const { askClaudeWithContext, askClaudeOneShot, runAgent } = await import('../ai
 const { readVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
 const { sendLongMessage, startTyping, stopTyping } = await import('../integrations/telegram/client.js');
+const { enqueue: enqueueKB } = await import('../kb/queue.js');
 
 const registerMock = registerReviewHandler as ReturnType<typeof vi.fn>;
 const updateSessionMock = updateReviewSession as ReturnType<typeof vi.fn>;
@@ -58,6 +74,7 @@ const gitCommitMock = gitCommitAndPush as ReturnType<typeof vi.fn>;
 const sendLongMock = sendLongMessage as ReturnType<typeof vi.fn>;
 const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
 const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
+const enqueueKBMock = enqueueKB as ReturnType<typeof vi.fn>;
 
 // Import the module under test (triggers registerReviewHandler side effect)
 const { weeklyHandler, detectOutline } = await import('./weekly.js');
@@ -537,11 +554,101 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
-      // review-writer + project-updater + json-updater = 3 calls (no psychology-updater)
+      // review-writer + project-updater + json-updater = 3 calls (no psychology-updater, no worldview, no playbook)
       expect(runAgentMock).toHaveBeenCalledTimes(3);
       expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
       expect(runAgentMock).not.toHaveBeenCalledWith('psychology-updater', expect.any(String));
+      expect(runAgentMock).not.toHaveBeenCalledWith('worldview-updater', expect.any(String));
+      expect(runAgentMock).not.toHaveBeenCalledWith('playbook-updater', expect.any(String));
+    });
+
+    it('spawns worldview-updater when worldview flag is true', async () => {
+      const session = approvalSession();
+      runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": true, "playbook": false}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
+      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Worldview updated.'));
+    });
+
+    it('spawns playbook-updater when playbook flag is true', async () => {
+      const session = approvalSession();
+      runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": false, "playbook": true}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
+      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Playbook entries added.'));
+    });
+
+    it('enqueues playbook.md for KB ingestion after playbook-updater succeeds', async () => {
+      const session = approvalSession();
+      runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": false, "playbook": true}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(enqueueKBMock).toHaveBeenCalledWith('pages/playbook.md');
+    });
+
+    it('enqueues touched project files for KB ingestion after project-updater succeeds', async () => {
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null })
+        .mockResolvedValueOnce({ text: '## projects/project-alpha.md\n- Added weekly summary\n## projects/project-beta.md\n- Updated thesis', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": true, "psychology": false, "json_updates": false, "worldview": false, "playbook": false}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
+      expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-beta.md');
+    });
+
+    it('enqueues touched world-view files for KB ingestion after worldview-updater succeeds', async () => {
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null })
+        .mockResolvedValueOnce({ text: 'Modified world-view/ai.md with new paragraph on world models', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": true, "playbook": false}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(enqueueKBMock).toHaveBeenCalledWith('world-view/ai.md');
+    });
+
+    it('does not enqueue archived projects', async () => {
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null })
+        .mockResolvedValueOnce({ text: '## projects/archive/old.md\n- Shouldn\'t touch\n## projects/project-alpha.md\n- Should touch', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": true, "psychology": false, "json_updates": false, "worldview": false, "playbook": false}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
+      expect(enqueueKBMock).not.toHaveBeenCalledWith('projects/archive/old.md');
     });
 
     it('spawns all post agents when analysis parse fails', async () => {
@@ -551,11 +658,13 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
-      // review-writer + all 3 post agents = 4
-      expect(runAgentMock).toHaveBeenCalledTimes(4);
+      // review-writer + all 5 post agents = 6
+      expect(runAgentMock).toHaveBeenCalledTimes(6);
       expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('psychology-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
     });
 
     it('spawns no post agents when none are flagged', async () => {
@@ -628,6 +737,24 @@ describe('reviews/weekly', () => {
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
       expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Project update failed.'));
+      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('JSON data updated.'));
+    });
+
+    it('reports missing post agents distinctly from failures', async () => {
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null }) // review-writer
+        .mockResolvedValueOnce({ text: null, error: 'Agent not found: project-updater' }) // missing agent file
+        .mockResolvedValueOnce({ text: 'Updated.', error: null }); // json-updater
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": true, "psychology": false, "json_updates": true}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Projects skipped (agent missing)'));
+      expect(sendLongMock).not.toHaveBeenCalledWith(bot, 100, expect.stringContaining('Project update failed.'));
       expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('JSON data updated.'));
     });
 

@@ -181,7 +181,7 @@ Full manual test plan covering all implementation phases (0-12).
 - [ ] 🔴 `/priorities` — extracts #priorities from yesterday's journal
 - [ ] 🔴 `/workout` — shows today's prescription from `health/plan.md`
 - [ ] 🔴 `/study` — shows current progress, this week's assignments, overdue items
-- [ ] 🟡 `/family` — 14-day journal scan focused on Sam/Jude mentions and balance
+- [ ] 🟡 `/family` — 14-day journal scan focused on configured family-name mentions and balance
 - [ ] 🟡 `/career` — shows active applications with staleness flags
 
 ## 22. Session-Based Commands

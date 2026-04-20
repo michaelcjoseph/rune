@@ -32,9 +32,13 @@ export async function ingestSource(
     const fullDest = getVaultPath(destPath);
     mkdirSync(join(config.VAULT_DIR, destDir), { recursive: true });
 
-    if (!vaultFileExists(destPath)) {
+    // Mutable sources (world-view, playbook, projects) are overwritten on every
+    // re-ingest so the wiki sees fresh content. Immutable sources (Readwise
+    // articles, captured conversations) are copied once and then left alone.
+    const isMutable = isMutableSource(sourcePath);
+    if (!vaultFileExists(destPath) || isMutable) {
       copyFileSync(getVaultPath(sourcePath), fullDest);
-      log.info('Copied source to raw/', { from: sourcePath, to: destPath });
+      log.info('Copied source to raw/', { from: sourcePath, to: destPath, overwrite: isMutable });
     }
   }
 
@@ -86,5 +90,18 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
 export function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('Readwise/')) return 'knowledge/raw/articles';
   if (sourcePath.includes('conversation')) return 'knowledge/raw/conversations';
+  if (sourcePath.startsWith('world-view/')) return 'knowledge/raw/world-view';
+  if (sourcePath === 'pages/playbook.md') return 'knowledge/raw/playbook';
+  if (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/')) {
+    return 'knowledge/raw/projects';
+  }
   return 'knowledge/raw/notes';
+}
+
+/** Returns true if the source path represents content that changes over time
+ *  and should be re-copied into knowledge/raw/ on every ingest. */
+export function isMutableSource(sourcePath: string): boolean {
+  return sourcePath.startsWith('world-view/')
+    || sourcePath === 'pages/playbook.md'
+    || (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/'));
 }

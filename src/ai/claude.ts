@@ -139,13 +139,29 @@ interface AgentDef {
 
 const agentDefCache = new Map<string, AgentDef>();
 
-/** Load an agent definition from .claude/agents/<name>.md, parsing frontmatter and body. */
+/** Load an agent definition from .claude/agents/<name>.md, parsing frontmatter and body.
+ *  Jarvis's own .claude/agents/ is checked first (generic, public, versioned with code);
+ *  the vault's .claude/agents/ is the fallback (user-owned, private, may contain
+ *  personal references like family names, employer, project codenames). */
 export function loadAgentDef(agentName: string): AgentDef {
   const cached = agentDefCache.get(agentName);
   if (cached) return cached;
 
-  const filePath = join(PROJECT_ROOT, '.claude', 'agents', `${agentName}.md`);
-  const raw = readFileSync(filePath, 'utf8');
+  const jarvisPath = join(PROJECT_ROOT, '.claude', 'agents', `${agentName}.md`);
+  const vaultPath = join(config.VAULT_DIR, '.claude', 'agents', `${agentName}.md`);
+
+  let raw: string;
+  let filePath: string;
+  try {
+    raw = readFileSync(jarvisPath, 'utf8');
+    filePath = jarvisPath;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    // Fall back to vault. If this also throws ENOENT, runAgent's caller will
+    // surface it as "Agent not found: <name>".
+    raw = readFileSync(vaultPath, 'utf8');
+    filePath = vaultPath;
+  }
 
   // Split frontmatter (between --- markers) from body
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
@@ -169,10 +185,23 @@ export function loadAgentDef(agentName: string): AgentDef {
   return def;
 }
 
+/** Prefix used on runAgent error messages when the agent file cannot be loaded. */
+export const AGENT_NOT_FOUND_PREFIX = 'Agent not found:';
+
 /** Run a named agent (defined in .claude/agents/) */
 export async function runAgent(agentName: string, prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
-  const def = loadAgentDef(agentName);
+  let def: AgentDef;
+  try {
+    def = loadAgentDef(agentName);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const message = code === 'ENOENT'
+      ? `${AGENT_NOT_FOUND_PREFIX} ${agentName}`
+      : `Failed to load agent ${agentName}: ${(err as Error).message}`;
+    log.error(message, { agentName });
+    return { text: null, error: message };
+  }
   const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
   const args = [
     '--agent', agentName,
@@ -180,8 +209,13 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     '-p', `${dateCtx}\n\n${prompt}`,
     '--no-session-persistence',
     '--model', config.AGENT_MODEL,
-    '--allowedTools', ...def.tools,
   ];
+  // Only restrict tools if the agent frontmatter declares them. Vault agents
+  // (authored for standalone Claude Code use) may omit `tools:`, in which case
+  // we let the CLI apply its defaults rather than passing an empty allowlist.
+  if (def.tools.length > 0) {
+    args.push('--allowedTools', ...def.tools);
+  }
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
   return execClaude(args, timeoutMs);
 }

@@ -1,11 +1,11 @@
 import TelegramBot from 'node-telegram-bot-api';
+import config from '../../config.js';
 import { readVaultFile } from '../../vault/files.js';
 import { getRecentFilenames } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('cmd-family');
 
-const NAMES = ['Sam', 'Jude'];
 const SCAN_DAYS = 14;
 
 function countMentions(content: string, name: string): number {
@@ -15,6 +15,15 @@ function countMentions(content: string, name: string): number {
 
 export async function handleFamily(bot: TelegramBot, chatId: number): Promise<void> {
   try {
+    const NAMES = config.FAMILY_NAMES;
+    if (NAMES.length === 0) {
+      await bot.sendMessage(
+        chatId,
+        'No family names configured. Set FAMILY_NAMES env var (e.g. FAMILY_NAMES=Alice,Bob) to use /family.',
+      );
+      return;
+    }
+
     const filenames = getRecentFilenames(SCAN_DAYS);
     const counts: Record<string, { total: number; days: number }> = {};
 
@@ -47,13 +56,16 @@ export async function handleFamily(bot: TelegramBot, chatId: number): Promise<vo
       lines.push(`${name}: ${total} mention${total !== 1 ? 's' : ''} across ${days} day${days !== 1 ? 's' : ''}`);
     }
 
-    const [a, b] = NAMES as [string, string];
-    if (counts[a]!.total > 0 && counts[b]!.total > 0) {
-      const ratio = Math.max(counts[a]!.total, counts[b]!.total) / Math.min(counts[a]!.total, counts[b]!.total);
-      if (ratio >= 2) {
-        const more = counts[a]!.total > counts[b]!.total ? a : b;
-        const less = more === a ? b : a;
-        lines.push('', `Imbalance: ${more} mentioned ${ratio.toFixed(1)}x more than ${less}`);
+    // Imbalance heuristic only applies when exactly 2 names are configured.
+    if (NAMES.length === 2) {
+      const [a, b] = NAMES as [string, string];
+      if (counts[a]!.total > 0 && counts[b]!.total > 0) {
+        const ratio = Math.max(counts[a]!.total, counts[b]!.total) / Math.min(counts[a]!.total, counts[b]!.total);
+        if (ratio >= 2) {
+          const more = counts[a]!.total > counts[b]!.total ? a : b;
+          const less = more === a ? b : a;
+          lines.push('', `Imbalance: ${more} mentioned ${ratio.toFixed(1)}x more than ${less}`);
+        }
       }
     }
 

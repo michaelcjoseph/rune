@@ -141,7 +141,7 @@ In progress. See [spec.md](spec.md) for details.
 - [x] `/priorities` — extract #priorities from yesterday's journal
 - [x] `/workout` — today's prescription from health/plan.md
 - [x] `/study` — current progress, this week's assignments, overdue items
-- [x] `/family` — 14-day journal scan for Sam/Jude mentions, flag imbalance
+- [x] `/family` — 14-day journal scan for configured family-name mentions, flag imbalance
 - [x] `/career` — active applications with staleness flags
 
 ### Session-based commands (reuse review session infrastructure)

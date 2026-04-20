@@ -154,7 +154,7 @@ Git commit + Telegram notification: "Your journal is ready"
 22. WHEN /priorities is sent THEN extract #priorities from yesterday's journal
 23. WHEN /workout is sent THEN show today's prescription from health/plan.md
 24. WHEN /study is sent THEN show current progress, this week's assignments, overdue items
-25. WHEN /family is sent THEN run 14-day journal scan focused on Sam/Jude mentions and balance
+25. WHEN /family is sent THEN run 14-day journal scan focused on configured family-name mentions and balance
 26. WHEN /career is sent THEN show active applications with staleness flags
 27. WHEN /think [topic] is sent THEN start a thinking partner session using think skill
 28. WHEN /health is sent THEN start a health coaching session using health skill

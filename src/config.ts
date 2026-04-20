@@ -23,6 +23,9 @@ const config = {
 
   JARVIS_HTTP_SECRET: process.env['JARVIS_HTTP_SECRET'] || '',
 
+  FAMILY_NAMES: (process.env['FAMILY_NAMES'] || '')
+    .split(',').map(s => s.trim()).filter(Boolean),
+
   LOGS_DIR: join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {
@@ -35,6 +38,10 @@ const config = {
 
   get INGESTION_QUEUE_FILE() {
     return join(this.LOGS_DIR, 'kb-ingestion-queue.json');
+  },
+
+  get PLAYBOOK_QUEUE_FILE() {
+    return join(this.LOGS_DIR, 'playbook-queue.json');
   },
 
   get REVIEW_SESSIONS_FILE() {

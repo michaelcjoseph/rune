@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB } from '../kb/engine.js';
+import { extractPlaybookDrafts } from './playbook-extract.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
@@ -113,6 +114,11 @@ Date context: ${date}`;
   return { step: 'Daily tags', status: 'success', detail: 'Tags processed and applied' };
 }
 
+async function stepPlaybookExtract(): Promise<NightlyStepResult> {
+  const result = await extractPlaybookDrafts();
+  return { step: 'Playbook extract', status: result.status, detail: result.detail };
+}
+
 async function stepWhoopActivity(): Promise<NightlyStepResult> {
   const result = await executeActivitySync();
   return { step: 'Whoop activity', status: result.status === 'synced' ? 'success' : result.status, detail: result.detail };
@@ -151,6 +157,7 @@ export async function executeNightly(): Promise<NightlyResult> {
   await run('Session capture', stepCaptureSession);
   await run('KB queue', stepKBQueue);
   await run('Daily tags', stepDailyTags);
+  await run('Playbook extract', stepPlaybookExtract);
   await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);
 
