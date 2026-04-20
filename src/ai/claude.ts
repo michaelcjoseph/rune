@@ -98,13 +98,14 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   });
 }
 
-function askClaudeSession(message: string, sessionId: string, model?: string, systemPrompt?: string): Promise<ClaudeResult> {
+function askClaudeSession(message: string, sessionId: string, model?: string, systemPrompt?: string, allowedTools?: string[]): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
     const args = createdSessions.has(sessionId)
       ? ['-p', message, '--resume', sessionId]
       : ['-p', message, '--session-id', sessionId];
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+    if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const result = await execClaude(args);
     if (!result.error) createdSessions.add(sessionId);
@@ -120,8 +121,8 @@ export async function askClaude(message: string, sessionId: string, model?: stri
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt */
-export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model, systemPrompt);
+export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string, allowedTools?: string[]): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model, systemPrompt, allowedTools);
 }
 
 /** One-shot query with no session persistence */

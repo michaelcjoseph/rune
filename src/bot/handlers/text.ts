@@ -1,7 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import config from '../../config.js';
 import { getSession, createSession, updateSession, setSessionModel } from '../../vault/sessions.js';
-import { askClaude } from '../../ai/claude.js';
+import { askClaudeWithContext } from '../../ai/claude.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -83,15 +83,49 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   return handleConversation(bot, chatId, text);
 }
 
+const VAULT_SYSTEM_PROMPT = `You are Jarvis, Michael's second-brain conversational layer. Your working directory is his Obsidian vault — you have full read access.
+
+VAULT MAP (read the relevant file(s), don't dump everything):
+- CLAUDE.md — identity, "About Me", vault folder structure, tag taxonomy, review cadence, command list. READ THIS FIRST when you don't already know the answer — it's the manifest.
+- world-view/world-view.md — Michael's explicit belief synthesis across 8 domains (ai, crypto, energy, raw-materials, geopolitics, demographics, governance, education-healthcare). Each domain has a dedicated file in world-view/ with thesis + investment implications + changelog.
+- knowledge/index.md — 100+ curated wiki entities/concepts/topics compiled from his reading. Large file — grep or scan rather than full-read unless needed.
+- knowledge/schema.md — how the KB is organized (raw sources → compiled wiki pages).
+- pages/index.md, investments/index.md, health/index.md, career/index.md, study/index.md, writing/index.md — per-domain indices.
+- journals/YYYY_MM_DD.md — daily notes (interstitial journaling).
+
+MCP TOOLS (jarvis-kb): kb_query (synthesized KB answer), kb_search (wiki search with type/tag filters), kb_stats (counts + recent log). Use for structured lookups when grep is awkward.
+
+HOW TO ANSWER:
+- For substantive questions about worldview, investments, projects, or thinking frameworks: READ the relevant index/page first, then answer with specifics grounded in Michael's actual notes. Cite with [[wikilinks]] where appropriate.
+- Prefer sharp probing questions over generic clarifying questions. Generic prompts like "what's the current state? what flows in? what flows out?" are exactly what to avoid — they waste his time re-eliciting context that's already in the vault. If you need clarification, anchor it to something concrete you found in the vault.
+- For tactical/operational asks: answer directly; don't over-fetch.
+- Responses go to Telegram on mobile — be concise. Structure matters more than length.
+- Never write files. If the question implies a write, say so and point to the right slash command.`;
+
+const CONVERSATION_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'mcp__jarvis-kb__kb_query',
+  'mcp__jarvis-kb__kb_search',
+  'mcp__jarvis-kb__kb_stats',
+];
+
 async function handleConversation(bot: TelegramBot, chatId: number, text: string): Promise<void> {
   let session = getSession(chatId);
   if (!session) {
-    session = createSession(chatId, text);
+    session = createSession(chatId, text, config.CONVERSATION_MODEL);
   }
 
   const typing = startTyping(bot, chatId);
   try {
-    const result = await askClaude(text, session.sessionId, session.model);
+    const result = await askClaudeWithContext(
+      text,
+      session.sessionId,
+      VAULT_SYSTEM_PROMPT,
+      session.model,
+      CONVERSATION_TOOLS,
+    );
     stopTyping(typing);
 
     if (result.error) {
@@ -193,10 +227,10 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     'Health:',
     '/whoop — Whoop connection status or auth link',
     '',
-    'Model:',
-    '/haiku — fast responses (default)',
-    '/sonnet — balanced',
+    'Model (conversation defaults to opus):',
     '/opus — max capability',
+    '/sonnet — balanced',
+    '/haiku — fast responses',
   ];
 
   await bot.sendMessage(chatId, lines.join('\n'));

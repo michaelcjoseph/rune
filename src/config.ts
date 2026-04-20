@@ -46,6 +46,7 @@ const config = {
 
   CLAUDE_TIMEOUT_MS: 120_000,
   DEFAULT_CHAT_MODEL: 'haiku',
+  CONVERSATION_MODEL: 'opus',
   ONESHOT_MODEL: 'sonnet',
   AGENT_MODEL: 'opus',
   TG_MAX_MESSAGE_LENGTH: 4096,

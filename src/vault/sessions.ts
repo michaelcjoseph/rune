@@ -21,13 +21,13 @@ export function getSession(chatId: number): Session | null {
   return sessions.get(chatId) || null;
 }
 
-export function createSession(chatId: number, firstMessage: string): Session {
+export function createSession(chatId: number, firstMessage: string, model?: string): Session {
   const session: Session = {
     sessionId: randomUUID(),
     lastActivity: new Date().toISOString(),
     messageCount: 1,
     firstMessage: (firstMessage || '').slice(0, 100),
-    model: config.DEFAULT_CHAT_MODEL,
+    model: model || config.DEFAULT_CHAT_MODEL,
   };
   sessions.set(chatId, session);
   persistSessions();
