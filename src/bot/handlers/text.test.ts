@@ -9,7 +9,7 @@ vi.mock('../../vault/sessions.js', () => ({
   createSession: vi.fn(),
   updateSession: vi.fn(),
 }));
-vi.mock('../../ai/claude.js', () => ({ askClaude: vi.fn() }));
+vi.mock('../../ai/claude.js', () => ({ askClaude: vi.fn(), askClaudeWithContext: vi.fn() }));
 vi.mock('../../integrations/telegram/client.js', () => ({
   sendLongMessage: vi.fn(),
   startTyping: vi.fn(() => setInterval(() => {}, 99999)),
@@ -41,7 +41,7 @@ const { handleStatus } = await import('../commands/status.js');
 const { handleKB } = await import('../commands/kb.js');
 const { handleIngest } = await import('../commands/ingest.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
-const { askClaude } = await import('../../ai/claude.js');
+const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { handleTextMessage } = await import('./text.js');
 
@@ -108,7 +108,7 @@ describe('text handler routing', () => {
   it('falls through to conversation for plain text', async () => {
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
-    const askClaudeMock = askClaude as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
 
     getSessionMock.mockReturnValue(null);
     createSessionMock.mockReturnValue({
@@ -118,11 +118,11 @@ describe('text handler routing', () => {
       firstMessage: 'hello',
       model: 'haiku',
     });
-    askClaudeMock.mockResolvedValue({ text: 'hi there!', error: null });
+    askMock.mockResolvedValue({ text: 'hi there!', error: null });
 
     await handleTextMessage(mockBot(), msg('hello'));
     expect(createSessionMock).toHaveBeenCalled();
-    expect(askClaudeMock).toHaveBeenCalledWith('hello', 'test-sess', 'haiku');
+    expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
   });
 
   it('ignores empty text', async () => {
@@ -143,8 +143,8 @@ describe('text handler routing', () => {
     expect(hasActiveReviewMock).toHaveBeenCalledWith(100);
     expect(handleReviewMessageMock).toHaveBeenCalledWith(100, 'looks good to me', bot);
     // Should NOT fall through to conversation
-    const askClaudeMock = askClaude as unknown as ReturnType<typeof vi.fn>;
-    expect(askClaudeMock).not.toHaveBeenCalled();
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    expect(askMock).not.toHaveBeenCalled();
   });
 
   it('falls through to conversation when no active review', async () => {
@@ -153,7 +153,7 @@ describe('text handler routing', () => {
 
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
-    const askClaudeMock = askClaude as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
 
     getSessionMock.mockReturnValue(null);
     createSessionMock.mockReturnValue({
@@ -163,13 +163,13 @@ describe('text handler routing', () => {
       firstMessage: 'some text',
       model: 'haiku',
     });
-    askClaudeMock.mockResolvedValue({ text: 'reply', error: null });
+    askMock.mockResolvedValue({ text: 'reply', error: null });
 
     await handleTextMessage(mockBot(), msg('some text'));
 
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
-    expect(askClaudeMock).toHaveBeenCalledWith('some text', 'test-sess', 'haiku');
+    expect(askMock).toHaveBeenCalledWith('some text', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
   });
 
   it('routes /fresh to command handler even during active review', async () => {
