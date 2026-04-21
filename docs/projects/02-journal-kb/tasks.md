@@ -4,7 +4,7 @@ Not started. See [spec.md](spec.md) for details.
 
 ## Phase 1 — Daily journal ingestion
 
-- [ ] Extend `determineRawDir()` in `src/kb/ingest.ts` to route `journals/*.md` → `knowledge/raw/journals/`
+- [x] Extend `determineRawDir()` in `src/kb/ingest.ts` to route `journals/*.md` → `knowledge/raw/journals/`
 - [ ] Extend `isMutableSource()` to include `journals/` (so re-ingestion of edited journals overwrites the raw copy)
 - [ ] Add `stepJournalIngest` to `src/jobs/nightly.ts` (enqueues today's journal; runs before the KB queue step so the journal is ingested in the same nightly pass)
 - [ ] Reorder nightly steps so KB queue runs after journal ingest (or add a second KB queue pass at the end)

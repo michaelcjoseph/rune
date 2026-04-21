@@ -147,6 +147,10 @@ describe('kb/ingest', () => {
       expect(determineRawDir('Readwise/foo.md')).toBe('knowledge/raw/articles');
     });
 
+    it('routes journal files', () => {
+      expect(determineRawDir('journals/2026_04_21.md')).toBe('knowledge/raw/journals');
+    });
+
     it('routes world-view files', () => {
       expect(determineRawDir('world-view/ai.md')).toBe('knowledge/raw/world-view');
       expect(determineRawDir('world-view/crypto.md')).toBe('knowledge/raw/world-view');

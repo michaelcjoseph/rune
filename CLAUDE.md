@@ -144,6 +144,7 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 
 `src/kb/ingest.ts` `determineRawDir()`:
 - `Readwise/*` → `knowledge/raw/articles/`
+- `journals/*` → `knowledge/raw/journals/`
 - `world-view/*` → `knowledge/raw/world-view/`
 - `pages/playbook.md` → `knowledge/raw/playbook/`
 - `projects/*` (excluding `projects/archive/`) → `knowledge/raw/projects/`

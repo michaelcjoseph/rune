@@ -89,6 +89,7 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
 /** Determine which raw/ subdirectory a source belongs in based on its path. */
 export function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('Readwise/')) return 'knowledge/raw/articles';
+  if (sourcePath.startsWith('journals/')) return 'knowledge/raw/journals';
   if (sourcePath.includes('conversation')) return 'knowledge/raw/conversations';
   if (sourcePath.startsWith('world-view/')) return 'knowledge/raw/world-view';
   if (sourcePath === 'pages/playbook.md') return 'knowledge/raw/playbook';
