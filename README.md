@@ -61,16 +61,16 @@ A single Node.js process that combines a Telegram bot, an LLM-powered knowledge 
 | `/ingest [path]` | Ingest source into wiki (or process queue) |
 | `/lint` | Run wiki health check |
 
-### Reviews (planned)
+### Reviews
 | Command | Description |
 |---------|-------------|
 | `/daily` | End-of-day tag processing and JSON updates |
-| `/weekly` | Interview-based weekly review (~30 min) |
+| `/weekly` | Interview-based weekly review (~30 min). Post-approval, updates project pages, playbook entries, world-view files, and psychology profile via specialist agents. |
 | `/monthly` | Monthly theme check-in and reflection |
 | `/quarterly` | 3-month patterns and strategic decisions |
 | `/yearly` | Annual reflection with 7 Questions framework |
 
-### Vault Operations (planned)
+### Vault Operations
 | Command | Description |
 |---------|-------------|
 | `/priorities` | Today's priorities from yesterday's journal |
@@ -78,6 +78,9 @@ A single Node.js process that combines a Telegram bot, an LLM-powered knowledge 
 | `/study` | Current study progress and assignments |
 | `/think <topic>` | Thinking partner mode |
 | `/health` | Health coaching session |
+| `/family` | 14-day journal scan for configured family-name mentions (requires `FAMILY_NAMES` env) |
+| `/blog <topic>` | Interview-based blog drafting |
+| `/lenny <topic>` / `/pg <topic>` | Library search (Lenny's Podcast / Paul Graham essays) |
 
 ## Knowledge Base
 
@@ -101,17 +104,52 @@ knowledge/
 
 Sources go in, wiki pages come out. The wiki-compiler agent reads raw sources, identifies entities/concepts/topics, creates or updates wiki pages with `[[wikilinks]]`, and maintains the index. No embeddings or vector DB — search uses a two-layer approach: the LLM reads the compact index to find relevant pages, then ripgrep does full-text search for additional matches.
 
+## Vault Content Model
+
+The vault has four LLM-mutable content layers with **different write semantics**. They stay distinct on purpose — each has its own cadence, tone, and audit trail.
+
+| Layer | Write semantics | Updater agent | Trigger |
+|---|---|---|---|
+| `knowledge/` | Wiki with `last-verified` + `valid-until` — pages decay | `wiki-compiler` | KB ingestion queue (nightly + on-demand) |
+| `world-view/*.md` | First-person essays with `### [[YYYY_MM_DD]]` changelog — beliefs evolve with audit trail | `worldview-updater` | Review outline approval (propose-only) |
+| `pages/playbook.md` | Append-only tactical entries with stable anchors | `playbook-proposer` + `playbook-updater` | `#playbook` journal tag → nightly queue → next review approval |
+| `projects/*.md` | Living logs: status + thesis + decisions + weekly summaries | `project-updater` | Review outline approval (authoritative) |
+
+`knowledge/` is the neutral reference layer — wiki pages *cite* the other three (via `knowledge/raw/{world-view,playbook,projects}/`). The flow is one-way: human-authored layers feed the KB as raw sources; the KB does not own them.
+
+After a review, files touched by the post-agents are auto-enqueued for the next nightly KB ingestion so wiki citations stay fresh. See `CLAUDE.md` for the full mechanics (review→post-agent flow, worldview-drift detection, KB raw-source routing).
+
 ## Agents
 
-Custom Claude Code agents handle structured operations:
+Custom Claude Code agents handle structured operations. Agents live in `.claude/agents/` in this repo (generic tooling, public) with fallback to `$VAULT_DIR/.claude/agents/` (personal content, private). `loadAgentDef` in `src/ai/claude.ts` checks Jarvis first, then the vault.
 
-| Agent | Location | Purpose |
-|-------|----------|---------|
-| wiki-compiler | `.claude/agents/` | Compile raw sources into wiki pages |
-| kb-query | `.claude/agents/` | Search wiki + vault, synthesize answers |
-| wiki-linter | `.claude/agents/` | Health-check wiki integrity |
+**Jarvis-local (generic tooling):**
 
-The vault can also define its own agents (e.g., journal-scanner, review-writer) that Jarvis invokes for review workflows.
+| Agent | Purpose |
+|-------|---------|
+| wiki-compiler | Compile raw sources into wiki pages |
+| kb-query | Search wiki + vault, synthesize answers |
+| wiki-linter | Health-check wiki integrity |
+| morning-prep | Gather vault data into a structured morning journal section |
+| session-summarizer | Rich session summaries with vault context |
+| release-notes | Generate changelog from git history |
+| content-triager | Classify URLs/text → kb-ingest, readwise, journal, or skip |
+| photo-classifier | Classify photos → book, receipt, whiteboard, etc. with routing |
+| system-scanner | Review prep: summarize state of health/study/psychology/etc. |
+| project-updater | Post-review: apply approved updates to `projects/*.md` |
+| playbook-proposer | Nightly: draft playbook entries from `#playbook`-tagged journals |
+| playbook-updater | Post-review: append approved drafts to `pages/playbook.md` |
+| worldview-updater | Post-review: apply approved diffs to `world-view/*.md` with changelog entry (propose-only semantics enforced upstream) |
+| psychology-updater | Post-review: scoped updates to `pages/psychology.md` |
+| json-updater | Post-review / nightly: apply updates to JSON data stores |
+
+**Vault-resident (personal specifics kept out of the public repo):**
+
+| Agent | Purpose |
+|-------|---------|
+| journal-scanner | Review prep: scan journals by date range + focus areas |
+| project-scanner | Review prep: compare project pages against recent journal activity |
+| review-writer | Review writeup: append formatted review to the journal |
 
 ## Setup
 
@@ -141,9 +179,17 @@ Edit `.env`:
 ```
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_USER_ID=your-numeric-user-id
-VAULT_DIR=/path/to/your/obsidian/vault   # optional, defaults to iCloud path
-LOGS_DIR=~/logs                           # optional
+VAULT_DIR=/path/to/your/obsidian/vault
+
+# Optional
+FAMILY_NAMES=Alice,Bob          # enables /family
+WHOOP_CLIENT_ID=...
+WHOOP_CLIENT_SECRET=...
+READWISE_TOKEN=...
+JARVIS_HTTP_SECRET=...          # required if you use the authenticated HTTP endpoints
 ```
+
+`LOGS_DIR` is not configurable — it's hardcoded to `<project-root>/logs/` (gitignored).
 
 ### Run
 
@@ -175,8 +221,15 @@ src/
 │   ├── query.ts          # Search + kb-query agent → answer
 │   ├── search.ts         # ripgrep full-text search
 │   └── queue.ts          # JSON-file ingestion queue
-├── jobs/                 # Scheduled cron jobs
-├── reviews/              # Review session state machine (planned)
+├── jobs/
+│   ├── nightly.ts        # Capture → KB queue → daily tags → playbook extract → Whoop → lint → commit
+│   ├── playbook-extract.ts # Scan #playbook tags → draft entries into playbook-queue.json
+│   ├── morning-prep.ts   # Morning journal preparation
+│   └── whoop-sync.ts     # Whoop sleep/activity sync
+├── reviews/
+│   ├── interview.ts      # Multi-phase interview state machine, post-agent dispatch
+│   ├── worldview-drift.ts # Detect world-view changes affecting active projects
+│   └── {weekly,monthly,quarterly,yearly,daily,...}.ts
 ├── vault/
 │   ├── files.ts          # Read/write/list vault files
 │   ├── journal.ts        # Journal append + morning prep
@@ -207,11 +260,13 @@ Each Telegram conversation gets a persistent session (UUID-based). Sessions surv
 
 ### Vault Integration
 
-Jarvis treats the vault as a shared filesystem:
-- `knowledge/` is LLM-owned — agents read and write freely
-- Everything else is human-owned — Jarvis reads for context, writes only to `journals/`
-- All writes go through `readVaultFile`/`writeVaultFile` helpers
-- Git commits happen at key moments (morning prep, `/fresh`, nightly)
+Jarvis treats the vault as a shared filesystem with a layered write model — see `CLAUDE.md` → "Vault Content Model" for the full breakdown:
+
+- `knowledge/` is LLM-owned — `wiki-compiler` reads and writes freely.
+- `world-view/`, `pages/playbook.md`, `projects/*.md`, `pages/psychology.md` and JSON data stores have **dedicated updater agents** (`worldview-updater`, `playbook-updater`, `project-updater`, `psychology-updater`, `json-updater`) that write under specific approval semantics (propose-only for world-view; append-on-approval for playbook; authoritative for projects/JSON).
+- All other directories are human-owned — Jarvis reads for context only.
+- All writes go through `readVaultFile`/`writeVaultFile` helpers in `src/vault/files.ts`, which assert paths stay within the vault boundary.
+- Git commits happen at key moments (morning prep, `/fresh`, post-review, nightly).
 
 ## Development
 
@@ -224,9 +279,9 @@ The project uses ESM (`"type": "module"`) with `.js` import extensions. TypeScri
 
 ## Status
 
-Phases 0-3 are complete (server, bot, knowledge base). Currently building vault consolidation (phases 4-7): morning prep, review commands, additional vault commands, and scheduled automation.
+MVP is implemented end-to-end: Telegram bot, knowledge base, morning prep, nightly job, content triage, all review commands (daily / weekly / monthly / quarterly / yearly), Whoop integration, vault commands, and the multi-layer vault content updaters (project / playbook / worldview / psychology / JSON). Active maintenance and iteration on top.
 
-See `docs/projects/01-mvp/` for the full spec and task breakdown.
+See `docs/projects/01-mvp/` for the original spec and task breakdown.
 
 ## Build Your Own
 
