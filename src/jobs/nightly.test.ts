@@ -12,8 +12,8 @@ vi.mock('./playbook-extract.js', () => ({
 vi.mock('../kb/engine.js', () => ({
   processIngestionQueue: vi.fn(),
   lintKB: vi.fn(),
+  enqueue: vi.fn(),
 }));
-vi.mock('../kb/queue.js', () => ({ enqueue: vi.fn() }));
 vi.mock('../ai/claude.js', () => ({
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
@@ -22,13 +22,12 @@ vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 vi.mock('../utils/time.js', () => ({
   getTodayDate: vi.fn(() => '2026-04-11'),
-  getTodayFilename: vi.fn(() => '2026-04-11.md'),
+  getTodayFilename: vi.fn(() => '2026_04_11.md'),
   getDayOfWeek: vi.fn(() => 'Saturday'),
 }));
 
 const { captureSessions } = await import('./capture.js');
-const { processIngestionQueue, lintKB } = await import('../kb/engine.js');
-const { enqueue } = await import('../kb/queue.js');
+const { processIngestionQueue, lintKB, enqueue } = await import('../kb/engine.js');
 const { askClaudeOneShot, runAgent } = await import('../ai/claude.js');
 const { readVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
@@ -192,7 +191,7 @@ describe('jobs/nightly', () => {
       const step = result.steps.find((s) => s.step === 'Journal ingest')!;
       expect(step.status).toBe('success');
       expect(step.detail).toContain('journals/');
-      expect(enqueueMock).toHaveBeenCalledWith('journals/2026-04-11.md');
+      expect(enqueueMock).toHaveBeenCalledWith('journals/2026_04_11.md');
     });
 
     it('skips journal ingest when journal is empty', async () => {
@@ -270,10 +269,27 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
       expect(result.steps).toHaveLength(7);
-      // Daily tags (index 1) errors on journal read
-      expect(result.steps[1]!.status).toBe('error');
+      // Journal read is centralized; both journal-dependent steps skip gracefully
+      const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
+      const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
+      expect(dailyTags.status).toBe('skipped');
+      expect(journalIngest.status).toBe('skipped');
+      expect(enqueueMock).not.toHaveBeenCalled();
       // Lint step still ran (last index)
       expect(result.steps[6]!.step).toBe('KB lint');
+    });
+
+    it('reads today journal only once across steps', async () => {
+      readMock.mockReturnValue('# Journal\n- 10:00 #workout ran 5k');
+      askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
+
+      await executeNightly();
+
+      const journalReads = readMock.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('journals/'),
+      );
+      expect(journalReads).toHaveLength(1);
+      expect(journalReads[0]![0]).toBe('journals/2026_04_11.md');
     });
   });
 

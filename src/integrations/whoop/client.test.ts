@@ -281,6 +281,17 @@ describe('whoop/client', () => {
       expect(url).toContain('/v1/cycle');
       fetchSpy.mockRestore();
     });
+
+    it('surfaces error detail on HTTP error', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('', { status: 500 }),
+      );
+      const result = await fetchCycles('tok', '2026-04-10', '2026-04-10');
+      expect(result.records).toEqual([]);
+      expect(result.error).toContain('HTTP 500');
+      expect(result.error).toContain('/v1/cycle');
+      fetchSpy.mockRestore();
+    });
   });
 
   describe('fetchWorkouts', () => {

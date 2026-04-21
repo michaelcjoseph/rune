@@ -147,15 +147,22 @@ export async function executeMorningPrep(): Promise<MorningPrepResult> {
   return { status: 'written', filepath };
 }
 
+// Absolute paths can appear in errors like `spawn ENOENT /Users/.../claude` and
+// would leak the vault location over Telegram; cap length as a belt-and-braces.
+function sanitizeErrorForTelegram(msg: string): string {
+  return msg.replace(/\/(?:Users|home|var|tmp|opt|private)\/\S+/g, '[path]').slice(0, 200);
+}
+
 export async function runMorningPrep(bot: TelegramBot): Promise<void> {
   try {
     const result = await executeMorningPrep();
     if (result.status === 'written') {
       await bot.sendMessage(config.TELEGRAM_USER_ID, 'Your journal is ready.');
     } else if (result.status === 'fallback') {
+      const safeError = sanitizeErrorForTelegram(result.synthError);
       await bot.sendMessage(
         config.TELEGRAM_USER_ID,
-        `Morning prep wrote a fallback — Claude synth failed: ${result.synthError}. Review and edit.`
+        `Morning prep wrote a fallback — Claude synth failed: ${safeError}. Review and edit.`
       );
     }
   } catch (err) {

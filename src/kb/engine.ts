@@ -8,6 +8,7 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('kb-engine');
 
 export { initKB } from './init.js';
+export { enqueue } from './queue.js';
 export { ingestSource, queryKB, lintKB };
 
 /**

@@ -368,6 +368,34 @@ describe('jobs/morning-prep — runMorningPrep', () => {
     expect(sent?.[1]).not.toBe('Your journal is ready.');
   });
 
+  it('fallback: redacts absolute paths from synthError before sending to Telegram', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({
+      text: null,
+      error: 'spawn ENOENT /Users/somebody/workspace/jarvis/node_modules/.bin/claude',
+    });
+
+    await runMorningPrep(mockBot);
+
+    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sent?.[1]).not.toContain('/Users/somebody');
+    expect(sent?.[1]).toContain('[path]');
+    expect(sent?.[1]).toContain('spawn ENOENT');
+  });
+
+  it('fallback: caps long synthError messages at 200 characters', async () => {
+    const longError = 'Claude error: ' + 'x'.repeat(500);
+    mockAskClaudeOneShot.mockResolvedValue({ text: null, error: longError });
+
+    await runMorningPrep(mockBot);
+
+    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    const msg = sent?.[1] as string;
+    // Extract the error substring from the template "... failed: <error>. Review..."
+    const match = msg.match(/failed: (.*?)\. Review/);
+    expect(match).not.toBeNull();
+    expect(match![1]!.length).toBeLessThanOrEqual(200);
+  });
+
   it('git commit is called with exact message "Morning prep"', async () => {
     await runMorningPrep(mockBot);
 

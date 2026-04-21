@@ -1,8 +1,7 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
-import { processIngestionQueue, lintKB } from '../kb/engine.js';
-import { enqueue } from '../kb/queue.js';
+import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
@@ -42,7 +41,7 @@ async function stepKBQueue(): Promise<NightlyStepResult> {
   return { step: 'KB queue', status: 'success', detail: `${processed} source(s) ingested` };
 }
 
-async function stepDailyTags(): Promise<NightlyStepResult> {
+async function stepDailyTags(date: string, content: string | null): Promise<NightlyStepResult> {
   const KNOWN_JSON_FILES = [
     'pages/books.json — book log',
     'pages/crm.json — contact interactions',
@@ -52,10 +51,6 @@ async function stepDailyTags(): Promise<NightlyStepResult> {
     'career/applications.json — job applications',
     'investments/investments.json — investment tracking',
   ];
-
-  const date = getTodayDate();
-  const filename = getTodayFilename();
-  const content = readVaultFile(`journals/${filename}`);
 
   if (!content?.trim()) {
     return { step: 'Daily tags', status: 'skipped', detail: 'No journal for today' };
@@ -120,12 +115,11 @@ async function stepPlaybookExtract(): Promise<NightlyStepResult> {
   return { step: 'Playbook extract', status: result.status, detail: result.detail };
 }
 
-async function stepJournalIngest(): Promise<NightlyStepResult> {
-  const source = `journals/${getTodayFilename()}`;
-  const content = readVaultFile(source);
+function stepJournalIngest(filename: string, content: string | null): NightlyStepResult {
   if (!content || content.trim().length === 0) {
     return { step: 'Journal ingest', status: 'skipped', detail: 'No journal content today' };
   }
+  const source = `journals/${filename}`;
   enqueue(source);
   return { step: 'Journal ingest', status: 'success', detail: source };
 }
@@ -153,7 +147,7 @@ export async function executeNightly(): Promise<NightlyResult> {
   log.info('Nightly processing started');
   const steps: NightlyStepResult[] = [];
 
-  const run = async (name: string, fn: () => Promise<NightlyStepResult>) => {
+  const run = async (name: string, fn: () => NightlyStepResult | Promise<NightlyStepResult>) => {
     try {
       const result = await fn();
       steps.push(result);
@@ -165,10 +159,19 @@ export async function executeNightly(): Promise<NightlyResult> {
     }
   };
 
+  const todayDate = getTodayDate();
+  const todayFilename = getTodayFilename();
+  let todayJournal: string | null = null;
+  try {
+    todayJournal = readVaultFile(`journals/${todayFilename}`);
+  } catch (err) {
+    log.error('Failed to read today\'s journal', { error: String(err) });
+  }
+
   await run('Session capture', stepCaptureSession);
-  await run('Daily tags', stepDailyTags);
+  await run('Daily tags', () => stepDailyTags(todayDate, todayJournal));
   await run('Playbook extract', stepPlaybookExtract);
-  await run('Journal ingest', stepJournalIngest);
+  await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);

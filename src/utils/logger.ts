@@ -4,15 +4,6 @@ import { fileURLToPath } from 'node:url';
 
 type Level = 'info' | 'warn' | 'error' | 'debug';
 
-// Persistent file sink — opened lazily on first write. Skipped when running under
-// vitest (VITEST env var) so test runs don't append to the real jarvis.log.
-// Rationale for existence: prior to this, scheduler / CLI output was only on
-// stdout. Incidents discovered hours later (e.g., the 2026-04-21 morning-prep
-// fallback) had no diagnostic trail once the process had restarted.
-//
-// Logs dir is computed locally (not imported from config.ts) to keep the logger
-// free of runtime env-var dependencies — otherwise every module importing the
-// logger would require TELEGRAM_BOT_TOKEN et al. to be set.
 const LOGGER_PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LOGGER_LOGS_DIR = process.env.JARVIS_LOGS_DIR || join(LOGGER_PROJECT_ROOT, 'logs');
 const LOG_FILE_NAME = 'jarvis.log';
