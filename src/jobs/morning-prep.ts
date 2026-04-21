@@ -45,14 +45,34 @@ function gatherWriting(): string {
   return content?.trim() || 'No writing topic set.';
 }
 
+// Cap raw source content so a fallback can't dump tens of KB of health/plan.md
+// or study/progress.json into the journal. The real synthesis (via Claude) sees
+// the full content; only the fallback path truncates.
+function truncateForFallback(content: string, sourceHint: string, maxLines: number): string {
+  const trimmed = content.trim();
+  const lines = trimmed.split('\n');
+  if (lines.length <= maxLines) return trimmed;
+  return `${lines.slice(0, maxLines).join('\n')}\n\n_… truncated — see \`${sourceHint}\`_`;
+}
+
 export function formatMorningPrepFallback(data: MorningData): string {
-  return `### Priorities Recap\n${data.priorities}\n\n### Workout\n${data.workout}\n\n### Study\n${data.study}\n\n### Writing Focus\n${data.writing}`;
+  const priorities = truncateForFallback(data.priorities, 'journals/<yesterday>.md #priorities', 15);
+  const workout = truncateForFallback(data.workout, 'health/plan.md', 10);
+  const study = truncateForFallback(data.study, 'study/syllabus.md, study/progress.json', 10);
+  const writing = truncateForFallback(data.writing, 'writing/topics.md', 10);
+  return `### Priorities Recap\n${priorities}\n\n### Workout\n${workout}\n\n### Study\n${study}\n\n### Writing Focus\n${writing}`;
+}
+
+export interface SynthesisResult {
+  text: string;
+  synthFailed: boolean;
+  synthError: string | null;
 }
 
 // Uses askClaudeOneShot instead of the morning-prep agent because the data is
 // already gathered in TypeScript — the agent's tool access (Read, Glob, etc.)
 // would be redundant. The prompt mirrors the agent's output format.
-export async function synthesizeMorningPrep(data: MorningData): Promise<string> {
+export async function synthesizeMorningPrep(data: MorningData): Promise<SynthesisResult> {
   const prompt = `You are preparing a morning journal section. Today is ${data.dayOfWeek}. Yesterday's journal: ${data.yesterdayFile}.
 
 Here is the gathered data:
@@ -89,28 +109,29 @@ Be concise — this is a morning glance, not a report. Use bullet points, not pa
   try {
     result = await askClaudeOneShot(prompt);
   } catch (err) {
-    log.error('Claude synthesis threw', { error: String(err) });
-    return formatMorningPrepFallback(data);
+    const errMsg = String(err);
+    log.error('Claude synthesis threw', { error: errMsg });
+    return { text: formatMorningPrepFallback(data), synthFailed: true, synthError: errMsg };
   }
 
   if (result.error || !result.text) {
-    log.error('Claude synthesis failed, using fallback', { error: result.error });
-    return formatMorningPrepFallback(data);
+    const errMsg = result.error ?? 'empty response';
+    log.error('Claude synthesis failed, using fallback', { error: errMsg });
+    return { text: formatMorningPrepFallback(data), synthFailed: true, synthError: errMsg };
   }
 
-  return result.text;
+  return { text: result.text, synthFailed: false, synthError: null };
 }
 
-export interface MorningPrepResult {
-  status: 'written' | 'skipped' | 'error';
-  filepath?: string;
-  error?: string;
-}
+export type MorningPrepResult =
+  | { status: 'written'; filepath: string }
+  | { status: 'fallback'; filepath: string; synthError: string }
+  | { status: 'skipped'; filepath: string };
 
 export async function executeMorningPrep(): Promise<MorningPrepResult> {
   const data = gatherMorningData();
-  const sections = await synthesizeMorningPrep(data);
-  const { written, filepath } = writeMorningPrep(sections);
+  const synthesis = await synthesizeMorningPrep(data);
+  const { written, filepath } = writeMorningPrep(synthesis.text);
 
   if (!written) {
     log.info('Morning prep already written, skipping', { filepath });
@@ -118,6 +139,10 @@ export async function executeMorningPrep(): Promise<MorningPrepResult> {
   }
 
   await gitCommitAndPush('Morning prep');
+  if (synthesis.synthFailed) {
+    log.warn('Morning prep written with fallback', { filepath, synthError: synthesis.synthError });
+    return { status: 'fallback', filepath, synthError: synthesis.synthError ?? 'unknown' };
+  }
   log.info('Morning prep complete', { filepath });
   return { status: 'written', filepath };
 }
@@ -127,6 +152,11 @@ export async function runMorningPrep(bot: TelegramBot): Promise<void> {
     const result = await executeMorningPrep();
     if (result.status === 'written') {
       await bot.sendMessage(config.TELEGRAM_USER_ID, 'Your journal is ready.');
+    } else if (result.status === 'fallback') {
+      await bot.sendMessage(
+        config.TELEGRAM_USER_ID,
+        `Morning prep wrote a fallback — Claude synth failed: ${result.synthError}. Review and edit.`
+      );
     }
   } catch (err) {
     log.error('Morning prep failed', { error: String(err) });

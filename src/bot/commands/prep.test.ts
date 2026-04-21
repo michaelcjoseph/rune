@@ -55,6 +55,23 @@ describe('handlePrep', () => {
     expect(bot.sendMessage).toHaveBeenCalledWith(CHAT_ID, 'Morning prep already written today.');
   });
 
+  it('sends fallback message with synth error when executeMorningPrep returns fallback', async () => {
+    mockExecuteMorningPrep.mockResolvedValue({
+      status: 'fallback',
+      filepath: '/vault/journals/2026_04_09.md',
+      synthError: 'Claude timed out after 120s',
+    });
+    const bot = mockBot();
+
+    await handlePrep(bot, CHAT_ID);
+
+    expect(mockStopTyping).toHaveBeenCalled();
+    const call = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call?.[0]).toBe(CHAT_ID);
+    expect(call?.[1]).toContain('fallback');
+    expect(call?.[1]).toContain('Claude timed out after 120s');
+  });
+
   it('sends error message when executeMorningPrep throws', async () => {
     mockExecuteMorningPrep.mockRejectedValue(new Error('vault not found'));
     const bot = mockBot();

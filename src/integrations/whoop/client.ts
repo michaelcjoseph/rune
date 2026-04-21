@@ -168,7 +168,12 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 
 // --- API Fetch Helpers ---
 
-async function apiGet<T>(path: string, token: string, params?: Record<string, string>): Promise<T | null> {
+export interface ApiResult<T> {
+  data: T | null;
+  error: string | null;
+}
+
+async function apiGet<T>(path: string, token: string, params?: Record<string, string>): Promise<ApiResult<T>> {
   const url = new URL(`${API_BASE}${path}`);
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
@@ -181,46 +186,57 @@ async function apiGet<T>(path: string, token: string, params?: Record<string, st
 
     if (!response.ok) {
       log.error('Whoop API error', { path, status: response.status });
-      return null;
+      return { data: null, error: `HTTP ${response.status} from ${path}` };
     }
 
-    return await response.json() as T;
+    const data = await response.json() as T;
+    return { data, error: null };
   } catch (err) {
-    log.error('Whoop API request failed', { path, error: (err as Error).message });
-    return null;
+    const detail = (err as Error).message;
+    log.error('Whoop API request failed', { path, error: detail });
+    return { data: null, error: `${path}: ${detail}` };
   }
 }
 
-export async function fetchSleep(token: string, startDate: string, endDate: string): Promise<WhoopSleep[]> {
-  const data = await apiGet<WhoopSleepResponse>('/v1/activity/sleep', token, {
-    start: `${startDate}T00:00:00.000Z`,
-    end: `${endDate}T23:59:59.999Z`,
-  });
-  return data?.records?.filter((r) => r.score_state === 'SCORED' && !r.nap) ?? [];
+export interface RecordsResult<T> {
+  records: T[];
+  error: string | null;
 }
 
-export async function fetchRecovery(token: string, startDate: string, endDate: string): Promise<WhoopRecoveryRecord[]> {
-  const data = await apiGet<WhoopRecoveryResponse>('/v1/recovery', token, {
+export async function fetchSleep(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopSleep>> {
+  const result = await apiGet<WhoopSleepResponse>('/v1/activity/sleep', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
-  return data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  const records = result.data?.records?.filter((r) => r.score_state === 'SCORED' && !r.nap) ?? [];
+  return { records, error: result.error };
 }
 
-export async function fetchCycles(token: string, startDate: string, endDate: string): Promise<WhoopCycle[]> {
-  const data = await apiGet<WhoopCycleResponse>('/v1/cycle', token, {
+export async function fetchRecovery(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopRecoveryRecord>> {
+  const result = await apiGet<WhoopRecoveryResponse>('/v1/recovery', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
-  return data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  const records = result.data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  return { records, error: result.error };
 }
 
-export async function fetchWorkouts(token: string, startDate: string, endDate: string): Promise<WhoopWorkout[]> {
-  const data = await apiGet<WhoopWorkoutResponse>('/v1/activity/workout', token, {
+export async function fetchCycles(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopCycle>> {
+  const result = await apiGet<WhoopCycleResponse>('/v1/cycle', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
-  return data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  const records = result.data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  return { records, error: result.error };
+}
+
+export async function fetchWorkouts(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopWorkout>> {
+  const result = await apiGet<WhoopWorkoutResponse>('/v1/activity/workout', token, {
+    start: `${startDate}T00:00:00.000Z`,
+    end: `${endDate}T23:59:59.999Z`,
+  });
+  const records = result.data?.records?.filter((r) => r.score_state === 'SCORED') ?? [];
+  return { records, error: result.error };
 }
 
 // --- Utilities ---

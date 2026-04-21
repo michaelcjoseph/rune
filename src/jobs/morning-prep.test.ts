@@ -164,42 +164,104 @@ describe('jobs/morning-prep — formatMorningPrepFallback', () => {
       '### Writing Focus\nDraft: LLM orchestration patterns'
     );
   });
+
+  it('truncates workout content exceeding the line cap and adds a source hint', () => {
+    const longWorkout = Array.from({ length: 50 }, (_, i) => `- exercise ${i}`).join('\n');
+    const data = { ...sampleData, workout: longWorkout };
+
+    const result = formatMorningPrepFallback(data);
+
+    // Fallback must be terse — no raw 50-line dump
+    expect(result).toContain('exercise 0');
+    expect(result).not.toContain('exercise 20');
+    expect(result).toContain('truncated');
+    expect(result).toContain('health/plan.md');
+    expect(result.length).toBeLessThan(2000);
+  });
+
+  it('truncates study content containing a raw JSON blob', () => {
+    const jsonBlob = JSON.stringify(Array.from({ length: 30 }, (_, i) => ({ id: i, title: `item ${i}` })), null, 2);
+    const data = { ...sampleData, study: `## Syllabus\n- Chapter 7: Transformers\n\n${jsonBlob}` };
+
+    const result = formatMorningPrepFallback(data);
+
+    // Raw item 29 must not end up in the journal
+    expect(result).not.toContain('item 29');
+    expect(result).toContain('truncated');
+    expect(result).toContain('study/syllabus.md');
+  });
+
+  it('truncates priorities content exceeding the 15-line cap and adds a journal source hint', () => {
+    const longPriorities = Array.from({ length: 30 }, (_, i) => `- priority ${i}`).join('\n');
+    const data = { ...sampleData, priorities: longPriorities };
+
+    const result = formatMorningPrepFallback(data);
+
+    expect(result).toContain('priority 0');
+    expect(result).toContain('priority 14'); // 15-line cap: indices 0..14 retained
+    expect(result).not.toContain('priority 20');
+    expect(result).not.toContain('priority 29');
+    expect(result).toContain('truncated');
+    expect(result).toContain('#priorities');
+  });
+
+  it('truncates writing content exceeding the 10-line cap and adds a topics source hint', () => {
+    const longWriting = Array.from({ length: 25 }, (_, i) => `- topic ${i}`).join('\n');
+    const data = { ...sampleData, writing: longWriting };
+
+    const result = formatMorningPrepFallback(data);
+
+    expect(result).toContain('topic 0');
+    expect(result).toContain('topic 9'); // 10-line cap: indices 0..9 retained
+    expect(result).not.toContain('topic 15');
+    expect(result).not.toContain('topic 24');
+    expect(result).toContain('truncated');
+    expect(result).toContain('writing/topics.md');
+  });
 });
 
 describe('jobs/morning-prep — synthesizeMorningPrep', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('on Claude success, returns result.text', async () => {
+  it('on Claude success, returns result.text with synthFailed=false', async () => {
     const synthesized = '### Priorities Recap\n- Ship feature X (in progress)\n\n### Workout\n- Run 5k + stretching\n\n### Study\n- Chapter 7: Transformers\n\n### Writing Focus\n- LLM orchestration patterns draft';
     mockAskClaudeOneShot.mockResolvedValue({ text: synthesized, error: null });
 
     const result = await synthesizeMorningPrep(sampleData);
 
-    expect(result).toBe(synthesized);
+    expect(result.text).toBe(synthesized);
+    expect(result.synthFailed).toBe(false);
+    expect(result.synthError).toBeNull();
   });
 
-  it('on Claude error, returns fallback-formatted content', async () => {
+  it('on Claude error, returns fallback-formatted content and synthFailed=true', async () => {
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'Claude timed out after 30s' });
 
     const result = await synthesizeMorningPrep(sampleData);
 
-    expect(result).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.text).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.synthFailed).toBe(true);
+    expect(result.synthError).toBe('Claude timed out after 30s');
   });
 
-  it('on Claude returning null text, returns fallback', async () => {
+  it('on Claude returning null text, returns fallback with synthFailed=true', async () => {
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: null });
 
     const result = await synthesizeMorningPrep(sampleData);
 
-    expect(result).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.text).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.synthFailed).toBe(true);
+    expect(result.synthError).toBe('empty response');
   });
 
-  it('on Claude throwing an exception, returns fallback instead of propagating', async () => {
+  it('on Claude throwing an exception, returns fallback with synthFailed=true', async () => {
     mockAskClaudeOneShot.mockRejectedValue(new Error('spawn ENOENT'));
 
     const result = await synthesizeMorningPrep(sampleData);
 
-    expect(result).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.text).toBe(formatMorningPrepFallback(sampleData));
+    expect(result.synthFailed).toBe(true);
+    expect(result.synthError).toContain('spawn ENOENT');
   });
 
   it('prompt includes dayOfWeek and yesterdayFile context', async () => {
@@ -227,6 +289,21 @@ describe('jobs/morning-prep — executeMorningPrep', () => {
     const result = await executeMorningPrep();
 
     expect(result).toEqual({ status: 'written', filepath: '/test/vault/journals/2026_04_09.md' });
+    expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
+  });
+
+  it('returns fallback status with synthError when Claude synthesis fails but write succeeds', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'Claude timed out after 120s' });
+    mockWriteMorningPrep.mockReturnValue({ written: true, filepath: '/test/vault/journals/2026_04_09.md' });
+
+    const result = await executeMorningPrep();
+
+    expect(result.status).toBe('fallback');
+    expect(result).toMatchObject({
+      status: 'fallback',
+      filepath: '/test/vault/journals/2026_04_09.md',
+      synthError: 'Claude timed out after 120s',
+    });
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
   });
 
@@ -275,6 +352,20 @@ describe('jobs/morning-prep — runMorningPrep', () => {
     expect(mockWriteMorningPrep).toHaveBeenCalledOnce();
     expect(mockGitCommitAndPush).not.toHaveBeenCalled();
     expect(mockBot.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('fallback: when Claude synthesis fails, sends a distinct TG message referencing the error', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'Claude timed out after 120s' });
+
+    await runMorningPrep(mockBot);
+
+    expect(mockWriteMorningPrep).toHaveBeenCalledOnce();
+    expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
+    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(sent?.[0]).toBe(123456);
+    expect(sent?.[1]).toContain('fallback');
+    expect(sent?.[1]).toContain('Claude timed out after 120s');
+    expect(sent?.[1]).not.toBe('Your journal is ready.');
   });
 
   it('git commit is called with exact message "Morning prep"', async () => {

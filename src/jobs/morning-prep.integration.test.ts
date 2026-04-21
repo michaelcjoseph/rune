@@ -206,14 +206,18 @@ describe('morning-prep integration', () => {
     expect(mockGitCommitAndPush).toHaveBeenCalledOnce();
   });
 
-  it('Claude failure uses fallback formatting with raw data headings', async () => {
+  it('Claude failure returns fallback status with synthError and writes terse journal', async () => {
     seedAllVaultFiles();
 
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'timeout' });
 
     const result = await executeMorningPrep();
 
-    expect(result.status).toBe('written');
+    expect(result.status).toBe('fallback');
+    if (result.status === 'fallback') {
+      expect(result.synthError).toBe('timeout');
+      expect(result.filepath).toBe(todayJournal);
+    }
     expect(existsSync(todayJournal)).toBe(true);
     const content = readFileSync(todayJournal, 'utf8');
 
@@ -229,7 +233,41 @@ describe('morning-prep integration', () => {
     expect(content).toContain('Transformer architectures');
     expect(content).toContain('Personal knowledge management with LLMs');
 
+    // Fallback must be terse — these fixtures are short, so no truncation should trigger
+    expect(content.length).toBeLessThan(5000);
+
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
+  });
+
+  it('Claude failure with large source files produces a terse (truncated) fallback, not a raw dump', async () => {
+    // Simulate the real-world incident: a 500-line health/plan.md and a 1000-line study/progress.json
+    const largePlan = Array.from({ length: 500 }, (_, i) => `- Line ${i} of workout plan content`).join('\n');
+    const largeProgress = JSON.stringify(
+      Array.from({ length: 1000 }, (_, i) => ({ id: i, lesson: `Lesson ${i}`, done: false })),
+      null,
+      2
+    );
+    writeVaultFixture('journals/2026_04_08.md', '#priorities\n- X');
+    writeVaultFixture('health/plan.md', largePlan);
+    writeVaultFixture('study/syllabus.md', '## Syllabus\n- Intro');
+    writeVaultFixture('study/progress.json', largeProgress);
+    writeVaultFixture('writing/topics.md', '- Topic A');
+
+    mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'timeout' });
+
+    const result = await executeMorningPrep();
+
+    expect(result.status).toBe('fallback');
+    const content = readFileSync(todayJournal, 'utf8');
+
+    // Terse: far smaller than the 50KB incident that triggered this fix
+    expect(content.length).toBeLessThan(3000);
+    // The raw dump must not leak
+    expect(content).not.toContain('Line 499 of workout plan content');
+    expect(content).not.toContain('"lesson": "Lesson 999"');
+    // Source hints must be present so the user knows where to look
+    expect(content).toContain('health/plan.md');
+    expect(content).toContain('truncated');
   });
 
   it('gatherMorningData reads all vault sources correctly', () => {

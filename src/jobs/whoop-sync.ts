@@ -96,16 +96,25 @@ export async function executeSleepSync(): Promise<WhoopSyncResult> {
   const date = getYesterdayDate();
   log.info('Syncing sleep data', { date });
 
-  const [sleepRecords, recoveryRecords] = await Promise.all([
+  const [sleepResult, recoveryResult] = await Promise.all([
     fetchSleep(token, date, date),
     fetchRecovery(token, date, date),
   ]);
 
-  const sleep = sleepRecords[0];
-  const recovery = recoveryRecords[0];
+  // If both endpoints failed with HTTP/network errors, surface as error (not a silent skip)
+  if (sleepResult.error && recoveryResult.error) {
+    return { status: 'error', date, detail: `API errors: sleep=${sleepResult.error}; recovery=${recoveryResult.error}` };
+  }
+
+  const sleep = sleepResult.records[0];
+  const recovery = recoveryResult.records[0];
 
   if (!sleep && !recovery) {
-    return { status: 'skipped', date, detail: 'No sleep/recovery data available' };
+    // Mention which sides errored vs which legitimately returned empty so the user knows
+    const partialErrorSuffix = sleepResult.error || recoveryResult.error
+      ? ` (partial API errors: sleep=${sleepResult.error ?? 'ok'}, recovery=${recoveryResult.error ?? 'ok'})`
+      : '';
+    return { status: 'skipped', date, detail: `No sleep/recovery data available${partialErrorSuffix}` };
   }
 
   const data = readDailyData(date);
@@ -130,6 +139,10 @@ export async function runWhoopSleepSync(bot: TelegramBot): Promise<void> {
       await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop: ${result.detail}`);
     } else if (result.status === 'error' && result.detail) {
       await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop sync failed — ${result.detail}`);
+    } else if (result.status === 'skipped' && result.detail && result.detail !== 'Whoop not configured') {
+      // Don't go silent when the API legitimately returned no data — the user was
+      // otherwise left wondering whether the sync even ran.
+      await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop sleep sync: ${result.detail}${result.date ? ` (for ${result.date})` : ''}`);
     }
   } catch (err) {
     log.error('Sleep sync failed', { error: String(err) });
@@ -152,15 +165,23 @@ export async function executeActivitySync(): Promise<WhoopSyncResult> {
   const date = getTodayDate();
   log.info('Syncing activity data', { date });
 
-  const [cycles, workouts] = await Promise.all([
+  const [cyclesResult, workoutsResult] = await Promise.all([
     fetchCycles(token, date, date),
     fetchWorkouts(token, date, date),
   ]);
 
-  const cycle = cycles[0];
+  if (cyclesResult.error && workoutsResult.error) {
+    return { status: 'error', date, detail: `API errors: cycles=${cyclesResult.error}; workouts=${workoutsResult.error}` };
+  }
+
+  const cycle = cyclesResult.records[0];
+  const workouts = workoutsResult.records;
 
   if (!cycle && workouts.length === 0) {
-    return { status: 'skipped', detail: 'No strain/workout data available' };
+    const partialErrorSuffix = cyclesResult.error || workoutsResult.error
+      ? ` (partial API errors: cycles=${cyclesResult.error ?? 'ok'}, workouts=${workoutsResult.error ?? 'ok'})`
+      : '';
+    return { status: 'skipped', detail: `No strain/workout data available${partialErrorSuffix}` };
   }
 
   const data = readDailyData(date);

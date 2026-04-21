@@ -8,7 +8,7 @@ import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
-import { createLogger } from './utils/logger.js';
+import { createLogger, flushLogger } from './utils/logger.js';
 
 const log = createLogger('main');
 
@@ -37,7 +37,7 @@ log.info('Jarvis started', {
 });
 
 // Graceful shutdown
-function shutdown() {
+async function shutdown() {
   log.info('Shutting down...');
   stopWatcher();
   stopScheduler();
@@ -46,17 +46,18 @@ function shutdown() {
   persistReviewSessions();
   bot.stopPolling();
   server.close();
+  await flushLogger();
   process.exit(0);
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGTERM', () => { void shutdown(); });
+process.on('SIGINT', () => { void shutdown(); });
 
 process.on('uncaughtException', (err) => {
   log.error('Uncaught exception', { error: err.message, stack: err.stack });
   persistSessions();
   persistReviewSessions();
-  process.exit(1);
+  void flushLogger().finally(() => process.exit(1));
 });
 
 process.on('unhandledRejection', (err) => {

@@ -197,8 +197,9 @@ describe('whoop/client', () => {
       );
 
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
-      expect(result).toHaveLength(1);
-      expect(result[0]!.id).toBe(1);
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0]!.id).toBe(1);
+      expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/activity/sleep');
@@ -210,21 +211,24 @@ describe('whoop/client', () => {
       fetchSpy.mockRestore();
     });
 
-    it('returns empty array on API error', async () => {
+    it('returns empty records and surfaces an error detail on API HTTP error', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response('Server Error', { status: 500 }),
       );
 
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
-      expect(result).toEqual([]);
+      expect(result.records).toEqual([]);
+      expect(result.error).toContain('HTTP 500');
+      expect(result.error).toContain('/v1/activity/sleep');
       fetchSpy.mockRestore();
     });
 
-    it('returns empty array on network error', async () => {
+    it('returns empty records and surfaces an error detail on network error', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('timeout'));
 
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
-      expect(result).toEqual([]);
+      expect(result.records).toEqual([]);
+      expect(result.error).toContain('timeout');
       fetchSpy.mockRestore();
     });
   });
@@ -241,17 +245,19 @@ describe('whoop/client', () => {
       );
 
       const result = await fetchRecovery('tok', '2026-04-10', '2026-04-10');
-      expect(result).toHaveLength(1);
-      expect(result[0]!.cycle_id).toBe(1);
+      expect(result.records).toHaveLength(1);
+      expect(result.records[0]!.cycle_id).toBe(1);
+      expect(result.error).toBeNull();
       fetchSpy.mockRestore();
     });
 
-    it('returns empty array on error', async () => {
+    it('surfaces error detail on HTTP error', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response('', { status: 500 }),
       );
       const result = await fetchRecovery('tok', '2026-04-10', '2026-04-10');
-      expect(result).toEqual([]);
+      expect(result.records).toEqual([]);
+      expect(result.error).toContain('HTTP 500');
       fetchSpy.mockRestore();
     });
   });
@@ -268,7 +274,8 @@ describe('whoop/client', () => {
       );
 
       const result = await fetchCycles('tok', '2026-04-10', '2026-04-10');
-      expect(result).toHaveLength(1);
+      expect(result.records).toHaveLength(1);
+      expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/cycle');
@@ -287,20 +294,22 @@ describe('whoop/client', () => {
       );
 
       const result = await fetchWorkouts('tok', '2026-04-10', '2026-04-10');
-      expect(result).toHaveLength(1);
+      expect(result.records).toHaveLength(1);
+      expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
       expect(url).toContain('/v1/activity/workout');
       fetchSpy.mockRestore();
     });
 
-    it('returns empty array when no records', async () => {
+    it('returns empty records with error=null when API returns zero records', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response(JSON.stringify({ records: [] }), { status: 200 }),
       );
 
       const result = await fetchWorkouts('tok', '2026-04-10', '2026-04-10');
-      expect(result).toEqual([]);
+      expect(result.records).toEqual([]);
+      expect(result.error).toBeNull();
       fetchSpy.mockRestore();
     });
   });
