@@ -77,7 +77,7 @@ src/
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
-│   ├── nightly.ts           # Nightly orchestrator: capture → KB queue → daily tags → playbook extract → whoop → lint → commit
+│   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → playbook extract → journal ingest → KB queue → whoop → lint → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
 │   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
 │   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json

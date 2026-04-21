@@ -13,6 +13,7 @@ vi.mock('../kb/engine.js', () => ({
   processIngestionQueue: vi.fn(),
   lintKB: vi.fn(),
 }));
+vi.mock('../kb/queue.js', () => ({ enqueue: vi.fn() }));
 vi.mock('../ai/claude.js', () => ({
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../utils/time.js', () => ({
 
 const { captureSessions } = await import('./capture.js');
 const { processIngestionQueue, lintKB } = await import('../kb/engine.js');
+const { enqueue } = await import('../kb/queue.js');
 const { askClaudeOneShot, runAgent } = await import('../ai/claude.js');
 const { readVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
@@ -35,6 +37,7 @@ const { executeNightly, runNightly } = await import('./nightly.js');
 
 const captureMock = captureSessions as unknown as ReturnType<typeof vi.fn>;
 const queueMock = processIngestionQueue as unknown as ReturnType<typeof vi.fn>;
+const enqueueMock = enqueue as unknown as ReturnType<typeof vi.fn>;
 const lintMock = lintKB as unknown as ReturnType<typeof vi.fn>;
 const askMock = askClaudeOneShot as unknown as ReturnType<typeof vi.fn>;
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
@@ -56,14 +59,15 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 6 steps and returns results', async () => {
+    it('runs all 7 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(6);
+      expect(result.steps).toHaveLength(7);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
-        'KB queue',
         'Daily tags',
         'Playbook extract',
+        'Journal ingest',
+        'KB queue',
         'Whoop activity',
         'KB lint',
       ]);
@@ -178,6 +182,35 @@ describe('jobs/nightly', () => {
       expect(step.detail).toContain('Agent crashed');
     });
 
+    // -- Journal ingest step --
+    it('enqueues today\'s journal when content exists', async () => {
+      readMock.mockReturnValue('# Journal\n- 10:00 meeting with #alice about project');
+      // Prevent Daily tags from calling the json-updater agent during this test
+      askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Journal ingest')!;
+      expect(step.status).toBe('success');
+      expect(step.detail).toContain('journals/');
+      expect(enqueueMock).toHaveBeenCalledWith('journals/2026-04-11.md');
+    });
+
+    it('skips journal ingest when journal is empty', async () => {
+      readMock.mockReturnValue('   \n  ');
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Journal ingest')!;
+      expect(step.status).toBe('skipped');
+      expect(enqueueMock).not.toHaveBeenCalled();
+    });
+
+    it('skips journal ingest when journal does not exist', async () => {
+      readMock.mockReturnValue(null);
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Journal ingest')!;
+      expect(step.status).toBe('skipped');
+      expect(enqueueMock).not.toHaveBeenCalled();
+    });
+
     // -- Lint step --
     it('skips lint when not Sunday', async () => {
       dayMock.mockReturnValue('Wednesday');
@@ -213,10 +246,10 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(6);
+      expect(result.steps).toHaveLength(7);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
-      expect(result.steps[1]!.step).toBe('KB queue');
+      expect(result.steps[1]!.step).toBe('Daily tags');
       expect(queueMock).toHaveBeenCalled();
     });
 
@@ -224,20 +257,23 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(6);
-      expect(result.steps[1]!.status).toBe('error');
-      // Daily tags step still ran
-      expect(result.steps[2]!.step).toBe('Daily tags');
+      expect(result.steps).toHaveLength(7);
+      // KB queue is now at index 4 (after Session capture, Daily tags, Playbook extract, Journal ingest)
+      expect(result.steps[4]!.step).toBe('KB queue');
+      expect(result.steps[4]!.status).toBe('error');
+      // Whoop activity still ran after it
+      expect(result.steps[5]!.step).toBe('Whoop activity');
     });
 
-    it('continues when daily tags throws', async () => {
+    it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(6);
-      expect(result.steps[2]!.status).toBe('error');
-      // Lint step still ran (now at index 5)
-      expect(result.steps[5]!.step).toBe('KB lint');
+      expect(result.steps).toHaveLength(7);
+      // Daily tags (index 1) errors on journal read
+      expect(result.steps[1]!.status).toBe('error');
+      // Lint step still ran (last index)
+      expect(result.steps[6]!.step).toBe('KB lint');
     });
   });
 

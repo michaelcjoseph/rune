@@ -6,8 +6,8 @@ Not started. See [spec.md](spec.md) for details.
 
 - [x] Extend `determineRawDir()` in `src/kb/ingest.ts` to route `journals/*.md` → `knowledge/raw/journals/`
 - [x] Extend `isMutableSource()` to include `journals/` (so re-ingestion of edited journals overwrites the raw copy)
-- [ ] Add `stepJournalIngest` to `src/jobs/nightly.ts` (enqueues today's journal; runs before the KB queue step so the journal is ingested in the same nightly pass)
-- [ ] Reorder nightly steps so KB queue runs after journal ingest (or add a second KB queue pass at the end)
+- [x] Add `stepJournalIngest` to `src/jobs/nightly.ts` (enqueues today's journal; runs before the KB queue step so the journal is ingested in the same nightly pass)
+- [x] Reorder nightly steps so KB queue runs after journal ingest (or add a second KB queue pass at the end)
 - [ ] Update `.claude/agents/wiki-compiler.md` with a "Journal-shaped sources" subsection: skip timestamps and casual asides, focus on people/decisions/concepts, update existing pages additively
 - [ ] Verify `wiki-compiler` does not write to `projects/*.md` (boundary check — already enforced but confirm under journal-ingest path)
 - [ ] Surface ingest counts in nightly TG summary

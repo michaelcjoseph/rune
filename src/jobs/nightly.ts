@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB } from '../kb/engine.js';
+import { enqueue } from '../kb/queue.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
@@ -119,6 +120,16 @@ async function stepPlaybookExtract(): Promise<NightlyStepResult> {
   return { step: 'Playbook extract', status: result.status, detail: result.detail };
 }
 
+async function stepJournalIngest(): Promise<NightlyStepResult> {
+  const source = `journals/${getTodayFilename()}`;
+  const content = readVaultFile(source);
+  if (!content || content.trim().length === 0) {
+    return { step: 'Journal ingest', status: 'skipped', detail: 'No journal content today' };
+  }
+  enqueue(source);
+  return { step: 'Journal ingest', status: 'success', detail: source };
+}
+
 async function stepWhoopActivity(): Promise<NightlyStepResult> {
   const result = await executeActivitySync();
   return { step: 'Whoop activity', status: result.status === 'synced' ? 'success' : result.status, detail: result.detail };
@@ -155,9 +166,10 @@ export async function executeNightly(): Promise<NightlyResult> {
   };
 
   await run('Session capture', stepCaptureSession);
-  await run('KB queue', stepKBQueue);
   await run('Daily tags', stepDailyTags);
   await run('Playbook extract', stepPlaybookExtract);
+  await run('Journal ingest', stepJournalIngest);
+  await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);
 
