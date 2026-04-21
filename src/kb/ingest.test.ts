@@ -169,6 +169,14 @@ describe('kb/ingest', () => {
       expect(determineRawDir('projects/archive/old.md')).toBe('knowledge/raw/notes');
     });
 
+    it('routes conversation files to conversations/', () => {
+      expect(determineRawDir('conversations/2026-04-07.md')).toBe('knowledge/raw/conversations');
+    });
+
+    it('routes paths containing "conversation" in name to conversations/', () => {
+      expect(determineRawDir('notes/conversation-with-alice.md')).toBe('knowledge/raw/conversations');
+    });
+
     it('falls back to notes for unknown paths', () => {
       expect(determineRawDir('misc/something.md')).toBe('knowledge/raw/notes');
     });

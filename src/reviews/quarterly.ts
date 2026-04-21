@@ -4,7 +4,7 @@ import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
 
 /** Get the three month ranges for the quarter containing targetDate */
-function getQuarterMonths(targetDate: string): Array<{ first: string; last: string; label: string }> {
+export function getQuarterMonths(targetDate: string): Array<{ first: string; last: string; label: string }> {
   const parts = targetDate.split('-').map(Number) as [number, number, number];
   const year = parts[0];
   const month = parts[1];
@@ -21,7 +21,7 @@ function getQuarterMonths(targetDate: string): Array<{ first: string; last: stri
   return months;
 }
 
-function getQuarterLabel(targetDate: string): string {
+export function getQuarterLabel(targetDate: string): string {
   const month = Number(targetDate.split('-')[1]);
   const q = Math.ceil(month / 3);
   const year = targetDate.split('-')[0];

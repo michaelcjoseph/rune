@@ -4,7 +4,7 @@ import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
 
 /** Get the four quarter ranges for the year in targetDate */
-function getYearQuarters(targetDate: string): Array<{ first: string; last: string; label: string }> {
+export function getYearQuarters(targetDate: string): Array<{ first: string; last: string; label: string }> {
   const year = Number(targetDate.split('-')[0]);
   const quarters = [
     { start: 1, end: 3, label: 'Journal Scanner (Q1)' },

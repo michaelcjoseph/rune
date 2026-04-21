@@ -4,7 +4,7 @@ import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
 
 /** Get first and last day of the month containing targetDate */
-function getMonthRange(targetDate: string): { first: string; last: string } {
+export function getMonthRange(targetDate: string): { first: string; last: string } {
   const parts = targetDate.split('-').map(Number) as [number, number, number];
   const first = new Date(parts[0], parts[1] - 1, 1);
   const last = new Date(parts[0], parts[1], 0); // day 0 of next month = last day of this month

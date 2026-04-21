@@ -38,7 +38,7 @@ export function toScannerDate(isoDate: string): string {
 }
 
 /** Extract interview instructions (Steps 2-3) from the full SKILL.md */
-function extractInterviewInstructions(skillContent: string): string {
+export function extractInterviewInstructions(skillContent: string): string {
   const step2Start = skillContent.indexOf('## Step 2: Interview');
   const step4Start = skillContent.indexOf('## Step 4:');
   if (step2Start === -1) return skillContent;

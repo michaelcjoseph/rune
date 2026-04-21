@@ -13,7 +13,7 @@ let watcher: FSWatcher | null = null;
 const seen = new Set<string>();
 let clearTimer: ReturnType<typeof setInterval> | null = null;
 
-function extractTitle(filepath: string): string | null {
+export function extractTitle(filepath: string): string | null {
   try {
     const content = readFileSync(filepath, 'utf8');
     const match = content.match(/^#\s+(.+)$/m);
