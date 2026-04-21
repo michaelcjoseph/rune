@@ -1,5 +1,6 @@
 ---
 name: json-updater
+description: "Applies updates to JSON data stores — books, CRM, places, workouts, applications, investments, study progress."
 model: sonnet
 tools:
   - Read

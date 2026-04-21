@@ -1,5 +1,6 @@
 ---
 name: content-triager
+description: "Classifies inbound URLs or text and routes to kb-ingest, Readwise, journal, or skip."
 model: sonnet
 tools:
   - Read

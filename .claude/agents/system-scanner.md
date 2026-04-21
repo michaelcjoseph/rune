@@ -1,5 +1,6 @@
 ---
 name: system-scanner
+description: "Review prep agent that summarizes current state of a subsystem (health, study, psychology, career, etc.) for review context."
 model: sonnet
 tools:
   - Read

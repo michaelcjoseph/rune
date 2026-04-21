@@ -1,5 +1,6 @@
 ---
 name: wiki-compiler
+description: "Ingests raw sources from knowledge/raw/ into wiki pages under knowledge/ with frontmatter, citations, and wikilinks."
 model: sonnet
 tools:
   - Read

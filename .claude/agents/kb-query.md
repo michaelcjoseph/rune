@@ -1,5 +1,6 @@
 ---
 name: kb-query
+description: "Answers a question by searching the knowledge base wiki and vault, returning a synthesized answer with wikilink citations."
 model: sonnet
 tools:
   - Read

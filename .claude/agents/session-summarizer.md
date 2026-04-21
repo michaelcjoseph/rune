@@ -1,5 +1,6 @@
 ---
 name: session-summarizer
+description: "Summarizes a Claude Code session transcript with vault context into a rich recap for journal archival. Read-only."
 model: sonnet
 tools:
   - Read

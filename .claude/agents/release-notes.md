@@ -1,5 +1,6 @@
 ---
 name: release-notes
+description: "Generates a changelog from recent git history."
 model: sonnet
 tools:
   - Read

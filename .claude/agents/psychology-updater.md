@@ -1,5 +1,6 @@
 ---
 name: psychology-updater
+description: "Post-review agent that applies scoped updates to pages/psychology.md (observation, pattern_check, reassessment, full_rewrite)."
 model: sonnet
 tools:
   - Read

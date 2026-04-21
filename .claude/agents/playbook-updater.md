@@ -1,5 +1,6 @@
 ---
 name: playbook-updater
+description: "Post-review agent that appends user-approved playbook drafts from the queue into pages/playbook.md, append-only."
 model: sonnet
 tools:
   - Read

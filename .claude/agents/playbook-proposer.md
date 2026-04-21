@@ -1,5 +1,6 @@
 ---
 name: playbook-proposer
+description: "Nightly agent that drafts playbook entries from #playbook-tagged journal sections into the queue for later approval."
 model: sonnet
 tools:
   - Read

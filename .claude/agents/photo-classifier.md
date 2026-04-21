@@ -1,5 +1,6 @@
 ---
 name: photo-classifier
+description: "Classifies a photo (book cover, receipt, whiteboard, etc.) and recommends downstream routing."
 model: sonnet
 tools:
   - Read

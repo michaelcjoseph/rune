@@ -1,5 +1,6 @@
 ---
 name: morning-prep
+description: "Gathers vault data — priorities, calendar, recent journals, Whoop — and produces a structured morning journal section."
 model: sonnet
 tools:
   - Read

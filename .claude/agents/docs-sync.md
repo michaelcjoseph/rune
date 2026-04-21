@@ -1,5 +1,6 @@
 ---
 name: docs-sync
+description: "Updates CLAUDE.md and project docs after structural changes — new modules, commands, agents, env vars, scripts."
 model: sonnet
 tools:
   - Read

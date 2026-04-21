@@ -1,5 +1,6 @@
 ---
 name: architecture-reviewer
+description: "Reviews changes for system-level architectural concerns — vault boundary violations, Claude CLI spawn patterns, session management, cron safety, module boundaries, graceful shutdown."
 model: sonnet
 tools:
   - Read

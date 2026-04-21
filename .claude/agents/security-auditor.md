@@ -1,5 +1,6 @@
 ---
 name: security-auditor
+description: "Audits changes for hardcoded secrets, PII exposure, vault content leaks, path traversal, and unsafe shell commands. Read-only."
 model: sonnet
 tools:
   - Read

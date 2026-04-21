@@ -1,5 +1,6 @@
 ---
 name: code-simplifier
+description: "Checks code for dead code, over-abstraction, duplication, and unnecessary complexity. Read-only — reports findings only."
 model: sonnet
 tools:
   - Read

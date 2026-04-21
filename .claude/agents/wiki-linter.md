@@ -1,5 +1,6 @@
 ---
 name: wiki-linter
+description: "Health-checks the wiki — broken links, orphans, expired valid-until dates, schema drift. Read-only."
 model: sonnet
 tools:
   - Read

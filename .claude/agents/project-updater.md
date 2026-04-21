@@ -1,5 +1,6 @@
 ---
 name: project-updater
+description: "Post-review agent that applies user-approved updates to projects/*.md (status, thesis, decisions log, weekly summaries)."
 model: sonnet
 tools:
   - Read

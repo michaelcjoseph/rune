@@ -1,5 +1,6 @@
 ---
 name: code-reviewer
+description: "Reviews code changes for bugs, security issues, TypeScript strict-mode violations, and Jarvis convention violations. Read-only."
 model: sonnet
 tools:
   - Read

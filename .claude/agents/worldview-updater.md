@@ -1,5 +1,6 @@
 ---
 name: worldview-updater
+description: "Post-review agent that applies user-approved diffs to world-view/*.md with a dated changelog entry. Propose-only."
 model: sonnet
 tools:
   - Read

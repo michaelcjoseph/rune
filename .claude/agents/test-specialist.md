@@ -1,5 +1,6 @@
 ---
 name: test-specialist
+description: "Writes and runs vitest tests for code changes; bootstraps test infrastructure if missing."
 model: sonnet
 tools:
   - Read
