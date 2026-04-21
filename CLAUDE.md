@@ -151,7 +151,7 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 - anything with `conversation` in the path → `knowledge/raw/conversations/`
 - fallback → `knowledge/raw/notes/`
 
-Mutable sources (world-view, playbook, active projects) **overwrite** the `raw/` copy on every re-ingest (see `isMutableSource()`) so wiki citations reflect current content. Immutable sources (Readwise, conversations) are copied once.
+Mutable sources (world-view, playbook, active projects, journals) **overwrite** the `raw/` copy on every re-ingest (see `isMutableSource()`) so wiki citations reflect current content. Immutable sources (Readwise, conversations) are copied once.
 
 ## Key Conventions
 

@@ -183,10 +183,11 @@ describe('kb/ingest', () => {
   });
 
   describe('isMutableSource', () => {
-    it('marks world-view / playbook / active projects as mutable', () => {
+    it('marks world-view / playbook / active projects / journals as mutable', () => {
       expect(isMutableSource('world-view/ai.md')).toBe(true);
       expect(isMutableSource('pages/playbook.md')).toBe(true);
       expect(isMutableSource('projects/project-alpha.md')).toBe(true);
+      expect(isMutableSource('journals/2026_04_21.md')).toBe(true);
     });
 
     it('marks Readwise and archived projects as immutable', () => {

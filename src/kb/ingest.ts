@@ -104,5 +104,6 @@ export function determineRawDir(sourcePath: string): string {
 export function isMutableSource(sourcePath: string): boolean {
   return sourcePath.startsWith('world-view/')
     || sourcePath === 'pages/playbook.md'
+    || sourcePath.startsWith('journals/')
     || (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/'));
 }
