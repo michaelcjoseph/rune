@@ -42,9 +42,9 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Skill registry
 
-- [ ] Create `src/bot/skill-registry.ts` exporting `getSkillRegistry(): SkillEntry[]`
-- [ ] Pull entries from: agent files with `triggers:` frontmatter, slash commands (with one-line description metadata), and the carried-forward `kb_query` intent (KB-shaped matrix as few-shot examples)
-- [ ] Cache the registry at startup; expose `reloadSkillRegistry()` for future hot-reload
+- [x] Create `src/bot/skill-registry.ts` exporting `getSkillRegistry(): SkillEntry[]`
+- [x] Pull entries from: agent files with `triggers:` frontmatter, slash commands (with one-line description metadata), and the carried-forward `kb_query` intent (KB-shaped matrix as few-shot examples)
+- [x] Cache the registry at startup; expose `reloadSkillRegistry()` for future hot-reload
 
 ### Resolver
 

@@ -26,6 +26,10 @@ vi.mock('../ai/claude.js', () => ({
   clearAgentDefCache: vi.fn(),
 }));
 
+vi.mock('../bot/skill-registry.js', () => ({
+  reloadSkillRegistry: vi.fn(),
+}));
+
 vi.mock('../integrations/telegram/client.js', () => ({
   sendLongMessage: vi.fn(async () => {}),
 }));

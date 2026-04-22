@@ -149,6 +149,9 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
 export interface AgentDef {
   prompt: string;
   tools: string[];
+  /** One-line agent description from frontmatter. Used by the skill registry
+   *  to give the resolver a compact label for each routable skill. */
+  description?: string;
   /** Optional cron expression (5- or 6-field). When set, the scheduler registers
    *  a job that calls runAgent(name, cron_args ?? '') at each tick. */
   cron?: string;
@@ -204,6 +207,7 @@ export function loadAgentDef(agentName: string): AgentDef {
   const tools = parseYamlListField(frontmatter, 'tools');
   const triggers = parseYamlListField(frontmatter, 'triggers');
 
+  const description = parseYamlScalarField(frontmatter, 'description');
   const cron = parseYamlScalarField(frontmatter, 'cron');
   const cronArgs = parseYamlScalarField(frontmatter, 'cron_args');
   const cronChatRaw = parseYamlScalarField(frontmatter, 'cron_chat')?.toLowerCase();
@@ -212,6 +216,7 @@ export function loadAgentDef(agentName: string): AgentDef {
   const def: AgentDef = {
     prompt: body,
     tools,
+    ...(description !== undefined ? { description } : {}),
     ...(cron !== undefined ? { cron } : {}),
     ...(cronArgs !== undefined ? { cronArgs } : {}),
     ...(cronChat !== undefined ? { cronChat } : {}),

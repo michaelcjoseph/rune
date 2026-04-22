@@ -4,7 +4,8 @@ import cron, { type ScheduledTask } from 'node-cron';
 import type TelegramBot from 'node-telegram-bot-api';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
-import { clearAgentDefCache, loadAgentDef, runAgent } from '../ai/claude.js';
+import { loadAgentDef, runAgent } from '../ai/claude.js';
+import { reloadSkillRegistry } from '../bot/skill-registry.js';
 import { sendLongMessage } from '../integrations/telegram/client.js';
 import { runMorningPrep } from './morning-prep.js';
 import { runNightly } from './nightly.js';
@@ -202,10 +203,11 @@ function checkMissedJobs(jobs: JobDefinition[]): void {
  *  handler calls runAgent(name, cron_args) and routes output per cron_chat.
  *  Invalid cron expressions are logged and skipped (no crash). */
 export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
-  // Evict cached defs so frontmatter edits (cron, cron_args, cron_chat,
-  // triggers) take effect on a scheduler stop/start cycle. Agent files are
-  // re-read on the next loadAgentDef call below.
-  clearAgentDefCache();
+  // Evict cached agent defs AND the skill-registry cache so frontmatter edits
+  // (cron, cron_args, cron_chat, triggers, description) take effect on a
+  // scheduler stop/start cycle. Both caches derive from the same source and
+  // must be refreshed together; reloadSkillRegistry() handles both.
+  reloadSkillRegistry();
 
   const seen = new Set<string>();
   const agentNames: string[] = [];

@@ -27,6 +27,7 @@ src/
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
+│   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, KB_QUERY_ENTRY, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
 │   └── commands/
 │       ├── fresh.ts         # /fresh — clear session, git commit
 │       ├── journal.ts       # /journal — append to today's journal
