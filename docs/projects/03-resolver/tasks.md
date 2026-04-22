@@ -32,9 +32,9 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Ask-Twice telemetry harness (#2 part 1)
 
-- [ ] Add `src/utils/intent-log.ts` exporting `appendIntent(entry: IntentLogEntry): void` (JSONL append to `logs/intent-log.jsonl`)
-- [ ] Define `IntentLogEntry` type: `{ts, intent, args, confidence, outcome, skill_invoked}`
-- [ ] Tests: append, file rotation safety (don't truncate on concurrent writes)
+- [x] Add `src/utils/intent-log.ts` exporting `appendIntent(entry: IntentLogEntry): void` (JSONL append to `logs/intent-log.jsonl`)
+- [x] Define `IntentLogEntry` type: `{ts, intent, args, confidence, outcome, skill_invoked}`
+- [x] Tests: append, file rotation safety (don't truncate on concurrent writes)
 
 ## Phase B — Resolver
 

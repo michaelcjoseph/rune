@@ -106,6 +106,7 @@ src/
 └── utils/
     ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, getRecentFilenames, etc.)
     ├── logger.ts            # Structured JSON logging with component tags
+    ├── intent-log.ts        # Ask-Twice telemetry: appendIntent → logs/intent-log.jsonl
     └── markdown.ts          # Markdown parsing utilities (future)
 cli/
 └── jarvis.ts                # CLI entry point for local interactive use
