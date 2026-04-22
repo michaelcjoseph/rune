@@ -2,12 +2,23 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import config from '../config.js';
 import { runAgent } from '../ai/claude.js';
-import { readVaultFile, vaultFileExists, getVaultPath } from '../vault/files.js';
+import { readVaultFile, vaultFileExists, getVaultPath, listVaultFiles, getFileModTime } from '../vault/files.js';
 import { dequeue } from './queue.js';
 import { initKB } from './init.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-ingest');
+
+export interface IngestCounts {
+  readonly created: number;
+  readonly updated: number;
+}
+
+export interface IngestResult {
+  success: boolean;
+  output: string;
+  counts: IngestCounts;
+}
 
 /**
  * Ingest a source file into the knowledge base.
@@ -16,13 +27,13 @@ const log = createLogger('kb-ingest');
 export async function ingestSource(
   sourcePath: string,
   options?: { guidance?: string },
-): Promise<{ success: boolean; output: string }> {
+): Promise<IngestResult> {
   log.info('Starting ingestion', { source: sourcePath });
 
   // Ensure the source exists in the vault
   const content = readVaultFile(sourcePath);
   if (!content) {
-    return { success: false, output: `Source file not found: ${sourcePath}` };
+    return { success: false, output: `Source file not found: ${sourcePath}`, counts: { created: 0, updated: 0 } };
   }
 
   // If the source is not already in knowledge/raw/, copy it there
@@ -65,25 +76,47 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
   // Snapshot log.md before agent runs to verify it wrote something
   const logBefore = readVaultFile('knowledge/log.md') || '';
 
-  const result = await runAgent('wiki-compiler', prompt);
+  // Snapshot mtimes before and after the agent runs so we can (a) detect any
+  // boundary violation in projects/, and (b) surface created/updated counts in
+  // knowledge/wiki/ for the nightly TG summary.
+  const projectsBefore = snapshotProjectsMtimes();
+  const wikiBefore = snapshotWikiMtimes();
+
+  const result = await runAgent('wiki-compiler', prompt, config.CLAUDE_INGEST_TIMEOUT_MS);
+
+  const projectsAfter = snapshotProjectsMtimes();
+  const wikiAfter = snapshotWikiMtimes();
+  const counts = diffWikiCounts(wikiBefore, wikiAfter);
+
+  // Check the boundary guard before the error return so writes during a failed
+  // agent run are still surfaced.
+  const violations = diffMtimes(projectsBefore, projectsAfter);
+  if (violations.length > 0) {
+    log.error('wiki-compiler wrote to projects/*.md (boundary violation)', { source: sourcePath, violations });
+    return {
+      success: false,
+      output: `wiki-compiler boundary violation: modified projects/*.md — ${violations.join(', ')}`,
+      counts,
+    };
+  }
 
   if (result.error) {
     log.error('Ingestion failed', { source: sourcePath, error: result.error });
-    return { success: false, output: result.error };
+    return { success: false, output: result.error, counts };
   }
 
   // Verify the agent actually wrote to the log — if not, it ran but did nothing
   const logAfter = readVaultFile('knowledge/log.md') || '';
   if (logAfter === logBefore) {
     log.error('Agent completed but wrote nothing to log.md', { source: sourcePath });
-    return { success: false, output: 'Agent completed but produced no output — wiki-compiler may not have found the knowledge base.' };
+    return { success: false, output: 'Agent completed but produced no output — wiki-compiler may not have found the knowledge base.', counts };
   }
 
   // Remove from queue if it was queued
   dequeue(sourcePath);
 
-  log.info('Ingestion complete', { source: sourcePath });
-  return { success: true, output: result.text || 'Ingestion complete.' };
+  log.info('Ingestion complete', { source: sourcePath, created: counts.created, updated: counts.updated });
+  return { success: true, output: result.text || 'Ingestion complete.', counts };
 }
 
 /** Determine which raw/ subdirectory a source belongs in based on its path. */
@@ -106,4 +139,57 @@ export function isMutableSource(sourcePath: string): boolean {
     || sourcePath === 'pages/playbook.md'
     || sourcePath.startsWith('journals/')
     || (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/'));
+}
+
+/** Snapshot mtime of every projects/**\/*.md file (excluding projects/archive/).
+ *  Used as a boundary guard around wiki-compiler runs — the compiler's scope is
+ *  knowledge/ only; any modification to projects/ is a violation. */
+export function snapshotProjectsMtimes(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const rel of listVaultFiles('projects')) {
+    if (rel.startsWith('projects/archive/')) continue;
+    const mtime = getFileModTime(rel);
+    if (mtime !== null) out.set(rel, mtime.getTime());
+  }
+  return out;
+}
+
+/** Return list of paths whose mtime changed (or that were added) between two snapshots. */
+function diffMtimes(before: Map<string, number>, after: Map<string, number>): string[] {
+  const changed: string[] = [];
+  for (const [path, mtime] of after) {
+    const prev = before.get(path);
+    if (prev === undefined || prev !== mtime) changed.push(path);
+  }
+  return changed;
+}
+
+/** Snapshot mtime of every knowledge/wiki/**\/*.md file. Used by `ingestSource`
+ *  to report created/updated counts for the nightly summary. */
+export function snapshotWikiMtimes(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const rel of listVaultFiles('knowledge/wiki')) {
+    const mtime = getFileModTime(rel);
+    if (mtime !== null) out.set(rel, mtime.getTime());
+  }
+  return out;
+}
+
+/** Classify wiki-page mtime diffs: new paths are created; existing paths with
+ *  changed mtime are updated. Paths present in `before` but missing from `after`
+ *  (deletions) are not counted.
+ *
+ *  Caveat: mtime resolution depends on the filesystem (APFS has nanosecond
+ *  precision; HFS+ has 1s). Two writes to the same file inside one second on
+ *  an HFS+ volume would be invisible to this diff. Not a concern on the
+ *  target APFS vault. */
+export function diffWikiCounts(before: Map<string, number>, after: Map<string, number>): IngestCounts {
+  let created = 0;
+  let updated = 0;
+  for (const [path, mtime] of after) {
+    const prev = before.get(path);
+    if (prev === undefined) created++;
+    else if (prev !== mtime) updated++;
+  }
+  return { created, updated };
 }

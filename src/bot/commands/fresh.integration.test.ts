@@ -13,6 +13,7 @@ vi.mock('../../config.js', () => ({
     LOGS_DIR: logsDir,
     TIMEZONE: 'America/Chicago',
     CLAUDE_TIMEOUT_MS: 5000,
+    CLAUDE_INGEST_TIMEOUT_MS: 5000,
     ONESHOT_MODEL: 'sonnet',
     DEFAULT_CHAT_MODEL: 'sonnet',
     INGESTION_QUEUE_FILE: join(logsDir, 'kb-ingestion-queue.json'),
@@ -123,6 +124,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     expect(mockRunAgent).toHaveBeenCalledWith(
       'wiki-compiler',
       expect.stringContaining('knowledge/raw/conversations/'),
+      expect.any(Number),
     );
 
     // 6. Queue is now empty after processing

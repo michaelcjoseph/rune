@@ -15,19 +15,23 @@ export { ingestSource, queryKB, lintKB };
  * Process all sources in the ingestion queue.
  * Called during nightly processing.
  */
-export async function processIngestionQueue(): Promise<{ processed: number; errors: number }> {
+export async function processIngestionQueue(): Promise<{ processed: number; errors: number; created: number; updated: number }> {
   const queue = getQueue();
   if (queue.length === 0) {
     log.info('Ingestion queue is empty');
-    return { processed: 0, errors: 0 };
+    return { processed: 0, errors: 0, created: 0, updated: 0 };
   }
 
   log.info(`Processing ${queue.length} queued source(s)`);
   let processed = 0;
   let errors = 0;
+  let created = 0;
+  let updated = 0;
 
   for (const entry of queue) {
     const result = await ingestSource(entry.source, { guidance: entry.guidance });
+    created += result.counts.created;
+    updated += result.counts.updated;
     if (result.success) {
       processed++;
     } else {
@@ -36,8 +40,8 @@ export async function processIngestionQueue(): Promise<{ processed: number; erro
     }
   }
 
-  log.info('Ingestion queue processed', { processed, errors });
-  return { processed, errors };
+  log.info('Ingestion queue processed', { processed, errors, created, updated });
+  return { processed, errors, created, updated };
 }
 
 /** Get KB stats: page counts, last operations from log. */

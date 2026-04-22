@@ -3,8 +3,9 @@ import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
+import { extractMeetings, appendProjectDecisions } from './meeting-extract.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
-import { readVaultFile } from '../vault/files.js';
+import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { getTodayDate, getTodayFilename, getDayOfWeek } from '../utils/time.js';
 import { createLogger } from '../utils/logger.js';
@@ -31,14 +32,18 @@ async function stepCaptureSession(): Promise<NightlyStepResult> {
 }
 
 async function stepKBQueue(): Promise<NightlyStepResult> {
-  const { processed, errors } = await processIngestionQueue();
+  const { processed, errors, created, updated } = await processIngestionQueue();
   if (processed === 0 && errors === 0) {
     return { step: 'KB queue', status: 'skipped', detail: 'Queue empty' };
   }
   if (errors > 0) {
     return { step: 'KB queue', status: 'error', detail: `${processed} processed, ${errors} failed` };
   }
-  return { step: 'KB queue', status: 'success', detail: `${processed} source(s) ingested` };
+  return {
+    step: 'KB queue',
+    status: 'success',
+    detail: `${processed} source(s) ingested, ${created} created, ${updated} updated`,
+  };
 }
 
 async function stepDailyTags(date: string, content: string | null): Promise<NightlyStepResult> {
@@ -124,9 +129,85 @@ function stepJournalIngest(filename: string, content: string | null): NightlySte
   return { step: 'Journal ingest', status: 'success', detail: source };
 }
 
+async function stepMeetingExtract(content: string | null, date: string): Promise<NightlyStepResult> {
+  if (!content || content.trim().length === 0) {
+    return { step: 'Meeting extract', status: 'skipped', detail: 'No journal content today' };
+  }
+  const meetings = await extractMeetings(content, date);
+  if (meetings.length === 0) {
+    return { step: 'Meeting extract', status: 'skipped', detail: 'No #meeting blocks to transcribe' };
+  }
+
+  // Append decisions to project Decisions Logs first — runs independently of
+  // attendees so meetings with decisions but no attendees are still captured.
+  let decisionsAppended = 0;
+  for (const m of meetings) {
+    if (!m.project || m.decisions.length === 0) continue;
+    const r = appendProjectDecisions(m.project, date, m.decisions);
+    if (r.status === 'success') {
+      decisionsAppended += r.appended;
+      enqueue(`projects/${m.project}.md`);
+    } else if (r.status === 'error') {
+      log.error('Decision append failed', { project: m.project, detail: r.detail });
+    }
+  }
+  const decisionsSuffix = decisionsAppended > 0 ? `, ${decisionsAppended} decision(s) → projects/` : '';
+
+  // Aggregate unique attendees across all meetings to a single CRM update.
+  const attendees = Array.from(new Set(meetings.flatMap((m) => m.attendees)));
+  if (attendees.length === 0) {
+    return { step: 'Meeting extract', status: 'success', detail: `${meetings.length} meeting(s) found, skipped CRM (no attendees)${decisionsSuffix}` };
+  }
+
+  // CRM journal_refs use underscore date form (matches journal filenames sans `.md`).
+  const journalRef = date.replace(/-/g, '_');
+
+  const crmPrompt = `Update pages/crm.json: append "${journalRef}" to the journal_refs of each attendee from today's meeting(s).
+
+Attendees:
+${attendees.map((a) => `- ${a}`).join('\n')}
+
+Process this as a **single read-modify-write pass**:
+1. Read pages/crm.json once.
+2. For each attendee in the list above:
+   a. Find the entry whose \`id\` matches the slug. If no id matches, fall back to a case-insensitive name match. If still no match, create a new entry: \`{id: <slug>, name: <derived>, journal_refs: ["${journalRef}"]}\`. For \`name\`, replace hyphens with spaces and title-case as a best-effort fallback.
+   b. **Dedup**: only append "${journalRef}" if it's NOT already in the entry's \`journal_refs\`. If today's ref is already present, leave the entry unchanged.
+   c. Preserve all other fields on existing entries.
+3. Write the updated array back to pages/crm.json once at the end.
+
+Report a one-line summary per attendee: "<id>: appended" / "<id>: already present" / "<id>: created new entry". Flag any uncertain name derivation explicitly (e.g. "<id>: created new entry (name uncertain — review)").`;
+
+  const result = await runAgent('json-updater', crmPrompt);
+  if (result.error) {
+    log.error('CRM update via json-updater failed', { error: result.error, attendees });
+    return { step: 'Meeting extract', status: 'error', detail: `${meetings.length} meeting(s) extracted, CRM update failed: ${result.error}` };
+  }
+
+  // Enqueue the freshly updated CRM file so the next KB queue pass picks up the new
+  // contacts and journal_refs (mirrors the post-review enqueue pattern).
+  enqueue('pages/crm.json');
+
+  return { step: 'Meeting extract', status: 'success', detail: `${meetings.length} meeting(s), ${attendees.length} attendee(s) → CRM${decisionsSuffix}` };
+}
+
 async function stepWhoopActivity(): Promise<NightlyStepResult> {
   const result = await executeActivitySync();
   return { step: 'Whoop activity', status: result.status === 'synced' ? 'success' : result.status, detail: result.detail };
+}
+
+function stepMarkProcessed(filename: string, content: string | null, date: string): NightlyStepResult {
+  if (!content) {
+    return { step: 'Mark processed', status: 'skipped', detail: 'No journal content today' };
+  }
+  const path = `journals/${filename}`;
+  const marker = `<!-- daily-processed: ${date} -->`;
+  if (content.includes(marker)) {
+    return { step: 'Mark processed', status: 'skipped', detail: 'Marker already present' };
+  }
+  // Append marker with a single blank line separator. Preserve existing trailing newline.
+  const sep = content.endsWith('\n') ? '\n' : '\n\n';
+  writeVaultFile(path, `${content}${sep}${marker}\n`);
+  return { step: 'Mark processed', status: 'success', detail: marker };
 }
 
 async function stepLint(): Promise<NightlyStepResult> {
@@ -172,9 +253,11 @@ export async function executeNightly(): Promise<NightlyResult> {
   await run('Daily tags', () => stepDailyTags(todayDate, todayJournal));
   await run('Playbook extract', stepPlaybookExtract);
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
+  await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);
+  await run('Mark processed', () => stepMarkProcessed(todayFilename, todayJournal, todayDate));
 
   // Final commit for any residual uncommitted changes
   await gitCommitAndPush('Nightly processing');
@@ -183,7 +266,7 @@ export async function executeNightly(): Promise<NightlyResult> {
   return { steps };
 }
 
-function formatSummary(result: NightlyResult): string {
+export function formatSummary(result: NightlyResult): string {
   const icons: Record<string, string> = { success: '+', skipped: '-', error: 'x' };
   const lines = result.steps.map((s) => {
     const icon = icons[s.status] || '?';

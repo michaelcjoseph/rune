@@ -55,6 +55,7 @@ src/
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
 │   ├── interview.ts         # Interactive interview phase for review sessions
 │   ├── worldview-drift.ts   # Detect world-view changelog entries affecting active projects
+│   ├── kb-activity.ts       # Scan knowledge/log.md INGEST entries → structured digest for review prep
 │   ├── daily.ts             # Daily review handler
 │   ├── weekly.ts            # Weekly review handler
 │   ├── monthly.ts           # Monthly review handler
@@ -77,10 +78,11 @@ src/
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
-│   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → playbook extract → journal ingest → KB queue → whoop → lint → commit
+│   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → playbook extract → journal ingest → meeting extract → KB queue → whoop → lint → mark processed → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
 │   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
 │   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json
+│   ├── meeting-extract.ts   # Scan today's journal for #meeting blocks → structured Meeting[] via askClaudeOneShot
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)

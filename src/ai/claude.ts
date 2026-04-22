@@ -50,6 +50,16 @@ export function killActiveProcesses(): void {
   }
 }
 
+/** Wait for all active Claude CLI child processes to exit, up to `timeoutMs`.
+ *  Paired with killActiveProcesses(): call this after sending SIGTERM so the
+ *  parent doesn't exit while children are mid-write. */
+export async function waitForActiveProcesses(timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (activeProcesses.size > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   return new Promise((resolve) => {

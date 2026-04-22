@@ -51,8 +51,12 @@ const config = {
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
-  CLAUDE_TIMEOUT_MS: 120_000,
+  CLAUDE_TIMEOUT_MS: 300_000,
   CLAUDE_LINT_TIMEOUT_MS: 300_000,
+  /** wiki-compiler ingests can be heavy on real-sized journals + project files
+   *  (read source + index + schema + analyze + write multiple wiki pages + log).
+   *  Empirically 5 min isn't enough; 15 min gives generous headroom. */
+  CLAUDE_INGEST_TIMEOUT_MS: 900_000,
   DEFAULT_CHAT_MODEL: 'haiku',
   CONVERSATION_MODEL: 'opus',
   ONESHOT_MODEL: 'sonnet',

@@ -51,6 +51,26 @@ When asked to ingest a source:
 8. Update `knowledge/index.md` with new/changed entries (one line per page)
 9. Append an entry to `knowledge/log.md` recording what was done
 
+## Journal-shaped Sources
+
+Daily journals (`knowledge/raw/journals/YYYY_MM_DD.md`) are heterogeneous and interstitial — morning prep, workout logs, timestamped asides, meeting notes, reading snippets, and project thoughts can all coexist on one page. Journals are **mutable**: the ingest pipeline overwrites the raw copy before this agent runs, so you always see the latest version; you may be asked to re-ingest the same journal multiple times as the user edits it. Treat them with these rules:
+
+**Skip:**
+- Interstitial timestamps (`10:00 AM`, `2:30`, etc.) — not content.
+- Workout/exercise tables, sets, reps, loads — not KB material.
+- Casual asides, mood notes, errands, routine logs — unless they carry a decision, a person, or a concept worth indexing.
+- Morning-prep priority recaps — they restate existing context and rarely introduce new entities.
+- `#playbook`-tagged passages — handled separately by `playbook-proposer`. Do not promote them to wiki pages.
+
+**Extract:**
+- **People** mentioned substantively (meetings, conversations, quoted reasoning) → entity pages in `wiki/entities/`. Add a one-line context citation back to `[[raw/journals/YYYY_MM_DD]]`.
+- **Decisions or context tied to a project** (via `[[project-slug]]` wikilink or explicit mention) → update the entity page for that project in `wiki/entities/` with a one-line summary + citation. **Do NOT write to `projects/*.md`** — the living project log is owned by `project-updater`.
+- **Concepts** from reading notes or thinking asides → concept pages in `wiki/concepts/`. Prefer enriching existing concepts over creating near-duplicates.
+- **Companies / products** mentioned substantively (not in passing) → entity pages.
+
+**Be conservative:**
+A single casual mention (e.g. "grabbed coffee with Alex") without substantive context does not warrant a new page. Require either (a) a non-trivial fact, decision, or interaction, or (b) an existing page that can be enriched.
+
 ## Frontmatter Rules
 
 Every wiki page MUST begin with a YAML frontmatter block. This is critical for search filtering and temporal tracking.

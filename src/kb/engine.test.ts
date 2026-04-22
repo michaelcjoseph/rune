@@ -27,9 +27,11 @@ describe('kb/engine', () => {
   beforeEach(() => vi.clearAllMocks());
 
   describe('processIngestionQueue', () => {
+    const ZERO = { created: 0, updated: 0 };
+
     it('returns zeros when queue is empty', async () => {
       queueMock.mockReturnValue([]);
-      expect(await processIngestionQueue()).toEqual({ processed: 0, errors: 0 });
+      expect(await processIngestionQueue()).toEqual({ processed: 0, errors: 0, created: 0, updated: 0 });
       expect(ingestMock).not.toHaveBeenCalled();
     });
 
@@ -38,9 +40,9 @@ describe('kb/engine', () => {
         { source: 'raw/a.md', addedAt: '' },
         { source: 'raw/b.md', addedAt: '', guidance: 'focus on X' },
       ]);
-      ingestMock.mockResolvedValue({ success: true, output: 'ok' });
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
 
-      expect(await processIngestionQueue()).toEqual({ processed: 2, errors: 0 });
+      expect(await processIngestionQueue()).toEqual({ processed: 2, errors: 0, created: 0, updated: 0 });
       expect(ingestMock).toHaveBeenCalledWith('raw/b.md', { guidance: 'focus on X' });
     });
 
@@ -50,10 +52,46 @@ describe('kb/engine', () => {
         { source: 'raw/bad.md', addedAt: '' },
       ]);
       ingestMock
-        .mockResolvedValueOnce({ success: true, output: 'ok' })
-        .mockResolvedValueOnce({ success: false, output: 'failed' });
+        .mockResolvedValueOnce({ success: true, output: 'ok', counts: ZERO })
+        .mockResolvedValueOnce({ success: false, output: 'failed', counts: ZERO });
 
-      expect(await processIngestionQueue()).toEqual({ processed: 1, errors: 1 });
+      expect(await processIngestionQueue()).toEqual({ processed: 1, errors: 1, created: 0, updated: 0 });
+    });
+
+    it('aggregates created and updated counts across queued sources', async () => {
+      queueMock.mockReturnValue([
+        { source: 'raw/a.md', addedAt: '' },
+        { source: 'raw/b.md', addedAt: '' },
+        { source: 'raw/c.md', addedAt: '' },
+      ]);
+      ingestMock
+        .mockResolvedValueOnce({ success: true, output: 'ok', counts: { created: 2, updated: 1 } })
+        .mockResolvedValueOnce({ success: true, output: 'ok', counts: { created: 0, updated: 3 } })
+        .mockResolvedValueOnce({ success: true, output: 'ok', counts: { created: 1, updated: 0 } });
+
+      expect(await processIngestionQueue()).toEqual({
+        processed: 3,
+        errors: 0,
+        created: 3,
+        updated: 4,
+      });
+    });
+
+    it('still includes counts from failed ingests (e.g., boundary violations)', async () => {
+      queueMock.mockReturnValue([
+        { source: 'raw/good.md', addedAt: '' },
+        { source: 'raw/violation.md', addedAt: '' },
+      ]);
+      ingestMock
+        .mockResolvedValueOnce({ success: true, output: 'ok', counts: { created: 2, updated: 0 } })
+        .mockResolvedValueOnce({ success: false, output: 'boundary violation', counts: { created: 1, updated: 0 } });
+
+      expect(await processIngestionQueue()).toEqual({
+        processed: 1,
+        errors: 1,
+        created: 3,
+        updated: 0,
+      });
     });
   });
 

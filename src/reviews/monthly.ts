@@ -2,6 +2,7 @@ import { registerReviewHandler } from './orchestrator.js';
 import { createInterviewHandler, toScannerDate } from './interview.js';
 import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
+import { scanKBActivity, renderKBActivitySection } from './kb-activity.js';
 
 /** Get first and last day of the month containing targetDate */
 export function getMonthRange(targetDate: string): { first: string; last: string } {
@@ -27,6 +28,10 @@ const monthlyConfig: InterviewReviewConfig = {
       { agent: 'journal-scanner', prompt: `start_date: ${toScannerDate(first)}, end_date: ${toScannerDate(last)}, focus_areas: [family, projects, tags, emotions, reading, unresolved, psychology]`, label: 'Journal Scanner Results' },
       { agent: 'system-scanner', prompt: 'systems: [health, study, career, investments, psychology, writing]', label: 'System Scanner Results' },
     ];
+  },
+  extraPrepContext: async (session: ReviewSession) => {
+    const { first, last } = getMonthRange(session.targetDate);
+    return renderKBActivitySection(scanKBActivity(first, last));
   },
   postAgents: 'dynamic',
   psychologyScope: 'pattern_check',

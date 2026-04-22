@@ -3,6 +3,7 @@ import { createInterviewHandler, toScannerDate, detectOutline } from './intervie
 import type { InterviewReviewConfig } from './interview.js';
 import type { ReviewSession } from './session.js';
 import { detectWorldviewDrift, formatDriftFlags } from './worldview-drift.js';
+import { scanKBActivity, renderKBActivitySection } from './kb-activity.js';
 
 // Re-export for tests and backward compatibility
 export { detectOutline };
@@ -36,11 +37,13 @@ const weeklyConfig: InterviewReviewConfig = {
       { agent: 'system-scanner', prompt: 'systems: [health, study, psychology]', label: 'System Scanner Results' },
     ];
   },
-  extraPrepContext: (session: ReviewSession) => {
+  extraPrepContext: async (session: ReviewSession) => {
     const friday = session.targetDate;
     const saturday = getWeekSaturday(friday);
-    const flags = detectWorldviewDrift(toScannerDate(saturday), toScannerDate(friday));
-    return formatDriftFlags(flags);
+    const drift = formatDriftFlags(detectWorldviewDrift(toScannerDate(saturday), toScannerDate(friday)));
+    const kb = await renderKBActivitySection(scanKBActivity(saturday, friday));
+    const sections = [drift, kb].filter((s): s is string => typeof s === 'string');
+    return sections.length > 0 ? sections.join('\n\n') : null;
   },
   postAgents: 'dynamic',
   psychologyScope: 'observation',

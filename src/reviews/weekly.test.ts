@@ -29,6 +29,7 @@ vi.mock('../ai/claude.js', () => ({
 vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
   listVaultFiles: vi.fn(() => []),
+  vaultFileExists: vi.fn(() => false),
 }));
 
 vi.mock('../vault/git.js', () => ({
@@ -179,6 +180,51 @@ describe('reviews/weekly', () => {
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         prepContext: expect.stringContaining('system data'),
       });
+    });
+
+    // 3b. Surfaces KB activity digest in prepContext when log.md has entries in the window
+    it('includes KB activity digest in prepContext when knowledge/log.md has entries in the window', async () => {
+      // targetDate = 2026-04-10 (Friday) → window: 2026-04-04 (Saturday) … 2026-04-10.
+      const session = makeSession();
+      runAgentMock.mockResolvedValue({ text: 'scan', error: null });
+
+      // Controlled fixture: one INGEST entry with a prefixed-wiki page so resolveCategory
+      // classifies by path and resolveDirection can read frontmatter from readVaultFile.
+      readVaultMock.mockImplementation((path: string) => {
+        if (path === 'knowledge/log.md') {
+          return `# Log\n\n[2026-04-08 10:00] [INGEST] Test entry.\n  Sources: [[raw/articles/foo]]\n  Pages touched: [[wiki/entities/alice]]\n`;
+        }
+        if (path === 'knowledge/wiki/entities/alice.md') {
+          return '---\ntype: entity\ncreated: 2026-04-08\nlast-verified: 2026-04-08\n---';
+        }
+        return null;
+      });
+      askClaudeCtxMock.mockResolvedValue({ text: 'Beginning.', error: null });
+
+      await weeklyHandler.start(session, bot);
+
+      expect(updateSessionMock).toHaveBeenCalledWith(100, {
+        prepContext: expect.stringContaining('# KB Activity'),
+      });
+      expect(updateSessionMock).toHaveBeenCalledWith(100, {
+        prepContext: expect.stringContaining('[[wiki/entities/alice]]'),
+      });
+    });
+
+    // 3c. Suppresses the KB activity section when log.md has no entries in the window
+    it('does not include KB activity section when log.md is empty in the window', async () => {
+      const session = makeSession();
+      runAgentMock.mockResolvedValue({ text: 'scan', error: null });
+      readVaultMock.mockReturnValue(null); // log.md missing
+      askClaudeCtxMock.mockResolvedValue({ text: 'Beginning.', error: null });
+
+      await weeklyHandler.start(session, bot);
+
+      // No call with a prepContext that includes "# KB Activity"
+      const kbCalls = updateSessionMock.mock.calls.filter(
+        (call) => typeof call[1]?.prepContext === 'string' && call[1].prepContext.includes('# KB Activity'),
+      );
+      expect(kbCalls).toHaveLength(0);
     });
 
     // 4. Reads SKILL.md from vault, builds system prompt

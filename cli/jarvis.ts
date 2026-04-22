@@ -7,6 +7,7 @@ const COMMANDS: Record<string, string> = {
   lint: 'Run wiki health check',
   status: 'Show KB stats and system state',
   search: 'Search vault and wiki',
+  nightly: 'Run the full nightly pipeline against today\'s journal (commits + pushes at the end)',
   help: 'Show this help text',
 };
 
@@ -77,6 +78,9 @@ async function main(): Promise<void> {
       break;
     case 'search':
       await cmdSearch(args);
+      break;
+    case 'nightly':
+      await cmdNightly();
       break;
   }
 }
@@ -211,6 +215,17 @@ async function cmdSearch(args: string[]): Promise<void> {
   }
   for (const r of results) {
     console.log(`${r.file}:${r.line}  ${r.content.trim()}`);
+  }
+}
+
+async function cmdNightly(): Promise<void> {
+  const { executeNightly, formatSummary } = await import('../src/jobs/nightly.js');
+  console.log('Running nightly pipeline (this may take 5-15 minutes)...\n');
+  const result = await executeNightly();
+  console.log(formatSummary(result));
+  // Exit non-zero if any step errored, so wrappers can detect failures
+  if (result.steps.some((s) => s.status === 'error')) {
+    process.exitCode = 1;
   }
 }
 

@@ -25,9 +25,9 @@ export interface InterviewReviewConfig {
   defaultInstructions: string;
   buildPromptHeader: (session: ReviewSession) => string;
   prepAgents: (session: ReviewSession) => PrepAgentCall[];
-  /** Optional synchronous prep — appended to prepContext after agent results.
-   *  Use for local computations (changelog scans, queue dumps) that don't need an LLM. */
-  extraPrepContext?: (session: ReviewSession) => string | null;
+  /** Optional prep — appended to prepContext after agent results. May be sync (local
+   *  computations like changelog scans) or async (LLM-driven summarizers). */
+  extraPrepContext?: (session: ReviewSession) => string | null | Promise<string | null>;
   postAgents: 'dynamic' | 'psychology-only';
   psychologyScope: string;
 }
@@ -113,7 +113,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         }
       }
 
-      const extra = config.extraPrepContext?.(session);
+      const extra = await config.extraPrepContext?.(session);
       if (extra) prepSections.push(extra);
 
       const prepContext = prepSections.join('\n\n');

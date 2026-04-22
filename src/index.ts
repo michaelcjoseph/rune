@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
-import { markSessionCreated, killActiveProcesses } from './ai/claude.js';
+import { markSessionCreated, killActiveProcesses, waitForActiveProcesses } from './ai/claude.js';
 import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
 import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
@@ -42,6 +42,7 @@ async function shutdown() {
   stopWatcher();
   stopScheduler();
   killActiveProcesses();
+  await waitForActiveProcesses();
   persistSessions();
   persistReviewSessions();
   bot.stopPolling();
