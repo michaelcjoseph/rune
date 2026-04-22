@@ -28,6 +28,7 @@ src/
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
 │   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, KB_QUERY_ENTRY, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
+│   ├── resolver.ts          # Classify free-form TG messages against skill registry via Haiku; returns ClassifyResult {skill, args, confidence, second_skill, second_confidence, ambiguous}
 │   └── commands/
 │       ├── fresh.ts         # /fresh — clear session, git commit
 │       ├── journal.ts       # /journal — append to today's journal
@@ -201,6 +202,8 @@ Optional:
 - `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` — Whoop OAuth credentials
 - `READWISE_TOKEN` — Readwise Reader API
 - `JARVIS_HTTP_SECRET` — shared secret for authenticated HTTP endpoints
+- `RESOLVER_CONFIDENCE_THRESHOLD` — minimum confidence for resolver to dispatch a skill (default `0.7`)
+- `RESOLVER_MIN_WORDS` — minimum word count before resolver runs (default `5`)
 
 `LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored).
 

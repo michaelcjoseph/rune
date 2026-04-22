@@ -48,15 +48,15 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Resolver
 
-- [ ] Create `src/bot/resolver.ts` exporting `classifyIntent(message, registry): { skill, args, confidence }`
-- [ ] Implement single Haiku call with the message + compact registry; structured-output prompt returns JSON
-- [ ] Default confidence threshold: 0.7 (configurable via env)
-- [ ] Add `classifyIntent` thin wrapper in `src/ai/claude.ts`
-- [ ] Wire into `src/bot/handlers/text.ts`: insert between active-session check and freeform fallback. Skip for slash commands, active sessions, messages < 5 words
-- [ ] On every resolver call: append to intent log via `appendIntent()` regardless of routing outcome
-- [ ] On confidence < threshold: fall through to freeform handler
-- [ ] On routed-skill failure: log to intent-log with `outcome: 'failed'`; reply via existing freeform fallback
-- [ ] On ambiguous top-2 within 0.05 confidence: fall through with note "Couldn't tell if you meant /X or /Y"
+- [x] Create `src/bot/resolver.ts` exporting `classifyIntent(message, registry): { skill, args, confidence }`
+- [x] Implement single Haiku call with the message + compact registry; structured-output prompt returns JSON
+- [x] Default confidence threshold: 0.7 (configurable via env)
+- [x] Add `classifyIntent` thin wrapper in `src/ai/claude.ts`
+- [x] Wire into `src/bot/handlers/text.ts`: insert between active-session check and freeform fallback. Skip for slash commands, active sessions, messages < 5 words
+- [x] On every resolver call: append to intent log via `appendIntent()` regardless of routing outcome
+- [x] On confidence < threshold: fall through to freeform handler
+- [x] On routed-skill failure: log to intent-log with `outcome: 'failed'`; reply via existing freeform fallback
+- [x] On ambiguous top-2 within 0.05 confidence: fall through with note "Couldn't tell if you meant /X or /Y"
 
 ### Resolver evals
 

@@ -8,6 +8,7 @@ import { createBot } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
+import { getSkillRegistry } from './bot/skill-registry.js';
 import { createLogger, flushLogger } from './utils/logger.js';
 
 const log = createLogger('main');
@@ -30,6 +31,11 @@ const bot = createBot();
 const server = startHttpServer();
 startScheduler(bot);
 startWatcher(bot);
+
+// Warm the skill-registry cache. startScheduler() above calls
+// reloadSkillRegistry(), which evicts the cache; without priming here the
+// first non-slash TG message pays the fs scan inline.
+getSkillRegistry();
 
 log.info('Jarvis started', {
   vault: config.VAULT_DIR,

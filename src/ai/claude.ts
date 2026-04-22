@@ -146,6 +146,16 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
   return execClaude(args, timeoutMs);
 }
 
+/** Thin Haiku wrapper used by the resolver for structured JSON classification.
+ *  No session, no date context prefix (the classifier prompt is self-contained
+ *  and must not be polluted), short timeout (the resolver runs inline on every
+ *  non-slash TG message — users feel this latency). Callers are responsible
+ *  for parsing the response; this function only spawns the CLI. */
+export async function classifyIntent(prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
+  const args = ['-p', prompt, '--no-session-persistence', '--model', config.CLASSIFIER_MODEL];
+  return execClaude(args, timeoutMs ?? config.CLASSIFIER_TIMEOUT_MS);
+}
+
 export interface AgentDef {
   prompt: string;
   tools: string[];

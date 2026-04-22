@@ -148,11 +148,6 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['what does pg say', 'paul graham on'],
   },
   {
-    name: 'status',
-    description: 'Show uptime and session info.',
-    triggers: ['system status', 'how are you doing'],
-  },
-  {
     name: 'learn',
     description: 'Append a runtime learning that future agents auto-prepend.',
     triggers: ['remember that i prefer', 'note this preference'],

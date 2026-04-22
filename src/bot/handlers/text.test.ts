@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../config.js', () => ({
-  default: { TELEGRAM_USER_ID: 42, VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago' },
+  default: {
+    TELEGRAM_USER_ID: 42,
+    VAULT_DIR: '/test/vault',
+    TIMEZONE: 'America/Chicago',
+    RESOLVER_MIN_WORDS: 5,
+    RESOLVER_CONFIDENCE_THRESHOLD: 0.7,
+    RESOLVER_AMBIGUITY_DELTA: 0.05,
+  },
 }));
 
 vi.mock('../../vault/sessions.js', () => ({
@@ -9,7 +16,22 @@ vi.mock('../../vault/sessions.js', () => ({
   createSession: vi.fn(),
   updateSession: vi.fn(),
 }));
-vi.mock('../../ai/claude.js', () => ({ askClaude: vi.fn(), askClaudeWithContext: vi.fn() }));
+vi.mock('../../ai/claude.js', () => ({
+  askClaude: vi.fn(),
+  askClaudeWithContext: vi.fn(),
+  runAgent: vi.fn(),
+}));
+vi.mock('../resolver.js', () => ({ classifyIntent: vi.fn() }));
+vi.mock('../skill-registry.js', () => ({
+  getSkillRegistry: vi.fn(() => [
+    { name: 'journal', kind: 'slash', description: 'Add to journal.' },
+    { name: 'kb_query', kind: 'intent', description: 'Answer from KB.' },
+    { name: 'weekly', kind: 'slash', description: 'Weekly review.' },
+    { name: 'family', kind: 'slash', description: 'Family mentions.' },
+    { name: 'content-triager', kind: 'agent', description: 'Triage content.' },
+  ]),
+}));
+vi.mock('../../utils/intent-log.js', () => ({ appendIntent: vi.fn() }));
 vi.mock('../../integrations/telegram/client.js', () => ({
   sendLongMessage: vi.fn(),
   startTyping: vi.fn(() => setInterval(() => {}, 99999)),
@@ -29,6 +51,17 @@ vi.mock('../commands/quarterly.js', () => ({ handleQuarterly: vi.fn() }));
 vi.mock('../commands/yearly.js', () => ({ handleYearly: vi.fn() }));
 vi.mock('../commands/learn.js', () => ({ handleLearn: vi.fn() }));
 vi.mock('../commands/learn-list.js', () => ({ handleLearnList: vi.fn() }));
+vi.mock('../commands/family.js', () => ({ handleFamily: vi.fn() }));
+vi.mock('../commands/career.js', () => ({ handleCareer: vi.fn() }));
+vi.mock('../commands/workout.js', () => ({ handleWorkout: vi.fn() }));
+vi.mock('../commands/study.js', () => ({ handleStudy: vi.fn() }));
+vi.mock('../commands/think.js', () => ({ handleThink: vi.fn() }));
+vi.mock('../commands/health.js', () => ({ handleHealth: vi.fn() }));
+vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
+vi.mock('../commands/lenny.js', () => ({ handleLenny: vi.fn() }));
+vi.mock('../commands/pg.js', () => ({ handlePG: vi.fn() }));
+vi.mock('../commands/seed.js', () => ({ handleSeed: vi.fn() }));
+vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
@@ -36,6 +69,10 @@ vi.mock('../../reviews/orchestrator.js', () => ({
   registerReviewHandler: vi.fn(),
 }));
 
+const { classifyIntent: mockClassify } = await import('../resolver.js');
+const { appendIntent } = await import('../../utils/intent-log.js');
+const { runAgent } = await import('../../ai/claude.js');
+const { handleFamily } = await import('../commands/family.js');
 const { handleFresh } = await import('../commands/fresh.js');
 const { handleJournal } = await import('../commands/journal.js');
 const { handleAsk } = await import('../commands/ask.js');
@@ -220,5 +257,205 @@ describe('text handler routing', () => {
     expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolver wiring in text handler', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+
+    // Default session setup so the freeform fallback path is exercisable.
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'x',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+  });
+
+  function classifyResult(overrides: Record<string, unknown> = {}) {
+    return {
+      skill: 'journal',
+      args: '',
+      confidence: 0.9,
+      second_skill: null,
+      second_confidence: 0,
+      ambiguous: false,
+      raw: '',
+      ...overrides,
+    };
+  }
+
+  it('skips the resolver for messages below the word-count threshold', async () => {
+    await handleTextMessage(mockBot(), msg('short msg here'));
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(appendIntent).not.toHaveBeenCalled();
+  });
+
+  it('calls the resolver for messages at or above the word-count threshold', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0 }));
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    expect(mockClassify).toHaveBeenCalled();
+  });
+
+  it('invokes handleJournal when the resolver returns a slash kind with high confidence', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'journal', args: '11am, called dad', confidence: 0.95 }),
+    );
+    await handleTextMessage(mockBot(), msg('add this to my journal: 11am, called dad'));
+    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, '11am, called dad');
+  });
+
+  it('invokes handleKB for the synthetic kb_query intent', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'kb_query', args: 'what do I know about world models', confidence: 0.9 }),
+    );
+    await handleTextMessage(mockBot(), msg('what do I know about world models'));
+    expect(handleKB).toHaveBeenCalledWith(expect.anything(), 100, 'what do I know about world models');
+  });
+
+  it('invokes runAgent when the resolver returns an agent kind', async () => {
+    vi.mocked(runAgent).mockResolvedValue({ text: 'triage output', error: null });
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'content-triager', args: 'some link', confidence: 0.9 }),
+    );
+    await handleTextMessage(mockBot(), msg('classify this content for me please'));
+    expect(runAgent).toHaveBeenCalledWith('content-triager', 'some link');
+  });
+
+  it('falls through to conversation when confidence < threshold', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'journal', confidence: 0.5 }),
+    );
+    await handleTextMessage(mockBot(), msg('this is a five word test'));
+    expect(handleJournal).not.toHaveBeenCalled();
+    expect(askClaudeWithContext).toHaveBeenCalled();
+  });
+
+  it('falls through with disambiguation note when top-2 is ambiguous', async () => {
+    const bot = mockBot();
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({
+        skill: 'journal',
+        second_skill: 'weekly',
+        confidence: 0.72,
+        second_confidence: 0.71,
+        ambiguous: true,
+      }),
+    );
+    await handleTextMessage(bot, msg('this could go either way honestly'));
+    expect(handleJournal).not.toHaveBeenCalled();
+    const notice = bot.sendMessage.mock.calls[0][1] as string;
+    expect(notice).toContain('/journal');
+    expect(notice).toContain('/weekly');
+    expect(askClaudeWithContext).toHaveBeenCalled();
+  });
+
+  it('appends an intent log entry on every resolver call — outcome routed', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0.95 }));
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    expect(appendIntent).toHaveBeenCalledTimes(1);
+    const entry = vi.mocked(appendIntent).mock.calls[0]![0];
+    expect(entry.outcome).toBe('routed');
+    expect(entry.skill_invoked).toBe('journal');
+    expect(entry.confidence).toBe(0.95);
+  });
+
+  it('appends outcome=low_confidence when classification is below threshold', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0.3 }));
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    expect(appendIntent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(appendIntent).mock.calls[0]![0].outcome).toBe('low_confidence');
+    expect(vi.mocked(appendIntent).mock.calls[0]![0].skill_invoked).toBeNull();
+  });
+
+  it('appends outcome=ambiguous when top-2 is within delta', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({
+        skill: 'journal',
+        second_skill: 'weekly',
+        confidence: 0.72,
+        second_confidence: 0.71,
+        ambiguous: true,
+      }),
+    );
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    expect(vi.mocked(appendIntent).mock.calls[0]![0].outcome).toBe('ambiguous');
+    expect(vi.mocked(appendIntent).mock.calls[0]![0].skill_invoked).toBeNull();
+  });
+
+  it('appends outcome=failed when the routed skill throws', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'family', confidence: 0.9 }),
+    );
+    vi.mocked(handleFamily).mockRejectedValueOnce(new Error('boom'));
+    await handleTextMessage(mockBot(), msg('what did I note about family'));
+    const entry = vi.mocked(appendIntent).mock.calls[0]![0];
+    expect(entry.outcome).toBe('failed');
+    expect(entry.skill_invoked).toBe('family');
+    // Still falls through to conversation so user is not silent-failed.
+    expect(askClaudeWithContext).toHaveBeenCalled();
+  });
+
+  it('does NOT call the resolver when an active review is in progress', async () => {
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(true);
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(appendIntent).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call the resolver for slash commands', async () => {
+    await handleTextMessage(mockBot(), msg('/weekly 2025-W10'));
+    expect(mockClassify).not.toHaveBeenCalled();
+  });
+
+  it('logs failed outcome when the resolver picks a skill not in the registry', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'ghost-skill', confidence: 0.9 }),
+    );
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    const entry = vi.mocked(appendIntent).mock.calls[0]![0];
+    expect(entry.outcome).toBe('failed');
+    expect(entry.skill_invoked).toBe('ghost-skill');
+  });
+
+  it('uses the description (not a fake slash name) in the ambiguity notice for intent kinds', async () => {
+    const bot = mockBot();
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({
+        skill: 'kb_query',
+        second_skill: 'journal',
+        confidence: 0.72,
+        second_confidence: 0.70,
+        ambiguous: true,
+      }),
+    );
+    await handleTextMessage(bot, msg('one two three four five six'));
+    const notice = bot.sendMessage.mock.calls[0][1] as string;
+    // kb_query is an intent, not a slash — never show "/kb_query" to the user.
+    expect(notice).not.toContain('/kb_query');
+    expect(notice).toContain('Answer from KB.');
+    expect(notice).toContain('/journal');
+  });
+
+  it('falls through cleanly when classifyIntent itself throws', async () => {
+    vi.mocked(mockClassify).mockRejectedValue(new Error('classifier exploded'));
+    await handleTextMessage(mockBot(), msg('one two three four five'));
+    // Outer try/catch in tryResolveAndDispatch must swallow the throw and
+    // allow the freeform fallback to run; the Telegram polling loop must not
+    // see an uncaught rejection.
+    expect(askClaudeWithContext).toHaveBeenCalled();
+    // No intent-log entry is emitted when the classifier throws before we
+    // know the outcome — the log only captures completed classifications.
+    expect(appendIntent).not.toHaveBeenCalled();
   });
 });

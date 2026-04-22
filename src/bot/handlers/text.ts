@@ -1,7 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import config from '../../config.js';
 import { getSession, createSession, updateSession, setSessionModel } from '../../vault/sessions.js';
-import { askClaudeWithContext } from '../../ai/claude.js';
+import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -36,6 +36,9 @@ import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
 import { WHOOP_REDIRECT_URI } from '../../server/http.js';
 import { getStoredTokens } from '../../integrations/whoop/keychain.js';
+import { classifyIntent, type ClassifyResult } from '../resolver.js';
+import { getSkillRegistry, type SkillEntry } from '../skill-registry.js';
+import { appendIntent, type IntentOutcome } from '../../utils/intent-log.js';
 
 export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
   // Security gate
@@ -84,8 +87,153 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   // Active review session takes priority over default conversation
   if (hasActiveReview(chatId)) return handleReviewMessage(chatId, text, bot);
 
+  // Resolver: classify free-form messages against the skill registry. Skipped
+  // for short messages (rarely encode a routable intent) to save the Haiku
+  // call. Slash commands already short-circuited above; active-session above.
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  if (wordCount >= config.RESOLVER_MIN_WORDS) {
+    const routed = await tryResolveAndDispatch(bot, chatId, text);
+    if (routed) return;
+    // Fall through — the resolver already logged the intent-log entry.
+  }
+
   // Default: multi-turn conversation
   return handleConversation(bot, chatId, text);
+}
+
+/** Run the resolver and, if confidence ≥ threshold and the top-2 aren't
+ *  ambiguous, invoke the routed skill. Always appends one entry to the
+ *  intent log when the classifier runs. Returns true if a skill was invoked
+ *  (caller should stop); false if the caller should fall through to the
+ *  freeform handler. Any thrown error — including from getSkillRegistry or
+ *  classifyIntent itself — is caught and treated as "not routed" so the
+ *  Telegram polling handler never sees an uncaught rejection. */
+async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: string): Promise<boolean> {
+  try {
+    const registry = getSkillRegistry();
+    const result = await classifyIntent(text, registry);
+
+    // Low confidence — fall through without invoking a skill.
+    if (result.skill === null || result.confidence < config.RESOLVER_CONFIDENCE_THRESHOLD) {
+      logIntent(text, result, 'low_confidence', null);
+      return false;
+    }
+
+    // Top-2 within delta — ambiguous, note and fall through.
+    if (result.ambiguous) {
+      const primaryLabel = labelForSkill(registry, result.skill);
+      const secondaryLabel = labelForSkill(registry, result.second_skill!);
+      await bot.sendMessage(
+        chatId,
+        `Couldn't tell if you meant ${primaryLabel} or ${secondaryLabel}. Falling back to chat.`,
+      );
+      logIntent(text, result, 'ambiguous', null);
+      return false;
+    }
+
+    const entry = registry.find(s => s.name === result.skill);
+    if (!entry) {
+      log.warn('Resolver chose a skill not in registry', { skill: result.skill });
+      logIntent(text, result, 'failed', result.skill);
+      return false;
+    }
+
+    try {
+      await invokeSkill(bot, chatId, text, entry, result.args);
+      logIntent(text, result, 'routed', entry.name);
+      return true;
+    } catch (err) {
+      log.error('Routed skill threw', { skill: entry.name, error: (err as Error).message });
+      logIntent(text, result, 'failed', entry.name);
+      return false;
+    }
+  } catch (err) {
+    log.error('Resolver path threw before routing could be attempted', {
+      error: (err as Error).message,
+    });
+    return false;
+  }
+}
+
+/** Produce a user-facing label for a skill in the ambiguity notice. Slash/agent
+ *  entries use `/name` (the user recognizes these as commands); intent-kind
+ *  entries have no matching slash command, so the description is shown
+ *  instead. Falls back to the raw name if the entry is missing. */
+function labelForSkill(registry: SkillEntry[], name: string): string {
+  const entry = registry.find(s => s.name === name);
+  if (!entry) return `/${name}`;
+  if (entry.kind === 'intent') return entry.description;
+  return `/${name}`;
+}
+
+function logIntent(
+  text: string,
+  result: ClassifyResult,
+  outcome: IntentOutcome,
+  skill_invoked: string | null,
+): void {
+  appendIntent({
+    ts: new Date().toISOString(),
+    intent: text,
+    args: result.args,
+    confidence: result.confidence,
+    outcome,
+    skill_invoked,
+  });
+}
+
+/** Dispatch a routed skill to its underlying handler. Kept as a switch rather
+ *  than a map because slash-command handler signatures vary (some take args,
+ *  some don't) — one place to edit when commands change. */
+async function invokeSkill(
+  bot: TelegramBot,
+  chatId: number,
+  message: string,
+  skill: SkillEntry,
+  args: string,
+): Promise<void> {
+  if (skill.kind === 'intent' && skill.name === 'kb_query') {
+    return handleKB(bot, chatId, args || message);
+  }
+  if (skill.kind === 'agent') {
+    const result = await runAgent(skill.name, args || message);
+    if (result.error || !result.text) {
+      throw new Error(result.error ?? 'Agent returned empty output');
+    }
+    await sendLongMessage(bot, chatId, result.text);
+    return;
+  }
+  // Slash-kind dispatch. Mirrors the prefix chain at the top of
+  // handleTextMessage. Only commands that make sense as resolver routes are
+  // listed — model-switch (/opus, /sonnet, /haiku), auth (/whoop, /start),
+  // and admin (/status, /lint, /seed) commands are intentionally omitted.
+  switch (skill.name) {
+    case 'journal': return handleJournal(bot, chatId, args);
+    case 'ask': return handleAsk(bot, chatId, args || message);
+    case 'kb': return handleKB(bot, chatId, args || message);
+    case 'ingest': return handleIngest(bot, chatId, args);
+    case 'priorities': return handlePriorities(bot, chatId);
+    case 'workout': return handleWorkout(bot, chatId);
+    case 'study': return handleStudy(bot, chatId);
+    case 'family': return handleFamily(bot, chatId);
+    case 'career': return handleCareer(bot, chatId);
+    case 'prep': return handlePrep(bot, chatId);
+    case 'daily': return handleDaily(bot, chatId, args);
+    case 'weekly': return handleWeekly(bot, chatId, args);
+    case 'monthly': return handleMonthly(bot, chatId, args);
+    case 'quarterly': return handleQuarterly(bot, chatId, args);
+    case 'yearly': return handleYearly(bot, chatId, args);
+    case 'think': return handleThink(bot, chatId, args);
+    case 'health': return handleHealth(bot, chatId, args);
+    case 'blog': return handleBlog(bot, chatId, args);
+    case 'lenny': return handleLenny(bot, chatId, args || message);
+    case 'pg': return handlePG(bot, chatId, args || message);
+    case 'learn': return handleLearn(bot, chatId, args || message);
+    case 'learn-list': return handleLearnList(bot, chatId);
+    case 'fresh': return handleFresh(bot, chatId);
+    default:
+      throw new Error(`No dispatcher for slash skill: ${skill.name}`);
+  }
 }
 
 const VAULT_SYSTEM_PROMPT = `You are Jarvis, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.

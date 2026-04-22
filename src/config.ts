@@ -8,6 +8,24 @@ function required(name: string): string {
   return val.startsWith('~/') ? join(homedir(), val.slice(2)) : val;
 }
 
+/** Parse an optional numeric env var with a safe fallback. A missing or
+ *  malformed value (NaN, infinite, out of range) falls back to `fallback`
+ *  rather than propagating as NaN, which would silently invert guard checks
+ *  (e.g. `x < NaN` is always false). */
+function parseNumericEnv(
+  name: string,
+  fallback: number,
+  opts: { min?: number; max?: number; integer?: boolean } = {},
+): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (opts.min !== undefined && parsed < opts.min) return fallback;
+  if (opts.max !== undefined && parsed > opts.max) return fallback;
+  return opts.integer ? Math.floor(parsed) : parsed;
+}
+
 export const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const config = {
@@ -57,10 +75,28 @@ const config = {
    *  (read source + index + schema + analyze + write multiple wiki pages + log).
    *  Empirically 5 min isn't enough; 15 min gives generous headroom. */
   CLAUDE_INGEST_TIMEOUT_MS: 900_000,
+  /** Short timeout for the resolver's inline classify call — users feel this
+   *  latency on every non-slash TG message. If Haiku hasn't returned in 20s,
+   *  we fall through to the existing freeform handler. */
+  CLASSIFIER_TIMEOUT_MS: 20_000,
   DEFAULT_CHAT_MODEL: 'haiku',
   CONVERSATION_MODEL: 'opus',
   ONESHOT_MODEL: 'sonnet',
   AGENT_MODEL: 'opus',
+  CLASSIFIER_MODEL: 'haiku',
+
+  /** Resolver routes to a skill when confidence ≥ this threshold; otherwise
+   *  falls through to the freeform conversation handler. Falls back to the
+   *  default when the env var parses to NaN or lands outside [0, 1], so a bad
+   *  config doesn't silently disable the confidence gate. */
+  RESOLVER_CONFIDENCE_THRESHOLD: parseNumericEnv('RESOLVER_CONFIDENCE_THRESHOLD', 0.7, { min: 0, max: 1 }),
+  /** If top-1 and top-2 are within this delta, the resolver treats the call
+   *  as ambiguous and falls through. */
+  RESOLVER_AMBIGUITY_DELTA: 0.05,
+  /** Resolver is skipped for messages with fewer than this many words —
+   *  short messages rarely encode a routable intent and aren't worth the
+   *  Haiku call. */
+  RESOLVER_MIN_WORDS: parseNumericEnv('RESOLVER_MIN_WORDS', 5, { min: 0, integer: true }),
   TG_MAX_MESSAGE_LENGTH: 4096,
   TIMEZONE: 'America/Chicago',
 } as const;
