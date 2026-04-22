@@ -60,9 +60,9 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Resolver evals
 
-- [ ] Create `evals/resolver.yaml` with the carried-forward KB-shaped/non-KB matrix as direct fixtures (8 entries)
-- [ ] Add additional fixtures covering routing to other skills (journal append, /family, /weekly, etc.)
-- [ ] Assert: classified skill matches expected, confidence ≥ threshold for clear cases
+- [x] Create `evals/resolver.yaml` with the carried-forward KB-shaped/non-KB matrix as direct fixtures (8 entries)
+- [x] Add additional fixtures covering routing to other skills (journal append, /family, /weekly, etc.)
+- [x] Assert: classified skill matches expected, confidence ≥ threshold for clear cases
 
 ### Ask-Twice scan job (#2 part 2)
 

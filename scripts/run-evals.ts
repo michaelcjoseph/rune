@@ -4,7 +4,9 @@ import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { PROJECT_ROOT } from '../src/config.js';
-import { runAgent } from '../src/ai/claude.js';
+import { runAgent, killActiveProcesses } from '../src/ai/claude.js';
+import { classifyIntent } from '../src/bot/resolver.js';
+import { getSkillRegistry } from '../src/bot/skill-registry.js';
 
 export type AssertionType =
   | 'substring'
@@ -166,7 +168,7 @@ export function validateEvalFile(
   return { ok: true, file: obj as unknown as EvalFile };
 }
 
-interface FixtureReport {
+export interface FixtureReport {
   fixture: string;
   passed: boolean;
   elapsedMs: number;
@@ -190,10 +192,43 @@ interface RunReport {
   skipped: FileSkip[];
 }
 
-async function runFixture(
+export async function runFixture(
   agent: string,
   fixture: Fixture,
 ): Promise<FixtureReport> {
+  // The resolver is a module, not an agent file — it cannot be invoked via
+  // runAgent. Special-case the name: call the real classifyIntent pipeline
+  // with the live skill registry and serialize the routing-ready fields as
+  // JSON. `raw` is dropped so the eval output is stable across runs.
+  if (agent === 'resolver') {
+    const rStart = Date.now();
+    try {
+      const result = await classifyIntent(fixture.input, getSkillRegistry());
+      const output = JSON.stringify({
+        skill: result.skill,
+        args: result.args,
+        confidence: result.confidence,
+        second_skill: result.second_skill,
+        second_confidence: result.second_confidence,
+        ambiguous: result.ambiguous,
+      });
+      const results = fixture.assertions.map((a) => runAssertion(a, output));
+      return {
+        fixture: fixture.name,
+        passed: results.every((r) => r.passed),
+        elapsedMs: Date.now() - rStart,
+        assertions: results,
+      };
+    } catch (err) {
+      return {
+        fixture: fixture.name,
+        passed: false,
+        elapsedMs: Date.now() - rStart,
+        assertions: [],
+        agentError: (err as Error).message,
+      };
+    }
+  }
   const start = Date.now();
   const result = await runAgent(agent, fixture.input, fixture.timeout_ms);
   const elapsedMs = Date.now() - start;
@@ -386,6 +421,13 @@ const invokedDirectly =
   process.argv[1] !== undefined &&
   fileURLToPath(import.meta.url) === process.argv[1];
 if (invokedDirectly) {
+  // Ctrl-C should reap any in-flight Claude CLI child — otherwise a resolver
+  // fixture's 20-second Haiku call can be orphaned briefly. Mirrors the
+  // shutdown pattern in src/index.ts.
+  process.on('SIGINT', () => {
+    killActiveProcesses();
+    process.exit(130);
+  });
   main().catch((err) => {
     console.error('Runner crashed:', err);
     process.exit(1);

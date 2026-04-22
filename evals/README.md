@@ -35,6 +35,32 @@ File name must match the agent name (e.g. `wiki-compiler.yaml` ↔ agent
 `wiki-compiler`). The runner uses the filename stem as the `runAgent()`
 argument.
 
+### Special case: `resolver.yaml`
+
+The resolver is a module (`src/bot/resolver.ts`), not a markdown agent, so
+`runAgent()` cannot invoke it. The runner special-cases the filename stem
+`resolver`: when it sees it, the fixture's `input` is passed to the real
+`classifyIntent(input, getSkillRegistry())` pipeline, and the routing-ready
+`ClassifyResult` fields are serialized as JSON. Assertions then run against
+that JSON string. The serialized shape is:
+
+```json
+{"skill":"...","args":"...","confidence":0.0,"second_skill":"...","second_confidence":0.0,"ambiguous":false}
+```
+
+The `raw` classifier text is dropped so eval output is stable. No other
+filenames get this treatment.
+
+Caveats specific to the resolver special-case:
+- **`timeout_ms` has no effect.** The classifier timeout is always
+  `CLASSIFIER_TIMEOUT_MS` from `src/config.ts`. Per-fixture overrides in
+  the YAML are silently ignored on this path.
+- **Do not create `.claude/agents/resolver.md`.** The runner's
+  filename-stem check would silently shadow the real agent; the agent
+  would still work in production via `loadAgentDef`, but
+  `npm run evals -- resolver` would keep exercising the module path
+  instead of the agent.
+
 ## YAML schema
 
 ```yaml

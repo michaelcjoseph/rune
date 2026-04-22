@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock src/config.js before any import that transitively pulls it in.
 // The module path is relative to the scripts/ directory one level up.
@@ -29,6 +29,11 @@ vi.mock('../src/config.js', () => ({
     WHOOP_CLIENT_ID: '',
     WHOOP_CLIENT_SECRET: '',
     JARVIS_HTTP_SECRET: '',
+    CLASSIFIER_MODEL: 'haiku',
+    CLASSIFIER_TIMEOUT_MS: 20_000,
+    RESOLVER_CONFIDENCE_THRESHOLD: 0.7,
+    RESOLVER_AMBIGUITY_DELTA: 0.05,
+    RESOLVER_MIN_WORDS: 5,
   },
   PROJECT_ROOT: '/tmp/project',
 }));
@@ -36,9 +41,25 @@ vi.mock('../src/config.js', () => ({
 // Mock src/ai/claude.js to prevent spawn side effects and claude binary resolution.
 vi.mock('../src/ai/claude.js', () => ({
   runAgent: vi.fn(),
+  killActiveProcesses: vi.fn(),
 }));
 
-const { runAssertion, validateEvalFile, parseCliArgs } = await import('./run-evals.js');
+// Mock the resolver pipeline so the runner's resolver-branch tests don't spawn
+// a real Haiku call. skill-registry is also mocked to avoid filesystem scans.
+vi.mock('../src/bot/resolver.js', () => ({
+  classifyIntent: vi.fn(),
+}));
+
+vi.mock('../src/bot/skill-registry.js', () => ({
+  getSkillRegistry: vi.fn(() => [
+    { name: 'journal', kind: 'slash', description: 'Add to journal.' },
+    { name: 'kb_query', kind: 'intent', description: 'Answer from KB.' },
+  ]),
+}));
+
+const { runAssertion, validateEvalFile, parseCliArgs, runFixture } = await import('./run-evals.js');
+const { runAgent } = await import('../src/ai/claude.js');
+const { classifyIntent } = await import('../src/bot/resolver.js');
 
 // ---------------------------------------------------------------------------
 // runAssertion — substring
@@ -410,5 +431,88 @@ describe('parseCliArgs', () => {
     const args = parseCliArgs(['-v']);
     expect(args.agentFilter).toBeNull();
     expect(args.unknown).toEqual(['-v']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runFixture — resolver special-case branch
+// ---------------------------------------------------------------------------
+describe('runFixture: resolver branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('routes agent=resolver through classifyIntent, not runAgent', async () => {
+    vi.mocked(classifyIntent).mockResolvedValue({
+      skill: 'kb_query',
+      args: '',
+      confidence: 0.9,
+      second_skill: null,
+      second_confidence: 0,
+      ambiguous: false,
+      raw: '{"skill":"kb_query"}',
+    });
+
+    const report = await runFixture('resolver', {
+      name: 'kb lookup',
+      input: 'what do I know about X',
+      assertions: [{ type: 'substring', value: '"skill":"kb_query"' }],
+    });
+
+    expect(classifyIntent).toHaveBeenCalledTimes(1);
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(report.passed).toBe(true);
+  });
+
+  it('serializes the ClassifyResult as JSON (omitting raw) for assertions', async () => {
+    vi.mocked(classifyIntent).mockResolvedValue({
+      skill: 'journal',
+      args: 'note this',
+      confidence: 0.85,
+      second_skill: null,
+      second_confidence: 0,
+      ambiguous: false,
+      raw: 'should not appear in output',
+    });
+
+    const report = await runFixture('resolver', {
+      name: 'journal',
+      input: 'add this to my journal please',
+      assertions: [
+        { type: 'json_shape', required_keys: ['skill', 'args', 'confidence', 'second_skill'] },
+        { type: 'substring', value: '"skill":"journal"' },
+      ],
+    });
+
+    expect(report.passed).toBe(true);
+    expect(report.assertions).toHaveLength(2);
+    expect(report.assertions.every((a) => a.passed)).toBe(true);
+  });
+
+  it('reports agentError when classifyIntent throws', async () => {
+    vi.mocked(classifyIntent).mockRejectedValue(new Error('classifier exploded'));
+
+    const report = await runFixture('resolver', {
+      name: 'crash',
+      input: 'anything at all here',
+      assertions: [{ type: 'substring', value: 'anything' }],
+    });
+
+    expect(report.passed).toBe(false);
+    expect(report.agentError).toBe('classifier exploded');
+    expect(report.assertions).toHaveLength(0);
+  });
+
+  it('does not invoke the resolver branch for non-resolver agents', async () => {
+    vi.mocked(runAgent).mockResolvedValue({ text: 'agent output', error: null });
+
+    await runFixture('wiki-compiler', {
+      name: 'normal agent',
+      input: 'ingest this',
+      assertions: [{ type: 'substring', value: 'agent output' }],
+    });
+
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(classifyIntent).not.toHaveBeenCalled();
   });
 });

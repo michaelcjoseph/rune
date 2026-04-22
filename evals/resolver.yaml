@@ -1,0 +1,118 @@
+agent: resolver
+# The resolver is a module, not a markdown agent — the run-evals.ts runner
+# special-cases this filename and invokes `classifyIntent(input, getSkillRegistry())`
+# from src/bot/resolver.ts directly. The "output" that assertions run against
+# is `JSON.stringify({skill, args, confidence, second_skill, second_confidence,
+# ambiguous})` — the ClassifyResult minus the raw classifier text.
+fixtures:
+  # ── KB-shaped matrix (verbatim from docs/projects/03-resolver/spec.md) ────
+  # Positive: these should classify as kb_query with high confidence.
+
+  - name: "matrix: VC quote lookup → kb_query"
+    input: "What did Fred Wilson say about glp-1?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"kb_query"'
+      - type: regex
+        pattern: '"confidence":0\.[7-9]|"confidence":1(\.0+)?'
+
+  - name: "matrix: self-knowledge query → kb_query"
+    input: "What do I know about world models?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"kb_query"'
+      - type: regex
+        pattern: '"confidence":0\.[7-9]|"confidence":1(\.0+)?'
+
+  - name: "matrix: public-figure fact → kb_query"
+    input: "Who runs Stripe these days?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"kb_query"'
+      - type: regex
+        pattern: '"confidence":0\.[7-9]|"confidence":1(\.0+)?'
+
+  - name: "matrix: past-decision recall → kb_query"
+    input: "Remind me what we decided about pricing last sprint?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"kb_query"'
+      - type: regex
+        pattern: '"confidence":0\.[7-9]|"confidence":1(\.0+)?'
+
+  # Negative: these are NOT KB-shaped. Either they route somewhere else
+  # (journal) or they fall through entirely (confidence < threshold). The
+  # regex pattern below asserts the *routing outcome*, not the classifier's
+  # opinion — a kb_query nomination with confidence < 0.7 would fall through
+  # to freeform in production, which is the same routing outcome we want
+  # here. If future drift requires asserting "classifier never even
+  # nominates kb_query", drop the confidence branch from the pattern.
+
+  - name: "matrix: factual non-vault query → not kb_query"
+    input: "What time is sunset tonight in Chicago?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      # Must not claim this is a KB lookup. Either skill is something else
+      # or confidence is low enough to fall through.
+      - type: regex
+        pattern: '"skill":(?!"kb_query")|"confidence":0\.[0-6]'
+
+  - name: "matrix: journal directive → journal"
+    input: "Add this to my journal: watched a long documentary this evening."
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"journal"'
+
+  - name: "matrix: casual small talk → not kb_query"
+    input: "Hey, how are you doing today?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: regex
+        pattern: '"skill":(?!"kb_query")|"confidence":0\.[0-6]'
+
+  # ── Additional routing fixtures (beyond the carried-forward matrix) ──────
+  # Each exercises a different slash command path through the registry.
+
+  - name: "route: family mentions → family"
+    input: "What did I note about my family over the last couple of weeks?"
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"family"'
+
+  - name: "route: weekly review request → weekly"
+    input: "Let's do the weekly review for this past week."
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"weekly"'
+
+  - name: "route: save-a-learning directive → learn"
+    input: "Please remember that I prefer terse answers with no recap."
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"learn"'
+
+  - name: "route: reset-session intent → fresh"
+    input: "Let's start fresh and reset this whole session please."
+    assertions:
+      - type: json_shape
+        required_keys: ["skill", "args", "confidence", "second_skill"]
+      - type: substring
+        value: '"skill":"fresh"'
