@@ -10,7 +10,11 @@ Pick the next pending task from a project's task list and drive it through the f
 
 If no argument is given, list all projects in `docs/projects/` and ask the user which one to work on.
 
-**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), and step 17 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 17 empty list) still terminate the run — those are error/completion exits, not checkpoints.
+**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), step 17 creates one git commit per completed task (using the release-notes agent to draft the message) without pausing for approval, and step 18 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 17 commit still failing after one retry, step 18 empty list) still terminate the run — those are error/completion exits, not checkpoints.
+
+Because `--auto` commits everything in the working tree at the end of each task, start from a clean working tree (no unrelated uncommitted changes). If `git status` is dirty at step 2 in `--auto` mode, stop and report to the user instead of sweeping those changes into a task commit.
+
+**No discretionary pauses in `--auto`.** The hard stops listed above are the *only* valid reasons to stop or ask the user something mid-run. Do not invent additional checkpoints — do not pause to offer a commit, confirm direction, summarize progress, checkpoint a subsystem boundary, or ask whether to proceed between tasks. If a general instruction elsewhere (e.g., "only commit when the user asks" or "confirm risky actions") seems to conflict with `--auto`, resolve it by *not performing the action*, not by pausing. The user authorized an unattended sweep by passing `--auto`; interrupting that sweep for any reason outside the hard-stop list violates the contract.
 
 ## Instructions
 
@@ -29,8 +33,8 @@ Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`)
 
 - If no unchecked tasks remain, tell the user all tasks are complete and stop.
 - Announce which task you're picking up.
-- **Without `--auto`**: confirm with the user before proceeding.
-- **With `--auto`**: proceed immediately.
+- **With `--auto`**: run `git status --porcelain` first. If the working tree is not clean, stop and report the dirty files to the user — do not proceed, because step 17 would otherwise sweep those unrelated changes into the task commit. Then proceed immediately.
+- **Without `--auto`**: confirm with the user before proceeding. A dirty working tree is fine here since the user commits manually.
 
 ---
 
@@ -44,8 +48,7 @@ Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`)
 
 ### 4. Explore and Research
 
-Read the project spec and reference materials. Use Read, Glob, Grep, and the
-Explore agent to understand the codebase before designing the approach.
+Read the project spec and reference materials. Use Read, Glob, Grep, and the Explore agent to understand the codebase before designing the approach.
 
 **Always read:**
 
@@ -58,18 +61,11 @@ Explore agent to understand the codebase before designing the approach.
 - Find existing files that will need changes
 - Understand current patterns in the relevant modules
 - Identify any dependencies or constraints
-
-**Jarvis-specific patterns to check:**
-
-- If the task touches AI operations, read `src/ai/claude.ts` for the spawning pattern
-- If the task adds a new command, read `src/bot/handlers/text.ts` for routing pattern and an existing command in `src/bot/commands/` for structure
-- If the task adds a cron job, read existing jobs in `src/jobs/` for the pattern
-- If the task touches vault files, read `src/vault/files.ts` for the file operation API
-- If the task adds an agent, read an existing agent in `.claude/agents/` for frontmatter and prompt conventions
+- If `CLAUDE.md` points to specific reference files for the kind of change you're making (e.g., "to add a new X, read Y for the pattern"), read those
 
 ### 5. Write the Plan
 
-Write the implementation plan to the plan file. The plan should include:
+Write the implementation plan. The plan should include:
 
 - **Approach**: what you're going to do and why (mention alternatives considered if relevant)
 - **Files to change**: list of existing files to modify and any new files needed
@@ -88,8 +84,7 @@ Write the implementation plan to the plan file. The plan should include:
 
 ### 7. Create Execution Tasks
 
-After the user approves the plan, create `TaskCreate` items for each sub-task from
-the plan:
+After the user approves the plan, create `TaskCreate` items for each sub-task from the plan:
 
 - Use clear descriptions and `activeForm` labels
 - Set up `blockedBy` dependencies where sub-tasks must be sequential
@@ -103,8 +98,7 @@ Work through the sub-tasks in order:
 - Follow all conventions in `CLAUDE.md`
 - Keep changes minimal and focused on the task
 
-After implementation is complete, stage all changes but do NOT commit yet.
-This ensures review agents can see the full diff via `git diff HEAD`.
+After implementation is complete, stage all changes but do NOT commit yet. This ensures review agents can see the full diff via `git diff HEAD`.
 
 ### 9. Test — Round 1
 
@@ -113,9 +107,9 @@ Use the `Agent` tool with `subagent_type: "test-specialist"` to write and run te
 ```
 Write tests for the changes just implemented for the [task name] task
 in project [project]. The following files were changed: [list changed files].
-If test infrastructure (vitest) is not yet configured, set it up first.
-Run all tests and fix any failures. Focus on the test scenarios from the
-test plan that relate to this task.
+If test infrastructure is not yet configured, set it up using the project's
+idiomatic framework. Run all tests and fix any failures. Focus on the test
+scenarios from the test plan that relate to this task.
 ```
 
 Wait for the agent to finish and confirm all tests pass before proceeding.
@@ -130,8 +124,8 @@ Use the `Agent` tool with `subagent_type: "code-reviewer"`:
 
 ```
 Review the changes made for the [task name] task. The following files were
-changed: [list changed files]. Check for bugs, security issues, TypeScript
-strict mode violations, and jarvis convention violations per CLAUDE.md.
+changed: [list changed files]. Check for bugs, security issues, type-safety
+violations, and project convention violations per CLAUDE.md.
 ```
 
 **Always run security-auditor** (every change needs security & exposure review):
@@ -140,23 +134,21 @@ Use the `Agent` tool with `subagent_type: "security-auditor"`:
 
 ```
 Audit the changes made for the [task name] task. The following files were
-changed: [list changed files]. Check for: hardcoded secrets, personal info
-exposure, vault content leaks, path traversal risks, unsanitized input in
-shell commands, and anything unsafe for the public GitHub remote.
+changed: [list changed files]. Check for hardcoded secrets, personal-info
+exposure, sensitive content leaks, path traversal risks, unsanitized input
+in shell commands, and anything unsafe to commit to the remote.
 ```
 
 **Run architecture-reviewer when applicable:**
 
-Use the `Agent` tool with `subagent_type: "architecture-reviewer"` **if** the task involves new modules, changes to `src/ai/claude.ts`, changes to session management, new cron jobs, changes to `src/index.ts` startup/shutdown, new agent definitions, or changes to vault file operation patterns.
-
-**Architecture reviewer is always run for Phase 4+ tasks** (scheduler, reviews, vault commands, nightly automation) since these phases wire new subsystems into the main process.
+Use the `Agent` tool with `subagent_type: "architecture-reviewer"` **if** the task involves new modules, changes to centralized wrappers (config, logger, external-CLI/process spawning, I/O helpers), new background/scheduled work, changes to process startup/shutdown, new agent definitions, or changes that cross module boundaries.
 
 ```
 Review the changes made for the [task name] task. The following files were
-changed: [list changed files]. Check for: vault boundary violations,
-Claude CLI spawning patterns, session management correctness, cron job
-safety, module boundary violations, graceful shutdown gaps, and
-single-process resource concerns.
+changed: [list changed files]. Check for module boundary violations,
+resource lifecycle issues, centralization violations, graceful shutdown
+gaps, concurrency hazards, and any project-specific architectural rules
+in CLAUDE.md.
 ```
 
 If a reviewer is not applicable, skip it and note "N/A — no relevant changes" in the completion summary.
@@ -171,9 +163,7 @@ Collect findings from all reviewers. Address issues in priority order:
 
 If no issues were found, skip to step 12.
 
-If any reviewer returns a BLOCK verdict, or fixing issues requires fundamentally
-changing the approach, stop and report to the user with blocking findings and
-a proposed alternative. Do NOT proceed until the user confirms.
+If any reviewer returns a BLOCK verdict, or fixing issues requires fundamentally changing the approach, stop and report to the user with blocking findings and a proposed alternative. Do NOT proceed until the user confirms.
 
 ### 12. Test — Round 2
 
@@ -187,8 +177,7 @@ Fix any failures.
 
 Skip this step if no code changes were made in step 11.
 
-If tests fail after two fix attempts, stop and report the failures to the
-user. Do not loop indefinitely.
+If tests fail after two fix attempts, stop and report the failures to the user. Do not loop indefinitely.
 
 ### 13. Simplify
 
@@ -199,8 +188,7 @@ Check the changes made for the [task name] task for dead code,
 over-abstractions, duplication, and unnecessary complexity.
 ```
 
-The code-simplifier is read-only — it reports findings but cannot edit files.
-After it finishes, apply its recommendations yourself:
+The code-simplifier is read-only — it reports findings but cannot edit files. After it finishes, apply its recommendations yourself:
 
 - **Quick Wins** — apply all
 - **Medium Effort** — apply if clearly beneficial
@@ -243,15 +231,47 @@ Use the `Agent` tool with `subagent_type: "docs-sync"`:
 
 ```
 Scan the codebase for structural changes and update CLAUDE.md and project
-docs to reflect the current state. Focus on: project structure tree,
-agents table, environment variables, and npm scripts.
+docs to reflect the current state. Focus on: project structure, agents
+and skills tables, environment variables, and scripts.
 ```
 
 Skip this step if the task only changed existing file internals without adding new modules, commands, agents, config values, or scripts.
 
-### 17. Complete
+### 17. Mark Task Done
 
-Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` for the completed task.
+Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` for the completed task. This applies in both modes, and it happens **before** step 18 so the tasks.md update lands in the same commit as the task's code changes.
+
+### 18. Commit (`--auto` only)
+
+**Without `--auto`**: Skip this step. The user will review the diff and commit manually.
+
+**With `--auto`**: Create one commit that captures everything done for this task (code, tests, docs, tasks.md update).
+
+1. Run `git add -A` to stage all changes for the task. (Pre-existing dirty files should have been caught at step 2 — if any slipped through, stop and report rather than committing unknown work.)
+2. Use the `Agent` tool with `subagent_type: "release-notes"` to draft the message:
+
+   ```
+   Generate a commit message (Mode B) for the currently staged changes, which
+   complete the "[task name]" task in project [project]. Analyze the staged
+   diff directly — do NOT use `git log`, these changes are not yet committed.
+   Return only the raw message text (subject + optional body), no preamble.
+   ```
+
+3. Take the returned message and create the commit using a HEREDOC so formatting is preserved, appending the `Co-Authored-By` trailer:
+
+   ```bash
+   git commit -m "$(cat <<'EOF'
+   <message returned by release-notes agent>
+
+   Co-Authored-By: Claude <noreply@anthropic.com>
+   EOF
+   )"
+   ```
+
+4. Run `git status` to verify the commit landed and the tree is clean.
+5. If the commit fails (pre-commit hook, signing issue, etc.), diagnose the failure, fix the underlying issue, re-stage with `git add -A`, and create a **new** commit with the same message — do not use `--amend` or `--no-verify`. If the retry also fails, stop and report to the user with the hook output; do not loop.
+
+### 19. Report and Continue
 
 Output a completion summary:
 
@@ -280,9 +300,9 @@ Output a completion summary:
 
 - [changes applied or "No changes needed"]
 
-### Evals
+### Commit
 
-- [agent names run + pass/fail, OR "N/A — no agent prompts changed", OR "Deferred — no eval YAML exists for <agent> yet, added as follow-up"]
+- [commit SHA and subject, or "Not committed — run without --auto"]
 
 ### Next Task
 

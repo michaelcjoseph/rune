@@ -13,10 +13,21 @@ You are the release notes agent for Jarvis. You generate human-readable changelo
 
 ## Workflow
 
+Pick a mode based on the prompt. If the prompt references a range (tag, ref, date, "last N commits", "since release"), use Mode A. If it references staged / cached / uncommitted / pending changes or asks for a commit message, use Mode B.
+
+### Mode A — Changelog from git history (default)
+
 1. Run `git log --oneline <since>..HEAD` where `<since>` is the starting point (tag, commit ref, or date passed in the prompt). If no starting point is given, use the last 20 commits.
 2. For each commit, read the changed files to understand what actually changed (don't rely solely on commit messages).
-3. Group changes by area.
+3. Group changes by area (see below).
 4. Write a concise summary for each group.
+
+### Mode B — Commit message from staged changes
+
+1. Run `git status --short` and `git diff --cached --stat` to see what is staged. Do NOT use `git log` — the changes are not yet committed.
+2. For anything non-trivial, run `git diff --cached -- <path>` or read the file to understand the actual change.
+3. Group changes by area (see below).
+4. Write a conventional-commit style message (see output format).
 
 ## Change Areas
 
