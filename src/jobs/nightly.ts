@@ -56,6 +56,11 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     'career/applications.json — job applications',
     'investments/investments.json — investment tracking',
   ];
+  const KNOWN_MARKDOWN_FILES = [
+    'health/nutrition.md — meal notes (#diet tags)',
+    'projects/ideas.md — project ideas (#idea tags)',
+    'writing/topics.md — writing topics / prompts (journal-surfaced blog or essay ideas)',
+  ];
 
   if (!content?.trim()) {
     return { step: 'Daily tags', status: 'skipped', detail: 'No journal for today' };
@@ -67,10 +72,15 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     ? content.slice(0, MAX_JOURNAL_CHARS) + '\n\n[truncated]'
     : content;
 
-  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #book, #priorities, etc.). For each tagged item, extract the relevant data from the surrounding text and propose a JSON update.
+  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #book, #priorities, #diet, #idea, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
 
-Known JSON data files:
+## Known targets
+
+**JSON data files** (handled by the \`json-updater\` agent):
 ${KNOWN_JSON_FILES.map((f) => `- ${f}`).join('\n')}
+
+**Markdown content files** (handled by the \`daily-content-updater\` agent):
+${KNOWN_MARKDOWN_FILES.map((f) => `- ${f}`).join('\n')}
 
 Journal entry for ${date}:
 ---
@@ -82,9 +92,23 @@ For each tag found, output a proposed update in this format:
 **#tagname** → target file
 - Data to add/update: [extracted details]
 
-If no actionable tags are found (i.e., nothing that maps to a JSON data file), say "No JSON updates needed." and briefly summarize what was in the journal.
+## Special rules
 
-Be concise. Only propose updates for tags that clearly map to a data file.`;
+- **\`#book\` summaries**: when you propose a \`#book\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.
+- **Implicit CRM references**: even without an explicit \`#crm\` tag, any mention of \`[[sam]]\` or \`[[jude]]\` should produce a CRM update for that contact (append today's journal_ref, add any new context).
+- **\`#study\` status inference**: when the journal describes *starting* a study topic, set \`status: "in_progress"\`. When it describes *finishing* a topic, set \`status: "completed"\`. Use journal wording as the signal ("started reading X", "finished X", "completed X course").
+- **\`#diet\` tags** → \`health/nutrition.md\`. Propose the meal line in the form expected by \`daily-content-updater\`: a date + time + meal description. Multiple \`#diet\` mentions in one journal can share the same date heading.
+- **\`#idea\` tags** → \`projects/ideas.md\`. Propose a short title (3-6 words) and a one-to-two sentence description distilled from the tagged passage. Always include a \`Source: [[${date.replace(/-/g, '_')}]]\` pointer.
+- **Writing topics** → \`writing/topics.md\`. Without requiring an explicit tag, notice phrases like "I should write about X", "good essay idea: Y", "blog post: Z" and propose each as a bulleted topic. Skip if nothing writing-shaped surfaces.
+- **\`#health\` tags do NOT map to any file**. Do not propose an update for them. Instead, after the regular update list, emit a line:
+
+  \`Health flags: <brief summary of each #health mention, semicolon-separated>\`
+
+  If there are no \`#health\` mentions, omit this line entirely. These flags surface in the nightly summary for later weekly-review discussion.
+
+If no actionable tags are found (no JSON updates AND no markdown updates AND no \`#health\` flags AND no implicit sam/jude references AND no writing topics), say "No updates needed." and briefly summarize what was in the journal.
+
+Be concise. Only propose updates for tags that clearly map to a target above or match the special rules.`;
 
   const analysis = await askClaudeOneShot(analysisPrompt);
 
@@ -92,27 +116,105 @@ Be concise. Only propose updates for tags that clearly map to a data file.`;
     return { step: 'Daily tags', status: 'error', detail: analysis.error || 'Empty response' };
   }
 
-  if (analysis.text.includes('No JSON updates needed')) {
-    return { step: 'Daily tags', status: 'skipped', detail: 'No actionable tags' };
+  // Extract any "Health flags:" line for surfacing in the step detail.
+  const healthFlags = extractHealthFlags(analysis.text);
+
+  // Match the new canonical marker + keep backward-compat with the old phrase.
+  const noUpdates = /no (json )?updates needed/i.test(analysis.text);
+  if (noUpdates) {
+    const detail = healthFlags
+      ? `No updates, but health flags: ${healthFlags}`
+      : 'No actionable tags';
+    return { step: 'Daily tags', status: 'skipped', detail };
   }
 
-  const agentPrompt = `Apply the following proposed JSON updates to the vault data files. Read each target file first to understand its structure, then add the new entries.
+  // Route to json-updater and/or daily-content-updater based on which target files
+  // the analyzer referenced. Each agent gets the full analysis text; its own scope
+  // (per frontmatter + prompt) limits what it acts on.
+  // Match full paths OR bare file names — the analyzer LLM may emit either form.
+  const mentionsJson = /\b(books|crm|places|workouts|progress|applications|investments)\.json\b/.test(analysis.text);
+  const mentionsMarkdown = /\b(nutrition|ideas|topics)\.md\b/.test(analysis.text);
 
-Only modify files listed in the proposed updates. Do not create new files or modify files outside the proposed scope.
+  const agentPrompt = `Apply the following proposed updates to the appropriate vault files. Read each target file first to understand its structure, then add the new entries.
+
+Only modify files in your declared scope. Do not create new files or modify files outside the proposed scope.
 
 Proposed updates:
 ${analysis.text}
 
 Date context: ${date}`;
 
-  const result = await runAgent('json-updater', agentPrompt);
+  const results: string[] = [];
+  if (mentionsJson) {
+    const r = await runAgent('json-updater', agentPrompt);
+    if (r.error) {
+      return { step: 'Daily tags', status: 'error', detail: `json-updater failed: ${r.error}` };
+    }
+    results.push('json-updater');
+  }
+  if (mentionsMarkdown) {
+    const r = await runAgent('daily-content-updater', agentPrompt);
+    if (r.error) {
+      return { step: 'Daily tags', status: 'error', detail: `daily-content-updater failed: ${r.error}` };
+    }
+    results.push('daily-content-updater');
+  }
 
-  if (result.error) {
-    return { step: 'Daily tags', status: 'error', detail: result.error };
+  if (results.length === 0) {
+    // Analyzer proposed updates but no recognized targets — unusual; flag as success-but-noop.
+    const detail = healthFlags
+      ? `No recognized targets; health flags: ${healthFlags}`
+      : 'No recognized targets in analysis';
+    return { step: 'Daily tags', status: 'skipped', detail };
   }
 
   await gitCommitAndPush(`Daily tag processing: ${date}`);
-  return { step: 'Daily tags', status: 'success', detail: 'Tags processed and applied' };
+  const base = `Tags processed via ${results.join(' + ')}`;
+  const detail = healthFlags ? `${base}; health flags: ${healthFlags}` : base;
+  return { step: 'Daily tags', status: 'success', detail };
+}
+
+/** Extract the `Health flags: ...` line from the daily-tags analysis output.
+ *  Returns the flag text (without the prefix) or null if no health flags were emitted. */
+function extractHealthFlags(analysisText: string): string | null {
+  const match = analysisText.match(/^Health flags:\s*(.+)$/m);
+  return match ? match[1]!.trim() : null;
+}
+
+/** Compute MM-DD for the day after `date` (ISO `YYYY-MM-DD`). Handles year rollover. */
+function tomorrowMonthDay(date: string): string {
+  const parts = date.split('-').map(Number) as [number, number, number];
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  d.setDate(d.getDate() + 1);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}-${dd}`;
+}
+
+interface CrmEntry {
+  name?: string;
+  birthday?: string;
+}
+
+function stepBirthdayAlerts(date: string): NightlyStepResult {
+  const raw = readVaultFile('pages/crm.json');
+  if (!raw) {
+    return { step: 'Birthday alerts', status: 'skipped', detail: 'pages/crm.json not found' };
+  }
+  let entries: CrmEntry[];
+  try {
+    entries = JSON.parse(raw) as CrmEntry[];
+  } catch {
+    return { step: 'Birthday alerts', status: 'error', detail: 'pages/crm.json is not valid JSON' };
+  }
+  const target = tomorrowMonthDay(date);
+  const names = entries
+    .filter((e) => e.birthday === target && typeof e.name === 'string' && e.name.length > 0)
+    .map((e) => e.name!);
+  if (names.length === 0) {
+    return { step: 'Birthday alerts', status: 'skipped', detail: 'No birthdays tomorrow' };
+  }
+  return { step: 'Birthday alerts', status: 'success', detail: `Tomorrow: ${names.join(', ')}` };
 }
 
 async function stepPlaybookExtract(): Promise<NightlyStepResult> {
@@ -138,17 +240,24 @@ async function stepMeetingExtract(content: string | null, date: string): Promise
     return { step: 'Meeting extract', status: 'skipped', detail: 'No #meeting blocks to transcribe' };
   }
 
-  // Append decisions to project Decisions Logs first — runs independently of
-  // attendees so meetings with decisions but no attendees are still captured.
-  let decisionsAppended = 0;
+  // Aggregate decisions per project across all meetings, then call the helper
+  // ONCE per project — produces a single dated heading per project per day instead
+  // of one heading per decision. Runs independently of attendees so decisions-only
+  // meetings still land.
+  const decisionsByProject = new Map<string, string[]>();
   for (const m of meetings) {
     if (!m.project || m.decisions.length === 0) continue;
-    const r = appendProjectDecisions(m.project, date, m.decisions);
+    const existing = decisionsByProject.get(m.project) ?? [];
+    decisionsByProject.set(m.project, [...existing, ...m.decisions]);
+  }
+  let decisionsAppended = 0;
+  for (const [project, decisions] of decisionsByProject) {
+    const r = appendProjectDecisions(project, date, decisions);
     if (r.status === 'success') {
       decisionsAppended += r.appended;
-      enqueue(`projects/${m.project}.md`);
+      enqueue(`projects/${project}.md`);
     } else if (r.status === 'error') {
-      log.error('Decision append failed', { project: m.project, detail: r.detail });
+      log.error('Decision append failed', { project, detail: r.detail });
     }
   }
   const decisionsSuffix = decisionsAppended > 0 ? `, ${decisionsAppended} decision(s) → projects/` : '';
@@ -169,13 +278,22 @@ ${attendees.map((a) => `- ${a}`).join('\n')}
 
 Process this as a **single read-modify-write pass**:
 1. Read pages/crm.json once.
-2. For each attendee in the list above:
-   a. Find the entry whose \`id\` matches the slug. If no id matches, fall back to a case-insensitive name match. If still no match, create a new entry: \`{id: <slug>, name: <derived>, journal_refs: ["${journalRef}"]}\`. For \`name\`, replace hyphens with spaces and title-case as a best-effort fallback.
-   b. **Dedup**: only append "${journalRef}" if it's NOT already in the entry's \`journal_refs\`. If today's ref is already present, leave the entry unchanged.
-   c. Preserve all other fields on existing entries.
+2. For each attendee in the list above, follow this match hierarchy:
+   a. **Exact id match**: find an existing entry whose \`id\` === the slug. If found, append \`"${journalRef}"\` to its \`journal_refs\` (dedup — skip if already present).
+   b. **Exact name match** (case-insensitive, whitespace-normalized): if no id match, look for an existing entry whose \`name\` matches. If found, treat as (a).
+   c. **Fuzzy name match** (ambiguous cases — e.g., the slug is \`alice\` and an existing entry has \`name: "Alice Smith"\`, or partial matches, or nicknames): do NOT auto-append and do NOT create a new entry. Instead, emit a line:
+      \`FUZZY: <slug> may match existing entry <existing-id> ("<existing-name>") — human review needed\`
+      Leave the file unchanged for this attendee.
+   d. **No match at all** (neither exact nor fuzzy): create a new entry \`{id: <slug>, name: <derived>, journal_refs: ["${journalRef}"]}\` where \`name\` is derived by replacing hyphens with spaces and title-casing. Preserve all other fields on existing entries.
 3. Write the updated array back to pages/crm.json once at the end.
 
-Report a one-line summary per attendee: "<id>: appended" / "<id>: already present" / "<id>: created new entry". Flag any uncertain name derivation explicitly (e.g. "<id>: created new entry (name uncertain — review)").`;
+Report a one-line summary per attendee. Use one of these exact prefixes so the nightly job can parse the output:
+- \`<id>: appended\` — added today's ref.
+- \`<id>: already present\` — dedup, no change.
+- \`<id>: created new entry\` — genuinely unknown contact.
+- \`FUZZY: ...\` — uncertain match (from rule c).
+
+Do not create a new entry when rule (c) fires; conservative bias prevents silent CRM pollution.`;
 
   const result = await runAgent('json-updater', crmPrompt);
   if (result.error) {
@@ -187,7 +305,16 @@ Report a one-line summary per attendee: "<id>: appended" / "<id>: already presen
   // contacts and journal_refs (mirrors the post-review enqueue pattern).
   enqueue('pages/crm.json');
 
-  return { step: 'Meeting extract', status: 'success', detail: `${meetings.length} meeting(s), ${attendees.length} attendee(s) → CRM${decisionsSuffix}` };
+  // Parse any FUZZY lines from the agent output — these are uncertain name matches
+  // the agent deliberately skipped writing for. Surface as a warning in the step detail.
+  const fuzzyCount = (result.text ?? '').split('\n').filter((l) => /^FUZZY:/.test(l.trim())).length;
+  const fuzzySuffix = fuzzyCount > 0 ? `, ${fuzzyCount} FUZZY match(es) need review` : '';
+
+  return {
+    step: 'Meeting extract',
+    status: 'success',
+    detail: `${meetings.length} meeting(s), ${attendees.length} attendee(s) → CRM${decisionsSuffix}${fuzzySuffix}`,
+  };
 }
 
 async function stepWhoopActivity(): Promise<NightlyStepResult> {
@@ -224,8 +351,25 @@ async function stepLint(): Promise<NightlyStepResult> {
   return { step: 'KB lint', status: 'success', detail: report.slice(0, 200) };
 }
 
-export async function executeNightly(): Promise<NightlyResult> {
-  log.info('Nightly processing started');
+/** Convert ISO `YYYY-MM-DD` to the journal-file form `YYYY_MM_DD.md`. */
+function toJournalFilename(isoDate: string): string {
+  return `${isoDate.replace(/-/g, '_')}.md`;
+}
+
+/** Run the full nightly pipeline. If `targetDate` is provided (ISO `YYYY-MM-DD`),
+ *  processes that day's journal instead of today's — useful for backfilling a
+ *  missed day via `npm run cli -- nightly --date 2026-04-17`.
+ *
+ *  If the target journal already contains `<!-- daily-processed: <date> -->`
+ *  (written by `stepMarkProcessed` at the end of a successful run), bail out
+ *  immediately and return a single-step skipped result — prevents duplicate
+ *  decisions headings in `projects/*.md` and wasted LLM calls. Pass
+ *  `{force: true}` to bypass the gate (CLI: `--date X --force`). */
+export async function executeNightly(
+  targetDate?: string,
+  options?: { force?: boolean },
+): Promise<NightlyResult> {
+  log.info('Nightly processing started', { targetDate: targetDate ?? '(today)', force: options?.force ?? false });
   const steps: NightlyStepResult[] = [];
 
   const run = async (name: string, fn: () => NightlyStepResult | Promise<NightlyStepResult>) => {
@@ -240,8 +384,8 @@ export async function executeNightly(): Promise<NightlyResult> {
     }
   };
 
-  const todayDate = getTodayDate();
-  const todayFilename = getTodayFilename();
+  const todayDate = targetDate ?? getTodayDate();
+  const todayFilename = targetDate ? toJournalFilename(targetDate) : getTodayFilename();
   let todayJournal: string | null = null;
   try {
     todayJournal = readVaultFile(`journals/${todayFilename}`);
@@ -249,8 +393,19 @@ export async function executeNightly(): Promise<NightlyResult> {
     log.error('Failed to read today\'s journal', { error: String(err) });
   }
 
+  const marker = `<!-- daily-processed: ${todayDate} -->`;
+  if (!options?.force && todayJournal?.includes(marker)) {
+    const detail = `${marker} found in journals/${todayFilename}. Re-run with --force to override.`;
+    const step: NightlyStepResult = { step: 'Already processed', status: 'skipped', detail };
+    steps.push(step);
+    log.info(`Step complete: ${step.step}`, { status: step.status, detail });
+    log.info('Nightly processing complete', { steps: steps.length, earlyExit: true });
+    return { steps };
+  }
+
   await run('Session capture', stepCaptureSession);
   await run('Daily tags', () => stepDailyTags(todayDate, todayJournal));
+  await run('Birthday alerts', () => stepBirthdayAlerts(todayDate));
   await run('Playbook extract', stepPlaybookExtract);
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));

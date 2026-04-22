@@ -171,7 +171,7 @@ describe('jobs/meeting-extract', () => {
       expect(writeMock).not.toHaveBeenCalled();
     });
 
-    it('inserts a single decision after the Decisions Log heading', () => {
+    it('inserts a single dated heading with one bullet per decision after the Decisions Log heading', () => {
       readMock.mockReturnValue([
         '# project-alpha',
         '',
@@ -190,21 +190,27 @@ describe('jobs/meeting-extract', () => {
       const writtenPath = writeMock.mock.calls[0]![0];
       const writtenContent = writeMock.mock.calls[0]![1] as string;
       expect(writtenPath).toBe('projects/project-alpha.md');
-      // New entry should appear before the old one
-      const newIdx = writtenContent.indexOf('### [[2026_04_21]]: ship X by Q2');
+      // New aggregate heading + bullet appears before the old entry
+      const headingIdx = writtenContent.indexOf('### [[2026_04_21]]: Meeting decisions');
+      const bulletIdx = writtenContent.indexOf('- ship X by Q2');
       const oldIdx = writtenContent.indexOf('### 2026-03-22: Old decision');
-      expect(newIdx).toBeGreaterThan(-1);
-      expect(oldIdx).toBeGreaterThan(newIdx);
+      expect(headingIdx).toBeGreaterThan(-1);
+      expect(bulletIdx).toBeGreaterThan(headingIdx);
+      expect(oldIdx).toBeGreaterThan(headingIdx);
     });
 
-    it('inserts multiple decisions, each as its own ### entry', () => {
+    it('inserts multiple decisions as bullets under a single dated heading (no flooding)', () => {
       readMock.mockReturnValue('## Decisions Log\n\n');
       appendProjectDecisions('project-alpha', '2026-04-21', ['decide A', 'decide B', 'decide C']);
 
       const written = writeMock.mock.calls[0]![1] as string;
-      expect(written).toContain('### [[2026_04_21]]: decide A');
-      expect(written).toContain('### [[2026_04_21]]: decide B');
-      expect(written).toContain('### [[2026_04_21]]: decide C');
+      // Exactly one heading regardless of decision count
+      const headingMatches = written.match(/### \[\[2026_04_21\]\]: Meeting decisions/g) ?? [];
+      expect(headingMatches).toHaveLength(1);
+      // Each decision is a bullet under it
+      expect(written).toContain('- decide A');
+      expect(written).toContain('- decide B');
+      expect(written).toContain('- decide C');
     });
 
     it('inserts after italic intro lines (preserves the section preamble)', () => {
@@ -221,7 +227,7 @@ describe('jobs/meeting-extract', () => {
       const lines = written.split('\n');
       const headingIdx = lines.findIndex((l) => l === '## Decisions Log');
       const introIdx = lines.findIndex((l) => l.startsWith('*Key decisions'));
-      const newEntryIdx = lines.findIndex((l) => l === '### [[2026_04_21]]: ship X');
+      const newEntryIdx = lines.findIndex((l) => l === '### [[2026_04_21]]: Meeting decisions');
       // Intro line is preserved and appears before the new entry
       expect(introIdx).toBeGreaterThan(headingIdx);
       expect(newEntryIdx).toBeGreaterThan(introIdx);

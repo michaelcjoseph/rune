@@ -113,8 +113,10 @@ const DECISIONS_HEADING_RE = /^##\s+Decisions Log\b/i;
 
 /** Append meeting decisions to a project's Decisions Log section.
  *
- *  Inserts new `### [[YYYY_MM_DD]]: <decision>` entries at the top of the section,
- *  after the heading and any italic intro lines. Skips when the project file or
+ *  Inserts a single `### [[YYYY_MM_DD]]: Meeting decisions` heading followed by
+ *  one bullet per decision, at the top of the section (after heading + italic intro).
+ *  Caller is expected to aggregate decisions across meetings before calling — one
+ *  call = one heading per project per day. Skips when the project file or
  *  Decisions Log section is missing — does not create either. */
 export function appendProjectDecisions(slug: string, journalDate: string, decisions: string[]): DecisionAppendResult {
   if (decisions.length === 0) {
@@ -146,14 +148,14 @@ export function appendProjectDecisions(slug: string, journalDate: string, decisi
   }
 
   const ref = journalDate.replace(/-/g, '_');
-  const newEntries: string[] = [];
+  const newEntries: string[] = [`### [[${ref}]]: Meeting decisions`];
   for (const d of decisions) {
-    newEntries.push(`### [[${ref}]]: ${d}`);
-    newEntries.push('');
+    newEntries.push(`- ${d}`);
   }
+  newEntries.push('');
   // Drop the trailing blank if the next existing line is already blank — avoids
-  // a double-blank between the last new entry and existing content.
-  if (newEntries.length > 0 && lines[insertIdx]?.trim() === '') {
+  // a double-blank between the new heading block and existing content.
+  if (lines[insertIdx]?.trim() === '') {
     newEntries.pop();
   }
 

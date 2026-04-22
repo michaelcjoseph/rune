@@ -66,12 +66,13 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 9 steps and returns results', async () => {
+    it('runs all 10 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(9);
+      expect(result.steps).toHaveLength(10);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
+        'Birthday alerts',
         'Playbook extract',
         'Journal ingest',
         'Meeting extract',
@@ -80,6 +81,22 @@ describe('jobs/nightly', () => {
         'KB lint',
         'Mark processed',
       ]);
+    });
+
+    it('uses the provided targetDate (for backfill) instead of getTodayDate', async () => {
+      readMock.mockReturnValue('# Journal for 2026-04-17\n- some content');
+      askMock.mockResolvedValue({ text: 'No updates needed.', error: null });
+
+      await executeNightly('2026-04-17');
+
+      // Journal read uses the target filename, not today's
+      expect(readMock).toHaveBeenCalledWith('journals/2026_04_17.md');
+    });
+
+    it('defaults to today when no targetDate is provided', async () => {
+      readMock.mockReturnValue(null);
+      await executeNightly();
+      expect(readMock).toHaveBeenCalledWith('journals/2026_04_11.md');
     });
 
     it('always runs final git commit', async () => {
@@ -199,6 +216,92 @@ describe('jobs/nightly', () => {
       expect(step.detail).toContain('Agent crashed');
     });
 
+    it('includes special rules (sam/jude CRM, study status, #health flags) in the daily-tags analysis prompt', async () => {
+      readMock.mockReturnValue('# Journal\n- something');
+      askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
+
+      await executeNightly();
+
+      const prompt = askMock.mock.calls[0]![0] as string;
+      expect(prompt).toContain('[[sam]]');
+      expect(prompt).toContain('[[jude]]');
+      expect(prompt).toContain('implicit');
+      expect(prompt).toMatch(/status:\s*"in_progress"/);
+      expect(prompt).toMatch(/status:\s*"completed"/);
+      expect(prompt).toContain('#health');
+      expect(prompt).toContain('Health flags:');
+    });
+
+    it('surfaces health flags in the Daily tags step detail on the skip path', async () => {
+      readMock.mockReturnValue('# Journal\n- #health sore shoulder from yesterday');
+      askMock.mockResolvedValue({
+        text: 'No JSON updates needed. Nothing tagged for JSON stores.\n\nHealth flags: sore shoulder from yesterday',
+        error: null,
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Daily tags')!;
+      expect(step.status).toBe('skipped');
+      expect(step.detail).toContain('sore shoulder');
+    });
+
+    it('routes to daily-content-updater when analysis targets a markdown content file', async () => {
+      readMock.mockReturnValue('# Journal\n- 11:30 #idea AI estate planning service');
+      askMock.mockResolvedValue({
+        text: '**#idea** → projects/ideas.md\n- Title: AI Estate Planning Service\n- Description: AI generates estate plans, $50-100 per plan.\n- Source: [[2026_04_11]]',
+        error: null,
+      });
+      agentMock.mockResolvedValue({ text: 'Appended', error: null });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Daily tags')!;
+      expect(step.status).toBe('success');
+      // daily-content-updater was invoked; json-updater was NOT
+      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.stringContaining('#idea'));
+      const jsonCalls = agentMock.mock.calls.filter((c) => c[0] === 'json-updater');
+      expect(jsonCalls).toHaveLength(0);
+      expect(step.detail).toContain('daily-content-updater');
+    });
+
+    it('routes to both json-updater and daily-content-updater when analysis mentions both target types', async () => {
+      readMock.mockReturnValue('# Journal\n- 08:00 #workout 5k\n- 11:30 #idea estate planning\n- 13:00 #diet eggs');
+      askMock.mockResolvedValue({
+        text: '**#workout** → workouts.json\n- 5k run\n\n**#idea** → projects/ideas.md\n- Title: AI Estate Planning\n- Source: [[2026_04_11]]\n\n**#diet** → health/nutrition.md\n- Breakfast 8am: 2 eggs',
+        error: null,
+      });
+      agentMock.mockResolvedValue({ text: 'ok', error: null });
+
+      await executeNightly();
+
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
+      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.any(String));
+    });
+
+    it('accepts the new "No updates needed" phrasing as well as legacy "No JSON updates needed"', async () => {
+      readMock.mockReturnValue('# Journal\n- nothing tagged');
+      askMock.mockResolvedValue({ text: 'No updates needed. Light day.', error: null });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Daily tags')!;
+      expect(step.status).toBe('skipped');
+      expect(agentMock).not.toHaveBeenCalledWith('json-updater', expect.any(String));
+      expect(agentMock).not.toHaveBeenCalledWith('daily-content-updater', expect.any(String));
+    });
+
+    it('surfaces health flags in the Daily tags step detail on the success path', async () => {
+      readMock.mockReturnValue('# Journal\n- #workout 5k\n- #health dull knee pain');
+      askMock.mockResolvedValue({
+        text: '**#workout** → health/workouts.json\n- 5k run\n\nHealth flags: dull knee pain',
+        error: null,
+      });
+      agentMock.mockResolvedValue({ text: 'Updated', error: null });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Daily tags')!;
+      expect(step.status).toBe('success');
+      expect(step.detail).toContain('dull knee pain');
+    });
+
     // -- Journal ingest step --
     it('enqueues today\'s journal when content exists', async () => {
       readMock.mockReturnValue('# Journal\n- 10:00 meeting with #alice about project');
@@ -285,7 +388,7 @@ describe('jobs/nightly', () => {
       expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('2026_04_11'));
       expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('alice'));
       expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('bob'));
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('Dedup'));
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('dedup'));
     });
 
     it('skips json-updater call when meetings have no attendees (decisions-only)', async () => {
@@ -418,6 +521,70 @@ describe('jobs/nightly', () => {
       expect(enqueueMock).toHaveBeenCalledWith('projects/project-beta.md');
     });
 
+    it('surfaces FUZZY match count in the step detail when json-updater flags uncertain attendees', async () => {
+      readMock.mockReturnValue('# Journal\n#meeting');
+      askMock.mockResolvedValue({ text: 'No updates needed.', error: null });
+      extractMeetingsMock.mockResolvedValue([
+        { attendees: ['alice', 'bob'], project: null, decisions: [] },
+      ]);
+      // Agent reports one fuzzy match needing review
+      agentMock.mockResolvedValue({
+        text: 'alice: appended\nFUZZY: bob may match existing entry bob-smith ("Bob Smith") — human review needed',
+        error: null,
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Meeting extract')!;
+      expect(step.status).toBe('success');
+      expect(step.detail).toContain('1 FUZZY match(es) need review');
+    });
+
+    it('includes the fuzzy-name guard rules in the CRM update prompt', async () => {
+      readMock.mockReturnValue('# Journal\n#meeting');
+      askMock.mockResolvedValue({ text: 'No updates needed.', error: null });
+      extractMeetingsMock.mockResolvedValue([
+        { attendees: ['alice'], project: null, decisions: [] },
+      ]);
+      agentMock.mockResolvedValue({ text: 'alice: appended', error: null });
+
+      await executeNightly();
+
+      const crmCall = agentMock.mock.calls.find(
+        (c) => c[0] === 'json-updater' && typeof c[1] === 'string' && c[1].includes('pages/crm.json'),
+      )!;
+      const prompt = crmCall[1] as string;
+      expect(prompt).toContain('FUZZY:');
+      expect(prompt).toContain('human review needed');
+      expect(prompt).toContain('Fuzzy name match');
+    });
+
+    it('aggregates decisions from multiple meetings tagged to the same project into ONE helper call', async () => {
+      // Real-world case from logs: 5 meetings all tagged to `relay` flooded the
+      // Decisions Log with 12 separate headings. Now they collapse into one call
+      // with all decisions combined → one heading per project per day.
+      readMock.mockReturnValue('# Journal\n#meeting');
+      askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
+      extractMeetingsMock.mockResolvedValue([
+        { attendees: ['a'], project: 'relay', decisions: ['d1'] },
+        { attendees: ['b'], project: 'relay', decisions: ['d2', 'd3'] },
+        { attendees: ['c'], project: 'relay', decisions: ['d4'] },
+        { attendees: ['d'], project: 'relay', decisions: ['d5', 'd6', 'd7'] },
+        { attendees: ['e'], project: 'relay', decisions: ['d8'] },
+      ]);
+      agentMock.mockResolvedValue({ text: 'updated', error: null });
+      appendDecisionsMock.mockReturnValue({ status: 'success', appended: 8, detail: 'ok' });
+
+      await executeNightly();
+
+      // ONE call to the helper, not five — all decisions combined
+      expect(appendDecisionsMock).toHaveBeenCalledTimes(1);
+      expect(appendDecisionsMock).toHaveBeenCalledWith(
+        'relay',
+        '2026-04-11',
+        ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'],
+      );
+    });
+
     it('does not enqueue project files when appendProjectDecisions skips or errors', async () => {
       readMock.mockReturnValue('# Journal\n#meeting');
       askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
@@ -491,6 +658,61 @@ describe('jobs/nightly', () => {
       expect(step.detail).toContain('timed out');
     });
 
+    // -- Birthday alerts step --
+    it('surfaces upcoming birthdays occurring on the day AFTER today', async () => {
+      // Today is 2026-04-11 (Saturday per the mocked date). Tomorrow is 04-12.
+      readMock.mockImplementation((path: string) => {
+        if (path === 'pages/crm.json') {
+          return JSON.stringify([
+            { id: 'alice', name: 'Alice', birthday: '04-12' },
+            { id: 'bob', name: 'Bob', birthday: '06-01' },
+            { id: 'carol', name: 'Carol', birthday: '04-12' },
+          ]);
+        }
+        return null;
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Birthday alerts')!;
+      expect(step.status).toBe('success');
+      expect(step.detail).toContain('Alice');
+      expect(step.detail).toContain('Carol');
+      expect(step.detail).not.toContain('Bob');
+    });
+
+    it('skips when no birthdays match tomorrow', async () => {
+      readMock.mockImplementation((path: string) => {
+        if (path === 'pages/crm.json') {
+          return JSON.stringify([{ id: 'alice', name: 'Alice', birthday: '09-09' }]);
+        }
+        return null;
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Birthday alerts')!;
+      expect(step.status).toBe('skipped');
+      expect(step.detail).toContain('No birthdays');
+    });
+
+    it('skips when pages/crm.json does not exist', async () => {
+      readMock.mockReturnValue(null);
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Birthday alerts')!;
+      expect(step.status).toBe('skipped');
+      expect(step.detail).toContain('not found');
+    });
+
+    it('errors when pages/crm.json is malformed JSON', async () => {
+      readMock.mockImplementation((path: string) => {
+        if (path === 'pages/crm.json') return 'not valid json {';
+        return null;
+      });
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'Birthday alerts')!;
+      expect(step.status).toBe('error');
+      expect(step.detail).toContain('not valid JSON');
+    });
+
     // -- Mark processed step --
     it('appends the daily-processed marker to today\'s journal when not already present', async () => {
       readMock.mockReturnValue('# Journal\n- 10:00 entry\n');
@@ -506,17 +728,68 @@ describe('jobs/nightly', () => {
       );
     });
 
-    it('skips the marker append when today\'s marker is already present (idempotent)', async () => {
+    it('bails out early with a single skipped step when today\'s marker is already present', async () => {
+      // Early-exit gate: if the target journal already has the daily-processed marker
+      // for the same date, skip the whole pipeline to avoid re-appending decisions,
+      // re-running the LLM, etc. stepMarkProcessed is never reached in this path.
+      readMock.mockReturnValue('# Journal\n- 10:00 entry\n\n<!-- daily-processed: 2026-04-11 -->\n');
+
+      const result = await executeNightly();
+
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0]!.step).toBe('Already processed');
+      expect(result.steps[0]!.status).toBe('skipped');
+      expect(result.steps[0]!.detail).toContain('<!-- daily-processed: 2026-04-11 -->');
+      expect(result.steps[0]!.detail).toContain('--force');
+      // No downstream work done
+      expect(captureMock).not.toHaveBeenCalled();
+      expect(askMock).not.toHaveBeenCalled();
+      expect(agentMock).not.toHaveBeenCalled();
+      expect(extractMeetingsMock).not.toHaveBeenCalled();
+      expect(queueMock).not.toHaveBeenCalled();
+      expect(enqueueMock).not.toHaveBeenCalled();
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(gitMock).not.toHaveBeenCalled();
+    });
+
+    it('honors options.force to re-run a date whose marker is already present', async () => {
       readMock.mockReturnValue('# Journal\n- 10:00 entry\n\n<!-- daily-processed: 2026-04-11 -->\n');
       askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
 
+      const result = await executeNightly(undefined, { force: true });
+
+      // Full pipeline ran
+      expect(result.steps).toHaveLength(10);
+      expect(result.steps[0]!.step).toBe('Session capture');
+      expect(captureMock).toHaveBeenCalled();
+      // Mark processed still skips its own append because the marker is already in the file
+      const markStep = result.steps.find((s) => s.step === 'Mark processed')!;
+      expect(markStep.status).toBe('skipped');
+      expect(markStep.detail).toContain('already present');
+    });
+
+    it('applies the early-exit gate to backfill runs too (targetDate matches marker)', async () => {
+      readMock.mockReturnValue('# Journal for 2026-04-17\n\n<!-- daily-processed: 2026-04-17 -->\n');
+
+      const result = await executeNightly('2026-04-17');
+
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0]!.step).toBe('Already processed');
+      expect(result.steps[0]!.detail).toContain('2026-04-17');
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
+    it('does NOT early-exit when the marker belongs to a different date', async () => {
+      // Journal carries yesterday's marker (e.g. a backfill scenario where the writer
+      // previously processed the file under the wrong date). Today's marker is absent,
+      // so the gate doesn't fire and the pipeline runs normally.
+      readMock.mockReturnValue('# Journal\n- 10:00 entry\n\n<!-- daily-processed: 2026-04-10 -->\n');
+      askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
+
       const result = await executeNightly();
-      const step = result.steps.find((s) => s.step === 'Mark processed')!;
-      expect(step.status).toBe('skipped');
-      expect(step.detail).toContain('already present');
-      // No write call for the journal — but other steps may have written elsewhere
-      const journalWrites = writeMock.mock.calls.filter((c) => c[0] === 'journals/2026_04_11.md');
-      expect(journalWrites).toHaveLength(0);
+
+      expect(result.steps).toHaveLength(10);
+      expect(captureMock).toHaveBeenCalled();
     });
 
     it('skips the marker step when no journal content exists', async () => {
@@ -546,7 +819,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(9);
+      expect(result.steps).toHaveLength(10);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -557,19 +830,19 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(9);
-      // KB queue is at index 5 (after Session capture, Daily tags, Playbook extract, Journal ingest, Meeting extract)
-      expect(result.steps[5]!.step).toBe('KB queue');
-      expect(result.steps[5]!.status).toBe('error');
+      expect(result.steps).toHaveLength(10);
+      // KB queue is at index 6 (after Session capture, Daily tags, Birthday alerts, Playbook extract, Journal ingest, Meeting extract)
+      expect(result.steps[6]!.step).toBe('KB queue');
+      expect(result.steps[6]!.status).toBe('error');
       // Whoop activity still ran after it
-      expect(result.steps[6]!.step).toBe('Whoop activity');
+      expect(result.steps[7]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(9);
+      expect(result.steps).toHaveLength(10);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -580,8 +853,8 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is now last
-      expect(result.steps[8]!.step).toBe('Mark processed');
+      // Mark processed is now last (index 9)
+      expect(result.steps[9]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {

@@ -78,11 +78,12 @@ src/
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
-│   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → playbook extract → journal ingest → meeting extract → KB queue → whoop → lint → mark processed → commit
+│   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → birthday alerts → playbook extract → journal ingest → meeting extract → KB queue → whoop → lint → mark processed → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
 │   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
 │   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json
 │   ├── meeting-extract.ts   # Scan today's journal for #meeting blocks → structured Meeting[] via askClaudeOneShot
+│   ├── book-summarizer.ts   # Generate 1-2 sentence book summary via askClaudeOneShot (returns null on UNKNOWN)
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
@@ -214,6 +215,7 @@ Optional:
 | worldview-updater | `.claude/agents/worldview-updater.md` | Post-review: apply approved diffs to world-view/*.md with changelog entry |
 | psychology-updater | `.claude/agents/psychology-updater.md` | Post-review: apply scoped updates to pages/psychology.md |
 | json-updater | `.claude/agents/json-updater.md` | Post-review / nightly: apply updates to JSON data stores |
+| daily-content-updater | `.claude/agents/daily-content-updater.md` | Nightly daily-tags: apply updates to markdown content stores (`health/nutrition.md`, `projects/ideas.md`, `writing/topics.md`) |
 
 ### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
 

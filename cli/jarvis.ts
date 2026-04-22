@@ -7,7 +7,7 @@ const COMMANDS: Record<string, string> = {
   lint: 'Run wiki health check',
   status: 'Show KB stats and system state',
   search: 'Search vault and wiki',
-  nightly: 'Run the full nightly pipeline against today\'s journal (commits + pushes at the end)',
+  nightly: 'Run the full nightly pipeline (commits + pushes). Default: today. Use `--date YYYY-MM-DD` to backfill. Add `--force` to re-run a date already marked processed.',
   help: 'Show this help text',
 };
 
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
       await cmdSearch(args);
       break;
     case 'nightly':
-      await cmdNightly();
+      await cmdNightly(args);
       break;
   }
 }
@@ -218,10 +218,25 @@ async function cmdSearch(args: string[]): Promise<void> {
   }
 }
 
-async function cmdNightly(): Promise<void> {
+async function cmdNightly(args: string[]): Promise<void> {
+  const { flags } = parseFlags(args);
+  const rawDate = flags['date'];
+  let targetDate: string | undefined;
+  if (rawDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+      console.error(`--date must be ISO YYYY-MM-DD (got "${rawDate}")`);
+      process.exitCode = 1;
+      return;
+    }
+    targetDate = rawDate;
+  }
+  const force = 'force' in flags;
+
   const { executeNightly, formatSummary } = await import('../src/jobs/nightly.js');
-  console.log('Running nightly pipeline (this may take 5-15 minutes)...\n');
-  const result = await executeNightly();
+  const label = targetDate ? `for ${targetDate}` : '(today)';
+  const forceSuffix = force ? ' [--force]' : '';
+  console.log(`Running nightly pipeline ${label}${forceSuffix} (this may take 5-15 minutes)...\n`);
+  const result = await executeNightly(targetDate, { force });
   console.log(formatSummary(result));
   // Exit non-zero if any step errored, so wrappers can detect failures
   if (result.steps.some((s) => s.status === 'error')) {
