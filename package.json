@@ -9,7 +9,8 @@
     "cli": "tsx --env-file-if-exists=.env.local cli/jarvis.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts"
+    "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts",
+    "intent-scan": "tsx --env-file-if-exists=.env.local scripts/run-intent-scan.ts"
   },
   "engines": {
     "node": ">=22"

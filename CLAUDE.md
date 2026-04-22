@@ -88,6 +88,8 @@ src/
 │   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json
 │   ├── meeting-extract.ts   # Scan today's journal for #meeting blocks → structured Meeting[] via askClaudeOneShot
 │   ├── book-summarizer.ts   # Generate 1-2 sentence book summary via askClaudeOneShot (returns null on UNKNOWN)
+│   ├── intent-scan.ts       # Weekly Ask-Twice scan: reads intent-log.jsonl (last 30 days), groups via Haiku, dedupes against skill registry + pending queue, writes up to 3 proposals to proposal-queue.json
+│   ├── proposal-queue.ts    # Proposal queue types + CRUD (logs/proposal-queue.json)
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
@@ -116,7 +118,8 @@ evals/
 └── README.md                # YAML schema + authoring conventions for the MVP eval framework
 scripts/
 ├── run-evals.ts             # Dev tool: parse eval YAMLs, invoke agents via runAgent(), report pass/fail
-└── run-evals.test.ts        # Unit tests for the eval runner (vitest)
+├── run-evals.test.ts        # Unit tests for the eval runner (vitest)
+└── run-intent-scan.ts       # CLI entry point for intent-scan job (npm run intent-scan)
 ```
 
 ## Vault Content Model
@@ -183,9 +186,10 @@ Mutable sources (world-view, playbook, active projects, journals) **overwrite** 
 ## Running
 
 ```bash
-npm run dev    # Development with tsx watch mode
-npm run start  # Production
-npm run cli    # Local CLI interface
+npm run dev          # Development with tsx watch mode
+npm run start        # Production
+npm run cli          # Local CLI interface
+npm run intent-scan  # Run Ask-Twice intent scan manually
 ```
 
 ## Environment Variables
@@ -229,6 +233,7 @@ Optional:
 | psychology-updater | `.claude/agents/psychology-updater.md` | Post-review: apply scoped updates to pages/psychology.md |
 | json-updater | `.claude/agents/json-updater.md` | Post-review / nightly: apply updates to JSON data stores |
 | daily-content-updater | `.claude/agents/daily-content-updater.md` | Nightly daily-tags: apply updates to markdown content stores (`health/nutrition.md`, `projects/ideas.md`, `writing/topics.md`) |
+| intent-scan | `.claude/agents/intent-scan.md` | Saturday 3pm cron: runs `npm run intent-scan` to process intent-log and write skill proposals |
 
 ### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
 

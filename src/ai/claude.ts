@@ -70,7 +70,10 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
     const child = spawn(CLAUDE_BIN, args, {
       cwd: config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
+      // Expose PROJECT_ROOT so agents that shell out can locate the Jarvis
+      // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
+      // agent, which runs `npm run intent-scan` from the project root.
+      env: { ...process.env, JARVIS_PROJECT_ROOT: PROJECT_ROOT },
     });
 
     activeProcesses.add(child);
@@ -146,15 +149,18 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
   return execClaude(args, timeoutMs);
 }
 
-/** Thin Haiku wrapper used by the resolver for structured JSON classification.
- *  No session, no date context prefix (the classifier prompt is self-contained
- *  and must not be polluted), short timeout (the resolver runs inline on every
- *  non-slash TG message — users feel this latency). Callers are responsible
- *  for parsing the response; this function only spawns the CLI. */
-export async function classifyIntent(prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
+/** Thin Haiku one-shot wrapper — no session, no date-context prefix, short
+ *  default timeout. Used by the resolver for structured JSON classification
+ *  and by the intent-scan for grouping repeated user intents. Callers are
+ *  responsible for parsing any response; this function only spawns the CLI.
+ *  The short default timeout is right for callers on the latency-sensitive
+ *  path (e.g. the resolver); offline callers (e.g. the weekly scan) may pass
+ *  a larger explicit `timeoutMs`. */
+export async function askHaikuOneShot(prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
   const args = ['-p', prompt, '--no-session-persistence', '--model', config.CLASSIFIER_MODEL];
   return execClaude(args, timeoutMs ?? config.CLASSIFIER_TIMEOUT_MS);
 }
+
 
 export interface AgentDef {
   prompt: string;

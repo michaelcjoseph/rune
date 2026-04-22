@@ -1,5 +1,5 @@
 import config from '../config.js';
-import { classifyIntent as callClassifier } from '../ai/claude.js';
+import { askHaikuOneShot as callClassifier } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import type { SkillEntry } from './skill-registry.js';
 

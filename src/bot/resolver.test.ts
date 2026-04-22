@@ -15,7 +15,7 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../ai/claude.js', () => ({
-  classifyIntent: vi.fn(async (_prompt: string) => ({ text: '{}', error: null })),
+  askHaikuOneShot: vi.fn(async (_prompt: string) => ({ text: '{}', error: null })),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -32,7 +32,7 @@ const {
   parseClassifyResponse,
   classifyIntent,
 } = await import('./resolver.js');
-const { classifyIntent: mockCall } = await import('../ai/claude.js');
+const { askHaikuOneShot: mockCall } = await import('../ai/claude.js');
 
 const sampleRegistry = [
   {

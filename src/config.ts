@@ -62,6 +62,10 @@ const config = {
     return join(this.LOGS_DIR, 'playbook-queue.json');
   },
 
+  get PROPOSAL_QUEUE_FILE() {
+    return join(this.LOGS_DIR, 'proposal-queue.json');
+  },
+
   get REVIEW_SESSIONS_FILE() {
     return join(this.LOGS_DIR, 'review-sessions.json');
   },
@@ -79,6 +83,10 @@ const config = {
    *  latency on every non-slash TG message. If Haiku hasn't returned in 20s,
    *  we fall through to the existing freeform handler. */
   CLASSIFIER_TIMEOUT_MS: 20_000,
+  /** Timeout for the weekly intent-scan Haiku one-shot. Offline, so longer
+   *  than the resolver, but much shorter than CLAUDE_TIMEOUT_MS (which is
+   *  scoped to Opus agent runs that read/write vault files). */
+  HAIKU_SCAN_TIMEOUT_MS: 60_000,
   DEFAULT_CHAT_MODEL: 'haiku',
   CONVERSATION_MODEL: 'opus',
   ONESHOT_MODEL: 'sonnet',
