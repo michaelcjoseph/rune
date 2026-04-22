@@ -1,9 +1,11 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import cron, { type ScheduledTask } from 'node-cron';
 import type TelegramBot from 'node-telegram-bot-api';
-import config from '../config.js';
+import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { clearAgentDefCache, loadAgentDef, runAgent } from '../ai/claude.js';
+import { sendLongMessage } from '../integrations/telegram/client.js';
 import { runMorningPrep } from './morning-prep.js';
 import { runNightly } from './nightly.js';
 import { runWeeklyNudge, runReviewNudge } from './nudges.js';
@@ -195,6 +197,103 @@ function checkMissedJobs(jobs: JobDefinition[]): void {
   }
 }
 
+/** Scan `.claude/agents/` (Jarvis first, vault fallback) for agent files that
+ *  declare a `cron:` frontmatter field. Returns a JobDefinition per agent whose
+ *  handler calls runAgent(name, cron_args) and routes output per cron_chat.
+ *  Invalid cron expressions are logged and skipped (no crash). */
+export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
+  // Evict cached defs so frontmatter edits (cron, cron_args, cron_chat,
+  // triggers) take effect on a scheduler stop/start cycle. Agent files are
+  // re-read on the next loadAgentDef call below.
+  clearAgentDefCache();
+
+  const seen = new Set<string>();
+  const agentNames: string[] = [];
+
+  // Jarvis-first precedence matches loadAgentDef: project dir wins over vault.
+  for (const dir of [join(PROJECT_ROOT, '.claude', 'agents'), join(config.VAULT_DIR, '.claude', 'agents')]) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.warn(`Failed to scan agents dir ${dir}`, { error: (err as Error).message });
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.md')) continue;
+      const name = entry.slice(0, -'.md'.length);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      agentNames.push(name);
+    }
+  }
+
+  const jobs: JobDefinition[] = [];
+  for (const name of agentNames) {
+    let def;
+    try {
+      def = loadAgentDef(name);
+    } catch (err) {
+      log.warn(`Could not load agent def for cron scan: ${name}`, { error: (err as Error).message });
+      continue;
+    }
+    if (!def.cron) continue;
+    if (!cron.validate(def.cron)) {
+      log.error(`Invalid cron expression for agent ${name}; skipping registration`, {
+        expression: def.cron,
+      });
+      continue;
+    }
+    // Enforce 5-field cron — node-cron's validate also accepts 6-field (seconds)
+    // expressions, but getLastScheduledTime only supports 5-field, so 6-field
+    // jobs would silently miss catchup on restart/wake.
+    if (def.cron.trim().split(/\s+/).length !== 5) {
+      log.error(
+        `Agent ${name} cron must be a 5-field expression (seconds precision not supported); skipping`,
+        { expression: def.cron },
+      );
+      continue;
+    }
+
+    const jobName = `agent:${name}`;
+    const cronArgs = def.cronArgs ?? '';
+    const cronChat = def.cronChat === true;
+    const run = async () => {
+      const result = await runAgent(name, cronArgs);
+      if (result.error) {
+        log.error(`Scheduled agent ${name} failed`, { error: result.error });
+        return;
+      }
+      const text = result.text?.trim() ?? '';
+      if (text.length === 0) {
+        // Successful run with empty output. For cronChat agents this is
+        // surprising (user expects a post); warn so silent runs are auditable.
+        const level = cronChat ? 'warn' : 'info';
+        log[level](`Scheduled agent ${name} completed with empty output`, { cronChat });
+        return;
+      }
+      if (cronChat) {
+        try {
+          await sendLongMessage(bot, config.TELEGRAM_USER_ID, text);
+        } catch (err) {
+          log.error(`Failed to post ${name} output to Telegram`, { error: (err as Error).message });
+        }
+      } else {
+        log.info(`Scheduled agent ${name} completed`, { chars: text.length });
+      }
+    };
+    jobs.push({
+      name: jobName,
+      schedule: def.cron,
+      run,
+      handler: guarded(jobName, run),
+    });
+  }
+  return jobs;
+}
+
 function registerJobs(bot: TelegramBot): JobDefinition[] {
   return [
     {
@@ -238,7 +337,7 @@ export function startScheduler(bot: TelegramBot): void {
     stopScheduler();
   }
 
-  const jobs = registerJobs(bot);
+  const jobs = [...registerJobs(bot), ...scanAgentCronJobs(bot)];
   registeredJobs = jobs;
 
   for (const job of jobs) {

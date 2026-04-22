@@ -25,10 +25,10 @@ Not started. See [spec.md](spec.md) for details.
 ### Skill-frontmatter cron (#6)
 
 - [x] Extend `src/ai/claude.ts:loadAgentDef` frontmatter parser to read optional `cron`, `cron_args`, `cron_chat`, `triggers` fields
-- [ ] In `src/jobs/scheduler.ts:startScheduler`, scan all agent files (Jarvis + vault) and register a generic `runAgent(name, cron_args ?? '')` job per agent with a `cron:` field
-- [ ] On invocation: if `cron_chat: true`, post output to TG; otherwise log only
-- [ ] Validate cron expression at registration; bad expression → log error and skip (don't crash)
-- [ ] Tests: cron parsing, registration, invocation routing (chat vs log), bad-expression handling
+- [x] In `src/jobs/scheduler.ts:startScheduler`, scan all agent files (Jarvis + vault) and register a generic `runAgent(name, cron_args ?? '')` job per agent with a `cron:` field
+- [x] On invocation: if `cron_chat: true`, post output to TG; otherwise log only
+- [x] Validate cron expression at registration; bad expression → log error and skip (don't crash)
+- [x] Tests: cron parsing, registration, invocation routing (chat vs log), bad-expression handling
 
 ### Ask-Twice telemetry harness (#2 part 1)
 

@@ -163,6 +163,12 @@ export interface AgentDef {
 
 const agentDefCache = new Map<string, AgentDef>();
 
+/** Evict all cached agent defs. Call on scheduler restart so frontmatter edits
+ *  (new cron, changed triggers, etc.) take effect without a full process restart. */
+export function clearAgentDefCache(): void {
+  agentDefCache.clear();
+}
+
 /** Load an agent definition from .claude/agents/<name>.md, parsing frontmatter and body.
  *  Jarvis's own .claude/agents/ is checked first (generic, public, versioned with code);
  *  the vault's .claude/agents/ is the fallback (user-owned, private, may contain
