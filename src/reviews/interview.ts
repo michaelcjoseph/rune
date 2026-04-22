@@ -8,6 +8,7 @@ import { gitCommitAndPush } from '../vault/git.js';
 import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
+import { getPendingProposals } from '../jobs/proposal-queue.js';
 import { enqueue as enqueueKB } from '../kb/queue.js';
 
 const log = createLogger('interview-review');
@@ -110,6 +111,23 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
             `- **${d.slug}** (${d.domain}, from [[${d.sourceJournal}]]):\n${d.entryMarkdown}`
           ).join('\n\n');
           prepSections.push(`# Pending Playbook Drafts (${drafts.length})\n${draftList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved drafts will be appended to pages/playbook.md after outline approval.*`);
+        }
+
+        const proposals = getPendingProposals();
+        if (proposals.length > 0) {
+          const proposalList = proposals.map(p => {
+            const parts = [`- **${p.title}** — ${p.rationale}`];
+            if (p.suggested_skill) {
+              // suggested_skill may be a full multi-line skill body; render only
+              // the first non-empty line inline so the prep context stays
+              // scannable. Full body remains in logs/proposal-queue.json.
+              const firstLine = p.suggested_skill.split('\n').find(l => l.trim().length > 0) ?? '';
+              parts.push(`  Suggested skill: ${firstLine.trim()}`);
+            }
+            if (p.suggested_cron) parts.push(`  Suggested cron: \`${p.suggested_cron}\``);
+            return parts.join('\n');
+          }).join('\n\n');
+          prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can discuss and note decisions. The automated approval path (skill-file creation / cron registration on approval) is not yet wired — proposals remain in logs/proposal-queue.json until the post-review updater lands in the next iteration.*`);
         }
       }
 

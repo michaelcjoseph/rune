@@ -69,7 +69,7 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Create `src/jobs/intent-scan.ts` exporting `runIntentScan(bot)` — reads last 30 days of intent log, groups by intent shape via Haiku, emits proposals to `logs/proposal-queue.json` (`{type: 'skill_or_cron', title, rationale, suggested_skill, suggested_cron, status: 'pending'}`)
 - [x] Cap proposals at 3 per scan; dedupe against existing skill registry; validate any cron expression in proposals
 - [x] Register the job via skill-frontmatter cron (eat the dogfood) — add a thin `intent-scan` agent file with `cron: "0 15 * * 6"` (Saturday 3pm)
-- [ ] Extend `src/reviews/interview.ts` prep context to include pending proposals (analogous to playbook queue)
+- [x] Extend `src/reviews/interview.ts` prep context to include pending proposals (analogous to playbook queue)
 - [ ] Extend post-review agent flow: when a proposal is approved, the relevant updater creates the skill file or registers the cron via frontmatter edit
 - [x] Tests: scan over a synthetic intent log, dedupe behavior, proposal validation, prep-context integration
 

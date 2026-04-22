@@ -42,6 +42,8 @@ vi.mock('../integrations/telegram/client.js', () => ({
   stopTyping: vi.fn(),
 }));
 
+vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: vi.fn(() => []) }));
+
 vi.mock('../jobs/playbook-extract.js', () => ({
   getPendingPlaybookDrafts: vi.fn(() => []),
   extractPlaybookDrafts: vi.fn(),

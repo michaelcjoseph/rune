@@ -40,6 +40,7 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
 }));
 vi.mock('../jobs/playbook-extract.js', () => ({ getPendingPlaybookDrafts: vi.fn(() => []) }));
+vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: vi.fn(() => []) }));
 vi.mock('../kb/queue.js', () => ({ enqueue: vi.fn() }));
 
 const { toScannerDate, detectOutline, extractInterviewInstructions } = await import('./interview.js');
