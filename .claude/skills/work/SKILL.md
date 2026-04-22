@@ -5,10 +5,12 @@ Pick the next pending task from a project's task list and drive it through the f
 ## Usage
 
 ```
-/work [project-name]
+/work [project-name] [--auto]
 ```
 
 If no argument is given, list all projects in `docs/projects/` and ask the user which one to work on.
+
+**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), and step 16 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 16 empty list) still terminate the run — those are error/completion exits, not checkpoints.
 
 ## Instructions
 
@@ -26,7 +28,9 @@ Match the argument to a folder in `docs/projects/`:
 Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`).
 
 - If no unchecked tasks remain, tell the user all tasks are complete and stop.
-- Show the user which task you're picking up and confirm before proceeding.
+- Announce which task you're picking up.
+- **Without `--auto`**: confirm with the user before proceeding.
+- **With `--auto`**: proceed immediately.
 
 ---
 
@@ -34,8 +38,9 @@ Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`)
 
 ### 3. Enter Plan Mode
 
-Call `EnterPlanMode` to switch into planning mode. This disables editing tools and
-forces thorough exploration before committing to an approach.
+**Without `--auto`**: Call `EnterPlanMode` to switch into planning mode. This disables editing tools and forces thorough exploration before committing to an approach.
+
+**With `--auto`**: Do NOT call `EnterPlanMode` (it requires human approval to exit, which breaks unattended flow). Instead, still perform thorough exploration in steps 4–5 before any edits, and write the plan to the turn output so it's visible in the transcript. Skip step 6 entirely and proceed to Phase 2.
 
 ### 4. Explore and Research
 
@@ -73,8 +78,9 @@ Write the implementation plan to the plan file. The plan should include:
 
 ### 6. Exit Plan Mode
 
-Call `ExitPlanMode` to present the plan for user approval. Do NOT proceed until the
-user approves.
+**Without `--auto`**: Call `ExitPlanMode` to present the plan for user approval. Do NOT proceed until the user approves.
+
+**With `--auto`**: Skip this step (see step 3). Proceed directly to Phase 2.
 
 ---
 
@@ -261,5 +267,7 @@ Output a completion summary:
 
 After outputting the summary, check `tasks.md` for the next unchecked task (`- [ ]`):
 
-- **If a next task exists**: ask the user "Ready to start the next task: **[task name]**?" and if they confirm, loop back to **step 3** (Enter Plan Mode) with that task.
+- **If a next task exists**:
+  - **Without `--auto`**: ask the user "Ready to start the next task: **[task name]**?" and if they confirm, loop back to **step 3** with that task.
+  - **With `--auto`**: loop back to **step 3** immediately with that task — do not ask.
 - **If no tasks remain**: tell the user all tasks for the project are complete and stop.
