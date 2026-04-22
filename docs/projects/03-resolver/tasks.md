@@ -70,7 +70,7 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Cap proposals at 3 per scan; dedupe against existing skill registry; validate any cron expression in proposals
 - [x] Register the job via skill-frontmatter cron (eat the dogfood) — add a thin `intent-scan` agent file with `cron: "0 15 * * 6"` (Saturday 3pm)
 - [x] Extend `src/reviews/interview.ts` prep context to include pending proposals (analogous to playbook queue)
-- [ ] Extend post-review agent flow: when a proposal is approved, the relevant updater creates the skill file or registers the cron via frontmatter edit
+- [x] Extend post-review agent flow: when a proposal is approved, the relevant updater creates the skill file or registers the cron via frontmatter edit
 - [x] Tests: scan over a synthetic intent log, dedupe behavior, proposal validation, prep-context integration
 
 ## Phase C — KB optimizations

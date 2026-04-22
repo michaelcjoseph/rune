@@ -229,6 +229,7 @@ Optional:
 | project-updater | `.claude/agents/project-updater.md` | Post-review: apply approved updates to projects/*.md |
 | playbook-proposer | `.claude/agents/playbook-proposer.md` | Nightly: draft playbook entries from `#playbook`-tagged journals |
 | playbook-updater | `.claude/agents/playbook-updater.md` | Post-review: append approved drafts to pages/playbook.md |
+| proposal-updater | `.claude/agents/proposal-updater.md` | Post-review: action approved Ask-Twice proposals — creates new agent files under `.claude/agents/` and/or registers cron frontmatter on existing agents; marks actioned entries in `logs/proposal-queue.json` |
 | worldview-updater | `.claude/agents/worldview-updater.md` | Post-review: apply approved diffs to world-view/*.md with changelog entry |
 | psychology-updater | `.claude/agents/psychology-updater.md` | Post-review: apply scoped updates to pages/psychology.md |
 | json-updater | `.claude/agents/json-updater.md` | Post-review / nightly: apply updates to JSON data stores |

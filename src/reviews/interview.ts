@@ -8,7 +8,8 @@ import { gitCommitAndPush } from '../vault/git.js';
 import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
-import { getPendingProposals } from '../jobs/proposal-queue.js';
+import { getPendingProposals, clearApprovedProposals } from '../jobs/proposal-queue.js';
+import { PROJECT_ROOT } from '../config.js';
 import { enqueue as enqueueKB } from '../kb/queue.js';
 
 const log = createLogger('interview-review');
@@ -127,7 +128,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
             if (p.suggested_cron) parts.push(`  Suggested cron: \`${p.suggested_cron}\``);
             return parts.join('\n');
           }).join('\n\n');
-          prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can discuss and note decisions. The automated approval path (skill-file creation / cron registration on approval) is not yet wired — proposals remain in logs/proposal-queue.json until the post-review updater lands in the next iteration.*`);
+          prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved proposals are actioned after outline approval: the proposal-updater agent creates new files in .claude/agents/ and registers cron frontmatter. Restart Jarvis to pick up any newly-registered crons.*`);
         }
       }
 
@@ -287,13 +288,14 @@ conversation_context: ${session.prepContext}`);
       };
 
       if (config.postAgents === 'dynamic') {
-        const analysisResult = await askClaudeOneShot(`Based on this ${config.type} review prep context and approved outline, determine which post-interview updates are needed. Reply with a JSON object containing boolean fields: "projects", "psychology", "json_updates", "worldview", "playbook".
+        const analysisResult = await askClaudeOneShot(`Based on this ${config.type} review prep context and approved outline, determine which post-interview updates are needed. Reply with a JSON object containing boolean fields: "projects", "psychology", "json_updates", "worldview", "playbook", "proposals".
 
 Set "projects" to true if active projects were discussed with meaningful updates (thesis changes, new risks, decisions).
 Set "psychology" to true if psychological patterns were observed or challenged.
 Set "json_updates" to true if trackable items were mentioned (#workout, #book, #crm, #place, etc.).
 Set "worldview" to true if the outline proposes specific changes to world-view/*.md files (belief shifts the user approved applying).
 Set "playbook" to true if the outline approves applying playbook drafts from the queue or proposes new tactical patterns to add.
+Set "proposals" to true if the outline approves or rejects any Ask-Twice proposals from the pending queue (i.e., the review touches proposal status decisions that should be actioned by creating agent files or registering crons).
 
 Prep context:
 ${session.prepContext}
@@ -303,14 +305,14 @@ ${session.outline}
 
 Reply ONLY with the JSON object, nothing else.`);
 
-        let updates = { projects: false, psychology: false, json_updates: false, worldview: false, playbook: false };
+        let updates = { projects: false, psychology: false, json_updates: false, worldview: false, playbook: false, proposals: false };
         if (analysisResult.text) {
           try {
             const parsed = JSON.parse(analysisResult.text.replace(/```json?\n?|\n?```/g, '').trim());
             updates = { ...updates, ...parsed };
           } catch {
             log.warn('Failed to parse update analysis, running all agents', { text: analysisResult.text });
-            updates = { projects: true, psychology: true, json_updates: true, worldview: true, playbook: true };
+            updates = { projects: true, psychology: true, json_updates: true, worldview: true, playbook: true, proposals: true };
           }
         }
 
@@ -340,6 +342,18 @@ Reply ONLY with the JSON object, nothing else.`);
           agentPromises.push(runPostAgent('playbook', 'playbook-updater',
             `Apply approved playbook drafts from logs/playbook-queue.json. Only apply drafts the outline approves; leave the rest in the queue.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
             () => enqueueKB('pages/playbook.md')));
+        }
+
+        if (updates.proposals) {
+          // proposal-updater marks approved proposals as status:'approved' in
+          // the queue and creates/edits agent files. The TS-side sweep below
+          // drops the actioned entries so the queue doesn't grow unbounded.
+          // PROJECT_ROOT is passed explicitly because execClaude runs with
+          // cwd=VAULT_DIR, so bare `.claude/agents/` would resolve to the
+          // vault, not the Jarvis repo.
+          agentPromises.push(runPostAgent('proposals', 'proposal-updater',
+            `Action approved Ask-Twice proposals from \`${PROJECT_ROOT}/logs/proposal-queue.json\`. Create new agent files at \`${PROJECT_ROOT}/.claude/agents/<slug>.md\` for approved skills. Register cron frontmatter on existing agents at the same path for approved crons. Leave unapproved entries as 'pending'. Jarvis project root: \`${PROJECT_ROOT}\`.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            () => clearApprovedProposals()));
         }
       } else {
         // psychology-only mode
@@ -374,6 +388,7 @@ Reply ONLY with the JSON object, nothing else.`);
         summarize('json_updates', 'JSON data updated.', 'JSON update failed.', 'JSON updates skipped (agent missing).'),
         summarize('worldview', 'Worldview updated.', 'Worldview update failed.', 'Worldview skipped (agent missing).'),
         summarize('playbook', 'Playbook entries added.', 'Playbook update failed.', 'Playbook skipped (agent missing).'),
+        summarize('proposals', 'Ask-Twice proposals actioned (restart Jarvis to pick up new cron agents).', 'Proposal update failed.', 'Proposal update skipped (agent missing).'),
       ].filter(Boolean).join('\n');
 
       updateReviewSession(session.chatId, { phase: 'done' });

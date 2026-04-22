@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Mocks ---
 
+vi.mock('../config.js', () => ({
+  default: {
+    VAULT_DIR: '/test/vault',
+    TIMEZONE: 'America/Chicago',
+    TELEGRAM_USER_ID: 123,
+    LOGS_DIR: '/tmp/jarvis-test-logs',
+  },
+  PROJECT_ROOT: '/test/project',
+}));
+
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -42,7 +52,10 @@ vi.mock('../integrations/telegram/client.js', () => ({
   stopTyping: vi.fn(),
 }));
 
-vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: vi.fn(() => []) }));
+vi.mock('../jobs/proposal-queue.js', () => ({
+  getPendingProposals: vi.fn(() => []),
+  clearApprovedProposals: vi.fn(),
+}));
 
 vi.mock('../jobs/playbook-extract.js', () => ({
   getPendingPlaybookDrafts: vi.fn(() => []),
@@ -652,6 +665,38 @@ describe('reviews/weekly', () => {
       expect(enqueueKBMock).toHaveBeenCalledWith('pages/playbook.md');
     });
 
+    it('spawns proposal-updater and calls clearApprovedProposals when proposals flag is true', async () => {
+      const { clearApprovedProposals } = await import('../jobs/proposal-queue.js');
+      const session = approvalSession();
+      runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": false, "playbook": false, "proposals": true}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String));
+      expect(vi.mocked(clearApprovedProposals)).toHaveBeenCalled();
+      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Ask-Twice proposals actioned'));
+    });
+
+    it('does NOT call clearApprovedProposals when proposal-updater fails', async () => {
+      const { clearApprovedProposals } = await import('../jobs/proposal-queue.js');
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null })
+        .mockResolvedValueOnce({ text: null, error: 'agent failed' });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false, "worldview": false, "playbook": false, "proposals": true}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(vi.mocked(clearApprovedProposals)).not.toHaveBeenCalled();
+    });
+
     it('enqueues touched project files for KB ingestion after project-updater succeeds', async () => {
       const session = approvalSession();
       runAgentMock
@@ -706,13 +751,14 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
-      // review-writer + all 5 post agents = 6
-      expect(runAgentMock).toHaveBeenCalledTimes(6);
+      // review-writer + all 6 post agents = 7
+      expect(runAgentMock).toHaveBeenCalledTimes(7);
       expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('psychology-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
       expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String));
     });
 
     it('spawns no post agents when none are flagged', async () => {

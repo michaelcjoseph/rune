@@ -15,6 +15,7 @@ vi.mock('../config.js', () => ({
     get REVIEW_SESSIONS_FILE() { return '/tmp/jarvis-test-logs/review-sessions.json'; },
     get SESSIONS_FILE() { return '/tmp/jarvis-test-logs/tg-sessions.json'; },
   },
+  PROJECT_ROOT: '/test/project',
 }));
 
 vi.mock('./session.js', () => ({
@@ -40,7 +41,10 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
 }));
 vi.mock('../jobs/playbook-extract.js', () => ({ getPendingPlaybookDrafts: vi.fn(() => []) }));
-vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: vi.fn(() => []) }));
+vi.mock('../jobs/proposal-queue.js', () => ({
+  getPendingProposals: vi.fn(() => []),
+  clearApprovedProposals: vi.fn(),
+}));
 vi.mock('../kb/queue.js', () => ({ enqueue: vi.fn() }));
 
 const { toScannerDate, detectOutline, extractInterviewInstructions } = await import('./interview.js');
