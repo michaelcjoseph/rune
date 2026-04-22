@@ -1,0 +1,15 @@
+agent: kb-query
+fixtures:
+  - name: "Gracefully handles a topic with no KB coverage"
+    input: |
+      What do I know about zyxw-nonexistent-topic-98765? Do not invent information.
+    assertions:
+      # Bounded alternation to catch common "no coverage" phrasings without
+      # unbounded backtracking. The README's ReDoS guidance flags `.*` between
+      # alternations as a hazard, so this pattern uses a fixed alternation of
+      # complete phrases instead.
+      - type: regex
+        pattern: "(don't know|no\\s+(results|matches?|information|coverage|relevant|record|data|pages?|entries|documentation)|not\\s+(found|documented|in\\s+the\\s+(knowledge base|KB|wiki|vault))|nothing\\s+(found|relevant)|unable to (find|locate)|no mention|empty|cannot find)"
+        flags: "i"
+      - type: max_length_chars
+        value: 3000

@@ -8,5 +8,6 @@ coverage/
 
 *.log
 *.tmp
+*.jsonl
 
 .DS_Store

@@ -27,6 +27,8 @@ vi.mock('../commands/weekly.js', () => ({ handleWeekly: vi.fn() }));
 vi.mock('../commands/monthly.js', () => ({ handleMonthly: vi.fn() }));
 vi.mock('../commands/quarterly.js', () => ({ handleQuarterly: vi.fn() }));
 vi.mock('../commands/yearly.js', () => ({ handleYearly: vi.fn() }));
+vi.mock('../commands/learn.js', () => ({ handleLearn: vi.fn() }));
+vi.mock('../commands/learn-list.js', () => ({ handleLearnList: vi.fn() }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
@@ -40,6 +42,8 @@ const { handleAsk } = await import('../commands/ask.js');
 const { handleStatus } = await import('../commands/status.js');
 const { handleKB } = await import('../commands/kb.js');
 const { handleIngest } = await import('../commands/ingest.js');
+const { handleLearn } = await import('../commands/learn.js');
+const { handleLearnList } = await import('../commands/learn-list.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -90,6 +94,41 @@ describe('text handler routing', () => {
   it('routes /status', async () => {
     await handleTextMessage(mockBot(), msg('/status'));
     expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100);
+  });
+
+  it('routes /learn with text', async () => {
+    await handleTextMessage(mockBot(), msg('/learn prefer terse answers'));
+    expect(handleLearn).toHaveBeenCalledWith(expect.anything(), 100, 'prefer terse answers');
+  });
+
+  it('routes bare /learn as empty-args (usage hint path)', async () => {
+    await handleTextMessage(mockBot(), msg('/learn'));
+    expect(handleLearn).toHaveBeenCalledWith(expect.anything(), 100, '');
+  });
+
+  it('routes /learn-list to its own handler, not /learn', async () => {
+    await handleTextMessage(mockBot(), msg('/learn-list'));
+    expect(handleLearnList).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleLearn).not.toHaveBeenCalled();
+  });
+
+  it('does not mistakenly route /learning as /learn', async () => {
+    // "/learning" does not equal '/learn' and does not start with '/learn ',
+    // so it should fall through to conversation, not invoke handleLearn.
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'test-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: '/learning',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+    await handleTextMessage(mockBot(), msg('/learning curve question'));
+    expect(handleLearn).not.toHaveBeenCalled();
   });
 
   it('routes /start and sends help', async () => {

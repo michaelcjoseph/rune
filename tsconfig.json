@@ -16,6 +16,6 @@
     "sourceMap": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src/**/*", "cli/**/*"],
+  "include": ["src/**/*", "cli/**/*", "scripts/**/*"],
   "exclude": ["node_modules", "dist", "_old"]
 }

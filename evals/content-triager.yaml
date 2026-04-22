@@ -1,0 +1,38 @@
+agent: content-triager
+fixtures:
+  - name: "Classifies low-substance social chatter as skip or readwise"
+    input: |
+      Classify this content:
+
+      Title: "10 things I learned on Twitter today"
+      URL: https://example.com/twitter-roundup
+      Content: Hot takes about AI, celebrity gossip, viral memes, and quick opinions with no sources, frameworks, or novel analysis.
+    assertions:
+      - type: regex
+        pattern: "^CLASSIFICATION: (skip|readwise)\\s*$"
+        flags: "m"
+      - type: substring
+        value: "TITLE:"
+      - type: substring
+        value: "REASONING:"
+      - type: max_length_chars
+        value: 2000
+
+  # Note: this fixture accepts both kb-ingest and readwise because the agent
+  # is instructed to prefer readwise when a topic already exists in the KB's
+  # index.md. A vault with an existing transformer page should route to
+  # readwise; a fresh vault should route to kb-ingest. Either is compliant
+  # agent behavior, so the assertion is tolerant to both.
+  - name: "Classifies a substantive research paper as kb-ingest or readwise (not skip/journal)"
+    input: |
+      Classify this content:
+
+      Title: "Attention Is All You Need"
+      URL: https://arxiv.org/abs/1706.03762
+      Content: Foundational 2017 paper introducing the Transformer architecture, self-attention mechanism, multi-head attention, positional encodings, and the encoder-decoder stack. Establishes the modern foundation for LLMs.
+    assertions:
+      - type: regex
+        pattern: "^CLASSIFICATION: (kb-ingest|readwise)\\s*$"
+        flags: "m"
+      - type: substring
+        value: "REASONING:"

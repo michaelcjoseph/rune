@@ -10,7 +10,7 @@ Pick the next pending task from a project's task list and drive it through the f
 
 If no argument is given, list all projects in `docs/projects/` and ask the user which one to work on.
 
-**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), and step 16 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 16 empty list) still terminate the run — those are error/completion exits, not checkpoints.
+**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), and step 17 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 17 empty list) still terminate the run — those are error/completion exits, not checkpoints.
 
 ## Instructions
 
@@ -217,7 +217,27 @@ were changed: [list changed files]. Run all tests and fix any failures.
 
 Skip this step if step 13 made no code changes.
 
-### 15. Sync Docs
+### 15. Evals — Conditional
+
+If the task modified agent behavior in any of these ways, run the relevant evals:
+
+- Any file under `.claude/agents/` (Jarvis) or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
+- The prompt strings, context assembly, or args passed to `runAgent()` changed in a source file (grep the diff for `runAgent(`)
+- `AGENT_MODEL` / agent-loading logic in `src/ai/claude.ts` changed
+
+```bash
+npm run evals -- <agent-name>     # single agent
+npm run evals                     # all agents if multiple touched
+npm run evals -- --dry-run        # validate YAML only (use if iterating on fixtures)
+```
+
+A non-zero exit from `npm run evals` is a failure — fix the failing fixture (or the agent prompt) before proceeding, or defer with explicit justification in the completion summary.
+
+If no `evals/<agent-name>.yaml` exists for an affected agent yet, note it in the completion summary as a follow-up rather than blocking.
+
+Skip this step if the task didn't touch agent behavior. MVP: no CI gate, manual cadence, pass/fail goes in the completion summary alongside test results.
+
+### 16. Sync Docs
 
 Use the `Agent` tool with `subagent_type: "docs-sync"`:
 
@@ -229,7 +249,7 @@ agents table, environment variables, and npm scripts.
 
 Skip this step if the task only changed existing file internals without adding new modules, commands, agents, config values, or scripts.
 
-### 16. Complete
+### 17. Complete
 
 Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` for the completed task.
 
@@ -259,6 +279,10 @@ Output a completion summary:
 ### Simplification
 
 - [changes applied or "No changes needed"]
+
+### Evals
+
+- [agent names run + pass/fail, OR "N/A — no agent prompts changed", OR "Deferred — no eval YAML exists for <agent> yet, added as follow-up"]
 
 ### Next Task
 

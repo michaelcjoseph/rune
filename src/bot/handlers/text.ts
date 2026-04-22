@@ -29,6 +29,8 @@ import { handleBlog } from '../commands/blog.js';
 import { handleLenny } from '../commands/lenny.js';
 import { handlePG } from '../commands/pg.js';
 import { handleSeed } from '../commands/seed.js';
+import { handleLearn } from '../commands/learn.js';
+import { handleLearnList } from '../commands/learn-list.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
@@ -63,6 +65,9 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/blog')) return handleBlog(bot, chatId, text.slice('/blog'.length).trim());
   if (text.startsWith('/lenny')) return handleLenny(bot, chatId, text.slice('/lenny'.length).trim());
   if (text.startsWith('/pg')) return handlePG(bot, chatId, text.slice('/pg'.length).trim());
+  // /learn-list must come before /learn so the longer prefix wins.
+  if (text.startsWith('/learn-list')) return handleLearnList(bot, chatId);
+  if (text === '/learn' || text.startsWith('/learn ')) return handleLearn(bot, chatId, text.slice('/learn'.length).trim());
   if (text.startsWith('/prep')) return handlePrep(bot, chatId);
   if (text.startsWith('/seed')) return handleSeed(bot, chatId, text.slice('/seed'.length).trim());
   if (text.startsWith('/lint')) return handleLint(bot, chatId);
@@ -236,6 +241,8 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/lint — run wiki health check',
     '/prep — run morning prep now',
     '/status — show uptime and session info',
+    '/learn <text> — append a runtime learning (auto-prepended to future agents)',
+    '/learn-list — show current prepended learnings',
     '',
     'Sessions:',
     '/think <topic> — thinking partner mode',

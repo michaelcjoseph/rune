@@ -49,7 +49,9 @@ src/
 │       ├── family.ts        # /family — family planning/review
 │       ├── career.ts        # /career — career reflection/planning
 │       ├── lenny.ts         # /lenny — library search (Lenny's Newsletter)
-│       └── pg.ts            # /pg — library search (Paul Graham essays)
+│       ├── pg.ts            # /pg — library search (Paul Graham essays)
+│       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
+│       └── learn-list.ts    # /learn-list — echo the current prepended learnings
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
@@ -97,6 +99,7 @@ src/
 ├── vault/
 │   ├── files.ts             # Read/write/list vault markdown files
 │   ├── journal.ts           # Journal file creation, append, writeMorningPrep, parseTag
+│   ├── learnings.ts         # /learn-authored JSONL store + prompt-prepend builder for runAgent
 │   ├── git.ts               # git add/commit/push helpers
 │   ├── sessions.ts          # TG session Map with JSON persistence + crash recovery
 │   └── watcher.ts           # FSWatcher for Readwise article detection, TG notify + enqueue
@@ -106,6 +109,11 @@ src/
     └── markdown.ts          # Markdown parsing utilities (future)
 cli/
 └── jarvis.ts                # CLI entry point for local interactive use
+evals/
+└── README.md                # YAML schema + authoring conventions for the MVP eval framework
+scripts/
+├── run-evals.ts             # Dev tool: parse eval YAMLs, invoke agents via runAgent(), report pass/fail
+└── run-evals.test.ts        # Unit tests for the eval runner (vitest)
 ```
 
 ## Vault Content Model

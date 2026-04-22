@@ -1,0 +1,25 @@
+# wiki-compiler writes to knowledge/wiki/, knowledge/index.md, and knowledge/log.md
+# when actually ingesting. This MVP fixture probes the agent's workflow understanding
+# without asking it to modify the vault — catches regressions where the agent loses
+# awareness of schema.md / index.md / frontmatter conventions.
+
+agent: wiki-compiler
+fixtures:
+  - name: "Describes ingestion workflow without mutating the vault"
+    input: |
+      Do NOT write, edit, or create any files for this request.
+
+      In 3-6 bullet points, summarize the steps you take when asked to ingest a new raw source into the knowledge base. Cover which files you read first, how you decide between new vs. existing pages, and what metadata every wiki page must carry.
+    assertions:
+      - type: substring
+        value: "schema.md"
+      - type: substring
+        value: "index.md"
+      - type: regex
+        pattern: "frontmatter|last-verified|valid-until"
+        flags: "i"
+      - type: regex
+        pattern: "wikilink|\\[\\["
+        flags: "i"
+      - type: max_length_chars
+        value: 3000

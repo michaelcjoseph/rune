@@ -375,6 +375,159 @@ describe('ai/claude', () => {
       expect(def.tools).toEqual(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash']);
       expect(def.prompt).toContain('wiki compiler');
     });
+
+    it('parses cron, cron_args, cron_chat, and triggers from frontmatter', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: sec-filings-watcher
+cron: "0 7 * * 1"
+cron_args: "Review latest SEC filings and flag anomalies."
+cron_chat: true
+triggers:
+  - "check sec filings"
+  - "what's new in sec"
+tools:
+  - Read
+  - Grep
+---
+
+You are a SEC filings watcher.`);
+      const def = loadAgentDef('sec-filings-watcher');
+      expect(def.cron).toBe('0 7 * * 1');
+      expect(def.cronArgs).toBe('Review latest SEC filings and flag anomalies.');
+      expect(def.cronChat).toBe(true);
+      expect(def.triggers).toEqual(['check sec filings', "what's new in sec"]);
+      expect(def.tools).toEqual(['Read', 'Grep']);
+      expect(def.prompt).toContain('SEC filings watcher');
+    });
+
+    it('treats missing optional fields as undefined / empty', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: plain-agent
+tools:
+  - Read
+---
+
+Plain body.`);
+      const def = loadAgentDef('plain-agent');
+      expect(def.cron).toBeUndefined();
+      expect(def.cronArgs).toBeUndefined();
+      expect(def.cronChat).toBeUndefined();
+      expect(def.triggers).toBeUndefined();
+      expect(def.tools).toEqual(['Read']);
+    });
+
+    it('accepts unquoted cron and cron_chat: false', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: log-only-cron
+cron: 0 9 * * *
+cron_chat: false
+---
+
+Body.`);
+      const def = loadAgentDef('log-only-cron');
+      expect(def.cron).toBe('0 9 * * *');
+      expect(def.cronChat).toBe(false);
+    });
+
+    it('accepts single-quoted scalar values', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: single-quoted
+cron: '15 3 * * *'
+cron_args: 'run the thing'
+---
+
+Body.`);
+      const def = loadAgentDef('single-quoted');
+      expect(def.cron).toBe('15 3 * * *');
+      expect(def.cronArgs).toBe('run the thing');
+    });
+
+    it('ignores cron_chat values that are neither "true" nor "false"', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: weird-chat
+cron: "0 * * * *"
+cron_chat: maybe
+---
+
+Body.`);
+      const def = loadAgentDef('weird-chat');
+      expect(def.cronChat).toBeUndefined();
+    });
+
+    it('strips trailing inline comments from unquoted scalar values', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: comment-test
+cron: 0 7 * * 1 # runs every Monday at 7am
+cron_args: run the thing # arg comment
+---
+
+Body.`);
+      const def = loadAgentDef('comment-test');
+      expect(def.cron).toBe('0 7 * * 1');
+      expect(def.cronArgs).toBe('run the thing');
+    });
+
+    it('accepts case-insensitive cron_chat booleans (True, FALSE, etc.)', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: case-bool-true
+cron_chat: True
+---
+
+Body.`);
+      expect(loadAgentDef('case-bool-true').cronChat).toBe(true);
+
+      readFileMock.mockImplementationOnce(() => `---
+name: case-bool-false
+cron_chat: FALSE
+---
+
+Body.`);
+      expect(loadAgentDef('case-bool-false').cronChat).toBe(false);
+    });
+
+    it('accepts zero-indent (top-level) list items', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: zero-indent-list
+triggers:
+- first
+- second
+---
+
+Body.`);
+      expect(loadAgentDef('zero-indent-list').triggers).toEqual(['first', 'second']);
+    });
+
+    it('parses triggers list with mixed quote styles', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: trigger-test
+triggers:
+  - "double quoted"
+  - 'single quoted'
+  - unquoted trigger
+---
+
+Body.`);
+      const def = loadAgentDef('trigger-test');
+      expect(def.triggers).toEqual(['double quoted', 'single quoted', 'unquoted trigger']);
+    });
   });
 
   describe('runAgent', () => {
@@ -422,6 +575,68 @@ describe('ai/claude', () => {
         expect.any(Array),
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
+    });
+
+    it('omits the Learnings block when learnings.jsonl is absent', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'do stuff');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const prompt = args[args.indexOf('-p') + 1]!;
+      // Default ENOENT for any path that's not an agent file — no learnings to
+      // prepend — so prompt starts directly with the date context.
+      expect(prompt.startsWith('## Learnings')).toBe(false);
+      expect(prompt).toMatch(/^Today is /);
+      expect(prompt).toContain('do stuff');
+    });
+
+    it('prepends the Learnings block before date context and user prompt when learnings.jsonl exists', async () => {
+      const { readFileSync } = await import('node:fs');
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      // Override for this one call: respond to the learnings path; keep agent-file behavior.
+      // Single-shot override that handles both possible reads (agent file + learnings
+       // file). `loadAgentDef` caches agent defs across tests, so depending on test
+       // order the agent-file branch may or may not fire — handle both.
+      readFileMock.mockImplementationOnce((path: string) => {
+        if (typeof path === 'string' && path.endsWith('learnings.jsonl')) {
+          return [
+            JSON.stringify({ ts: '2025-01-01T00:00:00.000Z', text: 'prefer terse answers' }),
+            JSON.stringify({ ts: '2025-02-01T00:00:00.000Z', text: 'cite sources when discussing papers' }),
+          ].join('\n') + '\n';
+        }
+        if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
+        throw new Error(`ENOENT: ${path}`);
+      });
+      // Same impl for any second read (in case both happen in this test).
+      readFileMock.mockImplementationOnce((path: string) => {
+        if (typeof path === 'string' && path.endsWith('learnings.jsonl')) {
+          return [
+            JSON.stringify({ ts: '2025-01-01T00:00:00.000Z', text: 'prefer terse answers' }),
+            JSON.stringify({ ts: '2025-02-01T00:00:00.000Z', text: 'cite sources when discussing papers' }),
+          ].join('\n') + '\n';
+        }
+        if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
+        throw new Error(`ENOENT: ${path}`);
+      });
+
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'ingest this paper');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const prompt = args[args.indexOf('-p') + 1]!;
+
+      // Block is at the very start.
+      expect(prompt.startsWith('## Learnings')).toBe(true);
+      // Both entries appear oldest-first in the block.
+      const terseIdx = prompt.indexOf('prefer terse answers');
+      const citeIdx = prompt.indexOf('cite sources when discussing papers');
+      expect(terseIdx).toBeGreaterThan(-1);
+      expect(citeIdx).toBeGreaterThan(-1);
+      expect(terseIdx).toBeLessThan(citeIdx);
+      // Date context appears AFTER the block.
+      const dateIdx = prompt.indexOf('Today is ');
+      expect(dateIdx).toBeGreaterThan(citeIdx);
+      // Original user prompt appears AFTER the date context.
+      const userIdx = prompt.indexOf('ingest this paper');
+      expect(userIdx).toBeGreaterThan(dateIdx);
     });
   });
 

@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDateContext } from '../utils/time.js';
+// Deliberate one-way dependency ai/ → vault/: every runAgent() should transparently
+// pick up /learn-authored guidance without each caller re-implementing the prepend.
+// If vault/learnings ever needs Claude help (e.g., dedup), extract a context/ layer.
+import { buildLearningsPrompt } from '../vault/learnings.js';
 
 const log = createLogger('claude');
 
@@ -142,9 +146,19 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
   return execClaude(args, timeoutMs);
 }
 
-interface AgentDef {
+export interface AgentDef {
   prompt: string;
   tools: string[];
+  /** Optional cron expression (5- or 6-field). When set, the scheduler registers
+   *  a job that calls runAgent(name, cron_args ?? '') at each tick. */
+  cron?: string;
+  /** Prompt string passed as the second arg to runAgent when cron fires. */
+  cronArgs?: string;
+  /** When true, the agent's stdout is posted to Telegram; otherwise log-only. */
+  cronChat?: boolean;
+  /** Natural-language trigger phrases used by the resolver to classify free-form
+   *  TG messages onto this agent. */
+  triggers?: string[];
 }
 
 const agentDefCache = new Map<string, AgentDef>();
@@ -181,18 +195,70 @@ export function loadAgentDef(agentName: string): AgentDef {
   const body = match[2]!.trim();
 
   // Parse tools from frontmatter (simple YAML list extraction)
-  const tools: string[] = [];
-  const toolsMatch = frontmatter.match(/tools:\n((?:\s+-\s+\S+\n?)*)/);
-  if (toolsMatch) {
-    for (const line of toolsMatch[1]!.split('\n')) {
-      const tool = line.match(/^\s+-\s+(\S+)/);
-      if (tool) tools.push(tool[1]!);
-    }
-  }
+  const tools = parseYamlListField(frontmatter, 'tools');
+  const triggers = parseYamlListField(frontmatter, 'triggers');
 
-  const def = { prompt: body, tools };
+  const cron = parseYamlScalarField(frontmatter, 'cron');
+  const cronArgs = parseYamlScalarField(frontmatter, 'cron_args');
+  const cronChatRaw = parseYamlScalarField(frontmatter, 'cron_chat')?.toLowerCase();
+  const cronChat = cronChatRaw === 'true' ? true : cronChatRaw === 'false' ? false : undefined;
+
+  const def: AgentDef = {
+    prompt: body,
+    tools,
+    ...(cron !== undefined ? { cron } : {}),
+    ...(cronArgs !== undefined ? { cronArgs } : {}),
+    ...(cronChat !== undefined ? { cronChat } : {}),
+    ...(triggers.length > 0 ? { triggers } : {}),
+  };
   agentDefCache.set(agentName, def);
   return def;
+}
+
+/** Extract a single-line scalar value from a YAML frontmatter string.
+ *  Supports: `key: value`, `key: "value"`, `key: 'value'`. Returns undefined
+ *  if the field is absent. Values are trimmed. Only looks at line-leading keys
+ *  (not nested). Good enough for Jarvis's flat frontmatter schema. */
+function parseYamlScalarField(frontmatter: string, key: string): string | undefined {
+  const escKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^${escKey}:[ \\t]*(.*?)\\s*$`, 'm');
+  const match = frontmatter.match(re);
+  if (!match) return undefined;
+  let raw = match[1]!.trim();
+  if (raw.length === 0) return undefined;
+  // Strip surrounding quotes first so `"x" # comment` is handled as well as `x # comment`.
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1);
+  }
+  // Strip trailing inline comment (YAML convention: ` #` starts a comment when
+  // the `#` is preceded by whitespace). Only applied to unquoted values.
+  const commentIdx = raw.search(/\s+#/);
+  if (commentIdx !== -1) raw = raw.slice(0, commentIdx).trim();
+  return raw;
+}
+
+/** Extract a YAML list field. Supports the block form:
+ *    key:
+ *      - foo
+ *      - bar
+ *  Returns [] if the field is absent or empty. Items are trimmed of quotes. */
+function parseYamlListField(frontmatter: string, key: string): string[] {
+  const escKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Accept zero-indent (`- item`) as well as indented (`  - item`) block lists.
+  const re = new RegExp(`^${escKey}:\\n((?:[ \\t]*-\\s+.+\\n?)*)`, 'm');
+  const match = frontmatter.match(re);
+  if (!match) return [];
+  const items: string[] = [];
+  for (const line of match[1]!.split('\n')) {
+    const itemMatch = line.match(/^[ \t]*-\s+(.+?)\s*$/);
+    if (!itemMatch) continue;
+    let item = itemMatch[1]!;
+    if ((item.startsWith('"') && item.endsWith('"')) || (item.startsWith("'") && item.endsWith("'"))) {
+      item = item.slice(1, -1);
+    }
+    items.push(item);
+  }
+  return items;
 }
 
 /** Prefix used on runAgent error messages when the agent file cannot be loaded. */
@@ -213,10 +279,20 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     return { text: null, error: message };
   }
   const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
+  // Prepend /learn-authored runtime learnings so agents adapt without code changes.
+  // Read failures here must not break agent invocation — fall back to empty.
+  let learningsBlock = '';
+  try {
+    learningsBlock = buildLearningsPrompt();
+  } catch (err) {
+    log.warn('Failed to load learnings; proceeding without prepend', {
+      error: (err as Error).message,
+    });
+  }
   const args = [
     '--agent', agentName,
     '--agents', agentsJson,
-    '-p', `${dateCtx}\n\n${prompt}`,
+    '-p', `${learningsBlock}${dateCtx}\n\n${prompt}`,
     '--no-session-persistence',
     '--model', config.AGENT_MODEL,
   ];

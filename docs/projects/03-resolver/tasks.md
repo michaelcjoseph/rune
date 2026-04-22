@@ -8,23 +8,23 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Skill evals MVP (#7)
 
-- [ ] Create `evals/` directory with `README.md` documenting the YAML schema (agent, fixtures with input + assertions; assertion types: substring, citation_present, max_length_chars, json_shape, regex)
-- [ ] Add `scripts/run-evals.ts` that loads YAML, invokes agent via `runAgent()`, runs assertions, prints per-fixture pass/fail breakdown, exits non-zero on any fail
-- [ ] Add `npm run evals` entry to `package.json`; support `npm run evals -- <agent-name>` for single-agent runs and `npm run evals -- --dry-run` to validate YAML without API calls
-- [ ] Write 2–3 sample evals (`evals/wiki-compiler.yaml`, `evals/kb-query.yaml`, `evals/content-triager.yaml`) — each with at least one fixture
-- [ ] Add eval-pass requirement to `/work` skill done checklist (lightweight reference, no CI gate yet)
+- [x] Create `evals/` directory with `README.md` documenting the YAML schema (agent, fixtures with input + assertions; assertion types: substring, citation_present, max_length_chars, json_shape, regex)
+- [x] Add `scripts/run-evals.ts` that loads YAML, invokes agent via `runAgent()`, runs assertions, prints per-fixture pass/fail breakdown, exits non-zero on any fail
+- [x] Add `npm run evals` entry to `package.json`; support `npm run evals -- <agent-name>` for single-agent runs and `npm run evals -- --dry-run` to validate YAML without API calls
+- [x] Write 2–3 sample evals (`evals/wiki-compiler.yaml`, `evals/kb-query.yaml`, `evals/content-triager.yaml`) — each with at least one fixture
+- [x] Add eval-pass requirement to `/work` skill done checklist (lightweight reference, no CI gate yet)
 
 ### `/learn` (#8)
 
-- [ ] Add `src/bot/commands/learn.ts` (`/learn <text>` appends `{ts, text}` JSON line to `vault/learnings.jsonl`; empty text → usage hint)
-- [ ] Add `src/bot/commands/learn-list.ts` (echo current prepended learnings, capped at the same N as runtime)
-- [ ] Register both commands in `src/bot/handlers/text.ts`
-- [ ] Extend `src/ai/claude.ts:runAgent` to read tail of `vault/learnings.jsonl` and prepend to agent prompt under `## Learnings` heading; cap at N most recent (default 20) by token budget
-- [ ] Tests: append happy path, file-missing case, prepend ordering, token-budget cap
+- [x] Add `src/bot/commands/learn.ts` (`/learn <text>` appends `{ts, text}` JSON line to `vault/learnings.jsonl`; empty text → usage hint)
+- [x] Add `src/bot/commands/learn-list.ts` (echo current prepended learnings, capped at the same N as runtime)
+- [x] Register both commands in `src/bot/handlers/text.ts`
+- [x] Extend `src/ai/claude.ts:runAgent` to read tail of `vault/learnings.jsonl` and prepend to agent prompt under `## Learnings` heading; cap at N most recent (default 20) by token budget
+- [x] Tests: append happy path, file-missing case, prepend ordering, token-budget cap
 
 ### Skill-frontmatter cron (#6)
 
-- [ ] Extend `src/ai/claude.ts:loadAgentDef` frontmatter parser to read optional `cron`, `cron_args`, `cron_chat`, `triggers` fields
+- [x] Extend `src/ai/claude.ts:loadAgentDef` frontmatter parser to read optional `cron`, `cron_args`, `cron_chat`, `triggers` fields
 - [ ] In `src/jobs/scheduler.ts:startScheduler`, scan all agent files (Jarvis + vault) and register a generic `runAgent(name, cron_args ?? '')` job per agent with a `cron:` field
 - [ ] On invocation: if `cron_chat: true`, post output to TG; otherwise log only
 - [ ] Validate cron expression at registration; bad expression → log error and skip (don't crash)
