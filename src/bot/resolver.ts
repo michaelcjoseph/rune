@@ -1,5 +1,5 @@
 import config from '../config.js';
-import { askHaikuOneShot as callClassifier } from '../ai/claude.js';
+import { askClaudeOneShot as callClassifier } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import type { SkillEntry } from './skill-registry.js';
 
@@ -31,7 +31,7 @@ interface RawClassify {
   second_confidence?: unknown;
 }
 
-/** Build the compact prompt shown to Haiku. The registry is rendered as a
+/** Build the compact prompt shown to the classifier. The registry is rendered as a
  *  terse list of skill descriptors (name, description, triggers, examples)
  *  followed by the user message and strict JSON instructions. */
 export function buildResolverPrompt(message: string, registry: SkillEntry[]): string {
@@ -99,8 +99,8 @@ export function parseClassifyResponse(raw: string): ClassifyResult {
   return { skill, args, confidence, second_skill, second_confidence, ambiguous, raw };
 }
 
-/** Strip a single leading ```json / ``` fence if present. Haiku sometimes
- *  wraps JSON even when told not to. */
+/** Strip a single leading ```json / ``` fence if present. Models sometimes
+ *  wrap JSON even when told not to. */
 function stripFences(s: string): string {
   if (!s.startsWith('```')) return s;
   const withoutOpen = s.replace(/^```(?:json)?\n?/, '');
@@ -127,11 +127,13 @@ function zeroResult(raw: string): ClassifyResult {
 }
 
 /** Classify a free-form user message against the provided skill registry.
- *  Returns a ClassifyResult with routing-ready fields. Errors from the Haiku
- *  call collapse to a zero-confidence result — the caller falls through. */
+ *  Returns a ClassifyResult with routing-ready fields. Errors from the
+ *  classifier call collapse to a zero-confidence result — the caller falls through. */
 export async function classifyIntent(message: string, registry: SkillEntry[]): Promise<ClassifyResult> {
   const prompt = buildResolverPrompt(message, registry);
-  const result = await callClassifier(prompt);
+  // Explicit short timeout — every TG message hits this path, and the new
+  // CLAUDE_TIMEOUT_MS default (30 min) would freeze the bot on a hang.
+  const result = await callClassifier(prompt, config.CLASSIFIER_TIMEOUT_MS);
   if (result.error || result.text === null) {
     log.warn('Classifier call failed; falling through to freeform', { error: result.error });
     return zeroResult('');

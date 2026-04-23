@@ -5,8 +5,8 @@ vi.mock('../config.js', () => ({
     VAULT_DIR: '/test/vault',
     TIMEZONE: 'America/Chicago',
     TELEGRAM_USER_ID: 42,
-    CLASSIFIER_MODEL: 'haiku',
-    CLASSIFIER_TIMEOUT_MS: 20_000,
+    ONESHOT_MODEL: 'opus',
+    CLASSIFIER_TIMEOUT_MS: 60_000,
     RESOLVER_CONFIDENCE_THRESHOLD: 0.7,
     RESOLVER_AMBIGUITY_DELTA: 0.05,
     RESOLVER_MIN_WORDS: 5,
@@ -15,7 +15,7 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../ai/claude.js', () => ({
-  askHaikuOneShot: vi.fn(async (_prompt: string) => ({ text: '{}', error: null })),
+  askClaudeOneShot: vi.fn(async (_prompt: string, _timeoutMs?: number) => ({ text: '{}', error: null })),
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -32,7 +32,7 @@ const {
   parseClassifyResponse,
   classifyIntent,
 } = await import('./resolver.js');
-const { askHaikuOneShot: mockCall } = await import('../ai/claude.js');
+const { askClaudeOneShot: mockCall } = await import('../ai/claude.js');
 
 const sampleRegistry = [
   {
@@ -73,7 +73,7 @@ describe('buildResolverPrompt', () => {
     expect(prompt).toContain('"she said \\"hi\\" to me this morning"');
   });
 
-  it('instructs Haiku to return JSON only', () => {
+  it('instructs the classifier to return JSON only', () => {
     const prompt = buildResolverPrompt('test', sampleRegistry);
     expect(prompt).toMatch(/JSON only/i);
     expect(prompt).toContain('"skill"');
@@ -213,7 +213,7 @@ describe('classifyIntent', () => {
     vi.clearAllMocks();
   });
 
-  it('invokes the Haiku wrapper with a prompt built from the registry', async () => {
+  it('invokes the classifier with a prompt built from the registry and the short CLASSIFIER_TIMEOUT_MS', async () => {
     vi.mocked(mockCall).mockResolvedValue({
       text: JSON.stringify({
         skill: 'kb_query',
@@ -227,9 +227,10 @@ describe('classifyIntent', () => {
 
     const result = await classifyIntent('what do I know about X', sampleRegistry);
     expect(mockCall).toHaveBeenCalledTimes(1);
-    const callArg = vi.mocked(mockCall).mock.calls[0]![0];
-    expect(callArg).toContain('kb_query');
-    expect(callArg).toContain('what do I know about X');
+    const [promptArg, timeoutArg] = vi.mocked(mockCall).mock.calls[0]!;
+    expect(promptArg).toContain('kb_query');
+    expect(promptArg).toContain('what do I know about X');
+    expect(timeoutArg).toBe(60_000);
     expect(result.skill).toBe('kb_query');
   });
 

@@ -15,7 +15,7 @@ vi.mock('../config.js', () => ({
     VAULT_DIR: tmpDir,
     TIMEZONE: 'America/Chicago',
     CLAUDE_TIMEOUT_MS: 5000,
-    ONESHOT_MODEL: 'sonnet',
+    ONESHOT_MODEL: 'opus',
   },
 }));
 

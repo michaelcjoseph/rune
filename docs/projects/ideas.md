@@ -1,11 +1,8 @@
 - quarterly and annual SEC reports ingestion of companies I'm following
-- send morning prep as telegram message
+- Monitor and ingest research papers on topics of interest for my KB
 - dynamic workouts based on whoop data, health goals, and most recent workouts
 - impove lenny's library setup with connection to mcp and link directly to kb
 - move pg essays to kb as well
 - set up child developmental agent support to help with monitoring progress and planning weekly
-- figure out how to merge pkms playbook with kb
 - Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook
-- link Jarvis to multiple vaults so entire family can have access to Jarvis
-- Monitor and ingest research papers on topics of interest for my KB
 - Hybrid KB search (ripgrep + vector via `sqlite-vec`, reciprocal rank fusion in `kb_query`) — deferred from project 03-resolver Phase C when the KB was still small; revisit once the wiki has 100+ pages across varied domains and synonym/paraphrase misses become a felt problem. Open question whether to use a hosted embedding model (OpenAI `text-embedding-3-small`) or a local one (e.g. `@xenova/transformers`) to preserve the project's no-API-key posture.

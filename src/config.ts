@@ -73,23 +73,24 @@ const config = {
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
-  CLAUDE_TIMEOUT_MS: 300_000,
+  CLAUDE_TIMEOUT_MS: 1_800_000,
   CLAUDE_LINT_TIMEOUT_MS: 300_000,
   /** wiki-compiler ingests can be heavy on real-sized journals + project files
    *  (read source + index + schema + analyze + write multiple wiki pages + log).
-   *  Empirically 5 min isn't enough; 15 min gives generous headroom. */
-  CLAUDE_INGEST_TIMEOUT_MS: 900_000,
-  /** Short timeout for the resolver's inline classify call — users feel this
-   *  latency on every non-slash TG message. If Haiku hasn't returned in 20s,
-   *  we fall through to the existing freeform handler. */
-  CLASSIFIER_TIMEOUT_MS: 20_000,
+   *  Matches CLAUDE_TIMEOUT_MS today but kept as a separate knob so ingest
+   *  timeouts can diverge from the generic default without touching everything. */
+  CLAUDE_INGEST_TIMEOUT_MS: 1_800_000,
+  /** Resolver's inline classify call runs on every non-slash TG message —
+   *  users feel this latency. 60s gives Opus room to respond; if it hasn't
+   *  returned by then we fall through to the existing freeform handler. */
+  CLASSIFIER_TIMEOUT_MS: 60_000,
   /** Timeout for the weekly intent-scan Haiku one-shot. Offline, so longer
    *  than the resolver, but much shorter than CLAUDE_TIMEOUT_MS (which is
    *  scoped to Opus agent runs that read/write vault files). */
   HAIKU_SCAN_TIMEOUT_MS: 60_000,
-  DEFAULT_CHAT_MODEL: 'haiku',
+  DEFAULT_CHAT_MODEL: 'opus',
   CONVERSATION_MODEL: 'opus',
-  ONESHOT_MODEL: 'sonnet',
+  ONESHOT_MODEL: 'opus',
   AGENT_MODEL: 'opus',
   CLASSIFIER_MODEL: 'haiku',
 

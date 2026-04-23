@@ -94,8 +94,13 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       activeProcesses.delete(child);
-      if (signal === 'SIGTERM') {
-        log.error('Claude CLI timed out', { args: args.slice(0, 3) });
+      // Claude CLI installs a SIGTERM handler that exits cleanly with code 143
+      // (POSIX convention: 128 + SIGTERM=15), so Node reports `{code: 143,
+      // signal: null}` — not `{code: null, signal: 'SIGTERM'}`. Treat both as
+      // timeouts so the TG summary stays readable.
+      const timedOut = signal === 'SIGTERM' || code === 143;
+      if (timedOut) {
+        log.error('Claude CLI timed out', { args: args.slice(0, 3), code, signal });
         resolve({ text: null, error: `Claude timed out after ${timeout / 1000}s` });
       } else if (code !== 0) {
         const error = stderr.trim() || `Claude exited with code ${code}`;

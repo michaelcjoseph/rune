@@ -5,8 +5,8 @@ vi.mock('../config.js', () => ({
   default: {
     VAULT_DIR: '/tmp/test-vault',
     CLAUDE_TIMEOUT_MS: 100,
-    DEFAULT_CHAT_MODEL: 'haiku',
-    ONESHOT_MODEL: 'sonnet',
+    DEFAULT_CHAT_MODEL: 'opus',
+    ONESHOT_MODEL: 'opus',
     AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
   },
@@ -78,12 +78,12 @@ describe('ai/claude', () => {
       expect(result).toEqual({ text: 'hello world', error: null });
     });
 
-    it('uses sonnet model and prepends date context', async () => {
+    it('uses the configured one-shot model and prepends date context', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'sonnet'],
+        ['-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'opus'],
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
       const prompt = spawnMock.mock.calls[0]![1][1] as string;
@@ -115,12 +115,12 @@ describe('ai/claude', () => {
   });
 
   describe('askClaude (session)', () => {
-    it('uses --session-id and haiku for new sessions', async () => {
+    it('uses --session-id and the default chat model for new sessions', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
       await askClaude('hello', 'new-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--session-id', 'new-sess', '--model', 'haiku'],
+        ['-p', 'hello', '--session-id', 'new-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -134,7 +134,7 @@ describe('ai/claude', () => {
       expect(result.text).toBe('second');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'msg2', '--resume', 'resume-test', '--model', 'haiku'],
+        ['-p', 'msg2', '--resume', 'resume-test', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -145,17 +145,17 @@ describe('ai/claude', () => {
       await askClaude('hello', 'restored-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--resume', 'restored-sess', '--model', 'haiku'],
+        ['-p', 'hello', '--resume', 'restored-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
 
     it('passes custom model when specified', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
-      await askClaude('hello', 'opus-sess', 'opus');
+      await askClaude('hello', 'haiku-sess', 'haiku');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--session-id', 'opus-sess', '--model', 'opus'],
+        ['-p', 'hello', '--session-id', 'haiku-sess', '--model', 'haiku'],
         expect.any(Object),
       );
     });
@@ -168,7 +168,7 @@ describe('ai/claude', () => {
       await askClaude('retry', 'fail-sess');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'retry', '--session-id', 'fail-sess', '--model', 'haiku'],
+        ['-p', 'retry', '--session-id', 'fail-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -261,11 +261,11 @@ describe('ai/claude', () => {
 
     it('passes custom model when specified', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
-      await askClaudeWithContext('hello', 'ctx-opus-sess', 'sys', 'opus');
+      await askClaudeWithContext('hello', 'ctx-haiku-sess', 'sys', 'haiku');
 
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).toContain('--model');
-      expect(args).toContain('opus');
+      expect(args).toContain('haiku');
     });
 
     it('uses default model when none specified', async () => {
@@ -274,7 +274,7 @@ describe('ai/claude', () => {
 
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).toContain('--model');
-      expect(args).toContain('haiku');
+      expect(args).toContain('opus');
     });
 
     it('does not mark session as created on error', async () => {
@@ -683,6 +683,24 @@ Body.`);
       expect(result.error).toContain('timed out');
     });
 
+    it('classifies exit code 143 as a timeout (Claude CLI catches SIGTERM)', async () => {
+      // When our timer fires child.kill('SIGTERM'), the Claude CLI installs a
+      // SIGTERM handler and exits with code 143 (POSIX 128+SIGTERM). Node then
+      // emits close with {code: 143, signal: null} rather than signal: 'SIGTERM'.
+      // The close-handler must treat that as a timeout, not a generic error.
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn(() => {
+        process.nextTick(() => child.emit('close', 143, null));
+      });
+      spawnMock.mockReturnValue(child);
+
+      const result = await askClaudeOneShot('slow query');
+      expect(result.text).toBeNull();
+      expect(result.error).toMatch(/^Claude timed out after/);
+    });
+
     it('uses config.CLAUDE_TIMEOUT_MS when timeoutMs is not provided', async () => {
       vi.useFakeTimers();
       try {
@@ -798,18 +816,18 @@ Body.`);
   });
 
   describe('summarizeSession', () => {
-    it('always uses haiku model', async () => {
-      // First call creates the session with opus
+    it('uses the default chat model', async () => {
+      // First call creates the session with haiku (not the default)
       spawnMock.mockReturnValue(createChild({ stdout: 'first reply' }));
-      await askClaude('hello', 'sum-sess', 'opus');
+      await askClaude('hello', 'sum-sess', 'haiku');
 
-      // summarizeSession should use haiku regardless
+      // summarizeSession passes config.DEFAULT_CHAT_MODEL (opus in this test config)
       spawnMock.mockReturnValue(createChild({ stdout: 'Topic: test\nDiscussion: stuff' }));
       const result = await summarizeSession('sum-sess');
       expect(result.text).toBe('Topic: test\nDiscussion: stuff');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        expect.arrayContaining(['--resume', 'sum-sess', '--model', 'haiku']),
+        expect.arrayContaining(['--resume', 'sum-sess', '--model', 'opus']),
         expect.any(Object),
       );
     });

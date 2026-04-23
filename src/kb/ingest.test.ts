@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../config.js', () => ({
-  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', CLAUDE_INGEST_TIMEOUT_MS: 900_000 },
+  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', CLAUDE_INGEST_TIMEOUT_MS: 1_800_000 },
 }));
 
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
@@ -78,9 +78,9 @@ describe('kb/ingest', () => {
 
     await ingestSource('notes/test.md');
 
-    // Real ingests can run >5 min; wiki-compiler must use the dedicated timeout,
-    // not the default CLAUDE_TIMEOUT_MS. (Mocked config sets it to 900_000.)
-    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.any(String), 900_000);
+    // Real ingests can run long; wiki-compiler uses the dedicated timeout
+    // constant so it can diverge from the generic default. (Mocked config sets it to 1_800_000.)
+    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.any(String), 1_800_000);
   });
 
   it('includes guidance in agent prompt', async () => {

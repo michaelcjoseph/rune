@@ -14,8 +14,8 @@ vi.mock('../../config.js', () => ({
     TIMEZONE: 'America/Chicago',
     CLAUDE_TIMEOUT_MS: 5000,
     CLAUDE_INGEST_TIMEOUT_MS: 5000,
-    ONESHOT_MODEL: 'sonnet',
-    DEFAULT_CHAT_MODEL: 'sonnet',
+    ONESHOT_MODEL: 'opus',
+    DEFAULT_CHAT_MODEL: 'opus',
     INGESTION_QUEUE_FILE: join(logsDir, 'kb-ingestion-queue.json'),
   },
 }));
