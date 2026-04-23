@@ -34,7 +34,7 @@ describe('handleWorkout', () => {
   });
 
   it('sends workout section when health/plan.md has a section for today', async () => {
-    const planContent = '# Workout Plan\n\n## Monday\nSquats 5x5\nBench 3x8\n\n## Tuesday\nDeadlifts 3x5\n';
+    const planContent = '# Workout Plan\n\n## Session Details\n\n### Monday\nSquats 5x5\nBench 3x8\n\n### Tuesday\nDeadlifts 3x5\n';
     mockReadVaultFile.mockReturnValue(planContent);
 
     await handleWorkout(mockBot, chatId);
@@ -70,7 +70,7 @@ describe('handleWorkout', () => {
   });
 
   it('sends "No workout prescription" when file exists but no section for today', async () => {
-    const planContent = '# Workout Plan\n\n## Tuesday\nDeadlifts 3x5\n\n## Wednesday\nRest\n';
+    const planContent = '# Workout Plan\n\n### Tuesday\nDeadlifts 3x5\n\n### Wednesday\nRest\n';
     mockReadVaultFile.mockReturnValue(planContent);
 
     await handleWorkout(mockBot, chatId);
@@ -82,7 +82,7 @@ describe('handleWorkout', () => {
   });
 
   it('handles section being the last one in the file', async () => {
-    const planContent = '# Workout Plan\n\n## Sunday\nYoga\n\n## Monday\nSquats 5x5\nBench 3x8';
+    const planContent = '# Workout Plan\n\n### Sunday\nYoga\n\n### Monday\nSquats 5x5\nBench 3x8';
     mockReadVaultFile.mockReturnValue(planContent);
 
     await handleWorkout(mockBot, chatId);
@@ -90,6 +90,38 @@ describe('handleWorkout', () => {
     expect(mockBot.sendMessage).toHaveBeenCalledWith(
       chatId,
       "Monday's workout:\n\nSquats 5x5\nBench 3x8",
+    );
+  });
+
+  it('uses day parsed from args instead of today', async () => {
+    mockGetDayOfWeek.mockReturnValue('Wednesday');
+    const planContent = '### Monday\nMobility\n\n### Wednesday\nHeavy lifts\n';
+    mockReadVaultFile.mockReturnValue(planContent);
+
+    await handleWorkout(mockBot, chatId, 'Monday mobility workout');
+
+    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, "Monday's workout:\n\nMobility");
+  });
+
+  it('falls back to today when args contains no day name', async () => {
+    mockGetDayOfWeek.mockReturnValue('Tuesday');
+    const planContent = '### Tuesday\nDeadlifts\n';
+    mockReadVaultFile.mockReturnValue(planContent);
+
+    await handleWorkout(mockBot, chatId, "what's my workout");
+
+    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, "Tuesday's workout:\n\nDeadlifts");
+  });
+
+  it('matches combined day heading (Monday / Thursday)', async () => {
+    const planContent = '### Monday / Thursday — Joint/Mobility\nJoint work\n\n### Tuesday\nStrength\n';
+    mockReadVaultFile.mockReturnValue(planContent);
+
+    await handleWorkout(mockBot, chatId, 'monday');
+
+    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+      chatId,
+      "Monday's workout:\n\nJoint work",
     );
   });
 

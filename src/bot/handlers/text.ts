@@ -58,8 +58,8 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/monthly')) return handleMonthly(bot, chatId, text.slice('/monthly'.length).trim());
   if (text.startsWith('/quarterly')) return handleQuarterly(bot, chatId, text.slice('/quarterly'.length).trim());
   if (text.startsWith('/yearly')) return handleYearly(bot, chatId, text.slice('/yearly'.length).trim());
-  if (text.startsWith('/priorities')) return handlePriorities(bot, chatId);
-  if (text.startsWith('/workout')) return handleWorkout(bot, chatId);
+  if (text.startsWith('/priorities')) return handlePriorities(bot, chatId, text.slice('/priorities'.length).trim());
+  if (text.startsWith('/workout')) return handleWorkout(bot, chatId, text.slice('/workout'.length).trim());
   if (text.startsWith('/study')) return handleStudy(bot, chatId);
   if (text.startsWith('/family')) return handleFamily(bot, chatId);
   if (text.startsWith('/career')) return handleCareer(bot, chatId);
@@ -212,8 +212,8 @@ async function invokeSkill(
     case 'ask': return handleAsk(bot, chatId, args || message);
     case 'kb': return handleKB(bot, chatId, args || message);
     case 'ingest': return handleIngest(bot, chatId, args);
-    case 'priorities': return handlePriorities(bot, chatId);
-    case 'workout': return handleWorkout(bot, chatId);
+    case 'priorities': return handlePriorities(bot, chatId, args);
+    case 'workout': return handleWorkout(bot, chatId, args);
     case 'study': return handleStudy(bot, chatId);
     case 'family': return handleFamily(bot, chatId);
     case 'career': return handleCareer(bot, chatId);
