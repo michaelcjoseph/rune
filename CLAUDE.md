@@ -102,7 +102,7 @@ src/
 │   ├── whoop/client.ts      # OAuth2 token management + Whoop API calls
 │   └── readwise/client.ts   # Save articles to Readwise Reader API
 ├── vault/
-│   ├── files.ts             # Read/write/list vault markdown files
+│   ├── files.ts             # Read/write/append/list vault markdown files (assertWithinVault-guarded)
 │   ├── journal.ts           # Journal file creation, append, writeMorningPrep, parseTag
 │   ├── learnings.ts         # /learn-authored JSONL store + prompt-prepend builder for runAgent
 │   ├── git.ts               # git add/commit/push helpers
@@ -180,7 +180,7 @@ Mutable sources (world-view, playbook, active projects, journals) **overwrite** 
 - Claude CLI spawning is centralized in `src/ai/claude.ts` — never spawn `claude` directly elsewhere
 - Session locks prevent concurrent CLI writes to the same session ID
 - Git commits happen at key moments (morning prep, /fresh, nightly), not on timers
-- Vault files use `readVaultFile`/`writeVaultFile` from `src/vault/files.ts` — paths are relative to vault root
+- Vault files use `readVaultFile` / `writeVaultFile` / `appendVaultFile` from `src/vault/files.ts` — paths are relative to vault root
 - KB agents **must not** write outside `knowledge/`
 - Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
 

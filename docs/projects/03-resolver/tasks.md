@@ -105,6 +105,6 @@ scale.
 
 ## Cross-phase
 
-- [ ] Update CLAUDE.md `Agents` section if any new runtime agents are added (resolver-classifier, intent-scan, etc.)
-- [ ] Update CLAUDE.md `Project Structure` section as new files land
-- [ ] Update `docs/projects/index.md` status for this project as phases ship
+- [x] Update CLAUDE.md `Agents` section if any new runtime agents are added (resolver-classifier, intent-scan, etc.)
+- [x] Update CLAUDE.md `Project Structure` section as new files land
+- [x] Update `docs/projects/index.md` status for this project as phases ship
