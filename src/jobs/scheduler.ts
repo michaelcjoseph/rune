@@ -68,8 +68,8 @@ function guarded(name: string, fn: () => Promise<void>): () => void {
 }
 
 /**
- * Parse a cron expression and determine the most recent time it should have fired
- * before `now`, looking back up to `maxLookbackMs`.
+ * Parse a cron expression (interpreted as UTC) and determine the most recent
+ * time it should have fired before `now`, looking back up to `maxLookbackMs`.
  */
 function getLastScheduledTime(cronExpr: string, now: Date, maxLookbackMs: number): Date | null {
   // Parse cron fields: minute hour day-of-month month day-of-week
@@ -100,22 +100,17 @@ function getLastScheduledTime(cronExpr: string, now: Date, maxLookbackMs: number
 
   const earliest = now.getTime() - maxLookbackMs;
 
-  // Walk backwards from now, minute by minute would be too slow.
-  // Instead, check each candidate day going back, then match hour/minute.
-  const tzDate = (d: Date) => new Date(d.toLocaleString('en-US', { timeZone: config.TIMEZONE }));
-
   for (let dayOffset = 0; dayOffset <= Math.ceil(maxLookbackMs / 86_400_000) + 1; dayOffset++) {
     const candidate = new Date(now.getTime() - dayOffset * 86_400_000);
-    const local = tzDate(candidate);
-    const localMonth = local.getMonth() + 1;
-    const localDom = local.getDate();
-    const localDow = local.getDay();
+    const utcMonth = candidate.getUTCMonth() + 1;
+    const utcDom = candidate.getUTCDate();
+    const utcDow = candidate.getUTCDay();
 
-    if (!months.includes(localMonth)) continue;
+    if (!months.includes(utcMonth)) continue;
 
     // Cron uses OR logic for dom/dow when both are specified (non-*)
-    const domMatch = domField === '*' || doms.includes(localDom);
-    const dowMatch = dowField === '*' || dows.includes(localDow);
+    const domMatch = domField === '*' || doms.includes(utcDom);
+    const dowMatch = dowField === '*' || dows.includes(utcDow);
     if (domField !== '*' && dowField !== '*') {
       if (!domMatch && !dowMatch) continue;
     } else {
@@ -128,10 +123,14 @@ function getLastScheduledTime(cronExpr: string, now: Date, maxLookbackMs: number
 
     for (const h of sortedHours) {
       for (const m of sortedMinutes) {
-        // Build a Date in the target timezone
-        const dateStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
-        // Parse in Chicago timezone by computing offset
-        const scheduled = cronToDate(dateStr, config.TIMEZONE);
+        const scheduled = new Date(Date.UTC(
+          candidate.getUTCFullYear(),
+          candidate.getUTCMonth(),
+          candidate.getUTCDate(),
+          h,
+          m,
+          0,
+        ));
 
         if (scheduled.getTime() > now.getTime()) continue;
         if (scheduled.getTime() < earliest) return null;
@@ -142,35 +141,6 @@ function getLastScheduledTime(cronExpr: string, now: Date, maxLookbackMs: number
   }
 
   return null;
-}
-
-/** Convert a "YYYY-MM-DDTHH:mm:ss" string in the given timezone to a UTC Date. */
-function cronToDate(localStr: string, tz: string): Date {
-  // Use a formatter to find the UTC offset for this local time
-  const naive = new Date(localStr + 'Z'); // treat as UTC temporarily
-  // Binary-search approach: find the Date whose tz representation matches localStr
-  // Simple approach: use Intl to get the offset
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-
-  // Try naive ± 24h to find the right offset
-  for (const offset of [0, -3600000, 3600000, -7200000, 7200000]) {
-    const test = new Date(naive.getTime() + offset);
-    const parts = formatter.formatToParts(test);
-    const get = (type: string) => parts.find(p => p.type === type)!.value;
-    const formatted = `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
-    if (formatted === localStr) return test;
-  }
-
-  return naive; // fallback
 }
 
 const MAX_CATCHUP_LOOKBACK_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -296,35 +266,37 @@ export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
   return jobs;
 }
 
+// Cron schedules are in UTC. Local times (America/Chicago) are given for
+// reference and assume CDT (UTC-5); in CST (UTC-6) they fire one hour earlier.
 function registerJobs(bot: TelegramBot): JobDefinition[] {
   return [
     {
       name: 'morning-prep',
-      schedule: '30 5 * * *', // 5:30 AM daily
+      schedule: '30 10 * * *', // 10:30 UTC → 5:30 AM CDT / 4:30 AM CST
       run: () => runMorningPrep(bot),
       handler: guarded('morning-prep', () => runMorningPrep(bot)),
     },
     {
       name: 'nightly',
-      schedule: '30 23 * * *', // 11:30 PM daily
+      schedule: '30 4 * * *', // 04:30 UTC → 11:30 PM CDT / 10:30 PM CST (prev day local)
       run: () => runNightly(bot),
       handler: guarded('nightly', () => runNightly(bot)),
     },
     {
       name: 'whoop-sleep',
-      schedule: '0 8 * * *', // 8:00 AM daily
+      schedule: '0 13 * * *', // 13:00 UTC → 8:00 AM CDT / 7:00 AM CST
       run: () => runWhoopSleepSync(bot),
       handler: guarded('whoop-sleep', () => runWhoopSleepSync(bot)),
     },
     {
       name: 'weekly-nudge',
-      schedule: '0 15 * * 5', // Friday 3 PM
+      schedule: '0 20 * * 5', // 20:00 UTC Friday → 3 PM CDT / 2 PM CST
       run: () => runWeeklyNudge(bot),
       handler: guarded('weekly-nudge', () => runWeeklyNudge(bot)),
     },
     {
       name: 'review-nudge',
-      schedule: '0 15 28-31 * *', // Last days of month, 3 PM — Phase 7 adds last-day check
+      schedule: '0 20 28-31 * *', // 20:00 UTC last days of month → 3 PM CDT / 2 PM CST
       run: () => runReviewNudge(bot),
       handler: guarded('review-nudge', () => runReviewNudge(bot)),
     },
@@ -344,10 +316,10 @@ export function startScheduler(bot: TelegramBot): void {
 
   for (const job of jobs) {
     const task = cron.schedule(job.schedule, job.handler, {
-      timezone: config.TIMEZONE,
+      timezone: 'UTC',
     });
     tasks.push(task);
-    log.info(`Registered cron job: ${job.name}`, { schedule: job.schedule, timezone: config.TIMEZONE });
+    log.info(`Registered cron job: ${job.name}`, { schedule: job.schedule, timezone: 'UTC' });
   }
 
   // Check for missed jobs on startup

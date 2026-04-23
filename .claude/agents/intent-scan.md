@@ -1,7 +1,7 @@
 ---
 name: intent-scan
 description: "Weekly Ask-Twice intent-log scan — drafts skill/cron proposals for approval in the next review. Fires via skill-frontmatter cron (Saturday 3pm). This agent is a thin dogfood wrapper: the real logic lives in src/jobs/intent-scan.ts."
-cron: "0 15 * * 6"
+cron: "0 20 * * 6"
 cron_chat: true
 tools:
   - Bash

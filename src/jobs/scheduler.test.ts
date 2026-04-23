@@ -98,12 +98,12 @@ describe('jobs/scheduler', () => {
     });
   });
 
-  it('startScheduler calls cron.schedule with the correct timezone', () => {
+  it('startScheduler calls cron.schedule with UTC timezone', () => {
     startScheduler({} as any);
 
     expect(mockSchedule).toHaveBeenCalled();
     const options = mockSchedule.mock.calls[0]![2] as unknown as { timezone: string };
-    expect(options.timezone).toBe('America/Chicago');
+    expect(options.timezone).toBe('UTC');
   });
 
   it('startScheduler registers the expected number of jobs (5)', () => {
@@ -112,11 +112,11 @@ describe('jobs/scheduler', () => {
     expect(mockSchedule).toHaveBeenCalledTimes(5);
   });
 
-  it('startScheduler passes the morning-prep cron expression', () => {
+  it('startScheduler passes the morning-prep cron expression in UTC', () => {
     startScheduler({} as any);
 
     const cronExpr = mockSchedule.mock.calls[0]![0] as unknown as string;
-    expect(cronExpr).toBe('30 5 * * *');
+    expect(cronExpr).toBe('30 10 * * *'); // 5:30 AM CDT
   });
 
   it('stopScheduler calls .stop() on all registered tasks', () => {
