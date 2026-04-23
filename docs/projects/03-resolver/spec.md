@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project converts Jarvis from a command-driven tool into a **self-observing system that proposes its own upgrades**. Today, every Jarvis capability is reachable only via a hardcoded slash command, every cron job is a code change, and there is no telemetry that notices when the user asks for the same kind of thing twice. This project adds a **Resolver** that routes free-form Telegram messages to the right skill, an **Ask-Twice** loop that watches for repeated intents and proposes new skills/crons, **skill-frontmatter–driven cron** so new scheduled work doesn't require editing the scheduler, an **MVP eval framework** so agent regressions don't ship silently, deterministic **entity auto-linking** in KB ingest, **compilation checkpoints + source hierarchy** in wiki-compiler, **hybrid (vector + keyword) KB search**, and a **`/learn` institutional memory** that all agents auto-prepend.
+This project converts Jarvis from a command-driven tool into a **self-observing system that proposes its own upgrades**. Today, every Jarvis capability is reachable only via a hardcoded slash command, every cron job is a code change, and there is no telemetry that notices when the user asks for the same kind of thing twice. This project adds a **Resolver** that routes free-form Telegram messages to the right skill, an **Ask-Twice** loop that watches for repeated intents and proposes new skills/crons, **skill-frontmatter–driven cron** so new scheduled work doesn't require editing the scheduler, an **MVP eval framework** so agent regressions don't ship silently, deterministic **entity auto-linking** in KB ingest, **compilation checkpoints + source hierarchy** in wiki-compiler, and a **`/learn` institutional memory** that all agents auto-prepend.
 
 The patterns here are drawn from a corpus of personal-AI tooling (Garry Tan's gstack/gbrain, Nikunj Kothari's llm-wiki, the "thin harness, fat skills" ethos). Jarvis already nails the "fat skills" half — 20+ markdown agents in `.claude/agents/`. What's missing is the thin harness, the resolver, and the compounding loop.
 
@@ -17,7 +17,7 @@ Free-form Telegram messages route to the right skill automatically; recurring in
 3. **Tertiary:** New scheduled work ships by adding a `cron:` field to an agent's frontmatter — no scheduler code change.
 4. **Quaternary:** Agents have an MVP eval framework (one YAML per agent, manual `npm run evals`) so behavior regressions are catchable.
 5. **Quinary:** A `/learn` command appends to a runtime learnings store that all agents auto-prepend.
-6. **Senary:** KB ingest auto-links to known entities (deterministic regex over `pages/{books,crm,places}.json` + `FAMILY_NAMES`); wiki-compiler processes the queue in source-priority order with mid-run checkpoints; KB search becomes hybrid (ripgrep + vector + RRF).
+6. **Senary:** KB ingest auto-links to known entities (deterministic regex over `pages/{books,crm,places}.json` + `FAMILY_NAMES`); wiki-compiler processes the queue in source-priority order with mid-run checkpoints.
 
 ### Non-Goals
 
@@ -35,7 +35,6 @@ Free-form Telegram messages route to the right skill automatically; recurring in
 - **Resolver call cost:** one Haiku classification per non-slash, non-active-session message. Cap by skipping messages shorter than ~5 words. Estimated: dozens of calls per day at most.
 - **Intent log volume:** one JSON line per resolved message. Hundreds per month. Trivial.
 - **Ask-Twice scan:** weekly job that reads the last ~30 days of intent log + skill registry. Single Haiku call.
-- **Embedding cost (hybrid search):** `text-embedding-3-small` over the full KB at ingest time. ~$1 for the full KB; pennies per nightly delta. SQLite + sqlite-vec (no Postgres).
 - **Skill cron registration:** zero runtime cost — scanned at startup.
 - **Eval cost:** `npm run evals` invokes each agent against fixture inputs. ~$0.50 for a full run; manual cadence.
 
@@ -129,7 +128,7 @@ Agent behavior shifts without code change
 - **Skill-cron**: agent file with `cron:` frontmatter.
 - **Evals**: `npm run evals` manually.
 - **`/learn`**: TG slash command.
-- **Entity link, checkpoints, hybrid search**: triggered by KB ingest / query (transparent).
+- **Entity link, checkpoints**: triggered by KB ingest (transparent).
 
 ### Exit Points
 
@@ -192,13 +191,6 @@ Agent behavior shifts without code change
 27. WHEN the KB ingestion queue is processed THEN sources are processed in priority order: `world-view` > `pages/playbook.md` > `journals/*` > `projects/*` > Readwise > conversations > notes.
 28. WHEN every 15 ingestions complete THEN `wiki-linter` is invoked automatically and a checkpoint summary is appended to `knowledge/log.md`.
 29. WHEN a checkpoint surfaces a quality issue (orphan, stale page, cramming) THEN it is logged to a checkpoint section the next nightly TG summary can include.
-
-### Hybrid search (Phase C, post-Project-02)
-
-30. WHEN a wiki page is ingested THEN its content is embedded via `text-embedding-3-small` and stored in `logs/kb-vectors.sqlite` (sqlite-vec).
-31. WHEN `kb_query` runs with `--hybrid` (or feature flag enabled) THEN search results are produced by reciprocal rank fusion (RRF) of ripgrep + vector results.
-32. WHEN the feature flag is off THEN existing ripgrep-only behavior is preserved.
-33. WHEN side-by-side mode is active (Phase C rollout) THEN both result sets are logged for comparison without changing user-visible behavior.
 
 ---
 
@@ -317,21 +309,7 @@ Modified files:
 
 Note: After Project 02 ships, journals enter the queue alongside other sources. Hierarchy ranking puts journals at top alongside `world-view` (because journals are the freshest first-person source). KB-activity scanner from Project 02 Phase 2 may need a backward-compatible parser tweak to skip checkpoint-shaped entries — covered in Phase C tasks.
 
-**Hybrid search (#5):**
-
-New dependencies:
-- `better-sqlite3`, `sqlite-vec` extension.
-
-New files:
-- `src/kb/embeddings.ts` — embed text via OpenAI `text-embedding-3-small`; store in `logs/kb-vectors.sqlite`.
-- `src/kb/search-hybrid.ts` — RRF fusion of ripgrep + vector results.
-
-Modified files:
-- `src/kb/ingest.ts` — after compile, embed and store.
-- `src/kb/query.ts` — add `--hybrid` flag (and feature flag in config) to use hybrid search.
-- `.claude/agents/kb-query.md` — note the new `hybrid_search` capability.
-
-Side-by-side rollout: Phase C ships hybrid search behind a flag; for one week, both result sets are logged for comparison; flip default on after sanity check.
+**~~Hybrid search (#5)~~ — deferred.** See `docs/projects/ideas.md`. Rationale: at current KB scale, ripgrep + the resolver's `kb_query` routing cover the observed query shape. Revisit when the wiki has 100+ pages across varied domains and synonym/paraphrase misses become a felt problem.
 
 ### Coordination notes
 
@@ -372,10 +350,7 @@ Side-by-side rollout: Phase C ships hybrid search behind a flag; for one week, b
 - [ ] Source-priority queue (#4): extend `src/kb/queue.ts` with priority; `processIngestionQueue` orders by priority
 - [ ] Mid-run checkpoints (#4): wiki-linter invoked every 15 ingests; checkpoint summary appended to `knowledge/log.md`
 - [ ] KB-activity scanner backward-compat tweak (Project 02 Phase 2 deliverable) so checkpoint entries are skipped gracefully
-- [ ] Hybrid search dependencies + `src/kb/embeddings.ts` + ingest hook
-- [ ] `src/kb/search-hybrid.ts` with RRF
-- [ ] `kb-query` agent updated with `hybrid_search` capability
-- [ ] Side-by-side rollout: hybrid behind a flag, log both result sets for one week, flip default
+- [ ] ~~Hybrid search (#5)~~ — deferred to `docs/projects/ideas.md`
 
 ---
 
@@ -428,12 +403,6 @@ Side-by-side rollout: Phase C ships hybrid search behind a flag; for one week, b
 - **Queue empty when scheduled**: skip silently.
 - **Priority field missing on legacy queue entries**: default to lowest priority.
 
-### Hybrid search
-
-- **Embedding API unavailable at ingest**: page is committed without embedding; a backfill job re-tries on next ingest cycle.
-- **sqlite-vec extension fails to load on a host**: fall back to ripgrep-only with a warning at startup.
-- **RRF returns empty when both branches return results**: bug — log full ranks for diagnosis.
-
 ---
 
 ## Open Questions
@@ -442,6 +411,5 @@ Side-by-side rollout: Phase C ships hybrid search behind a flag; for one week, b
 - [ ] Ask-Twice cadence — weekly is the suggested default, but if proposals start surfacing late, consider daily lightweight scan + weekly synthesis.
 - [ ] Skill frontmatter triggers field — natural language phrases or structured (regex/keywords)? Lean natural language for the resolver's classifier prompt.
 - [ ] `/learn` deletion — is `/forget <substring>` worth it, or is editing `learnings.jsonl` directly enough?
-- [ ] Hybrid search embedding model — OpenAI `text-embedding-3-small` (cheap, hosted) vs local model (free, privacy)? Default OpenAI for simplicity; revisit if the call cost becomes annoying.
 - [ ] When journals enter the KB queue (post-Project-02), should the entity-extract auto-link `[[wikilinks]]` *inside the journal page itself*, or only inside the compiled wiki pages? V1: only compiled wiki pages — journals are first-person source, leave voice intact.
 - [ ] Should the resolver be allowed to chain skills (e.g., "summarize today's whoop and add to journal" → run two skills in sequence)? Out of scope for v1; single-skill routing only.

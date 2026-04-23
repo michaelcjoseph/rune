@@ -95,16 +95,13 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Backward-compat tweak in Project 02's `src/reviews/kb-activity.ts` parser to skip `[CHECKPOINT]` entries
 - [x] Tests: priority ordering, checkpoint trigger at boundary, log format, scanner skip-checkpoint compatibility
 
-### Hybrid search (#5)
+### ~~Hybrid search (#5)~~
 
-- [ ] Add dependencies: `better-sqlite3`, `sqlite-vec` extension
-- [ ] Create `src/kb/embeddings.ts` for `text-embedding-3-small` calls; persist to `logs/kb-vectors.sqlite`
-- [ ] Hook into `src/kb/ingest.ts` after compile: embed compiled content, store
-- [ ] Create `src/kb/search-hybrid.ts` with reciprocal rank fusion of ripgrep + vector results
-- [ ] Add `--hybrid` flag (and config feature flag) to `src/kb/query.ts`; default off initially
-- [ ] Update `.claude/agents/kb-query.md` with `hybrid_search` capability note
-- [ ] Side-by-side rollout: enable hybrid in shadow-log mode for one week (both result sets logged for comparison without changing user-visible behavior); flip default after sanity check
-- [ ] Tests: embedding storage, RRF math, fallback when sqlite-vec missing, side-by-side mode
+Deferred to `docs/projects/ideas.md`. Revisit when the KB has 100+ pages
+across varied domains and synonym/paraphrase misses become a felt
+problem. Pulling in `better-sqlite3` + `sqlite-vec` native deps (and
+likely an external embedding model) isn't justified at current vault
+scale.
 
 ## Cross-phase
 
