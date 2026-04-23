@@ -5,10 +5,28 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-queue');
 
-interface QueueEntry {
+export interface QueueEntry {
   source: string; // relative path in vault
   addedAt: string; // ISO timestamp
   guidance?: string; // optional user guidance for ingestion
+  /** Priority tier derived from the source path. Higher runs earlier in
+   *  processIngestionQueue. Absent on legacy entries — treated as 0. */
+  priority?: number;
+}
+
+/** Derive the ingestion priority for a source path. Higher = earlier in the
+ *  queue. The tiers below reflect the Karpathy-style corpus hierarchy from
+ *  the 03-resolver spec: first-person sources (world-view, journals) come
+ *  before curated tactical content, which comes before active projects,
+ *  which comes before third-party inputs. */
+export function getPriority(sourcePath: string): number {
+  if (sourcePath.startsWith('world-view/')) return 100;
+  if (sourcePath.startsWith('journals/')) return 100;
+  if (sourcePath === 'pages/playbook.md') return 80;
+  if (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/')) return 60;
+  if (sourcePath.startsWith('Readwise/')) return 40;
+  if (sourcePath.includes('conversation')) return 20;
+  return 0;
 }
 
 function readQueue(): QueueEntry[] {
@@ -33,9 +51,10 @@ export function enqueue(source: string, guidance?: string): void {
     log.info('Source already in queue, skipping', { source });
     return;
   }
-  entries.push({ source, addedAt: new Date().toISOString(), guidance });
+  const priority = getPriority(source);
+  entries.push({ source, addedAt: new Date().toISOString(), guidance, priority });
   writeQueue(entries);
-  log.info('Added to ingestion queue', { source });
+  log.info('Added to ingestion queue', { source, priority });
 }
 
 /** Get all queued sources. */

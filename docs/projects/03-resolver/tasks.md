@@ -89,11 +89,11 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Source hierarchy + checkpoints (#4)
 
-- [ ] Extend `src/kb/queue.ts` with `priority` field and `getPriority(sourcePath): number` derivation: `world-view` and `journals/*` (top tier) > `pages/playbook.md` > `projects/*` > Readwise > conversations > notes
-- [ ] Modify `src/kb/engine.ts:processIngestionQueue` to process in priority order; track ingestion count
-- [ ] Every 15 ingestions: invoke `wiki-linter`, append checkpoint summary to `knowledge/log.md` with a stable shape (e.g. `[YYYY-MM-DD HH:MM] [CHECKPOINT] ...`)
-- [ ] Backward-compat tweak in Project 02's `src/reviews/kb-activity.ts` parser to skip `[CHECKPOINT]` entries
-- [ ] Tests: priority ordering, checkpoint trigger at boundary, log format, scanner skip-checkpoint compatibility
+- [x] Extend `src/kb/queue.ts` with `priority` field and `getPriority(sourcePath): number` derivation: `world-view` and `journals/*` (top tier) > `pages/playbook.md` > `projects/*` > Readwise > conversations > notes
+- [x] Modify `src/kb/engine.ts:processIngestionQueue` to process in priority order; track ingestion count
+- [x] Every 15 ingestions: invoke `wiki-linter`, append checkpoint summary to `knowledge/log.md` with a stable shape (e.g. `[YYYY-MM-DD HH:MM] [CHECKPOINT] ...`)
+- [x] Backward-compat tweak in Project 02's `src/reviews/kb-activity.ts` parser to skip `[CHECKPOINT]` entries
+- [x] Tests: priority ordering, checkpoint trigger at boundary, log format, scanner skip-checkpoint compatibility
 
 ### Hybrid search (#5)
 

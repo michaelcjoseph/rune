@@ -6,22 +6,38 @@ vi.mock('../config.js', () => ({
 
 vi.mock('./ingest.js', () => ({ ingestSource: vi.fn() }));
 vi.mock('./query.js', () => ({ queryKB: vi.fn() }));
-vi.mock('./lint.js', () => ({ lintKB: vi.fn() }));
-vi.mock('./queue.js', () => ({ getQueue: vi.fn() }));
+vi.mock('./lint.js', () => ({ lintKB: vi.fn(async () => ({ report: 'lint clean' })) }));
+vi.mock('./queue.js', () => ({
+  getQueue: vi.fn(),
+  // The real getPriority is a pure function; re-export a lightweight stub so
+  // engine.ts's priority-of fallback for legacy entries returns 0 by default.
+  getPriority: vi.fn((source: string) => {
+    if (source.startsWith('world-view/') || source.startsWith('journals/')) return 100;
+    if (source === 'pages/playbook.md') return 80;
+    if (source.startsWith('projects/') && !source.startsWith('projects/archive/')) return 60;
+    if (source.startsWith('Readwise/')) return 40;
+    if (source.includes('conversation')) return 20;
+    return 0;
+  }),
+}));
 vi.mock('../vault/files.js', () => ({
   listVaultFiles: vi.fn(),
   readVaultFile: vi.fn(),
+  appendVaultFile: vi.fn(),
 }));
 
 const { ingestSource } = await import('./ingest.js');
 const { getQueue } = await import('./queue.js');
-const { listVaultFiles, readVaultFile } = await import('../vault/files.js');
-const { processIngestionQueue, getKBStats } = await import('./engine.js');
+const { listVaultFiles, readVaultFile, appendVaultFile } = await import('../vault/files.js');
+const { lintKB } = await import('./lint.js');
+const { processIngestionQueue, getKBStats, INGESTS_PER_CHECKPOINT } = await import('./engine.js');
 
 const ingestMock = ingestSource as unknown as ReturnType<typeof vi.fn>;
 const queueMock = getQueue as unknown as ReturnType<typeof vi.fn>;
 const listMock = listVaultFiles as unknown as ReturnType<typeof vi.fn>;
 const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
+const lintMock = lintKB as unknown as ReturnType<typeof vi.fn>;
+const appendMock = appendVaultFile as unknown as ReturnType<typeof vi.fn>;
 
 describe('kb/engine', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -31,7 +47,7 @@ describe('kb/engine', () => {
 
     it('returns zeros when queue is empty', async () => {
       queueMock.mockReturnValue([]);
-      expect(await processIngestionQueue()).toEqual({ processed: 0, errors: 0, created: 0, updated: 0 });
+      expect(await processIngestionQueue()).toEqual({ processed: 0, errors: 0, created: 0, updated: 0, checkpoints: 0 });
       expect(ingestMock).not.toHaveBeenCalled();
     });
 
@@ -42,7 +58,7 @@ describe('kb/engine', () => {
       ]);
       ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
 
-      expect(await processIngestionQueue()).toEqual({ processed: 2, errors: 0, created: 0, updated: 0 });
+      expect(await processIngestionQueue()).toEqual({ processed: 2, errors: 0, created: 0, updated: 0, checkpoints: 0 });
       expect(ingestMock).toHaveBeenCalledWith('raw/b.md', { guidance: 'focus on X' });
     });
 
@@ -55,7 +71,7 @@ describe('kb/engine', () => {
         .mockResolvedValueOnce({ success: true, output: 'ok', counts: ZERO })
         .mockResolvedValueOnce({ success: false, output: 'failed', counts: ZERO });
 
-      expect(await processIngestionQueue()).toEqual({ processed: 1, errors: 1, created: 0, updated: 0 });
+      expect(await processIngestionQueue()).toEqual({ processed: 1, errors: 1, created: 0, updated: 0, checkpoints: 0 });
     });
 
     it('aggregates created and updated counts across queued sources', async () => {
@@ -74,6 +90,7 @@ describe('kb/engine', () => {
         errors: 0,
         created: 3,
         updated: 4,
+        checkpoints: 0,
       });
     });
 
@@ -91,7 +108,135 @@ describe('kb/engine', () => {
         errors: 1,
         created: 3,
         updated: 0,
+        checkpoints: 0,
       });
+    });
+
+    it('processes queue in priority order (higher first)', async () => {
+      queueMock.mockReturnValue([
+        { source: 'Readwise/article.md', addedAt: '', priority: 40 },
+        { source: 'world-view/ai.md', addedAt: '', priority: 100 },
+        { source: 'projects/foo.md', addedAt: '', priority: 60 },
+        { source: 'notes/scratch.md', addedAt: '', priority: 0 },
+        { source: 'pages/playbook.md', addedAt: '', priority: 80 },
+      ]);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+
+      await processIngestionQueue();
+
+      const calledSources = ingestMock.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calledSources).toEqual([
+        'world-view/ai.md',
+        'pages/playbook.md',
+        'projects/foo.md',
+        'Readwise/article.md',
+        'notes/scratch.md',
+      ]);
+    });
+
+    it('preserves FIFO order within the same priority tier', async () => {
+      // V8's Array.prototype.sort has been stable since Node 11. Two entries
+      // at the same priority must run in their getQueue() order.
+      queueMock.mockReturnValue([
+        { source: 'world-view/first.md', addedAt: '2026-04-01', priority: 100 },
+        { source: 'world-view/second.md', addedAt: '2026-04-02', priority: 100 },
+        { source: 'world-view/third.md', addedAt: '2026-04-03', priority: 100 },
+      ]);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+      await processIngestionQueue();
+      const calledSources = ingestMock.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calledSources).toEqual([
+        'world-view/first.md',
+        'world-view/second.md',
+        'world-view/third.md',
+      ]);
+    });
+
+    it('falls back to getPriority(source) when priority field is absent on legacy entries', async () => {
+      queueMock.mockReturnValue([
+        { source: 'Readwise/old.md', addedAt: '' }, // no priority
+        { source: 'world-view/new.md', addedAt: '' }, // no priority
+      ]);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+
+      await processIngestionQueue();
+
+      const calledSources = ingestMock.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calledSources).toEqual(['world-view/new.md', 'Readwise/old.md']);
+    });
+
+    it('triggers a checkpoint every 15 successful ingestions', async () => {
+      expect(INGESTS_PER_CHECKPOINT).toBe(15);
+      const entries = Array.from({ length: 30 }, (_, i) => ({
+        source: `raw/s${i}.md`,
+        addedAt: '',
+      }));
+      queueMock.mockReturnValue(entries);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+
+      const result = await processIngestionQueue();
+
+      expect(result.checkpoints).toBe(2);
+      expect(lintMock).toHaveBeenCalledTimes(2);
+      expect(appendMock).toHaveBeenCalledTimes(2);
+      // Each checkpoint line contains the [CHECKPOINT] marker with a stable shape.
+      for (const call of appendMock.mock.calls) {
+        const [rel, line] = call as [string, string];
+        expect(rel).toBe('knowledge/log.md');
+        expect(line).toMatch(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] \[CHECKPOINT\] /);
+      }
+    });
+
+    it('does NOT trigger a checkpoint when fewer than 15 successful ingestions', async () => {
+      const entries = Array.from({ length: 14 }, (_, i) => ({
+        source: `raw/s${i}.md`,
+        addedAt: '',
+      }));
+      queueMock.mockReturnValue(entries);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+
+      const result = await processIngestionQueue();
+
+      expect(result.checkpoints).toBe(0);
+      expect(lintMock).not.toHaveBeenCalled();
+      expect(appendMock).not.toHaveBeenCalled();
+    });
+
+    it('continues queue processing when a checkpoint itself fails', async () => {
+      const entries = Array.from({ length: 16 }, (_, i) => ({
+        source: `raw/s${i}.md`,
+        addedAt: '',
+      }));
+      queueMock.mockReturnValue(entries);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+      lintMock.mockRejectedValueOnce(new Error('lint blew up'));
+
+      const result = await processIngestionQueue();
+      // All 16 entries still processed; checkpoint count is 0 because the
+      // only checkpoint attempt threw.
+      expect(result.processed).toBe(16);
+      expect(result.checkpoints).toBe(0);
+    });
+
+    it('counts only SUCCESSFUL ingestions toward the checkpoint cadence', async () => {
+      // 15 entries: every 3rd one fails. Only 10 succeed, so no checkpoint.
+      const entries = Array.from({ length: 15 }, (_, i) => ({
+        source: `raw/s${i}.md`,
+        addedAt: '',
+      }));
+      queueMock.mockReturnValue(entries);
+      for (let i = 0; i < entries.length; i++) {
+        if (i % 3 === 2) {
+          ingestMock.mockResolvedValueOnce({ success: false, output: 'err', counts: ZERO });
+        } else {
+          ingestMock.mockResolvedValueOnce({ success: true, output: 'ok', counts: ZERO });
+        }
+      }
+
+      const result = await processIngestionQueue();
+      expect(result.processed).toBe(10);
+      expect(result.errors).toBe(5);
+      expect(result.checkpoints).toBe(0);
     });
   });
 

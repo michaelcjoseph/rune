@@ -130,6 +130,31 @@ describe('reviews/kb-activity', () => {
       expect(digest.entries).toEqual([]);
     });
 
+    it('skips [CHECKPOINT] anchors without their prose leaking into previous [INGEST] block', () => {
+      readMock.mockReturnValue(`# Knowledge Base Log
+
+[2026-04-21 10:00] [INGEST] Real entry before checkpoint.
+  Pages touched: [[before-checkpoint]]
+
+[2026-04-21 10:05] [CHECKPOINT] After 15 ingestions — orphan page detected: [[stale-topic]]
+
+[2026-04-21 10:10] [INGEST] Real entry after checkpoint.
+  Pages touched: [[after-checkpoint]]
+`);
+      const digest = scanKBActivity('2026-04-21', '2026-04-21');
+      // Only the 2 INGEST entries surface; CHECKPOINT is never an entry.
+      expect(digest.entries).toHaveLength(2);
+      // The pre-checkpoint INGEST body should not contain the checkpoint
+      // summary text — its block ends at the CHECKPOINT anchor.
+      const preEntry = digest.entries[0]!;
+      expect(preEntry.rawStatus).not.toContain('orphan page');
+      expect(preEntry.rawStatus).not.toContain('CHECKPOINT');
+      expect(preEntry.pagesTouched).toEqual(['before-checkpoint']);
+      // Post-checkpoint INGEST is unaffected.
+      const postEntry = digest.entries[1]!;
+      expect(postEntry.pagesTouched).toEqual(['after-checkpoint']);
+    });
+
     it('ignores lines that are not INGEST anchors', () => {
       readMock.mockReturnValue(`# Knowledge Base Log
 

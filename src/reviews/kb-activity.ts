@@ -46,8 +46,14 @@ export function scanKBActivity(startDate: string, endDate: string): KBActivityDi
   // Regexes are scoped to this function so their `g`-flag `lastIndex` can't
   // leak across calls via `.test()` / `.exec()` from unrelated callers.
   const anchorRe = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] \[INGEST\] ?(.*)$/gm;
+  // Generic anchor pattern — matches INGEST as well as CHECKPOINT (added by
+  // src/kb/engine.ts's mid-queue checkpoint feature). Used only to bound
+  // block bodies: if a CHECKPOINT sits between two INGEST entries, its
+  // prose must not be attributed to the preceding INGEST.
+  const anyAnchorRe = /^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\] \[[A-Z]+\]/gm;
 
   const anchors = Array.from(raw.matchAll(anchorRe));
+  const allAnchors = Array.from(raw.matchAll(anyAnchorRe));
   for (let i = 0; i < anchors.length; i++) {
     const match = anchors[i]!;
     const date = match[1]!;
@@ -56,9 +62,13 @@ export function scanKBActivity(startDate: string, endDate: string): KBActivityDi
     const time = match[2]!;
     const anchorTail = (match[3] ?? '').trim();
 
-    // Body spans from end of anchor line to start of next anchor (or EOF).
+    // Body spans from end of anchor line to the next anchor of any tag type
+    // (INGEST or CHECKPOINT), or EOF. Using `allAnchors` instead of
+    // `anchors` prevents CHECKPOINT prose from leaking into the previous
+    // INGEST block.
     const blockStart = match.index! + match[0].length;
-    const blockEnd = i + 1 < anchors.length ? anchors[i + 1]!.index! : raw.length;
+    const nextAnchor = allAnchors.find(a => a.index! > match.index!);
+    const blockEnd = nextAnchor !== undefined ? nextAnchor.index! : raw.length;
     const body = raw.slice(blockStart, blockEnd);
 
     // Status prose may continue on subsequent lines before the first labeled

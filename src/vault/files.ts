@@ -1,6 +1,7 @@
 import {
   readFileSync,
   writeFileSync,
+  appendFileSync,
   renameSync,
   existsSync,
   mkdirSync,
@@ -37,6 +38,17 @@ export function writeVaultFile(relativePath: string, content: string): void {
   const tmp = fullPath + '.tmp';
   writeFileSync(tmp, content);
   renameSync(tmp, fullPath);
+}
+
+/** Append content to a vault file. Path is relative to vault root. Creates
+ *  the parent directory + the file itself on first write. Atomic replace is
+ *  deliberately NOT used here — append-then-rename loses the existing
+ *  contents. For inherently append-only artifacts like knowledge/log.md. */
+export function appendVaultFile(relativePath: string, content: string): void {
+  const fullPath = join(config.VAULT_DIR, relativePath);
+  assertWithinVault(fullPath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  appendFileSync(fullPath, content);
 }
 
 /** Check if a vault file exists. Path is relative to vault root. */
