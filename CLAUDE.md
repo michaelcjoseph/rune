@@ -73,7 +73,8 @@ src/
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
 │   ├── init.ts              # KB directory scaffolding and schema initialization
-│   ├── ingest.ts            # Copy source to raw/ → spawn wiki-compiler agent
+│   ├── ingest.ts            # Copy source to raw/ → spawn wiki-compiler agent → entity-link touched pages
+│   ├── entity-extract.ts    # linkEntities(): build alias map from JSON stores + FAMILY_NAMES, wikilink bare mentions in reference sections, append to related: frontmatter
 │   ├── query.ts             # Build context → spawn kb-query agent → synthesized answer
 │   ├── lint.ts              # Spawn wiki-linter agent → health report
 │   ├── search.ts            # ripgrep-based full-text search across vault + wiki

@@ -2,9 +2,10 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import config from '../config.js';
 import { runAgent } from '../ai/claude.js';
-import { readVaultFile, vaultFileExists, getVaultPath, listVaultFiles, getFileModTime } from '../vault/files.js';
+import { readVaultFile, writeVaultFile, vaultFileExists, getVaultPath, listVaultFiles, getFileModTime } from '../vault/files.js';
 import { dequeue } from './queue.js';
 import { initKB } from './init.js';
+import { linkEntities, loadAliasMap } from './entity-extract.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-ingest');
@@ -112,11 +113,53 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
     return { success: false, output: 'Agent completed but produced no output — wiki-compiler may not have found the knowledge base.', counts };
   }
 
+  // Entity auto-link pass: for each wiki page the compiler just touched,
+  // scan for mentions of known entities (CRM, books, places, family) and
+  // append canonical slugs to the page's `related:` frontmatter. Reference
+  // sections also get bare mentions rewritten to wikilinks. Failures here
+  // must not fail the ingest — the page itself is already written.
+  try {
+    applyEntityLinks(wikiBefore, wikiAfter);
+  } catch (err) {
+    log.warn('Entity auto-link pass failed; leaving pages un-linked', {
+      error: (err as Error).message,
+    });
+  }
+
   // Remove from queue if it was queued
   dequeue(sourcePath);
 
   log.info('Ingestion complete', { source: sourcePath, created: counts.created, updated: counts.updated });
   return { success: true, output: result.text || 'Ingestion complete.', counts };
+}
+
+/** After a wiki-compiler run, walk the set of created/updated pages and
+ *  apply the entity-linker. Per-page failures are isolated: one malformed
+ *  page must not block the rest. `loadAliasMap()` is hoisted so the JSON
+ *  data stores are read once per ingest, not once per touched page. */
+function applyEntityLinks(before: Map<string, number>, after: Map<string, number>): void {
+  const touched: string[] = [];
+  for (const [path, mtime] of after) {
+    const prev = before.get(path);
+    if (prev === undefined || prev !== mtime) touched.push(path);
+  }
+  if (touched.length === 0) return;
+  const aliasMap = loadAliasMap();
+  for (const rel of touched) {
+    try {
+      const content = readVaultFile(rel);
+      if (content === null) continue;
+      const result = linkEntities(rel, content, aliasMap);
+      if (result.updatedContent === content) continue;
+      writeVaultFile(rel, result.updatedContent);
+      log.info('Entity-linker updated wiki page', { rel, related: result.related });
+    } catch (err) {
+      log.warn('Entity-linker failed on page, skipping', {
+        rel,
+        error: (err as Error).message,
+      });
+    }
+  }
 }
 
 /** Determine which raw/ subdirectory a source belongs in based on its path. */

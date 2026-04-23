@@ -79,13 +79,13 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Entity auto-linking (#3)
 
-- [ ] Create `src/kb/entity-extract.ts` exporting `linkEntities(pagePath, content): { related: string[], updatedContent: string }`
-- [ ] Build alias map from `pages/crm.json`, `pages/books.json`, `pages/places.json`, `FAMILY_NAMES` env var; longest-first ordering for matching
-- [ ] Word-boundary, case-aware regex matching (capitalized first letter required for personal names to avoid "Stripe" → "stripes")
-- [ ] Append matched canonical paths to page's `related:` frontmatter (deduped)
-- [ ] Replace bare mentions inside fenced "References" / "See also" sections only (do NOT mangle prose)
-- [ ] Hook into `src/kb/ingest.ts` after `wiki-compiler` returns; merge frontmatter, write page back
-- [ ] Tests: alias precedence, word-boundary edge cases, References-only replacement, no-match no-op, missing-canonical-page skip
+- [x] Create `src/kb/entity-extract.ts` exporting `linkEntities(pagePath, content): { related: string[], updatedContent: string }`
+- [x] Build alias map from `pages/crm.json`, `pages/books.json`, `pages/places.json`, `FAMILY_NAMES` env var; longest-first ordering for matching
+- [x] Word-boundary, case-aware regex matching (capitalized first letter required for personal names to avoid "Stripe" → "stripes")
+- [x] Append matched canonical paths to page's `related:` frontmatter (deduped)
+- [x] Replace bare mentions inside fenced "References" / "See also" sections only (do NOT mangle prose)
+- [x] Hook into `src/kb/ingest.ts` after `wiki-compiler` returns; merge frontmatter, write page back
+- [x] Tests: alias precedence, word-boundary edge cases, References-only replacement, no-match no-op, missing-canonical-page skip
 
 ### Source hierarchy + checkpoints (#4)
 
