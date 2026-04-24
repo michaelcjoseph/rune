@@ -187,9 +187,9 @@ describe('whoop/client', () => {
   describe('fetchSleep', () => {
     it('makes correct API call and filters scored non-nap records', async () => {
       const mockRecords = [
-        { id: 1, score_state: 'SCORED', nap: false, score: { stage_summary: {} } },
-        { id: 2, score_state: 'SCORED', nap: true, score: { stage_summary: {} } },
-        { id: 3, score_state: 'PENDING_STRAIN', nap: false, score: { stage_summary: {} } },
+        { id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8', score_state: 'SCORED', nap: false, score: { stage_summary: {} } },
+        { id: '8d3c1f22-0000-4000-8000-000000000002', score_state: 'SCORED', nap: true, score: { stage_summary: {} } },
+        { id: '8d3c1f22-0000-4000-8000-000000000003', score_state: 'PENDING_STRAIN', nap: false, score: { stage_summary: {} } },
       ];
 
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -198,11 +198,11 @@ describe('whoop/client', () => {
 
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toHaveLength(1);
-      expect(result.records[0]!.id).toBe(1);
+      expect(result.records[0]!.id).toBe('ecfc6a15-4661-442f-a9a4-f160dd7afae8');
       expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
-      expect(url).toContain('/v1/activity/sleep');
+      expect(url).toContain('/v2/activity/sleep');
       expect(url).toContain('start=2026-04-10T00%3A00%3A00.000Z');
       expect(url).toContain('end=2026-04-10T23%3A59%3A59.999Z');
 
@@ -219,7 +219,7 @@ describe('whoop/client', () => {
       const result = await fetchSleep('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toEqual([]);
       expect(result.error).toContain('HTTP 500');
-      expect(result.error).toContain('/v1/activity/sleep');
+      expect(result.error).toContain('/v2/activity/sleep');
       fetchSpy.mockRestore();
     });
 
@@ -234,10 +234,10 @@ describe('whoop/client', () => {
   });
 
   describe('fetchRecovery', () => {
-    it('filters scored records', async () => {
+    it('filters scored records and hits /v2/recovery with a UUID sleep_id', async () => {
       const mockRecords = [
-        { cycle_id: 1, score_state: 'SCORED', score: { recovery_score: 80 } },
-        { cycle_id: 2, score_state: 'PENDING_STRAIN', score: {} },
+        { cycle_id: 1, sleep_id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8', score_state: 'SCORED', score: { recovery_score: 80 } },
+        { cycle_id: 2, sleep_id: '8d3c1f22-0000-4000-8000-000000000002', score_state: 'PENDING_STRAIN', score: {} },
       ];
 
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -247,7 +247,11 @@ describe('whoop/client', () => {
       const result = await fetchRecovery('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toHaveLength(1);
       expect(result.records[0]!.cycle_id).toBe(1);
+      expect(result.records[0]!.sleep_id).toBe('ecfc6a15-4661-442f-a9a4-f160dd7afae8');
       expect(result.error).toBeNull();
+
+      const url = fetchSpy.mock.calls[0]![0] as string;
+      expect(url).toContain('/v2/recovery');
       fetchSpy.mockRestore();
     });
 
@@ -258,6 +262,7 @@ describe('whoop/client', () => {
       const result = await fetchRecovery('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toEqual([]);
       expect(result.error).toContain('HTTP 500');
+      expect(result.error).toContain('/v2/recovery');
       fetchSpy.mockRestore();
     });
   });
@@ -278,7 +283,7 @@ describe('whoop/client', () => {
       expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
-      expect(url).toContain('/v1/cycle');
+      expect(url).toContain('/v2/cycle');
       fetchSpy.mockRestore();
     });
 
@@ -289,27 +294,29 @@ describe('whoop/client', () => {
       const result = await fetchCycles('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toEqual([]);
       expect(result.error).toContain('HTTP 500');
-      expect(result.error).toContain('/v1/cycle');
+      expect(result.error).toContain('/v2/cycle');
       fetchSpy.mockRestore();
     });
   });
 
   describe('fetchWorkouts', () => {
-    it('filters scored records and uses correct endpoint', async () => {
+    it('filters scored records, hits /v2/activity/workout, passes through UUID id + sport_name', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response(JSON.stringify({
           records: [
-            { id: 1, score_state: 'SCORED', sport_id: 44, score: { strain: 12 } },
+            { id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8', score_state: 'SCORED', sport_name: 'running', score: { strain: 12 } },
           ],
         }), { status: 200 }),
       );
 
       const result = await fetchWorkouts('tok', '2026-04-10', '2026-04-10');
       expect(result.records).toHaveLength(1);
+      expect(result.records[0]!.id).toBe('ecfc6a15-4661-442f-a9a4-f160dd7afae8');
+      expect(result.records[0]!.sport_name).toBe('running');
       expect(result.error).toBeNull();
 
       const url = fetchSpy.mock.calls[0]![0] as string;
-      expect(url).toContain('/v1/activity/workout');
+      expect(url).toContain('/v2/activity/workout');
       fetchSpy.mockRestore();
     });
 

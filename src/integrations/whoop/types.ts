@@ -8,7 +8,7 @@ export interface WhoopSleepResponse {
 }
 
 export interface WhoopSleep {
-  id: number;
+  id: string;
   user_id: number;
   created_at: string;
   updated_at: string;
@@ -43,7 +43,7 @@ export interface WhoopRecoveryResponse {
 
 export interface WhoopRecoveryRecord {
   cycle_id: number;
-  sleep_id: number;
+  sleep_id: string;
   user_id: number;
   created_at: string;
   updated_at: string;
@@ -86,14 +86,14 @@ export interface WhoopWorkoutResponse {
 }
 
 export interface WhoopWorkout {
-  id: number;
+  id: string;
   user_id: number;
   created_at: string;
   updated_at: string;
   start: string;
   end: string;
   timezone_offset: string;
-  sport_id: number;
+  sport_name: string;
   score_state: string;
   score: {
     strain: number;
@@ -101,7 +101,7 @@ export interface WhoopWorkout {
     max_heart_rate: number;
     kilojoule: number;
     percent_recorded: number;
-    zone_duration: { zone_zero_milli: number; zone_one_milli: number; zone_two_milli: number; zone_three_milli: number; zone_four_milli: number; zone_five_milli: number; };
+    zone_durations: { zone_zero_milli: number; zone_one_milli: number; zone_two_milli: number; zone_three_milli: number; zone_four_milli: number; zone_five_milli: number; };
   };
 }
 
@@ -131,7 +131,7 @@ export interface WhoopDailyData {
     max_hr: number;
   };
   workouts?: {
-    sport_id: number;
+    sport_name: string;
     duration_min: number;
     strain: number;
     calories: number;

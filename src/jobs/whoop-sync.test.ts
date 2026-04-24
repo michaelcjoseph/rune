@@ -68,7 +68,7 @@ const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 
 function makeSleep(overrides: Record<string, unknown> = {}) {
   return {
-    id: 1,
+    id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8',
     score_state: 'SCORED',
     nap: false,
     score: {
@@ -124,8 +124,8 @@ function makeCycle(overrides: Record<string, unknown> = {}) {
 
 function makeWorkout(overrides: Record<string, unknown> = {}) {
   return {
-    id: 1,
-    sport_id: 44,
+    id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8',
+    sport_name: 'running',
     score_state: 'SCORED',
     start: '2026-04-11T10:00:00.000Z',
     end: '2026-04-11T10:45:00.000Z',
@@ -135,7 +135,7 @@ function makeWorkout(overrides: Record<string, unknown> = {}) {
       average_heart_rate: 145,
       max_heart_rate: 178,
       percent_recorded: 100,
-      zone_duration: { zone_zero_milli: 0, zone_one_milli: 0, zone_two_milli: 0, zone_three_milli: 0, zone_four_milli: 0, zone_five_milli: 0 },
+      zone_durations: { zone_zero_milli: 0, zone_one_milli: 0, zone_two_milli: 0, zone_three_milli: 0, zone_four_milli: 0, zone_five_milli: 0 },
     },
     ...overrides,
   };
@@ -285,21 +285,21 @@ describe('jobs/whoop-sync', () => {
     });
 
     it('returns error when both cycles and workouts endpoints fail', async () => {
-      fetchCyclesMock.mockResolvedValue(apiErr('HTTP 500 from /v1/cycle'));
-      fetchWorkoutsMock.mockResolvedValue(apiErr('HTTP 500 from /v1/activity/workout'));
+      fetchCyclesMock.mockResolvedValue(apiErr('HTTP 500 from /v2/cycle'));
+      fetchWorkoutsMock.mockResolvedValue(apiErr('HTTP 500 from /v2/activity/workout'));
 
       const result = await executeActivitySync();
 
       expect(result.status).toBe('error');
       expect(result.date).toBe('2026-04-11');
       expect(result.detail).toContain('API errors');
-      expect(result.detail).toContain('cycles=HTTP 500 from /v1/cycle');
-      expect(result.detail).toContain('workouts=HTTP 500 from /v1/activity/workout');
+      expect(result.detail).toContain('cycles=HTTP 500 from /v2/cycle');
+      expect(result.detail).toContain('workouts=HTTP 500 from /v2/activity/workout');
       expect(writeMock).not.toHaveBeenCalled();
     });
 
     it('on partial API failure (cycles errored, workouts empty), returns skipped with partial-error suffix', async () => {
-      fetchCyclesMock.mockResolvedValue(apiErr('HTTP 500 from /v1/cycle'));
+      fetchCyclesMock.mockResolvedValue(apiErr('HTTP 500 from /v2/cycle'));
       fetchWorkoutsMock.mockResolvedValue(ok([]));
 
       const result = await executeActivitySync();
@@ -307,7 +307,7 @@ describe('jobs/whoop-sync', () => {
       expect(result.status).toBe('skipped');
       expect(result.detail).toContain('No strain/workout data available');
       expect(result.detail).toContain('partial API errors');
-      expect(result.detail).toContain('cycles=HTTP 500 from /v1/cycle');
+      expect(result.detail).toContain('cycles=HTTP 500 from /v2/cycle');
       expect(result.detail).toContain('workouts=ok');
       expect(writeMock).not.toHaveBeenCalled();
     });
@@ -343,7 +343,7 @@ describe('jobs/whoop-sync', () => {
       expect(written.strain.score).toBe(12.3);
       expect(written.strain.calories).toBe(2000);
       expect(written.workouts).toHaveLength(1);
-      expect(written.workouts[0].sport_id).toBe(44);
+      expect(written.workouts[0].sport_name).toBe('running');
       expect(written.workouts[0].duration_min).toBe(45);
       expect(written.workouts[0].strain).toBe(8.5);
     });
@@ -475,8 +475,8 @@ describe('jobs/whoop-sync', () => {
     });
 
     it('sends Telegram error when both sleep and recovery endpoints fail', async () => {
-      fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v1/activity/sleep'));
-      fetchRecoveryMock.mockResolvedValue(apiErr('HTTP 500 from /v1/recovery'));
+      fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v2/activity/sleep'));
+      fetchRecoveryMock.mockResolvedValue(apiErr('HTTP 500 from /v2/recovery'));
       const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
 
       await runWhoopSleepSync(bot);
@@ -485,8 +485,23 @@ describe('jobs/whoop-sync', () => {
       expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('HTTP 500'));
     });
 
+    it('regression: 404s on both endpoints produce the exact Telegram string previously seen, but referencing v2 paths', async () => {
+      // Locks in the reported failure mode AND that we are now hitting /v2 endpoints.
+      // If this test ever starts failing because it mentions /v1, we've regressed the migration.
+      fetchSleepMock.mockResolvedValue(apiErr('HTTP 404 from /v2/activity/sleep'));
+      fetchRecoveryMock.mockResolvedValue(apiErr('HTTP 404 from /v2/recovery'));
+      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+
+      await runWhoopSleepSync(bot);
+
+      expect(bot.sendMessage).toHaveBeenCalledWith(
+        12345,
+        'Whoop sync failed — API errors: sleep=HTTP 404 from /v2/activity/sleep; recovery=HTTP 404 from /v2/recovery',
+      );
+    });
+
     it('on partial API failure (sleep errored, recovery empty), surfaces it in the skipped-notify message', async () => {
-      fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v1/activity/sleep'));
+      fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v2/activity/sleep'));
       fetchRecoveryMock.mockResolvedValue(ok([]));
       const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
 

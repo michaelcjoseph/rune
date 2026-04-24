@@ -65,7 +65,7 @@ function transformStrain(cycle: WhoopCycle): WhoopDailyData['strain'] {
 function transformWorkout(w: WhoopWorkout): NonNullable<WhoopDailyData['workouts']>[number] {
   const durationMs = new Date(w.end).getTime() - new Date(w.start).getTime();
   return {
-    sport_id: w.sport_id,
+    sport_name: w.sport_name,
     duration_min: Math.round(durationMs / 60_000),
     strain: Math.round(w.score.strain * 10) / 10,
     calories: Math.round(w.score.kilojoule / 4.184),

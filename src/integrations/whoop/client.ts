@@ -204,7 +204,7 @@ export interface RecordsResult<T> {
 }
 
 export async function fetchSleep(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopSleep>> {
-  const result = await apiGet<WhoopSleepResponse>('/v1/activity/sleep', token, {
+  const result = await apiGet<WhoopSleepResponse>('/v2/activity/sleep', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
@@ -213,7 +213,7 @@ export async function fetchSleep(token: string, startDate: string, endDate: stri
 }
 
 export async function fetchRecovery(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopRecoveryRecord>> {
-  const result = await apiGet<WhoopRecoveryResponse>('/v1/recovery', token, {
+  const result = await apiGet<WhoopRecoveryResponse>('/v2/recovery', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
@@ -222,7 +222,7 @@ export async function fetchRecovery(token: string, startDate: string, endDate: s
 }
 
 export async function fetchCycles(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopCycle>> {
-  const result = await apiGet<WhoopCycleResponse>('/v1/cycle', token, {
+  const result = await apiGet<WhoopCycleResponse>('/v2/cycle', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
@@ -231,7 +231,7 @@ export async function fetchCycles(token: string, startDate: string, endDate: str
 }
 
 export async function fetchWorkouts(token: string, startDate: string, endDate: string): Promise<RecordsResult<WhoopWorkout>> {
-  const result = await apiGet<WhoopWorkoutResponse>('/v1/activity/workout', token, {
+  const result = await apiGet<WhoopWorkoutResponse>('/v2/activity/workout', token, {
     start: `${startDate}T00:00:00.000Z`,
     end: `${endDate}T23:59:59.999Z`,
   });
