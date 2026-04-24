@@ -1,8 +1,8 @@
+- improve lenny's library setup with connection to mcp and link directly to kb
+- move pg essays to kb as well
+- dynamic workouts based on whoop data, health goals, and most recent workouts
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB
-- dynamic workouts based on whoop data, health goals, and most recent workouts
-- impove lenny's library setup with connection to mcp and link directly to kb
-- move pg essays to kb as well
 - set up child developmental agent support to help with monitoring progress and planning weekly
 - Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook
 - Hybrid KB search (ripgrep + vector via `sqlite-vec`, reciprocal rank fusion in `kb_query`) — deferred from project 03-resolver Phase C when the KB was still small; revisit once the wiki has 100+ pages across varied domains and synonym/paraphrase misses become a felt problem. Open question whether to use a hosted embedding model (OpenAI `text-embedding-3-small`) or a local one (e.g. `@xenova/transformers`) to preserve the project's no-API-key posture.
