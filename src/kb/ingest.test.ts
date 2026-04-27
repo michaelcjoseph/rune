@@ -19,12 +19,13 @@ vi.mock('node:fs', async () => {
 });
 
 const { runAgent } = await import('../ai/claude.js');
-const { readVaultFile, vaultFileExists, listVaultFiles, getFileModTime } = await import('../vault/files.js');
+const { readVaultFile, writeVaultFile, vaultFileExists, listVaultFiles, getFileModTime } = await import('../vault/files.js');
 const { copyFileSync } = await import('node:fs');
 const { ingestSource, determineRawDir, isMutableSource, snapshotProjectsMtimes, snapshotWikiMtimes, diffWikiCounts } = await import('./ingest.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
+const writeMock = writeVaultFile as unknown as ReturnType<typeof vi.fn>;
 const existsMock = vaultFileExists as unknown as ReturnType<typeof vi.fn>;
 const copyMock = copyFileSync as unknown as ReturnType<typeof vi.fn>;
 const listMock = listVaultFiles as unknown as ReturnType<typeof vi.fn>;
@@ -165,9 +166,9 @@ describe('kb/ingest', () => {
       expect(determineRawDir('Readwise/foo.md')).toBe('knowledge/raw/articles');
     });
 
-    it('routes journal files', () => {
-      expect(determineRawDir('journals/2026_04_21.md')).toBe('knowledge/raw/journals');
-    });
+    // Note: journals are special-cased before determineRawDir is reached
+    // (split into raw/journals/ and raw/reviews/ inside ingestSource), so
+    // there is no determineRawDir branch for journals to test.
 
     it('routes world-view files', () => {
       expect(determineRawDir('world-view/ai.md')).toBe('knowledge/raw/world-view');
@@ -235,7 +236,7 @@ describe('kb/ingest', () => {
     );
   });
 
-  it('overwrites raw copy when re-ingesting an existing journal (same-day edits)', async () => {
+  it('writes journal raw copy via writeVaultFile (no copyFileSync) on same-day edits', async () => {
     existsMock.mockReturnValue(true);
     let logCallCount = 0;
     readMock.mockImplementation((path: string) => {
@@ -243,16 +244,189 @@ describe('kb/ingest', () => {
         logCallCount++;
         return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
       }
-      return 'content';
+      // No review heading — so the splitter returns review=null and only the
+      // journal portion is written.
+      return 'just journal prose, no review section';
     });
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('journals/2026_04_21.md');
 
-    expect(copyMock).toHaveBeenCalledWith(
-      '/test/vault/journals/2026_04_21.md',
-      '/test/vault/knowledge/raw/journals/2026_04_21.md',
+    expect(writeMock).toHaveBeenCalledWith(
+      'knowledge/raw/journals/2026_04_21.md',
+      'just journal prose, no review section',
     );
+    // Journal flow no longer goes through copyFileSync.
+    expect(copyMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('knowledge/raw/journals/'),
+    );
+  });
+
+  describe('journal review-section split', () => {
+    // Stage successful agent run + return given journal content for the source path.
+    // log.md must "change" between the snapshot before and after the agent runs so
+    // ingestSource considers the run successful (see "Agent completed but wrote nothing"
+    // guard in ingest.ts).
+    const arrangeAgent = (sourcePath: string, journalContent: string) => {
+      let logCallCount = 0;
+      readMock.mockImplementation((path: string) => {
+        if (path === 'knowledge/log.md') {
+          logCallCount++;
+          return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
+        }
+        if (path === sourcePath) return journalContent;
+        return 'content';
+      });
+      agentMock.mockResolvedValue({ text: 'ok', error: null });
+    };
+
+    it('splits a Friday journal with ## Week in Review into raw/journals/ and raw/reviews/', async () => {
+      const journalContent = `# 2026-04-24
+
+Some morning notes.
+
+#priorities
+- Ship Aura
+
+## Week in Review
+
+**Reflection:** good week
+**Next Week's Goals:**
+1. More shipping`;
+      arrangeAgent('journals/2026_04_24.md', journalContent);
+
+      await ingestSource('journals/2026_04_24.md');
+
+      // Journal portion: pre-review only, trailing whitespace trimmed.
+      expect(writeMock).toHaveBeenCalledWith(
+        'knowledge/raw/journals/2026_04_24.md',
+        '# 2026-04-24\n\nSome morning notes.\n\n#priorities\n- Ship Aura',
+      );
+      // Review portion: derived filename includes review type, content includes the heading.
+      const reviewCall = writeMock.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/reviews/'),
+      );
+      expect(reviewCall).toBeDefined();
+      expect(reviewCall![0]).toBe('knowledge/raw/reviews/2026_04_24-weekly.md');
+      expect(reviewCall![1] as string).toContain('## Week in Review');
+      expect(reviewCall![1] as string).toContain('**Reflection:** good week');
+    });
+
+    it('writes only journal portion when no review section present', async () => {
+      const journalContent = `Plain daily notes.
+
+#priorities
+- One thing`;
+      arrangeAgent('journals/2026_04_22.md', journalContent);
+
+      await ingestSource('journals/2026_04_22.md');
+
+      const journalWrite = writeMock.mock.calls.find(
+        (c: unknown[]) => c[0] === 'knowledge/raw/journals/2026_04_22.md',
+      );
+      const reviewWrite = writeMock.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/reviews/'),
+      );
+      expect(journalWrite).toBeDefined();
+      expect(journalWrite![1]).toBe(journalContent);
+      expect(reviewWrite).toBeUndefined();
+    });
+
+    it.each([
+      ['weekly', '## Week in Review', '2026_04_24', 'weekly'],
+      ['monthly', '# April 2026 Review', '2026_04_30', 'monthly'],
+      ['quarterly Q1', '# Q1 2026 Review', '2026_03_31', 'quarterly'],
+      ['quarterly Q2', '# Q2 2026 Review', '2026_06_30', 'quarterly'],
+      ['quarterly Q3', '# Q3 2026 Review', '2026_09_30', 'quarterly'],
+      ['quarterly Q4', '# Q4 2026 Review', '2026_12_31', 'quarterly'],
+      ['yearly', '# 2026 Yearly Review', '2026_12_31', 'yearly'],
+    ])('produces correct derived filename for %s reviews', async (_label, heading, dateBase, expectedType) => {
+      const journalContent = `Notes.\n\n${heading}\n\nbody`;
+      arrangeAgent(`journals/${dateBase}.md`, journalContent);
+
+      await ingestSource(`journals/${dateBase}.md`);
+
+      const reviewCall = writeMock.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/reviews/'),
+      );
+      expect(reviewCall).toBeDefined();
+      expect(reviewCall![0]).toBe(`knowledge/raw/reviews/${dateBase}-${expectedType}.md`);
+    });
+
+    it('idempotent: re-ingesting the same journal writes the same files', async () => {
+      const journalContent = `Notes.\n\n## Week in Review\n\nbody`;
+      arrangeAgent('journals/2026_04_24.md', journalContent);
+
+      await ingestSource('journals/2026_04_24.md');
+      const firstCalls = writeMock.mock.calls
+        .filter((c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/'))
+        .map((c: unknown[]) => [c[0], c[1]]);
+
+      writeMock.mockClear();
+      await ingestSource('journals/2026_04_24.md');
+      const secondCalls = writeMock.mock.calls
+        .filter((c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/'))
+        .map((c: unknown[]) => [c[0], c[1]]);
+
+      expect(secondCalls).toEqual(firstCalls);
+    });
+
+    it('skips writing raw/journals/ when pre-review prose is empty (line-0 review heading)', async () => {
+      const journalContent = `## Week in Review\n\n**Reflection:** wrote nothing else`;
+      arrangeAgent('journals/2026_04_24.md', journalContent);
+
+      await ingestSource('journals/2026_04_24.md');
+
+      const journalCall = writeMock.mock.calls.find(
+        (c: unknown[]) => c[0] === 'knowledge/raw/journals/2026_04_24.md',
+      );
+      const reviewCall = writeMock.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('knowledge/raw/reviews/'),
+      );
+      expect(journalCall).toBeUndefined();
+      expect(reviewCall).toBeDefined();
+    });
+
+    it('agent prompt points at raw/journals/ path (not the live vault path) when journal is split', async () => {
+      const journalContent = `Notes.\n\n## Week in Review\n\nbody`;
+      arrangeAgent('journals/2026_04_24.md', journalContent);
+
+      await ingestSource('journals/2026_04_24.md');
+
+      const promptArg = (agentMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![1] as string;
+      // The agent must read the split raw copy, not the unsplit live journal.
+      expect(promptArg).toContain('Source file: knowledge/raw/journals/2026_04_24.md');
+      expect(promptArg).not.toMatch(/Source file: journals\/2026_04_24\.md/);
+      // Review file must be surfaced as a co-source with the citation-preference reminder.
+      expect(promptArg).toContain('knowledge/raw/reviews/2026_04_24-weekly.md');
+      expect(promptArg).toContain('weekly review');
+      expect(promptArg).toContain('canonical layer');
+    });
+
+    it('agent prompt points at raw/reviews/ path when journal pre-review prose is empty', async () => {
+      const journalContent = `## Week in Review\n\nbody only`;
+      arrangeAgent('journals/2026_04_24.md', journalContent);
+
+      await ingestSource('journals/2026_04_24.md');
+
+      const promptArg = (agentMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![1] as string;
+      expect(promptArg).toContain('Source file: knowledge/raw/reviews/2026_04_24-weekly.md');
+      // No "Additional source" line when the review file IS the primary source.
+      expect(promptArg).not.toContain('Additional source');
+    });
+
+    it('agent prompt has no review-related lines when journal has no review section', async () => {
+      const journalContent = `Plain daily notes.\n\n#priorities\n- One thing`;
+      arrangeAgent('journals/2026_04_22.md', journalContent);
+
+      await ingestSource('journals/2026_04_22.md');
+
+      const promptArg = (agentMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![1] as string;
+      expect(promptArg).toContain('Source file: knowledge/raw/journals/2026_04_22.md');
+      expect(promptArg).not.toContain('Additional source');
+      expect(promptArg).not.toContain('raw/reviews/');
+    });
   });
 
   describe('wiki-compiler boundary guard', () => {

@@ -3,6 +3,7 @@ import { join, basename } from 'node:path';
 import config from '../config.js';
 import { runAgent } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile, vaultFileExists, getVaultPath, listVaultFiles, getFileModTime } from '../vault/files.js';
+import { splitJournalAtReview } from '../vault/journal.js';
 import { initKB } from './init.js';
 import { linkEntities, loadAliasMap } from './entity-extract.js';
 import { createLogger } from '../utils/logger.js';
@@ -41,20 +42,69 @@ export async function ingestSource(
     return { success: false, permanent: true, output: `Source file not found: ${sourcePath}`, counts: { created: 0, updated: 0 } };
   }
 
-  // If the source is not already in knowledge/raw/, copy it there
-  if (!sourcePath.startsWith('knowledge/raw/')) {
-    const destDir = determineRawDir(sourcePath);
-    const destPath = join(destDir, basename(sourcePath));
-    const fullDest = getVaultPath(destPath);
-    mkdirSync(join(config.VAULT_DIR, destDir), { recursive: true });
+  // If the source is not already in knowledge/raw/, copy it there.
+  // Promote sourcePath to its raw/ counterpart for journals so the agent reads
+  // the split prose, not the live (still-combined) journal file.
+  let promptSourcePath = sourcePath;
+  let reviewSourcePath: string | null = null;
+  let reviewType: 'weekly' | 'monthly' | 'quarterly' | 'yearly' | null = null;
 
-    // Mutable sources (world-view, playbook, projects) are overwritten on every
-    // re-ingest so the wiki sees fresh content. Immutable sources (Readwise
-    // articles, captured conversations) are copied once and then left alone.
-    const isMutable = isMutableSource(sourcePath);
-    if (!vaultFileExists(destPath) || isMutable) {
-      copyFileSync(getVaultPath(sourcePath), fullDest);
-      log.info('Copied source to raw/', { from: sourcePath, to: destPath, overwrite: isMutable });
+  if (!sourcePath.startsWith('knowledge/raw/')) {
+    if (sourcePath.startsWith('journals/')) {
+      // Journals get split at any appended review section so wiki-compiler doesn't
+      // see the same prose twice — once here, and again via the canonical layer
+      // file (projects/X.md, world-view/Y.md, etc.) the post-review updaters wrote
+      // it to. The review portion lands in raw/reviews/ as a chronological hedge
+      // for cases where post-agents skipped the canonical-write path.
+      const journalDestDir = 'knowledge/raw/journals';
+      mkdirSync(join(config.VAULT_DIR, journalDestDir), { recursive: true });
+      const journalDest = join(journalDestDir, basename(sourcePath));
+      const { journal, review } = splitJournalAtReview(content);
+
+      // Skip writing an empty journal raw file (line-0 review heading edge case).
+      // The review file alone carries the content; the agent prompt below
+      // points at whichever raw file exists.
+      const journalHasContent = journal.trim().length > 0;
+      if (journalHasContent) {
+        writeVaultFile(journalDest, journal);
+        promptSourcePath = journalDest;
+      }
+
+      if (review) {
+        const reviewDestDir = 'knowledge/raw/reviews';
+        mkdirSync(join(config.VAULT_DIR, reviewDestDir), { recursive: true });
+        const reviewDest = join(reviewDestDir, `${basename(sourcePath, '.md')}-${review.type}.md`);
+        writeVaultFile(reviewDest, review.content);
+        reviewSourcePath = reviewDest;
+        reviewType = review.type;
+        if (!journalHasContent) {
+          // No pre-review prose; the review file is the only source.
+          promptSourcePath = reviewDest;
+          reviewSourcePath = null;
+        }
+        log.info('Split journal at review section', {
+          from: sourcePath,
+          journalDest: journalHasContent ? journalDest : null,
+          reviewDest,
+          reviewType: review.type,
+        });
+      } else {
+        log.info('Wrote journal to raw/ (no review section)', { from: sourcePath, journalDest });
+      }
+    } else {
+      const destDir = determineRawDir(sourcePath);
+      const destPath = join(destDir, basename(sourcePath));
+      const fullDest = getVaultPath(destPath);
+      mkdirSync(join(config.VAULT_DIR, destDir), { recursive: true });
+
+      // Mutable sources (world-view, playbook, projects) are overwritten on every
+      // re-ingest so the wiki sees fresh content. Immutable sources (Readwise
+      // articles, captured conversations) are copied once and then left alone.
+      const isMutable = isMutableSource(sourcePath);
+      if (!vaultFileExists(destPath) || isMutable) {
+        copyFileSync(getVaultPath(sourcePath), fullDest);
+        log.info('Copied source to raw/', { from: sourcePath, to: destPath, overwrite: isMutable });
+      }
     }
   }
 
@@ -66,9 +116,15 @@ export async function ingestSource(
     ? `\n\nUser guidance: ${options.guidance}`
     : '';
 
+  // When a journal was split, surface the review file as a co-source and remind
+  // the agent of the canonical-citation preference rule from its agent doc.
+  const reviewNote = reviewSourcePath && reviewType
+    ? `\n\nAdditional source (split from this journal): ${reviewSourcePath} (${reviewType} review). Per your agent doc's "Review Sources" rule, prefer citing the canonical layer (raw/projects/, raw/world-view/, raw/playbook, etc.) over raw/reviews/ when content overlaps.`
+    : '';
+
   const prompt = `Ingest the following source into the knowledge base.
 
-Source file: ${sourcePath}
+Source file: ${promptSourcePath}${reviewNote}
 
 Read the source file, then follow the ingestion workflow defined in knowledge/schema.md:
 1. Read the source material
@@ -163,10 +219,11 @@ function applyEntityLinks(before: Map<string, number>, after: Map<string, number
   }
 }
 
-/** Determine which raw/ subdirectory a source belongs in based on its path. */
+/** Determine which raw/ subdirectory a source belongs in based on its path.
+ *  Note: journals are special-cased earlier in `ingestSource` (split into
+ *  raw/journals/ and raw/reviews/) and never reach this function. */
 export function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('Readwise/')) return 'knowledge/raw/articles';
-  if (sourcePath.startsWith('journals/')) return 'knowledge/raw/journals';
   if (sourcePath.includes('conversation')) return 'knowledge/raw/conversations';
   if (sourcePath.startsWith('world-view/')) return 'knowledge/raw/world-view';
   if (sourcePath === 'pages/playbook.md') return 'knowledge/raw/playbook';

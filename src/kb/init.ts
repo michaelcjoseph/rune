@@ -10,8 +10,10 @@ const log = createLogger('kb-init');
 const KB_DIRS = [
   'knowledge/raw/articles',
   'knowledge/raw/conversations',
+  'knowledge/raw/journals',
   'knowledge/raw/notes',
   'knowledge/raw/media',
+  'knowledge/raw/reviews',
   'knowledge/wiki/entities',
   'knowledge/wiki/concepts',
   'knowledge/wiki/topics',

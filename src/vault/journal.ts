@@ -111,3 +111,48 @@ export function parseWeeklyGoals(content: string): string | null {
 
   return collected.join('\n').trim();
 }
+
+export type ReviewType = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+
+export interface ParsedReview {
+  type: ReviewType;
+  /** Includes the heading line itself. No trailing newline normalization. */
+  content: string;
+}
+
+/**
+ * Split a journal at the structured review section appended by the vault-resident
+ * `review-writer` agent. Returns the pre-review prose as `journal` and the review
+ * portion as `review` (or null if no review heading is found).
+ *
+ * CONTRACT: tracks the headings review-writer emits — weekly/monthly/quarterly/yearly.
+ * Daily reviews don't go through review-writer and don't append a structured section.
+ * If review-writer's heading templates change, update REVIEW_HEADING_PATTERNS here.
+ *
+ * Splits on the FIRST matching heading. Subsequent review-shaped headings on the
+ * same day (e.g. weekly + monthly on the same Friday) stay attached to the first.
+ */
+export function splitJournalAtReview(content: string): {
+  journal: string;
+  review: ParsedReview | null;
+} {
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    for (const { pattern, type } of REVIEW_HEADING_PATTERNS) {
+      if (pattern.test(line)) {
+        const journal = lines.slice(0, i).join('\n').replace(/\s+$/, '');
+        const review = lines.slice(i).join('\n');
+        return { journal, review: { type, content: review } };
+      }
+    }
+  }
+  return { journal: content, review: null };
+}
+
+const REVIEW_HEADING_PATTERNS: ReadonlyArray<{ pattern: RegExp; type: ReviewType }> = [
+  { pattern: /^## Week in Review\s*$/, type: 'weekly' },
+  { pattern: /^# Q[1-4] \d{4} Review\s*$/, type: 'quarterly' },
+  { pattern: /^# \d{4} Yearly Review\s*$/, type: 'yearly' },
+  { pattern: /^# [A-Z][a-z]+ \d{4} Review\s*$/, type: 'monthly' },
+];

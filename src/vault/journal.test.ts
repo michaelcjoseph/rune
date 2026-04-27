@@ -16,7 +16,7 @@ vi.mock('../utils/time.js', () => ({
   getTodayFilename: () => '2026_04_07.md',
 }));
 
-const { appendToJournal, writeMorningPrep, parseTag, parseWeeklyGoals } = await import('./journal.js');
+const { appendToJournal, writeMorningPrep, parseTag, parseWeeklyGoals, splitJournalAtReview } = await import('./journal.js');
 
 describe('appendToJournal', () => {
   beforeEach(() => {
@@ -283,5 +283,185 @@ More content here`;
 **Reflection:** Should not be captured
 - Some reflection`;
     expect(parseWeeklyGoals(content)).toBe('1. Goal one');
+  });
+});
+
+describe('splitJournalAtReview', () => {
+  it('splits at ## Week in Review (weekly)', () => {
+    const content = `# 2026-04-24
+
+Some morning notes.
+
+#priorities
+- Ship Aura
+
+## Week in Review
+
+**Last Week's Goals:** done
+**Reflection:** good week`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review).not.toBeNull();
+    expect(review?.type).toBe('weekly');
+    expect(review?.content.startsWith('## Week in Review')).toBe(true);
+    expect(review?.content).toContain("**Reflection:** good week");
+    expect(journal).toBe(`# 2026-04-24
+
+Some morning notes.
+
+#priorities
+- Ship Aura`);
+  });
+
+  it('splits at # April 2026 Review (monthly)', () => {
+    const content = `Daily prose here.
+
+# April 2026 Review
+
+## Last Month's Goals
+- Did the things`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review?.type).toBe('monthly');
+    expect(review?.content.startsWith('# April 2026 Review')).toBe(true);
+    expect(journal).toBe('Daily prose here.');
+  });
+
+  it('splits at # Q2 2026 Review (quarterly)', () => {
+    const content = `Notes.
+
+# Q2 2026 Review
+
+## Theme Assessment`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review?.type).toBe('quarterly');
+    expect(review?.content.startsWith('# Q2 2026 Review')).toBe(true);
+  });
+
+  it('splits at # 2026 Yearly Review (yearly)', () => {
+    const content = `Notes.
+
+# 2026 Yearly Review
+
+## Q4 Patterns`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review?.type).toBe('yearly');
+    expect(review?.content.startsWith('# 2026 Yearly Review')).toBe(true);
+  });
+
+  it('returns review null when no review heading present', () => {
+    const content = `# 2026-04-22
+
+Just journal prose.
+
+#priorities
+- Do the work`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+    expect(journal).toBe(content);
+  });
+
+  it('does not match a review-shaped phrase mid-line', () => {
+    // The heading must be line-leading. Inline mentions (e.g. in a sentence)
+    // must not trigger a split.
+    const content = `Just talking about the ## Week in Review yesterday.
+
+#priorities
+- nothing`;
+    const { review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+  });
+
+  it('does not match a review-shaped phrase nested under another heading level', () => {
+    // ### Week in Review is a sub-heading, not the structured ## marker
+    // review-writer emits.
+    const content = `Notes.
+
+### Week in Review
+
+Sub-section, not a real review.`;
+    const { review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+  });
+
+  it('captures only the FIRST review heading; secondary review-shaped headings stay inside review.content', () => {
+    // Same-day weekly + monthly is rare but possible (e.g. last Friday of month).
+    const content = `Notes.
+
+## Week in Review
+
+**Reflection:** weekly stuff
+
+# April 2026 Review
+
+## Last Month's Goals
+- April things`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review?.type).toBe('weekly');
+    expect(journal).toBe('Notes.');
+    expect(review?.content).toContain('# April 2026 Review');
+    expect(review?.content).toContain('weekly stuff');
+  });
+
+  it('preserves pre-review content exactly (no off-by-one)', () => {
+    const content = `line A
+line B
+line C
+## Week in Review
+review body`;
+    const { journal } = splitJournalAtReview(content);
+    expect(journal).toBe('line A\nline B\nline C');
+  });
+
+  it('strips trailing whitespace/newlines from the journal portion', () => {
+    const content = `prose
+
+
+## Week in Review
+body`;
+    const { journal } = splitJournalAtReview(content);
+    expect(journal).toBe('prose');
+  });
+
+  it('returns content unchanged as journal when there is no heading', () => {
+    const content = '   leading whitespace and trailing too   \n\n';
+    const { journal, review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+    expect(journal).toBe(content);
+  });
+
+  it('does not match a malformed monthly heading like "# april 2026 review" (lowercase)', () => {
+    // review-writer always emits TitleCase. Lowercase variants are unlikely
+    // and we don't want to treat them as section dividers.
+    const content = `Notes.
+
+# april 2026 review
+
+Body`;
+    const { review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+  });
+
+  it('does not match a daily-shaped heading like "## Day in Review"', () => {
+    // Daily reviews don't go through review-writer and don't append a structured
+    // section. If the daily handler ever starts emitting one, this test fails
+    // loudly and forces a contract update before silent regression.
+    const content = `Notes.
+
+## Day in Review
+
+Body`;
+    const { review } = splitJournalAtReview(content);
+    expect(review).toBeNull();
+  });
+
+  it('returns empty journal when review heading is at line 0', () => {
+    // Edge case: journal file opens with the review heading. Pre-review
+    // portion is empty; ingest skips writing raw/journals/ in this case.
+    const content = `## Week in Review
+
+**Reflection:** wrote nothing else today`;
+    const { journal, review } = splitJournalAtReview(content);
+    expect(journal).toBe('');
+    expect(review?.type).toBe('weekly');
+    expect(review?.content).toBe(content);
   });
 });
