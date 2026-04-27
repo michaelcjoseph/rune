@@ -110,7 +110,11 @@ If no actionable tags are found (no JSON updates AND no markdown updates AND no 
 
 Be concise. Only propose updates for tags that clearly map to a target above or match the special rules.`;
 
-  const analysis = await askClaudeOneShot(analysisPrompt);
+  let analysis = await askClaudeOneShot(analysisPrompt);
+  if (analysis.error?.includes('timed out')) {
+    log.warn('Daily tags analyzer timed out, retrying once');
+    analysis = await askClaudeOneShot(analysisPrompt);
+  }
 
   if (analysis.error || !analysis.text) {
     return { step: 'Daily tags', status: 'error', detail: analysis.error || 'Empty response' };
