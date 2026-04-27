@@ -1,6 +1,4 @@
-- improve lenny's library setup with connection to mcp and link directly to kb
-- move pg essays to kb as well
-- dynamic workouts based on whoop data, health goals, and most recent workouts
+- Web app to talk to Jarvis on desktop
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB
 - set up child developmental agent support to help with monitoring progress and planning weekly

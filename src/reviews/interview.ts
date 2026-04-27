@@ -245,8 +245,12 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
     const typing = startTyping(bot, session.chatId);
 
     try {
+      const journalPath = `journals/${toScannerDate(session.targetDate)}.md`;
+      const journalBefore = readVaultFile(journalPath);
+      const sizeBefore = journalBefore?.length ?? 0;
+
       const writerResult = await runAgent('review-writer', `review_type: ${config.type}
-target_date: ${session.targetDate}
+target_date: ${toScannerDate(session.targetDate)}
 approved_outline: ${session.outline}
 conversation_context: ${session.prepContext}`);
 
@@ -257,6 +261,18 @@ conversation_context: ${session.prepContext}`);
         updateReviewSession(session.chatId, { phase: 'done' });
         sessionPrompts.delete(session.claudeSessionId);
         return;
+      }
+
+      const journalAfter = readVaultFile(journalPath);
+      const sizeAfter = journalAfter?.length ?? 0;
+      const journalWritten = sizeAfter > sizeBefore;
+      if (!journalWritten) {
+        log.error('review-writer did not modify journal', {
+          type: config.type,
+          journalPath,
+          sizeBefore,
+          sizeAfter,
+        });
       }
 
       updateReviewSession(session.chatId, { phase: 'updates' });
@@ -382,7 +398,9 @@ Reply ONLY with the JSON object, nothing else.`);
       };
 
       const agentSummary = [
-        writerResult.text ? 'Review written to journal.' : null,
+        journalWritten
+          ? 'Review written to journal.'
+          : 'Review write-up returned but journal was not modified — outline preserved in logs/review-sessions.json.',
         summarize('projects', 'Project pages updated.', 'Project update failed.', 'Projects skipped (agent missing).'),
         summarize('psychology', 'Psychology profile updated.', 'Psychology update failed.', 'Psychology skipped (agent missing).'),
         summarize('json_updates', 'JSON data updated.', 'JSON update failed.', 'JSON updates skipped (agent missing).'),

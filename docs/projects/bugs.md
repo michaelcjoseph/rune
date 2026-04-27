@@ -1,0 +1,3 @@
+- [ ] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
+- [ ] The morning prep should include at the top this week’s goals
+- [ ] Whoop numbers don’t match what’s in the app. I think there’s a date mismatch (pulling recovery and sleep for the day before, not this morning)
