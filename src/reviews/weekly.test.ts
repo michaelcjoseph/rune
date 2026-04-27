@@ -589,7 +589,8 @@ describe('reviews/weekly', () => {
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('review_type: weekly'));
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('target_date: 2026-04-10'));
+      // toScannerDate converts hyphens to underscores for agent prompts.
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('target_date: 2026_04_10'));
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('approved_outline:'));
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('conversation_context:'));
     });
@@ -833,6 +834,16 @@ describe('reviews/weekly', () => {
       askClaudeOneShotMock.mockResolvedValue({
         text: '{"projects": true, "psychology": true, "json_updates": true}',
         error: null,
+      });
+      // Production reads the journal before/after review-writer to detect a
+      // size growth; only then does the summary emit "Review written to journal."
+      let journalReadCount = 0;
+      readVaultMock.mockImplementation((p: string) => {
+        if (p === 'journals/2026_04_10.md') {
+          journalReadCount++;
+          return journalReadCount === 1 ? '' : '## Weekly Review\n- Item A\n- Item B';
+        }
+        return null;
       });
 
       await weeklyHandler.handleMessage(session, 'yes', bot);
