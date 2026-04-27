@@ -43,6 +43,9 @@ vi.mock('../vault/git.js', () => ({
 vi.mock('../utils/time.js', () => ({
   getYesterdayDate: vi.fn(() => '2026-04-10'),
   getTodayDate: vi.fn(() => '2026-04-11'),
+  // Naive Chicago-date impl for tests: take the UTC YYYY-MM-DD slice of the ISO string.
+  // Test fixtures pick UTC times that don't cross the day boundary so this is faithful.
+  toChicagoDate: vi.fn((d: Date) => d.toISOString().slice(0, 10)),
 }));
 
 const { isConfigured, getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts } = await import('../integrations/whoop/client.js');
@@ -71,6 +74,9 @@ function makeSleep(overrides: Record<string, unknown> = {}) {
     id: 'ecfc6a15-4661-442f-a9a4-f160dd7afae8',
     score_state: 'SCORED',
     nap: false,
+    // Default end=2026-04-11T12:00Z → "today" in mocked toChicagoDate
+    start: '2026-04-11T04:00:00.000Z',
+    end: '2026-04-11T12:00:00.000Z',
     score: {
       stage_summary: {
         total_in_bed_time_milli: 28_800_000, // 8h
@@ -96,6 +102,7 @@ function makeRecovery(overrides: Record<string, unknown> = {}) {
   return {
     cycle_id: 1,
     score_state: 'SCORED',
+    created_at: '2026-04-11T12:05:00.000Z',
     score: {
       recovery_score: 72,
       hrv_rmssd_milli: 45.678,
@@ -176,14 +183,85 @@ describe('jobs/whoop-sync', () => {
       fetchRecoveryMock.mockResolvedValue(ok([]));
 
       const result = await executeSleepSync();
-      expect(result).toEqual({ status: 'skipped', date: '2026-04-10', detail: 'No sleep/recovery data available' });
+      expect(result).toEqual({ status: 'skipped', date: '2026-04-11', detail: 'No sleep data available' });
       expect(writeMock).not.toHaveBeenCalled();
+    });
+
+    it('returns skipped (and ignores recovery) when recovery is present but sleep is absent', async () => {
+      // Recovery alone could be tied to a prior day's sleep — skip rather than
+      // mislabel orphan recovery numbers under today.
+      fetchSleepMock.mockResolvedValue(ok([]));
+      fetchRecoveryMock.mockResolvedValue(ok([makeRecovery()]));
+
+      const result = await executeSleepSync();
+
+      expect(result.status).toBe('skipped');
+      expect(result.date).toBe('2026-04-11');
+      expect(result.detail).toContain('No sleep data available');
+      expect(result.detail).toContain('recovery present but ignored without sleep');
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(gitMock).not.toHaveBeenCalled();
+    });
+
+    it('queries the yesterday..today window (not yesterday..yesterday)', async () => {
+      fetchSleepMock.mockResolvedValue(ok([]));
+      fetchRecoveryMock.mockResolvedValue(ok([]));
+
+      await executeSleepSync();
+
+      expect(fetchSleepMock).toHaveBeenCalledWith('test-token', '2026-04-10', '2026-04-11');
+      expect(fetchRecoveryMock).toHaveBeenCalledWith('test-token', '2026-04-10', '2026-04-11');
+    });
+
+    it('returns error when latest sleep has malformed end timestamp', async () => {
+      fetchSleepMock.mockResolvedValue(ok([
+        makeSleep({ end: 'not-a-real-timestamp' }),
+      ]));
+      fetchRecoveryMock.mockResolvedValue(ok([]));
+
+      const result = await executeSleepSync();
+
+      expect(result.status).toBe('error');
+      expect(result.date).toBe('2026-04-11');
+      expect(result.detail).toContain('invalid end timestamp');
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(gitMock).not.toHaveBeenCalled();
+    });
+
+    it('skips with date-mismatch detail when latest sleep ended yesterday (not today)', async () => {
+      // Sleep that ended yesterday → Whoop hasn't finalized this morning's sleep yet
+      fetchSleepMock.mockResolvedValue(ok([
+        makeSleep({ start: '2026-04-10T04:00:00.000Z', end: '2026-04-10T12:00:00.000Z' }),
+      ]));
+      fetchRecoveryMock.mockResolvedValue(ok([]));
+
+      const result = await executeSleepSync();
+
+      expect(result.status).toBe('skipped');
+      expect(result.date).toBe('2026-04-10');
+      expect(result.detail).toContain('Latest sleep ended 2026-04-10');
+      expect(result.detail).toContain('not 2026-04-11');
+      expect(writeMock).not.toHaveBeenCalled();
+      expect(gitMock).not.toHaveBeenCalled();
+    });
+
+    it('picks the most recently-ended sleep when multiple records returned', async () => {
+      const earlier = makeSleep({ id: 'earlier', start: '2026-04-10T04:00:00.000Z', end: '2026-04-10T12:00:00.000Z' });
+      const latest = makeSleep({ id: 'latest', start: '2026-04-11T04:00:00.000Z', end: '2026-04-11T12:00:00.000Z' });
+      // Return out of order to verify we sort, not just pick records[0]
+      fetchSleepMock.mockResolvedValue(ok([earlier, latest]));
+      fetchRecoveryMock.mockResolvedValue(ok([]));
+
+      const result = await executeSleepSync();
+
+      expect(result.status).toBe('synced');
+      expect(result.date).toBe('2026-04-11');
     });
 
     it('writes JSON and generates trends on success', async () => {
       // generateTrends reads the last 30 days — provide data so trends.md is written
       const sampleData = JSON.stringify({
-        date: '2026-04-10',
+        date: '2026-04-11',
         sleep: { duration_hours: 7, performance: 85, efficiency: 90, rem_pct: 21, deep_pct: 14, respiratory_rate: 15, disturbances: 2 },
         recovery: { score: 72, hrv: 45.68, resting_hr: 55, spo2: 97 },
       });
@@ -198,15 +276,15 @@ describe('jobs/whoop-sync', () => {
       const result = await executeSleepSync();
 
       expect(result.status).toBe('synced');
-      expect(result.date).toBe('2026-04-10');
+      expect(result.date).toBe('2026-04-11');
       expect(result.detail).toContain('Sleep:');
       expect(result.detail).toContain('Recovery: 72%');
       expect(result.detail).toContain('HRV: 45.68ms');
 
-      // Verify daily data was written
+      // Verify daily data was written under today (date the sleep ended), not yesterday
       expect(writeMock).toHaveBeenCalledWith(
-        'health/whoop/2026-04-10.json',
-        expect.stringContaining('"date": "2026-04-10"'),
+        'health/whoop/2026-04-11.json',
+        expect.stringContaining('"date": "2026-04-11"'),
       );
 
       // Verify trends were generated (writes trends.md)
@@ -216,7 +294,7 @@ describe('jobs/whoop-sync', () => {
       expect(trendsCalls.length).toBeGreaterThanOrEqual(1);
 
       // Verify git commit
-      expect(gitMock).toHaveBeenCalledWith('Whoop sleep sync: 2026-04-10');
+      expect(gitMock).toHaveBeenCalledWith('Whoop sleep sync: 2026-04-11');
     });
 
     it('writes sleep data with correct transformations', async () => {
@@ -226,7 +304,7 @@ describe('jobs/whoop-sync', () => {
       await executeSleepSync();
 
       const written = JSON.parse(writeMock.mock.calls.find(
-        (c: unknown[]) => (c[0] as string).includes('2026-04-10.json'),
+        (c: unknown[]) => (c[0] as string).includes('2026-04-11.json'),
       )![1]);
 
       expect(written.sleep).toBeDefined();
@@ -240,8 +318,8 @@ describe('jobs/whoop-sync', () => {
 
     it('merges with existing daily data file', async () => {
       readMock.mockImplementation((path: string) => {
-        if (path === 'health/whoop/2026-04-10.json') {
-          return JSON.stringify({ date: '2026-04-10', strain: { score: 10, calories: 2000, avg_hr: 75, max_hr: 165 } });
+        if (path === 'health/whoop/2026-04-11.json') {
+          return JSON.stringify({ date: '2026-04-11', strain: { score: 10, calories: 2000, avg_hr: 75, max_hr: 165 } });
         }
         return null;
       });
@@ -252,7 +330,7 @@ describe('jobs/whoop-sync', () => {
       await executeSleepSync();
 
       const written = JSON.parse(writeMock.mock.calls.find(
-        (c: unknown[]) => (c[0] as string).includes('2026-04-10.json'),
+        (c: unknown[]) => (c[0] as string).includes('2026-04-11.json'),
       )![1]);
 
       // Existing strain preserved, sleep + recovery added
@@ -470,8 +548,8 @@ describe('jobs/whoop-sync', () => {
       expect(bot.sendMessage).toHaveBeenCalledOnce();
       const call = bot.sendMessage.mock.calls[0];
       expect(call[0]).toBe(12345);
-      expect(call[1]).toContain('No sleep/recovery data available');
-      expect(call[1]).toContain('2026-04-10');
+      expect(call[1]).toContain('No sleep data available');
+      expect(call[1]).toContain('2026-04-11');
     });
 
     it('sends Telegram error when both sleep and recovery endpoints fail', async () => {
@@ -509,7 +587,7 @@ describe('jobs/whoop-sync', () => {
 
       expect(bot.sendMessage).toHaveBeenCalledOnce();
       const call = bot.sendMessage.mock.calls[0];
-      expect(call[1]).toContain('No sleep/recovery data available');
+      expect(call[1]).toContain('No sleep data available');
       expect(call[1]).toContain('partial API errors');
       expect(call[1]).toContain('sleep=HTTP 500');
     });

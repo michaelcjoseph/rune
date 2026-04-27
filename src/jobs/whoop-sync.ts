@@ -2,7 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts, isConfigured, describeTokenError } from '../integrations/whoop/client.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
-import { getYesterdayDate, getTodayDate } from '../utils/time.js';
+import { getYesterdayDate, getTodayDate, toChicagoDate } from '../utils/time.js';
 import { createLogger } from '../utils/logger.js';
 import config from '../config.js';
 import type { WhoopDailyData, WhoopSleep, WhoopRecoveryRecord, WhoopCycle, WhoopWorkout } from '../integrations/whoop/types.js';
@@ -93,32 +93,58 @@ export async function executeSleepSync(): Promise<WhoopSyncResult> {
   }
   const token = tokenResult.token;
 
-  const date = getYesterdayDate();
-  log.info('Syncing sleep data', { date });
+  const today = getTodayDate();
+  const yesterday = getYesterdayDate();
+  log.info('Syncing sleep data', { window: `${yesterday}..${today}` });
 
+  // Wide enough window to catch the latest sleep regardless of timezone offset.
   const [sleepResult, recoveryResult] = await Promise.all([
-    fetchSleep(token, date, date),
-    fetchRecovery(token, date, date),
+    fetchSleep(token, yesterday, today),
+    fetchRecovery(token, yesterday, today),
   ]);
 
   // If both endpoints failed with HTTP/network errors, surface as error (not a silent skip)
   if (sleepResult.error && recoveryResult.error) {
-    return { status: 'error', date, detail: `API errors: sleep=${sleepResult.error}; recovery=${recoveryResult.error}` };
+    return { status: 'error', date: today, detail: `API errors: sleep=${sleepResult.error}; recovery=${recoveryResult.error}` };
   }
 
-  const sleep = sleepResult.records[0];
-  const recovery = recoveryResult.records[0];
+  // Latest sleep = most recent end timestamp (naps already filtered in fetchSleep).
+  const sleep = [...sleepResult.records].sort(
+    (a, b) => new Date(b.end).getTime() - new Date(a.end).getTime(),
+  )[0];
+  // Recovery has no start/end; created_at is its closest proxy.
+  const recovery = [...recoveryResult.records].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )[0];
 
-  if (!sleep && !recovery) {
-    // Mention which sides errored vs which legitimately returned empty so the user knows
+  // Sleep anchors the day — its end timestamp is what dates the record. Recovery
+  // alone has no end timestamp and can be tied to a prior day's sleep, so we
+  // skip rather than persist orphan recovery numbers under today.
+  if (!sleep) {
     const partialErrorSuffix = sleepResult.error || recoveryResult.error
       ? ` (partial API errors: sleep=${sleepResult.error ?? 'ok'}, recovery=${recoveryResult.error ?? 'ok'})`
       : '';
-    return { status: 'skipped', date, detail: `No sleep/recovery data available${partialErrorSuffix}` };
+    const recoveryNote = recovery ? ' (recovery present but ignored without sleep)' : '';
+    return { status: 'skipped', date: today, detail: `No sleep data available${partialErrorSuffix}${recoveryNote}` };
+  }
+
+  // Guard against malformed end timestamp before it propagates into a "NaN-NaN-NaN" date label.
+  if (Number.isNaN(new Date(sleep.end).getTime())) {
+    return { status: 'error', date: today, detail: `Sleep record has invalid end timestamp: ${sleep.end}` };
+  }
+
+  // Label by the date the sleep actually ended (Chicago).
+  const date = toChicagoDate(new Date(sleep.end));
+
+  // Sanity check: if the latest sleep didn't end today, the morning's data is
+  // likely not finalized yet. Skip rather than overwrite a previous day's file.
+  if (date !== today) {
+    log.info('Latest sleep did not end today', { sleep_end_date: date, today });
+    return { status: 'skipped', date, detail: `Latest sleep ended ${date}, not ${today} — Whoop may not have finalized this morning's sleep yet` };
   }
 
   const data = readDailyData(date);
-  if (sleep) data.sleep = transformSleep(sleep);
+  data.sleep = transformSleep(sleep);
   if (recovery) data.recovery = transformRecovery(recovery);
   writeDailyData(data);
 

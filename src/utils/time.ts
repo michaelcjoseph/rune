@@ -26,9 +26,13 @@ export function getTodayFilename(): string {
   return formatDateFilename(new Date());
 }
 
-export function getTodayDate(): string {
-  const { year, month, day } = getLocalDate(new Date());
+export function toChicagoDate(date: Date): string {
+  const { year, month, day } = getLocalDate(date);
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+export function getTodayDate(): string {
+  return toChicagoDate(new Date());
 }
 
 export function getTimestamp(): string {
@@ -47,9 +51,7 @@ export function getYesterdayFilename(): string {
 
 export function getYesterdayDate(): string {
   const { year, month, day } = getLocalDate(new Date());
-  const d = new Date(year, month, day - 1);
-  const { year: y, month: m, day: dd } = getLocalDate(d);
-  return `${y}-${String(m + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  return toChicagoDate(new Date(year, month, day - 1));
 }
 
 export function getDayOfWeek(): string {

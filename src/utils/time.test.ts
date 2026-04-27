@@ -19,6 +19,7 @@ const {
   getRecentFilenames,
   getWeekRange,
   getMonthInfo,
+  toChicagoDate,
 } = await import('./time.js');
 
 describe('time utils', () => {
@@ -44,6 +45,30 @@ describe('time utils', () => {
     // 2026-04-08 04:00 UTC = 2026-04-07 23:00 Chicago (CDT)
     vi.setSystemTime(new Date('2026-04-08T04:00:00.000Z'));
     expect(getTodayFilename()).toBe('2026_04_07.md');
+  });
+
+  describe('toChicagoDate', () => {
+    it('returns YYYY-MM-DD for an arbitrary Date', () => {
+      // 2026-04-11 12:00 UTC = 2026-04-11 07:00 Chicago (CDT)
+      expect(toChicagoDate(new Date('2026-04-11T12:00:00.000Z'))).toBe('2026-04-11');
+    });
+
+    it('crosses Chicago day boundary — late UTC same day in Chicago (CDT)', () => {
+      // 2026-04-08 04:00 UTC = 2026-04-07 23:00 Chicago (CDT, UTC-5)
+      expect(toChicagoDate(new Date('2026-04-08T04:00:00.000Z'))).toBe('2026-04-07');
+    });
+
+    it('crosses Chicago day boundary — early UTC is the new day in Chicago (CDT)', () => {
+      // 2026-04-08 06:00 UTC = 2026-04-08 01:00 Chicago (CDT)
+      expect(toChicagoDate(new Date('2026-04-08T06:00:00.000Z'))).toBe('2026-04-08');
+    });
+
+    it('handles CST winter offset (UTC-6)', () => {
+      // 2026-01-15 06:30 UTC = 2026-01-15 00:30 Chicago (CST, UTC-6)
+      expect(toChicagoDate(new Date('2026-01-15T06:30:00.000Z'))).toBe('2026-01-15');
+      // 2026-01-15 05:30 UTC = 2026-01-14 23:30 Chicago (CST)
+      expect(toChicagoDate(new Date('2026-01-15T05:30:00.000Z'))).toBe('2026-01-14');
+    });
   });
 
   it('getDateContext includes day of week, date, timezone, and journal filename', () => {
