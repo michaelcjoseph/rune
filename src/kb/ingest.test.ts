@@ -13,7 +13,6 @@ vi.mock('../vault/files.js', () => ({
   listVaultFiles: vi.fn(() => []),
   getFileModTime: vi.fn(() => null),
 }));
-vi.mock('./queue.js', () => ({ dequeue: vi.fn() }));
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return { ...actual, copyFileSync: vi.fn(), mkdirSync: vi.fn() };
@@ -21,14 +20,12 @@ vi.mock('node:fs', async () => {
 
 const { runAgent } = await import('../ai/claude.js');
 const { readVaultFile, vaultFileExists, listVaultFiles, getFileModTime } = await import('../vault/files.js');
-const { dequeue } = await import('./queue.js');
 const { copyFileSync } = await import('node:fs');
 const { ingestSource, determineRawDir, isMutableSource, snapshotProjectsMtimes, snapshotWikiMtimes, diffWikiCounts } = await import('./ingest.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
 const existsMock = vaultFileExists as unknown as ReturnType<typeof vi.fn>;
-const dequeueMock = dequeue as unknown as ReturnType<typeof vi.fn>;
 const copyMock = copyFileSync as unknown as ReturnType<typeof vi.fn>;
 const listMock = listVaultFiles as unknown as ReturnType<typeof vi.fn>;
 const mtimeMock = getFileModTime as unknown as ReturnType<typeof vi.fn>;
@@ -46,6 +43,15 @@ describe('kb/ingest', () => {
     const result = await ingestSource('missing.md');
     expect(result.success).toBe(false);
     expect(result.output).toContain('not found');
+  });
+
+  it('flags missing-source failures as permanent so the engine can dequeue', async () => {
+    // Regression: a stale post-review enqueue (e.g. agent referenced a file it
+    // never wrote) used to sit in the queue forever and re-fail on every run.
+    // The engine consumes `permanent` to decide whether to dequeue.
+    readMock.mockReturnValue(null);
+    const result = await ingestSource('projects/ghost.md');
+    expect(result.permanent).toBe(true);
   });
 
   it('runs wiki-compiler agent on valid source', async () => {
@@ -98,21 +104,6 @@ describe('kb/ingest', () => {
     expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.stringContaining('focus on APIs'), expect.any(Number));
   });
 
-  it('dequeues source after success', async () => {
-    let logCallCount = 0;
-    readMock.mockImplementation((path: string) => {
-      if (path === 'knowledge/log.md') {
-        logCallCount++;
-        return logCallCount === 1 ? '# Log' : '# Log\n[2026-04-15] Ingested';
-      }
-      return 'content';
-    });
-    agentMock.mockResolvedValue({ text: 'ok', error: null });
-
-    await ingestSource('raw/test.md');
-    expect(dequeueMock).toHaveBeenCalledWith('raw/test.md');
-  });
-
   it('returns error when agent fails', async () => {
     readMock.mockReturnValue('content');
     agentMock.mockResolvedValue({ text: null, error: 'agent crashed' });
@@ -120,6 +111,9 @@ describe('kb/ingest', () => {
     const result = await ingestSource('notes/test.md');
     expect(result.success).toBe(false);
     expect(result.output).toBe('agent crashed');
+    // Agent failures may be transient (CLI timeout, network); not a permanent
+    // failure, so the engine should leave the entry queued for retry.
+    expect(result.permanent).toBeFalsy();
   });
 
   it('returns error when agent succeeds but writes nothing to log.md', async () => {
@@ -130,7 +124,7 @@ describe('kb/ingest', () => {
     const result = await ingestSource('notes/test.md');
     expect(result.success).toBe(false);
     expect(result.output).toContain('produced no output');
-    expect(dequeueMock).not.toHaveBeenCalled();
+    expect(result.permanent).toBeFalsy();
   });
 
   it('copies Readwise files to raw/articles/', async () => {

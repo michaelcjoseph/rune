@@ -2,7 +2,7 @@ import config from '../config.js';
 import { ingestSource } from './ingest.js';
 import { queryKB } from './query.js';
 import { lintKB } from './lint.js';
-import { getQueue, getPriority, type QueueEntry } from './queue.js';
+import { getQueue, dequeue, getPriority, type QueueEntry } from './queue.js';
 import { readVaultFile, listVaultFiles, appendVaultFile } from '../vault/files.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -56,6 +56,7 @@ export async function processIngestionQueue(): Promise<{ processed: number; erro
     created += result.counts.created;
     updated += result.counts.updated;
     if (result.success) {
+      dequeue(entry.source);
       processed++;
       if (processed % INGESTS_PER_CHECKPOINT === 0) {
         try {
@@ -69,6 +70,10 @@ export async function processIngestionQueue(): Promise<{ processed: number; erro
     } else {
       errors++;
       log.error('Failed to ingest queued source', { source: entry.source, error: result.output });
+      // Permanent failures (e.g. source file does not exist) cannot be retried,
+      // so they would re-fail every nightly forever if left queued. Transient
+      // failures (CLI timeout, agent crash) stay queued to retry next run.
+      if (result.permanent) dequeue(entry.source);
     }
   }
 

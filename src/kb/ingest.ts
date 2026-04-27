@@ -3,7 +3,6 @@ import { join, basename } from 'node:path';
 import config from '../config.js';
 import { runAgent } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile, vaultFileExists, getVaultPath, listVaultFiles, getFileModTime } from '../vault/files.js';
-import { dequeue } from './queue.js';
 import { initKB } from './init.js';
 import { linkEntities, loadAliasMap } from './entity-extract.js';
 import { createLogger } from '../utils/logger.js';
@@ -19,6 +18,11 @@ export interface IngestResult {
   success: boolean;
   output: string;
   counts: IngestCounts;
+  /** True when the failure cannot be retried (e.g. source file does not exist).
+   *  Consumed by `processIngestionQueue` to decide whether to dequeue the entry.
+   *  Absent or false means the failure may be transient (CLI timeout, agent
+   *  crash) and the entry should remain queued for the next nightly run. */
+  permanent?: boolean;
 }
 
 /**
@@ -34,7 +38,7 @@ export async function ingestSource(
   // Ensure the source exists in the vault
   const content = readVaultFile(sourcePath);
   if (!content) {
-    return { success: false, output: `Source file not found: ${sourcePath}`, counts: { created: 0, updated: 0 } };
+    return { success: false, permanent: true, output: `Source file not found: ${sourcePath}`, counts: { created: 0, updated: 0 } };
   }
 
   // If the source is not already in knowledge/raw/, copy it there
@@ -125,9 +129,6 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
       error: (err as Error).message,
     });
   }
-
-  // Remove from queue if it was queued
-  dequeue(sourcePath);
 
   log.info('Ingestion complete', { source: sourcePath, created: counts.created, updated: counts.updated });
   return { success: true, output: result.text || 'Ingestion complete.', counts };

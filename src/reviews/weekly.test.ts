@@ -39,7 +39,9 @@ vi.mock('../ai/claude.js', () => ({
 vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
   listVaultFiles: vi.fn(() => []),
-  vaultFileExists: vi.fn(() => false),
+  // Default to "exists" so post-review enqueueTouchedFiles tests assert the
+  // happy path. Tests that need a missing file override per-case.
+  vaultFileExists: vi.fn(() => true),
 }));
 
 vi.mock('../vault/git.js', () => ({
@@ -75,7 +77,7 @@ vi.mock('../kb/queue.js', () => ({
 const { registerReviewHandler } = await import('./orchestrator.js');
 const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext, askClaudeOneShot, runAgent } = await import('../ai/claude.js');
-const { readVaultFile } = await import('../vault/files.js');
+const { readVaultFile, vaultFileExists } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
 const { sendLongMessage, startTyping, stopTyping } = await import('../integrations/telegram/client.js');
 const { enqueue: enqueueKB } = await import('../kb/queue.js');
@@ -91,6 +93,7 @@ const sendLongMock = sendLongMessage as ReturnType<typeof vi.fn>;
 const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
 const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 const enqueueKBMock = enqueueKB as ReturnType<typeof vi.fn>;
+const vaultFileExistsMock = vaultFileExists as ReturnType<typeof vi.fn>;
 
 // Import the module under test (triggers registerReviewHandler side effect)
 const { weeklyHandler, detectOutline } = await import('./weekly.js');
@@ -132,6 +135,9 @@ describe('reviews/weekly', () => {
     vi.clearAllMocks();
     bot = makeBot();
     startTypingMock.mockReturnValue('typing-handle');
+    // Default to "everything exists" so enqueue-touched-files tests assert the
+    // happy path. Tests that need to simulate a missing file override per-case.
+    vaultFileExistsMock.mockReturnValue(true);
   });
 
   // 1. detectOutline
@@ -726,6 +732,26 @@ describe('reviews/weekly', () => {
       await weeklyHandler.handleMessage(session, 'yes', bot);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('world-view/ai.md');
+    });
+
+    it('skips enqueue when project-updater output mentions a path that does not exist', async () => {
+      // Regression: project-updater's output sometimes references a path it
+      // didn't actually write (renamed, hallucinated, file in archive). The
+      // queue would accept it, then re-fail on every nightly run forever.
+      vaultFileExistsMock.mockImplementation((path: string) => path !== 'projects/ghost.md');
+      const session = approvalSession();
+      runAgentMock
+        .mockResolvedValueOnce({ text: 'Review written.', error: null })
+        .mockResolvedValueOnce({ text: '## projects/project-alpha.md\n- updated\n## projects/ghost.md\n- mentioned but not written', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": true, "psychology": false, "json_updates": false, "worldview": false, "playbook": false}',
+        error: null,
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', bot);
+
+      expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
+      expect(enqueueKBMock).not.toHaveBeenCalledWith('projects/ghost.md');
     });
 
     it('does not enqueue archived projects', async () => {

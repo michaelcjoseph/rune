@@ -9,6 +9,7 @@ vi.mock('./query.js', () => ({ queryKB: vi.fn() }));
 vi.mock('./lint.js', () => ({ lintKB: vi.fn(async () => ({ report: 'lint clean' })) }));
 vi.mock('./queue.js', () => ({
   getQueue: vi.fn(),
+  dequeue: vi.fn(),
   // The real getPriority is a pure function; re-export a lightweight stub so
   // engine.ts's priority-of fallback for legacy entries returns 0 by default.
   getPriority: vi.fn((source: string) => {
@@ -27,13 +28,14 @@ vi.mock('../vault/files.js', () => ({
 }));
 
 const { ingestSource } = await import('./ingest.js');
-const { getQueue } = await import('./queue.js');
+const { getQueue, dequeue } = await import('./queue.js');
 const { listVaultFiles, readVaultFile, appendVaultFile } = await import('../vault/files.js');
 const { lintKB } = await import('./lint.js');
 const { processIngestionQueue, getKBStats, INGESTS_PER_CHECKPOINT } = await import('./engine.js');
 
 const ingestMock = ingestSource as unknown as ReturnType<typeof vi.fn>;
 const queueMock = getQueue as unknown as ReturnType<typeof vi.fn>;
+const dequeueMock = dequeue as unknown as ReturnType<typeof vi.fn>;
 const listMock = listVaultFiles as unknown as ReturnType<typeof vi.fn>;
 const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
 const lintMock = lintKB as unknown as ReturnType<typeof vi.fn>;
@@ -72,6 +74,45 @@ describe('kb/engine', () => {
         .mockResolvedValueOnce({ success: false, output: 'failed', counts: ZERO });
 
       expect(await processIngestionQueue()).toEqual({ processed: 1, errors: 1, created: 0, updated: 0, checkpoints: 0 });
+    });
+
+    it('dequeues sources after successful ingest', async () => {
+      queueMock.mockReturnValue([{ source: 'raw/a.md', addedAt: '' }]);
+      ingestMock.mockResolvedValue({ success: true, output: 'ok', counts: ZERO });
+
+      await processIngestionQueue();
+
+      expect(dequeueMock).toHaveBeenCalledWith('raw/a.md');
+    });
+
+    it('dequeues sources flagged as permanent failures (e.g. missing file)', async () => {
+      // Regression: a stuck `projects/jarvis.md` entry re-failed every nightly
+      // because nothing dequeued it. ingestSource now flags missing-file
+      // failures with `permanent: true` and the engine acts on that.
+      queueMock.mockReturnValue([{ source: 'projects/ghost.md', addedAt: '' }]);
+      ingestMock.mockResolvedValue({
+        success: false,
+        permanent: true,
+        output: 'Source file not found: projects/ghost.md',
+        counts: ZERO,
+      });
+
+      await processIngestionQueue();
+
+      expect(dequeueMock).toHaveBeenCalledWith('projects/ghost.md');
+    });
+
+    it('keeps transient failures queued for retry', async () => {
+      queueMock.mockReturnValue([{ source: 'raw/timeout.md', addedAt: '' }]);
+      ingestMock.mockResolvedValue({
+        success: false,
+        output: 'agent crashed',
+        counts: ZERO,
+      });
+
+      await processIngestionQueue();
+
+      expect(dequeueMock).not.toHaveBeenCalled();
     });
 
     it('aggregates created and updated counts across queued sources', async () => {

@@ -3,7 +3,7 @@ import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession, ReviewType } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import { askClaudeWithContext, askClaudeOneShot, runAgent, AGENT_NOT_FOUND_PREFIX, type ClaudeResult } from '../ai/claude.js';
-import { readVaultFile } from '../vault/files.js';
+import { readVaultFile, vaultFileExists } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
@@ -299,7 +299,13 @@ conversation_context: ${session.prepContext}`);
         const matches = output.match(pattern) || [];
         const unique = [...new Set(matches)];
         for (const file of unique) {
-          if (!filter || filter(file)) enqueueKB(file);
+          if (filter && !filter(file)) continue;
+          // Guard against agent output citing a path it didn't actually write.
+          if (!vaultFileExists(file)) {
+            log.warn('enqueueTouchedFiles: skipping non-existent path from agent output', { file });
+            continue;
+          }
+          enqueueKB(file);
         }
       };
 
