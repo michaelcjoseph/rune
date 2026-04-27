@@ -49,6 +49,19 @@ export function getYesterdayFilename(): string {
   return formatDateFilename(new Date(year, month, day - 1));
 }
 
+/**
+ * Filename of the most recent Friday on or before today (Chicago tz).
+ * If today is Friday, returns today's filename — the weekly review may not have
+ * run yet, in which case the caller will simply find no goals section.
+ */
+export function getMostRecentFridayFilename(): string {
+  const { year, month, day } = getLocalDate(new Date());
+  // UTC anchor avoids local-TZ reinterpretation of Chicago-local date components
+  const dow = new Date(Date.UTC(year, month, day)).getUTCDay(); // 0=Sun..6=Sat
+  const daysBack = (dow - 5 + 7) % 7; // offset from Friday (day 5); +7 keeps non-negative
+  return formatDateFilename(new Date(year, month, day - daysBack));
+}
+
 export function getYesterdayDate(): string {
   const { year, month, day } = getLocalDate(new Date());
   return toChicagoDate(new Date(year, month, day - 1));

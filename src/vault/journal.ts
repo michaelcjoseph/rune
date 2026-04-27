@@ -70,3 +70,44 @@ export function parseTag(content: string, tag: string): string | null {
 
   return collected.join('\n').trim();
 }
+
+/**
+ * Extract the **Next Week's Goals:** numbered list from a weekly-review journal.
+ * Terminates at the next bold section header (**Foo:**), markdown heading,
+ * `---` separator, or EOF. Returns null if the header is not present.
+ *
+ * CONTRACT: tracks the header emitted by the vault-resident `review-writer`
+ * agent (pkms/.claude/agents/review-writer.md). Apostrophe class accepts both
+ * straight (U+0027) and curly (U+2019) — Obsidian's Smart Quotes setting emits
+ * the curly form by default. If review-writer's template ever changes the
+ * heading wording, update headerPattern here.
+ */
+export function parseWeeklyGoals(content: string): string | null {
+  const lines = content.split('\n');
+  const headerPattern = /^\*\*Next Week[’']?s Goals:?\*\*\s*$/i;
+
+  let startIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (headerPattern.test(lines[i]!.trim())) {
+      startIdx = i + 1;
+      break;
+    }
+  }
+
+  if (startIdx === -1) return null;
+
+  const collected: string[] = [];
+  for (let i = startIdx; i < lines.length; i++) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    // Require trailing colon inside bold so list items like `**Stretch goal**`
+    // don't terminate the scan — only true section headers do. Trailing prose
+    // on the same line is allowed (e.g. `**Reflection:** wrapped up`).
+    if (/^\*\*[^*]+:\*\*(?:\s|$)/.test(trimmed)) break;
+    if (/^#{1,6}\s/.test(trimmed)) break;
+    if (/^---+\s*$/.test(trimmed)) break;
+    collected.push(line);
+  }
+
+  return collected.join('\n').trim();
+}

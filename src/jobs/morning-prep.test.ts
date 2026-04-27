@@ -3,10 +3,12 @@ import type TelegramBot from 'node-telegram-bot-api';
 
 const mockReadVaultFile = vi.fn<(path: string) => string | null>();
 const mockParseTag = vi.fn<(content: string, tag: string) => string | null>();
+const mockParseWeeklyGoals = vi.fn<(content: string) => string | null>();
 const mockWriteMorningPrep = vi.fn<(sections: string) => { written: boolean; filepath: string }>();
 const mockGitCommitAndPush = vi.fn<(message: string) => void>();
 const mockGetYesterdayFilename = vi.fn(() => '2026_04_08.md');
 const mockGetDayOfWeek = vi.fn(() => 'Wednesday');
+const mockGetMostRecentFridayFilename = vi.fn(() => '2026_04_03.md');
 const mockAskClaudeOneShot = vi.fn<(message: string, timeoutMs?: number) => Promise<{ text: string | null; error: string | null }>>();
 
 vi.mock('../vault/files.js', () => ({
@@ -15,6 +17,7 @@ vi.mock('../vault/files.js', () => ({
 
 vi.mock('../vault/journal.js', () => ({
   parseTag: mockParseTag,
+  parseWeeklyGoals: mockParseWeeklyGoals,
   writeMorningPrep: mockWriteMorningPrep,
 }));
 
@@ -25,6 +28,7 @@ vi.mock('../vault/git.js', () => ({
 vi.mock('../utils/time.js', () => ({
   getYesterdayFilename: mockGetYesterdayFilename,
   getDayOfWeek: mockGetDayOfWeek,
+  getMostRecentFridayFilename: mockGetMostRecentFridayFilename,
 }));
 
 vi.mock('../utils/logger.js', () => ({
@@ -55,8 +59,10 @@ describe('jobs/morning-prep — gatherMorningData', () => {
 
   it('returns real content for all fields when every source is present', () => {
     const journalContent = '# Journal\n#priorities\n- Ship feature X\n- Review PRs\n';
+    const fridayContent = '## Week in Review\n\n**Next Week\'s Goals:**\n1. Ship Aura\n2. Sleep 8h';
     mockReadVaultFile.mockImplementation((path: string) => {
       if (path === 'journals/2026_04_08.md') return journalContent;
+      if (path === 'journals/2026_04_03.md') return fridayContent;
       if (path === 'health/plan.md') return 'Run 5k + stretching';
       if (path === 'study/syllabus.md') return 'Chapter 7: Transformers';
       if (path === 'study/progress.json') return '{"chapter":6,"complete":true}';
@@ -64,9 +70,12 @@ describe('jobs/morning-prep — gatherMorningData', () => {
       return null;
     });
     mockParseTag.mockReturnValue('- Ship feature X\n- Review PRs');
+    mockParseWeeklyGoals.mockReturnValue('1. Ship Aura\n2. Sleep 8h');
 
     const data = gatherMorningData();
 
+    expect(data.weeklyGoals).toBe('1. Ship Aura\n2. Sleep 8h');
+    expect(data.weeklyGoalsSource).toBe('2026_04_03.md');
     expect(data.priorities).toBe('- Ship feature X\n- Review PRs');
     expect(data.workout).toBe('Run 5k + stretching');
     expect(data.study).toBe('Chapter 7: Transformers\n\n{"chapter":6,"complete":true}');
@@ -78,13 +87,48 @@ describe('jobs/morning-prep — gatherMorningData', () => {
   it('returns fallback strings when all sources are missing', () => {
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     const data = gatherMorningData();
 
+    expect(data.weeklyGoals).toBe('No weekly goals set.');
+    expect(data.weeklyGoalsSource).toBeNull();
     expect(data.priorities).toBe('No priorities logged yesterday.');
     expect(data.workout).toBe('No workout plan found.');
     expect(data.study).toBe('No active study assignments.');
     expect(data.writing).toBe('No writing topic set.');
+  });
+
+  it('returns fallback for weekly goals when Friday journal has no goals section', () => {
+    mockReadVaultFile.mockImplementation((path: string) => {
+      if (path === 'journals/2026_04_03.md') return '# Friday\nNo weekly review happened.';
+      return null;
+    });
+    mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
+
+    const data = gatherMorningData();
+
+    expect(data.weeklyGoals).toBe('No weekly goals set.');
+    expect(data.weeklyGoalsSource).toBeNull();
+    expect(mockParseWeeklyGoals).toHaveBeenCalledWith('# Friday\nNo weekly review happened.');
+  });
+
+  it('strict single-Friday read: does not look back beyond getMostRecentFridayFilename', () => {
+    // Even if older Friday journals existed with goals, gatherer must not read them.
+    mockReadVaultFile.mockImplementation((path: string) => {
+      if (path === 'journals/2026_04_03.md') return null; // most recent Friday — empty
+      if (path === 'journals/2026_03_27.md') return '**Next Week\'s Goals:**\n1. Stale goal';
+      return null;
+    });
+    mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
+
+    const data = gatherMorningData();
+
+    expect(data.weeklyGoals).toBe('No weekly goals set.');
+    expect(data.weeklyGoalsSource).toBeNull();
+    expect(mockReadVaultFile).not.toHaveBeenCalledWith('journals/2026_03_27.md');
   });
 
   it('returns fallback for priorities when journal exists but has no #priorities tag', () => {
@@ -93,6 +137,7 @@ describe('jobs/morning-prep — gatherMorningData', () => {
       return null;
     });
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     const data = gatherMorningData();
 
@@ -106,6 +151,7 @@ describe('jobs/morning-prep — gatherMorningData', () => {
       return null;
     });
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     const data = gatherMorningData();
 
@@ -118,6 +164,7 @@ describe('jobs/morning-prep — gatherMorningData', () => {
       return null;
     });
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     const data = gatherMorningData();
 
@@ -127,6 +174,7 @@ describe('jobs/morning-prep — gatherMorningData', () => {
   it('always populates yesterdayFile and dayOfWeek from time utils', () => {
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     const data = gatherMorningData();
 
@@ -134,17 +182,21 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(data.dayOfWeek).toBe('Wednesday');
     expect(mockGetYesterdayFilename).toHaveBeenCalledOnce();
     expect(mockGetDayOfWeek).toHaveBeenCalledOnce();
+    expect(mockGetMostRecentFridayFilename).toHaveBeenCalledOnce();
   });
 
   it('never throws even if readVaultFile returns null for every path', () => {
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
+    mockParseWeeklyGoals.mockReturnValue(null);
 
     expect(() => gatherMorningData()).not.toThrow();
   });
 });
 
 const sampleData = {
+  weeklyGoals: '1. Ship Aura\n2. Sleep 8h\n3. Build shelves',
+  weeklyGoalsSource: '2026_04_03.md',
   priorities: '- Ship feature X\n- Review PRs',
   workout: 'Run 5k + stretching',
   study: 'Chapter 7: Transformers',
@@ -153,16 +205,39 @@ const sampleData = {
   dayOfWeek: 'Wednesday',
 };
 
+const sampleDataNoGoals = {
+  ...sampleData,
+  weeklyGoals: 'No weekly goals set.',
+  weeklyGoalsSource: null,
+};
+
 describe('jobs/morning-prep — formatMorningPrepFallback', () => {
-  it('produces correct 4-section markdown with the data', () => {
+  it('produces correct 5-section markdown with weekly goals header showing source date', () => {
     const result = formatMorningPrepFallback(sampleData);
 
     expect(result).toBe(
+      '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h\n3. Build shelves\n\n' +
       '### Priorities Recap\n- Ship feature X\n- Review PRs\n\n' +
       '### Workout\nRun 5k + stretching\n\n' +
       '### Study\nChapter 7: Transformers\n\n' +
       '### Writing Focus\nDraft: LLM orchestration patterns'
     );
+  });
+
+  it('uses bare "Weekly Goals" header with fallback text when no source Friday is available', () => {
+    const result = formatMorningPrepFallback(sampleDataNoGoals);
+
+    expect(result.startsWith('### Weekly Goals\nNo weekly goals set.\n\n### Priorities Recap')).toBe(true);
+    expect(result).not.toContain('(from');
+  });
+
+  it('places weekly goals before priorities in the rendered output', () => {
+    const result = formatMorningPrepFallback(sampleData);
+    const goalsIdx = result.indexOf('### Weekly Goals');
+    const prioritiesIdx = result.indexOf('### Priorities Recap');
+
+    expect(goalsIdx).toBeGreaterThanOrEqual(0);
+    expect(prioritiesIdx).toBeGreaterThan(goalsIdx);
   });
 
   it('truncates workout content exceeding the line cap and adds a source hint', () => {
@@ -273,6 +348,34 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
     expect(prompt).toContain('Wednesday');
     expect(prompt).toContain('2026_04_08.md');
   });
+
+  it('prompt includes weekly goals body and source date when goals are present', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({ text: 'synthesized', error: null });
+
+    await synthesizeMorningPrep(sampleData);
+
+    const prompt = mockAskClaudeOneShot.mock.calls[0]![0];
+    expect(prompt).toContain("This Week's Goals");
+    expect(prompt).toContain('2026-04-03');
+    expect(prompt).toContain('1. Ship Aura');
+    expect(prompt).toContain('### Weekly Goals (from 2026-04-03)');
+    // Weekly Goals header must appear before Priorities Recap in the template
+    expect(prompt.indexOf('### Weekly Goals')).toBeLessThan(prompt.indexOf('### Priorities Recap'));
+  });
+
+  it('prompt uses bare "Weekly Goals" header with fallback body when source is null', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({ text: 'synthesized', error: null });
+
+    await synthesizeMorningPrep(sampleDataNoGoals);
+
+    const prompt = mockAskClaudeOneShot.mock.calls[0]![0];
+    expect(prompt).toContain('### Weekly Goals');
+    // No actual interpolated source date should appear — the static
+    // "(from YYYY-MM-DD)" guard sentence is allowed but a rendered date is not.
+    expect(prompt).not.toMatch(/### Weekly Goals \(from \d{4}-\d{2}-\d{2}\)/);
+    expect(prompt).not.toMatch(/\(from \d{4}-\d{2}-\d{2}\)/);
+    expect(prompt).toContain('No weekly goals set.');
+  });
 });
 
 describe('jobs/morning-prep — executeMorningPrep', () => {
@@ -280,7 +383,8 @@ describe('jobs/morning-prep — executeMorningPrep', () => {
     vi.clearAllMocks();
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
-    mockAskClaudeOneShot.mockResolvedValue({ text: '### Priorities Recap\n...', error: null });
+    mockParseWeeklyGoals.mockReturnValue(null);
+    mockAskClaudeOneShot.mockResolvedValue({ text: '### Weekly Goals\nNo weekly goals set.\n\n### Priorities Recap\n...', error: null });
   });
 
   it('returns written status and commits on successful write', async () => {
@@ -332,7 +436,8 @@ describe('jobs/morning-prep — runMorningPrep', () => {
     // Default stubs: sources present, Claude succeeds, write succeeds
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
-    mockAskClaudeOneShot.mockResolvedValue({ text: '### Priorities Recap\n...', error: null });
+    mockParseWeeklyGoals.mockReturnValue(null);
+    mockAskClaudeOneShot.mockResolvedValue({ text: '### Weekly Goals\nNo weekly goals set.\n\n### Priorities Recap\n...', error: null });
     mockWriteMorningPrep.mockReturnValue({ written: true, filepath: '/test/vault/journals/2026_04_09.md' });
   });
 

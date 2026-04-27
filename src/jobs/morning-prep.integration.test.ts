@@ -22,6 +22,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../utils/time.js', () => ({
   getTodayFilename: () => '2026_04_09.md',
   getYesterdayFilename: () => '2026_04_08.md',
+  getMostRecentFridayFilename: () => '2026_04_03.md',
   getDayOfWeek: () => 'Wednesday',
   getDateContext: () => 'Today is Wednesday, April 9, 2026 (America/Chicago). Today\'s journal file: 2026_04_09.md',
 }));
@@ -72,6 +73,21 @@ Some notes from yesterday.
   );
 
   writeVaultFixture(
+    'journals/2026_04_03.md',
+    `# 2026-04-03
+
+## Week in Review
+
+**Reflection:** Solid week.
+
+**Next Week's Goals:**
+1. Ship Aura
+2. Sleep 8h consistently
+3. Build shelves for Sam
+`
+  );
+
+  writeVaultFixture(
     'health/plan.md',
     `## Wednesday
 - Bench press 3x8
@@ -108,7 +124,7 @@ beforeEach(() => {
 
   // Default: Claude returns synthesized content
   mockAskClaudeOneShot.mockResolvedValue({
-    text: '### Priorities Recap\n- Ship feature X (in progress)\n- Review PRs (pending)\n\n### Workout\n- Bench press 3x8\n- Pull-ups 3x10\n- 20 min run\n\n### Study\n- Week 5: Transformer architectures\n- 1 assignment remaining\n\n### Writing Focus\n- Personal knowledge management with LLMs',
+    text: '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h consistently\n3. Build shelves for Sam\n\n### Priorities Recap\n- Ship feature X (in progress)\n- Review PRs (pending)\n\n### Workout\n- Bench press 3x8\n- Pull-ups 3x10\n- 20 min run\n\n### Study\n- Week 5: Transformer architectures\n- 1 assignment remaining\n\n### Writing Focus\n- Personal knowledge management with LLMs',
     error: null,
   });
 
@@ -129,6 +145,10 @@ beforeEach(() => {
   // Clean yesterday's journal
   const yesterdayJournal = join(tmpDir, 'journals', '2026_04_08.md');
   if (existsSync(yesterdayJournal)) unlinkSync(yesterdayJournal);
+
+  // Clean Friday journal (weekly goals source)
+  const fridayJournal = join(tmpDir, 'journals', '2026_04_03.md');
+  if (existsSync(fridayJournal)) unlinkSync(fridayJournal);
 });
 
 // --- Tests ---
@@ -155,6 +175,14 @@ describe('morning-prep integration', () => {
     expect(prompt).toContain('Ship feature X');
     expect(prompt).toContain('Bench press');
     expect(prompt).toContain('Wednesday');
+    // Weekly goals from Friday journal must be passed in and required in the template
+    expect(prompt).toContain('Ship Aura');
+    expect(prompt).toContain('### Weekly Goals (from 2026-04-03)');
+    expect(prompt.indexOf('### Weekly Goals')).toBeLessThan(prompt.indexOf('### Priorities Recap'));
+
+    // Synthesized journal contains the new section above Priorities Recap
+    expect(content).toContain('### Weekly Goals (from 2026-04-03)');
+    expect(content.indexOf('### Weekly Goals')).toBeLessThan(content.indexOf('### Priorities Recap'));
 
     // Git commit was called
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
@@ -173,6 +201,7 @@ describe('morning-prep integration', () => {
     // Claude was still called but with fallback data
     expect(mockAskClaudeOneShot).toHaveBeenCalledOnce();
     const prompt = mockAskClaudeOneShot.mock.calls[0]![0] as string;
+    expect(prompt).toContain('No weekly goals set');
     expect(prompt).toContain('No priorities logged yesterday');
     expect(prompt).toContain('No workout plan found');
     expect(prompt).toContain('No active study assignments');
@@ -221,13 +250,16 @@ describe('morning-prep integration', () => {
     expect(existsSync(todayJournal)).toBe(true);
     const content = readFileSync(todayJournal, 'utf8');
 
-    // Fallback format headings present
+    // Fallback format headings present, including the new Weekly Goals section
+    expect(content).toContain('### Weekly Goals (from 2026-04-03)');
     expect(content).toContain('### Priorities Recap');
     expect(content).toContain('### Workout');
     expect(content).toContain('### Study');
     expect(content).toContain('### Writing Focus');
+    expect(content.indexOf('### Weekly Goals')).toBeLessThan(content.indexOf('### Priorities Recap'));
 
     // Raw data present (not synthesized)
+    expect(content).toContain('Ship Aura');
     expect(content).toContain('Ship feature X');
     expect(content).toContain('Bench press 3x8');
     expect(content).toContain('Transformer architectures');
@@ -277,6 +309,9 @@ describe('morning-prep integration', () => {
 
     expect(data.yesterdayFile).toBe('2026_04_08.md');
     expect(data.dayOfWeek).toBe('Wednesday');
+    expect(data.weeklyGoalsSource).toBe('2026_04_03.md');
+    expect(data.weeklyGoals).toContain('Ship Aura');
+    expect(data.weeklyGoals).toContain('Sleep 8h consistently');
     expect(data.priorities).toContain('Ship feature X');
     expect(data.priorities).toContain('Review PRs');
     expect(data.workout).toContain('Bench press 3x8');
@@ -285,8 +320,21 @@ describe('morning-prep integration', () => {
     expect(data.writing).toContain('Personal knowledge management with LLMs');
   });
 
-  it('formatMorningPrepFallback produces correct structure', () => {
+  it('gatherMorningData returns "No weekly goals set." when Friday journal lacks the section', () => {
+    // Seed all vault files, but overwrite the Friday journal to remove its goals.
+    seedAllVaultFiles();
+    writeVaultFixture('journals/2026_04_03.md', '# 2026-04-03\n\nNo weekly review happened this week.\n');
+
+    const data = gatherMorningData();
+
+    expect(data.weeklyGoals).toBe('No weekly goals set.');
+    expect(data.weeklyGoalsSource).toBeNull();
+  });
+
+  it('formatMorningPrepFallback produces correct structure with weekly goals at top', () => {
     const data = {
+      weeklyGoals: '1. Ship Aura\n2. Sleep more',
+      weeklyGoalsSource: '2026_04_03.md',
       priorities: '- Task A\n- Task B',
       workout: '- Push-ups 3x20',
       study: '- Read chapter 4',
@@ -297,6 +345,8 @@ describe('morning-prep integration', () => {
 
     const output = formatMorningPrepFallback(data);
 
+    expect(output).toContain('### Weekly Goals (from 2026-04-03)');
+    expect(output).toContain('1. Ship Aura');
     expect(output).toContain('### Priorities Recap');
     expect(output).toContain('- Task A');
     expect(output).toContain('### Workout');
@@ -305,5 +355,6 @@ describe('morning-prep integration', () => {
     expect(output).toContain('- Read chapter 4');
     expect(output).toContain('### Writing Focus');
     expect(output).toContain('- Blog post draft');
+    expect(output.indexOf('### Weekly Goals')).toBeLessThan(output.indexOf('### Priorities Recap'));
   });
 });

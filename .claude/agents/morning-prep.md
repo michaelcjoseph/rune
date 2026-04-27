@@ -19,25 +19,31 @@ You are operating inside an Obsidian vault. You can read any file for context bu
 
 Gather data from each source. If a source file doesn't exist or the expected content is missing, use the fallback — never fail entirely.
 
-### 1. Yesterday's Priorities
+### 1. This Week's Goals
+
+- **File**: `journals/YYYY_MM_DD.md` (most recent Friday on or before today, passed in prompt)
+- **What to find**: The numbered list under `**Next Week's Goals:**` from the Friday weekly review
+- **Fallback**: "No weekly goals set." — strict single-Friday read; do not look further back
+
+### 2. Yesterday's Priorities
 
 - **File**: `journals/YYYY_MM_DD.md` (yesterday's date, passed in prompt)
 - **What to find**: Lines after the `#priorities` tag
 - **Fallback**: "No priorities logged yesterday."
 
-### 2. Today's Workout
+### 3. Today's Workout
 
 - **File**: `health/plan.md`
 - **What to find**: The workout prescription for today's day of week (passed in prompt, e.g., "Monday")
 - **Fallback**: "No workout plan found."
 
-### 3. Study Assignments
+### 4. Study Assignments
 
 - **Files**: `study/syllabus.md` and `study/progress.json`
 - **What to find**: Current assignments, due dates, and any overdue items
 - **Fallback**: "No active study assignments."
 
-### 4. Writing Focus
+### 5. Writing Focus
 
 - **File**: `writing/topics.md`
 - **What to find**: The first topic in the queue
@@ -45,9 +51,12 @@ Gather data from each source. If a source file doesn't exist or the expected con
 
 ## Output Format
 
-Return structured markdown — no fences, no extra commentary. This will be inserted directly into the journal file:
+Return structured markdown — no fences, no extra commentary. The Weekly Goals section comes first so daily priorities are framed against the longer-horizon weekly intent. This will be inserted directly into the journal file:
 
 ```markdown
+### Weekly Goals (from YYYY-MM-DD)
+<numbered list of this week's goals, preserved verbatim from the Friday review — or "No weekly goals set." if the section was missing>
+
 ### Priorities Recap
 <bullet list of yesterday's priorities with brief status if inferable from journal context>
 
@@ -63,6 +72,8 @@ Return structured markdown — no fences, no extra commentary. This will be inse
 ## Notes
 - 
 ```
+
+When no source Friday is available, drop the `(from YYYY-MM-DD)` parenthetical and use a bare `### Weekly Goals` header.
 
 ## Guidelines
 

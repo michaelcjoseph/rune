@@ -20,6 +20,7 @@ const {
   getWeekRange,
   getMonthInfo,
   toChicagoDate,
+  getMostRecentFridayFilename,
 } = await import('./time.js');
 
 describe('time utils', () => {
@@ -258,6 +259,53 @@ describe('time utils', () => {
       for (const f of filenames) {
         expect(f).toMatch(/^\d{4}_\d{2}_\d{2}\.md$/);
       }
+    });
+  });
+
+  describe('getMostRecentFridayFilename', () => {
+    // Pinned to 2026-04-07 (Tuesday). Most recent Friday on/before is 2026-04-03.
+    it('returns the prior Friday when pinned to a Tuesday', () => {
+      expect(getMostRecentFridayFilename()).toBe('2026_04_03.md');
+    });
+
+    it('returns today when pinned to a Friday', () => {
+      // 2026-04-10 12:00 Chicago (17:00 UTC) is a Friday
+      vi.setSystemTime(new Date('2026-04-10T17:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2026_04_10.md');
+    });
+
+    it('returns yesterday when pinned to a Saturday', () => {
+      // 2026-04-11 12:00 Chicago (17:00 UTC) is a Saturday
+      vi.setSystemTime(new Date('2026-04-11T17:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2026_04_10.md');
+    });
+
+    it('returns six days back when pinned to a Thursday', () => {
+      // 2026-04-09 12:00 Chicago (17:00 UTC) is a Thursday → most recent Fri is 2026-04-03
+      vi.setSystemTime(new Date('2026-04-09T17:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2026_04_03.md');
+    });
+
+    it('handles month boundary — Friday in prior month', () => {
+      // 2026-05-04 12:00 Chicago (17:00 UTC) is a Monday → most recent Fri is 2026-05-01
+      vi.setSystemTime(new Date('2026-05-04T17:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2026_05_01.md');
+    });
+
+    it('handles year boundary — Friday in prior year', () => {
+      // 2026-01-01 12:00 Chicago is a Thursday → most recent Friday is 2025-12-26
+      vi.setSystemTime(new Date('2026-01-01T18:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2025_12_26.md');
+    });
+
+    it('returns YYYY_MM_DD.md format', () => {
+      expect(getMostRecentFridayFilename()).toMatch(/^\d{4}_\d{2}_\d{2}\.md$/);
+    });
+
+    it('honors timezone boundary — early UTC on Saturday is still Friday in Chicago', () => {
+      // 2026-04-11 04:00 UTC = 2026-04-10 23:00 Chicago (Friday)
+      vi.setSystemTime(new Date('2026-04-11T04:00:00.000Z'));
+      expect(getMostRecentFridayFilename()).toBe('2026_04_10.md');
     });
   });
 
