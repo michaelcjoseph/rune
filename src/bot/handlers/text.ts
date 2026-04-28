@@ -248,7 +248,10 @@ VAULT MAP (read the relevant file(s), don't dump everything):
 
 MCP TOOLS (jarvis-kb): kb_query (synthesized KB answer), kb_search (wiki search with type/tag filters), kb_stats (counts + recent log). Use for structured lookups when grep is awkward.
 
+WEB SEARCH (WebSearch, WebFetch): External-knowledge tools. Use them ACTIVELY when the question reaches outside the user's vault — current events, news, definitions, third-party docs/APIs, library behavior, market data, anything time-sensitive or factual that isn't already in their notes. Don't treat web as a last resort: if the question is genuinely about the world (not the user), web search is often the right first move alongside KB lookups. Cite sources inline (URL or article title) the way you cite [[wikilinks]] for vault content.
+
 HOW TO ANSWER:
+- Route by subject: questions about the user (worldview, investments, projects, frameworks) → vault/KB first. Questions about the world (current state, external facts, third-party tools/topics) → web first, vault second if relevant. Mixed questions (e.g., "how does X relate to my thesis on Y") → both, in parallel where possible.
 - For substantive questions about worldview, investments, projects, or thinking frameworks: READ the relevant index/page first, then answer with specifics grounded in the user's actual notes. Cite with [[wikilinks]] where appropriate.
 - Prefer sharp probing questions over generic clarifying questions. Generic prompts like "what's the current state? what flows in? what flows out?" are exactly what to avoid — they waste time re-eliciting context that's already in the vault. If you need clarification, anchor it to something concrete you found in the vault.
 - For tactical/operational asks: answer directly; don't over-fetch.
@@ -259,6 +262,8 @@ const CONVERSATION_TOOLS = [
   'Read',
   'Glob',
   'Grep',
+  'WebSearch',
+  'WebFetch',
   'mcp__jarvis-kb__kb_query',
   'mcp__jarvis-kb__kb_search',
   'mcp__jarvis-kb__kb_stats',
