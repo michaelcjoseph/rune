@@ -28,7 +28,7 @@ Error handling checklist for the journal → KB ingestion pipeline, KB-activity 
 - [ ] 🟡 Casual asides ("had a great ramen at Tatsu-ya #place") still go through `#place` tag pipeline; the journal-ingest run doesn't double-process them as KB entities
 - [ ] 🟡 People mentioned in meeting notes (`[[alice]]`) get an entity page created/updated with a `journal_ref` to the source date
 - [ ] 🟡 Project thoughts in journals update the relevant project's wiki page (not the `projects/<slug>.md` markdown file — that's a separate write, owned by `project-updater`)
-- [ ] 🟢 Reading insights tagged with `#book` or wikilinked to `[[book-title]]` get processed correctly
+- [ ] 🟢 Reading insights tagged with `#books` or wikilinked to `[[book-title]]` get processed correctly
 
 ### Boundary enforcement
 - [ ] 🔴 `wiki-compiler` does not write to `projects/*.md` during journal ingest (existing scope rule, verify under journal-shaped input)

@@ -314,7 +314,7 @@ conversation_context: ${session.prepContext}`);
 
 Set "projects" to true if active projects were discussed with meaningful updates (thesis changes, new risks, decisions).
 Set "psychology" to true if psychological patterns were observed or challenged.
-Set "json_updates" to true if trackable items were mentioned (#workout, #book, #crm, #place, etc.).
+Set "json_updates" to true if trackable items were mentioned (#workout, #books, #crm, #place, etc.).
 Set "worldview" to true if the outline proposes specific changes to world-view/*.md files (belief shifts the user approved applying).
 Set "playbook" to true if the outline approves applying playbook drafts from the queue or proposes new tactical patterns to add.
 Set "proposals" to true if the outline approves or rejects any Ask-Twice proposals from the pending queue (i.e., the review touches proposal status decisions that should be actioned by creating agent files or registering crons).

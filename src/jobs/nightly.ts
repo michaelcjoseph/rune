@@ -72,7 +72,7 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     ? content.slice(0, MAX_JOURNAL_CHARS) + '\n\n[truncated]'
     : content;
 
-  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #book, #priorities, #diet, #idea, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
+  const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, #diet, #idea, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
 
 ## Known targets
 
@@ -94,7 +94,7 @@ For each tag found, output a proposed update in this format:
 
 ## Special rules
 
-- **\`#book\` summaries**: when you propose a \`#book\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.
+- **\`#books\` summaries**: when you propose a \`#books\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.
 - **Implicit CRM references**: even without an explicit \`#crm\` tag, any mention of \`[[sam]]\` or \`[[jude]]\` should produce a CRM update for that contact (append today's journal_ref, add any new context).
 - **\`#study\` status inference**: when the journal describes *starting* a study topic, set \`status: "in_progress"\`. When it describes *finishing* a topic, set \`status: "completed"\`. Use journal wording as the signal ("started reading X", "finished X", "completed X course").
 - **\`#diet\` tags** → \`health/nutrition.md\`. Propose the meal line in the form expected by \`daily-content-updater\`: a date + time + meal description. Multiple \`#diet\` mentions in one journal can share the same date heading.

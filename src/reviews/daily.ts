@@ -39,7 +39,7 @@ async function start(session: ReviewSession, bot: TelegramBot): Promise<void> {
   const typing = startTyping(bot, session.chatId);
 
   try {
-    const prompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #book, #priorities, etc.). For each tagged item, extract the relevant data from the surrounding text and propose a JSON update.
+    const prompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, etc.). For each tagged item, extract the relevant data from the surrounding text and propose a JSON update.
 
 Known JSON data files:
 ${KNOWN_JSON_FILES.map(f => `- ${f}`).join('\n')}

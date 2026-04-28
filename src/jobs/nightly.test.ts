@@ -206,8 +206,8 @@ describe('jobs/nightly', () => {
     });
 
     it('reports error when json-updater agent fails', async () => {
-      readMock.mockReturnValue('# Journal\n- 10:00 #book read Dune');
-      askMock.mockResolvedValue({ text: '**#book** -> books.json', error: null });
+      readMock.mockReturnValue('# Journal\n- 10:00 #books read Dune');
+      askMock.mockResolvedValue({ text: '**#books** -> books.json', error: null });
       agentMock.mockResolvedValue({ text: null, error: 'Agent crashed' });
 
       const result = await executeNightly();

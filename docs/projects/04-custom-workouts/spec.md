@@ -313,6 +313,6 @@ Requirement #24 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts
 
 - [ ] Should `health/plan.md` be formally deprecated, or retained as an optional "weekly-template" input the generator may consult? Revisit after a few weeks of generator use.
 - [ ] Should `/done-workout` accept an inline notes tail (e.g., `/done-workout skipped last set, knee tweak`) that's appended to the journal block? Defer to v1.1.
-- [ ] Is hand-editing `health/exercises.md` low-friction enough long term, or will we want an `#exercise` journal tag + nightly parse (à la `#workout` / `#book`)? Revisit after ~4 weeks of use.
+- [ ] Is hand-editing `health/exercises.md` low-friction enough long term, or will we want an `#exercise` journal tag + nightly parse (à la `#workout` / `#books`)? Revisit after ~4 weeks of use.
 - [ ] Should the generator return a structured JSON block for future analytics (tracking tonnage, volume, etc.), or stay pure markdown with nightly parsing handling structure? v1 asks the agent for best-effort JSON but doesn't depend on it.
 - [ ] Should two `/workout` invocations in rapid succession warn before overwriting the prior `last-workout.json`? Not in v1 — the cost of overwrite is just "re-issue `/done-workout` after the workout you actually did."

@@ -120,7 +120,7 @@ Read the image file above to see the photo.${captionNote}`;
       }
 
       case 'data-update': {
-        const tag = classified.classification === 'book' ? '#book'
+        const tag = classified.classification === 'book' ? '#books'
           : classified.classification === 'receipt' ? '#receipt'
           : `#${classified.classification}`;
         appendToJournal(`- ${ts} ${tag} ${classified.title}\n\t- ${classified.details}`);
