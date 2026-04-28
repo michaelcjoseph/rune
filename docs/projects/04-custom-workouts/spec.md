@@ -129,41 +129,44 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 8. WHEN `health/equipment.md` is missing or empty THEN the generator falls back to bodyweight-only and notes that in its output.
 9. WHEN `health/exercises.md` is missing or empty THEN the generator proceeds with no preference bias — pure goals + equipment + recovery drive selection.
 10. WHEN Whoop data is absent (sync failed, auth expired, no JSONs in window) THEN the generator proceeds without it and flags in the output that recovery data was unavailable.
-11. WHEN `health/goals.md` is present THEN its content materially shapes focus defaults in the no-args path.
+11. WHEN `/workout` is invoked THEN the command first calls `ensureWhoopSyncedForToday()` (sleep+recovery only — today's strain isn't relevant for today's workout) before invoking the generator.
+12. WHEN `ensureWhoopSyncedForToday()` fails (auth expired, network error, Whoop API 5xx) THEN generation proceeds and Requirement #10 (recovery-unavailable note in output) applies. The pre-sync is best-effort — never blocks generation.
+13. WHEN today's `health/whoop/{date}.json` already exists with a `recovery` field THEN `ensureWhoopSyncedForToday()` is a no-op (no redundant API call).
+14. WHEN `health/goals.md` is present THEN its content materially shapes focus defaults in the no-args path.
 
 ### Exercise-preference semantics
 
-12. WHEN an exercise is in `## Preferred` THEN the generator favors it in main work.
-13. WHEN an exercise is in `## Trying` THEN the generator incorporates at least one per session when reasonable.
-14. WHEN an exercise is in `## Benched` THEN the generator avoids it unless no equipment-compatible alternative exists; if forced to include, the benched reason is surfaced in the output.
-15. WHEN an exercise is in `## Retired` THEN the generator never suggests it.
+15. WHEN an exercise is in `## Preferred` THEN the generator favors it in main work.
+16. WHEN an exercise is in `## Trying` THEN the generator incorporates at least one per session when reasonable.
+17. WHEN an exercise is in `## Benched` THEN the generator avoids it unless no equipment-compatible alternative exists; if forced to include, the benched reason is surfaced in the output.
+18. WHEN an exercise is in `## Retired` THEN the generator never suggests it.
 
 ### Output format
 
-16. WHEN the generator returns THEN the markdown has three sections: `## Warmup`, `## Main`, `## Cooldown`, each as a bulleted list.
-17. WHEN a main-work item is strength or power THEN it includes sets × reps and load.
-18. WHEN a main-work item is endurance, speed, or mobility THEN it includes duration or distance and intensity/pace guidance.
-19. WHEN any exercise has rest-between-sets guidance THEN it is listed on the same bullet.
-20. WHEN recovery was low (recovery < 40 or HRV trend materially down) THEN the output includes a one-line recovery note at the top and biases toward lighter work.
+19. WHEN the generator returns THEN the markdown has three sections: `## Warmup`, `## Main`, `## Cooldown`, each as a bulleted list.
+20. WHEN a main-work item is strength or power THEN it includes sets × reps and load.
+21. WHEN a main-work item is endurance, speed, or mobility THEN it includes duration or distance and intensity/pace guidance.
+22. WHEN any exercise has rest-between-sets guidance THEN it is listed on the same bullet.
+23. WHEN recovery was low (recovery < 40 or HRV trend materially down) THEN the output includes a one-line recovery note at the top and biases toward lighter work.
 
 ### `last-workout.json` persistence
 
-21. WHEN a workout is generated THEN `logs/last-workout.json` is written with `{generated_at, location, focus, markdown, structured}` where `structured` is the agent's best-effort JSON decomposition (may be empty object in v1 if agent opts out).
-22. WHEN `logs/last-workout.json` already exists THEN it is overwritten, not appended.
-23. WHEN Jarvis restarts between `/workout` and `/done-workout` THEN the file persists and `/done-workout` still works.
+24. WHEN a workout is generated THEN `logs/last-workout.json` is written with `{generated_at, location, focus, markdown, structured}` where `structured` is the agent's best-effort JSON decomposition (may be empty object in v1 if agent opts out).
+25. WHEN `logs/last-workout.json` already exists THEN it is overwritten, not appended.
+26. WHEN Jarvis restarts between `/workout` and `/done-workout` THEN the file persists and `/done-workout` still works.
 
 ### `/done-workout` behavior
 
-24. WHEN `/done-workout` is invoked AND `logs/last-workout.json` exists THEN the file's contents are appended to today's journal in a `#workout`-tagged block that the existing `json-updater` parses.
-25. WHEN `/done-workout` is invoked AND `logs/last-workout.json` is missing THEN the user gets a friendly "nothing to log — run `/workout` first" reply and no journal write occurs.
-26. WHEN `logs/last-workout.json` is older than 48 hours THEN `/done-workout` warns before logging ("this workout was generated X hours ago — still want to log it?"); a second `/done-workout` call within 10 minutes confirms.
-27. WHEN the journal append succeeds THEN `logs/last-workout.json` is deleted.
-28. WHEN the journal append fails (filesystem error, permission) THEN `logs/last-workout.json` is preserved so a retry is possible.
+27. WHEN `/done-workout` is invoked AND `logs/last-workout.json` exists THEN the file's contents are appended to today's journal in a `#workout`-tagged block that the existing `json-updater` parses.
+28. WHEN `/done-workout` is invoked AND `logs/last-workout.json` is missing THEN the user gets a friendly "nothing to log — run `/workout` first" reply and no journal write occurs.
+29. WHEN `logs/last-workout.json` is older than 48 hours THEN `/done-workout` warns before logging ("this workout was generated X hours ago — still want to log it?"); a second `/done-workout` call within 10 minutes confirms.
+30. WHEN the journal append succeeds THEN `logs/last-workout.json` is deleted.
+31. WHEN the journal append fails (filesystem error, permission) THEN `logs/last-workout.json` is preserved so a retry is possible.
 
 ### Resolver integration
 
-29. WHEN `workout` and `done-workout` command files are present THEN `src/bot/skill-registry.ts` includes them with descriptive triggers: for `workout` — "give me a workout", "what should I train today", "I'm at the gym"; for `done-workout` — "workout done", "mark workout complete", "log my workout".
-30. WHEN the resolver classifies a free-form message to one of these skills with confidence ≥ threshold THEN it is invoked with the message as args (natural-language args are the generator's problem to interpret).
+32. WHEN `workout` and `done-workout` command files are present THEN `src/bot/skill-registry.ts` includes them with descriptive triggers: for `workout` — "give me a workout", "what should I train today", "I'm at the gym"; for `done-workout` — "workout done", "mark workout complete", "log my workout".
+33. WHEN the resolver classifies a free-form message to one of these skills with confidence ≥ threshold THEN it is invoked with the message as args (natural-language args are the generator's problem to interpret).
 
 ---
 
@@ -195,10 +198,12 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 
 - `src/bot/commands/workout.ts` — replace the current `plan.md`-reading body:
   - Parse args order-independently (location keywords vs focus keywords have disjoint vocabularies).
+  - Call `ensureWhoopSyncedForToday()` (best-effort) so today's recovery is in the bundle when invoked before the 8 AM cron.
   - Build the input bundle via `readVaultFile` + `readEquipment` + `readRecentWhoopDays` + reading `health/workouts.json` tail.
   - Invoke `workout-generator` via `runAgent` with the bundle as the prompt.
   - Write `logs/last-workout.json`.
   - Send result to TG.
+- `src/jobs/whoop-sync.ts` — add and export `ensureWhoopSyncedForToday(): Promise<void>`. Reads `health/whoop/{today}.json`; if missing or `recovery` field absent, calls existing `executeSleepSync()`. Errors are caught + logged; never thrown. Used by `/workout` (and any future caller that needs fresh recovery data).
 
 **New file:**
 
@@ -220,7 +225,7 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 [full markdown body from last-workout.json]
 ```
 
-Requirement #24 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts:42`) already scans for `#workout` and routes to `json-updater`. The `json-updater` agent's instruction (`/Users/michaelcjoseph/workspace/jarvis/.claude/agents/json-updater.md:22`) knows how to turn this into a `workouts.json` entry with `{date, type, duration, exercises[], notes}`. No changes to that pipeline.
+Requirement #27 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts:42`) already scans for `#workout` and routes to `json-updater`. The `json-updater` agent's instruction (`/Users/michaelcjoseph/workspace/jarvis/.claude/agents/json-updater.md:22`) knows how to turn this into a `workouts.json` entry with `{date, type, duration, exercises[], notes}`. No changes to that pipeline.
 
 **Modified files:**
 
@@ -228,12 +233,18 @@ Requirement #24 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts
 - `src/bot/skill-registry.ts` — add resolver triggers for both commands.
 - `cli/jarvis.ts` — wire `workout` and `done-workout` CLI subcommands; reuse the same underlying functions as the TG handlers.
 
+**Morning-prep decoupling:**
+
+- `src/jobs/morning-prep.ts` — drop the `workout: string` field from `MorningData`; remove `gatherWorkout()`; remove the call from `gatherMorningData()`; remove `### Workout` from the fallback template; remove `**Today's Workout (...)**` and `### Workout` from the Claude synthesis prompt.
+- `.claude/agents/morning-prep.md` — remove the "Today's Workout" data-source section. Update the frontmatter `description` field to drop the stale "Whoop" mention (morning prep never read Whoop directly) and the now-removed workout responsibility.
+
 ### Coordination notes
 
 - **No new cron.** Both commands are user-triggered.
 - **No MCP changes.** Generator is an agent invocation, not an MCP tool.
 - **Existing `/workout` replacement.** The current `plan.md`-reading behavior is gone. If in the future we want "show me this week's plan", it belongs in a separate `/plan` command.
 - **`health/plan.md` status.** Retained as an *optional* input the generator can consult for weekly high-level structure, but no longer the source of truth for daily prescription. Formal deprecation is an open question (see below).
+- **Morning prep coupling.** This project removes the `### Workout` section from morning prep. After this project ships, `/workout` is the single source of truth for daily workouts; the morning-prep job no longer reads `health/plan.md`. The `.claude/agents/morning-prep.md` frontmatter `description` (which currently misleadingly mentions "Whoop" — morning prep never read Whoop directly) is also corrected as part of this work. See Phase C tasks for the precise edits.
 
 ---
 

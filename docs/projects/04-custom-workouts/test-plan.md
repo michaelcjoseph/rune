@@ -34,6 +34,14 @@ Error handling checklist for the generator, `/workout` command, `/done-workout` 
 - [ ] 🟡 Low recovery (score < 40 or HRV trend materially down in recent Whoop data) produces a one-line note at the top of the output and biases toward lighter work
 - [ ] 🟢 Agent `structured` JSON block, if present, is valid JSON (or absent — both acceptable in v1)
 
+### Whoop pre-sync
+
+- [ ] 🔴 `/workout` invoked with no today's Whoop JSON → `ensureWhoopSyncedForToday()` calls `executeSleepSync()` before generator runs; resulting agent input includes today's recovery
+- [ ] 🟡 `/workout` invoked with today's Whoop JSON already containing `recovery` → no redundant sync call (assert `executeSleepSync` not called)
+- [ ] 🟡 `/workout` invoked with today's Whoop JSON present but `recovery` field absent (e.g., earlier sync only got sleep) → `executeSleepSync()` is called
+- [ ] 🟡 Pre-sync throws (mocked auth-expired or network error) → generation still proceeds; output includes recovery-unavailable note (Requirement #10)
+- [ ] 🟢 Pre-sync log line appears in `logs/` for observability
+
 ### Fallbacks
 
 - [ ] 🔴 `health/equipment.md` missing → generator falls back to bodyweight-only; output includes a note
@@ -101,4 +109,6 @@ Error handling checklist for the generator, `/workout` command, `/done-workout` 
 - [ ] 🔴 All existing Jarvis tests pass after each phase ships
 - [ ] 🟡 Weekly review's health-related prep (if any) reads `workouts.json` correctly with generator-authored entries mixed in with hand-logged ones
 - [ ] 🟡 `health/plan.md` is no longer read by the command (retired from that role) — no stale reference in the codebase
-- [ ] 🟢 Morning prep is unaffected (does not invoke workout generation)
+- [ ] 🔴 Morning prep no longer renders a `### Workout` section in its output
+- [ ] 🟡 Morning prep no longer reads `health/plan.md` (no `gatherWorkout()` call)
+- [ ] 🟢 `.claude/agents/morning-prep.md` frontmatter `description` no longer mentions "Whoop" or workouts

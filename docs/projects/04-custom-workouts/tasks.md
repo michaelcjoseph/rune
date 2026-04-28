@@ -45,6 +45,12 @@ Not started. See [spec.md](spec.md) for details.
 - [ ] Handle missing-input fallbacks per Requirements #8–#10 (bodyweight-only, no preference bias, Whoop absent note)
 - [ ] Tests: arg parsing (both orders, invalid args, natural-language tail), missing-data fallbacks, `last-workout.json` write shape, agent-timeout path preserves no file
 
+### Whoop pre-sync
+
+- [ ] Add `ensureWhoopSyncedForToday()` to `src/jobs/whoop-sync.ts` and export it. Reads `health/whoop/{today}.json`; if missing or `recovery` absent, awaits `executeSleepSync()`. Catches and logs errors — never throws.
+- [ ] Call `ensureWhoopSyncedForToday()` from `src/bot/commands/workout.ts` immediately after arg parsing, before building the input bundle for `runAgent`.
+- [ ] Tests: pre-sync fires when today's Whoop file is missing; pre-sync fires when file exists but `recovery` field absent; pre-sync is a no-op when today's file has `recovery`; pre-sync failure (mocked sleep-sync throw) is swallowed and generation still completes with recovery-unavailable note.
+
 ## Phase C — Logging + wiring
 
 > Depends on: Phase B complete.
@@ -72,6 +78,17 @@ Not started. See [spec.md](spec.md) for details.
 
 - [ ] Wire `workout` subcommand in `cli/jarvis.ts`: `npm run cli -- workout [home|gym] [focus]` invokes the same function as the TG handler and prints the markdown
 - [ ] Wire `done-workout` subcommand in `cli/jarvis.ts`: `npm run cli -- done-workout` invokes the same function and prints the journal append outcome
+
+### Morning prep cleanup
+
+- [ ] `src/jobs/morning-prep.ts`: drop `workout` field from `MorningData` interface
+- [ ] `src/jobs/morning-prep.ts`: remove `gatherWorkout()` function and its call site in `gatherMorningData()`
+- [ ] `src/jobs/morning-prep.ts`: remove `### Workout` from the fallback template (around line 82)
+- [ ] `src/jobs/morning-prep.ts`: remove `**Today's Workout (${data.dayOfWeek}):**` line and `### Workout` directive from the Claude synthesis prompt
+- [ ] `.claude/agents/morning-prep.md`: remove the "Today's Workout" data-source section
+- [ ] `.claude/agents/morning-prep.md`: update frontmatter `description` to drop the stale "Whoop" mention and the workout responsibility
+- [ ] Test: morning prep output (mock vault) renders all sections except `### Workout`
+- [ ] Manual smoke: trigger `/prep` via Telegram on a dev run; confirm output renders correctly without the workout section
 
 ### Documentation
 
