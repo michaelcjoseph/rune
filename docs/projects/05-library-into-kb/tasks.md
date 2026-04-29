@@ -30,7 +30,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Documentation (Phase A only — minimal)
 
-- [ ] Update `CLAUDE.md` § **KB raw-source routing** with the three new routes (mutable/immutable noted)
+- [x] Update `CLAUDE.md` § **KB raw-source routing** with the three new routes (mutable/immutable noted)
 
 ## Phase B — Lenny MCP integration
 

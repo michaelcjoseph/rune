@@ -170,10 +170,13 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 - `world-view/*` → `knowledge/raw/world-view/`
 - `pages/playbook.md` → `knowledge/raw/playbook/`
 - `projects/*` (excluding `projects/archive/`) → `knowledge/raw/projects/`
+- `library/lenny/*` → `knowledge/raw/lenny/` (mutable — Lenny posts can be re-published upstream)
+- `library/lennys-podcast/*` → `knowledge/raw/lenny/` (legacy folder; immutable — one-time backfill)
+- `library/graham-essays/*` → `knowledge/raw/articles/` (immutable — one-time backfill)
 - anything with `conversation` in the path → `knowledge/raw/conversations/`
 - fallback → `knowledge/raw/notes/`
 
-Mutable sources (world-view, playbook, active projects, journals) **overwrite** the `raw/` copy on every re-ingest (see `isMutableSource()`) so wiki citations reflect current content. Immutable sources (Readwise, conversations) are copied once.
+Mutable sources (world-view, playbook, active projects, journals, library/lenny) **overwrite** the `raw/` copy on every re-ingest (see `isMutableSource()`) so wiki citations reflect current content. Immutable sources (Readwise, conversations, library/lennys-podcast, library/graham-essays) are copied once.
 
 ## Key Conventions
 
