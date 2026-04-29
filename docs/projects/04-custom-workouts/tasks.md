@@ -13,7 +13,7 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Vault read helpers
 
-- [ ] Add `src/vault/equipment.ts` exporting `readEquipment(): { home: string; gym: string }`. Minimal parser — split on `## Home` / `## Gym` headers, return raw block content. Missing file → both sections empty strings.
+- [x] Add `src/vault/equipment.ts` exporting `readEquipment(): { home: string; gym: string }`. Minimal parser — split on `## Home` / `## Gym` headers, return raw block content. Missing file → both sections empty strings.
 - [ ] Add `src/vault/whoop-recent.ts` exporting `readRecentWhoopDays(n: number): WhoopDaily[]`. Lists `health/whoop/*.json`, sorts by date desc, returns the last `n`. Empty dir → empty array.
 - [ ] Tests for both helpers: happy path, missing file, malformed content, fewer-than-n days available.
 
