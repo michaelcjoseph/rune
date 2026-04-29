@@ -57,14 +57,14 @@ Not started. See [spec.md](spec.md) for details.
 
 ### `/done-workout` command
 
-- [ ] Add `src/bot/commands/done-workout.ts`:
+- [x] Add `src/bot/commands/done-workout.ts`:
   - Read `logs/last-workout.json`; missing → friendly "nothing to log" reply, no writes
   - If `generated_at` > 48h old → warn and require a second invocation within 10 minutes to confirm (simple timestamp compare, no session state)
   - Compose journal block: header line (`#workout\n\n**Generated workout** (<location> / <focus>) — <timestamp>`) followed by the stored `markdown`
   - Append via `appendVaultFile` using today's journal path (from `src/vault/journal.ts`)
   - On success: delete `logs/last-workout.json`
   - On append failure: preserve `logs/last-workout.json`, surface error to user
-- [ ] Tests: no-prior-workout path, stale warning + confirm flow, journal format matches what `json-updater` expects (cross-check against `.claude/agents/json-updater.md`), file-cleared-on-success, file-preserved-on-failure
+- [x] Tests: no-prior-workout path, stale warning + confirm flow, journal format matches what `json-updater` expects (cross-check against `.claude/agents/json-updater.md`), file-cleared-on-success, file-preserved-on-failure
 
 ### Handler + registry wiring
 
