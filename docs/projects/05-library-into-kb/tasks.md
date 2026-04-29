@@ -13,7 +13,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
   - `library/lennys-podcast/*` → `knowledge/raw/lenny` (legacy folder routes alongside new)
   - `library/graham-essays/*` → `knowledge/raw/articles`
 - [x] Update `src/kb/ingest.ts` `isMutableSource()` (lines 180–185): add `library/lenny/*` to the mutable set; leave the legacy folders immutable
-- [ ] Vitest in `src/kb/ingest.test.ts` (or new file if absent): cover the three new routes for `determineRawDir` and the mutability flag for all three prefixes
+- [x] Vitest in `src/kb/ingest.test.ts` (or new file if absent): cover the three new routes for `determineRawDir` and the mutability flag for all three prefixes
 
 ### Backfill script + npm wiring
 
