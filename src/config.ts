@@ -70,6 +70,10 @@ const config = {
     return join(this.LOGS_DIR, 'review-sessions.json');
   },
 
+  get LAST_WORKOUT_FILE() {
+    return join(this.LOGS_DIR, 'last-workout.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

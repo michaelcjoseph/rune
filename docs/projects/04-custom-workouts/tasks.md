@@ -35,15 +35,15 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Command rewrite
 
-- [ ] Replace body of `src/bot/commands/workout.ts`:
+- [x] Replace body of `src/bot/commands/workout.ts`:
   - Parse args: split on whitespace, classify each token as location keyword (`home`/`gym`), focus keyword (`mobility`/`endurance`/`strength`/`speed`/`power`), or extra (appended as natural-language context)
   - Reject unknown tokens that match neither vocabulary — reply with valid options list
   - Build input bundle via `readVaultFile` + `readEquipment()` + `readRecentWhoopDays(7)` + tail of `health/workouts.json` (last 14 days)
   - Invoke `workout-generator` via `runAgent` with the bundle as the prompt
-- [ ] Write `logs/last-workout.json` on success: `{generated_at, location, focus, markdown, structured}`
-- [ ] Send markdown to TG using the existing chunking client
-- [ ] Handle missing-input fallbacks per Requirements #8–#10 (bodyweight-only, no preference bias, Whoop absent note)
-- [ ] Tests: arg parsing (both orders, invalid args, natural-language tail), missing-data fallbacks, `last-workout.json` write shape, agent-timeout path preserves no file
+- [x] Write `logs/last-workout.json` on success: `{generated_at, location, focus, markdown, structured}`
+- [x] Send markdown to TG using the existing chunking client
+- [x] Handle missing-input fallbacks per Requirements #8–#10 (bodyweight-only, no preference bias, Whoop absent note)
+- [x] Tests: arg parsing (both orders, invalid args, natural-language tail), missing-data fallbacks, `last-workout.json` write shape, agent-timeout path preserves no file
 
 ### Whoop pre-sync
 
