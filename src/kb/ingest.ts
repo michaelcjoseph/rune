@@ -244,7 +244,9 @@ export function isMutableSource(sourcePath: string): boolean {
   return sourcePath.startsWith('world-view/')
     || sourcePath === 'pages/playbook.md'
     || sourcePath.startsWith('journals/')
-    || (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/'));
+    || (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/'))
+    // library/lennys-podcast/ and library/graham-essays/ are intentionally immutable (one-time backfill).
+    || sourcePath.startsWith('library/lenny/');
 }
 
 /** Snapshot mtime of every projects/**\/*.md file (excluding projects/archive/).

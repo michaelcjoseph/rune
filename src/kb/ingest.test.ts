@@ -226,6 +226,12 @@ describe('kb/ingest', () => {
       expect(isMutableSource('projects/archive/old.md')).toBe(false);
       expect(isMutableSource('misc/notes.md')).toBe(false);
     });
+
+    it('marks library/lenny/ as mutable and library/lennys-podcast/ and library/graham-essays/ as immutable', () => {
+      expect(isMutableSource('library/lenny/episode-42.md')).toBe(true);
+      expect(isMutableSource('library/lennys-podcast/old-episode.md')).toBe(false);
+      expect(isMutableSource('library/graham-essays/hackers-painters.md')).toBe(false);
+    });
   });
 
   it('overwrites raw copy when ingesting a mutable source that already exists', async () => {
