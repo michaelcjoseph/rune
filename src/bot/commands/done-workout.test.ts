@@ -136,6 +136,62 @@ describe('handleDoneWorkout — corrupt JSON', () => {
   });
 });
 
+// ─── 2b. Shape validation (corrupt-status) paths ─────────────────────────────
+
+describe('handleDoneWorkout — shape validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetDoneWorkoutState();
+    deleteLastWorkout();
+  });
+
+  it('treats file with missing markdown field as corrupt', async () => {
+    writeFileSync(LAST_WORKOUT_PATH, JSON.stringify({
+      generated_at: new Date().toISOString(),
+      location: 'gym',
+      focus: 'strength',
+      // markdown is absent
+      structured: {},
+    }));
+
+    const bot = mockBot();
+    await handleDoneWorkout(bot, CHAT_ID);
+
+    expect(bot.sendMessage).toHaveBeenCalledOnce();
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('Could not parse');
+    expect(mockAppendToJournal).not.toHaveBeenCalled();
+  });
+
+  it('treats file with invalid generated_at date as corrupt', async () => {
+    writeFileSync(LAST_WORKOUT_PATH, JSON.stringify({
+      generated_at: 'not-a-date',
+      location: 'gym',
+      focus: 'strength',
+      markdown: '# Workout',
+      structured: {},
+    }));
+
+    const bot = mockBot();
+    await handleDoneWorkout(bot, CHAT_ID);
+
+    expect(bot.sendMessage).toHaveBeenCalledOnce();
+    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('Could not parse');
+    expect(mockAppendToJournal).not.toHaveBeenCalled();
+  });
+
+  it('accepts file with location=null and focus=null (valid shape)', async () => {
+    writeLastWorkout({ location: null, focus: null });
+    mockAppendToJournal.mockReturnValue(undefined);
+
+    const bot = mockBot();
+    await handleDoneWorkout(bot, CHAT_ID);
+
+    expect(mockAppendToJournal).toHaveBeenCalledOnce();
+  });
+});
+
 // ─── 3. Stale warning + confirm flow ─────────────────────────────────────────
 
 describe('handleDoneWorkout — stale warning + confirm flow', () => {

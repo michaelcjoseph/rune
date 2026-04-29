@@ -10,7 +10,7 @@ vi.mock('../config.js', () => ({
   default: { VAULT_DIR: tmpDir },
 }));
 
-const { readVaultFile, writeVaultFile, vaultFileExists, listVaultFiles, getFileModTime, getVaultPath } =
+const { readVaultFile, writeVaultFile, vaultFileExists, listVaultFiles, listVaultDirEntries, getFileModTime, getVaultPath } =
   await import('./files.js');
 
 describe('vault/files', () => {
@@ -57,6 +57,40 @@ describe('vault/files', () => {
 
     it('returns empty array for nonexistent directory', () => {
       expect(listVaultFiles('no-such-dir')).toEqual([]);
+    });
+  });
+
+  describe('listVaultDirEntries', () => {
+    it('lists all entries (files and directories) non-recursively', () => {
+      mkdirSync(join(tmpDir, 'direntries/subdir'), { recursive: true });
+      writeFileSync(join(tmpDir, 'direntries/a.json'), '{}');
+      writeFileSync(join(tmpDir, 'direntries/b.md'), '');
+      writeFileSync(join(tmpDir, 'direntries/c.txt'), '');
+
+      const entries = listVaultDirEntries('direntries');
+      expect(entries).toContain('a.json');
+      expect(entries).toContain('b.md');
+      expect(entries).toContain('c.txt');
+      expect(entries).toContain('subdir');
+      // Does NOT recurse into subdir
+      expect(entries).not.toContain('direntries/a.json');
+    });
+
+    it('returns [] for a missing directory', () => {
+      expect(listVaultDirEntries('no-such-dir-entries')).toEqual([]);
+    });
+
+    it('returns [] for an empty directory', () => {
+      mkdirSync(join(tmpDir, 'emptydirentries'), { recursive: true });
+      expect(listVaultDirEntries('emptydirentries')).toEqual([]);
+    });
+
+    it('returns filenames without path prefix', () => {
+      mkdirSync(join(tmpDir, 'rawnames'), { recursive: true });
+      writeFileSync(join(tmpDir, 'rawnames/2026-04-27.json'), '{}');
+
+      const entries = listVaultDirEntries('rawnames');
+      expect(entries).toEqual(['2026-04-27.json']);
     });
   });
 

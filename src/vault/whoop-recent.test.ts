@@ -155,6 +155,28 @@ describe('vault/whoop-recent', () => {
     });
   });
 
+  describe('non-object JSON', () => {
+    it('skips files whose top-level JSON is an array', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeRaw('2026-04-26.json', '[{"date":"2026-04-26"}]');
+
+      const result = readRecentWhoopDays(10);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.date).toBe('2026-04-25');
+    });
+
+    it('skips files whose top-level JSON is a scalar', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeRaw('2026-04-26.json', '42');
+
+      const result = readRecentWhoopDays(10);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.date).toBe('2026-04-25');
+    });
+  });
+
   describe('n=0 edge case', () => {
     it('returns [] immediately when n=0', () => {
       writeDay('2026-04-25.json', DAY_2026_04_25);

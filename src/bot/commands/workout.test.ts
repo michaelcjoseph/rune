@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync, readdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -434,6 +434,23 @@ describe('generateWorkout — agent error / timeout', () => {
 
     expect('error' in result).toBe(true);
     expect((result as { error: string }).error).toBeTruthy();
+  });
+
+  it('returns {error} when the atomic write fails (logs dir missing)', async () => {
+    mockRunAgent.mockResolvedValue({
+      text: '## Warmup\n- Walk\n## Main\n- Squat\n## Cooldown\n- Stretch\n',
+      error: null,
+    });
+    // Remove logsTmpDir so the atomic write throws ENOENT.
+    rmSync(logsTmpDir, { recursive: true, force: true });
+
+    const result = await generateWorkout({ location: 'home', focus: 'strength', extra: '' });
+
+    expect('error' in result).toBe(true);
+    expect((result as { error: string }).error).toMatch(/persist/);
+
+    // Re-create for subsequent tests.
+    mkdirSync(logsTmpDir, { recursive: true });
   });
 });
 

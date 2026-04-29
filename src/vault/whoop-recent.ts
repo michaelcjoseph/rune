@@ -24,18 +24,22 @@ export function readRecentWhoopDays(n: number): WhoopDailyData[] {
   for (const filename of filenames) {
     const content = readVaultFile(join(WHOOP_DIR, filename));
     if (content === null) continue;
-    let parsed: WhoopDailyData;
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(content) as WhoopDailyData;
+      parsed = JSON.parse(content);
     } catch (err) {
       log.debug('Skipping unparseable Whoop file', { filename, err: String(err) });
       continue;
     }
-    if (typeof parsed?.date !== 'string') {
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      log.debug('Skipping Whoop file with unexpected shape', { filename });
+      continue;
+    }
+    if (typeof (parsed as { date?: unknown }).date !== 'string') {
       log.debug('Skipping Whoop file with missing date field', { filename });
       continue;
     }
-    days.push(parsed);
+    days.push(parsed as WhoopDailyData);
   }
   return days;
 }

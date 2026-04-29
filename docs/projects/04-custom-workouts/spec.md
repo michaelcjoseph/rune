@@ -225,7 +225,7 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 [full markdown body from last-workout.json]
 ```
 
-Requirement #27 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts:42`) already scans for `#workout` and routes to `json-updater`. The `json-updater` agent's instruction (`/Users/michaelcjoseph/workspace/jarvis/.claude/agents/json-updater.md:22`) knows how to turn this into a `workouts.json` entry with `{date, type, duration, exercises[], notes}`. No changes to that pipeline.
+Requirement #27 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts:42`) already scans for `#workout` and routes to `json-updater`. The `json-updater` agent's instruction (`.claude/agents/json-updater.md:22`) knows how to turn this into a `workouts.json` entry with `{date, type, duration, exercises[], notes}`. No changes to that pipeline.
 
 **Modified files:**
 

@@ -68,7 +68,7 @@ function formatBlock(entry: LastWorkout): string {
   const ts = new Date(entry.generated_at).toLocaleString('en-US', {
     dateStyle: 'short',
     timeStyle: 'short',
-    timeZone: 'America/Chicago',
+    timeZone: config.TIMEZONE,
   });
   return `#workout\n\n**Generated workout** (${tag}) — ${ts}\n\n${entry.markdown}`;
 }
