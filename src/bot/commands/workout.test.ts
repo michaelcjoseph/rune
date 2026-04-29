@@ -209,6 +209,31 @@ describe('buildWorkoutPrompt — section headings', () => {
     const out = buildWorkoutPrompt({ location: null, focus: null, extra: '' });
     expect(out).toMatch(/^Args: \(none/m);
   });
+
+  it('emits override-note line when args provide location and focus', () => {
+    const out = buildWorkoutPrompt({ location: 'gym', focus: 'strength', extra: '' });
+    expect(out).toMatch(/^Args precedence: user-supplied location and focus overrides/m);
+  });
+
+  it('emits override-note for location-only args', () => {
+    const out = buildWorkoutPrompt({ location: 'gym', focus: null, extra: '' });
+    expect(out).toMatch(/^Args precedence: user-supplied location overrides/m);
+  });
+
+  it('emits override-note for focus-only args', () => {
+    const out = buildWorkoutPrompt({ location: null, focus: 'strength', extra: '' });
+    expect(out).toMatch(/^Args precedence: user-supplied focus overrides/m);
+  });
+
+  it('omits override-note when no location or focus passed', () => {
+    const out = buildWorkoutPrompt({ location: null, focus: null, extra: '' });
+    expect(out).not.toMatch(/Args precedence:/);
+  });
+
+  it('omits override-note when only extra natural-language tail is passed', () => {
+    const out = buildWorkoutPrompt({ location: null, focus: null, extra: '30min quick' });
+    expect(out).not.toMatch(/Args precedence:/);
+  });
 });
 
 // ─── 7. buildWorkoutPrompt — missing-data fallbacks ──────────────────────────

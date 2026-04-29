@@ -102,6 +102,13 @@ export function buildWorkoutPrompt(args: ParsedArgs): string {
     args.extra,
   ].filter((s) => s.length > 0).join(' ').trim();
 
+  const overrideFields: string[] = [];
+  if (args.location) overrideFields.push('location');
+  if (args.focus) overrideFields.push('focus');
+  const overrideNote = overrideFields.length > 0
+    ? `Args precedence: user-supplied ${overrideFields.join(' and ')} overrides any conflicting day-of-week prescription in plan.md. Use plan.md only for week-phase calibration (RPE, load targets) and weekly-target accounting.`
+    : '';
+
   const goals = readVaultFile('health/goals.md') ?? '';
   const equipment = readEquipment();
   const exercises = readVaultFile('health/exercises.md') ?? '';
@@ -120,6 +127,7 @@ export function buildWorkoutPrompt(args: ParsedArgs): string {
 
   return [
     `Args: ${argsLine || '(none — infer location and focus)'}`,
+    ...(overrideNote ? [overrideNote] : []),
     '',
     '## goals (health/goals.md)',
     '',
