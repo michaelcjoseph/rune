@@ -230,6 +230,11 @@ export function determineRawDir(sourcePath: string): string {
   if (sourcePath.startsWith('projects/') && !sourcePath.startsWith('projects/archive/')) {
     return 'knowledge/raw/projects';
   }
+  // library/lennys-podcast/ is a legacy folder that routes to the same raw dir as library/lenny/.
+  if (sourcePath.startsWith('library/lenny/') || sourcePath.startsWith('library/lennys-podcast/')) {
+    return 'knowledge/raw/lenny';
+  }
+  if (sourcePath.startsWith('library/graham-essays/')) return 'knowledge/raw/articles';
   return 'knowledge/raw/notes';
 }
 

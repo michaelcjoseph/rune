@@ -14,6 +14,7 @@ const KB_DIRS = [
   'knowledge/raw/notes',
   'knowledge/raw/media',
   'knowledge/raw/reviews',
+  'knowledge/raw/lenny',
   'knowledge/wiki/entities',
   'knowledge/wiki/concepts',
   'knowledge/wiki/topics',

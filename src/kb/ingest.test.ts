@@ -196,6 +196,18 @@ describe('kb/ingest', () => {
       expect(determineRawDir('notes/conversation-with-alice.md')).toBe('knowledge/raw/conversations');
     });
 
+    it('routes library/lenny/ files to lenny/', () => {
+      expect(determineRawDir('library/lenny/episode-42.md')).toBe('knowledge/raw/lenny');
+    });
+
+    it('routes legacy library/lennys-podcast/ files to lenny/', () => {
+      expect(determineRawDir('library/lennys-podcast/old-episode.md')).toBe('knowledge/raw/lenny');
+    });
+
+    it('routes library/graham-essays/ files to articles/', () => {
+      expect(determineRawDir('library/graham-essays/hackers-painters.md')).toBe('knowledge/raw/articles');
+    });
+
     it('falls back to notes for unknown paths', () => {
       expect(determineRawDir('misc/something.md')).toBe('knowledge/raw/notes');
     });

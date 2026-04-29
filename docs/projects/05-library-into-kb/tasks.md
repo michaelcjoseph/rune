@@ -8,7 +8,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Routing changes
 
-- [ ] Update `src/kb/ingest.ts` `determineRawDir()` (lines 166–176): add three prefix checks
+- [x] Update `src/kb/ingest.ts` `determineRawDir()` (lines 166–176): add three prefix checks
   - `library/lenny/*` → `knowledge/raw/lenny`
   - `library/lennys-podcast/*` → `knowledge/raw/lenny` (legacy folder routes alongside new)
   - `library/graham-essays/*` → `knowledge/raw/articles`
