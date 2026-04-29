@@ -8,6 +8,8 @@ This project adds a localhost webview at `http://127.0.0.1:3847/` that talks to 
 
 The implementation reuses the existing skill registry, resolver, review orchestrator, and Claude CLI plumbing without modification. The only structural change is a new `MessageSender` abstraction that sits between handlers/jobs and the wire — `TelegramSender` keeps current behavior, `WebviewSender` is the new transport — plus a `NotificationBus` that cron jobs publish to instead of holding a `bot` reference.
 
+Phase E extends the webview from a read-mostly chat surface into a chat-driven *self-update* surface. A typed mutation pipeline (`MutationDescriptor` + `MutationApplier` registry) lets the webview drive Jarvis end-to-end actions without a review session in the loop — the first concrete applier is a `/work --auto` runner that picks any project under `docs/projects/*`, spawns Claude Code with the project's `spec.md`/`tasks.md` as context, and streams output back into the webview live. The pipeline is designed to absorb later mutation kinds (project-spec edits, proposal-queue approvals, agent-file edits, cron toggles) without each one re-inventing its own endpoint, persistence, or fan-out.
+
 ### Core Value Proposition
 
 A localhost browser surface that shares a single conversation with Telegram, renders Claude's output the way it deserves to be rendered, and turns Jarvis's internal state into ambient signal — without forking the bot, replacing TG, or adding any infrastructure beyond a new endpoint on the existing http server.
@@ -18,6 +20,7 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 2. **Secondary:** Rendering and interaction wins that TG cannot offer: client-side markdown rendering with code-block syntax highlighting, `[[wikilink]]` anchors that open Obsidian via `obsidian://`, streaming responses chunk-by-chunk over WebSocket, a multi-line textarea with Cmd+Enter to send, up-arrow recall of the previous message, and a model indicator + dropdown (Opus/Sonnet/Haiku) bound to the existing `/opus`-`/sonnet`-`/haiku` handlers.
 3. **Tertiary:** A light cockpit sidebar (~280px) showing live state from existing JSON files and in-memory maps: active conversation/review session, ingestion queue depth, last 10 agent runs, pending playbook + proposal approvals, last morning-prep + nightly run timestamps. Polled via `GET /api/state` every 5s.
 4. **Quaternary:** Approval buttons for review-session prompts (`/weekly` outline approval, `/blog` post drafts, etc.) plus live agent-run events streamed over the WebSocket into the sidebar's "running now" indicator. Achieved by emitting structured signals from `src/reviews/interview.ts` and instrumenting `runAgent()` in `src/ai/claude.ts` with bus events.
+5. **Quinary:** A typed mutation pipeline that lets the webview drive Jarvis self-update from chat. Phase E ships the framework (`MutationDescriptor` + `MutationApplier` registry, `logs/mutations.jsonl` persistence, `mutation-event` bus channel) plus a `/work --auto` runner that executes any Jarvis dev project under `docs/projects/*` end-to-end. A new "Projects" cockpit panel surfaces status (from `index.md`) and progress (derived from `tasks.md` checkboxes) and exposes a per-project "Run /work --auto" button. Future mutation kinds (project-spec edits, proposal approvals, agent-file edits, cron toggles) plug into the registry without new endpoints.
 
 ### Non-Goals
 
@@ -30,6 +33,9 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 - **Message-history persistence across page refresh.** v1: refresh = empty chat, but the underlying Claude session is preserved (next message resumes). Adding a server-side message log is deferred to v1.1.
 - **LAN access from the phone.** Listener stays bound to `127.0.0.1`. Exposing it requires real auth (not just a shared secret) and is out of scope.
 - **Frontend build pipeline.** No Vite, no React, no node_modules for the frontend. `markdown-it` and `highlight.js` load from a CDN; everything else is hand-written HTML/JS/CSS.
+- **Editing arbitrary vault files from the webview.** The Phase E mutation pipeline only writes through registered `MutationApplier` handlers; nothing writes outside what an applier declares as its target. No generic "edit any file" surface in v1.
+- **Replacing the review-time post-agents.** `proposal-updater`, `project-updater`, `playbook-updater`, `worldview-updater`, `psychology-updater`, `json-updater`, `daily-content-updater` continue to run after reviews exactly as today. Phase E is a parallel surface for chat-driven mutations, not a migration of the review pipeline.
+- **Multi-project coordinated `/work --auto` runs.** v1 caps concurrency at one `work-run` per project and two across all projects. Cross-project orchestration (dependency-ordered runs, fan-out) is out of scope.
 
 ### Scale Considerations
 
@@ -115,6 +121,49 @@ User can pivot to webview, type a follow-up, response goes to both.
 There is one logical conversation, not two.
 ```
 
+### Happy Path — `/work --auto` from the projects panel (Phase E)
+
+```
+User opens the webview. Cockpit's "Projects" panel lists docs/projects/*
+with status pills (Done / Spec / In Progress) and progress bars derived
+from each tasks.md checkbox count.
+         ↓
+User clicks "Run /work --auto" on, say, 04-custom-workouts.
+         ↓
+Webview shows a one-shot confirmation modal:
+  "Run /work --auto on 04-custom-workouts? Edits + commits without
+   further confirmation. [Run] [Cancel]"
+         ↓
+User clicks Run. Frontend POSTs /api/mutations with
+  { kind: 'work-run', payload: { projectSlug: '04-custom-workouts' } }.
+         ↓
+WorkRunApplier.validate passes (project exists, no other run for it,
+under global concurrency cap). Server creates a MutationDescriptor,
+appends it to logs/mutations.jsonl with status: 'running', and spawns
+  claude --add-dir docs/projects/04-custom-workouts/
+         -p '<spec.md + tasks.md + invoke /work --auto>'
+from PROJECT_ROOT. Child registers in src/ai/claude.ts's activeProcesses.
+         ↓
+A run drawer slides open in the webview showing live stdout. The
+"Mutations" cockpit panel shows the run under "Active" with a live
+elapsed timer and the tail of the most recent output line.
+         ↓
+Stdout chunks publish on the bus as { kind: 'mutation-event', subKind:
+'output', mutationId, data } and fan out to the webview WS as frames.
+TG receives a single short text-fallback line ("started /work --auto for
+04-custom-workouts") and stays quiet during the run.
+         ↓
+Claude Code finishes. Exit code 0 → applier emits 'completed';
+status flips to 'completed' in the descriptor, the JSONL log gets a
+final line, and the mutation moves from "Active" to "Recent" in the
+cockpit. TG receives a one-line completion summary.
+         ↓
+User opens the project repo: a feature branch (work/04-custom-workouts-
+<ts>) holds Claude's commits; tasks.md checkboxes reflect what /work
+ticked off. User reviews, merges, deletes the branch. Project dashboard
+status pill flips to "In Progress" or "Done" on next /api/state poll.
+```
+
 ### Edge — webview disconnected mid-stream
 
 ```
@@ -179,6 +228,9 @@ upgrades succeed.
 | Wikilink resolution | Client-side regex in the markdown renderer. `[[Note Title]]` → `<a href="obsidian://open?vault=<OBSIDIAN_VAULT_NAME>&file=Note%20Title">Note Title</a>`. Vault name passed once on page load via a `<meta>` tag populated server-side from `OBSIDIAN_VAULT_NAME` env (default = `basename($VAULT_DIR)`). |
 | Slash-command parity | No special-casing. Webview sends `{ kind: 'message', text: '/journal foo' }`; server routes through the same `handleTextMessage` switch chain as TG. |
 | Model dropdown | Bound to existing `/opus` / `/sonnet` / `/haiku` handlers — selecting "Sonnet" sends `/sonnet` as the next message. No new server logic. |
+| Mutation pipeline shape (Phase E) | Typed `MutationDescriptor { id, kind, source, target, preview, payload, createdAt, status }` + `MutationApplier { kind, autoApprove, validate, apply }` registry. `apply` returns an async iterable of `MutationEvent`s. Outbound events ride the existing `NotificationBus` as a new `'mutation-event'` kind so `WebviewSender` fans them out as `{ kind: 'mutation-event', … }` frames; `TelegramSender` receives a short text-fallback summary on `completed`/`failed` only. Persistent log: `logs/mutations.jsonl` (append-only). Active mutations held in an in-memory `Map<id, RunHandle>` for cancellation. v1 ships only the `work-run` applier; `project-edit` / `proposal-action` / `agent-edit` / `cron-toggle` are reserved kinds for later phases. |
+| `/work --auto` runner spawn pattern (Phase E) | `claude --add-dir docs/projects/<slug>/ -p '<spec.md + tasks.md + invoke /work --auto>'` from `PROJECT_ROOT`. Reuses `src/ai/claude.ts`'s `activeProcesses` set and `waitForActiveProcesses()` so SIGTERM on shutdown is already handled. Stdout streamed line-buffered as `output` mutation events; exit 0 → `completed`, non-zero → `failed`. `autoApprove: true` (no server-side confirmation gate); the webview still shows a one-shot client-side modal to prevent stray clicks. Concurrency cap: one `work-run` per project, two across all projects (constants in `src/config.ts`). |
+| Project dashboard source of truth (Phase E) | Status read from the `docs/projects/index.md` table cell. Progress derived from each `docs/projects/<slug>/tasks.md` by counting `- [x]` (done) vs total `- [ ]` + `- [x]`, grouped by `## Phase …` headers when present. No separate JSON store, no schema migration — the markdown is the schema. Spec link points at `obsidian://open?vault=<OBSIDIAN_VAULT_NAME>&file=docs/projects/<slug>/spec.md` when the vault registers the file, otherwise a plain file path. |
 
 ---
 
@@ -239,6 +291,39 @@ upgrades succeed.
 36. WHEN a TG message arrives THEN the resulting Claude response is delivered to all registered senders via the bus, so an open webview shows the same exchange in real time.
 37. WHEN a webview message arrives THEN the response is delivered to TG too — there is one logical conversation, not two parallel ones.
 38. WHEN a review session is active for `TELEGRAM_USER_ID` (started from either surface) THEN messages from the other surface route to the same review handler via `handleReviewMessage`.
+
+### Mutation pipeline (Phase E)
+
+39. WHEN a client `POST`s `/api/mutations` with `{ kind, payload }` and valid auth THEN the server resolves the registered `MutationApplier` for `kind`, calls `validate(payload)`, and returns 400 `{ error: <reason> }` on validation failure.
+40. WHEN validation passes THEN the server constructs a `MutationDescriptor` with `id` (ulid), `createdAt`, `source: 'webview'`, `status: 'pending'`, appends it to `logs/mutations.jsonl`, and returns 200 with the descriptor JSON.
+41. WHEN the descriptor's `kind` has `autoApprove: true` THEN the server transitions `status: 'running'` immediately, calls `applier.apply(descriptor, ctx)`, and begins consuming the resulting `AsyncIterable<MutationEvent>`.
+42. WHEN a `MutationEvent` is yielded THEN the server publishes `{ kind: 'mutation-event', mutationId, subKind, ts, data }` on the `NotificationBus`; `WebviewSender` forwards to all WS connections for `TELEGRAM_USER_ID`; `TelegramSender` ignores `output` / `progress` / `log` and emits a short text summary only on `completed` / `failed`.
+43. WHEN the applier yields its terminal event (`completed` or `failed`) THEN the server appends a final JSONL line with the resolved `status` and any `error` field, removes the entry from the in-memory active map, and stops fan-out for that `mutationId`.
+44. WHEN a client `GET`s `/api/mutations` with valid auth THEN the server returns `{ active: MutationDescriptor[], recent: MutationDescriptor[] }` where `recent` is the last 50 terminal entries from `logs/mutations.jsonl`.
+45. WHEN a client `POST`s `/api/mutations/:id/cancel` with valid auth THEN the server looks up the in-memory `RunHandle`, sends `SIGTERM` to the child, and the applier transitions `status: 'failed'` with `reason: 'cancelled'` on the next event tick. Cancelling an already-terminal mutation returns 409.
+46. WHEN the bus publishes a `'mutation-event'` to a `WebviewSender` with no registered WS connection THEN the event is dropped (no replay buffer); the persisted JSONL log is the source of truth for late-joiners.
+47. WHEN the server shuts down with active mutations THEN existing `killActiveProcesses()` + `waitForActiveProcesses()` paths in `src/ai/claude.ts` SIGTERM the children; on next boot, any descriptor still in `'running'` status is reconciled to `'failed'` with `reason: 'orphaned'` during startup recovery.
+48. WHEN `getStateSnapshot()` is called THEN its returned object includes `mutations: { active, recent }` mirroring the `/api/mutations` shape, so the cockpit can render without a separate fetch.
+49. WHEN `logs/mutations.jsonl` cannot be read or parsed THEN the affected line is skipped with a warning logged; subsequent lines are still consumed and the snapshot's `warnings` field surfaces the count.
+50. WHEN no `MutationApplier` is registered for the requested `kind` THEN `POST /api/mutations` returns 400 `{ error: 'unknown mutation kind: <kind>' }`.
+
+### Project dashboard (Phase E)
+
+51. WHEN `getStateSnapshot()` is called THEN it includes a `projects: ProjectSummary[]` field where each entry has `{ slug, status, progress: { done, total, perPhase? }, specPath, lastModified }`.
+52. WHEN parsing `docs/projects/index.md` THEN the table is read with the column order `Project | Status | Description`; rows whose first column does not match a `docs/projects/<slug>/spec.md` file are skipped.
+53. WHEN parsing a `tasks.md` THEN every `- [ ]` and `- [x]` line is counted; checkboxes nested under blockquote (`>`) lines are still counted; lines containing only commentary (no checkbox) are ignored.
+54. WHEN the `tasks.md` file is missing or malformed THEN the entry's `progress` is `{ done: 0, total: 0 }` and `warnings` carries a per-project entry; the panel renders a "—" placeholder.
+55. WHEN the cockpit's Projects panel renders a row THEN it displays the slug, status pill, progress as `<done>/<total>` plus a thin progress bar, a spec link (resolved via `obsidian://` when `OBSIDIAN_VAULT_NAME` is set), and a "Run /work --auto" button.
+
+### `/work --auto` runner (Phase E)
+
+56. WHEN `WorkRunApplier.validate({ projectSlug })` is called THEN it returns `ok: false` if `docs/projects/<slug>/` does not exist, `spec.md` is missing, another `work-run` for the same slug is already in `running` status, or the global cap (default 2) is reached.
+57. WHEN `WorkRunApplier.apply` runs THEN it spawns `claude` with `--add-dir docs/projects/<slug>/`, cwd = `PROJECT_ROOT`, and a `-p` prompt that concatenates the project's `spec.md` + `tasks.md` and ends with the literal `/work --auto` invocation; the spawned child is registered in `src/ai/claude.ts`'s `activeProcesses` set.
+58. WHEN the child writes to stdout THEN each newline-delimited chunk is yielded as a `MutationEvent` `{ kind: 'output', data: { line } }`; stderr is yielded as `{ kind: 'log', data: { line, stream: 'stderr' } }`.
+59. WHEN the child exits with code `0` THEN the applier yields `{ kind: 'completed', data: { exitCode: 0, durationMs } }`; non-zero exit yields `{ kind: 'failed', data: { exitCode, durationMs, error } }`. SIGTERM (code 143 or `signal: 'SIGTERM'`) is treated as `failed` with `reason: 'cancelled'` if the cancellation endpoint was called, else `'killed'`.
+60. WHEN two webview tabs both POST a `work-run` for the same project within the same second THEN the first wins; the second's `validate` fails with `reason: 'already running for <slug>'`.
+61. WHEN the cockpit's "Run /work --auto" button is clicked THEN the frontend renders a confirmation modal with the slug, the spawn command summary, and `[Run] [Cancel]`; only `Run` triggers `POST /api/mutations`. The modal is a UI affordance only; server-side `autoApprove: true` is unchanged.
+62. WHEN a `work-run` mutation is `running` THEN the corresponding project row's button is disabled and shows "Running…" until the descriptor transitions to a terminal status.
 
 ---
 
@@ -347,12 +432,74 @@ upgrades succeed.
 - `src/transport/webview-sender.test.ts` — assert `approval` round-trips on the wire.
 - Manual smoke: run `/weekly` from the webview, click the outline-approval button, watch the writeup phase advance.
 
+### Phase E — Mutation pipeline + project dashboard + `/work --auto` runner
+
+**New files:**
+
+- `src/transport/mutations.ts`:
+  ```typescript
+  export type MutationKind = 'work-run' | 'project-edit' | 'proposal-action' | 'agent-edit' | 'cron-toggle';
+  export type MutationStatus = 'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'rejected';
+  export interface MutationDescriptor<P = Record<string, unknown>> {
+    id: string;
+    kind: MutationKind;
+    source: 'webview' | 'review' | 'cron' | 'cli';
+    target: { type: string; ref: string };
+    preview: { summary: string; details?: string };
+    payload: P;
+    createdAt: string;
+    status: MutationStatus;
+    error?: string;
+  }
+  export interface MutationEvent {
+    mutationId: string;
+    ts: string;
+    kind: 'log' | 'progress' | 'output' | 'completed' | 'failed';
+    data?: unknown;
+  }
+  export interface MutationApplier<P = Record<string, unknown>> {
+    kind: MutationKind;
+    autoApprove: boolean;
+    validate(payload: P): { ok: true } | { ok: false; reason: string };
+    apply(descriptor: MutationDescriptor<P>, ctx: ApplyContext): AsyncIterable<MutationEvent>;
+  }
+  export function registerApplier<P>(applier: MutationApplier<P>): void;
+  export function getApplier(kind: MutationKind): MutationApplier | undefined;
+  ```
+  Plus `createMutation(kind, payload, source)` (validates + persists + starts apply when `autoApprove`), `cancelMutation(id)` (SIGTERM + status flip), and an in-memory `Map<id, RunHandle>` for active runs.
+- `src/jobs/mutations-log.ts` — append-only `logs/mutations.jsonl` reader/writer. `appendMutationLine(descriptor)`, `readRecentMutations(n)`, `reconcileOrphans()` (called on boot to flip stale `running` rows to `failed` with `reason: 'orphaned'`).
+- `src/jobs/work-runner.ts` — exports `workRunApplier: MutationApplier<{ projectSlug: string }>`. Implements `validate` (project dir + concurrency cap) and `apply` (spawn `claude` per the Architecture Decisions row, stream stdout/stderr as events). Reuses `activeProcesses` and `waitForActiveProcesses` from `src/ai/claude.ts` for graceful shutdown. Constants `WORK_RUN_PER_PROJECT_CAP = 1` and `WORK_RUN_GLOBAL_CAP = 2` live in `src/config.ts`.
+- `src/server/projects-snapshot.ts` — `getProjectSummaries()` parses `docs/projects/index.md` + each `tasks.md`, returns `ProjectSummary[]`.
+
+**Modified files:**
+
+- `src/transport/notification-bus.ts` — extend the event union to include `'mutation-event'` alongside the existing `'message'` and Phase D `'agent-event'` kinds.
+- `src/transport/webview-sender.ts` — forward `'mutation-event'` bus messages to connected WS as `{ kind: 'mutation-event', … }` frames; do not register them as send-failures when no WS is connected (drop silently).
+- `src/transport/telegram-sender.ts` — on `'mutation-event'` with `subKind: 'completed' | 'failed'`, send a one-line text summary (`✅ /work --auto on <slug> finished in <duration>` / `❌ /work --auto on <slug> failed: <reason>`); ignore `output` / `progress` / `log` to avoid TG message floods.
+- `src/server/webview.ts` — add three routes: `POST /api/mutations`, `GET /api/mutations`, `POST /api/mutations/:id/cancel`. All inherit the existing auth + non-localhost guard.
+- `src/server/state-snapshot.ts` — add `projects: getProjectSummaries()` and `mutations: { active, recent: readRecentMutations(50) }` to the snapshot.
+- `src/server/static/app.js` — add Projects cockpit panel (row per project, status pill, progress bar, "Run /work --auto" button); add Mutations cockpit panel (Active + Recent); add a slide-in run-detail drawer that subscribes to `mutation-event` frames matching its `mutationId`; add a confirmation modal for `work-run` clicks; reuse Phase D's chunk-render plumbing for the drawer's streaming output.
+- `src/server/static/app.css` — drawer slide-in transition, modal overlay, progress bar, status pill colors (Done = green, Spec = grey, In Progress = blue, Failed = red).
+- `src/config.ts` — add `WORK_RUN_PER_PROJECT_CAP` (default 1) and `WORK_RUN_GLOBAL_CAP` (default 2).
+- `src/index.ts` — at boot, `registerApplier(workRunApplier)` and `reconcileOrphans()` before the bot starts polling.
+- `CLAUDE.md` — new "Mutation pipeline" subsection under **Architecture**; **Project Structure** entries for `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`; **HTTP server** entries for the three new routes.
+
+**Tests:**
+
+- `src/transport/mutations.test.ts` — vitest: descriptor lifecycle (`pending` → `running` → `completed`), unknown-kind rejection, applier validation failures, cancellation flips status to `failed` with `reason: 'cancelled'`.
+- `src/jobs/mutations-log.test.ts` — vitest: append, read recent, skip corrupt line with warning, `reconcileOrphans()` rewrites stale `running` rows.
+- `src/jobs/work-runner.test.ts` — vitest with stubbed `spawn`: spawn args include `--add-dir` and `cwd: PROJECT_ROOT`, stdout chunks become `output` events, exit 0 → `completed`, exit non-zero → `failed`, second concurrent run for same slug rejected.
+- `src/server/projects-snapshot.test.ts` — vitest with fixture `index.md` + per-project `tasks.md`: progress count matches manual count, missing `tasks.md` produces `—` placeholder, malformed table cell does not crash.
+- `src/server/webview.test.ts` (extend) — `POST /api/mutations` with valid `work-run` payload returns 200 + descriptor; with invalid `kind` returns 400; `POST /api/mutations/:id/cancel` SIGTERMs within 5s in an integration smoke; `GET /api/mutations` returns active + recent.
+- Manual smoke: create a throwaway `docs/projects/99-sandbox/spec.md` with a trivial "create a hello.txt" task; click Run; watch streaming output; confirm `hello.txt` exists on a `work/99-sandbox-<ts>` branch.
+
 ### Coordination notes
 
 - **Phase A is independently shippable.** Refactor only — no UI, no behavior change. Lands first; lets every later phase target the abstraction.
 - **Phase B is the v1 milestone.** Chat parity with TG plus rendering + interaction wins. Cockpit and approval buttons are deferred but nothing blocks shipping B without them.
 - **Phase C is read-only and decoupled.** It can ship without D.
 - **Phase D is the largest cross-cutting change.** It edits review handlers and `runAgent`. Worth its own phase to bound the blast radius.
+- **Phase E builds on C + D.** It needs the snapshot infrastructure from C (extends it with `projects` and `mutations`) and the bus event-fan-out plumbing from D (adds a third event kind alongside `message` and `agent-event`). It does not touch review handlers, which keeps the review-time post-agent path untouched.
 - **No new env vars required for v1** (one optional one: `OBSIDIAN_VAULT_NAME`). No new cron registrations. No new dependencies — `markdown-it` and `highlight.js` load from a CDN, no npm install.
 
 ---
@@ -396,6 +543,17 @@ upgrades succeed.
 - **Cron job fires before bot ready**: existing scheduler-startup ordering already handles this. Bus subscribers register at boot before scheduler starts.
 - **Outbound notification while no surface is connected**: bus fans out; TG still receives (push notifications continue to land); webview-sender no-ops. No queuing.
 
+### Mutations (Phase E)
+
+- **Child process killed by the OS** (e.g., laptop sleeps and macOS reaps the `claude` child): the close handler fires with a non-zero exit; applier emits `failed` with `reason: 'killed'`; status reconciles correctly. No orphan in the active map because `close` always fires.
+- **`claude` CLI not in PATH at spawn time**: `spawn` emits `error` event (ENOENT). Applier yields `failed` with `reason: 'claude CLI not found'`. The cockpit shows the failed mutation with a hint pointing at the install URL. Subsequent runs are not blocked — `validate` does not pre-check PATH (the spawn is the source of truth).
+- **`tasks.md` malformed for a project**: `getProjectSummaries()` skips the bad file with a per-project warning; the panel renders the project row with `progress: —` rather than crashing the snapshot. Other projects remain visible.
+- **Two browser tabs both clicking "Run" within the same second**: both POSTs hit the server; the first creates the descriptor and starts running; the second's `validate` fails with `reason: 'already running for <slug>'` and returns 400. The second tab's UI shows the error inline; refresh re-syncs to the active run.
+- **Server shutdown mid-run**: `killActiveProcesses()` SIGTERMs the `claude` child (already wired); `waitForActiveProcesses()` lets it exit cleanly; the descriptor's last logged status remains `running`. On next boot, `reconcileOrphans()` flips it to `failed` with `reason: 'orphaned'` and surfaces it in the recent list.
+- **`logs/mutations.jsonl` corrupt line**: reader skips the line, logs a warning with the byte offset, and continues. Snapshot's `warnings` field carries a count so the UI can surface it.
+- **Cancellation race**: user clicks cancel in the same tick the applier yields `completed`. `cancelMutation(id)` returns 409 (`mutation already terminal`); the UI re-syncs to the terminal state on the next state-snapshot poll.
+- **TG receives a flood of mutations**: `TelegramSender` only sends on `completed`/`failed`, never on `output` / `progress` / `log`, so a verbose `/work --auto` run produces exactly two TG messages.
+
 ---
 
 ## Open Questions
@@ -410,3 +568,9 @@ upgrades succeed.
 - [ ] **Frontend telemetry.** Should `appendIntent()` (the existing intent-log pipeline) gain a `surface: 'tg' | 'webview'` field so we can measure adoption? Probably yes; one-line addition. Track in tasks.md.
 - [ ] **Server-side rate limiting.** The webview is single-user on localhost. Rate limiting feels like overkill, but the auth endpoint that exchanges `?token=` for a cookie is the one place where a misconfigured bot or stale tab could spam. Worth a light rate cap?
 - [ ] **`GET /api/state` schema versioning.** As panels evolve, the snapshot shape will change. Version the response envelope (`{ version: 1, … }`) from day one so the frontend can tolerate older servers during dev.
+- [ ] **(Phase E) Branching strategy for `/work --auto`.** Should the runner create a `work/<slug>-<ts>` branch off `main` before invoking `/work --auto`, then return to `main` on completion? Strong lean toward yes — keeps `main` clean if `/work` writes anything controversial — but the `/work` skill itself may already do this. Confirm during Phase E kickoff; if the skill handles branching, the runner stays a thin spawn.
+- [ ] **(Phase E) Per-project lockfile vs in-memory only.** The concurrency cap currently lives in the in-memory active map. Single-process Jarvis is fine. If we ever run two Jarvis instances against the same repo (HA, dev + prod side-by-side), an `flock`-based lockfile under `logs/work-locks/<slug>` becomes necessary. Defer until that happens.
+- [ ] **(Phase E) `tasks.md` checkbox feedback.** When `/work --auto` ticks off boxes mid-run, does it commit them, leave them dirty, or write to a separate progress log? Probably the `/work` skill handles its own progress-tracking semantics; Jarvis stays out of it. Surface a clear note in CLAUDE.md once observed behavior is confirmed.
+- [ ] **(Phase E) Vault life projects in the dashboard.** `projects/*.md` (life projects) have a different schema and don't have a `/work --auto` story. UI shape supports a second tab cleanly if we later want to surface them; deferred for v1 to avoid muddying the "dev project" mental model.
+- [ ] **(Phase E) Browseable mutation history.** Cockpit shows last 50 from `logs/mutations.jsonl`. If the user wants to scroll deeper, a paged `/api/mutations?cursor=<id>&limit=50` endpoint plus an "All mutations" view would land. Defer until last-50 feels insufficient.
+- [ ] **(Phase E) Future mutation kinds.** `project-edit` (inline spec edits), `proposal-action` (approve/reject queued proposals from chat without a review session), `agent-edit` (modify `.claude/agents/*.md`), `cron-toggle` (enable/disable scheduled jobs) are all listed in the `MutationKind` enum but not implemented. Each is a follow-on project that plugs into the existing pipeline. Sketch the rough design + risks for each before opening the next webview project.

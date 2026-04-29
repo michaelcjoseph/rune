@@ -172,3 +172,62 @@ Coverage checklist for the localhost webview chat surface, the transport abstrac
 - [ ] 🟡 After Phase B ships, `CLAUDE.md` Architecture mentions the webview as a second transport sharing session via `TELEGRAM_USER_ID`.
 - [ ] 🟡 `OBSIDIAN_VAULT_NAME` is documented in `CLAUDE.md` Environment Variables (optional, with default).
 - [ ] 🟢 `docs/projects/index.md` row for `06-webview` reflects the current shipped phase (`Spec` → `In Progress` → `Done`).
+- [ ] 🟡 After Phase E ships, `CLAUDE.md` Architecture has a "Mutation pipeline" subsection covering `MutationDescriptor`, `MutationApplier`, `logs/mutations.jsonl`, and the registered kinds (`work-run` implemented; others reserved).
+- [ ] 🟡 After Phase E ships, `CLAUDE.md` Project Structure includes `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`.
+- [ ] 🟡 After Phase E ships, `CLAUDE.md` HTTP server lists `POST /api/mutations`, `GET /api/mutations`, `POST /api/mutations/:id/cancel`.
+
+## 10. Mutation pipeline & `/work --auto` runner (Phase E)
+
+### Mutation lifecycle
+
+- [ ] 🔴 `POST /api/mutations` with `{ kind: 'work-run', payload: { projectSlug } }` and valid auth creates a descriptor with `status: 'running'` (because `autoApprove: true`), appends a row to `logs/mutations.jsonl`, and returns 200 with the descriptor JSON.
+- [ ] 🔴 `POST /api/mutations` with an invalid payload (e.g., missing `projectSlug` or non-existent slug) returns 400 with the applier's `validate` reason as `{ error: <reason> }`.
+- [ ] 🔴 `POST /api/mutations` with an unknown `kind` returns 400 `{ error: 'unknown mutation kind: <kind>' }`.
+- [ ] 🔴 `POST /api/mutations` without auth returns 401.
+- [ ] 🔴 A descriptor that completes successfully transitions `running` → `completed` and appends a final JSONL line with `status: 'completed'` and `durationMs`.
+- [ ] 🟡 A descriptor whose applier yields `failed` transitions `running` → `failed` with the `error` field set; the JSONL final line carries the same.
+- [ ] 🟢 Two consecutive `POST /api/mutations` calls produce monotonically increasing `id` values (ulid sort order).
+
+### WorkRun execution
+
+- [ ] 🔴 `WorkRunApplier.apply` spawns `claude` with `--add-dir docs/projects/<slug>/`, `cwd: PROJECT_ROOT`, and a `-p` prompt that contains the project's `spec.md` and `tasks.md` text plus the literal `/work --auto` invocation.
+- [ ] 🔴 The spawned child is registered in `src/ai/claude.ts`'s `activeProcesses` set; SIGTERM via `killActiveProcesses()` (server shutdown path) terminates it cleanly.
+- [ ] 🔴 Stdout chunks are line-buffered and yielded as `MutationEvent { kind: 'output', data: { line } }`; the WS receives `{ kind: 'mutation-event', subKind: 'output', mutationId, ts, data }` frames.
+- [ ] 🔴 Exit code 0 yields `{ kind: 'completed', data: { exitCode: 0, durationMs } }` and transitions descriptor status to `completed`.
+- [ ] 🔴 Exit code non-zero yields `{ kind: 'failed', data: { exitCode, durationMs, error } }` and transitions to `failed`.
+- [ ] 🔴 `POST /api/mutations/:id/cancel` SIGTERMs the child within 5s; descriptor transitions to `failed` with `reason: 'cancelled'`.
+- [ ] 🟡 A second `POST /api/mutations` for the same `projectSlug` while the first is `running` is rejected by `validate` with `reason: 'already running for <slug>'`; returns 400.
+- [ ] 🟡 A third concurrent `work-run` across distinct projects is rejected when `WORK_RUN_GLOBAL_CAP = 2` with `reason: 'global concurrency cap reached'`.
+- [ ] 🟢 Stderr lines yield `{ kind: 'log', data: { line, stream: 'stderr' } }` and do not flip status.
+- [ ] 🟢 `claude` not in PATH at spawn time produces a `failed` event with `reason: 'claude CLI not found'` (ENOENT-shaped error caught in spawn `error` handler).
+
+### Project dashboard
+
+- [ ] 🟡 `getProjectSummaries()` returns one entry per `docs/projects/<slug>/spec.md` row in `index.md`; rows missing a corresponding directory are skipped.
+- [ ] 🟡 Progress count matches a manual count of `- [ ]` + `- [x]` lines in `tasks.md` for a representative project (e.g., `06-webview` itself).
+- [ ] 🟡 Status pill text matches the cell in the `index.md` table verbatim (`Done`, `Spec`, `In Progress`).
+- [ ] 🟢 Missing `tasks.md` produces `progress: { done: 0, total: 0 }` and a `warnings` entry; the panel renders "—" rather than crashing.
+- [ ] 🟢 Per-phase progress (`perPhase`) is populated when `tasks.md` contains `## Phase …` headers; otherwise it is omitted.
+
+### Webview UI
+
+- [ ] 🔴 Clicking "Run /work --auto" on a project row opens the confirmation modal with the slug in the prompt.
+- [ ] 🔴 Clicking `Run` in the modal POSTs `/api/mutations` with the correct `kind` and `payload`; clicking `Cancel` closes the modal without a network call.
+- [ ] 🔴 The run-detail drawer opens on click of an active or recent mutation row and renders streaming `output` events live.
+- [ ] 🟡 The active mutation's elapsed timer in the cockpit panel updates each second.
+- [ ] 🟡 The "Run /work --auto" button is disabled (and shows "Running…") for any project with a `running` mutation; re-enables on terminal status.
+- [ ] 🟡 The drawer's Cancel button calls `POST /api/mutations/:id/cancel`; the drawer's status indicator updates within 5s.
+- [ ] 🟢 Status pill colors render correctly (Done = green, Spec = grey, In Progress = blue, Failed = red) in cross-browser smoke (Safari + Chrome).
+
+### Resilience
+
+- [ ] 🔴 Server shutdown mid-run: `killActiveProcesses()` SIGTERMs `claude` children; `waitForActiveProcesses()` lets them exit; on next boot, `reconcileOrphans()` flips any `running` descriptor in the JSONL to `failed` with `reason: 'orphaned'`.
+- [ ] 🟡 Two browser tabs both clicking Run within the same second: the second POST returns 400 with `'already running for <slug>'`; UI surfaces the error inline and re-syncs to the active run on next state poll.
+- [ ] 🟡 Cancellation race (cancel arrives in same tick as `completed`): `cancelMutation` returns 409; UI re-syncs to terminal state on next poll.
+- [ ] 🟡 `logs/mutations.jsonl` corrupt line: reader skips with a warning and a byte-offset log entry; subsequent lines parse correctly; snapshot's `warnings` carries the count.
+- [ ] 🟢 Bus publishes `mutation-event` while no WS connection registered: drop silently (no error; no replay buffer); persisted JSONL is the source of truth for late-joiners.
+
+### Telegram fallback
+
+- [ ] 🟡 During a `/work --auto` run, TG receives exactly two messages — one on `completed` (✅ summary with duration) or one on `failed` (❌ summary with reason). No `output` / `progress` / `log` flood.
+- [ ] 🟢 TG message format: `✅ /work --auto on <slug> finished in <duration>` or `❌ /work --auto on <slug> failed: <reason>`.

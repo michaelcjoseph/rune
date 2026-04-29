@@ -122,6 +122,62 @@ Not started. See [spec.md](spec.md) for details.
 - [ ] (Optional) Add `surface: 'tg' | 'webview'` to `appendIntent()` calls so resolver telemetry distinguishes adoption per surface.
 - [ ] Update `CLAUDE.md` § **Review → post-agent flow**: note the structured approval-signal channel; webview renders buttons, TG renders prose.
 
+## Phase E — Mutation pipeline + project dashboard + `/work --auto` runner
+
+> Depends on: Phase C (snapshot infrastructure) and Phase D (bus event fan-out plumbing).
+
+### Mutation pipeline (framework)
+
+- [ ] Create `src/transport/mutations.ts`: `MutationKind` union (`'work-run' | 'project-edit' | 'proposal-action' | 'agent-edit' | 'cron-toggle'`); `MutationStatus`, `MutationDescriptor<P>`, `MutationEvent`, `MutationApplier<P>`, `ApplyContext` types; `registerApplier`, `getApplier`, `createMutation`, `cancelMutation` functions; in-memory `Map<id, RunHandle>` for active runs.
+- [ ] Create `src/jobs/mutations-log.ts`: append-only `logs/mutations.jsonl` reader/writer. `appendMutationLine`, `readRecentMutations(n)`, `reconcileOrphans()` (flip stale `running` → `failed` with `reason: 'orphaned'`).
+- [ ] Modify `src/transport/notification-bus.ts`: extend the event union to include `'mutation-event'` alongside existing `'message'` and `'agent-event'`.
+- [ ] Modify `src/transport/webview-sender.ts`: forward `'mutation-event'` bus messages to connected WS as `{ kind: 'mutation-event', mutationId, subKind, ts, data }` frames; drop silently when no WS registered.
+- [ ] Modify `src/transport/telegram-sender.ts`: on `'mutation-event'` with `subKind: 'completed'` or `'failed'`, send a one-line summary; ignore `output` / `progress` / `log` to avoid TG floods.
+- [ ] Modify `src/index.ts`: register `workRunApplier` at boot; call `reconcileOrphans()` before the bot starts polling.
+- [ ] Vitest: `src/transport/mutations.test.ts` — descriptor lifecycle (`pending` → `running` → `completed`), unknown-kind rejection, applier validation failures, cancellation flips status with `reason: 'cancelled'`.
+- [ ] Vitest: `src/jobs/mutations-log.test.ts` — append, read recent, skip corrupt line with warning, `reconcileOrphans` rewrites stale `running` rows.
+
+### `/work --auto` runner
+
+- [ ] Create `src/jobs/work-runner.ts`: exports `workRunApplier: MutationApplier<{ projectSlug: string }>`. Implements `validate` (project dir exists, `spec.md` present, no other run for slug, under global cap) and `apply` (spawns `claude --add-dir docs/projects/<slug>/ -p '<spec + tasks + /work --auto>'` from `PROJECT_ROOT`).
+- [ ] Reuse `activeProcesses` and `waitForActiveProcesses` from `src/ai/claude.ts` for graceful shutdown (no signature changes needed).
+- [ ] Implement stdout line-buffering: each newline-delimited chunk yields a `MutationEvent { kind: 'output', data: { line } }`; stderr yields `{ kind: 'log', data: { line, stream: 'stderr' } }`.
+- [ ] Implement exit handling: code 0 → `completed`; non-zero → `failed`; SIGTERM → `failed` with `reason: 'cancelled'` if `cancelMutation` was called, else `'killed'`.
+- [ ] Modify `src/config.ts`: add `WORK_RUN_PER_PROJECT_CAP` (default 1) and `WORK_RUN_GLOBAL_CAP` (default 2).
+- [ ] Vitest: `src/jobs/work-runner.test.ts` — stubbed `spawn`: assert spawn args include `--add-dir` and `cwd: PROJECT_ROOT`; stdout chunks become `output` events; exit 0 → `completed`; exit non-zero → `failed`; second concurrent run for same slug rejected by `validate`.
+
+### API endpoints
+
+- [ ] Modify `src/server/webview.ts`: add `POST /api/mutations` (auth → resolve applier → validate → create descriptor → start apply when `autoApprove` → 200 with descriptor).
+- [ ] Modify `src/server/webview.ts`: add `GET /api/mutations` (returns `{ active, recent }` from in-memory map + JSONL).
+- [ ] Modify `src/server/webview.ts`: add `POST /api/mutations/:id/cancel` (SIGTERM via in-memory `RunHandle`; 409 if mutation is already terminal).
+- [ ] Vitest: extend `src/server/webview.test.ts` — `POST /api/mutations` happy path; invalid `kind` → 400; unauthorized → 401; cancellation SIGTERMs within 5s in integration smoke; `GET /api/mutations` shape.
+
+### Project dashboard / state snapshot extension
+
+- [ ] Create `src/server/projects-snapshot.ts`: `getProjectSummaries()` parses `docs/projects/index.md` (status + slug from table) and each `docs/projects/<slug>/tasks.md` (count `- [ ]` + `- [x]`, group by `## Phase …` headers). Returns `ProjectSummary[]` with `{ slug, status, progress: { done, total, perPhase? }, specPath, lastModified }`.
+- [ ] Modify `src/server/state-snapshot.ts`: add `projects: getProjectSummaries()` and `mutations: { active, recent: readRecentMutations(50) }` to the snapshot. Include per-project warnings in the snapshot's `warnings` field on parse failure.
+- [ ] Vitest: `src/server/projects-snapshot.test.ts` — fixture `index.md` + per-project `tasks.md`: progress matches manual count, missing `tasks.md` produces `—`, malformed table cell handled cleanly.
+
+### Webview UI
+
+- [ ] Modify `src/server/static/app.js`: add Projects cockpit panel (row per project: slug + status pill + progress bar + spec link + "Run /work --auto" button); disable button when a `work-run` is `running` for that slug.
+- [ ] Modify `src/server/static/app.js`: add Mutations cockpit panel — Active (live elapsed timer + tail of last `output` line) and Recent (last 5 terminal entries).
+- [ ] Modify `src/server/static/app.js`: implement run-detail drawer that opens on click of an active or recent mutation row; subscribes to `mutation-event` frames matching its `mutationId`; reuses the chunk renderer from Phase D.
+- [ ] Modify `src/server/static/app.js`: implement confirmation modal triggered by "Run /work --auto" button click ("Run /work --auto on `<slug>`? Edits + commits without further confirmation. [Run] [Cancel]"); only `Run` POSTs to `/api/mutations`.
+- [ ] Modify `src/server/static/app.css`: drawer slide-in transition; modal overlay; progress bar; status pill colors (Done = green, Spec = grey, In Progress = blue, Failed = red).
+
+### Smoke + docs
+
+- [ ] Manual smoke: create a throwaway `docs/projects/99-sandbox/` with a trivial `spec.md` and `tasks.md` (e.g., "create `hello.txt`"); click "Run /work --auto"; confirm modal; watch streaming output in the drawer; on completion, verify `hello.txt` exists on a `work/99-sandbox-<ts>` branch and the row's progress reflects ticked checkboxes.
+- [ ] Manual smoke: kick off a long-running `work-run`, click Cancel; verify SIGTERM lands within 5s and the status flips to `failed` with `reason: 'cancelled'`.
+- [ ] Manual smoke: kill `npm run dev` mid-run; restart; confirm `reconcileOrphans()` flips the orphaned descriptor to `failed` with `reason: 'orphaned'` and the recent panel surfaces it.
+- [ ] Update `CLAUDE.md`:
+  - **Architecture** section: add a "Mutation pipeline" subsection describing the `MutationDescriptor` + `MutationApplier` shape, the `logs/mutations.jsonl` log, and the registered kinds (with `work-run` as the only implemented one in this phase).
+  - **Project Structure** section: add `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`.
+  - **HTTP server** section: list `POST /api/mutations`, `GET /api/mutations`, `POST /api/mutations/:id/cancel`.
+- [ ] Update `docs/projects/index.md`: 06-webview row's status reflects shipped phase; description mentions the mutation pipeline + `/work --auto` runner.
+
 ## Cross-cutting
 
 - [ ] Decide on cookie vs URL token for WS auth (Open Question, Phase B).
@@ -129,3 +185,5 @@ Not started. See [spec.md](spec.md) for details.
 - [ ] Confirm `OBSIDIAN_VAULT_NAME` default works for the user's actual vault registration; document override in CLAUDE.md.
 - [ ] Add `OBSIDIAN_VAULT_NAME` to `.env.local.example` if one exists.
 - [ ] Final docs sweep: grep for "Telegram-only" assumptions in CLAUDE.md and update where the webview now applies.
+- [ ] (Phase E) Confirm whether the `/work` skill itself manages branching off `main`. If not, add branch creation/teardown to `WorkRunApplier`.
+- [ ] (Phase E) Sketch design + risks for each future `MutationKind` (`project-edit`, `proposal-action`, `agent-edit`, `cron-toggle`) before opening the follow-on project.
