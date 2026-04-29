@@ -13,7 +13,6 @@ export interface MorningData {
   weeklyGoals: string;
   weeklyGoalsSource: string | null;
   priorities: string;
-  workout: string;
   study: string;
   writing: string;
   yesterdayFile: string;
@@ -35,11 +34,6 @@ function gatherWeeklyGoals(fridayFile: string): { goals: string; sourceFile: str
   const parsed = parseWeeklyGoals(content);
   if (!parsed?.trim()) return { goals: 'No weekly goals set.', sourceFile: null };
   return { goals: parsed.trim(), sourceFile: fridayFile };
-}
-
-function gatherWorkout(): string {
-  const content = readVaultFile('health/plan.md');
-  return content?.trim() || 'No workout plan found.';
 }
 
 function gatherStudy(): string {
@@ -76,10 +70,9 @@ export function formatMorningPrepFallback(data: MorningData): string {
   const weeklyGoals = truncateForFallback(data.weeklyGoals, goalsSourceHint, 10);
   const goalsHeader = `### Weekly Goals${buildGoalsSourceLabel(data.weeklyGoalsSource)}`;
   const priorities = truncateForFallback(data.priorities, 'journals/<yesterday>.md #priorities', 15);
-  const workout = truncateForFallback(data.workout, 'health/plan.md', 10);
   const study = truncateForFallback(data.study, 'study/syllabus.md, study/progress.json', 10);
   const writing = truncateForFallback(data.writing, 'writing/topics.md', 10);
-  return `${goalsHeader}\n${weeklyGoals}\n\n### Priorities Recap\n${priorities}\n\n### Workout\n${workout}\n\n### Study\n${study}\n\n### Writing Focus\n${writing}`;
+  return `${goalsHeader}\n${weeklyGoals}\n\n### Priorities Recap\n${priorities}\n\n### Study\n${study}\n\n### Writing Focus\n${writing}`;
 }
 
 function formatSourceDate(filename: string): string {
@@ -109,9 +102,6 @@ ${data.weeklyGoals}
 **Yesterday's Priorities:**
 ${data.priorities}
 
-**Today's Workout (${data.dayOfWeek}):**
-${data.workout}
-
 **Study Assignments:**
 ${data.study}
 
@@ -125,9 +115,6 @@ ${goalsHeaderTemplate}
 
 ### Priorities Recap
 <bullet list of yesterday's priorities with brief status if inferable>
-
-### Workout
-<today's workout prescription — exercises, sets, reps, or rest day>
 
 ### Study
 <current assignments, progress, overdue items>
@@ -218,7 +205,6 @@ export function gatherMorningData(): MorningData {
     weeklyGoals: goals,
     weeklyGoalsSource: sourceFile,
     priorities: gatherPriorities(yesterdayFile),
-    workout: gatherWorkout(),
     study: gatherStudy(),
     writing: gatherWriting(),
     yesterdayFile,

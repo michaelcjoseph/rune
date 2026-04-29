@@ -77,7 +77,6 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(data.weeklyGoals).toBe('1. Ship Aura\n2. Sleep 8h');
     expect(data.weeklyGoalsSource).toBe('2026_04_03.md');
     expect(data.priorities).toBe('- Ship feature X\n- Review PRs');
-    expect(data.workout).toBe('Run 5k + stretching');
     expect(data.study).toBe('Chapter 7: Transformers\n\n{"chapter":6,"complete":true}');
     expect(data.writing).toBe('Draft: LLM orchestration patterns');
     expect(data.yesterdayFile).toBe('2026_04_08.md');
@@ -94,7 +93,6 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(data.weeklyGoals).toBe('No weekly goals set.');
     expect(data.weeklyGoalsSource).toBeNull();
     expect(data.priorities).toBe('No priorities logged yesterday.');
-    expect(data.workout).toBe('No workout plan found.');
     expect(data.study).toBe('No active study assignments.');
     expect(data.writing).toBe('No writing topic set.');
   });
@@ -198,7 +196,6 @@ const sampleData = {
   weeklyGoals: '1. Ship Aura\n2. Sleep 8h\n3. Build shelves',
   weeklyGoalsSource: '2026_04_03.md',
   priorities: '- Ship feature X\n- Review PRs',
-  workout: 'Run 5k + stretching',
   study: 'Chapter 7: Transformers',
   writing: 'Draft: LLM orchestration patterns',
   yesterdayFile: '2026_04_08.md',
@@ -212,13 +209,12 @@ const sampleDataNoGoals = {
 };
 
 describe('jobs/morning-prep — formatMorningPrepFallback', () => {
-  it('produces correct 5-section markdown with weekly goals header showing source date', () => {
+  it('produces correct 4-section markdown with weekly goals header showing source date', () => {
     const result = formatMorningPrepFallback(sampleData);
 
     expect(result).toBe(
       '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h\n3. Build shelves\n\n' +
       '### Priorities Recap\n- Ship feature X\n- Review PRs\n\n' +
-      '### Workout\nRun 5k + stretching\n\n' +
       '### Study\nChapter 7: Transformers\n\n' +
       '### Writing Focus\nDraft: LLM orchestration patterns'
     );
@@ -238,20 +234,6 @@ describe('jobs/morning-prep — formatMorningPrepFallback', () => {
 
     expect(goalsIdx).toBeGreaterThanOrEqual(0);
     expect(prioritiesIdx).toBeGreaterThan(goalsIdx);
-  });
-
-  it('truncates workout content exceeding the line cap and adds a source hint', () => {
-    const longWorkout = Array.from({ length: 50 }, (_, i) => `- exercise ${i}`).join('\n');
-    const data = { ...sampleData, workout: longWorkout };
-
-    const result = formatMorningPrepFallback(data);
-
-    // Fallback must be terse — no raw 50-line dump
-    expect(result).toContain('exercise 0');
-    expect(result).not.toContain('exercise 20');
-    expect(result).toContain('truncated');
-    expect(result).toContain('health/plan.md');
-    expect(result.length).toBeLessThan(2000);
   });
 
   it('truncates study content containing a raw JSON blob', () => {
@@ -299,7 +281,7 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('on Claude success, returns result.text with synthFailed=false', async () => {
-    const synthesized = '### Priorities Recap\n- Ship feature X (in progress)\n\n### Workout\n- Run 5k + stretching\n\n### Study\n- Chapter 7: Transformers\n\n### Writing Focus\n- LLM orchestration patterns draft';
+    const synthesized = '### Priorities Recap\n- Ship feature X (in progress)\n\n### Study\n- Chapter 7: Transformers\n\n### Writing Focus\n- LLM orchestration patterns draft';
     mockAskClaudeOneShot.mockResolvedValue({ text: synthesized, error: null });
 
     const result = await synthesizeMorningPrep(sampleData);

@@ -1,6 +1,6 @@
 ---
 name: morning-prep
-description: "Gathers vault data — priorities, calendar, recent journals, Whoop — and produces a structured morning journal section."
+description: "Gathers vault data — weekly goals, yesterday's priorities, study, writing — and produces a structured morning journal section."
 model: sonnet
 tools:
   - Read
@@ -31,19 +31,13 @@ Gather data from each source. If a source file doesn't exist or the expected con
 - **What to find**: Lines after the `#priorities` tag
 - **Fallback**: "No priorities logged yesterday."
 
-### 3. Today's Workout
-
-- **File**: `health/plan.md`
-- **What to find**: The workout prescription for today's day of week (passed in prompt, e.g., "Monday")
-- **Fallback**: "No workout plan found."
-
-### 4. Study Assignments
+### 3. Study Assignments
 
 - **Files**: `study/syllabus.md` and `study/progress.json`
 - **What to find**: Current assignments, due dates, and any overdue items
 - **Fallback**: "No active study assignments."
 
-### 5. Writing Focus
+### 4. Writing Focus
 
 - **File**: `writing/topics.md`
 - **What to find**: The first topic in the queue
@@ -59,9 +53,6 @@ Return structured markdown — no fences, no extra commentary. The Weekly Goals 
 
 ### Priorities Recap
 <bullet list of yesterday's priorities with brief status if inferable from journal context>
-
-### Workout
-<today's workout prescription — exercises, sets, reps, or rest day>
 
 ### Study
 <current assignments, progress, overdue items>

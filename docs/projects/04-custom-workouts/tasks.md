@@ -81,13 +81,13 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Morning prep cleanup
 
-- [ ] `src/jobs/morning-prep.ts`: drop `workout` field from `MorningData` interface
-- [ ] `src/jobs/morning-prep.ts`: remove `gatherWorkout()` function and its call site in `gatherMorningData()`
-- [ ] `src/jobs/morning-prep.ts`: remove `### Workout` from the fallback template (around line 82)
-- [ ] `src/jobs/morning-prep.ts`: remove `**Today's Workout (${data.dayOfWeek}):**` line and `### Workout` directive from the Claude synthesis prompt
-- [ ] `.claude/agents/morning-prep.md`: remove the "Today's Workout" data-source section
-- [ ] `.claude/agents/morning-prep.md`: update frontmatter `description` to drop the stale "Whoop" mention and the workout responsibility
-- [ ] Test: morning prep output (mock vault) renders all sections except `### Workout`
+- [x] `src/jobs/morning-prep.ts`: drop `workout` field from `MorningData` interface
+- [x] `src/jobs/morning-prep.ts`: remove `gatherWorkout()` function and its call site in `gatherMorningData()`
+- [x] `src/jobs/morning-prep.ts`: remove `### Workout` from the fallback template (around line 82)
+- [x] `src/jobs/morning-prep.ts`: remove `**Today's Workout (${data.dayOfWeek}):**` line and `### Workout` directive from the Claude synthesis prompt
+- [x] `.claude/agents/morning-prep.md`: remove the "Today's Workout" data-source section
+- [x] `.claude/agents/morning-prep.md`: update frontmatter `description` to drop the stale "Whoop" mention and the workout responsibility
+- [x] Test: morning prep output (mock vault) renders all sections except `### Workout`
 - [ ] Manual smoke: trigger `/prep` via Telegram on a dev run; confirm output renders correctly without the workout section
 
 ### Documentation
