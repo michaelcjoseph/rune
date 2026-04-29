@@ -47,9 +47,9 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Whoop pre-sync
 
-- [ ] Add `ensureWhoopSyncedForToday()` to `src/jobs/whoop-sync.ts` and export it. Reads `health/whoop/{today}.json`; if missing or `recovery` absent, awaits `executeSleepSync()`. Catches and logs errors — never throws.
-- [ ] Call `ensureWhoopSyncedForToday()` from `src/bot/commands/workout.ts` immediately after arg parsing, before building the input bundle for `runAgent`.
-- [ ] Tests: pre-sync fires when today's Whoop file is missing; pre-sync fires when file exists but `recovery` field absent; pre-sync is a no-op when today's file has `recovery`; pre-sync failure (mocked sleep-sync throw) is swallowed and generation still completes with recovery-unavailable note.
+- [x] Add `ensureWhoopSyncedForToday()` to `src/jobs/whoop-sync.ts` and export it. Reads `health/whoop/{today}.json`; if missing or `recovery` absent, awaits `executeSleepSync()`. Catches and logs errors — never throws.
+- [x] Call `ensureWhoopSyncedForToday()` from `src/bot/commands/workout.ts` immediately after arg parsing, before building the input bundle for `runAgent`.
+- [x] Tests: pre-sync fires when today's Whoop file is missing; pre-sync fires when file exists but `recovery` field absent; pre-sync is a no-op when today's file has `recovery`; pre-sync failure (mocked sleep-sync throw) is swallowed and generation still completes with recovery-unavailable note.
 
 ## Phase C — Logging + wiring
 

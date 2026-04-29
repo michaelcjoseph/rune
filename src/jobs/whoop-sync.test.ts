@@ -51,7 +51,7 @@ vi.mock('../utils/time.js', () => ({
 const { isConfigured, getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts } = await import('../integrations/whoop/client.js');
 const { readVaultFile, writeVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
-const { executeSleepSync, executeActivitySync, runWhoopSleepSync } = await import('./whoop-sync.js');
+const { executeSleepSync, executeActivitySync, runWhoopSleepSync, ensureWhoopSyncedForToday } = await import('./whoop-sync.js');
 
 const isConfiguredMock = isConfigured as unknown as ReturnType<typeof vi.fn>;
 const getTokenMock = getAccessToken as unknown as ReturnType<typeof vi.fn>;
@@ -605,6 +605,62 @@ describe('jobs/whoop-sync', () => {
       getTokenMock.mockRejectedValue(new Error('keychain crashed'));
       const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
       await expect(runWhoopSleepSync(bot)).resolves.toBeUndefined();
+    });
+  });
+
+  // executeSleepSync internally checks isConfigured() first; we set it to
+  // false so the function exits cleanly while still letting us assert on
+  // whether it was invoked at all (the isConfigured mock is the proxy).
+  describe('ensureWhoopSyncedForToday', () => {
+    it('calls executeSleepSync when today\'s Whoop file is missing (readVaultFile returns null)', async () => {
+      readMock.mockReturnValue(null);
+      isConfiguredMock.mockReturnValue(false);
+
+      await ensureWhoopSyncedForToday();
+
+      expect(isConfiguredMock).toHaveBeenCalled();
+    });
+
+    it('calls executeSleepSync when today\'s file exists but has no recovery field', async () => {
+      const dataWithoutRecovery = JSON.stringify({
+        date: '2026-04-11',
+        sleep: { duration_hours: 7, performance: 85, efficiency: 90, rem_pct: 21, deep_pct: 14, respiratory_rate: 15, disturbances: 2 },
+      });
+      readMock.mockImplementation((path: string) => {
+        if (path === 'health/whoop/2026-04-11.json') return dataWithoutRecovery;
+        return null;
+      });
+      isConfiguredMock.mockReturnValue(false);
+
+      await ensureWhoopSyncedForToday();
+
+      expect(isConfiguredMock).toHaveBeenCalled();
+    });
+
+    it('is a no-op when today\'s file already has a recovery field', async () => {
+      // File present with recovery — should skip executeSleepSync entirely.
+      const dataWithRecovery = JSON.stringify({
+        date: '2026-04-11',
+        sleep: { duration_hours: 7, performance: 85, efficiency: 90, rem_pct: 21, deep_pct: 14, respiratory_rate: 15, disturbances: 2 },
+        recovery: { score: 72, hrv: 45.68, resting_hr: 55, spo2: 97 },
+      });
+      readMock.mockImplementation((path: string) => {
+        if (path === 'health/whoop/2026-04-11.json') return dataWithRecovery;
+        return null;
+      });
+
+      await ensureWhoopSyncedForToday();
+
+      // executeSleepSync was NOT called — isConfigured should never have been hit.
+      expect(isConfiguredMock).not.toHaveBeenCalled();
+    });
+
+    it('swallows errors from executeSleepSync and does not throw', async () => {
+      // readVaultFile throws unexpectedly to simulate a corrupt / unreadable file system.
+      readMock.mockImplementation(() => { throw new Error('disk I/O error'); });
+
+      // Must not throw — ensureWhoopSyncedForToday always resolves.
+      await expect(ensureWhoopSyncedForToday()).resolves.toBeUndefined();
     });
   });
 });

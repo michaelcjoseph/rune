@@ -4,6 +4,7 @@ import { readVaultFile } from '../../vault/files.js';
 import { readEquipment } from '../../vault/equipment.js';
 import { readRecentWhoopDays } from '../../vault/whoop-recent.js';
 import { runAgent } from '../../ai/claude.js';
+import { ensureWhoopSyncedForToday } from '../../jobs/whoop-sync.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { toChicagoDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
@@ -167,8 +168,10 @@ export function extractStructured(markdown: string): object {
 
 /** Run the workout-generator agent end-to-end. Returns the markdown on
  *  success and `null` on agent failure (so the caller can decide how to
- *  surface the error). On success, persists `logs/last-workout.json`. */
+ *  surface the error). On success, persists `logs/last-workout.json`.
+ *  Pre-syncs today's Whoop recovery data first (best-effort, never blocks). */
 export async function generateWorkout(args: ParsedArgs): Promise<{ markdown: string } | { error: string }> {
+  await ensureWhoopSyncedForToday();
   const prompt = buildWorkoutPrompt(args);
   const result = await runAgent('workout-generator', prompt);
   if (!result.text) {

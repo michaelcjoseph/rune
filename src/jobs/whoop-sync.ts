@@ -158,6 +158,26 @@ export async function executeSleepSync(): Promise<WhoopSyncResult> {
   return { status: 'synced', date, detail: parts.join(' | ') };
 }
 
+/** Best-effort pre-sync used by user-triggered handlers (e.g. /workout) that
+ *  want today's recovery data in their context but cannot block on sync
+ *  failures. If today's `health/whoop/{date}.json` already has a `recovery`
+ *  field, this is a no-op (no redundant API call). Otherwise calls
+ *  `executeSleepSync()`. Errors and `error`-status results are caught + logged;
+ *  the caller can always proceed with whatever data is on disk. */
+export async function ensureWhoopSyncedForToday(): Promise<void> {
+  try {
+    const today = getTodayDate();
+    const existing = readDailyData(today);
+    if (existing.recovery) return;
+    const result = await executeSleepSync();
+    if (result.status === 'error') {
+      log.warn('ensureWhoopSyncedForToday: sleep sync errored', { detail: result.detail });
+    }
+  } catch (err) {
+    log.error('ensureWhoopSyncedForToday: unexpected failure', { error: String(err) });
+  }
+}
+
 export async function runWhoopSleepSync(bot: TelegramBot): Promise<void> {
   try {
     const result = await executeSleepSync();

@@ -50,6 +50,12 @@ vi.mock('../../utils/logger.js', () => ({
   }),
 }));
 
+const mockEnsureWhoopSyncedForToday = vi.fn().mockResolvedValue(undefined);
+
+vi.mock('../../jobs/whoop-sync.js', () => ({
+  ensureWhoopSyncedForToday: mockEnsureWhoopSyncedForToday,
+}));
+
 const {
   parseWorkoutArgs,
   buildWorkoutPrompt,
@@ -516,5 +522,19 @@ describe('handleWorkout — happy path', () => {
     expect(bot.sendMessage).toHaveBeenCalledOnce();
     const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('Workout generation failed');
+  });
+
+  it('calls ensureWhoopSyncedForToday before runAgent when handleWorkout runs', async () => {
+    const callOrder: string[] = [];
+    mockEnsureWhoopSyncedForToday.mockImplementation(async () => { callOrder.push('ensureWhoop'); });
+    mockRunAgent.mockImplementation(async () => { callOrder.push('runAgent'); return { text: '# Workout', error: null }; });
+    mockSendLongMessage.mockResolvedValue(undefined);
+
+    const bot = mockBot();
+    await handleWorkout(bot, CHAT_ID, 'gym strength');
+
+    expect(mockEnsureWhoopSyncedForToday).toHaveBeenCalledOnce();
+    expect(mockRunAgent).toHaveBeenCalledOnce();
+    expect(callOrder).toEqual(['ensureWhoop', 'runAgent']);
   });
 });
