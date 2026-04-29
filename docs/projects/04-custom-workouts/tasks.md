@@ -9,7 +9,7 @@ Not started. See [spec.md](spec.md) for details.
 ### Vault seed files
 
 - [x] Create `health/equipment.md` in vault with `## Home` and `## Gym` sections. Seed Home from existing `plan.md` equipment lines (adjustable kettlebells, barbell + plates). Gym section can start empty or with a placeholder — hand-fill after next gym visit.
-- [ ] Create `health/exercises.md` in vault with four sections: `## Preferred`, `## Trying`, `## Benched`, `## Retired`. Seed `Preferred` from exercises that appear ≥ 3× in the last 30 days of `workouts.json`. Each bullet: `- <name> — <short note>` (benched entries include a dated reason).
+- [x] Create `health/exercises.md` in vault with four sections: `## Preferred`, `## Trying`, `## Benched`, `## Retired`. Seed `Preferred` from exercises that appear ≥ 3× in the last 30 days of `workouts.json`. Each bullet: `- <name> — <short note>` (benched entries include a dated reason).
 
 ### Vault read helpers
 
