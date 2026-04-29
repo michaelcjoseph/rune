@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts",
-    "intent-scan": "tsx --env-file-if-exists=.env.local scripts/run-intent-scan.ts"
+    "intent-scan": "tsx --env-file-if-exists=.env.local scripts/run-intent-scan.ts",
+    "library-backfill": "tsx --env-file-if-exists=.env.local scripts/library-backfill.ts"
   },
   "engines": {
     "node": ">=22"

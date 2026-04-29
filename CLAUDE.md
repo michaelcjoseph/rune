@@ -123,7 +123,8 @@ evals/
 scripts/
 ├── run-evals.ts             # Dev tool: parse eval YAMLs, invoke agents via runAgent(), report pass/fail
 ├── run-evals.test.ts        # Unit tests for the eval runner (vitest)
-└── run-intent-scan.ts       # CLI entry point for intent-scan job (npm run intent-scan)
+├── run-intent-scan.ts       # CLI entry point for intent-scan job (npm run intent-scan)
+└── library-backfill.ts      # CLI entry point for bulk library-to-KB backfill (npm run library-backfill)
 ```
 
 ## Vault Content Model
@@ -193,7 +194,8 @@ Mutable sources (world-view, playbook, active projects, journals) **overwrite** 
 npm run dev          # Development with tsx watch mode
 npm run start        # Production
 npm run cli          # Local CLI interface
-npm run intent-scan  # Run Ask-Twice intent scan manually
+npm run intent-scan       # Run Ask-Twice intent scan manually
+npm run library-backfill  # Bulk-ingest library entries into the KB (project 05)
 ```
 
 ## Environment Variables

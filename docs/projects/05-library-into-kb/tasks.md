@@ -17,9 +17,9 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Backfill script + npm wiring
 
-- [ ] Add `scripts/library-backfill.ts`. Walks `library/{lennys-podcast,graham-essays,lenny}/**/*.md` via `fs.readdirSync` recursive, calls `enqueue(path)` for each, prints final count. Mirror the style of `scripts/run-intent-scan.ts` (env loading, structured logger, exit code).
-- [ ] Add npm script in `package.json`: `"library-backfill": "tsx --env-file-if-exists=.env.local scripts/library-backfill.ts"`
-- [ ] Confirm `enqueue()` in `src/kb/queue.ts` is idempotent for duplicate paths before relying on backfill safety; if not, add dedupe in the script
+- [x] Add `scripts/library-backfill.ts`. Walks `library/{lennys-podcast,graham-essays,lenny}/**/*.md` via `fs.readdirSync` recursive, calls `enqueue(path)` for each, prints final count. Mirror the style of `scripts/run-intent-scan.ts` (env loading, structured logger, exit code).
+- [x] Add npm script in `package.json`: `"library-backfill": "tsx --env-file-if-exists=.env.local scripts/library-backfill.ts"`
+- [x] Confirm `enqueue()` in `src/kb/queue.ts` is idempotent for duplicate paths before relying on backfill safety; if not, add dedupe in the script
 
 ### Smoke test
 
