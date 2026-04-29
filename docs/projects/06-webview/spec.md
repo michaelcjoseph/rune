@@ -31,7 +31,7 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 - **Browser push notifications outside the open tab.** Outbound notifications still go to TG (which has its own push); the webview only sees them when the tab is open and the WebSocket is connected. If you want a push from your laptop, TG desktop already does that.
 - **Vault file browser.** Tempting, but a slippery slope toward duplicating Obsidian. Wikilinks resolve to Obsidian; we don't host the file viewer.
 - **Message-history persistence across page refresh.** v1: refresh = empty chat, but the underlying Claude session is preserved (next message resumes). Adding a server-side message log is deferred to v1.1.
-- **LAN access from the phone.** Listener stays bound to `127.0.0.1`. Exposing it requires real auth (not just a shared secret) and is out of scope.
+- **LAN access from the phone, or any off-tailnet device.** Listener stays bound to `127.0.0.1`. Laptop access in a headless Mac mini deployment is supported via a Tailscale Serve front-end that terminates TLS on the tailnet edge and proxies to `127.0.0.1:3847` (see **Deployment** below). Off-tailnet exposure — public internet, cellular, an arbitrary LAN device — would require real auth (not just a shared secret) and is out of scope.
 - **Frontend build pipeline.** No Vite, no React, no node_modules for the frontend. `markdown-it` and `highlight.js` load from a CDN; everything else is hand-written HTML/JS/CSS.
 - **Editing arbitrary vault files from the webview.** The Phase E mutation pipeline only writes through registered `MutationApplier` handlers; nothing writes outside what an applier declares as its target. No generic "edit any file" surface in v1.
 - **Replacing the review-time post-agents.** `proposal-updater`, `project-updater`, `playbook-updater`, `worldview-updater`, `psychology-updater`, `json-updater`, `daily-content-updater` continue to run after reviews exactly as today. Phase E is a parallel surface for chat-driven mutations, not a migration of the review pipeline.
@@ -221,7 +221,7 @@ upgrades succeed.
 | Frontend stack | **Vanilla HTML/JS/CSS**, served from `src/server/static/`. `markdown-it` + `highlight.js` from a CDN. No build step, no `node_modules` for the frontend. Matches Jarvis's no-build-step ethos. |
 | Session key | Webview uses `TELEGRAM_USER_ID` as the `chatId` so the existing session map is shared verbatim. No schema change to `src/vault/sessions.ts`. |
 | Auth | Shared bearer (`JARVIS_HTTP_SECRET`). On first load, client supplies it as `?token=…`; server sets a `jarvis-auth` cookie (HttpOnly, SameSite=Strict). Cookie is checked on `/api/*` and the WS upgrade. Localhost + single-user — sufficient. |
-| Listener binding | Stays at `127.0.0.1:3847`. No LAN exposure in v1. |
+| Listener binding | Stays at `127.0.0.1:3847` always — Jarvis itself never binds to a public interface. For the headless Mac mini deployment, a Tailscale Serve front-end terminates TLS at `https://<host>.tail-xxxx.ts.net` and proxies to `127.0.0.1:3847`; the laptop hits the tailnet origin. See **Deployment** below. |
 | Cockpit data delivery | `GET /api/state` polled every 5s for the snapshot panels. Live agent-run events streamed over the WS as a separate frame `kind` (Phase D). Two channels because the snapshot is cheap and the live stream needs sub-second latency. |
 | Approval-button signal shape | Sidecar field on the WS frame: `{ kind: 'message', text, approval?: { prompt, options } }`. Webview renders buttons when `approval` is present; TG ignores it (text fallback). |
 | Static-asset hosting | Files on disk under `src/server/static/`, served by a small static-file handler in `src/server/webview.ts`. Path-traversal guard. Hot edit during dev = page refresh, no restart. |
@@ -254,7 +254,7 @@ upgrades succeed.
 11. WHEN a WS upgrade is requested at `/api/ws` with valid auth THEN the connection is registered with `WebviewSender` keyed by `TELEGRAM_USER_ID`.
 12. WHEN `GET /api/state` is hit with valid auth THEN it returns the cockpit snapshot: `{ activeSession, activeReview, ingestionQueueDepth, recentAgentRuns, pendingApprovals: { playbook, proposal }, lastMorningPrepAt, lastNightlyAt, ready }`.
 13. WHEN any `/api/*` endpoint or WS upgrade receives a request without a valid `jarvis-auth` cookie or `Authorization: Bearer <JARVIS_HTTP_SECRET>` header THEN it returns 401.
-14. WHEN any new endpoint receives a request whose `Host` header is neither `localhost` nor `127.0.0.1` THEN it returns 403 (defense in depth on top of the listener binding).
+14. WHEN any new endpoint receives a request whose `Host` header (port stripped) is not in `JARVIS_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) THEN it returns 403 (defense in depth on top of the listener binding). The allowlist is configurable so a Tailscale Serve front-end's MagicDNS hostname can be admitted in a headless Mac mini deployment without binding Jarvis to a public interface.
 15. WHEN multiple WS connections claim `TELEGRAM_USER_ID` simultaneously THEN all receive outbound frames; inbound frames are processed serially through the shared session (no extra locking — the existing `sessionLocks` map in `src/ai/claude.ts` already serializes Claude CLI calls).
 16. WHEN the bot is not yet ready THEN `/api/state` returns 503 with `{ ready: false, reason }` and the WS upgrade returns 503.
 
@@ -324,6 +324,53 @@ upgrades succeed.
 60. WHEN two webview tabs both POST a `work-run` for the same project within the same second THEN the first wins; the second's `validate` fails with `reason: 'already running for <slug>'`.
 61. WHEN the cockpit's "Run /work --auto" button is clicked THEN the frontend renders a confirmation modal with the slug, the spawn command summary, and `[Run] [Cancel]`; only `Run` triggers `POST /api/mutations`. The modal is a UI affordance only; server-side `autoApprove: true` is unchanged.
 62. WHEN a `work-run` mutation is `running` THEN the corresponding project row's button is disabled and shows "Running…" until the descriptor transitions to a terminal status.
+
+### Remote access (deployment)
+
+63. WHEN the auth-bootstrap handler sets the `jarvis-auth` cookie THEN it sets `Secure` iff the request arrived with `X-Forwarded-Proto: https` AND the immediate peer (`req.socket.remoteAddress`) is `127.0.0.1` / `::1`. `HttpOnly` and `SameSite=Strict` are set unconditionally. Trusting `X-Forwarded-Proto` from any other peer would be a header-spoofing bug, so the proxy hop is only honoured for the localhost-loopback case (which is exactly the Tailscale Serve topology).
+64. WHEN `JARVIS_ALLOWED_HOSTS` is parsed at startup THEN the value is split on commas, each entry is trimmed and lower-cased, and the result is held as a `Set<string>` queried by the Host-header guard (requirement 14). An empty / unset env var falls back to `localhost,127.0.0.1`.
+
+---
+
+## Deployment
+
+### Headless Mac mini + laptop access (Tailscale Serve)
+
+Goal: reach the webview from a laptop while Jarvis runs unattended on a Mac mini, without giving up the localhost-only listener binding and without standing up real OAuth.
+
+**Why Tailscale Serve specifically:** Jarvis stays bound to `127.0.0.1`, so even if the macOS application firewall is off, port 3847 remains unreachable from the home LAN. Tailscale Serve proxies the tailnet origin (`https://mac-mini.tail-xxxx.ts.net`) to `127.0.0.1:3847` over the loopback interface; the wire between laptop and Mac mini is encrypted by WireGuard and the browser hop is HTTPS, which lets the auth cookie carry the `Secure` flag.
+
+**On the Mac mini (one-time setup):**
+
+```sh
+brew install --cask tailscale
+open -a Tailscale            # sign in to your tailnet
+tailscale serve --bg --https=443 http://127.0.0.1:3847
+```
+
+Confirm the published origin with `tailscale serve status`.
+
+**Configure Jarvis (`.env.local`):**
+
+```
+JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
+```
+
+(Replace `mac-mini.tail-xxxx.ts.net` with the actual MagicDNS name from `tailscale status`. Anything not in this list is rejected by requirement 14.)
+
+**On the laptop:** install Tailscale, sign in to the same tailnet. First load: `https://mac-mini.tail-xxxx.ts.net/?token=<JARVIS_HTTP_SECRET>` — the page exchanges the token for the `jarvis-auth` cookie (set with `Secure; HttpOnly; SameSite=Strict` because the request arrived over forwarded HTTPS from `127.0.0.1`). Subsequent visits drop the `?token` query.
+
+**What stays the same:**
+
+- Jarvis binds to `127.0.0.1:3847`. No code path opens a public listener.
+- Auth is still the single shared `JARVIS_HTTP_SECRET`; the tailnet is the trust boundary, the cookie is the session-level convenience.
+- `requirement 14` (Host-header allowlist) enforces the tailnet hostname at the application layer in addition to the bind.
+
+**What's out of scope here:**
+
+- Daemonising Jarvis itself on Mac mini boot (`launchd` plist) — separate concern; `tailscale serve --bg` already persists across reboots.
+- Off-tailnet access (cellular, public internet, an arbitrary LAN device) — needs real auth, deliberately deferred.
+- Self-signed certs / a local reverse proxy (nginx/Caddy) — Tailscale Serve already terminates TLS with a real `*.ts.net` cert.
 
 ---
 

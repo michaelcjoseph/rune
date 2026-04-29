@@ -45,7 +45,10 @@ Not started. See [spec.md](spec.md) for details.
   - `POST /api/chat` → auth check → dispatch via `webview-bootstrap.ts` → JSON `{ text, sessionId, model }`.
   - `WS /api/ws` upgrade → auth check → register on `WebviewSender`. On `message` frame → dispatch. On `close` → unregister.
   - `GET /api/state` → 503 if not ready, else 200 with `getStateSnapshot()` (Phase C wires this fully; Phase B returns a stub).
-  - 401 on missing/invalid auth; 403 on non-localhost `Host`.
+  - 401 on missing/invalid auth; 403 on Host header not in `JARVIS_ALLOWED_HOSTS` (port stripped before comparison).
+- [ ] Modify `src/config.ts`: add `JARVIS_ALLOWED_HOSTS` env var. Parsed at startup (split on `,`, trim + lower-case each entry) into a `Set<string>` exported alongside the rest of the config; default `localhost,127.0.0.1`.
+- [ ] Wire `JARVIS_ALLOWED_HOSTS` into the Host-guard in `src/server/webview.ts` (requirement 14). The guard runs before auth so a misrouted request never advances to the secret-comparison codepath.
+- [ ] In the `POST /api/auth-bootstrap` handler (cookie-set path): set `Secure` on the `jarvis-auth` cookie iff `req.headers['x-forwarded-proto'] === 'https'` AND `req.socket.remoteAddress` is `127.0.0.1` / `::1`. Always set `HttpOnly` and `SameSite=Strict`. (Requirement 63.)
 - [ ] Create `src/server/webview-bootstrap.ts`: extracted dispatch entrypoint that mirrors `handleTextMessage` but takes a plain `{ userId, text }` instead of a TG `Message`. Handles slash-command branch, review-active branch, resolver branch, freeform branch.
 - [ ] Modify `src/server/http.ts`: call `mountWebviewRoutes(...)` after the existing `/health`, `/capture-sessions`, `/oauth/whoop` routes.
 - [ ] Wire `src/transport/webview-sender.ts` for real: `register(userId, ws)`, `unregister(userId, ws)`, per-user fan-out on bus events.
@@ -74,7 +77,16 @@ Not started. See [spec.md](spec.md) for details.
   - **Architecture** section: mention webview as second transport sharing session via `TELEGRAM_USER_ID`.
   - **HTTP server** section: list new endpoints.
   - **Project Structure** section: add `src/server/static/`, `src/server/webview.ts`, `src/server/auth.ts`, `src/server/webview-bootstrap.ts`.
-  - **Environment Variables** section: document `OBSIDIAN_VAULT_NAME`.
+  - **Environment Variables** section: document `OBSIDIAN_VAULT_NAME` and `JARVIS_ALLOWED_HOSTS`.
+
+### Phase B.5 — Tailscale Serve deployment for headless Mac mini
+
+> Optional within Phase B; required before laptop access from a headless Mac mini. Acceptance: every step in the spec's **Deployment** subsection executes cleanly and the test-plan's "Remote access" tests pass.
+
+- [ ] On the Mac mini: install Tailscale (`brew install --cask tailscale`), sign in, run `tailscale serve --bg --https=443 http://127.0.0.1:3847`, capture the published origin from `tailscale serve status`.
+- [ ] Set `JARVIS_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname.
+- [ ] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie.
+- [ ] Run the "Remote access (Tailscale Serve)" tests in `test-plan.md` end-to-end and check off each item there.
 
 ## Phase C — Cockpit sidebar
 
