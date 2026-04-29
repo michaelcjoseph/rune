@@ -76,8 +76,8 @@ Not started. See [spec.md](spec.md) for details.
 
 ### CLI
 
-- [ ] Wire `workout` subcommand in `cli/jarvis.ts`: `npm run cli -- workout [home|gym] [focus]` invokes the same function as the TG handler and prints the markdown
-- [ ] Wire `done-workout` subcommand in `cli/jarvis.ts`: `npm run cli -- done-workout` invokes the same function and prints the journal append outcome
+- [x] Wire `workout` subcommand in `cli/jarvis.ts`: `npm run cli -- workout [home|gym] [focus]` invokes the same function as the TG handler and prints the markdown
+- [x] Wire `done-workout` subcommand in `cli/jarvis.ts`: `npm run cli -- done-workout` invokes the same function and prints the journal append outcome
 
 ### Morning prep cleanup
 

@@ -7,6 +7,8 @@ const COMMANDS: Record<string, string> = {
   lint: 'Run wiki health check',
   status: 'Show KB stats and system state',
   search: 'Search vault and wiki',
+  workout: 'Generate today\'s workout. Args: [home|gym] [mobility|endurance|strength|speed|power]',
+  'done-workout': 'Log the most recently generated workout to today\'s journal',
   nightly: 'Run the full nightly pipeline (commits + pushes). Default: today. Use `--date YYYY-MM-DD` to backfill. Add `--force` to re-run a date already marked processed.',
   help: 'Show this help text',
 };
@@ -78,6 +80,12 @@ async function main(): Promise<void> {
       break;
     case 'search':
       await cmdSearch(args);
+      break;
+    case 'workout':
+      await cmdWorkout(args);
+      break;
+    case 'done-workout':
+      await cmdDoneWorkout();
       break;
     case 'nightly':
       await cmdNightly(args);
@@ -216,6 +224,29 @@ async function cmdSearch(args: string[]): Promise<void> {
   for (const r of results) {
     console.log(`${r.file}:${r.line}  ${r.content.trim()}`);
   }
+}
+
+/** Stub a Telegram bot that prints `sendMessage` calls to stdout. Lets the
+ *  CLI reuse the TG handler functions verbatim — single source of truth for
+ *  workout generation and logging behavior. */
+function makeStdoutBot(): import('node-telegram-bot-api') {
+  return {
+    sendMessage: async (_chatId: number, text: string) => {
+      console.log(text);
+      return undefined as never;
+    },
+    sendChatAction: async () => undefined as never,
+  } as unknown as import('node-telegram-bot-api');
+}
+
+async function cmdWorkout(args: string[]): Promise<void> {
+  const { handleWorkout } = await import('../src/bot/commands/workout.js');
+  await handleWorkout(makeStdoutBot(), 0, args.join(' '));
+}
+
+async function cmdDoneWorkout(): Promise<void> {
+  const { handleDoneWorkout } = await import('../src/bot/commands/done-workout.js');
+  await handleDoneWorkout(makeStdoutBot(), 0);
 }
 
 async function cmdNightly(args: string[]): Promise<void> {
