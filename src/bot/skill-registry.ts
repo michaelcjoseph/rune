@@ -74,8 +74,23 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
   },
   {
     name: 'workout',
-    description: 'Today\'s workout prescription.',
-    triggers: ['what\'s my workout', 'lift today'],
+    description: 'Generates a tailored daily workout from goals, equipment, recent training, and Whoop recovery.',
+    triggers: [
+      'give me a workout',
+      'what should I train today',
+      'I\'m at the gym what should I do',
+      'design me a session',
+    ],
+  },
+  {
+    name: 'done-workout',
+    description: 'Logs the most recently generated workout to today\'s journal with a #workout tag.',
+    triggers: [
+      'workout done',
+      'mark workout complete',
+      'log my workout',
+      'I finished my workout',
+    ],
   },
   {
     name: 'study',

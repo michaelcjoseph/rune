@@ -68,11 +68,11 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Handler + registry wiring
 
-- [ ] Register `/done-workout` in `src/bot/handlers/text.ts` alongside `/workout`
-- [ ] Add triggers for both commands in `src/bot/skill-registry.ts`:
+- [x] Register `/done-workout` in `src/bot/handlers/text.ts` alongside `/workout`
+- [x] Add triggers for both commands in `src/bot/skill-registry.ts`:
   - `workout`: "give me a workout", "what should I train today", "I'm at the gym what should I do", "design me a session"
   - `done-workout`: "workout done", "mark workout complete", "log my workout", "I finished my workout"
-- [ ] Ensure existing `/workout` plan-reading behavior is fully removed (not gated behind a flag)
+- [x] Ensure existing `/workout` plan-reading behavior is fully removed (not gated behind a flag)
 
 ### CLI
 

@@ -14,6 +14,7 @@ import { handleKB } from '../commands/kb.js';
 import { handleIngest } from '../commands/ingest.js';
 import { handlePriorities } from '../commands/priorities.js';
 import { handleWorkout } from '../commands/workout.js';
+import { handleDoneWorkout } from '../commands/done-workout.js';
 import { handleStudy } from '../commands/study.js';
 import { handleFamily } from '../commands/family.js';
 import { handleCareer } from '../commands/career.js';
@@ -59,6 +60,8 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/quarterly')) return handleQuarterly(bot, chatId, text.slice('/quarterly'.length).trim());
   if (text.startsWith('/yearly')) return handleYearly(bot, chatId, text.slice('/yearly'.length).trim());
   if (text.startsWith('/priorities')) return handlePriorities(bot, chatId, text.slice('/priorities'.length).trim());
+  // /done-workout must come before /workout so the longer prefix wins.
+  if (text.startsWith('/done-workout')) return handleDoneWorkout(bot, chatId);
   if (text.startsWith('/workout')) return handleWorkout(bot, chatId, text.slice('/workout'.length).trim());
   if (text.startsWith('/study')) return handleStudy(bot, chatId);
   if (text.startsWith('/family')) return handleFamily(bot, chatId);
@@ -214,6 +217,7 @@ async function invokeSkill(
     case 'ingest': return handleIngest(bot, chatId, args);
     case 'priorities': return handlePriorities(bot, chatId, args);
     case 'workout': return handleWorkout(bot, chatId, args);
+    case 'done-workout': return handleDoneWorkout(bot, chatId);
     case 'study': return handleStudy(bot, chatId);
     case 'family': return handleFamily(bot, chatId);
     case 'career': return handleCareer(bot, chatId);
