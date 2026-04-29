@@ -84,6 +84,18 @@ export function listVaultFiles(relativeDir: string): string[] {
   return results;
 }
 
+/** List all entries (file + directory names) in a vault directory. Non-recursive.
+ *  Returns raw filenames with no extension filter. Missing dir → []. */
+export function listVaultDirEntries(relativeDir: string): string[] {
+  const fullDir = join(config.VAULT_DIR, relativeDir);
+  assertWithinVault(fullDir);
+  try {
+    return readdirSync(fullDir);
+  } catch {
+    return [];
+  }
+}
+
 /** Get file modification time. Returns null if file doesn't exist. */
 export function getFileModTime(relativePath: string): Date | null {
   const fullPath = join(config.VAULT_DIR, relativePath);
