@@ -12,7 +12,7 @@ A single Node.js process that combines a Telegram bot, an LLM-powered knowledge 
 
 **Run structured reviews.** Interview-based weekly, monthly, quarterly, and yearly reviews conducted through Telegram. Prep agents scan your journals and vault systems silently, then Claude conducts a real conversation — surfacing quotes, challenging narratives, and producing write-ups appended to your journal.
 
-**Automate daily operations.** Morning journal prep (priorities, workout, study plan, writing topic), end-of-day tag processing (`#books`, `#crm`, `#workout`, etc. to JSON data stores), nightly session capture, and review nudges on a schedule.
+**Automate daily operations.** Morning journal prep (priorities, study plan, writing topic), end-of-day tag processing (`#books`, `#crm`, `#workout`, etc. to JSON data stores), nightly session capture, and review nudges on a schedule.
 
 ## Architecture
 
@@ -74,7 +74,8 @@ A single Node.js process that combines a Telegram bot, an LLM-powered knowledge 
 | Command | Description |
 |---------|-------------|
 | `/priorities` | Today's priorities from yesterday's journal |
-| `/workout` | Today's workout prescription |
+| `/workout [home\|gym] [focus]` | Generate a tailored workout (warmup → main → cooldown) from goals, equipment, recent training, and Whoop recovery |
+| `/done-workout` | Append the last generated workout to today's journal with a `#workout` tag |
 | `/study` | Current study progress and assignments |
 | `/think <topic>` | Thinking partner mode |
 | `/health` | Health coaching session |
