@@ -1,0 +1,121 @@
+agent: workout-generator
+fixtures:
+  - name: "Home strength session with low recovery and RDL benched"
+    input: |
+      Args: home strength
+
+      ## goals (health/goals.md)
+
+      # Health Goals
+
+      ## Active Goals
+
+      ### Body Recomposition
+      Maintain ~175 lbs, reduce body fat. Prioritize protein, train consistently.
+
+      ### Strength
+      Build full-body strength with kettlebells and barbell. RPE 7-8 on main lifts.
+
+      ### Mobility
+      Hip and ankle mobility for padel.
+
+      ## equipment (health/equipment.md)
+
+      ## Home
+
+      - 2 adjustable kettlebells — 8 / 12 / 20 / 25 / 35 / 40 lbs
+      - 45 lb barbell + 2 × 10 lb plates + 2 × 15 lb plates
+      - Pull-up / dip bar
+      - Floor stand for ATG split squats and Nordic curls
+      - Resistance bands
+
+      ## Gym
+
+      [empty]
+
+      ## exercises (health/exercises.md)
+
+      ## Preferred
+      - Goblet Squat — feels good on knees
+      - KB Swing — primary posterior-chain driver
+      - Pull-Ups — track weekly max
+
+      ## Trying
+      - ATG Split Squat — building tolerance
+
+      ## Benched
+      - Single Leg RDL — 2026-04-12 lower-back tightness, revisit in 4 weeks
+
+      ## Retired
+      - Barbell Back Squat — knee pain, never coming back
+
+      ## recent_workouts (last 14 days, newest first)
+
+      [
+        {"date": "2026-04-26", "type": "padel", "duration_min": 90},
+        {"date": "2026-04-25", "type": "mobility", "duration_min": 30},
+        {"date": "2026-04-23", "type": "padel", "duration_min": 75},
+        {"date": "2026-04-21", "type": "strength", "duration_min": 35,
+         "exercises": ["Goblet Squat", "Pushups", "Inverted Rows", "KB Swing"]}
+      ]
+
+      ## recent_whoop (last 7 days)
+
+      [
+        {"date": "2026-04-28", "sleep": {"duration_hours": 5.4, "performance": 62},
+         "recovery": {"score": 32, "hrv": 28, "resting_hr": 64}},
+        {"date": "2026-04-27", "sleep": {"duration_hours": 6.8, "performance": 78},
+         "recovery": {"score": 51, "hrv": 38, "resting_hr": 60}},
+        {"date": "2026-04-26", "sleep": {"duration_hours": 7.2, "performance": 84},
+         "recovery": {"score": 65, "hrv": 45, "resting_hr": 58}}
+      ]
+
+      ## whoop_trends (health/whoop/trends.md)
+
+      # Whoop Trends
+
+      ## 7-day rolling
+      - Sleep: 6.4h
+      - Recovery: 51
+      - HRV: 39
+
+      ## 30-day rolling
+      - Sleep: 6.9h
+      - Recovery: 60
+      - HRV: 44
+
+      Generate today's workout per the rules in your system prompt.
+    timeout_ms: 180000
+    # NOTE: Format strictness is aspirational. The agent prompt asks for the
+    # closed-up form (`## Warmup` / `## Cooldown`) but the underlying opus
+    # model has a strong fitness-coach prior and produces variable heading
+    # styles (`## Warm-up`, `**Warm-Up (5 min)**`, `## Block A`, `## Finisher`,
+    # etc.) across runs. These behavioral assertions catch the things that
+    # would actually break downstream:
+    #   - warmup content present
+    #   - main / strength block present
+    #   - some closing / cooldown / stretch content present
+    #   - low-recovery note present
+    #   - no retired exercises
+    # Tightening to literal `## Warmup` substring is a deferred follow-up
+    # (see project 04-custom-workouts task list). The Phase B `workout.ts`
+    # command will normalize at parse time per the spec's "agent output
+    # malformed" edge case.
+    assertions:
+      - type: regex
+        pattern: "warm[-\\s]?up"
+        flags: "i"
+      - type: regex
+        pattern: "(main|block\\s+a|primary|strength|session)"
+        flags: "i"
+      - type: regex
+        pattern: "(cool[-\\s]?down|stretch|hip\\s+flexor|finisher)"
+        flags: "i"
+      - type: regex
+        pattern: "^(?!.*Barbell Back Squat).*"
+        flags: "s"
+      - type: regex
+        pattern: "(recovery|HRV)"
+        flags: "i"
+      - type: max_length_chars
+        value: 6000

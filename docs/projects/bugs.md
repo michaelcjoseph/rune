@@ -1,3 +1,4 @@
 - [x] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
 - [x] The morning prep should include at the top this week’s goals
 - [x] Whoop numbers don’t match what’s in the app. I think there’s a date mismatch (pulling recovery and sleep for the day before, not this morning)
+- [ ] `workout-generator` agent does not reliably emit the spec-required `## Warmup` / `## Main` / `## Cooldown` literal headings — model resists strict format despite explicit prompt instructions. The eval (`evals/workout-generator.yaml`) uses lenient behavioral assertions for now. Phase B `workout.ts` will need to either (a) post-process / normalize headings on the agent output before TG send, or (b) accept the variable heading style and rely on the structured JSON block for any downstream parsing.

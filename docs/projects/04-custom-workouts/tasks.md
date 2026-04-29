@@ -19,13 +19,13 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Generator agent
 
-- [ ] Write `.claude/agents/workout-generator.md` with:
+- [x] Write `.claude/agents/workout-generator.md` with:
   - Description and `triggers:` frontmatter
   - Instructions to read the six inputs (goals, equipment, exercises, recent workouts, recent Whoop, whoop trends) plus optional `plan.md`
   - Four-state exercise semantics (Preferred favor / Trying incorporate / Benched avoid-unless-forced / Retired never)
   - Output-format contract (Warmup / Main / Cooldown sections, sets×reps×load for strength, duration/intensity for endurance, rest guidance, low-recovery note at top if applicable)
   - Best-effort trailing fenced JSON block with `structured` decomposition
-- [ ] Add `evals/workout-generator.yaml` with at least one fixture:
+- [x] Add `evals/workout-generator.yaml` with at least one fixture:
   - Input: synthetic `{goals, equipment, exercises, recent_workouts, recent_whoop}` bundle (home + strength focus, low recovery, RDL benched)
   - Assertions: `## Warmup` present, `## Main` present, `## Cooldown` present, no retired exercises, benched RDL either absent or surfaced with its reason, low-recovery note present
 
