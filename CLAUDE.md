@@ -46,7 +46,8 @@ src/
 │       ├── think.ts         # /think — open-ended thinking session
 │       ├── health.ts        # /health — health review session
 │       ├── blog.ts          # /blog — blog post drafting session
-│       ├── workout.ts       # /workout — workout planning/review
+│       ├── workout.ts       # /workout — invoke workout-generator agent with goals/equipment/exercises/Whoop recovery; persist logs/last-workout.json; chunk-send markdown to TG; pre-syncs Whoop via ensureWhoopSyncedForToday()
+│       ├── done-workout.ts  # /done-workout — append most recent generated workout to today's journal
 │       ├── study.ts         # /study — study session planning
 │       ├── family.ts        # /family — family planning/review
 │       ├── career.ts        # /career — career reflection/planning
@@ -85,7 +86,7 @@ src/
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
 │   ├── nightly.ts           # Nightly orchestrator: capture → daily tags → birthday alerts → playbook extract → journal ingest → meeting extract → KB queue → whoop → lint → mark processed → commit
 │   ├── capture.ts           # Session capture logic (used by HTTP endpoint + nightly job)
-│   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends
+│   ├── whoop-sync.ts        # Whoop sleep sync (8am) + activity sync (nightly) + trends; ensureWhoopSyncedForToday() best-effort pre-sync for user-triggered handlers
 │   ├── playbook-extract.ts  # Scan today's journal for #playbook tags → draft entries into playbook-queue.json
 │   ├── meeting-extract.ts   # Scan today's journal for #meeting blocks → structured Meeting[] via askClaudeOneShot
 │   ├── book-summarizer.ts   # Generate 1-2 sentence book summary via askClaudeOneShot (returns null on UNKNOWN)
@@ -107,6 +108,8 @@ src/
 │   ├── learnings.ts         # /learn-authored JSONL store + prompt-prepend builder for runAgent
 │   ├── git.ts               # git add/commit/push helpers
 │   ├── sessions.ts          # TG session Map with JSON persistence + crash recovery
+│   ├── equipment.ts         # readEquipment() parses health/equipment.md into {home, gym} raw blocks
+│   ├── whoop-recent.ts      # readRecentWhoopDays(n) returns last n parsed WhoopDailyData from health/whoop/
 │   └── watcher.ts           # FSWatcher for Readwise article detection, TG notify + enqueue
 └── utils/
     ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, getRecentFilenames, etc.)
@@ -210,7 +213,7 @@ Optional:
 - `RESOLVER_CONFIDENCE_THRESHOLD` — minimum confidence for resolver to dispatch a skill (default `0.7`)
 - `RESOLVER_MIN_WORDS` — minimum word count before resolver runs (default `5`)
 
-`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored).
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`.
 
 ## Agents
 
@@ -236,6 +239,7 @@ Optional:
 | json-updater | `.claude/agents/json-updater.md` | Post-review / nightly: apply updates to JSON data stores |
 | daily-content-updater | `.claude/agents/daily-content-updater.md` | Nightly daily-tags: apply updates to markdown content stores (`health/nutrition.md`, `projects/ideas.md`, `writing/topics.md`) |
 | intent-scan | `.claude/agents/intent-scan.md` | Saturday 3pm cron: runs `npm run intent-scan` to process intent-log and write skill proposals |
+| workout-generator | `.claude/agents/workout-generator.md` | Generates a one-shot daily workout (warmup → main → cooldown) tailored to goals, equipment, recent training load, Whoop recovery, and exercise preferences |
 
 ### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
 

@@ -92,6 +92,6 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` `Agents` section: add `workout-generator` row under Runtime Agents
-- [ ] Update `CLAUDE.md` `Project Structure` section: add `src/bot/commands/done-workout.ts`, `src/vault/equipment.ts`, `src/vault/whoop-recent.ts`
-- [ ] Update `docs/projects/index.md`: add `04-custom-workouts` row with appropriate status
+- [x] Update `CLAUDE.md` `Agents` section: add `workout-generator` row under Runtime Agents
+- [x] Update `CLAUDE.md` `Project Structure` section: add `src/bot/commands/done-workout.ts`, `src/vault/equipment.ts`, `src/vault/whoop-recent.ts`
+- [x] Update `docs/projects/index.md`: add `04-custom-workouts` row with appropriate status
