@@ -30,7 +30,7 @@ vi.mock('../bot/skill-registry.js', () => ({
   getSkillRegistry: vi.fn(() => [
     { name: 'journal', kind: 'slash', description: 'Add to journal.' },
     { name: 'weekly', kind: 'slash', description: 'Weekly review.' },
-    { name: 'kb_query', kind: 'intent', description: 'Answer from KB.' },
+    { name: 'workout', kind: 'slash', description: 'Generate a workout.' },
   ]),
 }));
 
@@ -150,8 +150,8 @@ describe('buildScanPrompt', () => {
   });
 
   it('includes the known-skills list for dedupe hint', () => {
-    const prompt = buildScanPrompt([], ['journal', 'weekly', 'kb_query']);
-    expect(prompt).toContain('journal, weekly, kb_query');
+    const prompt = buildScanPrompt([], ['journal', 'weekly', 'workout']);
+    expect(prompt).toContain('journal, weekly, workout');
   });
 
   it('caps proposals via the MAX_PROPOSALS_PER_SCAN constant', () => {

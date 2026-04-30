@@ -24,7 +24,6 @@ import { handleWeekly } from '../commands/weekly.js';
 import { handleMonthly } from '../commands/monthly.js';
 import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
-import { handleThink } from '../commands/think.js';
 import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
 import { handleLenny } from '../commands/lenny.js';
@@ -66,7 +65,6 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/study')) return handleStudy(bot, chatId);
   if (text.startsWith('/family')) return handleFamily(bot, chatId);
   if (text.startsWith('/career')) return handleCareer(bot, chatId);
-  if (text.startsWith('/think')) return handleThink(bot, chatId, text.slice('/think'.length).trim());
   if (text.startsWith('/health')) return handleHealth(bot, chatId, text.slice('/health'.length).trim());
   if (text.startsWith('/blog')) return handleBlog(bot, chatId, text.slice('/blog'.length).trim());
   if (text.startsWith('/lenny')) return handleLenny(bot, chatId, text.slice('/lenny'.length).trim());
@@ -122,13 +120,13 @@ async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: str
       return false;
     }
 
-    // Top-2 within delta — ambiguous, note and fall through.
+    // Top-2 within delta — ambiguous, note and fall through. Skill names are
+    // shown as `/name` to the user; the registry now contains only slash + agent
+    // kinds, both of which are user-recognizable as commands.
     if (result.ambiguous) {
-      const primaryLabel = labelForSkill(registry, result.skill);
-      const secondaryLabel = labelForSkill(registry, result.second_skill!);
       await bot.sendMessage(
         chatId,
-        `Couldn't tell if you meant ${primaryLabel} or ${secondaryLabel}. Falling back to chat.`,
+        `Couldn't tell if you meant /${result.skill} or /${result.second_skill}. Falling back to chat.`,
       );
       logIntent(text, result, 'ambiguous', null);
       return false;
@@ -158,17 +156,6 @@ async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: str
   }
 }
 
-/** Produce a user-facing label for a skill in the ambiguity notice. Slash/agent
- *  entries use `/name` (the user recognizes these as commands); intent-kind
- *  entries have no matching slash command, so the description is shown
- *  instead. Falls back to the raw name if the entry is missing. */
-function labelForSkill(registry: SkillEntry[], name: string): string {
-  const entry = registry.find(s => s.name === name);
-  if (!entry) return `/${name}`;
-  if (entry.kind === 'intent') return entry.description;
-  return `/${name}`;
-}
-
 function logIntent(
   text: string,
   result: ClassifyResult,
@@ -195,9 +182,6 @@ async function invokeSkill(
   skill: SkillEntry,
   args: string,
 ): Promise<void> {
-  if (skill.kind === 'intent' && skill.name === 'kb_query') {
-    return handleKB(bot, chatId, args || message);
-  }
   if (skill.kind === 'agent') {
     const result = await runAgent(skill.name, args || message);
     if (result.error || !result.text) {
@@ -212,8 +196,6 @@ async function invokeSkill(
   // and admin (/status, /lint, /seed) commands are intentionally omitted.
   switch (skill.name) {
     case 'journal': return handleJournal(bot, chatId, args);
-    case 'ask': return handleAsk(bot, chatId, args || message);
-    case 'kb': return handleKB(bot, chatId, args || message);
     case 'ingest': return handleIngest(bot, chatId, args);
     case 'priorities': return handlePriorities(bot, chatId, args);
     case 'workout': return handleWorkout(bot, chatId, args);
@@ -227,7 +209,6 @@ async function invokeSkill(
     case 'monthly': return handleMonthly(bot, chatId, args);
     case 'quarterly': return handleQuarterly(bot, chatId, args);
     case 'yearly': return handleYearly(bot, chatId, args);
-    case 'think': return handleThink(bot, chatId, args);
     case 'health': return handleHealth(bot, chatId, args);
     case 'blog': return handleBlog(bot, chatId, args);
     case 'lenny': return handleLenny(bot, chatId, args || message);
@@ -242,12 +223,17 @@ async function invokeSkill(
 
 const VAULT_SYSTEM_PROMPT = `You are Jarvis, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
 
+DEFAULT POSTURE — thinking partner. Lean Socratic. For strategic, reflective, or open-ended questions, your first move is to ask before you answer. Don't solve the problem for them; help them clarify their own thinking. Open with one or two sharp probing questions grounded in something specific you found in their vault. After they respond, offer your view.
+
+For tactical or factual asks ("find Rory in my CRM", "what's my workout today", "who is X") — answer directly. Skip the thinking ritual. Be brief.
+
 VAULT MAP (read the relevant file(s), don't dump everything):
 - CLAUDE.md — identity, "About Me", vault folder structure, tag taxonomy, review cadence, command list. READ THIS FIRST when you don't already know the answer — it's the manifest.
 - world-view/world-view.md — the user's explicit belief synthesis across 8 domains (ai, crypto, energy, raw-materials, geopolitics, demographics, governance, education-healthcare). Each domain has a dedicated file in world-view/ with thesis + investment implications + changelog.
 - knowledge/index.md — 100+ curated wiki entities/concepts/topics compiled from their reading. Large file — grep or scan rather than full-read unless needed.
 - knowledge/schema.md — how the KB is organized (raw sources → compiled wiki pages).
 - pages/index.md, investments/index.md, health/index.md, career/index.md, study/index.md, writing/index.md — per-domain indices.
+- pages/{books,crm,places}.json, health/workouts.json, career/applications.json, investments/investments.json — structured JSON stores. For lookups against these, Read/Grep them directly; no synthesis needed.
 - journals/YYYY_MM_DD.md — daily notes (interstitial journaling).
 
 MCP TOOLS (jarvis-kb): kb_query (synthesized KB answer), kb_search (wiki search with type/tag filters), kb_stats (counts + recent log). Use for structured lookups when grep is awkward.
@@ -255,12 +241,14 @@ MCP TOOLS (jarvis-kb): kb_query (synthesized KB answer), kb_search (wiki search 
 WEB SEARCH (WebSearch, WebFetch): External-knowledge tools. Use them ACTIVELY when the question reaches outside the user's vault — current events, news, definitions, third-party docs/APIs, library behavior, market data, anything time-sensitive or factual that isn't already in their notes. Don't treat web as a last resort: if the question is genuinely about the world (not the user), web search is often the right first move alongside KB lookups. Cite sources inline (URL or article title) the way you cite [[wikilinks]] for vault content.
 
 HOW TO ANSWER:
-- Route by subject: questions about the user (worldview, investments, projects, frameworks) → vault/KB first. Questions about the world (current state, external facts, third-party tools/topics) → web first, vault second if relevant. Mixed questions (e.g., "how does X relate to my thesis on Y") → both, in parallel where possible.
-- For substantive questions about worldview, investments, projects, or thinking frameworks: READ the relevant index/page first, then answer with specifics grounded in the user's actual notes. Cite with [[wikilinks]] where appropriate.
-- Prefer sharp probing questions over generic clarifying questions. Generic prompts like "what's the current state? what flows in? what flows out?" are exactly what to avoid — they waste time re-eliciting context that's already in the vault. If you need clarification, anchor it to something concrete you found in the vault.
-- For tactical/operational asks: answer directly; don't over-fetch.
+- Pick the mode by question shape, not by length. Strategy/reflection/exploration → ask first. Lookup/tactical/factual → answer directly.
+- Route by subject: questions about the user (worldview, investments, projects, frameworks) → vault/KB first. Questions about the world (current state, external facts, third-party tools/topics) → web first, vault second if relevant. Mixed questions → both, in parallel where possible.
+- For substantive questions about worldview, investments, projects, or thinking frameworks: READ the relevant index/page first, then either probe (strategy) or answer with specifics (lookup). Cite with [[wikilinks]] where appropriate.
+- Probing questions should be specific, not generic. "What's the current state? what flows in?" is exactly what to avoid — it re-elicits context already in the vault. Anchor every question to something concrete you found.
+- Surface assumptions the user might be making. Name them explicitly.
 - Responses go to Telegram on mobile — be concise. Structure matters more than length.
-- Never write files. If the question implies a write, say so and point to the right slash command.`;
+- Never write files. If the question implies a write, say so and point to the right slash command.
+- The user can end the thread with /fresh, or by asking you to log the conversation to the journal.`;
 
 const CONVERSATION_TOOLS = [
   'Read',
@@ -297,7 +285,11 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
     }
 
     updateSession(chatId);
-    await sendLongMessage(bot, chatId, result.text!);
+    // Mode visibility: every conversation reply is suffixed so the user can
+    // tell at a glance they are in a multi-turn thread (vs. a routed task
+    // action, which has no such marker).
+    const reply = `${result.text!}\n\n_— chatting · /fresh to end_`;
+    await sendLongMessage(bot, chatId, reply);
   } catch (err) {
     stopTyping(typing);
     log.error('Conversation exception', { error: (err as Error).message });
@@ -381,7 +373,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
   const lines = [
     'Jarvis — Second Brain',
     '',
-    'Send any message to chat with your vault.',
+    'Send any message to start a multi-turn chat with your vault. Jarvis leans Socratic — expect questions before answers on strategy/reflection. /fresh ends the thread; logging to journal also ends it.',
     '',
     'Commands:',
     '/priorities — yesterday\'s priorities',
@@ -403,7 +395,6 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/learn-list — show current prepended learnings',
     '',
     'Sessions:',
-    '/think <topic> — thinking partner mode',
     '/health [focus] — health coaching session',
     '/blog <topic> — blog writing session',
     '',

@@ -25,7 +25,6 @@ vi.mock('../resolver.js', () => ({ classifyIntent: vi.fn() }));
 vi.mock('../skill-registry.js', () => ({
   getSkillRegistry: vi.fn(() => [
     { name: 'journal', kind: 'slash', description: 'Add to journal.' },
-    { name: 'kb_query', kind: 'intent', description: 'Answer from KB.' },
     { name: 'weekly', kind: 'slash', description: 'Weekly review.' },
     { name: 'family', kind: 'slash', description: 'Family mentions.' },
     { name: 'content-triager', kind: 'agent', description: 'Triage content.' },
@@ -55,7 +54,6 @@ vi.mock('../commands/family.js', () => ({ handleFamily: vi.fn() }));
 vi.mock('../commands/career.js', () => ({ handleCareer: vi.fn() }));
 vi.mock('../commands/workout.js', () => ({ handleWorkout: vi.fn() }));
 vi.mock('../commands/study.js', () => ({ handleStudy: vi.fn() }));
-vi.mock('../commands/think.js', () => ({ handleThink: vi.fn() }));
 vi.mock('../commands/health.js', () => ({ handleHealth: vi.fn() }));
 vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
 vi.mock('../commands/lenny.js', () => ({ handleLenny: vi.fn() }));
@@ -201,6 +199,29 @@ describe('text handler routing', () => {
     expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
   });
 
+  it('appends the mode-visibility footer to conversation replies', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const { sendLongMessage } = await import('../../integrations/telegram/client.js');
+    const sendLongMock = sendLongMessage as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'test-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'hi there!', error: null });
+
+    await handleTextMessage(mockBot(), msg('hello'));
+    const reply = sendLongMock.mock.calls.at(-1)?.[2] as string;
+    expect(reply).toContain('hi there!');
+    expect(reply).toContain('— chatting · /fresh to end');
+  });
+
   it('ignores empty text', async () => {
     const bot = mockBot();
     await handleTextMessage(bot, msg(''));
@@ -314,12 +335,20 @@ describe('resolver wiring in text handler', () => {
     expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, '11am, called dad');
   });
 
-  it('invokes handleKB for the synthetic kb_query intent', async () => {
+  it('falls through to conversation for KB-shaped questions (kb_query is no longer a route)', async () => {
+    // kb_query was removed from the registry; the classifier mock will likely
+    // return a non-existent skill name for KB-shaped messages, which the
+    // dispatcher must report as "failed" and let fall through to chat.
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'kb_query', args: 'what do I know about world models', confidence: 0.9 }),
     );
     await handleTextMessage(mockBot(), msg('what do I know about world models'));
-    expect(handleKB).toHaveBeenCalledWith(expect.anything(), 100, 'what do I know about world models');
+    expect(handleKB).not.toHaveBeenCalled();
+    expect(askClaudeWithContext).toHaveBeenCalled();
+    // The intent log records the failure so it is auditable.
+    const entry = vi.mocked(appendIntent).mock.calls[0]![0];
+    expect(entry.outcome).toBe('failed');
+    expect(entry.skill_invoked).toBe('kb_query');
   });
 
   it('invokes runAgent when the resolver returns an agent kind', async () => {
@@ -428,11 +457,11 @@ describe('resolver wiring in text handler', () => {
     expect(entry.skill_invoked).toBe('ghost-skill');
   });
 
-  it('uses the description (not a fake slash name) in the ambiguity notice for intent kinds', async () => {
+  it('shows slash labels for both skills in the ambiguity notice', async () => {
     const bot = mockBot();
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({
-        skill: 'kb_query',
+        skill: 'family',
         second_skill: 'journal',
         confidence: 0.72,
         second_confidence: 0.70,
@@ -441,9 +470,7 @@ describe('resolver wiring in text handler', () => {
     );
     await handleTextMessage(bot, msg('one two three four five six'));
     const notice = bot.sendMessage.mock.calls[0][1] as string;
-    // kb_query is an intent, not a slash — never show "/kb_query" to the user.
-    expect(notice).not.toContain('/kb_query');
-    expect(notice).toContain('Answer from KB.');
+    expect(notice).toContain('/family');
     expect(notice).toContain('/journal');
   });
 

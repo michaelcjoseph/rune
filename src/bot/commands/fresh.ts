@@ -33,30 +33,32 @@ export function parseKBWorthy(summary: string): { isKBWorthy: boolean; journalSu
   return { isKBWorthy, journalSummary };
 }
 
-export async function handleFresh(bot: TelegramBot, chatId: number): Promise<void> {
-  const session = getSession(chatId);
-  if (!session) {
-    await bot.sendMessage(chatId, 'No active conversation to summarize.');
-    return;
-  }
+export type CloseConversationResult =
+  | { ok: true; journalSummary: string; isKBWorthy: boolean }
+  | { ok: false; error: string };
 
-  const typing = startTyping(bot, chatId);
+/** Summarize the active conversation, append the summary to today's journal,
+ *  optionally enqueue it to the KB, commit, and delete the session. Used by
+ *  /fresh and by /journal (which closes the thread after a journal write).
+ *  Returns metadata so callers can surface a tailored confirmation. Never
+ *  throws — errors are returned as { ok: false }. */
+export async function closeConversation(chatId: number): Promise<CloseConversationResult> {
+  const session = getSession(chatId);
+  if (!session) return { ok: false, error: 'no-session' };
+
   try {
     const result = await summarizeSession(session.sessionId);
-    stopTyping(typing);
-
-    const ts = getTimestamp();
 
     if (result.error) {
       log.error('Summarize error', { error: result.error, sessionId: session.sessionId });
       deleteSession(chatId);
-      await bot.sendMessage(chatId, `Could not summarize conversation — session reset.\nError: ${result.error}`);
-      return;
+      return { ok: false, error: result.error };
     }
 
     const { isKBWorthy, journalSummary } = parseKBWorthy(result.text ?? '');
     log.info('Session classified', { sessionId: session.sessionId, isKBWorthy });
 
+    const ts = getTimestamp();
     const summaryLines = journalSummary.split('\n').map((l) => `\t- ${l}`).join('\n');
     const entry = `- ${ts} [[jarvis]] telegram chat\n${summaryLines}`;
     appendToJournal(entry);
@@ -67,16 +69,31 @@ export async function handleFresh(bot: TelegramBot, chatId: number): Promise<voi
     }
 
     await gitCommitAndPush('TG conversation logged');
-
     deleteSession(chatId);
-
-    const kbLabel = isKBWorthy ? '📚 Saved to KB sources for ingestion.' : '';
-    const message = `Conversation logged. Session reset.\n\n${journalSummary}${kbLabel ? '\n\n' + kbLabel : ''}`;
-    await bot.sendMessage(chatId, message);
+    return { ok: true, journalSummary, isKBWorthy };
   } catch (err) {
-    stopTyping(typing);
-    log.error('Fresh exception', { error: (err as Error).message });
+    log.error('closeConversation exception', { error: (err as Error).message });
     deleteSession(chatId);
-    await bot.sendMessage(chatId, `Error logging conversation: ${(err as Error).message}. Session reset.`);
+    return { ok: false, error: (err as Error).message };
   }
+}
+
+export async function handleFresh(bot: TelegramBot, chatId: number): Promise<void> {
+  const session = getSession(chatId);
+  if (!session) {
+    await bot.sendMessage(chatId, 'No active conversation to summarize.');
+    return;
+  }
+
+  const typing = startTyping(bot, chatId);
+  const result = await closeConversation(chatId);
+  stopTyping(typing);
+
+  if (!result.ok) {
+    await bot.sendMessage(chatId, `Could not summarize conversation — session reset.\nError: ${result.error}`);
+    return;
+  }
+
+  const kbLabel = result.isKBWorthy ? '\n\nSaved to KB sources for ingestion.' : '';
+  await bot.sendMessage(chatId, `Conversation logged. Session reset.\n\n${result.journalSummary}${kbLabel}`);
 }

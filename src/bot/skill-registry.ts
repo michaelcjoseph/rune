@@ -9,32 +9,28 @@ const log = createLogger('skill-registry');
 /** What kind of skill an entry represents.
  *  - 'agent'  — a markdown agent in .claude/agents/ invoked via runAgent()
  *  - 'slash'  — a hardcoded slash command handler in src/bot/handlers/text.ts
- *  - 'intent' — a synthetic semantic destination (e.g. kb_query) that maps to
- *               a code path rather than a single runAgent/handler call */
-export type SkillKind = 'agent' | 'slash' | 'intent';
+ *
+ *  Intent-kind synthetic destinations were removed when KB queries became a
+ *  capability of the default conversation handler instead of a routed skill. */
+export type SkillKind = 'agent' | 'slash';
 
 /** Few-shot example used to anchor the resolver's classification. */
 export interface SkillExample {
   message: string;
-  /** Kept separate from expected_skill for the kb_query matrix — the carried-
-   *  forward Project 02 matrix labels examples KB-shaped vs not, not all of
-   *  which route to kb_query (some fall through to journal, freeform, etc). */
-  kb_shaped?: boolean;
   /** Skill name this example should classify to; omit for negative fixtures. */
   expected_skill?: string;
 }
 
 export interface SkillEntry {
   /** Stable identifier used by the resolver + intent log. Matches agent name
-   *  for 'agent' kind, slash command name (sans `/`) for 'slash', or a free
-   *  identifier like 'kb_query' for 'intent'. */
+   *  for 'agent' kind, slash command name (sans `/`) for 'slash'. */
   name: string;
   kind: SkillKind;
   /** One-line description shown to the classifier. */
   description: string;
   /** Natural-language trigger phrases the classifier can match against. */
   triggers?: string[];
-  /** Few-shot examples (used for kb_query; optional otherwise). */
+  /** Few-shot examples (optional). */
   examples?: SkillExample[];
 }
 
@@ -49,18 +45,8 @@ export interface SkillEntry {
 export const SLASH_COMMAND_METADATA: readonly { name: string; description: string; triggers: string[] }[] = [
   {
     name: 'journal',
-    description: 'Append an entry to today\'s journal.',
-    triggers: ['add to my journal', 'log in journal', 'jot this down', 'note this'],
-  },
-  {
-    name: 'ask',
-    description: 'One-shot freeform vault query.',
-    triggers: ['ask the vault', 'quick question'],
-  },
-  {
-    name: 'kb',
-    description: 'Query the knowledge base for a synthesized answer with citations.',
-    triggers: ['search kb', 'look it up in my notes'],
+    description: 'Append an entry to today\'s journal. Also closes the active conversation thread.',
+    triggers: ['add to my journal', 'log in journal', 'jot this down', 'note this', 'log this conversation'],
   },
   {
     name: 'ingest',
@@ -138,11 +124,6 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['yearly review', 'annual review'],
   },
   {
-    name: 'think',
-    description: 'Open-ended thinking partner session.',
-    triggers: ['think through', 'help me reason about'],
-  },
-  {
     name: 'health',
     description: 'Health coaching session.',
     triggers: ['health check-in', 'coach me on health'],
@@ -179,35 +160,6 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
   },
 ] as const;
 
-/** Carried-forward `kb_query` intent from Project 02 Phase 4. The matrix below
- *  is reproduced verbatim from docs/projects/03-resolver/spec.md lines 274–283
- *  as few-shot examples. In the resolver, kb_query is one routed skill among
- *  many — the binary "is this KB-shaped" classifier expands to N-way. */
-export const KB_QUERY_ENTRY: SkillEntry = {
-  name: 'kb_query',
-  kind: 'intent',
-  description:
-    'Answer from the personal knowledge base — notes, beliefs, projects, reading, and conversations.',
-  triggers: [
-    'what did i think about',
-    'what do i know about',
-    'what did we decide about',
-    'remind me what i noted',
-    'who is',
-    'what did X say about',
-  ],
-  examples: [
-    { message: "What did Fred Wilson say about glp-1?", kb_shaped: true, expected_skill: 'kb_query' },
-    { message: "What do I know about world models?", kb_shaped: true, expected_skill: 'kb_query' },
-    { message: "Who runs Stripe these days?", kb_shaped: true, expected_skill: 'kb_query' },
-    { message: "Remind me what we decided about Y last sprint?", kb_shaped: true, expected_skill: 'kb_query' },
-    { message: "What time is sunset?", kb_shaped: false },
-    { message: "Add this to my journal: 11am, called dad.", kb_shaped: false, expected_skill: 'journal' },
-    { message: "Reply 'thanks' to that.", kb_shaped: false },
-    { message: "How are you?", kb_shaped: false },
-  ],
-};
-
 /** Minimal projection of AgentDef that buildSkillRegistry needs. Keeping this
  *  narrow lets the pure builder be tested without filesystem or loadAgentDef. */
 export interface AgentDefLite {
@@ -238,7 +190,6 @@ export function buildSkillRegistry(agents: AgentDefLite[]): SkillEntry[] {
       triggers: [...slash.triggers],
     });
   }
-  entries.push(KB_QUERY_ENTRY);
   return entries;
 }
 

@@ -53,7 +53,7 @@ vi.mock('../src/bot/resolver.js', () => ({
 vi.mock('../src/bot/skill-registry.js', () => ({
   getSkillRegistry: vi.fn(() => [
     { name: 'journal', kind: 'slash', description: 'Add to journal.' },
-    { name: 'kb_query', kind: 'intent', description: 'Answer from KB.' },
+    { name: 'workout', kind: 'slash', description: 'Generate a workout.' },
   ]),
 }));
 
@@ -444,19 +444,19 @@ describe('runFixture: resolver branch', () => {
 
   it('routes agent=resolver through classifyIntent, not runAgent', async () => {
     vi.mocked(classifyIntent).mockResolvedValue({
-      skill: 'kb_query',
-      args: '',
+      skill: 'workout',
+      args: 'home strength',
       confidence: 0.9,
       second_skill: null,
       second_confidence: 0,
       ambiguous: false,
-      raw: '{"skill":"kb_query"}',
+      raw: '{"skill":"workout"}',
     });
 
     const report = await runFixture('resolver', {
-      name: 'kb lookup',
-      input: 'what do I know about X',
-      assertions: [{ type: 'substring', value: '"skill":"kb_query"' }],
+      name: 'workout request',
+      input: 'design me a workout',
+      assertions: [{ type: 'substring', value: '"skill":"workout"' }],
     });
 
     expect(classifyIntent).toHaveBeenCalledTimes(1);

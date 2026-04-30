@@ -8,7 +8,7 @@ Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
 - **HTTP server** (localhost:3847) — health endpoint, session capture for nightly
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
-- **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + think/health/blog sessions
+- **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog sessions. Free-form Telegram messages default to a multi-turn Socratic chat (`handleConversation` in `src/bot/handlers/text.ts`) — `/fresh` or a journal write closes the thread.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages)
 
 All AI operations use Claude Code CLI (Max subscription, no API key needed). Custom agents in `.claude/agents/` handle structured KB operations (wiki-compiler, kb-query, wiki-linter).
@@ -27,13 +27,13 @@ src/
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
-│   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, KB_QUERY_ENTRY, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
+│   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
 │   ├── resolver.ts          # Classify free-form TG messages against skill registry via Haiku; returns ClassifyResult {skill, args, confidence, second_skill, second_confidence, ambiguous}
 │   └── commands/
-│       ├── fresh.ts         # /fresh — clear session, git commit
-│       ├── journal.ts       # /journal — append to today's journal
-│       ├── ask.ts           # /ask — freeform Claude question
-│       ├── kb.ts            # /kb — knowledge base query
+│       ├── fresh.ts         # /fresh — summarize active chat, append to journal, optionally enqueue KB-worthy summary, commit, reset session. Exports `closeConversation` helper reused by /journal.
+│       ├── journal.ts       # /journal — append literal entry to today's journal; if a chat session is active, also calls closeConversation (mirrors /fresh)
+│       ├── ask.ts           # /ask — one-shot freeform Claude question (legacy escape hatch; no longer a resolver route)
+│       ├── kb.ts            # /kb — one-shot knowledge base query (legacy escape hatch; no longer a resolver route)
 │       ├── ingest.ts        # /ingest — enqueue vault file for KB ingestion
 │       ├── status.ts        # /status — system health overview
 │       ├── prep.ts          # /prep — trigger morning prep
@@ -43,7 +43,6 @@ src/
 │       ├── monthly.ts       # /monthly — monthly review session
 │       ├── quarterly.ts     # /quarterly — quarterly review session
 │       ├── yearly.ts        # /yearly — yearly review session
-│       ├── think.ts         # /think — open-ended thinking session
 │       ├── health.ts        # /health — health review session
 │       ├── blog.ts          # /blog — blog post drafting session
 │       ├── workout.ts       # /workout — invoke workout-generator agent with goals/equipment/exercises/Whoop recovery; persist logs/last-workout.json; chunk-send markdown to TG; pre-syncs Whoop via ensureWhoopSyncedForToday()
@@ -66,7 +65,6 @@ src/
 │   ├── monthly.ts           # Monthly review handler
 │   ├── quarterly.ts         # Quarterly review handler
 │   ├── yearly.ts            # Yearly review handler
-│   ├── think.ts             # Think session handler
 │   ├── health.ts            # Health review handler
 │   └── blog.ts              # Blog drafting handler
 ├── server/

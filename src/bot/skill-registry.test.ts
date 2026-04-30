@@ -32,7 +32,6 @@ const {
   getSkillRegistry,
   reloadSkillRegistry,
   SLASH_COMMAND_METADATA,
-  KB_QUERY_ENTRY,
 } = await import('./skill-registry.js');
 const { readdirSync } = await import('node:fs');
 const { loadAgentDef, clearAgentDefCache } = await import('../ai/claude.js');
@@ -77,22 +76,12 @@ describe('buildSkillRegistry', () => {
     }
   });
 
-  it('appends the kb_query synthetic intent as the last entry', () => {
-    const entries = buildSkillRegistry([]);
-    const last = entries[entries.length - 1]!;
-    expect(last.name).toBe('kb_query');
-    expect(last.kind).toBe('intent');
-  });
-
-  it('kb_query entry carries the 8-row KB-shaped/non-KB matrix as examples', () => {
-    const entries = buildSkillRegistry([]);
-    const kb = entries.find(e => e.name === 'kb_query')!;
-    expect(kb.examples).toBeDefined();
-    expect(kb.examples).toHaveLength(8);
-    const positives = kb.examples!.filter(e => e.kb_shaped === true);
-    const negatives = kb.examples!.filter(e => e.kb_shaped === false);
-    expect(positives).toHaveLength(4);
-    expect(negatives).toHaveLength(4);
+  it('produces only agent and slash entries (no synthetic intents)', () => {
+    const entries = buildSkillRegistry([{ name: 'foo', triggers: ['do foo'] }]);
+    for (const entry of entries) {
+      expect(entry.kind).toMatch(/^(agent|slash)$/);
+    }
+    expect(entries.some(e => e.name === 'kb_query')).toBe(false);
   });
 });
 
@@ -113,17 +102,15 @@ describe('SLASH_COMMAND_METADATA', () => {
     const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
     // Smoke-check: if these disappear from the table, the resolver loses
     // visibility into Jarvis's most commonly-used capabilities.
-    for (const required of ['journal', 'ask', 'kb', 'weekly', 'family', 'learn']) {
+    for (const required of ['journal', 'weekly', 'family', 'learn', 'workout']) {
       expect(names.has(required), `missing slash metadata for /${required}`).toBe(true);
     }
   });
-});
 
-describe('KB_QUERY_ENTRY', () => {
-  it('positive (kb_shaped) examples all route to kb_query', () => {
-    const positives = KB_QUERY_ENTRY.examples!.filter(e => e.kb_shaped === true);
-    for (const ex of positives) {
-      expect(ex.expected_skill).toBe('kb_query');
+  it('does not advertise removed kb_query / think / kb / ask routes', () => {
+    const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
+    for (const removed of ['kb_query', 'think', 'kb', 'ask']) {
+      expect(names.has(removed), `${removed} should not be a resolver route`).toBe(false);
     }
   });
 });
@@ -137,13 +124,13 @@ describe('getSkillRegistry', () => {
     vi.mocked(loadAgentDef).mockReturnValue({ prompt: 'body', tools: [] });
   });
 
-  it('returns slash and kb_query entries even when no agents have triggers', () => {
+  it('returns only slash entries when no agents have triggers', () => {
     const entries = getSkillRegistry();
     const agents = entries.filter(e => e.kind === 'agent');
     expect(agents).toHaveLength(0);
     const slashes = entries.filter(e => e.kind === 'slash');
     expect(slashes.length).toBe(SLASH_COMMAND_METADATA.length);
-    expect(entries.some(e => e.name === 'kb_query')).toBe(true);
+    expect(entries.some(e => e.name === 'kb_query')).toBe(false);
   });
 
   it('includes agents whose frontmatter declares triggers', () => {
@@ -214,9 +201,9 @@ describe('getSkillRegistry', () => {
     }) as any);
 
     const entries = getSkillRegistry();
-    // Still produces slash + kb_query entries.
+    // Still produces slash entries even with no agents on disk.
     expect(entries.some(e => e.kind === 'slash')).toBe(true);
-    expect(entries.some(e => e.name === 'kb_query')).toBe(true);
+    expect(entries.some(e => e.name === 'kb_query')).toBe(false);
   });
 
   it('caches the registry across repeat calls (no second fs scan)', () => {

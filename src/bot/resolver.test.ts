@@ -42,13 +42,13 @@ const sampleRegistry = [
     triggers: ['add to my journal'],
   },
   {
-    name: 'kb_query',
-    kind: 'intent' as const,
-    description: 'Answer from the personal KB.',
-    triggers: ['what did I think about'],
+    name: 'workout',
+    kind: 'slash' as const,
+    description: 'Generate a tailored daily workout.',
+    triggers: ['give me a workout'],
     examples: [
-      { message: 'What do I know about X?', kb_shaped: true, expected_skill: 'kb_query' },
-      { message: 'How are you?', kb_shaped: false },
+      { message: 'Design me a workout for today', expected_skill: 'workout' },
+      { message: 'How are you?' },
     ],
   },
 ];
@@ -57,14 +57,14 @@ describe('buildResolverPrompt', () => {
   it('includes every skill name in the prompt', () => {
     const prompt = buildResolverPrompt('test', sampleRegistry);
     expect(prompt).toContain('journal');
-    expect(prompt).toContain('kb_query');
+    expect(prompt).toContain('workout');
   });
 
   it('emits trigger phrases and examples', () => {
     const prompt = buildResolverPrompt('test', sampleRegistry);
     expect(prompt).toContain('add to my journal');
-    expect(prompt).toContain('What do I know about X?');
-    expect(prompt).toContain('→ kb_query');
+    expect(prompt).toContain('Design me a workout for today');
+    expect(prompt).toContain('→ workout');
     expect(prompt).toContain('→ (not this skill)');
   });
 
@@ -90,14 +90,14 @@ describe('parseClassifyResponse', () => {
       skill: 'journal',
       args: '11am, called dad',
       confidence: 0.91,
-      second_skill: 'kb_query',
+      second_skill: 'workout',
       second_confidence: 0.2,
     });
     const result = parseClassifyResponse(raw);
     expect(result.skill).toBe('journal');
     expect(result.args).toBe('11am, called dad');
     expect(result.confidence).toBe(0.91);
-    expect(result.second_skill).toBe('kb_query');
+    expect(result.second_skill).toBe('workout');
     expect(result.second_confidence).toBe(0.2);
     expect(result.ambiguous).toBe(false);
   });
@@ -107,8 +107,8 @@ describe('parseClassifyResponse', () => {
       skill: 'journal',
       args: 'foo',
       confidence: 0.72,
-      second_skill: 'kb_query',
-      second_confidence: 0.70, // 0.02 apart — ambiguous
+      second_skill: 'workout',
+      second_confidence: 0.70,
     });
     const result = parseClassifyResponse(raw);
     expect(result.ambiguous).toBe(true);
@@ -216,8 +216,8 @@ describe('classifyIntent', () => {
   it('invokes the classifier with a prompt built from the registry and the short CLASSIFIER_TIMEOUT_MS', async () => {
     vi.mocked(mockCall).mockResolvedValue({
       text: JSON.stringify({
-        skill: 'kb_query',
-        args: 'X',
+        skill: 'workout',
+        args: 'home strength',
         confidence: 0.9,
         second_skill: null,
         second_confidence: 0,
@@ -225,13 +225,13 @@ describe('classifyIntent', () => {
       error: null,
     });
 
-    const result = await classifyIntent('what do I know about X', sampleRegistry);
+    const result = await classifyIntent('design me a workout for today', sampleRegistry);
     expect(mockCall).toHaveBeenCalledTimes(1);
     const [promptArg, timeoutArg] = vi.mocked(mockCall).mock.calls[0]!;
-    expect(promptArg).toContain('kb_query');
-    expect(promptArg).toContain('what do I know about X');
+    expect(promptArg).toContain('workout');
+    expect(promptArg).toContain('design me a workout for today');
     expect(timeoutArg).toBe(60_000);
-    expect(result.skill).toBe('kb_query');
+    expect(result.skill).toBe('workout');
   });
 
   it('collapses to a zero-confidence result when the CLI call errors', async () => {

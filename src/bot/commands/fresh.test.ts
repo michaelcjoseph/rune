@@ -31,7 +31,7 @@ const { appendToJournal } = await import('../../vault/journal.js');
 const { gitCommitAndPush } = await import('../../vault/git.js');
 const { writeVaultFile } = await import('../../vault/files.js');
 const { enqueue } = await import('../../kb/queue.js');
-const { parseKBWorthy, saveConversationSource, handleFresh } = await import('./fresh.js');
+const { parseKBWorthy, saveConversationSource, handleFresh, closeConversation } = await import('./fresh.js');
 
 const writeVaultMock = writeVaultFile as unknown as ReturnType<typeof vi.fn>;
 const enqueueMock = enqueue as unknown as ReturnType<typeof vi.fn>;
@@ -117,6 +117,74 @@ describe('bot/commands/fresh', () => {
     it('returns the vault-relative path', () => {
       const path = saveConversationSource('some content');
       expect(path).toMatch(/^knowledge\/raw\/conversations\//);
+    });
+  });
+
+  describe('closeConversation', () => {
+    it('returns { ok: false, error: "no-session" } when no session exists', async () => {
+      getSessionMock.mockReturnValue(null);
+
+      const result = await closeConversation(123);
+
+      expect(result).toEqual({ ok: false, error: 'no-session' });
+      expect(summarizeMock).not.toHaveBeenCalled();
+    });
+
+    it('returns { ok: true } with journalSummary and isKBWorthy on success', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-ok' });
+      summarizeMock.mockResolvedValue({
+        text: 'Good discussion\nKB-worthy: yes',
+        error: null,
+      });
+
+      const result = await closeConversation(123);
+
+      expect(result).toMatchObject({ ok: true, journalSummary: 'Good discussion', isKBWorthy: true });
+      expect(appendMock).toHaveBeenCalled();
+      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(gitMock).toHaveBeenCalledWith('TG conversation logged');
+    });
+
+    it('returns { ok: true, isKBWorthy: false } and does not enqueue when KB-worthy: no', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-ok' });
+      summarizeMock.mockResolvedValue({
+        text: 'Short chat\nKB-worthy: no',
+        error: null,
+      });
+
+      const result = await closeConversation(123);
+
+      expect(result).toMatchObject({ ok: true, isKBWorthy: false });
+      expect(writeVaultMock).not.toHaveBeenCalled();
+      expect(enqueueMock).not.toHaveBeenCalled();
+    });
+
+    it('returns { ok: false } with error string when summarizeSession returns error', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-err' });
+      summarizeMock.mockResolvedValue({ text: null, error: 'CLI timeout' });
+
+      const result = await closeConversation(123);
+
+      expect(result).toEqual({ ok: false, error: 'CLI timeout' });
+      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(appendMock).not.toHaveBeenCalled();
+    });
+
+    it('returns { ok: false } and deletes session when summarizeSession throws', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-throw' });
+      summarizeMock.mockRejectedValue(new Error('network error'));
+
+      const result = await closeConversation(123);
+
+      expect(result).toEqual({ ok: false, error: 'network error' });
+      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+    });
+
+    it('never throws — catches all exceptions and returns ok: false', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-x' });
+      summarizeMock.mockRejectedValue(new Error('unexpected boom'));
+
+      await expect(closeConversation(123)).resolves.toMatchObject({ ok: false });
     });
   });
 
