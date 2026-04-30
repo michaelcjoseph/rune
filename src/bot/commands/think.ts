@@ -3,6 +3,9 @@ import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
 
+// Side-effect import: registers the think review handler
+import '../../reviews/think.js';
+
 const log = createLogger('cmd-think');
 
 export async function handleThink(bot: TelegramBot, chatId: number, args: string): Promise<void> {

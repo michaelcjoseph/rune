@@ -3,6 +3,9 @@ import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
 
+// Side-effect import: registers the blog review handler
+import '../../reviews/blog.js';
+
 const log = createLogger('cmd-blog');
 
 export async function handleBlog(bot: TelegramBot, chatId: number, args: string): Promise<void> {

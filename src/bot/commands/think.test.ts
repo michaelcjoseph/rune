@@ -20,6 +20,11 @@ vi.mock('../../utils/logger.js', () => ({
   }),
 }));
 
+// Mock the side-effect import that registers the think review handler;
+// without this, importing think.ts pulls in reviews/think.ts → reviews/session.ts
+// → config.ts, which throws on missing TELEGRAM_BOT_TOKEN in test environments.
+vi.mock('../../reviews/think.js', () => ({}));
+
 const { handleThink } = await import('./think.js');
 
 function mockBot() {
