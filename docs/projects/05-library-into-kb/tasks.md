@@ -23,9 +23,9 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Smoke test
 
-- [ ] Run `npm run library-backfill` against the live vault; capture the count
-- [ ] Trigger ingestion (let nightly run, or invoke `processIngestionQueue()` manually via a one-off script if needed)
-- [ ] Inspect `knowledge/log.md` for `[INGEST]` and `[CHECKPOINT]` entries proportional to backfill count
+- [x] Run `npm run library-backfill` against the live vault; capture the count
+- [x] Trigger ingestion (let nightly run, or invoke `processIngestionQueue()` manually via a one-off script if needed)
+- [x] Inspect `knowledge/log.md` for `[INGEST]` and `[CHECKPOINT]` entries proportional to backfill count
 - [ ] Spot-check 2–3 random topic pages to confirm citations to library raw files
 
 ### Documentation (Phase A only — minimal)
