@@ -50,8 +50,6 @@ src/
 │       ├── study.ts         # /study — study session planning
 │       ├── family.ts        # /family — family planning/review
 │       ├── career.ts        # /career — career reflection/planning
-│       ├── lenny.ts         # /lenny — library search (Lenny's Newsletter)
-│       ├── pg.ts            # /pg — library search (Paul Graham essays)
 │       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
 │       ├── learn-list.ts    # /learn-list — echo the current prepended learnings
 │       └── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent

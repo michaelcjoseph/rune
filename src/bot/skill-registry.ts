@@ -134,16 +134,6 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['draft a blog post', 'write an essay'],
   },
   {
-    name: 'lenny',
-    description: 'Search Lenny\'s Podcast transcripts.',
-    triggers: ['what did lenny say', 'lenny episode about'],
-  },
-  {
-    name: 'pg',
-    description: 'Search Paul Graham essays.',
-    triggers: ['what does pg say', 'paul graham on'],
-  },
-  {
     name: 'library-sync',
     description: 'Pull new Lenny posts and podcasts from the Lenny MCP into the vault library.',
     triggers: ['sync lenny', 'pull new lenny posts', 'fetch new lenny content'],

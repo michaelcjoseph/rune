@@ -74,24 +74,24 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Code removal
 
-- [ ] Delete `src/bot/commands/lenny.ts`
-- [ ] Delete `src/bot/commands/pg.ts`
-- [ ] Remove `/lenny` and `/pg` cases from `src/bot/handlers/text.ts`
-- [ ] Remove `lenny` and `pg` entries from `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA`
-- [ ] Grep the codebase for any other reference to `lenny` or `pg` slash commands (e.g., in `src/bot/resolver.ts` if hardcoded), clean up
+- [x] Delete `src/bot/commands/lenny.ts`
+- [x] Delete `src/bot/commands/pg.ts`
+- [x] Remove `/lenny` and `/pg` cases from `src/bot/handlers/text.ts`
+- [x] Remove `lenny` and `pg` entries from `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA`
+- [x] Grep the codebase for any other reference to `lenny` or `pg` slash commands (e.g., in `src/bot/resolver.ts` if hardcoded), clean up
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` § **Project Structure**:
+- [x] Update `CLAUDE.md` § **Project Structure**:
   - Remove `lenny.ts` and `pg.ts` rows from the `commands/` block
   - Add `library-sync.ts` row
-- [ ] Update `CLAUDE.md` § **Agents** Runtime Agents table: add `lenny-sync` row
-- [ ] Update `docs/projects/index.md`: add `05-library-into-kb` row with status
-- [ ] `grep -r "/lenny\|/pg" docs/` and clean up any remaining references
-- [ ] `grep -r "/lenny\|/pg" .claude/` for any agent or hook referencing them
+- [x] Update `CLAUDE.md` § **Agents** Runtime Agents table: add `lenny-sync` row
+- [x] Update `docs/projects/index.md`: add `05-library-into-kb` row with status
+- [x] `grep -r "/lenny\|/pg" docs/` and clean up any remaining references
+- [x] `grep -r "/lenny\|/pg" .claude/` for any agent or hook referencing them
 
 ### Smoke test
 
 - [ ] Boot the bot in dev mode; verify `/help` no longer lists `/lenny` or `/pg`
 - [ ] Send a free-text TG message containing "lenny" — confirm resolver gracefully routes to `/kb` or replies "no skill matched", no crash
-- [ ] All existing tests still pass (`npm test`)
+- [x] All existing tests still pass (`npm test`)

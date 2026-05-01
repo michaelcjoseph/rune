@@ -278,7 +278,7 @@ describe('dedupeAgainstRegistry', () => {
   });
 
   it('dedupes against real two-char skills like kb and pg (threshold is >= 2)', () => {
-    // "pg" is in the metadata; a proposal titled "PG summarizer" should collide.
+    // Two-char skill names collide correctly; threshold is >= 2 (not > 2).
     const items = [
       { title: 'PG summarizer', rationale: 'r', suggested_skill: 's' },
       { title: 'KB export', rationale: 'r', suggested_skill: 's' },
