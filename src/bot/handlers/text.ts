@@ -28,6 +28,7 @@ import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
 import { handleLenny } from '../commands/lenny.js';
 import { handlePG } from '../commands/pg.js';
+import { handleLibrarySync } from '../commands/library-sync.js';
 import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
 import { handleLearnList } from '../commands/learn-list.js';
@@ -69,6 +70,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   if (text.startsWith('/blog')) return handleBlog(bot, chatId, text.slice('/blog'.length).trim());
   if (text.startsWith('/lenny')) return handleLenny(bot, chatId, text.slice('/lenny'.length).trim());
   if (text.startsWith('/pg')) return handlePG(bot, chatId, text.slice('/pg'.length).trim());
+  if (text.startsWith('/library-sync')) return handleLibrarySync(bot, chatId);
   // /learn-list must come before /learn so the longer prefix wins.
   if (text.startsWith('/learn-list')) return handleLearnList(bot, chatId);
   if (text === '/learn' || text.startsWith('/learn ')) return handleLearn(bot, chatId, text.slice('/learn'.length).trim());
@@ -213,6 +215,7 @@ async function invokeSkill(
     case 'blog': return handleBlog(bot, chatId, args);
     case 'lenny': return handleLenny(bot, chatId, args || message);
     case 'pg': return handlePG(bot, chatId, args || message);
+    case 'library-sync': return handleLibrarySync(bot, chatId);
     case 'learn': return handleLearn(bot, chatId, args || message);
     case 'learn-list': return handleLearnList(bot, chatId);
     case 'fresh': return handleFresh(bot, chatId);
@@ -401,6 +404,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     'Library:',
     '/lenny <topic> — search Lenny\'s Podcast transcripts',
     '/pg <topic> — search Paul Graham essays',
+    '/library-sync — pull new Lenny posts and podcasts into the vault',
     '',
     'Reviews:',
     '/daily [date] — process journal tags into JSON updates',

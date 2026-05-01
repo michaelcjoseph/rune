@@ -38,30 +38,30 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### MCP discovery
 
-- [ ] Inspect `https://mcp.lennysdata.com/mcp` to enumerate exact tool names + arg schemas. Options: register first then run `claude mcp list-tools`, or use a one-shot agent that calls MCP introspection. Capture the tool list verbatim before writing the agent.
-- [ ] Determine auth requirements — does the server require a header / bearer? If yes, source the credential and add `LENNY_MCP_TOKEN` to `.env.local`.
+- [x] Inspect `https://mcp.lennysdata.com/mcp` to enumerate exact tool names + arg schemas. Options: register first then run `claude mcp list-tools`, or use a one-shot agent that calls MCP introspection. Capture the tool list verbatim before writing the agent.
+- [x] Determine auth requirements — does the server require a header / bearer? If yes, source the credential and add `LENNY_MCP_TOKEN` to `.env.local`.
 
 ### Settings + agent
 
-- [ ] Update `.claude/settings.json` to register `mcpServers.lenny` with HTTP transport pointing at `https://mcp.lennysdata.com/mcp`. (Confirm the Claude CLI's HTTP-MCP config schema during impl — fields may include `transport: "http"`, `url`, optional `headers`.)
-- [ ] Author `.claude/agents/lenny-sync.md` (Jarvis-resident, NOT vault-resident):
+- [x] Update `.claude/settings.json` to register `mcpServers.lenny` with HTTP transport pointing at `https://mcp.lennysdata.com/mcp`. (Confirm the Claude CLI's HTTP-MCP config schema during impl — fields may include `transport: "http"`, `url`, optional `headers`.) — Note: used Bash+curl approach instead; MCP tools inaccessible from vault cwd, token added to .env.local and config.ts instead
+- [x] Author `.claude/agents/lenny-sync.md` (Jarvis-resident, NOT vault-resident):
   - `tools:` frontmatter allow-lists the inspected MCP tools plus `Read`, `Write`, `Bash`
   - Body instructs: read `logs/lenny-sync-state.json` for `last_sync_at`; list posts + transcripts since that timestamp; for each new item, fetch body and write to `library/lenny/{posts,podcasts}/<slug>.md` with the prescribed frontmatter (`source`, `source-url`, `published-at`, `fetched-at`, `kind`); on completion write the new state file
   - Failure semantics: raise (non-zero) without advancing `last_sync_at`
 
 ### Nightly orchestrator
 
-- [ ] Add `stepLibrarySync()` to `src/jobs/nightly.ts`, ordered BEFORE `stepKBQueue()`. Responsibilities:
+- [x] Add `stepLibrarySync()` to `src/jobs/nightly.ts`, ordered BEFORE `stepKBQueue()`. Responsibilities:
   1. `await runAgent('lenny-sync', '')`
   2. Walk `library/lenny/{posts,podcasts}/` for files modified since the prior orchestrator run, call `enqueue(path)` for each
   3. Catch errors, log them, surface in the existing per-step nightly summary; do not block downstream steps
-- [ ] Confirm step ordering by reading the existing nightly file end-to-end before inserting
+- [x] Confirm step ordering by reading the existing nightly file end-to-end before inserting
 
 ### Manual TG slash
 
-- [ ] Add `src/bot/commands/library-sync.ts` — invokes the same `stepLibrarySync()` function as the nightly job; replies with summary `"Pulled N new posts, M new transcripts. Enqueued for KB ingestion."` (or the error)
-- [ ] Register `/library-sync` in `src/bot/handlers/text.ts`
-- [ ] Add `/library-sync` entry to `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA`
+- [x] Add `src/bot/commands/library-sync.ts` — invokes the same `stepLibrarySync()` function as the nightly job; replies with summary `"Pulled N new posts, M new transcripts. Enqueued for KB ingestion."` (or the error)
+- [x] Register `/library-sync` in `src/bot/handlers/text.ts`
+- [x] Add `/library-sync` entry to `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA`
 
 ### Smoke + resilience
 

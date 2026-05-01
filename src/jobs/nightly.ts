@@ -2,6 +2,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
+import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import { extractMeetings, appendProjectDecisions } from './meeting-extract.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
@@ -29,6 +30,11 @@ async function stepCaptureSession(): Promise<NightlyStepResult> {
     return { step: 'Session capture', status: 'skipped', detail: 'No active sessions' };
   }
   return { step: 'Session capture', status: 'success', detail: `${captured} session(s) captured` };
+}
+
+async function stepLibrarySync(): Promise<NightlyStepResult> {
+  const result = await runLibrarySync();
+  return { step: 'Library sync', ...result };
 }
 
 async function stepKBQueue(): Promise<NightlyStepResult> {
@@ -413,6 +419,7 @@ export async function executeNightly(
   await run('Playbook extract', stepPlaybookExtract);
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
+  await run('Library sync', stepLibrarySync);
   await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
   await run('KB lint', stepLint);

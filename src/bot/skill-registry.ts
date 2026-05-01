@@ -144,6 +144,11 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['what does pg say', 'paul graham on'],
   },
   {
+    name: 'library-sync',
+    description: 'Pull new Lenny posts and podcasts from the Lenny MCP into the vault library.',
+    triggers: ['sync lenny', 'pull new lenny posts', 'fetch new lenny content'],
+  },
+  {
     name: 'learn',
     description: 'Append a runtime learning that future agents auto-prepend.',
     triggers: ['remember that i prefer', 'note this preference'],

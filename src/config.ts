@@ -42,6 +42,7 @@ const config = {
   WORKSPACE_DIR: optional('WORKSPACE_DIR'),
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
+  LENNY_MCP_TOKEN: process.env['LENNY_MCP_TOKEN'] || '',
 
   WHOOP_CLIENT_ID: process.env['WHOOP_CLIENT_ID'] || '',
   WHOOP_CLIENT_SECRET: process.env['WHOOP_CLIENT_SECRET'] || '',

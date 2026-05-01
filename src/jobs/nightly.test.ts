@@ -55,6 +55,7 @@ const appendDecisionsMock = appendProjectDecisions as unknown as ReturnType<type
 function setDefaults() {
   captureMock.mockResolvedValue({ captured: 0 });
   queueMock.mockResolvedValue({ processed: 0, errors: 0, created: 0, updated: 0 });
+  agentMock.mockResolvedValue({ text: null, error: null });
   readMock.mockReturnValue(null);
   dayMock.mockReturnValue('Saturday');
 }
@@ -66,9 +67,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 10 steps and returns results', async () => {
+    it('runs all 11 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(10);
+      expect(result.steps).toHaveLength(11);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -76,6 +77,7 @@ describe('jobs/nightly', () => {
         'Playbook extract',
         'Journal ingest',
         'Meeting extract',
+        'Library sync',
         'KB queue',
         'Whoop activity',
         'KB lint',
@@ -177,7 +179,8 @@ describe('jobs/nightly', () => {
       const step = result.steps.find((s) => s.step === 'Daily tags')!;
       expect(step.status).toBe('skipped');
       expect(step.detail).toContain('No actionable tags');
-      expect(agentMock).not.toHaveBeenCalled();
+      expect(agentMock).not.toHaveBeenCalledWith('json-updater', expect.any(String));
+      expect(agentMock).not.toHaveBeenCalledWith('daily-content-updater', expect.any(String));
     });
 
     it('runs json-updater agent when tags found', async () => {
@@ -759,7 +762,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(10);
+      expect(result.steps).toHaveLength(11);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -788,7 +791,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(10);
+      expect(result.steps).toHaveLength(11);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -819,7 +822,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(10);
+      expect(result.steps).toHaveLength(11);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -830,19 +833,19 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(10);
-      // KB queue is at index 6 (after Session capture, Daily tags, Birthday alerts, Playbook extract, Journal ingest, Meeting extract)
-      expect(result.steps[6]!.step).toBe('KB queue');
-      expect(result.steps[6]!.status).toBe('error');
+      expect(result.steps).toHaveLength(11);
+      // Library sync is at index 6, KB queue at 7 (after Session capture, Daily tags, Birthday alerts, Playbook extract, Journal ingest, Meeting extract)
+      expect(result.steps[7]!.step).toBe('KB queue');
+      expect(result.steps[7]!.status).toBe('error');
       // Whoop activity still ran after it
-      expect(result.steps[7]!.step).toBe('Whoop activity');
+      expect(result.steps[8]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(10);
+      expect(result.steps).toHaveLength(11);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -853,8 +856,8 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is now last (index 9)
-      expect(result.steps[9]!.step).toBe('Mark processed');
+      // Mark processed is now last (index 10)
+      expect(result.steps[10]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {
