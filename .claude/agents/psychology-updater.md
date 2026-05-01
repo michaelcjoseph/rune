@@ -89,3 +89,7 @@ Complete review and potential rewrite of the full profile.
 ## Voice Preservation
 
 The existing prose is in the user's voice — direct, unflinching, specific. Match it. Prefer appending new observations over rewriting existing text. When rewriting is necessary, keep the original version inline in the changelog so the audit trail is complete.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

@@ -113,3 +113,7 @@ last-verified: 2026-04-07
 - Flag contradictions explicitly with dates and sources for both claims
 - Preserve existing content when updating — add, don't replace
 - Every new page must be linked from at least one existing page
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

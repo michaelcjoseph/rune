@@ -8,6 +8,12 @@ function required(name: string): string {
   return val.startsWith('~/') ? join(homedir(), val.slice(2)) : val;
 }
 
+function optional(name: string): string | undefined {
+  const val = process.env[name];
+  if (!val) return undefined;
+  return val.startsWith('~/') ? join(homedir(), val.slice(2)) : val;
+}
+
 /** Parse an optional numeric env var with a safe fallback. A missing or
  *  malformed value (NaN, infinite, out of range) falls back to `fallback`
  *  rather than propagating as NaN, which would silently invert guard checks
@@ -33,6 +39,7 @@ const config = {
   TELEGRAM_USER_ID: Number(required('TELEGRAM_USER_ID')),
 
   VAULT_DIR: required('VAULT_DIR'),
+  WORKSPACE_DIR: optional('WORKSPACE_DIR'),
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
 

@@ -215,6 +215,7 @@ Optional:
 - `JARVIS_HTTP_SECRET` — shared secret for authenticated HTTP endpoints
 - `RESOLVER_CONFIDENCE_THRESHOLD` — minimum confidence for resolver to dispatch a skill (default `0.7`)
 - `RESOLVER_MIN_WORDS` — minimum word count before resolver runs (default `5`)
+- `WORKSPACE_DIR` — path to workspace root (e.g. `~/workspace`). When set, agents receive it as context and as `JARVIS_WORKSPACE_DIR` env var so they can read project files outside the vault.
 
 `LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`.
 

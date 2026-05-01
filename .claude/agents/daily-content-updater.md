@@ -69,3 +69,7 @@ Append at the end of the existing list.
 3. Produce a one-line summary per target file: `<path>: N appended, M skipped (duplicates)`.
 
 If a proposed update is ambiguous or the target file has an unexpected structure, describe what you found in your summary and skip that specific update rather than corrupting the file.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

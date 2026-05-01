@@ -1,0 +1,110 @@
+/**
+ * Tests for WORKSPACE_DIR passthrough behavior in src/ai/claude.ts.
+ * Kept separate from claude.test.ts because the config mock needs WORKSPACE_DIR set.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+
+vi.mock('../config.js', () => ({
+  default: {
+    VAULT_DIR: '/tmp/test-vault',
+    CLAUDE_TIMEOUT_MS: 100,
+    DEFAULT_CHAT_MODEL: 'opus',
+    ONESHOT_MODEL: 'opus',
+    AGENT_MODEL: 'opus',
+    TIMEZONE: 'America/Chicago',
+    WORKSPACE_DIR: '/home/user/workspace',
+  },
+  PROJECT_ROOT: '/tmp/test-project',
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: vi.fn(),
+  execFileSync: vi.fn(() => '/usr/local/bin/claude\n'),
+}));
+
+const MOCK_AGENT_FILE = `---
+name: wiki-compiler
+model: sonnet
+tools:
+  - Read
+  - Write
+---
+
+You are the wiki compiler for a personal knowledge base.`;
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn((path: string) => {
+      if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
+      throw new Error(`ENOENT: ${path}`);
+    }),
+  };
+});
+
+const { spawn } = await import('node:child_process');
+const { askClaudeOneShot, runAgent } = await import('./claude.js');
+
+const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+
+function createChild(opts: { stdout?: string; stderr?: string; code?: number } = {}) {
+  const child = new EventEmitter() as any;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  const { stdout, stderr, code = 0 } = opts;
+  process.nextTick(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+    child.emit('close', code, null);
+  });
+  return child;
+}
+
+describe('ai/claude WORKSPACE_DIR set', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  describe('execClaude env passthrough', () => {
+    it('sets JARVIS_WORKSPACE_DIR in child process env when WORKSPACE_DIR is configured', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test prompt');
+      const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
+      expect(spawnEnv['JARVIS_WORKSPACE_DIR']).toBe('/home/user/workspace');
+    });
+
+    it('always sets JARVIS_PROJECT_ROOT regardless of WORKSPACE_DIR', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test prompt');
+      const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
+      expect(spawnEnv['JARVIS_PROJECT_ROOT']).toBe('/tmp/test-project');
+    });
+  });
+
+  describe('runAgent prompt with WORKSPACE_DIR', () => {
+    it('appends workspace directory line to prompt when WORKSPACE_DIR is set', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'agent result' }));
+      await runAgent('wiki-compiler', 'do stuff');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const prompt = args[args.indexOf('-p') + 1]!;
+      expect(prompt).toContain('Workspace directory (read-only): /home/user/workspace');
+    });
+
+    it('workspace directory line appears after date context and before user prompt', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'my task');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const prompt = args[args.indexOf('-p') + 1]!;
+      const dateIdx = prompt.indexOf('Today is ');
+      const wsIdx = prompt.indexOf('Workspace directory (read-only):');
+      const taskIdx = prompt.indexOf('my task');
+      expect(dateIdx).toBeGreaterThan(-1);
+      expect(wsIdx).toBeGreaterThan(dateIdx);
+      expect(taskIdx).toBeGreaterThan(wsIdx);
+    });
+  });
+});

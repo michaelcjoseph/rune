@@ -88,3 +88,7 @@ Use <100-row synthetic dataset + Opus judge, run overnight. Target: <$5 per full
 - If a draft's slug collides with an existing entry, append `-2`, `-3`, etc. to the slug and note it in output.
 - If the outline rejects a draft explicitly ("skip the X one"), mark its queue entry `status: "rejected"` and remove it from the queue.
 - If the outline is entirely silent on the queue, leave all drafts pending and report no changes.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

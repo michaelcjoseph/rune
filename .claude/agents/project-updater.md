@@ -87,3 +87,7 @@ End with a total-files-modified count.
 - If a project wasn't meaningfully discussed in the review, skip it — no empty entries.
 - If a project file doesn't exist for a name mentioned, report it as skipped. Do not create new project files.
 - If the outline contradicts the existing thesis without a clear reason, preserve the original and add a note under "Open Questions" flagging the contradiction for the user to resolve.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

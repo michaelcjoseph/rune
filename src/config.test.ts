@@ -54,4 +54,33 @@ describe('config', () => {
     const { default: config } = await import('./config.js');
     expect(config.LOGS_DIR).toMatch(/\/logs$/);
   });
+
+  it('WORKSPACE_DIR is undefined when not set', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    delete process.env['WORKSPACE_DIR'];
+    const { default: config } = await import('./config.js');
+    expect(config.WORKSPACE_DIR).toBeUndefined();
+  });
+
+  it('WORKSPACE_DIR returns the value as-is for absolute paths', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['WORKSPACE_DIR'] = '/home/user/workspace';
+    const { default: config } = await import('./config.js');
+    expect(config.WORKSPACE_DIR).toBe('/home/user/workspace');
+  });
+
+  it('WORKSPACE_DIR expands leading ~ to homedir', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['WORKSPACE_DIR'] = '~/workspace';
+    const { default: config } = await import('./config.js');
+    const { homedir } = await import('node:os');
+    expect(config.WORKSPACE_DIR).toBe(`${homedir()}/workspace`);
+    expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
+  });
 });

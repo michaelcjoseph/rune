@@ -74,3 +74,7 @@ Parse the outline for diffs — typically structured as "Worldview updates:" wit
 - If the outline proposes a diff that conflicts with existing content without justification, apply the diff BUT add a note at the end of the changelog entry: "Conflicts with earlier claim — user to reconcile." Do not delete the earlier claim.
 - If the outline references a topic file that doesn't exist, skip that diff and note it in the output — do not create new topic files.
 - If the changelog entry `why` isn't clear from the prep context, write `"Evolution noted during [weekly/monthly/quarterly] review — see journals/[date].md"` rather than inventing a reason.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

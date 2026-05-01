@@ -73,7 +73,11 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
       // Expose PROJECT_ROOT so agents that shell out can locate the Jarvis
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
       // agent, which runs `npm run intent-scan` from the project root.
-      env: { ...process.env, JARVIS_PROJECT_ROOT: PROJECT_ROOT },
+      env: {
+        ...process.env,
+        JARVIS_PROJECT_ROOT: PROJECT_ROOT,
+        ...(config.WORKSPACE_DIR ? { JARVIS_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+      },
     });
 
     activeProcesses.add(child);
@@ -324,7 +328,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   const args = [
     '--agent', agentName,
     '--agents', agentsJson,
-    '-p', `${learningsBlock}${dateCtx}\n\n${prompt}`,
+    '-p', `${learningsBlock}${dateCtx}${config.WORKSPACE_DIR ? `\nWorkspace directory (read-only): ${config.WORKSPACE_DIR}` : ''}\n\n${prompt}`,
     '--no-session-persistence',
     '--model', config.AGENT_MODEL,
   ];

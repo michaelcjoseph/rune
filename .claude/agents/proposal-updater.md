@@ -115,3 +115,7 @@ actioned entries.
 - **Both `suggested_skill` and `suggested_cron` present**: create a single
   agent file that carries both. This is the expected shape for
   scheduled-skill proposals.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

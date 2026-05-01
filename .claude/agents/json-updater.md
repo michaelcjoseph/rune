@@ -40,3 +40,7 @@ You are operating inside an Obsidian vault. JSON data files live in various dire
 - If a proposed update is ambiguous, apply the most reasonable interpretation and note it in your summary.
 - If a JSON file has an unexpected structure, describe what you found and skip that update rather than corrupting the file.
 - Keep entries compact — no unnecessary whitespace beyond standard JSON formatting.
+
+## Workspace Boundary
+
+If your context includes a "Workspace directory" path, treat it as strictly read-only. Never write, edit, or create files in that directory tree.

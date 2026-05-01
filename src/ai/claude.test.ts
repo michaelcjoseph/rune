@@ -815,6 +815,23 @@ Body.`);
     });
   });
 
+  describe('WORKSPACE_DIR env passthrough (WORKSPACE_DIR unset)', () => {
+    it('does not set JARVIS_WORKSPACE_DIR when WORKSPACE_DIR is empty', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeOneShot('test prompt');
+      const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
+      expect(spawnEnv).not.toHaveProperty('JARVIS_WORKSPACE_DIR');
+    });
+
+    it('runAgent prompt does not contain workspace directory line when WORKSPACE_DIR is empty', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await runAgent('wiki-compiler', 'do stuff');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const prompt = args[args.indexOf('-p') + 1]!;
+      expect(prompt).not.toContain('Workspace directory');
+    });
+  });
+
   describe('summarizeSession', () => {
     it('uses the default chat model', async () => {
       // First call creates the session with haiku (not the default)
