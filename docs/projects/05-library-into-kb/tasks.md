@@ -65,8 +65,8 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Smoke + resilience
 
-- [ ] Manual `/library-sync` from TG: confirm new files in `library/lenny/`, state file written, queue processes them on next nightly cycle, `/kb` query reflects new content
-- [ ] Resilience: temporarily point MCP URL at a bad host; trigger nightly; confirm error is logged + surfaced and `stepKBQueue` still runs
+- [x] Manual `/library-sync` from TG: confirm new files in `library/lenny/`, state file written, queue processes them on next nightly cycle, `/kb` query reflects new content
+- [x] Resilience: temporarily point MCP URL at a bad host; trigger nightly; confirm error is logged + surfaced and `stepKBQueue` still runs
 
 ## Phase C — Decommission `/lenny` + `/pg` + docs
 
@@ -92,6 +92,6 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 ### Smoke test
 
-- [ ] Boot the bot in dev mode; verify `/help` no longer lists `/lenny` or `/pg`
-- [ ] Send a free-text TG message containing "lenny" — confirm resolver gracefully routes to `/kb` or replies "no skill matched", no crash
+- [x] Boot the bot in dev mode; verify `/help` no longer lists `/lenny` or `/pg`
+- [x] Send a free-text TG message containing "lenny" — confirm resolver gracefully routes to `/kb` or replies "no skill matched", no crash
 - [x] All existing tests still pass (`npm test`)
