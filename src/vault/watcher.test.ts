@@ -51,10 +51,8 @@ vi.mock('node:fs', async (importOriginal) => {
 const { extractTitle, startWatcher, stopWatcher } = await import('./watcher.js');
 const fs = await import('node:fs');
 
-function makeFakeBot() {
-  return {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  };
+function makeFakeBus() {
+  return { publish: vi.fn() };
 }
 
 describe('extractTitle', () => {
@@ -118,78 +116,78 @@ describe('startWatcher + event handling', () => {
 
   it('seeds the seen-set with existing files and does not notify for them on startup', () => {
     mockedReaddirContents = ['existing.md', 'also-existing.md'];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'existing.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('calls enqueue with the correct relative path for a new file', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'new-article.md');
 
     expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Articles/new-article.md');
   });
 
-  it('sends a Telegram notification when a new article is detected', () => {
+  it('publishes a notification when a new article is detected', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'cool-article.md');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const [userId, message] = bot.sendMessage.mock.calls[0]!;
+    expect(bus.publish).toHaveBeenCalledOnce();
+    const { userId, text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
     expect(userId).toBe(42);
-    expect(message as string).toContain('Article Title');
-    expect(message as string).toContain('/ingest');
+    expect(text).toContain('Article Title');
+    expect(text).toContain('/ingest');
   });
 
   it('deduplicates: same filename only triggers enqueue once', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'dup.md');
     capturedWatchCallback?.('rename', 'dup.md');
 
     expect(mockEnqueue).toHaveBeenCalledOnce();
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
+    expect(bus.publish).toHaveBeenCalledOnce();
   });
 
   it('ignores non-.md filenames', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'image.png');
     capturedWatchCallback?.('rename', 'document.pdf');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('ignores events that are not rename', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('change', 'article.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('ignores null filename events', () => {
     mockedReaddirContents = [];
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', null);
 
@@ -201,34 +199,34 @@ describe('startWatcher + event handling', () => {
     vi.mocked(fs.statSync).mockImplementation(() => {
       throw new Error('ENOENT');
     });
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'deleted.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('falls back to filename (without .md) as title when file has no h1 heading', () => {
     mockedReaddirContents = [];
     vi.mocked(fs.readFileSync).mockReturnValue('## Section\n\nNo title here.');
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
 
     capturedWatchCallback?.('rename', 'my-article.md');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const message = bot.sendMessage.mock.calls[0]![1] as string;
-    expect(message).toContain('my-article');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('my-article');
   });
 
   it('does not start watcher when Readwise directory does not exist', () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.watch).mockClear();
-    const bot = makeFakeBot();
+    const bus = makeFakeBus();
 
-    startWatcher(bot as never);
+    startWatcher(bus as never);
 
     expect(fs.watch).not.toHaveBeenCalled();
     expect(capturedWatchCallback).toBeNull();
@@ -243,8 +241,8 @@ describe('stopWatcher', () => {
   });
 
   it('closes the fs.watch handle when called after startWatcher', () => {
-    const bot = makeFakeBot();
-    startWatcher(bot as never);
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
     stopWatcher();
     expect(mockWatcherClose).toHaveBeenCalledOnce();
   });

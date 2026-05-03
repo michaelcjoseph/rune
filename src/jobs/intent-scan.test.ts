@@ -42,10 +42,6 @@ vi.mock('../utils/intent-log.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn(async () => {}),
-}));
-
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -68,7 +64,6 @@ const {
   INTENT_SCAN_WINDOW_DAYS,
 } = await import('./intent-scan.js');
 const { askHaikuOneShot } = await import('../ai/claude.js');
-const { sendLongMessage } = await import('../integrations/telegram/client.js');
 
 function writeSampleLog(entries: object[]): void {
   writeFileSync(INTENT_LOG_FILE, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
@@ -438,7 +433,7 @@ describe('runIntentScan', () => {
     expect(result.detail).toContain('timeout');
   });
 
-  it('posts the summary to Telegram when bot is provided and proposals were queued', async () => {
+  it('publishes the summary to the bus when bus is provided and proposals were queued', async () => {
     const nowIso = new Date().toISOString();
     writeSampleLog(
       Array.from({ length: 10 }, (_, i) => ({
@@ -457,15 +452,15 @@ describe('runIntentScan', () => {
       error: null,
     });
 
-    const bot = { sendMessage: vi.fn() } as any;
-    await runIntentScan(bot);
-    expect(sendLongMessage).toHaveBeenCalled();
-    const message = vi.mocked(sendLongMessage).mock.calls[0]![2] as string;
-    expect(message).toContain('New pattern');
-    expect(message).toContain('Review in your next /weekly');
+    const bus = { publish: vi.fn() } as any;
+    await runIntentScan(bus);
+    expect(bus.publish).toHaveBeenCalledOnce();
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('New pattern');
+    expect(text).toContain('Review in your next /weekly');
   });
 
-  it('does NOT post to Telegram when bot is undefined', async () => {
+  it('does NOT publish when bus is undefined', async () => {
     const nowIso = new Date().toISOString();
     writeSampleLog(
       Array.from({ length: 10 }, (_, i) => ({
@@ -483,8 +478,9 @@ describe('runIntentScan', () => {
       ]),
       error: null,
     });
-    await runIntentScan();
-    expect(sendLongMessage).not.toHaveBeenCalled();
+    const result = await runIntentScan();
+    expect(result.status).toBe('success');
+    expect(result.queued.length).toBeGreaterThan(0);
   });
 
   it('confirms MIN_ENTRIES_FOR_SCAN is the documented threshold', () => {

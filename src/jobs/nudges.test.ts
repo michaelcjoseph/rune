@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type TelegramBot from 'node-telegram-bot-api';
 
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({
@@ -64,12 +63,13 @@ const { getQueue } = await import('../kb/queue.js');
 const { getMonthInfo } = await import('../utils/time.js');
 const { runWeeklyNudge, runReviewNudge } = await import('./nudges.js');
 
-describe('jobs/nudges — runWeeklyNudge', () => {
-  let bot: TelegramBot;
+function mockBus() {
+  return { publish: vi.fn() } as any;
+}
 
+describe('jobs/nudges — runWeeklyNudge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as unknown as TelegramBot;
   });
 
   it('sends a nudge message with week stats', async () => {
@@ -82,17 +82,18 @@ describe('jobs/nudges — runWeeklyNudge', () => {
       [123, { sessionId: 'a', lastActivity: '', messageCount: 10, firstMessage: '', model: '' }],
       [456, { sessionId: 'b', lastActivity: '', messageCount: 5, firstMessage: '', model: '' }],
     ]);
+    const bus = mockBus();
 
-    await runWeeklyNudge(bot);
+    await runWeeklyNudge(bus);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('Friday');
-    expect(msg).toContain('Apr 5');
-    expect(msg).toContain('3 journal entries');
-    expect(msg).toContain('2 active sessions (15 messages)');
-    expect(msg).toContain('11 wiki pages');
-    expect(msg).toContain('/weekly');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('Friday');
+    expect(text).toContain('Apr 5');
+    expect(text).toContain('3 journal entries');
+    expect(text).toContain('2 active sessions (15 messages)');
+    expect(text).toContain('11 wiki pages');
+    expect(text).toContain('/weekly');
   });
 
   it('shows singular forms for 1 entry / 1 session', async () => {
@@ -100,12 +101,13 @@ describe('jobs/nudges — runWeeklyNudge', () => {
     vi.mocked(getAllSessions).mockReturnValue([
       [123, { sessionId: 'a', lastActivity: '', messageCount: 3, firstMessage: '', model: '' }],
     ]);
+    const bus = mockBus();
 
-    await runWeeklyNudge(bot);
+    await runWeeklyNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('1 journal entry');
-    expect(msg).toContain('1 active session');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('1 journal entry');
+    expect(text).toContain('1 active session');
   });
 
   it('shows queued ingestion count when queue is non-empty', async () => {
@@ -113,91 +115,96 @@ describe('jobs/nudges — runWeeklyNudge', () => {
       { source: 'articles/foo.md', addedAt: '' },
       { source: 'articles/bar.md', addedAt: '' },
     ]);
+    const bus = mockBus();
 
-    await runWeeklyNudge(bot);
+    await runWeeklyNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('2 queued for ingestion');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('2 queued for ingestion');
   });
 
   it('omits message count when no sessions', async () => {
     vi.mocked(getAllSessions).mockReturnValue([]);
-    await runWeeklyNudge(bot);
+    const bus = mockBus();
+    await runWeeklyNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('0 active sessions');
-    expect(msg).not.toContain('messages');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('0 active sessions');
+    expect(text).not.toContain('messages');
   });
 
-  it('does not throw when sendMessage fails', async () => {
-    (bot.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('TG down'));
-    await expect(runWeeklyNudge(bot)).resolves.toBeUndefined();
+  it('does not throw even if bus.publish throws', async () => {
+    const bus = { publish: vi.fn().mockImplementation(() => { throw new Error('bus down'); }) } as any;
+    await expect(runWeeklyNudge(bus)).resolves.toBeUndefined();
   });
 });
 
 describe('jobs/nudges — runReviewNudge', () => {
-  let bot: TelegramBot;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as unknown as TelegramBot;
   });
 
   it('sends monthly nudge on last day of a regular month', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 5, monthName: 'May', day: 31, lastDay: 31 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('May');
-    expect(msg).toContain('monthly');
-    expect(msg).toContain('/monthly');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('May');
+    expect(text).toContain('monthly');
+    expect(text).toContain('/monthly');
   });
 
   it('sends quarterly nudge at end of Q1 (March)', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 3, monthName: 'March', day: 31, lastDay: 31 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('quarterly');
-    expect(msg).toContain('/quarterly');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('quarterly');
+    expect(text).toContain('/quarterly');
   });
 
   it('sends quarterly nudge at end of Q2 (June)', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 6, monthName: 'June', day: 30, lastDay: 30 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('quarterly');
-    expect(msg).toContain('/quarterly');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('quarterly');
+    expect(text).toContain('/quarterly');
   });
 
   it('sends quarterly nudge at end of Q3 (September)', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 9, monthName: 'September', day: 30, lastDay: 30 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('quarterly');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('quarterly');
   });
 
   it('sends yearly nudge at end of December', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 12, monthName: 'December', day: 31, lastDay: 31 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]![1] as string;
-    expect(msg).toContain('yearly');
-    expect(msg).toContain('/yearly');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('yearly');
+    expect(text).toContain('/yearly');
   });
 
   it('skips when not the last day of the month', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 4, monthName: 'April', day: 28, lastDay: 30 });
-    await runReviewNudge(bot);
+    const bus = mockBus();
+    await runReviewNudge(bus);
 
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
-  it('does not throw when sendMessage fails', async () => {
+  it('does not throw even if bus.publish throws', async () => {
     vi.mocked(getMonthInfo).mockReturnValue({ month: 4, monthName: 'April', day: 30, lastDay: 30 });
-    (bot.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('TG down'));
-    await expect(runReviewNudge(bot)).resolves.toBeUndefined();
+    const bus = { publish: vi.fn().mockImplementation(() => { throw new Error('bus down'); }) } as any;
+    await expect(runReviewNudge(bus)).resolves.toBeUndefined();
   });
 });

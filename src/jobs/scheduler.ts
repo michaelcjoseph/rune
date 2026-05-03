@@ -1,12 +1,11 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import cron, { type ScheduledTask } from 'node-cron';
-import type TelegramBot from 'node-telegram-bot-api';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { loadAgentDef, runAgent } from '../ai/claude.js';
 import { reloadSkillRegistry } from '../bot/skill-registry.js';
-import { sendLongMessage } from '../integrations/telegram/client.js';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import { runMorningPrep } from './morning-prep.js';
 import { runNightly } from './nightly.js';
 import { runWeeklyNudge, runReviewNudge } from './nudges.js';
@@ -172,7 +171,7 @@ function checkMissedJobs(jobs: JobDefinition[]): void {
  *  declare a `cron:` frontmatter field. Returns a JobDefinition per agent whose
  *  handler calls runAgent(name, cron_args) and routes output per cron_chat.
  *  Invalid cron expressions are logged and skipped (no crash). */
-export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
+export function scanAgentCronJobs(bus: NotificationBus): JobDefinition[] {
   // Evict cached agent defs AND the skill-registry cache so frontmatter edits
   // (cron, cron_args, cron_chat, triggers, description) take effect on a
   // scheduler stop/start cycle. Both caches derive from the same source and
@@ -247,11 +246,7 @@ export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
         return;
       }
       if (cronChat) {
-        try {
-          await sendLongMessage(bot, config.TELEGRAM_USER_ID, text);
-        } catch (err) {
-          log.error(`Failed to post ${name} output to Telegram`, { error: (err as Error).message });
-        }
+        bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text });
       } else {
         log.info(`Scheduled agent ${name} completed`, { chars: text.length });
       }
@@ -268,37 +263,37 @@ export function scanAgentCronJobs(bot: TelegramBot): JobDefinition[] {
 
 // Cron schedules are in UTC. Local times (America/Chicago) are given for
 // reference and assume CDT (UTC-5); in CST (UTC-6) they fire one hour earlier.
-function registerJobs(bot: TelegramBot): JobDefinition[] {
+function registerJobs(bus: NotificationBus): JobDefinition[] {
   return [
     {
       name: 'morning-prep',
       schedule: '30 10 * * *', // 10:30 UTC → 5:30 AM CDT / 4:30 AM CST
-      run: () => runMorningPrep(bot),
-      handler: guarded('morning-prep', () => runMorningPrep(bot)),
+      run: () => runMorningPrep(bus),
+      handler: guarded('morning-prep', () => runMorningPrep(bus)),
     },
     {
       name: 'nightly',
       schedule: '30 4 * * *', // 04:30 UTC → 11:30 PM CDT / 10:30 PM CST (prev day local)
-      run: () => runNightly(bot),
-      handler: guarded('nightly', () => runNightly(bot)),
+      run: () => runNightly(bus),
+      handler: guarded('nightly', () => runNightly(bus)),
     },
     {
       name: 'whoop-sleep',
       schedule: '0 13 * * *', // 13:00 UTC → 8:00 AM CDT / 7:00 AM CST
-      run: () => runWhoopSleepSync(bot),
-      handler: guarded('whoop-sleep', () => runWhoopSleepSync(bot)),
+      run: () => runWhoopSleepSync(bus),
+      handler: guarded('whoop-sleep', () => runWhoopSleepSync(bus)),
     },
     {
       name: 'weekly-nudge',
       schedule: '0 20 * * 5', // 20:00 UTC Friday → 3 PM CDT / 2 PM CST
-      run: () => runWeeklyNudge(bot),
-      handler: guarded('weekly-nudge', () => runWeeklyNudge(bot)),
+      run: () => runWeeklyNudge(bus),
+      handler: guarded('weekly-nudge', () => runWeeklyNudge(bus)),
     },
     {
       name: 'review-nudge',
       schedule: '0 20 28-31 * *', // 20:00 UTC last days of month → 3 PM CDT / 2 PM CST
-      run: () => runReviewNudge(bot),
-      handler: guarded('review-nudge', () => runReviewNudge(bot)),
+      run: () => runReviewNudge(bus),
+      handler: guarded('review-nudge', () => runReviewNudge(bus)),
     },
   ];
 }
@@ -306,12 +301,12 @@ function registerJobs(bot: TelegramBot): JobDefinition[] {
 // Keep a reference to the registered jobs so the heartbeat can access them
 let registeredJobs: JobDefinition[] = [];
 
-export function startScheduler(bot: TelegramBot): void {
+export function startScheduler({ bus }: { bus: NotificationBus }): void {
   if (tasks.length > 0) {
     stopScheduler();
   }
 
-  const jobs = [...registerJobs(bot), ...scanAgentCronJobs(bot)];
+  const jobs = [...registerJobs(bus), ...scanAgentCronJobs(bus)];
   registeredJobs = jobs;
 
   for (const job of jobs) {

@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type TelegramBot from 'node-telegram-bot-api';
 
 const mockReadVaultFile = vi.fn<(path: string) => string | null>();
 const mockParseTag = vi.fn<(content: string, tag: string) => string | null>();
@@ -411,7 +410,9 @@ describe('jobs/morning-prep — executeMorningPrep', () => {
 });
 
 describe('jobs/morning-prep — runMorningPrep', () => {
-  const mockBot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as unknown as TelegramBot;
+  function mockBus() {
+    return { publish: vi.fn() } as any;
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -424,106 +425,114 @@ describe('jobs/morning-prep — runMorningPrep', () => {
   });
 
   it('full success: gather -> synthesize -> write -> commit -> notify', async () => {
-    await runMorningPrep(mockBot);
+    const bus = mockBus();
+    await runMorningPrep(bus);
 
     expect(mockWriteMorningPrep).toHaveBeenCalledOnce();
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(123456, 'Your journal is ready.');
+    expect(bus.publish).toHaveBeenCalledWith({ kind: 'message', userId: 123456, text: 'Your journal is ready.' });
   });
 
   it('idempotent skip: writeMorningPrep returns written=false, no commit or notification', async () => {
     mockWriteMorningPrep.mockReturnValue({ written: false, filepath: '/test/vault/journals/2026_04_09.md' });
+    const bus = mockBus();
 
-    await runMorningPrep(mockBot);
+    await runMorningPrep(bus);
 
     expect(mockWriteMorningPrep).toHaveBeenCalledOnce();
     expect(mockGitCommitAndPush).not.toHaveBeenCalled();
-    expect(mockBot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
-  it('fallback: when Claude synthesis fails, sends a distinct TG message referencing the error', async () => {
+  it('fallback: when Claude synthesis fails, publishes a distinct message referencing the error', async () => {
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'Claude timed out after 120s' });
+    const bus = mockBus();
 
-    await runMorningPrep(mockBot);
+    await runMorningPrep(bus);
 
     expect(mockWriteMorningPrep).toHaveBeenCalledOnce();
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
-    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(sent?.[0]).toBe(123456);
-    expect(sent?.[1]).toContain('fallback');
-    expect(sent?.[1]).toContain('Claude timed out after 120s');
-    expect(sent?.[1]).not.toBe('Your journal is ready.');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).toContain('fallback');
+    expect(text).toContain('Claude timed out after 120s');
+    expect(text).not.toBe('Your journal is ready.');
   });
 
-  it('fallback: redacts absolute paths from synthError before sending to Telegram', async () => {
+  it('fallback: redacts absolute paths from synthError before publishing', async () => {
     mockAskClaudeOneShot.mockResolvedValue({
       text: null,
       error: 'spawn ENOENT /Users/somebody/workspace/jarvis/node_modules/.bin/claude',
     });
+    const bus = mockBus();
 
-    await runMorningPrep(mockBot);
+    await runMorningPrep(bus);
 
-    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(sent?.[1]).not.toContain('/Users/somebody');
-    expect(sent?.[1]).toContain('[path]');
-    expect(sent?.[1]).toContain('spawn ENOENT');
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    expect(text).not.toContain('/Users/somebody');
+    expect(text).toContain('[path]');
+    expect(text).toContain('spawn ENOENT');
   });
 
   it('fallback: caps long synthError messages at 200 characters', async () => {
     const longError = 'Claude error: ' + 'x'.repeat(500);
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: longError });
+    const bus = mockBus();
 
-    await runMorningPrep(mockBot);
+    await runMorningPrep(bus);
 
-    const sent = (mockBot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0];
-    const msg = sent?.[1] as string;
-    // Extract the error substring from the template "... failed: <error>. Review..."
-    const match = msg.match(/failed: (.*?)\. Review/);
+    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    const match = text.match(/failed: (.*?)\. Review/);
     expect(match).not.toBeNull();
     expect(match![1]!.length).toBeLessThanOrEqual(200);
   });
 
   it('git commit is called with exact message "Morning prep"', async () => {
-    await runMorningPrep(mockBot);
+    const bus = mockBus();
+    await runMorningPrep(bus);
 
     expect(mockGitCommitAndPush).toHaveBeenCalledOnce();
     expect(mockGitCommitAndPush.mock.calls[0]![0]).toBe('Morning prep');
   });
 
-  it('TG notification sent to config.TELEGRAM_USER_ID', async () => {
-    await runMorningPrep(mockBot);
+  it('notification published to config.TELEGRAM_USER_ID', async () => {
+    const bus = mockBus();
+    await runMorningPrep(bus);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledOnce();
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(123456, 'Your journal is ready.');
+    expect(bus.publish).toHaveBeenCalledOnce();
+    expect(bus.publish).toHaveBeenCalledWith({ kind: 'message', userId: 123456, text: 'Your journal is ready.' });
   });
 
   it('error in gatherMorningData does not throw', async () => {
     mockGetYesterdayFilename.mockImplementation(() => { throw new Error('time exploded'); });
+    const bus = mockBus();
 
-    await expect(runMorningPrep(mockBot)).resolves.toBeUndefined();
+    await expect(runMorningPrep(bus)).resolves.toBeUndefined();
 
     expect(mockGitCommitAndPush).not.toHaveBeenCalled();
-    expect(mockBot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('error in writeMorningPrep does not throw', async () => {
     mockWriteMorningPrep.mockImplementation(() => { throw new Error('fs write failed'); });
+    const bus = mockBus();
 
-    await expect(runMorningPrep(mockBot)).resolves.toBeUndefined();
+    await expect(runMorningPrep(bus)).resolves.toBeUndefined();
 
     expect(mockGitCommitAndPush).not.toHaveBeenCalled();
-    expect(mockBot.sendMessage).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
   });
 
   it('error in gitCommitAndPush does not throw', async () => {
     mockGitCommitAndPush.mockImplementation(() => { throw new Error('git failed'); });
+    const bus = mockBus();
 
-    await expect(runMorningPrep(mockBot)).resolves.toBeUndefined();
+    await expect(runMorningPrep(bus)).resolves.toBeUndefined();
   });
 
-  it('error in bot.sendMessage does not throw', async () => {
-    (mockBot.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('TG API down'));
+  it('bus.publish throwing does not propagate', async () => {
+    const bus = { publish: vi.fn().mockImplementation(() => { throw new Error('bus down'); }) } as any;
 
-    await expect(runMorningPrep(mockBot)).resolves.toBeUndefined();
+    await expect(runMorningPrep(bus)).resolves.toBeUndefined();
   });
 });

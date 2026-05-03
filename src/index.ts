@@ -10,6 +10,8 @@ import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { getSkillRegistry } from './bot/skill-registry.js';
 import { createLogger, flushLogger } from './utils/logger.js';
+import { NotificationBus } from './transport/notification-bus.js';
+import { createSenders } from './transport/sender.js';
 
 const log = createLogger('main');
 
@@ -28,9 +30,11 @@ restoreReviewSessions();
 
 // Start services
 const bot = createBot();
+const bus = new NotificationBus();
+const { destroy } = createSenders(bot, bus);
 const server = startHttpServer();
-startScheduler(bot);
-startWatcher(bot);
+startScheduler({ bus });
+startWatcher(bus);
 
 // Warm the skill-registry cache. startScheduler() above calls
 // reloadSkillRegistry(), which evicts the cache; without priming here the
@@ -45,8 +49,9 @@ log.info('Jarvis started', {
 // Graceful shutdown
 async function shutdown() {
   log.info('Shutting down...');
-  stopWatcher();
   stopScheduler();
+  stopWatcher();
+  destroy();
   killActiveProcesses();
   await waitForActiveProcesses();
   persistSessions();

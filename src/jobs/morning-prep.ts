@@ -1,4 +1,4 @@
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import { readVaultFile } from '../vault/files.js';
 import { parseTag, parseWeeklyGoals, writeMorningPrep } from '../vault/journal.js';
 import { askClaudeOneShot } from '../ai/claude.js';
@@ -168,21 +168,22 @@ export async function executeMorningPrep(): Promise<MorningPrepResult> {
 
 // Absolute paths can appear in errors like `spawn ENOENT /Users/.../claude` and
 // would leak the vault location over Telegram; cap length as a belt-and-braces.
-function sanitizeErrorForTelegram(msg: string): string {
+export function sanitizeErrorForTelegram(msg: string): string {
   return msg.replace(/\/(?:Users|home|var|tmp|opt|private)\/\S+/g, '[path]').slice(0, 200);
 }
 
-export async function runMorningPrep(bot: TelegramBot): Promise<void> {
+export async function runMorningPrep(bus: NotificationBus): Promise<void> {
   try {
     const result = await executeMorningPrep();
     if (result.status === 'written') {
-      await bot.sendMessage(config.TELEGRAM_USER_ID, 'Your journal is ready.');
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: 'Your journal is ready.' });
     } else if (result.status === 'fallback') {
       const safeError = sanitizeErrorForTelegram(result.synthError);
-      await bot.sendMessage(
-        config.TELEGRAM_USER_ID,
-        `Morning prep wrote a fallback — Claude synth failed: ${safeError}. Review and edit.`
-      );
+      bus.publish({
+        kind: 'message',
+        userId: config.TELEGRAM_USER_ID,
+        text: `Morning prep wrote a fallback — Claude synth failed: ${safeError}. Review and edit.`,
+      });
     }
   } catch (err) {
     log.error('Morning prep failed', { error: String(err) });

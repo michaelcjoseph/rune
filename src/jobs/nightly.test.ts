@@ -875,51 +875,47 @@ describe('jobs/nightly', () => {
   });
 
   describe('runNightly', () => {
-    it('sends summary message to Telegram on success', async () => {
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+    function mockBus() { return { publish: vi.fn() } as any; }
 
-      await runNightly(bot);
+    it('publishes summary message on success', async () => {
+      const bus = mockBus();
 
-      expect(bot.sendMessage).toHaveBeenCalledTimes(1);
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('Nightly complete'));
+      await runNightly(bus);
+
+      expect(bus.publish).toHaveBeenCalledTimes(1);
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('Nightly complete');
     });
 
-    it('sends error message when executeNightly throws', async () => {
-      captureMock.mockImplementation(() => { throw new Error('total failure'); });
-      // Make all steps throw so the error propagates through run() — but run() catches.
-      // Actually executeNightly wraps each step, so it won't throw from step errors.
-      // We need to make something outside the steps throw.
-      // gitCommitAndPush at the end will throw:
+    it('publishes error message when executeNightly throws', async () => {
+      // gitCommitAndPush at the end of executeNightly will throw:
       gitMock.mockImplementation(() => { throw new Error('total failure'); });
 
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
-      await runNightly(bot);
+      const bus = mockBus();
+      await runNightly(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('failed'));
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('failed');
     });
 
-    it('does not throw when both nightly and TG message fail', async () => {
+    it('does not throw when executeNightly throws', async () => {
       gitMock.mockImplementation(() => { throw new Error('git broke'); });
-      const bot = {
-        sendMessage: vi.fn()
-          .mockRejectedValueOnce(new Error('TG down'))   // error message send fails
-          .mockRejectedValueOnce(new Error('TG down')),  // in case called again
-      } as any;
+      const bus = mockBus();
 
-      // Should not throw
-      await expect(runNightly(bot)).resolves.toBeUndefined();
+      await expect(runNightly(bus)).resolves.toBeUndefined();
     });
 
     it('includes step status icons in summary message', async () => {
       captureMock.mockResolvedValue({ captured: 1 });
-      gitMock.mockReturnValue(undefined); // ensure no leftover throw from prior test
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      gitMock.mockReturnValue(undefined);
+      const bus = mockBus();
 
-      await runNightly(bot);
+      await runNightly(bus);
 
-      const msg = bot.sendMessage.mock.calls[0][1] as string;
-      expect(msg).toContain('[+]'); // success icon
-      expect(msg).toContain('[-]'); // skipped icon
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('[+]'); // success icon
+      expect(text).toContain('[-]'); // skipped icon
     });
   });
 });

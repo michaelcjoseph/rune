@@ -1,4 +1,4 @@
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import { getAccessToken, fetchSleep, fetchRecovery, fetchCycles, fetchWorkouts, isConfigured, describeTokenError } from '../integrations/whoop/client.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
@@ -178,17 +178,17 @@ export async function ensureWhoopSyncedForToday(): Promise<void> {
   }
 }
 
-export async function runWhoopSleepSync(bot: TelegramBot): Promise<void> {
+export async function runWhoopSleepSync(bus: NotificationBus): Promise<void> {
   try {
     const result = await executeSleepSync();
     if (result.status === 'synced' && result.detail) {
-      await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop: ${result.detail}`);
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Whoop: ${result.detail}` });
     } else if (result.status === 'error' && result.detail) {
-      await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop sync failed — ${result.detail}`);
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Whoop sync failed — ${result.detail}` });
     } else if (result.status === 'skipped' && result.detail && result.detail !== 'Whoop not configured') {
       // Don't go silent when the API legitimately returned no data — the user was
       // otherwise left wondering whether the sync even ran.
-      await bot.sendMessage(config.TELEGRAM_USER_ID, `Whoop sleep sync: ${result.detail}${result.date ? ` (for ${result.date})` : ''}`);
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Whoop sleep sync: ${result.detail}${result.date ? ` (for ${result.date})` : ''}` });
     }
   } catch (err) {
     log.error('Sleep sync failed', { error: String(err) });

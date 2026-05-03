@@ -1,4 +1,4 @@
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import { listVaultFiles } from '../vault/files.js';
 import { getAllSessions } from '../vault/sessions.js';
 import { getKBStats } from '../kb/engine.js';
@@ -10,7 +10,7 @@ import config from '../config.js';
 const log = createLogger('nudges');
 
 /** Friday 3pm — weekly review nudge with week stats. */
-export async function runWeeklyNudge(bot: TelegramBot): Promise<void> {
+export async function runWeeklyNudge(bus: NotificationBus): Promise<void> {
   try {
     const { start, end, filenames } = getWeekRange();
 
@@ -39,7 +39,7 @@ export async function runWeeklyNudge(bot: TelegramBot): Promise<void> {
       `Send /weekly to start.`,
     ];
 
-    await bot.sendMessage(config.TELEGRAM_USER_ID, lines.join('\n'));
+    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: lines.join('\n') });
     log.info('Weekly nudge sent', { journalCount, sessionCount, messageCount });
   } catch (err) {
     log.error('Weekly nudge failed', { error: String(err) });
@@ -47,7 +47,7 @@ export async function runWeeklyNudge(bot: TelegramBot): Promise<void> {
 }
 
 /** End-of-month — review reminder with cadence logic. */
-export async function runReviewNudge(bot: TelegramBot): Promise<void> {
+export async function runReviewNudge(bus: NotificationBus): Promise<void> {
   try {
     const { month, monthName, day, lastDay } = getMonthInfo();
 
@@ -72,7 +72,7 @@ export async function runReviewNudge(bot: TelegramBot): Promise<void> {
     }
 
     const message = `End of ${monthName} — time for your ${reviewType} review.\n\nSend ${command} to start.`;
-    await bot.sendMessage(config.TELEGRAM_USER_ID, message);
+    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: message });
     log.info('Review nudge sent', { month, reviewType });
   } catch (err) {
     log.error('Review nudge failed', { error: String(err) });

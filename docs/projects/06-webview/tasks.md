@@ -12,15 +12,15 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Create `src/transport/webview-sender.ts`: implements `MessageSender`; maintains `Map<userId, Set<WebSocket>>`; serializes outbound frames as `{ kind: 'message', text, approval? }` JSON; no-ops when no connection registered. (Phase A: register/unregister no-ops; Phase B wires real connections.)
 - [x] Vitest: `src/transport/notification-bus.test.ts` — fan-out to multiple subscribers; one failing subscriber doesn't block the others.
 - [x] Vitest: `src/transport/telegram-sender.test.ts` — chunking and newline-preferring splits match `sendLongMessage` parity for representative inputs (short, exactly 4096, multi-paragraph, no newlines).
-- [ ] Modify `src/index.ts`: instantiate `bus`; create senders; pass them into the scheduler and bot init.
-- [ ] Modify `src/jobs/scheduler.ts`: signature change — accept `{ bus, senders }` instead of `bot`. Cron job functions receive the bus.
-- [ ] Refactor cron jobs to publish to bus instead of calling `bot.sendMessage`:
-  - [ ] `src/jobs/morning-prep.ts`
-  - [ ] `src/jobs/nightly.ts`
-  - [ ] `src/jobs/whoop-sync.ts`
-  - [ ] `src/jobs/nudges.ts`
-  - [ ] `src/vault/watcher.ts`
-  - [ ] `src/jobs/intent-scan.ts`
+- [x] Modify `src/index.ts`: instantiate `bus`; create senders; pass them into the scheduler and bot init.
+- [x] Modify `src/jobs/scheduler.ts`: signature change — accept `{ bus }` instead of `bot`. Cron job functions receive the bus.
+- [x] Refactor cron jobs to publish to bus instead of calling `bot.sendMessage`:
+  - [x] `src/jobs/morning-prep.ts`
+  - [x] `src/jobs/nightly.ts`
+  - [x] `src/jobs/whoop-sync.ts`
+  - [x] `src/jobs/nudges.ts`
+  - [x] `src/vault/watcher.ts`
+  - [x] `src/jobs/intent-scan.ts`
 - [ ] Refactor handler / command / review callsites to use `senders.tg` instead of `bot.sendMessage`:
   - [ ] `src/bot/handlers/text.ts`
   - [ ] `src/bot/handlers/url.ts`

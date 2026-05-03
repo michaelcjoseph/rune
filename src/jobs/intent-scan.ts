@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import cron from 'node-cron';
 import config from '../config.js';
 import { askHaikuOneShot } from '../ai/claude.js';
@@ -9,7 +9,6 @@ import { intentLogPath, type IntentLogEntry } from '../utils/intent-log.js';
 // data provider for several cross-cutting features (cron, resolver, scan).
 import { getSkillRegistry } from '../bot/skill-registry.js';
 import { appendProposals, readProposalQueue, type Proposal } from './proposal-queue.js';
-import { sendLongMessage } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('intent-scan');
@@ -207,10 +206,10 @@ export function dedupeAgainstPending(
 
 /** Run the Ask-Twice intent scan. Reads `logs/intent-log.jsonl` (last 30 days),
  *  groups via a single Haiku one-shot, validates and dedupes, appends up to 3
- *  proposals to `logs/proposal-queue.json`. When `bot` is provided and any
+ *  proposals to `logs/proposal-queue.json`. When `bus` is provided and any
  *  proposals were drafted, posts a short summary to Telegram. Idempotent with
  *  respect to failure — partial writes never land. */
-export async function runIntentScan(bot?: TelegramBot): Promise<IntentScanResult> {
+export async function runIntentScan(bus?: NotificationBus): Promise<IntentScanResult> {
   const entries = filterRecent(readIntentLog());
   if (entries.length < MIN_ENTRIES_FOR_SCAN) {
     const detail = `Skipping — only ${entries.length} entries in window (need ≥ ${MIN_ENTRIES_FOR_SCAN})`;
@@ -248,18 +247,14 @@ export async function runIntentScan(bot?: TelegramBot): Promise<IntentScanResult
   appendProposals(proposals);
   log.info(`Queued ${proposals.length} proposal(s)`, { titles: proposals.map(p => p.title) });
 
-  if (bot) {
+  if (bus) {
     const summary = [
       `Ask-Twice scan drafted ${proposals.length} proposal(s):`,
       ...proposals.map(p => `• ${p.title} — ${p.rationale}`),
       '',
       'Review in your next /weekly.',
     ].join('\n');
-    try {
-      await sendLongMessage(bot, config.TELEGRAM_USER_ID, summary);
-    } catch (err) {
-      log.warn('Failed to post scan summary to Telegram', { error: (err as Error).message });
-    }
+    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: summary });
   }
 
   return {

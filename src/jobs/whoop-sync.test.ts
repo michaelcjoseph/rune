@@ -518,93 +518,95 @@ describe('jobs/whoop-sync', () => {
   });
 
   describe('runWhoopSleepSync', () => {
-    it('sends Telegram message on successful sync', async () => {
+    function mockBus() { return { publish: vi.fn() } as any; }
+
+    it('publishes message on successful sync', async () => {
       fetchSleepMock.mockResolvedValue(ok([makeSleep()]));
       fetchRecoveryMock.mockResolvedValue(ok([makeRecovery()]));
-      // Need readMock to return the written data for trends
       readMock.mockReturnValue(null);
 
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
-      await runWhoopSleepSync(bot);
+      const bus = mockBus();
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('Whoop:'));
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('Whoop:');
     });
 
-    it('does not send message when sync is skipped for "Whoop not configured"', async () => {
+    it('does not publish when sync is skipped for "Whoop not configured"', async () => {
       isConfiguredMock.mockReturnValue(false);
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
-      await runWhoopSleepSync(bot);
+      const bus = mockBus();
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).not.toHaveBeenCalled();
+      expect(bus.publish).not.toHaveBeenCalled();
     });
 
-    it('sends Telegram message when sync is skipped due to no data (distinct from not-configured)', async () => {
+    it('publishes message when sync is skipped due to no data (distinct from not-configured)', async () => {
       fetchSleepMock.mockResolvedValue(ok([]));
       fetchRecoveryMock.mockResolvedValue(ok([]));
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      const bus = mockBus();
 
-      await runWhoopSleepSync(bot);
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledOnce();
-      const call = bot.sendMessage.mock.calls[0];
-      expect(call[0]).toBe(12345);
-      expect(call[1]).toContain('No sleep data available');
-      expect(call[1]).toContain('2026-04-11');
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const { userId, text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(userId).toBe(12345);
+      expect(text).toContain('No sleep data available');
+      expect(text).toContain('2026-04-11');
     });
 
-    it('sends Telegram error when both sleep and recovery endpoints fail', async () => {
+    it('publishes error message when both sleep and recovery endpoints fail', async () => {
       fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v2/activity/sleep'));
       fetchRecoveryMock.mockResolvedValue(apiErr('HTTP 500 from /v2/recovery'));
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      const bus = mockBus();
 
-      await runWhoopSleepSync(bot);
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('Whoop sync failed'));
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('HTTP 500'));
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('Whoop sync failed');
+      expect(text).toContain('HTTP 500');
     });
 
-    it('regression: 404s on both endpoints produce the exact Telegram string previously seen, but referencing v2 paths', async () => {
-      // Locks in the reported failure mode AND that we are now hitting /v2 endpoints.
-      // If this test ever starts failing because it mentions /v1, we've regressed the migration.
+    it('regression: 404s on both endpoints produce the exact message previously seen, but referencing v2 paths', async () => {
       fetchSleepMock.mockResolvedValue(apiErr('HTTP 404 from /v2/activity/sleep'));
       fetchRecoveryMock.mockResolvedValue(apiErr('HTTP 404 from /v2/recovery'));
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      const bus = mockBus();
 
-      await runWhoopSleepSync(bot);
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(
-        12345,
-        'Whoop sync failed — API errors: sleep=HTTP 404 from /v2/activity/sleep; recovery=HTTP 404 from /v2/recovery',
-      );
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toBe('Whoop sync failed — API errors: sleep=HTTP 404 from /v2/activity/sleep; recovery=HTTP 404 from /v2/recovery');
     });
 
-    it('on partial API failure (sleep errored, recovery empty), surfaces it in the skipped-notify message', async () => {
+    it('on partial API failure (sleep errored, recovery empty), surfaces it in the skipped message', async () => {
       fetchSleepMock.mockResolvedValue(apiErr('HTTP 500 from /v2/activity/sleep'));
       fetchRecoveryMock.mockResolvedValue(ok([]));
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+      const bus = mockBus();
 
-      await runWhoopSleepSync(bot);
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledOnce();
-      const call = bot.sendMessage.mock.calls[0];
-      expect(call[1]).toContain('No sleep data available');
-      expect(call[1]).toContain('partial API errors');
-      expect(call[1]).toContain('sleep=HTTP 500');
+      expect(bus.publish).toHaveBeenCalledOnce();
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('No sleep data available');
+      expect(text).toContain('partial API errors');
+      expect(text).toContain('sleep=HTTP 500');
     });
 
-    it('sends Telegram alert when sync errors due to bad token', async () => {
+    it('publishes error alert when sync errors due to bad token', async () => {
       getTokenMock.mockResolvedValue({ ok: false, reason: 'refresh_rejected', status: 401 });
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
-      await runWhoopSleepSync(bot);
+      const bus = mockBus();
+      await runWhoopSleepSync(bus);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('Whoop sync failed'));
-      expect(bot.sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining('HTTP 401'));
+      const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+      expect(text).toContain('Whoop sync failed');
+      expect(text).toContain('HTTP 401');
     });
 
     it('does not throw when sync errors', async () => {
       getTokenMock.mockRejectedValue(new Error('keychain crashed'));
-      const bot = { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
-      await expect(runWhoopSleepSync(bot)).resolves.toBeUndefined();
+      const bus = mockBus();
+      await expect(runWhoopSleepSync(bus)).resolves.toBeUndefined();
     });
   });
 

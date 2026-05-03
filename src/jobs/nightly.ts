@@ -1,4 +1,5 @@
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
+import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
@@ -442,17 +443,13 @@ export function formatSummary(result: NightlyResult): string {
   return `Nightly complete:\n${lines.join('\n')}`;
 }
 
-export async function runNightly(bot: TelegramBot): Promise<void> {
+export async function runNightly(bus: NotificationBus): Promise<void> {
   try {
     const result = await executeNightly();
     const summary = formatSummary(result);
-    await bot.sendMessage(config.TELEGRAM_USER_ID, summary);
+    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: summary });
   } catch (err) {
     log.error('Nightly processing failed', { error: String(err) });
-    try {
-      await bot.sendMessage(config.TELEGRAM_USER_ID, `Nightly processing failed: ${String(err)}`);
-    } catch {
-      // TG send failed too — just log
-    }
+    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Nightly processing failed: ${sanitizeErrorForTelegram(String(err))}` });
   }
 }

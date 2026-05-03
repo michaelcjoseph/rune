@@ -30,10 +30,6 @@ vi.mock('../bot/skill-registry.js', () => ({
   reloadSkillRegistry: vi.fn(),
 }));
 
-vi.mock('../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn(async () => {}),
-}));
-
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({
     info: vi.fn(),
@@ -72,11 +68,16 @@ const { startScheduler, stopScheduler, recordJobRun, scanAgentCronJobs } = await
 const { readFileSync, writeFileSync, readdirSync } = await import('node:fs');
 const { runMorningPrep } = await import('./morning-prep.js');
 const { loadAgentDef, runAgent } = await import('../ai/claude.js');
-const { sendLongMessage } = await import('../integrations/telegram/client.js');
 
 // Minimal cron-validation stub: the real node-cron module is mocked at the top,
 // so we need to expose `.validate` on the mocked default so scheduler.ts can call it.
 // Done via module augmentation below.
+
+function mockBus() {
+  return { publish: vi.fn(), on: vi.fn(), off: vi.fn() } as any;
+}
+
+const SCHEDULER_ARGS = { bus: mockBus() };
 
 describe('jobs/scheduler', () => {
   beforeEach(() => {
@@ -99,7 +100,7 @@ describe('jobs/scheduler', () => {
   });
 
   it('startScheduler calls cron.schedule with UTC timezone', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
 
     expect(mockSchedule).toHaveBeenCalled();
     const options = mockSchedule.mock.calls[0]![2] as unknown as { timezone: string };
@@ -107,27 +108,27 @@ describe('jobs/scheduler', () => {
   });
 
   it('startScheduler registers the expected number of jobs (5)', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
 
     expect(mockSchedule).toHaveBeenCalledTimes(5);
   });
 
   it('startScheduler passes the morning-prep cron expression in UTC', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
 
     const cronExpr = mockSchedule.mock.calls[0]![0] as unknown as string;
     expect(cronExpr).toBe('30 10 * * *'); // 5:30 AM CDT
   });
 
   it('stopScheduler calls .stop() on all registered tasks', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
     stopScheduler();
 
     expect(mockStop).toHaveBeenCalledTimes(5);
   });
 
   it('stopScheduler clears the task list — second call does not error or re-stop', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
     stopScheduler();
     vi.clearAllMocks();
 
@@ -137,11 +138,11 @@ describe('jobs/scheduler', () => {
   });
 
   it('startScheduler can re-register jobs after stopScheduler', () => {
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
     stopScheduler();
     vi.clearAllMocks();
 
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
     expect(mockSchedule).toHaveBeenCalledTimes(5);
 
     stopScheduler();
@@ -168,7 +169,7 @@ describe('jobs/scheduler', () => {
       }),
     );
 
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
 
     // morning-prep's guarded handler should have been called
     // The handler is wrapped by guarded(), which calls runMorningPrep
@@ -187,7 +188,7 @@ describe('jobs/scheduler', () => {
       }),
     );
 
-    startScheduler({} as any);
+    startScheduler(SCHEDULER_ARGS);
 
     expect(runMorningPrep).not.toHaveBeenCalled();
   });
@@ -207,7 +208,7 @@ describe('jobs/scheduler', () => {
         return { prompt: 'body', tools: [] }; // no cron
       });
 
-      const jobs = scanAgentCronJobs({} as any);
+      const jobs = scanAgentCronJobs(mockBus());
       expect(jobs.map(j => j.name)).toEqual(['agent:sec-filings-watcher']);
       expect(jobs[0]!.schedule).toBe('0 7 * * 1');
     });
@@ -224,7 +225,7 @@ describe('jobs/scheduler', () => {
       });
       mockValidate.mockReturnValueOnce(false);
 
-      const jobs = scanAgentCronJobs({} as any);
+      const jobs = scanAgentCronJobs(mockBus());
       expect(jobs).toEqual([]);
     });
 
@@ -236,13 +237,13 @@ describe('jobs/scheduler', () => {
       }) as any);
       vi.mocked(loadAgentDef).mockReturnValue({ prompt: 'body', tools: [], cron: '0 9 * * *' });
 
-      const jobs = scanAgentCronJobs({} as any);
+      const jobs = scanAgentCronJobs(mockBus());
       expect(jobs).toHaveLength(1);
       // loadAgentDef should have been called exactly once (second dir's dup is skipped)
       expect(vi.mocked(loadAgentDef)).toHaveBeenCalledTimes(1);
     });
 
-    it('posts output to Telegram when cron_chat is true', async () => {
+    it('publishes output to bus when cron_chat is true', async () => {
       vi.mocked(readdirSync).mockImplementation(((dir: string) => {
         if (dir.includes('/test/project/')) return ['chatty.md'];
         return [];
@@ -256,14 +257,15 @@ describe('jobs/scheduler', () => {
       });
       vi.mocked(runAgent).mockResolvedValue({ text: 'chatty output', error: null });
 
-      const jobs = scanAgentCronJobs({ sendMessage: vi.fn() } as any);
+      const bus = mockBus();
+      const jobs = scanAgentCronJobs(bus);
       await jobs[0]!.run();
 
       expect(vi.mocked(runAgent)).toHaveBeenCalledWith('chatty', 'do it');
-      expect(vi.mocked(sendLongMessage)).toHaveBeenCalledWith(expect.anything(), 42, 'chatty output');
+      expect(bus.publish).toHaveBeenCalledWith({ kind: 'message', userId: 42, text: 'chatty output' });
     });
 
-    it('logs without posting to Telegram when cron_chat is false or missing', async () => {
+    it('does not publish when cron_chat is false or missing', async () => {
       vi.mocked(readdirSync).mockImplementation(((dir: string) => {
         if (dir.includes('/test/project/')) return ['quiet.md'];
         return [];
@@ -276,14 +278,15 @@ describe('jobs/scheduler', () => {
       });
       vi.mocked(runAgent).mockResolvedValue({ text: 'quiet output', error: null });
 
-      const jobs = scanAgentCronJobs({} as any);
+      const bus = mockBus();
+      const jobs = scanAgentCronJobs(bus);
       await jobs[0]!.run();
 
       expect(vi.mocked(runAgent)).toHaveBeenCalledWith('quiet', '');
-      expect(vi.mocked(sendLongMessage)).not.toHaveBeenCalled();
+      expect(bus.publish).not.toHaveBeenCalled();
     });
 
-    it('logs error and does not post when runAgent returns an error', async () => {
+    it('logs error and does not publish when runAgent returns an error', async () => {
       vi.mocked(readdirSync).mockImplementation(((dir: string) => {
         if (dir.includes('/test/project/')) return ['failing.md'];
         return [];
@@ -296,10 +299,11 @@ describe('jobs/scheduler', () => {
       });
       vi.mocked(runAgent).mockResolvedValue({ text: null, error: 'agent exploded' });
 
-      const jobs = scanAgentCronJobs({} as any);
+      const bus = mockBus();
+      const jobs = scanAgentCronJobs(bus);
       await jobs[0]!.run(); // must not throw
 
-      expect(vi.mocked(sendLongMessage)).not.toHaveBeenCalled();
+      expect(bus.publish).not.toHaveBeenCalled();
     });
 
     it('startScheduler merges agent-cron jobs with the hardcoded jobs', () => {
@@ -314,10 +318,10 @@ describe('jobs/scheduler', () => {
       });
 
       // Baseline hardcoded count (no readdirSync hits yet — happens inside scanAgentCronJobs)
-      const agentJobs = scanAgentCronJobs({} as any);
+      const agentJobs = scanAgentCronJobs(mockBus());
       mockSchedule.mockClear();
 
-      startScheduler({} as any);
+      startScheduler(SCHEDULER_ARGS);
       // Hardcoded jobs + scanned agent jobs — avoid hardcoding the count so
       // future additions to registerJobs don't silently break this test.
       expect(mockSchedule.mock.calls.length).toBeGreaterThan(agentJobs.length);
@@ -338,7 +342,7 @@ describe('jobs/scheduler', () => {
       });
       mockValidate.mockReturnValueOnce(true); // validate would accept it
 
-      const jobs = scanAgentCronJobs({} as any);
+      const jobs = scanAgentCronJobs(mockBus());
       expect(jobs).toEqual([]);
     });
 
@@ -348,7 +352,7 @@ describe('jobs/scheduler', () => {
         err.code = 'ENOENT';
         throw err;
       }) as any);
-      const jobs = scanAgentCronJobs({} as any);
+      const jobs = scanAgentCronJobs(mockBus());
       expect(jobs).toEqual([]);
     });
   });

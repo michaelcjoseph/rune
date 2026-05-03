@@ -1,6 +1,6 @@
 import { watch, existsSync, statSync, readFileSync, readdirSync, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import type TelegramBot from 'node-telegram-bot-api';
+import type { NotificationBus } from '../transport/notification-bus.js';
 import config from '../config.js';
 import { enqueue } from '../kb/queue.js';
 import { createLogger } from '../utils/logger.js';
@@ -23,7 +23,7 @@ export function extractTitle(filepath: string): string | null {
   }
 }
 
-export function startWatcher(bot: TelegramBot): void {
+export function startWatcher(bus: NotificationBus): void {
   const dir = join(config.VAULT_DIR, READWISE_DIR);
 
   if (!existsSync(dir)) {
@@ -60,11 +60,10 @@ export function startWatcher(bot: TelegramBot): void {
     enqueue(relativePath);
     log.info('New Readwise article detected', { filename, title });
 
-    void bot.sendMessage(
-      config.TELEGRAM_USER_ID,
-      `New article: ${title}\n\nQueued for ingestion. Reply /ingest to process now.`,
-    ).catch((err: Error) => {
-      log.error('Failed to send article notification', { error: err.message });
+    bus.publish({
+      kind: 'message',
+      userId: config.TELEGRAM_USER_ID,
+      text: `New article: ${title}\n\nQueued for ingestion. Reply /ingest to process now.`,
     });
   });
 
