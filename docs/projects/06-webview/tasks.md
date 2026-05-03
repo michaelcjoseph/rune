@@ -6,12 +6,12 @@ Not started. See [spec.md](spec.md) for details.
 
 > Server-side refactor only. No user-visible change. Independently shippable.
 
-- [ ] Create `src/transport/sender.ts`: `MessageSender` interface (`send`, `startTyping`, `stopTyping`), `SendOpts` type with optional `approval` sidecar, `createSenders(bot, bus)` factory.
-- [ ] Create `src/transport/notification-bus.ts`: typed wrapper over Node `EventEmitter` with `publish(event)` / `on(kind, handler)`.
-- [ ] Create `src/transport/telegram-sender.ts`: implements `MessageSender`; delegates `send` to `sendLongMessage(bot, …)` from `src/integrations/telegram/client.ts`; ignores `opts.approval`.
-- [ ] Create `src/transport/webview-sender.ts`: implements `MessageSender`; maintains `Map<userId, Set<WebSocket>>`; serializes outbound frames as `{ kind: 'message', text, approval? }` JSON; no-ops when no connection registered. (Phase A: register/unregister no-ops; Phase B wires real connections.)
-- [ ] Vitest: `src/transport/notification-bus.test.ts` — fan-out to multiple subscribers; one failing subscriber doesn't block the others.
-- [ ] Vitest: `src/transport/telegram-sender.test.ts` — chunking and newline-preferring splits match `sendLongMessage` parity for representative inputs (short, exactly 4096, multi-paragraph, no newlines).
+- [x] Create `src/transport/sender.ts`: `MessageSender` interface (`send`, `startTyping`, `stopTyping`), `SendOpts` type with optional `approval` sidecar, `createSenders(bot, bus)` factory.
+- [x] Create `src/transport/notification-bus.ts`: typed wrapper over Node `EventEmitter` with `publish(event)` / `on(kind, handler)`.
+- [x] Create `src/transport/telegram-sender.ts`: implements `MessageSender`; delegates `send` to `sendLongMessage(bot, …)` from `src/integrations/telegram/client.ts`; ignores `opts.approval`.
+- [x] Create `src/transport/webview-sender.ts`: implements `MessageSender`; maintains `Map<userId, Set<WebSocket>>`; serializes outbound frames as `{ kind: 'message', text, approval? }` JSON; no-ops when no connection registered. (Phase A: register/unregister no-ops; Phase B wires real connections.)
+- [x] Vitest: `src/transport/notification-bus.test.ts` — fan-out to multiple subscribers; one failing subscriber doesn't block the others.
+- [x] Vitest: `src/transport/telegram-sender.test.ts` — chunking and newline-preferring splits match `sendLongMessage` parity for representative inputs (short, exactly 4096, multi-paragraph, no newlines).
 - [ ] Modify `src/index.ts`: instantiate `bus`; create senders; pass them into the scheduler and bot init.
 - [ ] Modify `src/jobs/scheduler.ts`: signature change — accept `{ bus, senders }` instead of `bot`. Cron job functions receive the bus.
 - [ ] Refactor cron jobs to publish to bus instead of calling `bot.sendMessage`:

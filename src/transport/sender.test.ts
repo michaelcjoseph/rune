@@ -1,0 +1,141 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock logger to suppress output
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+// Mock config
+vi.mock('../config.js', () => ({
+  default: {
+    TG_MAX_MESSAGE_LENGTH: 4096,
+    TELEGRAM_BOT_TOKEN: 'test-token',
+    TELEGRAM_USER_ID: 123,
+  },
+}));
+
+// Mock telegram client
+vi.mock('../integrations/telegram/client.js', () => ({
+  sendLongMessage: vi.fn().mockResolvedValue(undefined),
+  startTyping: vi.fn().mockReturnValue(1),
+  stopTyping: vi.fn(),
+}));
+
+const { createSenders } = await import('./sender.js');
+const { NotificationBus } = await import('./notification-bus.js');
+
+const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+
+function mockBot() {
+  return {
+    sendMessage: vi.fn().mockResolvedValue({}),
+    sendChatAction: vi.fn().mockResolvedValue(true),
+  } as any;
+}
+
+describe('createSenders', () => {
+  let bot: ReturnType<typeof mockBot>;
+  let bus: InstanceType<typeof NotificationBus>;
+
+  beforeEach(() => {
+    bot = mockBot();
+    bus = new NotificationBus();
+  });
+
+  describe('return shape', () => {
+    it('returns an object with tg, webview, and destroy', () => {
+      const { tg, webview, destroy } = createSenders(bot, bus);
+      expect(tg).toBeDefined();
+      expect(webview).toBeDefined();
+      expect(typeof destroy).toBe('function');
+    });
+
+    it('tg sender has name "telegram"', () => {
+      const { tg } = createSenders(bot, bus);
+      expect(tg.name).toBe('telegram');
+    });
+
+    it('webview sender has name "webview"', () => {
+      const { webview } = createSenders(bot, bus);
+      expect(webview.name).toBe('webview');
+    });
+
+    it('returns distinct instances for tg and webview', () => {
+      const { tg, webview } = createSenders(bot, bus);
+      expect(tg).not.toBe(webview);
+    });
+  });
+
+  describe('bus "message" event fan-out', () => {
+    it('publishing a message event calls tg.send with the correct userId and text', async () => {
+      const { tg } = createSenders(bot, bus);
+      const tgSendSpy = vi.spyOn(tg, 'send').mockResolvedValue(undefined);
+
+      bus.publish({ kind: 'message', userId: 42, text: 'hello tg' });
+
+      // Give the microtask queue a tick (void + catch are async)
+      await flushMicrotasks();
+
+      expect(tgSendSpy).toHaveBeenCalledOnce();
+      expect(tgSendSpy).toHaveBeenCalledWith(42, 'hello tg');
+    });
+
+    it('publishing a message event calls webview.send with the correct userId and text', async () => {
+      const { webview } = createSenders(bot, bus);
+      const webviewSendSpy = vi.spyOn(webview, 'send').mockResolvedValue(undefined);
+
+      bus.publish({ kind: 'message', userId: 42, text: 'hello webview' });
+
+      await flushMicrotasks();
+
+      expect(webviewSendSpy).toHaveBeenCalledOnce();
+      expect(webviewSendSpy).toHaveBeenCalledWith(42, 'hello webview');
+    });
+
+    it('publishing a message event fans out to both senders', async () => {
+      const { tg, webview } = createSenders(bot, bus);
+      const tgSendSpy = vi.spyOn(tg, 'send').mockResolvedValue(undefined);
+      const webviewSendSpy = vi.spyOn(webview, 'send').mockResolvedValue(undefined);
+
+      bus.publish({ kind: 'message', userId: 99, text: 'broadcast' });
+
+      await flushMicrotasks();
+
+      expect(tgSendSpy).toHaveBeenCalledWith(99, 'broadcast');
+      expect(webviewSendSpy).toHaveBeenCalledWith(99, 'broadcast');
+    });
+
+    it('multiple published events each fan out to both senders', async () => {
+      const { tg, webview } = createSenders(bot, bus);
+      const tgSendSpy = vi.spyOn(tg, 'send').mockResolvedValue(undefined);
+      const webviewSendSpy = vi.spyOn(webview, 'send').mockResolvedValue(undefined);
+
+      bus.publish({ kind: 'message', userId: 1, text: 'first' });
+      bus.publish({ kind: 'message', userId: 2, text: 'second' });
+
+      await flushMicrotasks();
+
+      expect(tgSendSpy).toHaveBeenCalledTimes(2);
+      expect(webviewSendSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('tg.send failure is caught and webview.send still executes', async () => {
+      const { tg, webview } = createSenders(bot, bus);
+      vi.spyOn(tg, 'send').mockRejectedValue(new Error('tg down'));
+      const webviewSendSpy = vi.spyOn(webview, 'send').mockResolvedValue(undefined);
+
+      expect(() =>
+        bus.publish({ kind: 'message', userId: 1, text: 'error test' }),
+      ).not.toThrow();
+
+      await flushMicrotasks();
+
+      expect(webviewSendSpy).toHaveBeenCalledWith(1, 'error test');
+    });
+  });
+});

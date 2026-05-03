@@ -53,6 +53,11 @@ src/
 │       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
 │       ├── learn-list.ts    # /learn-list — echo the current prepended learnings
 │       └── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
+├── transport/
+│   ├── sender.ts            # MessageSender interface, SendOpts type, createSenders(bot, bus) factory; subscribes both senders to bus; returns { tg, webview, destroy }
+│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; fault-isolates failing subscribers
+│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; shutdown() drains timers
+│   └── webview-sender.ts    # WebviewSender implements MessageSender; Phase A no-ops; shutdown() stub
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
