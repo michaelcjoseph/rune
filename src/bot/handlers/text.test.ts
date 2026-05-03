@@ -15,6 +15,8 @@ vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
   createSession: vi.fn(),
   updateSession: vi.fn(),
+  setSessionModel: vi.fn(),
+  appendMessageToSession: vi.fn(),
 }));
 vi.mock('../../ai/claude.js', () => ({
   askClaude: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('../../integrations/telegram/client.js', () => ({
   stopTyping: vi.fn((i: NodeJS.Timeout) => clearInterval(i)),
 }));
 vi.mock('../commands/fresh.js', () => ({ handleFresh: vi.fn() }));
+vi.mock('../commands/fresh-full.js', () => ({ handleFreshFull: vi.fn() }));
 vi.mock('../commands/journal.js', () => ({ handleJournal: vi.fn() }));
 vi.mock('../commands/ask.js', () => ({ handleAsk: vi.fn() }));
 vi.mock('../commands/status.js', () => ({ handleStatus: vi.fn() }));
@@ -70,6 +73,7 @@ const { appendIntent } = await import('../../utils/intent-log.js');
 const { runAgent } = await import('../../ai/claude.js');
 const { handleFamily } = await import('../commands/family.js');
 const { handleFresh } = await import('../commands/fresh.js');
+const { handleFreshFull } = await import('../commands/fresh-full.js');
 const { handleJournal } = await import('../commands/journal.js');
 const { handleAsk } = await import('../commands/ask.js');
 const { handleStatus } = await import('../commands/status.js');
@@ -102,6 +106,12 @@ describe('text handler routing', () => {
   it('routes /fresh', async () => {
     await handleTextMessage(mockBot(), msg('/fresh'));
     expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
+  });
+
+  it('routes /fresh-full before /fresh so the more-specific prefix wins', async () => {
+    await handleTextMessage(mockBot(), msg('/fresh-full'));
+    expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleFresh).not.toHaveBeenCalled();
   });
 
   it('routes /journal with text', async () => {

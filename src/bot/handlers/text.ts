@@ -1,12 +1,13 @@
 import TelegramBot from 'node-telegram-bot-api';
 import config from '../../config.js';
-import { getSession, createSession, updateSession, setSessionModel } from '../../vault/sessions.js';
+import { getSession, createSession, updateSession, setSessionModel, appendMessageToSession } from '../../vault/sessions.js';
 import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
 import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('text-handler');
 import { handleFresh } from '../commands/fresh.js';
+import { handleFreshFull } from '../commands/fresh-full.js';
 import { handleJournal } from '../commands/journal.js';
 import { handleAsk } from '../commands/ask.js';
 import { handleStatus } from '../commands/status.js';
@@ -47,6 +48,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
   const text = (msg.text || '').trim();
   if (!text) return;
 
+  if (text.startsWith('/fresh-full')) return handleFreshFull(bot, chatId);
   if (text.startsWith('/fresh')) return handleFresh(bot, chatId);
   if (text.startsWith('/journal ')) return handleJournal(bot, chatId, text.slice('/journal '.length).trim());
   if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
@@ -213,6 +215,7 @@ async function invokeSkill(
     case 'learn': return handleLearn(bot, chatId, args || message);
     case 'learn-list': return handleLearnList(bot, chatId);
     case 'fresh': return handleFresh(bot, chatId);
+    case 'fresh-full': return handleFreshFull(bot, chatId);
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
   }
@@ -264,6 +267,8 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
     session = createSession(chatId, text, config.CONVERSATION_MODEL);
   }
 
+  appendMessageToSession(chatId, 'user', text);
+
   const typing = startTyping(bot, chatId);
   try {
     const result = await askClaudeWithContext(
@@ -281,11 +286,13 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
       return;
     }
 
+    const rawReply = result.text!;
+    appendMessageToSession(chatId, 'assistant', rawReply);
     updateSession(chatId);
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
-    const reply = `${result.text!}\n\n_— chatting · /fresh to end_`;
+    const reply = `${rawReply}\n\n_— chatting · /fresh to end_`;
     await sendLongMessage(bot, chatId, reply);
   } catch (err) {
     stopTyping(typing);
@@ -380,6 +387,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/family — 14-day family mention scan',
     '/career — active job applications',
     '/fresh — log conversation to journal, reset session',
+    '/fresh-full — log full verbatim transcript to journal with speaker labels, reset session',
     '/journal <text> — append entry to today\'s journal',
     '/ask <question> — one-shot vault query',
     '/kb <question> — query the knowledge base',

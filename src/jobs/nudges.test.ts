@@ -79,8 +79,8 @@ describe('jobs/nudges — runWeeklyNudge', () => {
       'journals/2026_04_09.md',
     ]);
     vi.mocked(getAllSessions).mockReturnValue([
-      [123, { sessionId: 'a', lastActivity: '', messageCount: 10, firstMessage: '', model: '' }],
-      [456, { sessionId: 'b', lastActivity: '', messageCount: 5, firstMessage: '', model: '' }],
+      [123, { sessionId: 'a', lastActivity: '', messageCount: 10, firstMessage: '', model: '', messages: [] }],
+      [456, { sessionId: 'b', lastActivity: '', messageCount: 5, firstMessage: '', model: '', messages: [] }],
     ]);
     const bus = mockBus();
 
@@ -99,7 +99,7 @@ describe('jobs/nudges — runWeeklyNudge', () => {
   it('shows singular forms for 1 entry / 1 session', async () => {
     vi.mocked(listVaultFiles).mockReturnValue(['journals/2026_04_05.md']);
     vi.mocked(getAllSessions).mockReturnValue([
-      [123, { sessionId: 'a', lastActivity: '', messageCount: 3, firstMessage: '', model: '' }],
+      [123, { sessionId: 'a', lastActivity: '', messageCount: 3, firstMessage: '', model: '', messages: [] }],
     ]);
     const bus = mockBus();
 

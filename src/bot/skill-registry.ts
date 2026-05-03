@@ -153,6 +153,11 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     description: 'Save the conversation to the journal and reset the session.',
     triggers: ['start fresh', 'reset the session', 'clear the context'],
   },
+  {
+    name: 'fresh-full',
+    description: 'Save the full verbatim conversation transcript to the journal with speaker labels, reset session.',
+    triggers: ['log full transcript', 'save full conversation', 'log everything verbatim'],
+  },
 ] as const;
 
 /** Minimal projection of AgentDef that buildSkillRegistry needs. Keeping this

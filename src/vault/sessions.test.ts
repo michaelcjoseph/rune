@@ -18,6 +18,8 @@ const {
   deleteSession,
   getAllSessions,
   restoreSessions,
+  appendMessageToSession,
+  getSessionMessages,
 } = await import('./sessions.js');
 
 describe('vault/sessions', () => {
@@ -78,6 +80,73 @@ describe('vault/sessions', () => {
       createSession(1, 'one');
       createSession(2, 'two');
       expect(getAllSessions()).toHaveLength(2);
+    });
+  });
+
+  describe('appendMessageToSession', () => {
+    it('appends a user message to an existing session', () => {
+      createSession(123, 'hello');
+      appendMessageToSession(123, 'user', 'hello world');
+      const messages = getSessionMessages(123);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]!.role).toBe('user');
+      expect(messages[0]!.text).toBe('hello world');
+    });
+
+    it('appends an assistant message', () => {
+      createSession(123, 'hi');
+      appendMessageToSession(123, 'assistant', 'Hello there!');
+      const messages = getSessionMessages(123);
+      expect(messages[0]!.role).toBe('assistant');
+      expect(messages[0]!.text).toBe('Hello there!');
+    });
+
+    it('appends multiple messages in order', () => {
+      createSession(123, 'first');
+      appendMessageToSession(123, 'user', 'msg 1');
+      appendMessageToSession(123, 'assistant', 'reply 1');
+      appendMessageToSession(123, 'user', 'msg 2');
+      const messages = getSessionMessages(123);
+      expect(messages).toHaveLength(3);
+      expect(messages.map(m => m.role)).toEqual(['user', 'assistant', 'user']);
+      expect(messages.map(m => m.text)).toEqual(['msg 1', 'reply 1', 'msg 2']);
+    });
+
+    it('records a timestamp (ts) on each message', () => {
+      createSession(123, 'hi');
+      appendMessageToSession(123, 'user', 'timestamped');
+      const ts = getSessionMessages(123)[0]!.ts;
+      expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it('is a no-op when no session exists for chatId', () => {
+      expect(() => appendMessageToSession(999, 'user', 'ghost')).not.toThrow();
+      expect(getSessionMessages(999)).toHaveLength(0);
+    });
+  });
+
+  describe('getSessionMessages', () => {
+    it('returns empty array when no session exists', () => {
+      expect(getSessionMessages(999)).toEqual([]);
+    });
+
+    it('returns empty array for a fresh session with no appended messages', () => {
+      createSession(123, 'hello');
+      expect(getSessionMessages(123)).toEqual([]);
+    });
+
+    it('reflects messages appended after session creation', () => {
+      createSession(123, 'hello');
+      appendMessageToSession(123, 'user', 'first');
+      appendMessageToSession(123, 'assistant', 'second');
+      expect(getSessionMessages(123)).toHaveLength(2);
+    });
+
+    it('returns empty array after session is deleted', () => {
+      createSession(123, 'hello');
+      appendMessageToSession(123, 'user', 'something');
+      deleteSession(123);
+      expect(getSessionMessages(123)).toHaveLength(0);
     });
   });
 

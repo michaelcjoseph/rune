@@ -4,8 +4,17 @@ import { dirname } from 'node:path';
 import config from '../config.js';
 import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
+import { getTodayDate, getTimestamp } from '../utils/time.js';
 
 const log = createLogger('sessions');
+
+const MAX_SESSION_MESSAGES = 200;
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  ts: string;
+}
 
 interface Session {
   sessionId: string;
@@ -13,6 +22,7 @@ interface Session {
   messageCount: number;
   firstMessage: string;
   model: string;
+  messages: ConversationMessage[];
 }
 
 const sessions = new Map<number, Session>();
@@ -28,6 +38,7 @@ export function createSession(chatId: number, firstMessage: string, model?: stri
     messageCount: 1,
     firstMessage: (firstMessage || '').slice(0, 100),
     model: model || config.DEFAULT_CHAT_MODEL,
+    messages: [],
   };
   sessions.set(chatId, session);
   persistSessions();
@@ -56,6 +67,18 @@ export function deleteSession(chatId: number): void {
   persistSessions();
 }
 
+export function appendMessageToSession(chatId: number, role: 'user' | 'assistant', text: string): void {
+  const session = sessions.get(chatId);
+  if (!session) return;
+  if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
+  session.messages.push({ role, text, ts: `${getTodayDate()} ${getTimestamp()}` });
+  // Persistence is deferred to updateSession to avoid 3 synchronous disk writes per turn.
+}
+
+export function getSessionMessages(chatId: number): ConversationMessage[] {
+  return sessions.get(chatId)?.messages ?? [];
+}
+
 export function getAllSessions(): [number, Session][] {
   return [...sessions.entries()];
 }
@@ -65,6 +88,7 @@ export function restoreSessions(): void {
     const data = readFileSync(config.SESSIONS_FILE, 'utf8');
     const entries = JSON.parse(data) as [number, Session][];
     for (const [chatId, session] of entries) {
+      if (!session.messages) session.messages = [];
       sessions.set(Number(chatId), session);
     }
     log.info(`Restored ${sessions.size} session(s) from disk`);
