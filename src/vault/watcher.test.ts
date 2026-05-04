@@ -143,7 +143,7 @@ describe('startWatcher + event handling', () => {
     capturedWatchCallback?.('rename', 'cool-article.md');
 
     expect(bus.publish).toHaveBeenCalledOnce();
-    const { userId, text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    const { userId, text } = bus.publish.mock.calls[0]![0] as { kind: string; userId: number; text: string };
     expect(userId).toBe(42);
     expect(text).toContain('Article Title');
     expect(text).toContain('/ingest');
@@ -217,7 +217,7 @@ describe('startWatcher + event handling', () => {
     capturedWatchCallback?.('rename', 'my-article.md');
 
     expect(bus.publish).toHaveBeenCalledOnce();
-    const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
+    const { text } = bus.publish.mock.calls[0]![0] as { kind: string; userId: number; text: string };
     expect(text).toContain('my-article');
   });
 
