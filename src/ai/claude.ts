@@ -104,7 +104,14 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
       // timeouts so the TG summary stays readable.
       const timedOut = signal === 'SIGTERM' || code === 143;
       if (timedOut) {
-        log.error('Claude CLI timed out', { args: args.slice(0, 3), code, signal });
+        const tail = (s: string) => s.slice(-500).trim();
+        log.error('Claude CLI timed out', {
+          args: args.slice(0, 3),
+          code,
+          signal,
+          stdoutTail: tail(stdout) || null,
+          stderrTail: tail(stderr) || null,
+        });
         resolve({ text: null, error: `Claude timed out after ${timeout / 1000}s` });
       } else if (code !== 0) {
         const error = stderr.trim() || `Claude exited with code ${code}`;
