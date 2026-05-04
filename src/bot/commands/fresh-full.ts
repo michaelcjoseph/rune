@@ -45,7 +45,7 @@ export async function handleFreshFull(bot: TelegramBot, chatId: number): Promise
   } catch (err) {
     log.error('fresh-full exception', { error: (err as Error).message });
     deleteSession(chatId);
-    await bot.sendMessage(chatId, 'Internal error logging conversation — check server logs. Session reset.');
+    await bot.sendMessage(chatId, `Internal error logging conversation — session reset. Error: ${(err as Error).message}`);
   } finally {
     stopTyping(typing);
   }

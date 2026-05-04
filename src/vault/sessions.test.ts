@@ -116,7 +116,7 @@ describe('vault/sessions', () => {
       createSession(123, 'hi');
       appendMessageToSession(123, 'user', 'timestamped');
       const ts = getSessionMessages(123)[0]!.ts;
-      expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(ts).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
     });
 
     it('is a no-op when no session exists for chatId', () => {

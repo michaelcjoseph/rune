@@ -91,7 +91,7 @@ export async function handleFresh(bot: TelegramBot, chatId: number): Promise<voi
 
   if (!result.ok) {
     log.error('Fresh: closeConversation failed', { error: result.error });
-    await bot.sendMessage(chatId, 'Could not summarize conversation — session reset.');
+    await bot.sendMessage(chatId, `Could not summarize conversation — session reset. Error: ${result.error}`);
     return;
   }
 

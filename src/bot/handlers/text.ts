@@ -8,6 +8,7 @@ import { createLogger } from '../../utils/logger.js';
 const log = createLogger('text-handler');
 import { handleFresh } from '../commands/fresh.js';
 import { handleFreshFull } from '../commands/fresh-full.js';
+import { handleClear } from '../commands/clear.js';
 import { handleJournal } from '../commands/journal.js';
 import { handleAsk } from '../commands/ask.js';
 import { handleStatus } from '../commands/status.js';
@@ -50,6 +51,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
 
   if (text.startsWith('/fresh-full')) return handleFreshFull(bot, chatId);
   if (text.startsWith('/fresh')) return handleFresh(bot, chatId);
+  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(bot, chatId);
   if (text.startsWith('/journal ')) return handleJournal(bot, chatId, text.slice('/journal '.length).trim());
   if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
   if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
@@ -388,6 +390,7 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/career — active job applications',
     '/fresh — log conversation to journal, reset session',
     '/fresh-full — log full verbatim transcript to journal with speaker labels, reset session',
+    '/clear — discard active session without journaling',
     '/journal <text> — append entry to today\'s journal',
     '/ask <question> — one-shot vault query',
     '/kb <question> — query the knowledge base',

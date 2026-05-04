@@ -40,6 +40,7 @@ vi.mock('../../integrations/telegram/client.js', () => ({
 }));
 vi.mock('../commands/fresh.js', () => ({ handleFresh: vi.fn() }));
 vi.mock('../commands/fresh-full.js', () => ({ handleFreshFull: vi.fn() }));
+vi.mock('../commands/clear.js', () => ({ handleClear: vi.fn() }));
 vi.mock('../commands/journal.js', () => ({ handleJournal: vi.fn() }));
 vi.mock('../commands/ask.js', () => ({ handleAsk: vi.fn() }));
 vi.mock('../commands/status.js', () => ({ handleStatus: vi.fn() }));
@@ -74,6 +75,7 @@ const { runAgent } = await import('../../ai/claude.js');
 const { handleFamily } = await import('../commands/family.js');
 const { handleFresh } = await import('../commands/fresh.js');
 const { handleFreshFull } = await import('../commands/fresh-full.js');
+const { handleClear } = await import('../commands/clear.js');
 const { handleJournal } = await import('../commands/journal.js');
 const { handleAsk } = await import('../commands/ask.js');
 const { handleStatus } = await import('../commands/status.js');
@@ -112,6 +114,25 @@ describe('text handler routing', () => {
     await handleTextMessage(mockBot(), msg('/fresh-full'));
     expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100);
     expect(handleFresh).not.toHaveBeenCalled();
+  });
+
+  it('routes /clear to handleClear', async () => {
+    await handleTextMessage(mockBot(), msg('/clear'));
+    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100);
+  });
+
+  it('/clear does not invoke handleFresh or handleFreshFull', async () => {
+    await handleTextMessage(mockBot(), msg('/clear'));
+    expect(handleFresh).not.toHaveBeenCalled();
+    expect(handleFreshFull).not.toHaveBeenCalled();
+  });
+
+  it('/start help text includes /clear description', async () => {
+    const bot = mockBot();
+    await handleTextMessage(bot, msg('/start'));
+    const helpText = bot.sendMessage.mock.calls[0][1] as string;
+    expect(helpText).toContain('/clear');
+    expect(helpText).toContain('discard active session');
   });
 
   it('routes /journal with text', async () => {
