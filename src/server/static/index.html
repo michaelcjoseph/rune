@@ -32,6 +32,16 @@
         <h3>Recent Agent Runs</h3>
         <div id="runs-content" class="panel-body"><span class="muted">No runs yet</span></div>
       </section>
+      <section id="panel-projects">
+        <h3>Projects</h3>
+        <div id="projects-content" class="panel-body"><span class="muted">Loading…</span></div>
+      </section>
+      <section id="panel-mutations">
+        <h3>Work Runs</h3>
+        <div id="mutations-active-content" class="panel-body"><span class="muted">None</span></div>
+        <h4>Recent</h4>
+        <div id="mutations-recent-content" class="panel-body"><span class="muted">No recent runs</span></div>
+      </section>
     </aside>
     <main id="main">
       <div id="chat">
@@ -56,6 +66,28 @@
       </form>
     </main>
   </div>
+
+  <!-- Confirmation modal for /work --auto -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <p>Run <strong>/work --auto</strong> on <strong id="modal-slug"></strong>?</p>
+      <p class="modal-warning">Edits and commits without further confirmation.</p>
+      <div class="modal-actions">
+        <button id="modal-run" class="modal-run-btn">Run</button>
+        <button id="modal-cancel" class="modal-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run detail drawer -->
+  <div id="mutation-drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <span id="drawer-title">Run output</span>
+      <button id="drawer-close">✕</button>
+    </div>
+    <pre id="drawer-output" class="drawer-output"></pre>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/14.1.0/markdown-it.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <script src="/static/app.js"></script>

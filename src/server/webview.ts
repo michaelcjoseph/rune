@@ -12,6 +12,8 @@ import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
+import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
+import type { MutationKind } from '../transport/mutations.js';
 
 const log = createLogger('webview');
 
@@ -186,6 +188,41 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
   }));
 }
 
+async function handleApiMutationsCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: { kind?: string; payload?: Record<string, unknown> } = {};
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'invalid JSON body' }));
+    return;
+  }
+  if (!body.kind) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'kind is required' }));
+    return;
+  }
+  const result = await createMutation(body.kind as MutationKind, body.payload ?? {}, 'webview');
+  if (!result.ok) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: result.reason }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(result.descriptor));
+}
+
+function handleApiMutationsCancel(res: ServerResponse, id: string): void {
+  const result = cancelMutation(id);
+  if (!result.ok) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: result.reason }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export interface WebviewDeps {
   webview: WebviewSender;
   isReady: () => boolean;
@@ -333,6 +370,17 @@ export function mountWebviewRoutes(
 
       if (req.method === 'POST' && pathname === '/api/chat') {
         await handleApiChat(req, res, deps.isReady);
+        return true;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/mutations') {
+        await handleApiMutationsCreate(req, res);
+        return true;
+      }
+
+      const cancelMatch = pathname.match(/^\/api\/mutations\/([^/]+)\/cancel$/);
+      if (req.method === 'POST' && cancelMatch) {
+        handleApiMutationsCancel(res, cancelMatch[1]!);
         return true;
       }
 

@@ -30,7 +30,9 @@ function resolveClaudePath(): string {
   throw new Error('Claude CLI not found in PATH or ~/.local/bin. Install from https://claude.ai/download');
 }
 
-const CLAUDE_BIN = resolveClaudePath();
+/** Resolved path to the Claude CLI binary. Exported for use by callers that
+ *  spawn claude directly (e.g. work-runner) to keep binary resolution centralized. */
+export const CLAUDE_BIN = resolveClaudePath();
 
 export interface ClaudeResult {
   text: string | null;
@@ -55,6 +57,16 @@ export function cleanupSession(sessionId: string): void {
 }
 
 const activeProcesses = new Set<ReturnType<typeof spawn>>();
+
+/** Register an external child process in the active-processes set for graceful-shutdown tracking. */
+export function registerActiveProcess(child: ReturnType<typeof spawn>): void {
+  activeProcesses.add(child);
+}
+
+/** Remove an external child process from the active-processes set when it exits. */
+export function unregisterActiveProcess(child: ReturnType<typeof spawn>): void {
+  activeProcesses.delete(child);
+}
 
 /** Kill all active Claude CLI child processes (for graceful shutdown) */
 export function killActiveProcesses(): void {

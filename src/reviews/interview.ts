@@ -55,10 +55,10 @@ export function detectOutline(response: string, marker: string): string | null {
   return response.slice(idx).trim();
 }
 
-const OUTLINE_APPROVAL_OPTIONS = [
+const OUTLINE_APPROVAL_OPTIONS: { value: string; label: string }[] = [
   { value: 'yes', label: 'Approve' },
   { value: 'cancel', label: 'Cancel' },
-] as const;
+];
 
 // Store the system prompt per session for multi-turn reuse
 const sessionPrompts = new Map<string, string>();

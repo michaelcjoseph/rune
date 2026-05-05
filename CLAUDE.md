@@ -6,7 +6,8 @@ Always-on personal second brain server. TypeScript/Node.js.
 
 Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
-- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints, and a WebSocket for real-time messaging
+- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints (`POST /api/mutations`, `POST /api/mutations/:id/cancel`), and a WebSocket for real-time messaging
+- **Mutation pipeline** — `src/transport/mutations.ts` is the central registry for autonomous codebase operations (MutationDescriptor, applier registry, createMutation/cancelMutation). `workRunApplier` in `src/jobs/work-runner.ts` is the first applier: spawns Claude CLI with `spec.md + tasks.md + /work --auto` for a project slug. Mutations are logged append-only to `logs/mutations.jsonl`; orphaned `running` entries are flipped to `failed` at startup via `reconcileOrphans()`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
 - **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog sessions. Free-form Telegram messages default to a multi-turn Socratic chat (`handleConversation` in `src/bot/handlers/text.ts`) — `/fresh` or a journal write closes the thread.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages)
@@ -21,7 +22,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 src/
 ├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler
 ├── config.ts                # Typed env vars and constants
-├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation
+├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner)
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview
@@ -57,10 +58,11 @@ src/
 │       ├── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
 │       └── seed.ts          # /seed — bulk-seed KB from vault files via seedAndProcess()
 ├── transport/
-│   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg to bus 'message' and webview to bus 'agent-event'; returns { tg, webview, destroy }
-│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent; BusAgentEvent has kind 'agent-event', subKind 'start'|'end', agent, runId, userId, startedAt (+ durationMs/status on end); fault-isolates failing subscribers
-│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; shutdown() drains timers
-│   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent() strips userId and forwards agent-event bus frames to connected WS clients
+│   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg/webview to bus 'message', 'agent-event', and 'mutation-event'; returns { tg, webview, destroy }
+│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent; BusMutationEvent has kind 'mutation-event', subKind 'log'|'progress'|'output'|'completed'|'failed'; fault-isolates failing subscribers
+│   ├── mutations.ts         # Mutation pipeline: MutationDescriptor/MutationKind/MutationStatus types, applier registry, createMutation(), cancelMutation(), activeRuns map, setMutationBus(); autoApprove appliers start immediately
+│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; onMutationEvent() stub; shutdown() drains timers
+│   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent() and onMutationEvent() forward bus frames to connected WS clients
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
@@ -77,9 +79,10 @@ src/
 ├── server/
 │   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
 │   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
-│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, WS /api/ws
+│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, POST /api/mutations, POST /api/mutations/:id/cancel, WS /api/ws
 │   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
-│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(ready): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, pending playbook/proposal counts; used by GET /api/state
+│   ├── projects-snapshot.ts # getProjectSummaries(): reads docs/projects/index.md + tasks.md per project; returns ProjectSummary[] with slug, status, task progress (done/total/perPhase), specPath, lastModified
+│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal counts, project summaries, active+recent mutations; used by GET /api/state
 │   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS)
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
@@ -103,6 +106,8 @@ src/
 │   ├── book-summarizer.ts   # Generate 1-2 sentence book summary via askClaudeOneShot (returns null on UNKNOWN)
 │   ├── intent-scan.ts       # Weekly Ask-Twice scan: reads intent-log.jsonl (last 30 days), groups via Haiku, dedupes against skill registry + pending queue, writes up to 3 proposals to proposal-queue.json
 │   ├── proposal-queue.ts    # Proposal queue types + CRUD (logs/proposal-queue.json)
+│   ├── mutations-log.ts     # Append-only JSONL log for mutations (logs/mutations.jsonl): appendMutationLine, readRecentMutations, reconcileOrphans (flips stale 'running' entries to 'failed' at startup)
+│   ├── work-runner.ts       # workRunApplier: MutationApplier for 'work-run' kind; spawns Claude CLI with spec.md+tasks.md+/work --auto in project dir; streams stdout/stderr as MutationEvents; enforces per-project and global concurrency caps
 │   ├── lenny-sync.ts        # Exports runLibrarySync() + LibrarySyncResult; pulls new Lenny posts/podcasts via lenny-sync agent, updates logs/lenny-sync-state.json
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── mcp/
@@ -203,6 +208,7 @@ Mutable sources (world-view, playbook, active projects, journals, library/lenny)
 - Vault files use `readVaultFile` / `writeVaultFile` / `appendVaultFile` from `src/vault/files.ts` — paths are relative to vault root
 - KB agents **must not** write outside `knowledge/`
 - Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
+- Autonomous codebase operations go through the mutation pipeline (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`, never spawn Claude CLI for project work directly. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` from `src/ai/claude.ts` keep binary resolution and shutdown tracking centralized for external spawners.
 
 ## Running
 
@@ -234,8 +240,10 @@ Optional:
 - `LENNY_MCP_TOKEN` — JWT Bearer token for the Lenny MCP server (`https://mcp.lennysdata.com/mcp`). Required for `/library-sync` and the nightly Library sync step.
 - `OBSIDIAN_VAULT_NAME` — optional, defaults to basename of `VAULT_DIR`; injected into webview `<meta>` tag for Obsidian wikilink resolution
 - `JARVIS_ALLOWED_HOSTS` — optional, defaults to `localhost,127.0.0.1`; host-guard allowlist for webview endpoints (`isAllowedHost`)
+- `WORK_RUN_PER_PROJECT_CAP` — max concurrent `work-run` mutations per project slug (default `1`, min `1`)
+- `WORK_RUN_GLOBAL_CAP` — max concurrent `work-run` mutations across all projects (default `2`, min `1`)
 
-`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`.
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`. `logs/mutations.jsonl` is a rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`.
 
 ## Agents
 

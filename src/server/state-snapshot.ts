@@ -6,6 +6,11 @@ import { getActiveReviewSession } from '../reviews/session.js';
 import { getQueue } from '../kb/queue.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals } from '../jobs/proposal-queue.js';
+import { readRecentMutations } from '../jobs/mutations-log.js';
+import { activeRuns } from '../transport/mutations.js';
+import { getProjectSummaries } from './projects-snapshot.js';
+import type { ProjectSummary } from './projects-snapshot.js';
+import type { MutationDescriptor } from '../transport/mutations.js';
 
 export interface AgentRunEntry {
   agent: string;
@@ -24,6 +29,8 @@ export interface StateSnapshot {
   pendingApprovals: { playbook: number; proposal: number };
   lastMorningPrepAt: string | null;
   lastNightlyAt: string | null;
+  projects: ProjectSummary[];
+  mutations: { active: MutationDescriptor[]; recent: MutationDescriptor[] };
   warnings: string[];
 }
 
@@ -78,6 +85,16 @@ export function getStateSnapshot(): StateSnapshot {
   const morningTs = schedulerState['morning-prep'] ?? null;
   const nightlyTs = schedulerState['nightly'] ?? null;
 
+  let projects: ProjectSummary[] = [];
+  try { projects = getProjectSummaries(); }
+  catch { warnings.push('projects: read error'); }
+
+  let recentMutations: MutationDescriptor[] = [];
+  try { recentMutations = readRecentMutations(50); }
+  catch { warnings.push('mutations.jsonl: read error'); }
+
+  const activeMutations = [...activeRuns.values()].map(h => h.descriptor);
+
   return {
     version: 1,
     ready: true,
@@ -92,6 +109,8 @@ export function getStateSnapshot(): StateSnapshot {
     pendingApprovals: { playbook: playbookCount, proposal: proposalCount },
     lastMorningPrepAt: morningTs ? new Date(morningTs).toISOString() : null,
     lastNightlyAt: nightlyTs ? new Date(nightlyTs).toISOString() : null,
+    projects,
+    mutations: { active: activeMutations, recent: recentMutations },
     warnings,
   };
 }

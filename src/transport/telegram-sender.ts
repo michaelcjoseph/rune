@@ -1,6 +1,10 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import type { MessageSender, SendOpts } from './sender.js';
+import type { BusMutationEvent } from './notification-bus.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('telegram-sender');
 
 /** TelegramSender implements MessageSender by delegating to the existing telegram
  *  client helpers. Maintains per-user typing timers so callers just call
@@ -26,6 +30,21 @@ export class TelegramSender implements MessageSender {
     if (timer === undefined) return;
     stopTyping(timer);
     this.typingTimers.delete(userId);
+  }
+
+  /** Send a short summary to Telegram on mutation completed/failed. Ignores output/log/progress. */
+  onMutationEvent(event: BusMutationEvent): void {
+    if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
+    const data = event.data as Record<string, unknown> | undefined;
+    const slug = String(data?.['slug'] ?? data?.['projectSlug'] ?? event.mutationId.slice(0, 8));
+    const durationMs = typeof data?.['durationMs'] === 'number' ? data['durationMs'] as number : null;
+    const durStr = durationMs !== null ? ` in ${(durationMs / 1000).toFixed(1)}s` : '';
+    const text = event.subKind === 'completed'
+      ? `✅ /work --auto on ${slug} finished${durStr}`
+      : `❌ /work --auto on ${slug} failed: ${String(data?.['reason'] ?? 'unknown')}`;
+    void this.send(event.userId, text).catch((err: unknown) => {
+      log.error('TelegramSender.onMutationEvent send failed', { error: err instanceof Error ? err.message : String(err) });
+    });
   }
 
   /** Drain all active typing timers. Call from shutdown to prevent interval leaks. */

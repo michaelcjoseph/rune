@@ -3,6 +3,9 @@ import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
 import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus } from './ai/claude.js';
+import { setMutationBus, registerApplier } from './transport/mutations.js';
+import { reconcileOrphans } from './jobs/mutations-log.js';
+import { workRunApplier } from './jobs/work-runner.js';
 import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
@@ -21,6 +24,9 @@ mkdirSync(config.LOGS_DIR, { recursive: true });
 // Ensure knowledge base structure exists
 initKB();
 
+// Flip any stale 'running' mutations from a prior interrupted run to 'failed'
+reconcileOrphans();
+
 // Restore sessions from previous run
 restoreSessions();
 for (const [, session] of getAllSessions()) {
@@ -32,6 +38,8 @@ restoreReviewSessions();
 const bot = createBot();
 const bus = new NotificationBus();
 setBus(bus);
+setMutationBus(bus);
+registerApplier(workRunApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;

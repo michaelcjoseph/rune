@@ -4,6 +4,21 @@ import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 
 // --- Mocks must be declared before any imports that pull in the mocked modules ---
 
+// Mutation mocks (used by the Phase E route tests appended below)
+const mockCreateMutation = vi.fn();
+const mockCancelMutation = vi.fn();
+const mockActiveRunsMap = new Map<string, any>();
+vi.mock('../transport/mutations.js', () => ({
+  createMutation: mockCreateMutation,
+  cancelMutation: mockCancelMutation,
+  activeRuns: mockActiveRunsMap,
+}));
+
+const mockReadRecentMutations = vi.fn(() => []);
+vi.mock('../jobs/mutations-log.js', () => ({
+  readRecentMutations: mockReadRecentMutations,
+}));
+
 const mockConfig = {
   HTTP_PORT: 0,
   HTTP_HOST: '127.0.0.1',
@@ -459,4 +474,62 @@ describe('server/webview', () => {
       expect(res.body.error).toBe('not found (fallthrough)');
     });
   });
+
+  // ---- POST /api/mutations ----
+
+  describe('POST /api/mutations', () => {
+    it('returns 200 with descriptor when createMutation returns ok: true', async () => {
+      const descriptor = {
+        id: 'desc-123',
+        kind: 'work-run',
+        source: 'webview',
+        target: { type: 'work-run', ref: '06-webview' },
+        preview: { summary: 'work-run on 06-webview' },
+        payload: { projectSlug: '06-webview' },
+        createdAt: '2026-05-05T12:00:00.000Z',
+        status: 'pending',
+      };
+      mockCreateMutation.mockResolvedValue({ ok: true, descriptor });
+
+      const res = await makeRequest(port, '/api/mutations', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: '06-webview' } }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe('desc-123');
+      expect(res.body.kind).toBe('work-run');
+      expect(res.body.status).toBe('pending');
+    });
+
+    it('returns 400 with error message when createMutation returns ok: false', async () => {
+      mockCreateMutation.mockResolvedValue({ ok: false, reason: 'unknown mutation kind: bad-kind' });
+
+      const res = await makeRequest(port, '/api/mutations', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ kind: 'bad-kind', payload: {} }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('bad-kind');
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await makeRequest(port, '/api/mutations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'work-run', payload: {} }),
+      });
+      expect(res.status).toBe(401);
+    });
+  });
+
 });

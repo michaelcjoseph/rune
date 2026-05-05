@@ -125,6 +125,8 @@
         scrollToBottom();
       } else if (frame.kind === 'agent-event') {
         handleAgentEvent(frame);
+      } else if (frame.kind === 'mutation-event') {
+        handleMutationEvent(frame);
       }
     };
 
@@ -344,6 +346,269 @@
         return `<div class="run-row"><span class="run-agent">${escHtml(r.agent)}</span><span class="${cls} run-meta">${escHtml(fmtDuration(r.durationMs))} · ${escHtml(fmtRelative(r.startedAt))}</span></div>`;
       }).join('');
       setHTML(runsEl, html);
+    }
+
+    // Projects panel
+    renderProjects(state.projects ?? []);
+
+    // Mutations panel
+    renderMutations(state.mutations ?? { active: [], recent: [] });
+  }
+
+  // ---- Projects panel ----
+
+  // Track active work-run slugs to disable their buttons
+  const runningProjectSlugs = new Set();
+
+  function renderProjects(projects) {
+    const el = document.getElementById('projects-content');
+    if (!el) return;
+    if (projects.length === 0) {
+      setHTML(el, '<span class="muted">No projects found</span>');
+      return;
+    }
+    // Update running slugs from state
+    runningProjectSlugs.clear();
+
+    const html = projects.map(p => {
+      const done = p.progress?.done ?? 0;
+      const total = p.progress?.total ?? 0;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const statusCls = statusPillClass(p.status);
+      const slug = p.slug;
+      return `<div class="project-row">` +
+        `<div class="project-header">` +
+        `<span class="project-slug">${escHtml(slug)}</span>` +
+        `<span class="status-pill ${statusCls}">${escHtml(p.status)}</span>` +
+        `</div>` +
+        `<div class="project-footer">` +
+        `<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>` +
+        `<span class="progress-text">${done}/${total}</span>` +
+        `<button class="run-btn" data-slug="${escHtml(slug)}" onclick="window._runWorkAuto('${escHtml(slug)}')">Run /work --auto</button>` +
+        `</div>` +
+        `</div>`;
+    }).join('');
+    setHTML(el, html);
+  }
+
+  function statusPillClass(status) {
+    const s = (status || '').toLowerCase();
+    if (s === 'done' || s.startsWith('done')) return 'pill-done';
+    if (s === 'in progress') return 'pill-inprogress';
+    if (s === 'spec') return 'pill-spec';
+    return 'pill-default';
+  }
+
+  // Expose to onclick handlers (IIFE scope)
+  window._runWorkAuto = function(slug) {
+    showConfirmModal(slug);
+  };
+
+  // ---- Confirmation modal ----
+
+  let modalSlug = null;
+
+  function showConfirmModal(slug) {
+    modalSlug = slug;
+    const modal = document.getElementById('confirm-modal');
+    const slugEl = document.getElementById('modal-slug');
+    if (modal && slugEl) {
+      slugEl.textContent = slug;
+      modal.classList.remove('hidden');
+    }
+  }
+
+  function hideConfirmModal() {
+    modalSlug = null;
+    const modal = document.getElementById('confirm-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  document.getElementById('modal-cancel')?.addEventListener('click', hideConfirmModal);
+
+  document.getElementById('modal-run')?.addEventListener('click', () => {
+    const slug = modalSlug;
+    hideConfirmModal();
+    if (!slug) return;
+    fetch('/api/mutations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: slug } }),
+    }).then(r => r.json()).then(data => {
+      if (data.error) {
+        appendMessage('assistant', `<p>Error: ${escHtml(data.error)}</p>`);
+      } else {
+        appendMessage('assistant', `<p>Started /work --auto for <strong>${escHtml(slug)}</strong> (id: ${escHtml(data.id)})</p>`);
+        lastStateJson = ''; // bust poll cache
+      }
+    }).catch(() => {
+      appendMessage('assistant', '<p>Failed to start work run.</p>');
+    });
+  });
+
+  // ---- Mutations panel ----
+
+  // Track active mutations and their drawer state
+  const activeMutationTimers = new Map(); // mutationId → { timerEl, startedAt, row }
+  let mutationTimerInterval = null;
+
+  // Drawer state
+  let drawerMutationId = null;
+  const drawerLines = [];
+
+  function renderMutations(mutations) {
+    renderActiveMutations(mutations.active ?? []);
+    renderRecentMutations(mutations.recent ?? []);
+
+    // Update running project slugs for button state
+    for (const m of mutations.active ?? []) {
+      if (m.kind === 'work-run' && m.payload?.projectSlug) {
+        runningProjectSlugs.add(m.payload.projectSlug);
+      }
+    }
+    updateRunButtons();
+  }
+
+  function updateRunButtons() {
+    document.querySelectorAll('.run-btn').forEach(btn => {
+      const slug = btn.dataset.slug;
+      if (runningProjectSlugs.has(slug)) {
+        btn.textContent = 'Running…';
+        btn.disabled = true;
+      } else {
+        btn.textContent = 'Run /work --auto';
+        btn.disabled = false;
+      }
+    });
+  }
+
+  function renderActiveMutations(active) {
+    const el = document.getElementById('mutations-active-content');
+    if (!el) return;
+    if (active.length === 0) {
+      setHTML(el, '<span class="muted">None</span>');
+      // Stop timer if no active runs
+      if (activeMutationTimers.size === 0 && mutationTimerInterval) {
+        clearInterval(mutationTimerInterval);
+        mutationTimerInterval = null;
+      }
+      return;
+    }
+    for (const m of active) {
+      if (!activeMutationTimers.has(m.id)) {
+        // New active — add row
+        const row = document.createElement('div');
+        row.className = 'mutation-row mutation-active';
+        row.dataset.mutationId = m.id;
+        const slug = escHtml(String(m.payload?.projectSlug ?? m.id.slice(0, 8)));
+        const timerSpan = document.createElement('span');
+        timerSpan.className = 'run-meta run-ok';
+        timerSpan.textContent = '0s ▶';
+        row.innerHTML = `<span class="run-agent">${slug}</span>`;
+        row.append(timerSpan);
+        row.addEventListener('click', () => openDrawer(m.id, String(m.payload?.projectSlug ?? m.id)));
+        el.insertBefore(row, el.firstChild);
+        activeMutationTimers.set(m.id, { timerEl: timerSpan, startedAt: m.createdAt, row });
+        if (!mutationTimerInterval) {
+          mutationTimerInterval = setInterval(() => {
+            const now = Date.now();
+            for (const [, entry] of activeMutationTimers) {
+              entry.timerEl.textContent = fmtDuration(now - new Date(entry.startedAt).getTime()) + ' ▶';
+            }
+          }, 500);
+        }
+      }
+    }
+    // Remove rows for mutations that are no longer active
+    const activeIds = new Set(active.map(m => m.id));
+    for (const [id, entry] of activeMutationTimers) {
+      if (!activeIds.has(id)) {
+        entry.row.remove();
+        activeMutationTimers.delete(id);
+      }
+    }
+    if (activeMutationTimers.size === 0 && mutationTimerInterval) {
+      clearInterval(mutationTimerInterval);
+      mutationTimerInterval = null;
+    }
+  }
+
+  function renderRecentMutations(recent) {
+    const el = document.getElementById('mutations-recent-content');
+    if (!el) return;
+    const shown = recent.slice(0, 5);
+    if (shown.length === 0) {
+      setHTML(el, '<span class="muted">No recent runs</span>');
+      return;
+    }
+    const html = shown.map(m => {
+      const cls = m.status === 'completed' ? 'run-ok' : 'run-error';
+      const slug = escHtml(String(m.payload?.projectSlug ?? m.id.slice(0, 8)));
+      return `<div class="mutation-row" data-mutation-id="${escHtml(m.id)}" onclick="window._openMutationDrawer('${escHtml(m.id)}', '${slug}')">` +
+        `<span class="run-agent">${slug}</span>` +
+        `<span class="${cls} run-meta">${escHtml(m.status)}</span>` +
+        `</div>`;
+    }).join('');
+    setHTML(el, html);
+  }
+
+  // ---- Run detail drawer ----
+
+  window._openMutationDrawer = function(mutationId, label) {
+    openDrawer(mutationId, label);
+  };
+
+  function openDrawer(mutationId, label) {
+    drawerMutationId = mutationId;
+    drawerLines.length = 0;
+    const drawer = document.getElementById('mutation-drawer');
+    const drawerTitle = document.getElementById('drawer-title');
+    const drawerOutput = document.getElementById('drawer-output');
+    if (!drawer || !drawerTitle || !drawerOutput) return;
+    drawerTitle.textContent = label;
+    drawerOutput.textContent = '';
+    drawer.classList.remove('hidden');
+  }
+
+  document.getElementById('drawer-close')?.addEventListener('click', () => {
+    drawerMutationId = null;
+    drawerLines.length = 0;
+    document.getElementById('mutation-drawer')?.classList.add('hidden');
+  });
+
+  function handleMutationEvent(frame) {
+    // Update active mutations timer if this is a new event
+    if (frame.subKind === 'output' && drawerMutationId === frame.mutationId) {
+      const line = String(frame.data?.line ?? '');
+      drawerLines.push(line);
+      const drawerOutput = document.getElementById('drawer-output');
+      if (drawerOutput) {
+        drawerOutput.textContent = drawerLines.join('\n');
+        drawerOutput.scrollTop = drawerOutput.scrollHeight;
+      }
+    }
+    if (frame.subKind === 'completed' || frame.subKind === 'failed') {
+      // Bust poll cache so mutations panel refreshes
+      lastStateJson = '';
+      // Remove from active timers
+      const entry = activeMutationTimers.get(frame.mutationId);
+      if (entry) {
+        entry.row.remove();
+        activeMutationTimers.delete(frame.mutationId);
+        if (activeMutationTimers.size === 0 && mutationTimerInterval) {
+          clearInterval(mutationTimerInterval);
+          mutationTimerInterval = null;
+        }
+      }
+      if (drawerMutationId === frame.mutationId) {
+        const status = frame.subKind === 'completed' ? '✅ Completed' : `❌ Failed: ${String(frame.data?.reason ?? '')}`;
+        drawerLines.push(`\n--- ${status} ---`);
+        const drawerOutput = document.getElementById('drawer-output');
+        if (drawerOutput) {
+          drawerOutput.textContent = drawerLines.join('\n');
+          drawerOutput.scrollTop = drawerOutput.scrollHeight;
+        }
+      }
     }
   }
 

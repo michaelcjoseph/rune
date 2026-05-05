@@ -129,6 +129,9 @@ const config = {
   RESOLVER_MIN_WORDS: parseNumericEnv('RESOLVER_MIN_WORDS', 5, { min: 0, integer: true }),
   TG_MAX_MESSAGE_LENGTH: 4096,
   TIMEZONE: 'America/Chicago',
+
+  WORK_RUN_PER_PROJECT_CAP: parseNumericEnv('WORK_RUN_PER_PROJECT_CAP', 1, { min: 1, integer: true }),
+  WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 2, { min: 1, integer: true }),
 } as const;
 
 export default config;

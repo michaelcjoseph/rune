@@ -9,23 +9,49 @@ const mockConfig = {
 
 vi.mock('../config.js', () => ({ default: mockConfig }));
 
-const mockGetSession = vi.fn(() => null);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetSession = vi.fn<() => any>(() => null);
 vi.mock('../vault/sessions.js', () => ({ getSession: mockGetSession }));
 
-const mockGetActiveReviewSession = vi.fn(() => null);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetActiveReviewSession = vi.fn<() => any>(() => null);
 vi.mock('../reviews/session.js', () => ({ getActiveReviewSession: mockGetActiveReviewSession }));
 
-const mockGetQueue = vi.fn(() => []);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetQueue = vi.fn<() => any>(() => []);
 vi.mock('../kb/queue.js', () => ({ getQueue: mockGetQueue }));
 
-const mockGetPendingPlaybookDrafts = vi.fn(() => []);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetPendingPlaybookDrafts = vi.fn<() => any>(() => []);
 vi.mock('../jobs/playbook-extract.js', () => ({ getPendingPlaybookDrafts: mockGetPendingPlaybookDrafts }));
 
-const mockGetPendingProposals = vi.fn(() => []);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetPendingProposals = vi.fn<() => any>(() => []);
 vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: mockGetPendingProposals }));
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockReadRecentMutations = vi.fn<() => any>(() => []);
+vi.mock('../jobs/mutations-log.js', () => ({
+  readRecentMutations: mockReadRecentMutations,
+  appendMutationLine: vi.fn(),
+}));
+
+vi.mock('../transport/mutations.js', () => ({
+  activeRuns: new Map(),
+  registerApplier: vi.fn(),
+  getApplier: vi.fn(),
+  createMutation: vi.fn(),
+  cancelMutation: vi.fn(),
+  setMutationBus: vi.fn(),
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetProjectSummaries = vi.fn<() => any>(() => []);
+vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSummaries }));
+
 // node:fs is mocked to control readFileSync responses
-const mockReadFileSync = vi.fn(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockReadFileSync = vi.fn<(...args: any[]) => any>(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); });
 vi.mock('node:fs', () => ({
   readFileSync: mockReadFileSync,
   appendFileSync: vi.fn(),
@@ -67,6 +93,8 @@ describe('state-snapshot / getStateSnapshot', () => {
     mockGetQueue.mockReturnValue([]);
     mockGetPendingPlaybookDrafts.mockReturnValue([]);
     mockGetPendingProposals.mockReturnValue([]);
+    mockReadRecentMutations.mockReturnValue([]);
+    mockGetProjectSummaries.mockReturnValue([]);
     // Default: no files exist
     mockReadFileSync.mockImplementation(() => {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
