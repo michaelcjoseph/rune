@@ -5,6 +5,7 @@ import { getAllSessions } from '../vault/sessions.js';
 import { captureSessions } from '../jobs/capture.js';
 import { isConfigured, exchangeCode, verifyOAuthState } from '../integrations/whoop/client.js';
 import { createLogger } from '../utils/logger.js';
+import { mountWebviewRoutes, type WebviewDeps } from './webview.js';
 
 const log = createLogger('http');
 
@@ -80,7 +81,9 @@ async function handleWhoopOAuth(req: IncomingMessage, res: ServerResponse): Prom
 
 export { WHOOP_REDIRECT_URI };
 
-export function startHttpServer(): Server {
+export function startHttpServer(webviewDeps?: WebviewDeps): Server {
+  let webviewHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null = null;
+
   const server = createServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {
@@ -92,6 +95,7 @@ export function startHttpServer(): Server {
       if (req.method === 'GET' && req.url?.startsWith('/oauth/whoop')) {
         return await handleWhoopOAuth(req, res);
       }
+      if (webviewHandler && await webviewHandler(req, res)) return;
       res.writeHead(404);
       res.end('Not found');
     } catch (err) {
@@ -100,6 +104,10 @@ export function startHttpServer(): Server {
       res.end('Internal error');
     }
   });
+
+  if (webviewDeps) {
+    webviewHandler = mountWebviewRoutes(server, webviewDeps);
+  }
 
   server.listen(config.HTTP_PORT, config.HTTP_HOST, () => {
     log.info(`HTTP server listening on ${config.HTTP_HOST}:${config.HTTP_PORT}`);

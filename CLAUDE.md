@@ -6,7 +6,7 @@ Always-on personal second brain server. TypeScript/Node.js.
 
 Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
-- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly
+- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints, and a WebSocket for real-time messaging
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
 - **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog sessions. Free-form Telegram messages default to a multi-turn Socratic chat (`handleConversation` in `src/bot/handlers/text.ts`) — `/fresh` or a journal write closes the thread.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages)
@@ -24,7 +24,7 @@ src/
 ├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
-│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency
+│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
 │   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
@@ -60,7 +60,7 @@ src/
 │   ├── sender.ts            # MessageSender interface, SendOpts type, createSenders(bot, bus) factory; subscribes both senders to bus; returns { tg, webview, destroy }
 │   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; fault-isolates failing subscribers
 │   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; shutdown() drains timers
-│   └── webview-sender.ts    # WebviewSender implements MessageSender; Phase A no-ops; shutdown() stub
+│   └── webview-sender.ts    # WebviewSender implements MessageSender; Phase B: register(userId, ws), unregister(userId, ws), per-user WS fan-out
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
@@ -75,7 +75,11 @@ src/
 │   ├── health.ts            # Health review handler
 │   └── blog.ts              # Blog drafting handler
 ├── server/
-│   └── http.ts              # HTTP server: health, session capture, Whoop OAuth callback
+│   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
+│   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
+│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, WS /api/ws
+│   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
+│   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS)
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
 │   ├── init.ts              # KB directory scaffolding and schema initialization
@@ -227,6 +231,8 @@ Optional:
 - `RESOLVER_MIN_WORDS` — minimum word count before resolver runs (default `5`)
 - `WORKSPACE_DIR` — path to workspace root (e.g. `~/workspace`). When set, agents receive it as context and as `JARVIS_WORKSPACE_DIR` env var so they can read project files outside the vault.
 - `LENNY_MCP_TOKEN` — JWT Bearer token for the Lenny MCP server (`https://mcp.lennysdata.com/mcp`). Required for `/library-sync` and the nightly Library sync step.
+- `OBSIDIAN_VAULT_NAME` — optional, defaults to basename of `VAULT_DIR`; injected into webview `<meta>` tag for Obsidian wikilink resolution
+- `JARVIS_ALLOWED_HOSTS` — optional, defaults to `localhost,127.0.0.1`; host-guard allowlist for webview endpoints (`isAllowedHost`)
 
 `LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`.
 

@@ -49,6 +49,14 @@ export async function handleTextMessage(sender: MessageSender, msg: TelegramBot.
   const text = (msg.text || '').trim();
   if (!text) return;
 
+  return dispatchText(sender, userId, text);
+}
+
+/** Core routing chain shared by TG and webview transports. Auth/userId extraction
+ *  happens upstream; callers must pass the verified userId. */
+export async function dispatchText(sender: MessageSender, userId: number, text: string): Promise<void> {
+  if (!text) return;
+
   if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId);
   if (text.startsWith('/fresh')) return handleFresh(sender, userId);
   if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId);

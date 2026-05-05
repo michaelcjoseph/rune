@@ -1,27 +1,66 @@
+import { WebSocket } from 'ws';
 import type { MessageSender, SendOpts } from './sender.js';
+import { createLogger } from '../utils/logger.js';
 
-/** WebviewSender implements MessageSender for the browser WebSocket transport.
- *  Phase A: all sends and typing indicators are no-ops.
- *  Phase B: add connections Map<number, Set<WebSocket>>, register/unregister, and
- *  implement send() to serialize { kind: 'message', text, approval? } to each
- *  registered connection (check ws.readyState === WebSocket.OPEN before sending). */
+const log = createLogger('webview-sender');
+
 export class WebviewSender implements MessageSender {
   readonly name = 'webview' as const;
 
-  async send(_userId: number, _text: string, _opts?: SendOpts): Promise<void> {
-    // Phase A no-op.
+  private readonly connections = new Map<number, Set<WebSocket>>();
+
+  register(userId: number, ws: WebSocket): void {
+    let conns = this.connections.get(userId);
+    if (!conns) {
+      conns = new Set();
+      this.connections.set(userId, conns);
+    }
+    conns.add(ws);
+    log.info('webview connection registered', { count: conns.size });
+  }
+
+  unregister(userId: number, ws: WebSocket): void {
+    const conns = this.connections.get(userId);
+    if (!conns) return;
+    conns.delete(ws);
+    if (conns.size === 0) this.connections.delete(userId);
+    log.info('webview connection unregistered', { remaining: conns.size });
+  }
+
+  async send(userId: number, text: string, opts?: SendOpts): Promise<void> {
+    const conns = this.connections.get(userId);
+    if (!conns || conns.size === 0) return;
+    const frame = JSON.stringify({
+      kind: 'message',
+      text,
+      ...(opts?.approval ? { approval: opts.approval } : {}),
+    });
+    for (const ws of conns) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(frame);
+        } catch (err) {
+          log.error('ws.send error', { error: (err as Error).message });
+        }
+      }
+    }
   }
 
   startTyping(_userId: number): void {
-    // Typing indicator is purely client-side in the webview.
+    // Typing indicator is client-side in the webview.
   }
 
   stopTyping(_userId: number): void {
     // No-op.
   }
 
-  /** Clean up any open connections. Phase A no-op; Phase B closes WS handles. */
+  /** Close all open connections and clear the registry. */
   shutdown(): void {
-    // No-op in Phase A.
+    for (const conns of this.connections.values()) {
+      for (const ws of conns) {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+    }
+    this.connections.clear();
   }
 }

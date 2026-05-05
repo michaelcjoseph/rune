@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="obsidian-vault" content="__OBSIDIAN_VAULT_NAME__">
+  <title>Jarvis</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <h2>Jarvis</h2>
+      <section id="panel-session">
+        <h3>Session</h3>
+        <div id="session-content" class="panel-body muted">No active session</div>
+      </section>
+      <section id="panel-queue">
+        <h3>Ingestion Queue</h3>
+        <div id="queue-content" class="panel-body muted">0 pending</div>
+      </section>
+      <section id="panel-review">
+        <h3>Active Review</h3>
+        <div id="review-content" class="panel-body muted">None</div>
+      </section>
+      <section id="panel-approvals">
+        <h3>Pending Approvals</h3>
+        <div id="approvals-content" class="panel-body muted">0 pending</div>
+      </section>
+    </aside>
+    <main id="main">
+      <div id="chat">
+        <div id="messages"></div>
+      </div>
+      <form id="input-form">
+        <div id="toolbar">
+          <select id="model-select" title="Switch model">
+            <option value="opus">Opus</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="haiku">Haiku</option>
+          </select>
+        </div>
+        <textarea
+          id="message-input"
+          placeholder="Message Jarvis… (Cmd+Enter to send, Enter for newline)"
+          rows="3"
+          autofocus
+        ></textarea>
+        <button type="submit" id="send-btn">Send</button>
+      </form>
+    </main>
+  </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/14.1.0/markdown-it.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

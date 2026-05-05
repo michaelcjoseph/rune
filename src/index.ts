@@ -31,9 +31,9 @@ restoreReviewSessions();
 // Start services
 const bot = createBot();
 const bus = new NotificationBus();
-const { tg, destroy } = createSenders(bot, bus);
+const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
-const server = startHttpServer();
+const server = startHttpServer({ webview });
 startScheduler({ bus });
 startWatcher(bus);
 

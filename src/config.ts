@@ -1,4 +1,4 @@
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -48,6 +48,10 @@ const config = {
   WHOOP_CLIENT_SECRET: process.env['WHOOP_CLIENT_SECRET'] || '',
 
   JARVIS_HTTP_SECRET: process.env['JARVIS_HTTP_SECRET'] || '',
+
+  get OBSIDIAN_VAULT_NAME() {
+    return process.env['OBSIDIAN_VAULT_NAME'] || basename(this.VAULT_DIR);
+  },
 
   JARVIS_ALLOWED_HOSTS: new Set(
     (process.env['JARVIS_ALLOWED_HOSTS'] || 'localhost,127.0.0.1')
