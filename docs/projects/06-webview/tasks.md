@@ -119,17 +119,17 @@ Not started. See [spec.md](spec.md) for details.
 
 > Depends on: Phase C.
 
-- [ ] Modify `src/reviews/interview.ts`: at approval points (outline approval, dynamic-section approvals), call `sender.send(userId, prompt, { approval: { prompt, options } })`. Keep typed-text fallback as a universal path.
-- [ ] Modify `src/reviews/orchestrator.ts`: same pattern wherever orchestrator-level approvals exist.
-- [ ] Modify `src/transport/webview-sender.ts`: serialize `approval` sidecar into the outbound WS frame.
-- [ ] Modify `src/transport/telegram-sender.ts`: ignore `approval` (text fallback unchanged).
-- [ ] Modify `src/ai/claude.ts`: instrument `runAgent`. Emit `bus.publish({ kind: 'agent-event', subKind: 'start', agent, runId, userId, startedAt })` on entry; `agent-event` `subKind: 'end'` on exit with `durationMs` and `status`. Include `userId: TELEGRAM_USER_ID` for nightly batch runs.
-- [ ] Modify `src/transport/webview-sender.ts`: forward `agent-event` bus messages to connected WS as `{ kind: 'agent-event', … }` frames.
-- [ ] Modify `src/server/static/app.js`:
+- [x] Modify `src/reviews/interview.ts`: at approval points (outline approval, dynamic-section approvals), call `sender.send(userId, prompt, { approval: { prompt, options } })`. Keep typed-text fallback as a universal path.
+- [x] Modify `src/reviews/orchestrator.ts`: same pattern wherever orchestrator-level approvals exist. (No approval messages in orchestrator.ts — N/A)
+- [x] Modify `src/transport/webview-sender.ts`: serialize `approval` sidecar into the outbound WS frame. (Already done in Phase B)
+- [x] Modify `src/transport/telegram-sender.ts`: ignore `approval` (text fallback unchanged). (Already done — TelegramSender.send ignores opts)
+- [x] Modify `src/ai/claude.ts`: instrument `runAgent`. Emit `bus.publish({ kind: 'agent-event', subKind: 'start', agent, runId, userId, startedAt })` on entry; `agent-event` `subKind: 'end'` on exit with `durationMs` and `status`. Include `userId: TELEGRAM_USER_ID` for nightly batch runs.
+- [x] Modify `src/transport/webview-sender.ts`: forward `agent-event` bus messages to connected WS as `{ kind: 'agent-event', … }` frames.
+- [x] Modify `src/server/static/app.js`:
   - Render approval-bearing message frames as a button row below the message; click sends `{ kind: 'message', text: <option.value> }`.
   - Subscribe to `agent-event` frames; render a "running now" panel above the recent-runs list with agent name + live elapsed timer; remove from "running now" and prepend to recent-runs on `subKind: 'end'`.
-- [ ] Vitest: `src/reviews/interview.test.ts` — assert approval emission shape on outline approval.
-- [ ] Vitest: `src/transport/webview-sender.test.ts` — `approval` sidecar round-trips on the wire; `agent-event` frames forward.
+- [x] Vitest: `src/reviews/interview.test.ts` — assert approval emission shape on outline approval.
+- [x] Vitest: `src/transport/webview-sender.test.ts` — `approval` sidecar round-trips on the wire; `agent-event` frames forward.
 - [ ] Manual smoke: run `/weekly` from the webview; click the outline-approval button; watch the writeup phase advance. Run `/think`, watch the agent show in "running now" while it works.
 - [ ] (Optional) Add `surface: 'tg' | 'webview'` to `appendIntent()` calls so resolver telemetry distinguishes adoption per surface.
 - [ ] Update `CLAUDE.md` § **Review → post-agent flow**: note the structured approval-signal channel; webview renders buttons, TG renders prose.

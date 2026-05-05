@@ -55,6 +55,11 @@ export function detectOutline(response: string, marker: string): string | null {
   return response.slice(idx).trim();
 }
 
+const OUTLINE_APPROVAL_OPTIONS = [
+  { value: 'yes', label: 'Approve' },
+  { value: 'cancel', label: 'Cancel' },
+] as const;
+
 // Store the system prompt per session for multi-turn reuse
 const sessionPrompts = new Map<string, string>();
 
@@ -213,7 +218,9 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
       if (outline) {
         updateReviewSession(session.chatId, { outline, phase: 'approval' });
         await sender.send(session.chatId, responseText);
-        await sender.send(session.chatId, '\nReply *yes* to approve this outline, *cancel* to stop, or send edits.');
+        await sender.send(session.chatId, '\nReply *yes* to approve this outline, *cancel* to stop, or send edits.', {
+          approval: { prompt: 'Approve or cancel the outline:', options: OUTLINE_APPROVAL_OPTIONS },
+        });
       } else {
         await sender.send(session.chatId, responseText);
       }
@@ -234,7 +241,9 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
       await sender.send(session.chatId, `${capitalize(config.type)} review cancelled.`);
     } else {
       updateReviewSession(session.chatId, { outline: text });
-      await sender.send(session.chatId, 'Outline updated. Reply *yes* to approve or *cancel* to stop.');
+      await sender.send(session.chatId, 'Outline updated. Reply *yes* to approve or *cancel* to stop.', {
+        approval: { prompt: 'Approve or cancel the updated outline:', options: OUTLINE_APPROVAL_OPTIONS },
+      });
     }
   }
 

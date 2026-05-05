@@ -8,8 +8,30 @@ export interface BusMessageEvent {
   text: string;
 }
 
-/** Union of all bus event kinds. Extended in Phase D (agent-event) and Phase E (mutation-event). */
-export type BusEvent = BusMessageEvent;
+export interface BusAgentEventStart {
+  kind: 'agent-event';
+  subKind: 'start';
+  agent: string;
+  runId: string;
+  userId: number;
+  startedAt: string;
+}
+
+export interface BusAgentEventEnd {
+  kind: 'agent-event';
+  subKind: 'end';
+  agent: string;
+  runId: string;
+  userId: number;
+  startedAt: string;
+  durationMs: number;
+  status: 'success' | 'error';
+}
+
+export type BusAgentEvent = BusAgentEventStart | BusAgentEventEnd;
+
+/** Union of all bus event kinds. Extended in Phase E (mutation-event). */
+export type BusEvent = BusMessageEvent | BusAgentEvent;
 
 type BusEventKind = BusEvent['kind'];
 type HandlerFor<K extends BusEventKind> = (event: Extract<BusEvent, { kind: K }>) => void;

@@ -21,7 +21,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 src/
 ├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler
 ├── config.ts                # Typed env vars and constants
-├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation
+├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview
@@ -57,10 +57,10 @@ src/
 │       ├── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
 │       └── seed.ts          # /seed — bulk-seed KB from vault files via seedAndProcess()
 ├── transport/
-│   ├── sender.ts            # MessageSender interface, SendOpts type, createSenders(bot, bus) factory; subscribes both senders to bus; returns { tg, webview, destroy }
-│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; fault-isolates failing subscribers
+│   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg to bus 'message' and webview to bus 'agent-event'; returns { tg, webview, destroy }
+│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent; BusAgentEvent has kind 'agent-event', subKind 'start'|'end', agent, runId, userId, startedAt (+ durationMs/status on end); fault-isolates failing subscribers
 │   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; shutdown() drains timers
-│   └── webview-sender.ts    # WebviewSender implements MessageSender; Phase B: register(userId, ws), unregister(userId, ws), per-user WS fan-out
+│   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent() strips userId and forwards agent-event bus frames to connected WS clients
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
@@ -156,7 +156,7 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 
 ### Review → post-agent flow
 
-`src/reviews/interview.ts` drives review sessions. After the user approves the outline:
+`src/reviews/interview.ts` drives review sessions. At outline-approval points the interview emits a structured approval signal via `sender.send(userId, text, { approval: { prompt, options } })`. On the webview this renders as clickable button rows; on Telegram the text is the fallback (the `opts` are ignored by TelegramSender). After the user approves the outline:
 1. `review-writer` appends the formatted review to today's journal.
 2. Dynamic analysis (one-shot LLM call in `runWriteupAndUpdates`) decides which post-agents to run by producing `{projects, psychology, json_updates, worldview, playbook}` booleans.
 3. Each post-agent runs in parallel. Failures and missing-agent errors are surfaced in the TG summary (not silent) — see `AGENT_NOT_FOUND_PREFIX` in `src/ai/claude.ts`.

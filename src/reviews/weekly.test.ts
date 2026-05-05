@@ -414,7 +414,7 @@ describe('reviews/weekly', () => {
         phase: 'approval',
       });
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Week in Review outline:'));
-      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Reply *yes*'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Reply *yes*'), expect.objectContaining({ approval: expect.any(Object) }));
     });
 
     // 12. When response has no outline -> sends response, stays in interview
@@ -542,7 +542,7 @@ describe('reviews/weekly', () => {
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         outline: 'Here is my revised outline with more detail',
       });
-      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Outline updated'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Outline updated'), expect.objectContaining({ approval: expect.any(Object) }));
     });
   });
 

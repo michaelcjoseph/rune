@@ -191,3 +191,5 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .run-meta { white-space: nowrap; flex-shrink: 0; }
 .run-ok { color: #5c9; }
 .run-error { color: #f66; }
+.run-live .run-agent { color: var(--accent); }
+.run-live .run-meta { color: var(--accent); }

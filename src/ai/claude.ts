@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
@@ -9,8 +10,16 @@ import { getDateContext } from '../utils/time.js';
 // pick up /learn-authored guidance without each caller re-implementing the prepend.
 // If vault/learnings ever needs Claude help (e.g., dedup), extract a context/ layer.
 import { buildLearningsPrompt } from '../vault/learnings.js';
+import type { NotificationBus } from '../transport/notification-bus.js';
 
 const log = createLogger('claude');
+
+let _bus: NotificationBus | null = null;
+
+/** Wire the notification bus into claude.ts so runAgent() can emit agent-event frames. */
+export function setBus(bus: NotificationBus): void {
+  _bus = bus;
+}
 
 function resolveClaudePath(): string {
   try {
@@ -346,15 +355,16 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     args.push('--allowedTools', ...def.tools);
   }
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
+  const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
+  const userId = config.TELEGRAM_USER_ID;
+  _bus?.publish({ kind: 'agent-event', subKind: 'start', agent: agentName, runId, userId, startedAt });
   const result = await execClaude(args, timeoutMs);
-  const entry = JSON.stringify({
-    agent: agentName,
-    startedAt,
-    durationMs: Date.now() - t0,
-    status: result.error ? 'error' : 'success',
-  });
+  const durationMs = Date.now() - t0;
+  const status = result.error ? 'error' : 'success';
+  _bus?.publish({ kind: 'agent-event', subKind: 'end', agent: agentName, runId, userId, startedAt, durationMs, status });
+  const entry = JSON.stringify({ agent: agentName, startedAt, durationMs, status });
   try {
     appendFileSync(join(config.LOGS_DIR, 'agent-runs.jsonl'), entry + '\n');
   } catch {

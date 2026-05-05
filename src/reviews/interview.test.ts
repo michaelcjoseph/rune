@@ -42,7 +42,10 @@ vi.mock('../jobs/proposal-queue.js', () => ({
 }));
 vi.mock('../kb/queue.js', () => ({ enqueue: vi.fn() }));
 
-const { toScannerDate, detectOutline, extractInterviewInstructions } = await import('./interview.js');
+const { toScannerDate, detectOutline, extractInterviewInstructions, createInterviewHandler } = await import('./interview.js');
+const { askClaudeWithContext } = await import('../ai/claude.js');
+const { updateReviewSession } = await import('./session.js');
+const { readVaultFile } = await import('../vault/files.js');
 
 describe('toScannerDate', () => {
   it('replaces hyphens with underscores', () => {
@@ -162,5 +165,100 @@ more interview text`;
     const content = `## Step 2: Interview\nbody\n## Step 4: Write`;
     const result = extractInterviewInstructions(content);
     expect(result).not.toContain('Step 4');
+  });
+});
+
+describe('createInterviewHandler — approval emission', () => {
+  function makeSession(overrides = {}) {
+    return {
+      id: 'review-1',
+      chatId: 42,
+      type: 'weekly' as const,
+      phase: 'interview' as const,
+      claudeSessionId: 'claude-sess-1',
+      prepContext: 'prep context here',
+      outline: null,
+      targetDate: '2026-05-05',
+      topic: null,
+      createdAt: '2026-05-05T00:00:00.000Z',
+      lastActivity: '2026-05-05T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function makeSender() {
+    return {
+      name: 'webview' as const,
+      send: vi.fn(async () => undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
+
+  const config = {
+    type: 'weekly' as const,
+    outlineMarker: 'review outline:',
+    skillPath: 'skills/weekly.md',
+    defaultInstructions: 'default instructions',
+    buildPromptHeader: () => 'header',
+    prepAgents: () => [],
+    postAgents: 'dynamic' as const,
+    psychologyScope: 'observation',
+  };
+
+  it('sends approval sidecar when outline is detected in interview phase', async () => {
+    (readVaultFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (askClaudeWithContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: 'Here is your weekly outline.\n\nreview outline:\n- Point one\n- Point two',
+      error: null,
+    });
+    (updateReviewSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    const handler = createInterviewHandler(config);
+    const session = makeSession();
+    const sender = makeSender();
+
+    await handler.handleMessage(session, 'ok, continue', sender);
+
+    // First send: the response body; second send: the approval prompt with sidecar
+    expect(sender.send).toHaveBeenCalledTimes(2);
+    expect(sender.send).toHaveBeenNthCalledWith(2,
+      expect.any(Number),
+      expect.stringContaining('Reply *yes*'),
+      expect.objectContaining({
+        approval: expect.objectContaining({
+          prompt: expect.any(String),
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'yes', label: 'Approve' }),
+            expect.objectContaining({ value: 'cancel', label: 'Cancel' }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('sends approval sidecar when outline is updated in approval phase', async () => {
+    (updateReviewSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    const handler = createInterviewHandler(config);
+    const session = makeSession({ phase: 'approval' });
+    const sender = makeSender();
+
+    // Send text that is not yes/no/cancel — triggers the outline-update path
+    await handler.handleMessage(session, 'Please also include the fitness section', sender);
+
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(sender.send).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.stringContaining('Outline updated'),
+      expect.objectContaining({
+        approval: expect.objectContaining({
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'yes' }),
+            expect.objectContaining({ value: 'cancel' }),
+          ]),
+        }),
+      }),
+    );
   });
 });

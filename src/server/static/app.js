@@ -123,11 +123,17 @@
           highlightBlocks(streamingDiv);
         }
         scrollToBottom();
+      } else if (frame.kind === 'agent-event') {
+        handleAgentEvent(frame);
       }
     };
 
     ws.onclose = () => {
       updateStatus('disconnected');
+      // Clear live-run tracking — end frames won't arrive on a closed connection
+      activeAgentRuns.clear();
+      if (activeRunsInterval) { clearInterval(activeRunsInterval); activeRunsInterval = null; }
+      document.querySelectorAll('.run-live').forEach(el => el.remove());
       setTimeout(() => {
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         connect();
@@ -217,6 +223,46 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
+
+  // Live agent-run tracking (from WS agent-event frames)
+  const activeAgentRuns = new Map(); // runId → { agent, startedAt, timerEl }
+  let activeRunsInterval = null;
+
+  function handleAgentEvent(frame) {
+    const runsEl = document.getElementById('runs-content');
+    if (!runsEl) return;
+    if (frame.subKind === 'start') {
+      const row = document.createElement('div');
+      row.className = 'run-row run-live';
+      const agentSpan = document.createElement('span');
+      agentSpan.className = 'run-agent';
+      agentSpan.textContent = frame.agent;
+      const timerSpan = document.createElement('span');
+      timerSpan.className = 'run-meta run-ok';
+      timerSpan.textContent = '0s';
+      row.append(agentSpan, timerSpan);
+      runsEl.insertBefore(row, runsEl.firstChild);
+      activeAgentRuns.set(frame.runId, { agent: frame.agent, startedAt: frame.startedAt, timerEl: timerSpan, row });
+      if (!activeRunsInterval) {
+        activeRunsInterval = setInterval(() => {
+          const now = Date.now();
+          for (const [, run] of activeAgentRuns) {
+            run.timerEl.textContent = fmtDuration(now - new Date(run.startedAt).getTime()) + ' ▶';
+          }
+        }, 500);
+      }
+    } else if (frame.subKind === 'end') {
+      const run = activeAgentRuns.get(frame.runId);
+      activeAgentRuns.delete(frame.runId);
+      if (activeAgentRuns.size === 0 && activeRunsInterval) {
+        clearInterval(activeRunsInterval);
+        activeRunsInterval = null;
+      }
+      // Remove live row by stored reference; bust poll cache so recent-runs panel updates
+      if (run) run.row.remove();
+      lastStateJson = '';
+    }
+  }
 
   // Cockpit state polling with diff-render
   let lastStateJson = '';

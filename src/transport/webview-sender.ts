@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import type { MessageSender, SendOpts } from './sender.js';
+import type { BusAgentEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('webview-sender');
@@ -52,6 +53,20 @@ export class WebviewSender implements MessageSender {
 
   stopTyping(_userId: number): void {
     // No-op.
+  }
+
+  /** Forward an agent-event bus message to all connected WS clients for the given userId.
+   *  Strips userId from the WS frame — it is used only for routing and must not cross the WS boundary. */
+  onAgentEvent(event: BusAgentEvent): void {
+    const conns = this.connections.get(event.userId);
+    if (!conns || conns.size === 0) return;
+    const { userId: _drop, ...rest } = event;
+    const frame = JSON.stringify(rest);
+    for (const ws of conns) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(frame); } catch { /* drop if closed */ }
+      }
+    }
   }
 
   /** Close all open connections and clear the registry. */

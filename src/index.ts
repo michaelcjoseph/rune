@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
-import { markSessionCreated, killActiveProcesses, waitForActiveProcesses } from './ai/claude.js';
+import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus } from './ai/claude.js';
 import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
@@ -31,6 +31,7 @@ restoreReviewSessions();
 // Start services
 const bot = createBot();
 const bus = new NotificationBus();
+setBus(bus);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;
