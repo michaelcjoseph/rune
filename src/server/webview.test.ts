@@ -23,12 +23,19 @@ vi.mock('../vault/sessions.js', () => ({
   getSession: vi.fn(() => null),
 }));
 
-vi.mock('../reviews/session.js', () => ({
-  getActiveReviewSession: vi.fn(() => null),
-}));
-
-vi.mock('../kb/queue.js', () => ({
-  getQueue: vi.fn(() => []),
+vi.mock('./state-snapshot.js', () => ({
+  getStateSnapshot: vi.fn(() => ({
+    version: 1,
+    ready: true,
+    activeSession: null,
+    activeReview: null,
+    ingestionQueueDepth: 0,
+    recentAgentRuns: [],
+    pendingApprovals: { playbook: 0, proposal: 0 },
+    lastMorningPrepAt: null,
+    lastNightlyAt: null,
+    warnings: [],
+  })),
 }));
 
 vi.mock('./webview-bootstrap.js', () => ({
@@ -39,8 +46,7 @@ vi.mock('./webview-bootstrap.js', () => ({
 const { mountWebviewRoutes } = await import('./webview.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const { getSession } = await import('../vault/sessions.js');
-const { getActiveReviewSession } = await import('../reviews/session.js');
-const { getQueue } = await import('../kb/queue.js');
+const { getStateSnapshot } = await import('./state-snapshot.js');
 
 // ---- helpers ----
 
@@ -112,7 +118,7 @@ describe('server/webview', () => {
       }
     });
 
-    webviewHandler = mountWebviewRoutes(server, { webview: mockWebviewSender as any });
+    webviewHandler = mountWebviewRoutes(server, { webview: mockWebviewSender as any, isReady: () => true });
 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     port = (server.address() as any).port;
@@ -127,9 +133,19 @@ describe('server/webview', () => {
     mockConfig.JARVIS_HTTP_SECRET = 'test-secret';
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
-    (getActiveReviewSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
-    (getQueue as ReturnType<typeof vi.fn>).mockReturnValue([]);
     (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+      version: 1,
+      ready: true,
+      activeSession: null,
+      activeReview: null,
+      ingestionQueueDepth: 0,
+      recentAgentRuns: [],
+      pendingApprovals: { playbook: 0, proposal: 0 },
+      lastMorningPrepAt: null,
+      lastNightlyAt: null,
+      warnings: [],
+    });
   });
 
   // ---- GET / ----
@@ -273,10 +289,12 @@ describe('server/webview', () => {
     });
 
     it('reflects active session in snapshot', async () => {
-      (getSession as ReturnType<typeof vi.fn>).mockReturnValue({
-        sessionId: 'sess-abc',
-        model: 'opus',
-        messageCount: 3,
+      (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+        version: 1, ready: true,
+        activeSession: { sessionId: 'sess-abc', model: 'opus', messageCount: 3 },
+        activeReview: null, ingestionQueueDepth: 0, recentAgentRuns: [],
+        pendingApprovals: { playbook: 0, proposal: 0 },
+        lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],
       });
       const res = await makeRequest(port, '/api/state', {
         headers: { authorization: 'Bearer test-secret' },
@@ -290,10 +308,12 @@ describe('server/webview', () => {
     });
 
     it('reflects active review in snapshot', async () => {
-      (getActiveReviewSession as ReturnType<typeof vi.fn>).mockReturnValue({
-        type: 'daily',
-        phase: 'interview',
-        targetDate: '2026-05-05',
+      (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+        version: 1, ready: true, activeSession: null,
+        activeReview: { type: 'daily', phase: 'interview', targetDate: '2026-05-05' },
+        ingestionQueueDepth: 0, recentAgentRuns: [],
+        pendingApprovals: { playbook: 0, proposal: 0 },
+        lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],
       });
       const res = await makeRequest(port, '/api/state', {
         headers: { authorization: 'Bearer test-secret' },
@@ -307,10 +327,12 @@ describe('server/webview', () => {
     });
 
     it('reflects non-empty ingestion queue depth', async () => {
-      (getQueue as ReturnType<typeof vi.fn>).mockReturnValue([
-        { source: 'journals/2026-05-05.md', addedAt: '2026-05-05T00:00:00.000Z' },
-        { source: 'world-view/foo.md', addedAt: '2026-05-05T00:00:00.000Z' },
-      ]);
+      (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+        version: 1, ready: true, activeSession: null, activeReview: null,
+        ingestionQueueDepth: 2, recentAgentRuns: [],
+        pendingApprovals: { playbook: 0, proposal: 0 },
+        lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],
+      });
       const res = await makeRequest(port, '/api/state', {
         headers: { authorization: 'Bearer test-secret' },
       });

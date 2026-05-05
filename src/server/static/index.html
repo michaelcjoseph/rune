@@ -26,7 +26,11 @@
       </section>
       <section id="panel-approvals">
         <h3>Pending Approvals</h3>
-        <div id="approvals-content" class="panel-body muted">0 pending</div>
+        <div id="approvals-content" class="panel-body muted">None</div>
+      </section>
+      <section id="panel-runs">
+        <h3>Recent Agent Runs</h3>
+        <div id="runs-content" class="panel-body"><span class="muted">No runs yet</span></div>
       </section>
     </aside>
     <main id="main">
@@ -40,6 +44,7 @@
             <option value="sonnet">Sonnet</option>
             <option value="haiku">Haiku</option>
           </select>
+          <span id="ws-status" class="ws-status disconnected">disconnected</span>
         </div>
         <textarea
           id="message-input"

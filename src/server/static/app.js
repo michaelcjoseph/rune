@@ -26,12 +26,16 @@
   const md = window.markdownit({ html: false, linkify: true, typographer: true });
   const vaultName = document.querySelector('meta[name="obsidian-vault"]')?.content ?? '';
 
+  function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   function renderMarkdown(text) {
     let html = md.render(text);
     // Wikilink substitution: [[Note Title]] → obsidian:// anchor
     html = html.replace(/\[\[([^\]]+)\]\]/g, (_, title) => {
       const href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(title)}`;
-      return `<a href="${href}" class="wikilink">${title}</a>`;
+      return `<a href="${escHtml(href)}" class="wikilink">${escHtml(title)}</a>`;
     });
     return html;
   }
@@ -214,14 +218,42 @@
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
 
-  // Cockpit state polling
-  let lastState = null;
+  // Cockpit state polling with diff-render
+  let lastStateJson = '';
+
+  function setText(el, text, muted) {
+    if (el.textContent !== text) el.textContent = text;
+    if (muted !== undefined) el.classList.toggle('muted', muted);
+  }
+
+  function setHTML(el, html) {
+    if (el.dataset.lastHtml !== html) {
+      el.innerHTML = html;
+      el.dataset.lastHtml = html;
+    }
+  }
+
   function pollState() {
     fetch('/api/state').then(r => r.json()).then(state => {
-      if (JSON.stringify(state) === JSON.stringify(lastState)) return;
-      lastState = state;
+      const json = JSON.stringify(state);
+      if (json === lastStateJson) return;
+      lastStateJson = json;
       renderState(state);
     }).catch(() => {});
+  }
+
+  function fmtDuration(ms) {
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    return `${Math.floor(ms / 60000)}m${Math.floor((ms % 60000) / 1000)}s`;
+  }
+
+  function fmtRelative(iso) {
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return `${Math.floor(diff / 86400000)}d ago`;
   }
 
   function renderState(state) {
@@ -229,32 +261,44 @@
     const sessionEl = document.getElementById('session-content');
     if (state.activeSession) {
       const s = state.activeSession;
-      sessionEl.textContent = `${s.sessionId.slice(0, 8)} · ${s.model} · ${s.messageCount} msgs`;
-      sessionEl.classList.remove('muted');
+      setText(sessionEl, `${s.sessionId.slice(0, 8)} · ${s.model} · ${s.messageCount} msgs`, false);
     } else {
-      sessionEl.textContent = 'No active session';
-      sessionEl.classList.add('muted');
+      setText(sessionEl, 'No active session', true);
     }
+
     // Queue panel
     const queueEl = document.getElementById('queue-content');
     const depth = state.ingestionQueueDepth ?? 0;
-    queueEl.textContent = `${depth} pending`;
-    queueEl.classList.toggle('muted', depth === 0);
+    setText(queueEl, `${depth} pending`, depth === 0);
+
     // Review panel
     const reviewEl = document.getElementById('review-content');
     if (state.activeReview) {
       const r = state.activeReview;
-      reviewEl.textContent = `${r.type} · ${r.phase}`;
-      reviewEl.classList.remove('muted');
+      setText(reviewEl, `${r.type} · ${r.phase}`, false);
     } else {
-      reviewEl.textContent = 'None';
-      reviewEl.classList.add('muted');
+      setText(reviewEl, 'None', true);
     }
+
     // Approvals panel
     const approvalsEl = document.getElementById('approvals-content');
-    const total = (state.pendingApprovals?.playbook ?? 0) + (state.pendingApprovals?.proposal ?? 0);
-    approvalsEl.textContent = `${total} pending`;
-    approvalsEl.classList.toggle('muted', total === 0);
+    const pb = state.pendingApprovals?.playbook ?? 0;
+    const pr = state.pendingApprovals?.proposal ?? 0;
+    const total = pb + pr;
+    setText(approvalsEl, total === 0 ? 'None' : `${pb} playbook · ${pr} proposal`, total === 0);
+
+    // Recent agent runs panel
+    const runsEl = document.getElementById('runs-content');
+    const runs = state.recentAgentRuns ?? [];
+    if (runs.length === 0) {
+      setHTML(runsEl, '<span class="muted">No runs yet</span>');
+    } else {
+      const html = runs.slice(0, 5).map(r => {
+        const cls = r.status === 'error' ? 'run-error' : 'run-ok';
+        return `<div class="run-row"><span class="run-agent">${escHtml(r.agent)}</span><span class="${cls} run-meta">${escHtml(fmtDuration(r.durationMs))} · ${escHtml(fmtRelative(r.startedAt))}</span></div>`;
+      }).join('');
+      setHTML(runsEl, html);
+    }
   }
 
   // Init

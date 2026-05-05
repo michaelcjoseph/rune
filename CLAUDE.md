@@ -21,7 +21,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 src/
 ├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler
 ├── config.ts                # Typed env vars and constants
-├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession
+├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview
@@ -79,6 +79,7 @@ src/
 │   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
 │   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, WS /api/ws
 │   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
+│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(ready): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, pending playbook/proposal counts; used by GET /api/state
 │   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS)
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
@@ -234,7 +235,7 @@ Optional:
 - `OBSIDIAN_VAULT_NAME` — optional, defaults to basename of `VAULT_DIR`; injected into webview `<meta>` tag for Obsidian wikilink resolution
 - `JARVIS_ALLOWED_HOSTS` — optional, defaults to `localhost,127.0.0.1`; host-guard allowlist for webview endpoints (`isAllowedHost`)
 
-`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`.
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`.
 
 ## Agents
 

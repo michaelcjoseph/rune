@@ -7,9 +7,8 @@ import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
+import { getStateSnapshot } from './state-snapshot.js';
 import { getSession } from '../vault/sessions.js';
-import { getActiveReviewSession } from '../reviews/session.js';
-import { getQueue } from '../kb/queue.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
@@ -128,29 +127,23 @@ async function handleAuthBootstrap(req: IncomingMessage, res: ServerResponse): P
   res.end(JSON.stringify({ ok: true }));
 }
 
-function handleApiState(_req: IncomingMessage, res: ServerResponse): void {
-  const userId = config.TELEGRAM_USER_ID;
-  const session = getSession(userId);
-  const review = getActiveReviewSession(userId);
-  const snapshot = {
-    ready: true,
-    activeSession: session
-      ? { sessionId: session.sessionId, model: session.model, messageCount: session.messageCount }
-      : null,
-    activeReview: review
-      ? { type: review.type, phase: review.phase, targetDate: review.targetDate }
-      : null,
-    ingestionQueueDepth: getQueue().length,
-    recentAgentRuns: [],
-    pendingApprovals: { playbook: 0, proposal: 0 },
-    lastMorningPrepAt: null,
-    lastNightlyAt: null,
-  };
+function handleApiState(res: ServerResponse, isReady: () => boolean): void {
+  if (!isReady()) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ready: false, reason: 'bot starting' }));
+    return;
+  }
+  const snapshot = getStateSnapshot();
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(snapshot));
 }
 
-async function handleApiChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
+  if (!isReady()) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ready: false, reason: 'bot starting' }));
+    return;
+  }
   let body: { message?: string } = {};
   try {
     body = JSON.parse(await readBody(req));
@@ -195,6 +188,7 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse): Promise
 
 export interface WebviewDeps {
   webview: WebviewSender;
+  isReady: () => boolean;
 }
 
 /**
@@ -227,6 +221,11 @@ export function mountWebviewRoutes(
     }
     if (!isAllowedHost(req)) {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (!deps.isReady()) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -328,12 +327,12 @@ export function mountWebviewRoutes(
       }
 
       if (req.method === 'GET' && pathname === '/api/state') {
-        handleApiState(req, res);
+        handleApiState(res, deps.isReady);
         return true;
       }
 
       if (req.method === 'POST' && pathname === '/api/chat') {
-        await handleApiChat(req, res);
+        await handleApiChat(req, res, deps.isReady);
         return true;
       }
 

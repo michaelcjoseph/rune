@@ -33,7 +33,8 @@ const bot = createBot();
 const bus = new NotificationBus();
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
-const server = startHttpServer({ webview });
+let ready = false;
+const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
 startWatcher(bus);
 
@@ -41,6 +42,8 @@ startWatcher(bus);
 // reloadSkillRegistry(), which evicts the cache; without priming here the
 // first non-slash TG message pays the fs scan inline.
 getSkillRegistry();
+
+ready = true;
 
 log.info('Jarvis started', {
   vault: config.VAULT_DIR,

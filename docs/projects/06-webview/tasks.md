@@ -73,7 +73,7 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Vitest: `src/server/auth.test.ts` — 401 missing, 401 wrong, 200 cookie, 200 bearer, 403 non-localhost.
 - [x] Vitest: `src/server/webview.test.ts` — integration: stub Claude CLI, POST `/api/chat`, assert response shape; open WS, send a message frame, assert outbound chunks.
 - [ ] Manual smoke: `npm run dev` → browser to `http://127.0.0.1:3847/?token=$JARVIS_HTTP_SECRET` → exchange a message → verify rendering and wikilink click opens Obsidian.
-- [ ] Update `CLAUDE.md`:
+- [x] Update `CLAUDE.md`:
   - **Architecture** section: mention webview as second transport sharing session via `TELEGRAM_USER_ID`.
   - **HTTP server** section: list new endpoints.
   - **Project Structure** section: add `src/server/static/`, `src/server/webview.ts`, `src/server/auth.ts`, `src/server/webview-bootstrap.ts`.
@@ -92,7 +92,7 @@ Not started. See [spec.md](spec.md) for details.
 
 > Depends on: Phase B.
 
-- [ ] Create `src/server/state-snapshot.ts`: `getStateSnapshot({ sessions, reviewSessions, queue, …})` returns:
+- [x] Create `src/server/state-snapshot.ts`: `getStateSnapshot({ sessions, reviewSessions, queue, …})` returns:
   ```typescript
   {
     version: 1,
@@ -107,13 +107,13 @@ Not started. See [spec.md](spec.md) for details.
     warnings: string[]
   }
   ```
-- [ ] Recent-runs source: append to `logs/agent-runs.jsonl` from `src/ai/claude.ts` `runAgent` (light-touch instrumentation in Phase C; Phase D adds live events).
-- [ ] Vitest: `src/server/state-snapshot.test.ts` — fixture queue files, fixture sessions; assert snapshot shape and warnings on malformed inputs.
-- [ ] Modify `src/server/webview.ts`: wire `GET /api/state` to `getStateSnapshot`; 503 with `{ ready: false, reason }` if bot not yet started.
-- [ ] Modify `src/server/static/app.js`: poll `GET /api/state` every 5s; render five panels (Active Session, Ingestion Queue, Recent Agent Runs, Pending Approvals, Last Runs); diff-render to avoid flicker.
-- [ ] Modify `src/server/static/app.css`: ~280px right rail, scrollable.
+- [x] Recent-runs source: append to `logs/agent-runs.jsonl` from `src/ai/claude.ts` `runAgent` (light-touch instrumentation in Phase C; Phase D adds live events).
+- [x] Vitest: `src/server/state-snapshot.test.ts` — fixture queue files, fixture sessions; assert snapshot shape and warnings on malformed inputs.
+- [x] Modify `src/server/webview.ts`: wire `GET /api/state` to `getStateSnapshot`; 503 with `{ ready: false, reason }` if bot not yet started.
+- [x] Modify `src/server/static/app.js`: poll `GET /api/state` every 5s; render five panels (Active Session, Ingestion Queue, Recent Agent Runs, Pending Approvals, Last Runs); diff-render to avoid flicker.
+- [x] Modify `src/server/static/app.css`: ~280px right rail, scrollable.
 - [ ] Manual smoke: enqueue a fake playbook draft via `appendVaultFile('logs/playbook-queue.json', …)` (or wait for nightly); confirm sidebar count ticks up within 5s.
-- [ ] Update `CLAUDE.md` Project Structure: add `src/server/state-snapshot.ts`; mention `logs/agent-runs.jsonl`.
+- [x] Update `CLAUDE.md` Project Structure: add `src/server/state-snapshot.ts`; mention `logs/agent-runs.jsonl`.
 
 ## Phase D — Approval buttons + live agent-run events
 

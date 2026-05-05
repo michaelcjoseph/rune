@@ -11,7 +11,7 @@
   --accent: #4d9fff;
   --user-bg: #1a2a3a;
   --assistant-bg: #141414;
-  --sidebar-w: 260px;
+  --sidebar-w: 280px;
   --input-h: 120px;
 }
 
@@ -183,3 +183,11 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .ws-status { font-size: .75rem; padding: .15rem .4rem; border-radius: 3px; }
 .ws-status.connected { color: #5c9; }
 .ws-status.disconnected { color: #f66; }
+
+/* Recent-runs list in sidebar */
+#runs-content { display: flex; flex-direction: column; gap: .3rem; }
+.run-row { display: flex; justify-content: space-between; align-items: baseline; gap: .4rem; font-size: .78rem; }
+.run-agent { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.run-meta { white-space: nowrap; flex-shrink: 0; }
+.run-ok { color: #5c9; }
+.run-error { color: #f66; }

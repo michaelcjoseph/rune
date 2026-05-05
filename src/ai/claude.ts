@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
@@ -346,7 +346,21 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     args.push('--allowedTools', ...def.tools);
   }
   log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
-  return execClaude(args, timeoutMs);
+  const startedAt = new Date().toISOString();
+  const t0 = Date.now();
+  const result = await execClaude(args, timeoutMs);
+  const entry = JSON.stringify({
+    agent: agentName,
+    startedAt,
+    durationMs: Date.now() - t0,
+    status: result.error ? 'error' : 'success',
+  });
+  try {
+    appendFileSync(join(config.LOGS_DIR, 'agent-runs.jsonl'), entry + '\n');
+  } catch {
+    // Non-fatal — snapshot will just show empty recent runs
+  }
+  return result;
 }
 
 /** Summarize a session for journal logging */
