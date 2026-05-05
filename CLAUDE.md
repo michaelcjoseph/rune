@@ -61,7 +61,7 @@ src/
 │   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg/webview to bus 'message', 'agent-event', and 'mutation-event'; returns { tg, webview, destroy }
 │   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent; BusMutationEvent has kind 'mutation-event', subKind 'log'|'progress'|'output'|'completed'|'failed'; fault-isolates failing subscribers
 │   ├── mutations.ts         # Mutation pipeline: MutationDescriptor/MutationKind/MutationStatus types, applier registry, createMutation(), cancelMutation(), activeRuns map, setMutationBus(); autoApprove appliers start immediately
-│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; onMutationEvent() stub; shutdown() drains timers
+│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; onMutationEvent() sends one-line TG summary on completed/failed, ignores output/log/progress; shutdown() drains timers
 │   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent() and onMutationEvent() forward bus frames to connected WS clients
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management

@@ -184,11 +184,11 @@ Not started. See [spec.md](spec.md) for details.
 - [ ] Manual smoke: create a throwaway `docs/projects/99-sandbox/` with a trivial `spec.md` and `tasks.md` (e.g., "create `hello.txt`"); click "Run /work --auto"; confirm modal; watch streaming output in the drawer; on completion, verify `hello.txt` exists on a `work/99-sandbox-<ts>` branch and the row's progress reflects ticked checkboxes.
 - [ ] Manual smoke: kick off a long-running `work-run`, click Cancel; verify SIGTERM lands within 5s and the status flips to `failed` with `reason: 'cancelled'`.
 - [ ] Manual smoke: kill `npm run dev` mid-run; restart; confirm `reconcileOrphans()` flips the orphaned descriptor to `failed` with `reason: 'orphaned'` and the recent panel surfaces it.
-- [ ] Update `CLAUDE.md`:
+- [x] Update `CLAUDE.md`:
   - **Architecture** section: add a "Mutation pipeline" subsection describing the `MutationDescriptor` + `MutationApplier` shape, the `logs/mutations.jsonl` log, and the registered kinds (with `work-run` as the only implemented one in this phase).
   - **Project Structure** section: add `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`.
-  - **HTTP server** section: list `POST /api/mutations`, `GET /api/mutations`, `POST /api/mutations/:id/cancel`.
-- [ ] Update `docs/projects/index.md`: 06-webview row's status reflects shipped phase; description mentions the mutation pipeline + `/work --auto` runner.
+  - **HTTP server** section: list `POST /api/mutations`, `POST /api/mutations/:id/cancel` (`GET /api/mutations` was removed as dead code — data embedded in `GET /api/state`).
+- [x] Update `docs/projects/index.md`: 06-webview row's status reflects shipped phase; description mentions the mutation pipeline + `/work --auto` runner.
 
 ## Cross-cutting
 
