@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-10');
@@ -25,8 +26,13 @@ vi.mock('../../utils/logger.js', () => ({
 
 const { resolveYear, handleYearly } = await import('./yearly.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 const CHAT_ID = 100;
@@ -65,21 +71,21 @@ describe('handleYearly', () => {
 
   it('calls startReview with resolved date for valid year', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleYearly(bot, CHAT_ID, '2025');
+    await handleYearly(sender, CHAT_ID, '2025');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'yearly', '2025-12-31', bot);
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'yearly', '2025-12-31', sender);
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it('sends error message for invalid input and does not call startReview', async () => {
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleYearly(bot, CHAT_ID, 'not-a-year');
+    await handleYearly(sender, CHAT_ID, 'not-a-year');
 
-    expect(bot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       CHAT_ID,
       'Invalid year format. Use: /yearly or /yearly 2025',
     );
@@ -88,10 +94,10 @@ describe('handleYearly', () => {
 
   it('calls startReview with current year when args is empty', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleYearly(bot, CHAT_ID, '');
+    await handleYearly(sender, CHAT_ID, '');
 
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'yearly', '2026-12-31', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'yearly', '2026-12-31', sender);
   });
 });

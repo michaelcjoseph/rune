@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-10');
@@ -24,8 +25,13 @@ vi.mock('../../utils/logger.js', () => ({
 
 const { resolveFriday, handleWeekly } = await import('./weekly.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 const CHAT_ID = 100;
@@ -102,22 +108,22 @@ describe('handleWeekly', () => {
 
   it('calls startReview with resolved Friday for valid input', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
     // Apr 11 2026 = Saturday -> resolves to Apr 10 (Friday)
-    await handleWeekly(bot, CHAT_ID, '2026-04-11');
+    await handleWeekly(sender, CHAT_ID, '2026-04-11');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', bot);
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', sender);
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it('sends error message for invalid date and does not call startReview', async () => {
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleWeekly(bot, CHAT_ID, 'not-a-date');
+    await handleWeekly(sender, CHAT_ID, 'not-a-date');
 
-    expect(bot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       CHAT_ID,
       'Invalid date format. Use: /weekly, /weekly 2026-04-11, or /weekly 4/11',
     );
@@ -127,20 +133,20 @@ describe('handleWeekly', () => {
   it('calls startReview with today when today is Friday and args is empty', async () => {
     mockGetTodayDate.mockReturnValue('2026-04-10'); // Friday
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleWeekly(bot, CHAT_ID, '');
+    await handleWeekly(sender, CHAT_ID, '');
 
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', sender);
   });
 
   it('calls startReview with previous Friday when today is Thursday', async () => {
     mockGetTodayDate.mockReturnValue('2026-04-16'); // Thursday
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleWeekly(bot, CHAT_ID, '');
+    await handleWeekly(sender, CHAT_ID, '');
 
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'weekly', '2026-04-10', sender);
   });
 });

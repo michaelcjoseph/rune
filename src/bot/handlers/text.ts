@@ -1,11 +1,9 @@
-import TelegramBot from 'node-telegram-bot-api';
+import type TelegramBot from 'node-telegram-bot-api';
+import type { MessageSender } from '../../transport/sender.js';
 import config from '../../config.js';
 import { getSession, createSession, updateSession, setSessionModel, appendMessageToSession } from '../../vault/sessions.js';
 import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
-import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
-
-const log = createLogger('text-handler');
 import { handleFresh } from '../commands/fresh.js';
 import { handleFreshFull } from '../commands/fresh-full.js';
 import { handleClear } from '../commands/clear.js';
@@ -41,67 +39,69 @@ import { classifyIntent, type ClassifyResult } from '../resolver.js';
 import { getSkillRegistry, type SkillEntry } from '../skill-registry.js';
 import { appendIntent, type IntentOutcome } from '../../utils/intent-log.js';
 
-export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
+const log = createLogger('text-handler');
+
+export async function handleTextMessage(sender: MessageSender, msg: TelegramBot.Message): Promise<void> {
   // Security gate
   if (msg.from?.id !== config.TELEGRAM_USER_ID) return;
 
-  const chatId = msg.chat.id;
+  const userId = msg.chat.id;
   const text = (msg.text || '').trim();
   if (!text) return;
 
-  if (text.startsWith('/fresh-full')) return handleFreshFull(bot, chatId);
-  if (text.startsWith('/fresh')) return handleFresh(bot, chatId);
-  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(bot, chatId);
-  if (text.startsWith('/journal ')) return handleJournal(bot, chatId, text.slice('/journal '.length).trim());
-  if (text.startsWith('/ask ')) return handleAsk(bot, chatId, text.slice('/ask '.length).trim());
-  if (text.startsWith('/kb ')) return handleKB(bot, chatId, text.slice('/kb '.length).trim());
-  if (text.startsWith('/ingest')) return handleIngest(bot, chatId, text.slice('/ingest'.length).trim());
-  if (text.startsWith('/daily')) return handleDaily(bot, chatId, text.slice('/daily'.length).trim());
-  if (text.startsWith('/weekly')) return handleWeekly(bot, chatId, text.slice('/weekly'.length).trim());
-  if (text.startsWith('/monthly')) return handleMonthly(bot, chatId, text.slice('/monthly'.length).trim());
-  if (text.startsWith('/quarterly')) return handleQuarterly(bot, chatId, text.slice('/quarterly'.length).trim());
-  if (text.startsWith('/yearly')) return handleYearly(bot, chatId, text.slice('/yearly'.length).trim());
-  if (text.startsWith('/priorities')) return handlePriorities(bot, chatId, text.slice('/priorities'.length).trim());
+  if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId);
+  if (text.startsWith('/fresh')) return handleFresh(sender, userId);
+  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId);
+  if (text.startsWith('/journal ')) return handleJournal(sender, userId, text.slice('/journal '.length).trim());
+  if (text.startsWith('/ask ')) return handleAsk(sender, userId, text.slice('/ask '.length).trim());
+  if (text.startsWith('/kb ')) return handleKB(sender, userId, text.slice('/kb '.length).trim());
+  if (text.startsWith('/ingest')) return handleIngest(sender, userId, text.slice('/ingest'.length).trim());
+  if (text.startsWith('/daily')) return handleDaily(sender, userId, text.slice('/daily'.length).trim());
+  if (text.startsWith('/weekly')) return handleWeekly(sender, userId, text.slice('/weekly'.length).trim());
+  if (text.startsWith('/monthly')) return handleMonthly(sender, userId, text.slice('/monthly'.length).trim());
+  if (text.startsWith('/quarterly')) return handleQuarterly(sender, userId, text.slice('/quarterly'.length).trim());
+  if (text.startsWith('/yearly')) return handleYearly(sender, userId, text.slice('/yearly'.length).trim());
+  if (text.startsWith('/priorities')) return handlePriorities(sender, userId, text.slice('/priorities'.length).trim());
   // /done-workout must come before /workout so the longer prefix wins.
-  if (text.startsWith('/done-workout')) return handleDoneWorkout(bot, chatId);
-  if (text.startsWith('/workout')) return handleWorkout(bot, chatId, text.slice('/workout'.length).trim());
-  if (text.startsWith('/study')) return handleStudy(bot, chatId);
-  if (text.startsWith('/family')) return handleFamily(bot, chatId);
-  if (text.startsWith('/career')) return handleCareer(bot, chatId);
-  if (text.startsWith('/health')) return handleHealth(bot, chatId, text.slice('/health'.length).trim());
-  if (text.startsWith('/blog')) return handleBlog(bot, chatId, text.slice('/blog'.length).trim());
-  if (text.startsWith('/library-sync')) return handleLibrarySync(bot, chatId);
+  if (text.startsWith('/done-workout')) return handleDoneWorkout(sender, userId);
+  if (text.startsWith('/workout')) return handleWorkout(sender, userId, text.slice('/workout'.length).trim());
+  if (text.startsWith('/study')) return handleStudy(sender, userId);
+  if (text.startsWith('/family')) return handleFamily(sender, userId);
+  if (text.startsWith('/career')) return handleCareer(sender, userId);
+  if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
+  if (text.startsWith('/blog')) return handleBlog(sender, userId, text.slice('/blog'.length).trim());
+  if (text.startsWith('/library-sync')) return handleLibrarySync(sender, userId);
   // /learn-list must come before /learn so the longer prefix wins.
-  if (text.startsWith('/learn-list')) return handleLearnList(bot, chatId);
-  if (text === '/learn' || text.startsWith('/learn ')) return handleLearn(bot, chatId, text.slice('/learn'.length).trim());
-  if (text.startsWith('/prep')) return handlePrep(bot, chatId);
-  if (text.startsWith('/seed')) return handleSeed(bot, chatId, text.slice('/seed'.length).trim());
-  if (text.startsWith('/lint')) return handleLint(bot, chatId);
-  if (text.startsWith('/opus')) return handleModelSwitch(bot, chatId, 'opus');
-  if (text.startsWith('/sonnet')) return handleModelSwitch(bot, chatId, 'sonnet');
-  if (text.startsWith('/haiku')) return handleModelSwitch(bot, chatId, 'haiku');
-  if (text.startsWith('/status')) return handleStatus(bot, chatId);
-  if (text.startsWith('/whoop')) return handleWhoop(bot, chatId);
-  if (text.startsWith('/start')) return handleStart(bot, chatId);
+  if (text.startsWith('/learn-list')) return handleLearnList(sender, userId);
+  if (text === '/learn' || text.startsWith('/learn ')) return handleLearn(sender, userId, text.slice('/learn'.length).trim());
+  if (text.startsWith('/prep')) return handlePrep(sender, userId);
+  if (text.startsWith('/seed')) return handleSeed(sender, userId, text.slice('/seed'.length).trim());
+  if (text.startsWith('/lint')) return handleLint(sender, userId);
+  if (text.startsWith('/opus')) return handleModelSwitch(sender, userId, 'opus');
+  if (text.startsWith('/sonnet')) return handleModelSwitch(sender, userId, 'sonnet');
+  if (text.startsWith('/haiku')) return handleModelSwitch(sender, userId, 'haiku');
+  if (text.startsWith('/status')) return handleStatus(sender, userId);
+  if (text.startsWith('/whoop')) return handleWhoop(sender, userId);
+  if (text.startsWith('/start')) return handleStart(sender, userId);
 
   // URL detection — messages containing URLs go to content triage
-  if (containsURL(text)) return handleURLMessage(bot, chatId, text);
+  if (containsURL(text)) return handleURLMessage(sender, userId, text);
 
   // Active review session takes priority over default conversation
-  if (hasActiveReview(chatId)) return handleReviewMessage(chatId, text, bot);
+  if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
 
   // Resolver: classify free-form messages against the skill registry. Skipped
   // for short messages (rarely encode a routable intent) to save the Haiku
   // call. Slash commands already short-circuited above; active-session above.
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   if (wordCount >= config.RESOLVER_MIN_WORDS) {
-    const routed = await tryResolveAndDispatch(bot, chatId, text);
+    const routed = await tryResolveAndDispatch(sender, userId, text);
     if (routed) return;
     // Fall through — the resolver already logged the intent-log entry.
   }
 
   // Default: multi-turn conversation
-  return handleConversation(bot, chatId, text);
+  return handleConversation(sender, userId, text);
 }
 
 /** Run the resolver and, if confidence ≥ threshold and the top-2 aren't
@@ -111,7 +111,7 @@ export async function handleTextMessage(bot: TelegramBot, msg: TelegramBot.Messa
  *  freeform handler. Any thrown error — including from getSkillRegistry or
  *  classifyIntent itself — is caught and treated as "not routed" so the
  *  Telegram polling handler never sees an uncaught rejection. */
-async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: string): Promise<boolean> {
+async function tryResolveAndDispatch(sender: MessageSender, userId: number, text: string): Promise<boolean> {
   try {
     const registry = getSkillRegistry();
     const result = await classifyIntent(text, registry);
@@ -126,8 +126,8 @@ async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: str
     // shown as `/name` to the user; the registry now contains only slash + agent
     // kinds, both of which are user-recognizable as commands.
     if (result.ambiguous) {
-      await bot.sendMessage(
-        chatId,
+      await sender.send(
+        userId,
         `Couldn't tell if you meant /${result.skill} or /${result.second_skill}. Falling back to chat.`,
       );
       logIntent(text, result, 'ambiguous', null);
@@ -142,7 +142,7 @@ async function tryResolveAndDispatch(bot: TelegramBot, chatId: number, text: str
     }
 
     try {
-      await invokeSkill(bot, chatId, text, entry, result.args);
+      await invokeSkill(sender, userId, text, entry, result.args);
       logIntent(text, result, 'routed', entry.name);
       return true;
     } catch (err) {
@@ -178,8 +178,8 @@ function logIntent(
  *  than a map because slash-command handler signatures vary (some take args,
  *  some don't) — one place to edit when commands change. */
 async function invokeSkill(
-  bot: TelegramBot,
-  chatId: number,
+  sender: MessageSender,
+  userId: number,
   message: string,
   skill: SkillEntry,
   args: string,
@@ -189,7 +189,7 @@ async function invokeSkill(
     if (result.error || !result.text) {
       throw new Error(result.error ?? 'Agent returned empty output');
     }
-    await sendLongMessage(bot, chatId, result.text);
+    await sender.send(userId, result.text);
     return;
   }
   // Slash-kind dispatch. Mirrors the prefix chain at the top of
@@ -197,27 +197,27 @@ async function invokeSkill(
   // listed — model-switch (/opus, /sonnet, /haiku), auth (/whoop, /start),
   // and admin (/status, /lint, /seed) commands are intentionally omitted.
   switch (skill.name) {
-    case 'journal': return handleJournal(bot, chatId, args);
-    case 'ingest': return handleIngest(bot, chatId, args);
-    case 'priorities': return handlePriorities(bot, chatId, args);
-    case 'workout': return handleWorkout(bot, chatId, args);
-    case 'done-workout': return handleDoneWorkout(bot, chatId);
-    case 'study': return handleStudy(bot, chatId);
-    case 'family': return handleFamily(bot, chatId);
-    case 'career': return handleCareer(bot, chatId);
-    case 'prep': return handlePrep(bot, chatId);
-    case 'daily': return handleDaily(bot, chatId, args);
-    case 'weekly': return handleWeekly(bot, chatId, args);
-    case 'monthly': return handleMonthly(bot, chatId, args);
-    case 'quarterly': return handleQuarterly(bot, chatId, args);
-    case 'yearly': return handleYearly(bot, chatId, args);
-    case 'health': return handleHealth(bot, chatId, args);
-    case 'blog': return handleBlog(bot, chatId, args);
-    case 'library-sync': return handleLibrarySync(bot, chatId);
-    case 'learn': return handleLearn(bot, chatId, args || message);
-    case 'learn-list': return handleLearnList(bot, chatId);
-    case 'fresh': return handleFresh(bot, chatId);
-    case 'fresh-full': return handleFreshFull(bot, chatId);
+    case 'journal': return handleJournal(sender, userId, args);
+    case 'ingest': return handleIngest(sender, userId, args);
+    case 'priorities': return handlePriorities(sender, userId, args);
+    case 'workout': return handleWorkout(sender, userId, args);
+    case 'done-workout': return handleDoneWorkout(sender, userId);
+    case 'study': return handleStudy(sender, userId);
+    case 'family': return handleFamily(sender, userId);
+    case 'career': return handleCareer(sender, userId);
+    case 'prep': return handlePrep(sender, userId);
+    case 'daily': return handleDaily(sender, userId, args);
+    case 'weekly': return handleWeekly(sender, userId, args);
+    case 'monthly': return handleMonthly(sender, userId, args);
+    case 'quarterly': return handleQuarterly(sender, userId, args);
+    case 'yearly': return handleYearly(sender, userId, args);
+    case 'health': return handleHealth(sender, userId, args);
+    case 'blog': return handleBlog(sender, userId, args);
+    case 'library-sync': return handleLibrarySync(sender, userId);
+    case 'learn': return handleLearn(sender, userId, args || message);
+    case 'learn-list': return handleLearnList(sender, userId);
+    case 'fresh': return handleFresh(sender, userId);
+    case 'fresh-full': return handleFreshFull(sender, userId);
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
   }
@@ -263,15 +263,15 @@ const CONVERSATION_TOOLS = [
   'mcp__jarvis-kb__kb_stats',
 ];
 
-async function handleConversation(bot: TelegramBot, chatId: number, text: string): Promise<void> {
-  let session = getSession(chatId);
+async function handleConversation(sender: MessageSender, userId: number, text: string): Promise<void> {
+  let session = getSession(userId);
   if (!session) {
-    session = createSession(chatId, text, config.CONVERSATION_MODEL);
+    session = createSession(userId, text, config.CONVERSATION_MODEL);
   }
 
-  appendMessageToSession(chatId, 'user', text);
+  appendMessageToSession(userId, 'user', text);
 
-  const typing = startTyping(bot, chatId);
+  sender.startTyping(userId);
   try {
     const result = await askClaudeWithContext(
       text,
@@ -280,46 +280,46 @@ async function handleConversation(bot: TelegramBot, chatId: number, text: string
       session.model,
       CONVERSATION_TOOLS,
     );
-    stopTyping(typing);
+    sender.stopTyping(userId);
 
     if (result.error) {
       log.error('Conversation error', { error: result.error, sessionId: session.sessionId });
-      await bot.sendMessage(chatId, `Error: ${result.error}`);
+      await sender.send(userId, `Error: ${result.error}`);
       return;
     }
 
     const rawReply = result.text!;
-    appendMessageToSession(chatId, 'assistant', rawReply);
-    updateSession(chatId);
+    appendMessageToSession(userId, 'assistant', rawReply);
+    updateSession(userId);
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
     const reply = `${rawReply}\n\n_— chatting · /fresh to end_`;
-    await sendLongMessage(bot, chatId, reply);
+    await sender.send(userId, reply);
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('Conversation exception', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+    await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }
 
-async function handleLint(bot: TelegramBot, chatId: number): Promise<void> {
+async function handleLint(sender: MessageSender, userId: number): Promise<void> {
   const { lintKB } = await import('../../kb/engine.js');
-  const typing = startTyping(bot, chatId);
+  sender.startTyping(userId);
   try {
     const result = await lintKB();
-    stopTyping(typing);
-    await sendLongMessage(bot, chatId, result.report);
+    sender.stopTyping(userId);
+    await sender.send(userId, result.report);
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('Lint error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Lint error: ${(err as Error).message}`);
+    await sender.send(userId, `Lint error: ${(err as Error).message}`);
   }
 }
 
-async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
+async function handleWhoop(sender: MessageSender, userId: number): Promise<void> {
   if (!isConfigured()) {
-    await bot.sendMessage(chatId, 'Whoop not configured. Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET in .env.local.');
+    await sender.send(userId, 'Whoop not configured. Set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET in .env.local.');
     return;
   }
 
@@ -333,8 +333,8 @@ async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
     const minutes = Math.floor(((stored.expiresAt - now) % 3_600_000) / 60_000);
     const expiresIn = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
     const expiryStr = new Date(stored.expiresAt).toLocaleString('en-US', { timeZone: config.TIMEZONE });
-    await bot.sendMessage(
-      chatId,
+    await sender.send(
+      userId,
       `Whoop connected.\nAccess token expires in ${expiresIn} (${expiryStr} ${config.TIMEZONE}).\nRefresh token present: ${hasRefresh ? 'yes' : 'no'}`,
     );
     return;
@@ -347,8 +347,8 @@ async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
     const hours = Math.floor((expiresAt - Date.now()) / 3_600_000);
     const minutes = Math.floor(((expiresAt - Date.now()) % 3_600_000) / 60_000);
     const expiryStr = new Date(expiresAt).toLocaleString('en-US', { timeZone: config.TIMEZONE });
-    await bot.sendMessage(
-      chatId,
+    await sender.send(
+      userId,
       `Whoop connected (refreshed).\nAccess token expires in ${hours}h ${minutes}m (${expiryStr} ${config.TIMEZONE}).`,
     );
     return;
@@ -357,25 +357,25 @@ async function handleWhoop(bot: TelegramBot, chatId: number): Promise<void> {
   const detail = describeTokenError(result);
   if (result.reason === 'no_refresh_token' || result.reason === 'refresh_rejected') {
     const url = getAuthorizationURL(WHOOP_REDIRECT_URI);
-    await bot.sendMessage(chatId, `${detail}\n\nOpen this link to re-authorize:\n\n${url}`);
+    await sender.send(userId, `${detail}\n\nOpen this link to re-authorize:\n\n${url}`);
   } else {
-    await bot.sendMessage(chatId, detail);
+    await sender.send(userId, detail);
   }
 }
 
-async function handleModelSwitch(bot: TelegramBot, chatId: number, model: string): Promise<void> {
-  const session = getSession(chatId);
+async function handleModelSwitch(sender: MessageSender, userId: number, model: string): Promise<void> {
+  const session = getSession(userId);
   if (!session) {
-    createSession(chatId, `/${model}`);
-    setSessionModel(chatId, model);
-    await bot.sendMessage(chatId, `Switched to ${model}. New session started.`);
+    createSession(userId, `/${model}`);
+    setSessionModel(userId, model);
+    await sender.send(userId, `Switched to ${model}. New session started.`);
     return;
   }
-  setSessionModel(chatId, model);
-  await bot.sendMessage(chatId, `Switched to ${model}.`);
+  setSessionModel(userId, model);
+  await sender.send(userId, `Switched to ${model}.`);
 }
 
-async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
+async function handleStart(sender: MessageSender, userId: number): Promise<void> {
   const lines = [
     'Jarvis — Second Brain',
     '',
@@ -425,5 +425,5 @@ async function handleStart(bot: TelegramBot, chatId: number): Promise<void> {
     '/haiku — fast responses',
   ];
 
-  await bot.sendMessage(chatId, lines.join('\n'));
+  await sender.send(userId, lines.join('\n'));
 }

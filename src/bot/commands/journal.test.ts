@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 vi.mock('../../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
@@ -17,10 +18,6 @@ vi.mock('../../utils/time.js', () => ({
 vi.mock('../../vault/files.js', () => ({ writeVaultFile: vi.fn() }));
 vi.mock('../../kb/queue.js', () => ({ enqueue: vi.fn() }));
 vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
-vi.mock('../../integrations/telegram/client.js', () => ({
-  startTyping: vi.fn(() => 'typing-handle'),
-  stopTyping: vi.fn(),
-}));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
@@ -37,8 +34,13 @@ const summarizeMock = summarizeSession as unknown as ReturnType<typeof vi.fn>;
 const appendMock = appendToJournal as unknown as ReturnType<typeof vi.fn>;
 const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 
-function makeBot(): any {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) };
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 describe('handleJournal', () => {
@@ -46,9 +48,9 @@ describe('handleJournal', () => {
 
   it('appends a literal entry and commits when no session is active', async () => {
     getSessionMock.mockReturnValue(null);
-    const bot = makeBot();
+    const sender = makeSender();
 
-    await handleJournal(bot, 100, 'bought groceries');
+    await handleJournal(sender, 100, 'bought groceries');
 
     const entry = appendMock.mock.calls[0]![0] as string;
     expect(entry).toContain('14:30');
@@ -56,7 +58,7 @@ describe('handleJournal', () => {
     expect(gitMock).toHaveBeenCalledWith('TG journal entry');
     expect(summarizeMock).not.toHaveBeenCalled();
     expect(deleteSessionMock).not.toHaveBeenCalled();
-    expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Logged to journal.');
+    expect(sender.send).toHaveBeenCalledWith(100, 'Logged to journal.');
   });
 
   it('also closes the conversation when a session is active', async () => {
@@ -65,9 +67,9 @@ describe('handleJournal', () => {
       text: 'Summary of conversation\nKB-worthy: no',
       error: null,
     });
-    const bot = makeBot();
+    const sender = makeSender();
 
-    await handleJournal(bot, 100, 'log this thread');
+    await handleJournal(sender, 100, 'log this thread');
 
     // Literal entry written first
     const literalEntry = appendMock.mock.calls[0]![0] as string;
@@ -80,7 +82,7 @@ describe('handleJournal', () => {
 
     expect(summarizeMock).toHaveBeenCalledWith('sess-active');
     expect(deleteSessionMock).toHaveBeenCalledWith(100);
-    const reply = bot.sendMessage.mock.calls[0][1] as string;
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('session reset');
   });
 
@@ -93,12 +95,12 @@ describe('handleJournal', () => {
       text: 'Deep conversation about product strategy\nKB-worthy: yes',
       error: null,
     });
-    const bot = makeBot();
+    const sender = makeSender();
 
-    await handleJournal(bot, 100, 'log kb conversation');
+    await handleJournal(sender, 100, 'log kb conversation');
 
     expect(enqueueMock).toHaveBeenCalled();
-    const reply = bot.sendMessage.mock.calls[0][1] as string;
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('Saved to KB sources');
     expect(reply).toContain('session reset');
   });
@@ -106,12 +108,12 @@ describe('handleJournal', () => {
   it('falls back gracefully if summarize fails mid-thread (still resets session)', async () => {
     getSessionMock.mockReturnValue({ sessionId: 'sess-active' });
     summarizeMock.mockResolvedValue({ text: null, error: 'CLI timeout' });
-    const bot = makeBot();
+    const sender = makeSender();
 
-    await handleJournal(bot, 100, 'log this');
+    await handleJournal(sender, 100, 'log this');
 
     expect(deleteSessionMock).toHaveBeenCalledWith(100);
-    const reply = bot.sendMessage.mock.calls[0][1] as string;
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('Logged to journal');
     expect(reply).toContain('CLI timeout');
   });
@@ -124,11 +126,11 @@ describe('handleJournal', () => {
       .mockReturnValueOnce({ sessionId: 'sess-race' }) // journal.ts getSession check
       .mockReturnValueOnce(null);                       // closeConversation's getSession
 
-    const bot = makeBot();
+    const sender = makeSender();
 
-    await handleJournal(bot, 100, 'log racing message');
+    await handleJournal(sender, 100, 'log racing message');
 
-    const reply = bot.sendMessage.mock.calls[0][1] as string;
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('Logged to journal');
     // The no-session branch suppresses the detail so user sees a clean message.
     expect(reply).not.toContain('Conversation summary failed');

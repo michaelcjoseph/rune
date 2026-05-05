@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MessageSender } from '../../transport/sender.js';
 
 const tmpDir = join(tmpdir(), `jarvis-fresh-int-${Date.now()}`);
 const logsDir = join(tmpDir, 'logs');
@@ -40,10 +41,6 @@ vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(() => ({ sessionId: 'test-session-1', messageCount: 5, firstMessage: 'hello' })),
   deleteSession: vi.fn(),
 }));
-vi.mock('../../integrations/telegram/client.js', () => ({
-  startTyping: vi.fn(() => 'typing-handle'),
-  stopTyping: vi.fn(),
-}));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
@@ -52,8 +49,13 @@ const { handleFresh } = await import('./fresh.js');
 const { getQueue } = await import('../../kb/queue.js');
 const { processIngestionQueue } = await import('../../kb/engine.js');
 
-function makeBotMock() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 beforeEach(() => {
@@ -94,8 +96,8 @@ describe('conversation-to-KB pipeline (e2e)', () => {
       return { text: 'Ingested successfully. Created 2 wiki pages.', error: null };
     });
 
-    const bot = makeBotMock();
-    await handleFresh(bot, 123);
+    const sender = makeSender();
+    await handleFresh(sender, 123);
 
     // 1. File saved to knowledge/raw/conversations/
     const conversationsDir = join(tmpDir, 'knowledge', 'raw', 'conversations');
@@ -132,7 +134,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     expect(queueAfter).toHaveLength(0);
 
     // 7. User message indicates KB save
-    const msg = bot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Saved to KB sources');
   });
 
@@ -147,8 +149,8 @@ describe('conversation-to-KB pipeline (e2e)', () => {
 
     mockSummarizeSession.mockResolvedValue({ text: summaryText, error: null });
 
-    const bot = makeBotMock();
-    await handleFresh(bot, 123);
+    const sender = makeSender();
+    await handleFresh(sender, 123);
 
     // No file saved
     const conversationsDir = join(tmpDir, 'knowledge', 'raw', 'conversations');
@@ -161,7 +163,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     expect(queue).toHaveLength(0);
 
     // No KB label in message
-    const msg = bot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).not.toContain('KB sources');
   });
 
@@ -176,8 +178,8 @@ describe('conversation-to-KB pipeline (e2e)', () => {
 
     mockSummarizeSession.mockResolvedValue({ text: summaryText, error: null });
 
-    const bot = makeBotMock();
-    await handleFresh(bot, 123);
+    const sender = makeSender();
+    await handleFresh(sender, 123);
 
     const journalFile = join(tmpDir, 'journals', '2026_04_14.md');
     expect(existsSync(journalFile)).toBe(true);

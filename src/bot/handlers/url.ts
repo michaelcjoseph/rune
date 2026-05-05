@@ -1,10 +1,9 @@
-import type TelegramBot from 'node-telegram-bot-api';
+import type { MessageSender } from '../../transport/sender.js';
 import { runAgent } from '../../ai/claude.js';
 import { writeVaultFile } from '../../vault/files.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { enqueue } from '../../kb/queue.js';
 import { getTimestamp } from '../../utils/time.js';
-import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { saveToReadwise } from '../../integrations/readwise/client.js';
 import { createLogger } from '../../utils/logger.js';
 import config from '../../config.js';
@@ -112,38 +111,38 @@ function formatAsMarkdown(url: string, title: string, content: string): string {
   return `# ${title}\n\nSource: ${url}\n\n${content}`;
 }
 
-async function routeKBIngest(url: string, title: string, content: string, guidance: string | undefined, bot: TelegramBot, chatId: number): Promise<void> {
+async function routeKBIngest(url: string, title: string, content: string, guidance: string | undefined, sender: MessageSender, userId: number): Promise<void> {
   const filename = `${sanitizeFilename(title)}.md`;
   const vaultPath = `knowledge/raw/articles/${filename}`;
   writeVaultFile(vaultPath, formatAsMarkdown(url, title, content));
   enqueue(vaultPath, guidance);
-  await bot.sendMessage(chatId, `Queued for KB: ${title}\n\nRun /ingest to process now.`);
+  await sender.send(userId, `Queued for KB: ${title}\n\nRun /ingest to process now.`);
 }
 
-async function routeReadwise(url: string, title: string, content: string, bot: TelegramBot, chatId: number): Promise<void> {
+async function routeReadwise(url: string, title: string, content: string, sender: MessageSender, userId: number): Promise<void> {
   const filename = `${sanitizeFilename(title)}.md`;
   const vaultPath = `Readwise/Articles/${filename}`;
   writeVaultFile(vaultPath, formatAsMarkdown(url, title, content));
 
   const apiResult = await saveToReadwise(url, title);
   const apiNote = apiResult.success ? ' + Readwise API' : '';
-  await bot.sendMessage(chatId, `Saved to Readwise${apiNote}: ${title}`);
+  await sender.send(userId, `Saved to Readwise${apiNote}: ${title}`);
 }
 
-async function routeJournal(url: string, title: string, reasoning: string, bot: TelegramBot, chatId: number): Promise<void> {
+async function routeJournal(url: string, title: string, reasoning: string, sender: MessageSender, userId: number): Promise<void> {
   const ts = getTimestamp();
   appendToJournal(`- ${ts} [${title}](${url})\n\t- ${reasoning}`);
-  await bot.sendMessage(chatId, `Logged to journal: ${title}`);
+  await sender.send(userId, `Logged to journal: ${title}`);
 }
 
-export async function handleURLMessage(bot: TelegramBot, chatId: number, text: string): Promise<void> {
+export async function handleURLMessage(sender: MessageSender, userId: number, text: string): Promise<void> {
   const urls = extractURLs(text);
   const url = urls[0];
   if (!url) return;
 
   const userContext = text.replace(url, '').trim();
 
-  const typing = startTyping(bot, chatId);
+  sender.startTyping(userId);
   try {
     const content = await fetchContent(url);
 
@@ -159,18 +158,18 @@ ${content}
 ---`;
 
     const result = await runAgent('content-triager', prompt);
-    stopTyping(typing);
+    sender.stopTyping(userId);
 
     if (result.error || !result.text) {
       log.error('Triage agent failed', { url, error: result.error });
-      await bot.sendMessage(chatId, `Triage failed: ${result.error || 'empty response'}`);
+      await sender.send(userId, `Triage failed: ${result.error || 'empty response'}`);
       return;
     }
 
     const triage = parseTriageResult(result.text);
     if (!triage) {
       log.error('Failed to parse triage result', { url, raw: result.text });
-      await sendLongMessage(bot, chatId, `Triage result (unparsed):\n\n${result.text}`);
+      await sender.send(userId, `Triage result (unparsed):\n\n${result.text}`);
       return;
     }
 
@@ -178,21 +177,21 @@ ${content}
 
     switch (triage.classification) {
       case 'kb-ingest':
-        await routeKBIngest(url, triage.title, content, triage.guidance, bot, chatId);
+        await routeKBIngest(url, triage.title, content, triage.guidance, sender, userId);
         break;
       case 'readwise':
-        await routeReadwise(url, triage.title, content, bot, chatId);
+        await routeReadwise(url, triage.title, content, sender, userId);
         break;
       case 'journal':
-        await routeJournal(url, triage.title, triage.reasoning, bot, chatId);
+        await routeJournal(url, triage.title, triage.reasoning, sender, userId);
         break;
       case 'skip':
-        await bot.sendMessage(chatId, `Skipped: ${triage.reasoning}`);
+        await sender.send(userId, `Skipped: ${triage.reasoning}`);
         break;
     }
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('URL handler error', { url, error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error processing URL: ${(err as Error).message}`);
+    await sender.send(userId, `Error processing URL: ${(err as Error).message}`);
   }
 }

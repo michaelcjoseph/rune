@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Side-effect import: registers the weekly review handler
 import '../../reviews/weekly.js';
@@ -40,13 +40,13 @@ export function resolveFriday(args: string): string | null {
   return null;
 }
 
-export async function handleWeekly(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleWeekly(sender: MessageSender, userId: number, args: string): Promise<void> {
   const date = resolveFriday(args);
   if (!date) {
-    await bot.sendMessage(chatId, 'Invalid date format. Use: /weekly, /weekly 2026-04-11, or /weekly 4/11');
+    await sender.send(userId, 'Invalid date format. Use: /weekly, /weekly 2026-04-11, or /weekly 4/11');
     return;
   }
 
-  log.info('Starting weekly review', { chatId, date });
-  await startReview(chatId, 'weekly', date, bot);
+  log.info('Starting weekly review', { userId, date });
+  await startReview(userId, 'weekly', date, sender);
 }

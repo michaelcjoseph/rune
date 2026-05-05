@@ -1,4 +1,3 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { readVaultFile } from '../../vault/files.js';
 import { parseTag } from '../../vault/journal.js';
 import {
@@ -8,6 +7,7 @@ import {
   getYesterdayFilename,
 } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-priorities');
 
@@ -40,25 +40,25 @@ function resolveTarget(args: string): Target {
   return { filename: getYesterdayFilename(), label: "Yesterday's" };
 }
 
-export async function handlePriorities(bot: TelegramBot, chatId: number, args = ''): Promise<void> {
+export async function handlePriorities(sender: MessageSender, userId: number, args = ''): Promise<void> {
   try {
     const { filename, label } = resolveTarget(args);
     const content = readVaultFile(`journals/${filename}`);
 
     if (!content?.trim()) {
-      await bot.sendMessage(chatId, `No journal entry for ${label.toLowerCase().replace("'s", '')}.`);
+      await sender.send(userId, `No journal entry for ${label.toLowerCase().replace("'s", '')}.`);
       return;
     }
 
     const priorities = parseTag(content, 'priorities');
     if (!priorities?.trim()) {
-      await bot.sendMessage(chatId, `No #priorities tagged in ${label.toLowerCase()} journal.`);
+      await sender.send(userId, `No #priorities tagged in ${label.toLowerCase()} journal.`);
       return;
     }
 
-    await bot.sendMessage(chatId, `${label} priorities:\n\n${priorities}`);
+    await sender.send(userId, `${label} priorities:\n\n${priorities}`);
   } catch (err) {
     log.error('Priorities error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+    await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }

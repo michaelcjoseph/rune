@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
@@ -27,8 +28,13 @@ vi.mock('../../reviews/blog.js', () => ({}));
 
 const { handleBlog } = await import('./blog.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 const CHAT_ID = 100;
@@ -37,22 +43,22 @@ describe('handleBlog', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('shows usage when no topic provided', async () => {
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleBlog(bot, CHAT_ID, '');
+    await handleBlog(sender, CHAT_ID, '');
 
-    expect(bot.sendMessage).toHaveBeenCalledWith(CHAT_ID, 'Usage: /blog <topic>');
+    expect(sender.send).toHaveBeenCalledWith(CHAT_ID, 'Usage: /blog <topic>');
     expect(mockStartReview).not.toHaveBeenCalled();
   });
 
   it('sets topic and calls startReview with correct args', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleBlog(bot, CHAT_ID, 'why testing matters');
+    await handleBlog(sender, CHAT_ID, 'why testing matters');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'blog', '2026-04-14', bot, 'why testing matters');
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'blog', '2026-04-14', sender, 'why testing matters');
+    expect(sender.send).not.toHaveBeenCalled();
   });
 });

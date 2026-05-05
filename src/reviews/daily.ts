@@ -1,11 +1,10 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { registerReviewHandler } from './orchestrator.js';
 import { updateReviewSession } from './session.js';
 import type { ReviewSession } from './session.js';
+import type { MessageSender } from '../transport/sender.js';
 import { askClaudeOneShot, runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
-import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('daily-review');
@@ -25,18 +24,18 @@ const KNOWN_JSON_FILES = [
   'investments/investments.json — investment tracking',
 ];
 
-async function start(session: ReviewSession, bot: TelegramBot): Promise<void> {
+async function start(session: ReviewSession, sender: MessageSender): Promise<void> {
   const filename = toJournalFilename(session.targetDate);
   const content = readVaultFile(`journals/${filename}`);
 
   if (!content?.trim()) {
-    await bot.sendMessage(session.chatId, `No journal found for ${session.targetDate}. Nothing to process.`);
+    await sender.send(session.chatId, `No journal found for ${session.targetDate}. Nothing to process.`);
     updateReviewSession(session.chatId, { phase: 'done' });
     return;
   }
 
-  await bot.sendMessage(session.chatId, `Reading journal for ${session.targetDate}...`);
-  const typing = startTyping(bot, session.chatId);
+  await sender.send(session.chatId, `Reading journal for ${session.targetDate}...`);
+  sender.startTyping(session.chatId);
 
   try {
     const prompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, etc.). For each tagged item, extract the relevant data from the surrounding text and propose a JSON update.
@@ -59,43 +58,43 @@ If no actionable tags are found (i.e., nothing that maps to a JSON data file), s
 Be concise. Only propose updates for tags that clearly map to a data file.`;
 
     const result = await askClaudeOneShot(prompt);
-    stopTyping(typing);
+    sender.stopTyping(session.chatId);
 
     if (result.error || !result.text) {
       log.error('Failed to analyze journal', { error: result.error, date: session.targetDate });
-      await bot.sendMessage(session.chatId, `Failed to analyze journal: ${result.error || 'empty response'}`);
+      await sender.send(session.chatId, `Failed to analyze journal: ${result.error || 'empty response'}`);
       updateReviewSession(session.chatId, { phase: 'done' });
       return;
     }
 
     if (result.text.includes('No JSON updates needed')) {
-      await sendLongMessage(bot, session.chatId, result.text);
+      await sender.send(session.chatId, result.text);
       updateReviewSession(session.chatId, { phase: 'done' });
       return;
     }
 
     updateReviewSession(session.chatId, { prepContext: result.text, phase: 'approval' });
-    await sendLongMessage(bot, session.chatId, result.text + '\n\nReply *yes* to apply these updates or *cancel* to skip.');
+    await sender.send(session.chatId, result.text + '\n\nReply *yes* to apply these updates or *cancel* to skip.');
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(session.chatId);
     throw err;
   }
 }
 
-async function handleMessage(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+async function handleMessage(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
   if (session.phase === 'approval') {
-    return handleApproval(session, text, bot);
+    return handleApproval(session, text, sender);
   }
 
   log.warn('Unexpected message in daily review', { phase: session.phase, chatId: session.chatId });
 }
 
-async function handleApproval(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+async function handleApproval(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
   const lower = text.toLowerCase().trim();
 
   if (['yes', 'y', 'approve', 'confirm', 'ok'].includes(lower)) {
-    await bot.sendMessage(session.chatId, 'Applying updates...');
-    const typing = startTyping(bot, session.chatId);
+    await sender.send(session.chatId, 'Applying updates...');
+    sender.startTyping(session.chatId);
 
     try {
       updateReviewSession(session.chatId, { phase: 'updates' });
@@ -108,27 +107,27 @@ ${session.prepContext}
 Date context: ${session.targetDate}`;
 
       const result = await runAgent('json-updater', agentPrompt);
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       if (result.error) {
         log.error('json-updater agent failed', { error: result.error });
-        await bot.sendMessage(session.chatId, `JSON update failed: ${result.error}`);
+        await sender.send(session.chatId, `JSON update failed: ${result.error}`);
         updateReviewSession(session.chatId, { phase: 'done' });
         return;
       }
 
       await gitCommitAndPush(`Daily review: ${session.targetDate}`);
       updateReviewSession(session.chatId, { phase: 'done' });
-      await sendLongMessage(bot, session.chatId, `Daily review complete.\n\n${result.text || 'Updates applied.'}`);
+      await sender.send(session.chatId, `Daily review complete.\n\n${result.text || 'Updates applied.'}`);
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       throw err;
     }
   } else if (['no', 'n', 'cancel', 'skip'].includes(lower)) {
     updateReviewSession(session.chatId, { phase: 'done' });
-    await bot.sendMessage(session.chatId, 'Daily review cancelled.');
+    await sender.send(session.chatId, 'Daily review cancelled.');
   } else {
-    await bot.sendMessage(session.chatId, 'Reply *yes* to apply updates or *cancel* to skip.');
+    await sender.send(session.chatId, 'Reply *yes* to apply updates or *cancel* to skip.');
   }
 }
 

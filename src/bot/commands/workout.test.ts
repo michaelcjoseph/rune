@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Create temp dirs before any mocks — vi.hoisted must be synchronous.
 const { vaultTmpDir, logsTmpDir } = vi.hoisted(() => {
@@ -31,14 +32,6 @@ const mockRunAgent = vi.fn();
 
 vi.mock('../../ai/claude.js', () => ({
   runAgent: mockRunAgent,
-}));
-
-const mockSendLongMessage = vi.fn();
-
-vi.mock('../../integrations/telegram/client.js', () => ({
-  sendLongMessage: mockSendLongMessage,
-  startTyping: vi.fn(() => setInterval(() => {}, 99999)),
-  stopTyping: vi.fn((i: NodeJS.Timeout) => clearInterval(i)),
 }));
 
 vi.mock('../../utils/logger.js', () => ({
@@ -84,11 +77,13 @@ function deleteLogsFile(name: string): void {
 
 const CHAT_ID = 42;
 
-function mockBot() {
+function makeSender(): MessageSender {
   return {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendChatAction: vi.fn().mockResolvedValue(undefined),
-  } as any;
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 // ─── 1. parseWorkoutArgs — both token orders ──────────────────────────────────
@@ -485,28 +480,28 @@ describe('handleWorkout — invalid args', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('sends usage message for unrecognized single token (/workout cardio)', async () => {
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'cardio');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'cardio');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain("didn't recognize");
     expect(mockRunAgent).not.toHaveBeenCalled();
   });
 
   it('sends usage message for two unrecognized tokens (/workout xyz pdq)', async () => {
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'xyz pdq');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'xyz pdq');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
+    expect(sender.send).toHaveBeenCalledOnce();
     expect(mockRunAgent).not.toHaveBeenCalled();
   });
 
   it('usage message includes location and focus options', async () => {
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'badarg');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'badarg');
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('home');
     expect(msg).toContain('gym');
     expect(msg).toContain('strength');
@@ -518,51 +513,47 @@ describe('handleWorkout — invalid args', () => {
 describe('handleWorkout — happy path', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('calls sendLongMessage with agent markdown on success', async () => {
+  it('calls sender.send with agent markdown on success', async () => {
     const markdown = "# Today's Workout\n\nSquats 5x5\n\n```json\n{\"sets\": 5}\n```";
     mockRunAgent.mockResolvedValue({ text: markdown, error: null });
-    mockSendLongMessage.mockResolvedValue(undefined);
 
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'gym strength');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'gym strength');
 
     expect(mockRunAgent).toHaveBeenCalledOnce();
-    expect(mockSendLongMessage).toHaveBeenCalledWith(bot, CHAT_ID, markdown);
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(sender.send).toHaveBeenCalledWith(CHAT_ID, markdown);
   });
 
   it('sends error message when agent returns error', async () => {
     mockRunAgent.mockResolvedValue({ text: null, error: 'Claude timed out' });
 
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'home');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'home');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Workout generation failed');
-    expect(mockSendLongMessage).not.toHaveBeenCalled();
   });
 
   it('works with empty args (no location/focus)', async () => {
     const markdown = '# Workout\n\nGeneral session.';
     mockRunAgent.mockResolvedValue({ text: markdown, error: null });
-    mockSendLongMessage.mockResolvedValue(undefined);
 
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, '');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, '');
 
     expect(mockRunAgent).toHaveBeenCalledOnce();
-    expect(mockSendLongMessage).toHaveBeenCalledWith(bot, CHAT_ID, markdown);
+    expect(sender.send).toHaveBeenCalledWith(CHAT_ID, markdown);
   });
 
   it('sends error message when runAgent throws', async () => {
     mockRunAgent.mockRejectedValue(new Error('unexpected crash'));
 
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'gym');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'gym');
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Workout generation failed');
   });
 
@@ -570,10 +561,9 @@ describe('handleWorkout — happy path', () => {
     const callOrder: string[] = [];
     mockEnsureWhoopSyncedForToday.mockImplementation(async () => { callOrder.push('ensureWhoop'); });
     mockRunAgent.mockImplementation(async () => { callOrder.push('runAgent'); return { text: '# Workout', error: null }; });
-    mockSendLongMessage.mockResolvedValue(undefined);
 
-    const bot = mockBot();
-    await handleWorkout(bot, CHAT_ID, 'gym strength');
+    const sender = makeSender();
+    await handleWorkout(sender, CHAT_ID, 'gym strength');
 
     expect(mockEnsureWhoopSyncedForToday).toHaveBeenCalledOnce();
     expect(mockRunAgent).toHaveBeenCalledOnce();

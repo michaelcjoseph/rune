@@ -1,12 +1,12 @@
 import { writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type TelegramBot from 'node-telegram-bot-api';
+import type { MessageSender } from '../../transport/sender.js';
 import { runAgent } from '../../ai/claude.js';
 import { writeVaultFile } from '../../vault/files.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { enqueue } from '../../kb/queue.js';
 import { getTimestamp } from '../../utils/time.js';
-import { startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
 import config from '../../config.js';
 
@@ -61,17 +61,17 @@ function cleanupPhoto(filepath: string): void {
   }
 }
 
-export async function handlePhotoMessage(bot: TelegramBot, msg: TelegramBot.Message): Promise<void> {
+export async function handlePhotoMessage(bot: TelegramBot, sender: MessageSender, msg: TelegramBot.Message): Promise<void> {
   if (msg.from?.id !== config.TELEGRAM_USER_ID) return;
   if (!msg.photo || msg.photo.length === 0) return;
 
-  const chatId = msg.chat.id;
+  const userId = msg.chat.id;
   const caption = msg.caption?.trim() || '';
   // Last element is the highest resolution
   const photo = msg.photo[msg.photo.length - 1];
   if (!photo) return;
 
-  const typing = startTyping(bot, chatId);
+  sender.startTyping(userId);
   let filepath = '';
 
   try {
@@ -85,18 +85,18 @@ Photo file: ${filepath}
 Read the image file above to see the photo.${captionNote}`;
 
     const result = await runAgent('photo-classifier', prompt);
-    stopTyping(typing);
+    sender.stopTyping(userId);
 
     if (result.error || !result.text) {
       log.error('Photo classifier failed', { error: result.error });
-      await bot.sendMessage(chatId, `Classification failed: ${result.error || 'empty response'}`);
+      await sender.send(userId, `Classification failed: ${result.error || 'empty response'}`);
       return;
     }
 
     const classified = parseClassifyResult(result.text);
     if (!classified) {
       log.error('Failed to parse classification', { raw: result.text });
-      await bot.sendMessage(chatId, `Photo classified but couldn't parse result:\n\n${result.text}`);
+      await sender.send(userId, `Photo classified but couldn't parse result:\n\n${result.text}`);
       return;
     }
 
@@ -107,7 +107,7 @@ Read the image file above to see the photo.${captionNote}`;
     switch (classified.route) {
       case 'journal':
         appendToJournal(`- ${ts} ${classified.title}\n\t- ${classified.details}`);
-        await bot.sendMessage(chatId, `Logged to journal: ${classified.title}`);
+        await sender.send(userId, `Logged to journal: ${classified.title}`);
         break;
 
       case 'kb-ingest': {
@@ -115,7 +115,7 @@ Read the image file above to see the photo.${captionNote}`;
         const vaultPath = `knowledge/raw/notes/${filename}`;
         writeVaultFile(vaultPath, `# ${classified.title}\n\n${classified.details}\n\nClassification: ${classified.classification}`);
         enqueue(vaultPath);
-        await bot.sendMessage(chatId, `Queued for KB: ${classified.title}\n\nRun /ingest to process now.`);
+        await sender.send(userId, `Queued for KB: ${classified.title}\n\nRun /ingest to process now.`);
         break;
       }
 
@@ -124,18 +124,18 @@ Read the image file above to see the photo.${captionNote}`;
           : classified.classification === 'receipt' ? '#receipt'
           : `#${classified.classification}`;
         appendToJournal(`- ${ts} ${tag} ${classified.title}\n\t- ${classified.details}`);
-        await bot.sendMessage(chatId, `Logged to journal with ${tag}: ${classified.title}\n\nWill be processed in nightly tag review.`);
+        await sender.send(userId, `Logged to journal with ${tag}: ${classified.title}\n\nWill be processed in nightly tag review.`);
         break;
       }
 
       case 'skip':
-        await bot.sendMessage(chatId, `Skipped: ${classified.details}`);
+        await sender.send(userId, `Skipped: ${classified.details}`);
         break;
     }
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('Photo handler error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error processing photo: ${(err as Error).message}`);
+    await sender.send(userId, `Error processing photo: ${(err as Error).message}`);
   } finally {
     if (filepath) cleanupPhoto(filepath);
   }

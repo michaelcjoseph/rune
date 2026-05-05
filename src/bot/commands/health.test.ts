@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
@@ -27,8 +28,13 @@ vi.mock('../../reviews/health.js', () => ({}));
 
 const { handleHealth } = await import('./health.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 const CHAT_ID = 100;
@@ -38,30 +44,30 @@ describe('handleHealth', () => {
 
   it('starts health session with no args (general coaching)', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleHealth(bot, CHAT_ID, '');
+    await handleHealth(sender, CHAT_ID, '');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, undefined);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', sender, undefined);
   });
 
   it('passes focus as topic when args provided', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleHealth(bot, CHAT_ID, 'sleep optimization');
+    await handleHealth(sender, CHAT_ID, 'sleep optimization');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, 'sleep optimization');
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', sender, 'sleep optimization');
   });
 
   it('passes undefined topic when no args', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleHealth(bot, CHAT_ID, '');
+    await handleHealth(sender, CHAT_ID, '');
 
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', bot, undefined);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'health', '2026-04-14', sender, undefined);
   });
 });

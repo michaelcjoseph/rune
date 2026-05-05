@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Mock heavy dependencies so the module can be imported without side effects.
 // interview.ts imports from session, ai/claude, vault/files, vault/git,
-// integrations/telegram/client, utils/logger, jobs/playbook-extract, kb/queue.
+// utils/logger, jobs/playbook-extract, kb/queue.
 
 vi.mock('../config.js', () => ({
   default: {
@@ -32,11 +32,6 @@ vi.mock('../ai/claude.js', () => ({
 
 vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
-vi.mock('../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn(),
-  startTyping: vi.fn(() => null),
-  stopTyping: vi.fn(),
-}));
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
 }));

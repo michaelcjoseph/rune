@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Side-effect import: registers the quarterly review handler
 import '../../reviews/quarterly.js';
@@ -42,13 +42,13 @@ export function resolveQuarter(args: string): string | null {
   return null;
 }
 
-export async function handleQuarterly(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleQuarterly(sender: MessageSender, userId: number, args: string): Promise<void> {
   const date = resolveQuarter(args);
   if (!date) {
-    await bot.sendMessage(chatId, 'Invalid quarter format. Use: /quarterly, /quarterly Q1, or /quarterly Q2 2026');
+    await sender.send(userId, 'Invalid quarter format. Use: /quarterly, /quarterly Q1, or /quarterly Q2 2026');
     return;
   }
 
-  log.info('Starting quarterly review', { chatId, date });
-  await startReview(chatId, 'quarterly', date, bot);
+  log.info('Starting quarterly review', { userId, date });
+  await startReview(userId, 'quarterly', date, sender);
 }

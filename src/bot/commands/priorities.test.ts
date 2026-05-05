@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockReadVaultFile = vi.fn();
 const mockParseTag = vi.fn();
@@ -34,9 +35,14 @@ vi.mock('../../utils/logger.js', () => ({
 const { handlePriorities } = await import('./priorities.js');
 
 describe('handlePriorities', () => {
-  const mockBot = {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  } as any;
+  function makeSender(): MessageSender {
+    return {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
   const chatId = 123;
 
   beforeEach(() => {
@@ -64,10 +70,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue(journalContent);
     mockParseTag.mockReturnValue('- Ship feature X\n- Review PR');
 
-    await handlePriorities(mockBot, chatId);
+    const sender = makeSender();
+    await handlePriorities(sender, chatId);
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_21.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Yesterday's priorities:\n\n- Ship feature X\n- Review PR",
     );
@@ -78,10 +85,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue(journalContent);
     mockParseTag.mockReturnValue('- Plan sprint');
 
-    await handlePriorities(mockBot, chatId, 'Monday');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'Monday');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_20.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Monday's priorities:\n\n- Plan sprint",
     );
@@ -91,10 +99,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue('#priorities\n- Today thing');
     mockParseTag.mockReturnValue('- Today thing');
 
-    await handlePriorities(mockBot, chatId, 'wednesday');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'wednesday');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_22.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Today's priorities:\n\n- Today thing",
     );
@@ -104,10 +113,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue('#priorities\n- Old thing');
     mockParseTag.mockReturnValue('- Old thing');
 
-    await handlePriorities(mockBot, chatId, 'Thursday');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'Thursday');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_16.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Thursday's priorities:\n\n- Old thing",
     );
@@ -117,10 +127,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue('#priorities\n- Thing');
     mockParseTag.mockReturnValue('- Thing');
 
-    await handlePriorities(mockBot, chatId, 'my priorities today');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'my priorities today');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_22.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Today's priorities:\n\n- Thing",
     );
@@ -130,10 +141,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue('#priorities\n- Thing');
     mockParseTag.mockReturnValue('- Thing');
 
-    await handlePriorities(mockBot, chatId, 'priorities yesterday');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'priorities yesterday');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_21.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Yesterday's priorities:\n\n- Thing",
     );
@@ -143,10 +155,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue('#priorities\n- Thing');
     mockParseTag.mockReturnValue('- Thing');
 
-    await handlePriorities(mockBot, chatId, "what's up");
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, "what's up");
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_21.md');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "Yesterday's priorities:\n\n- Thing",
     );
@@ -155,11 +168,12 @@ describe('handlePriorities', () => {
   it('sends "No journal entry" when target journal file does not exist', async () => {
     mockReadVaultFile.mockReturnValue(null);
 
-    await handlePriorities(mockBot, chatId, 'Monday');
+    const sender = makeSender();
+    await handlePriorities(sender, chatId, 'Monday');
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('journals/2026_04_20.md');
     expect(mockParseTag).not.toHaveBeenCalled();
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'No journal entry for monday.',
     );
@@ -170,10 +184,11 @@ describe('handlePriorities', () => {
     mockReadVaultFile.mockReturnValue(journalContent);
     mockParseTag.mockReturnValue(null);
 
-    await handlePriorities(mockBot, chatId);
+    const sender = makeSender();
+    await handlePriorities(sender, chatId);
 
     expect(mockParseTag).toHaveBeenCalledWith(journalContent, 'priorities');
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       "No #priorities tagged in yesterday's journal.",
     );
@@ -184,8 +199,9 @@ describe('handlePriorities', () => {
       throw new Error('disk read failed');
     });
 
-    await handlePriorities(mockBot, chatId);
+    const sender = makeSender();
+    await handlePriorities(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, 'Error: disk read failed');
+    expect(sender.send).toHaveBeenCalledWith(chatId, 'Error: disk read failed');
   });
 });

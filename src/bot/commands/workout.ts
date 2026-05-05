@@ -1,14 +1,13 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { writeFileSync, renameSync } from 'node:fs';
 import { readVaultFile } from '../../vault/files.js';
 import { readEquipment } from '../../vault/equipment.js';
 import { readRecentWhoopDays } from '../../vault/whoop-recent.js';
 import { runAgent } from '../../ai/claude.js';
 import { ensureWhoopSyncedForToday } from '../../jobs/whoop-sync.js';
-import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { toChicagoDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
 import config from '../../config.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-workout');
 
@@ -208,27 +207,27 @@ export async function generateWorkout(args: ParsedArgs): Promise<{ markdown: str
   return { markdown: result.text };
 }
 
-export async function handleWorkout(bot: TelegramBot, chatId: number, args = ''): Promise<void> {
+export async function handleWorkout(sender: MessageSender, userId: number, args = ''): Promise<void> {
   const parsed = parseWorkoutArgs(args);
   if (parsed === null) {
-    await bot.sendMessage(chatId, usageMessage());
+    await sender.send(userId, usageMessage());
     return;
   }
 
-  const typing = startTyping(bot, chatId);
+  sender.startTyping(userId);
   try {
     const result = await generateWorkout(parsed);
     if ('error' in result) {
       log.error('Workout generation failed', { error: result.error });
-      await bot.sendMessage(chatId, 'Workout generation failed. Check server logs for details.');
+      await sender.send(userId, 'Workout generation failed. Check server logs for details.');
       return;
     }
-    await sendLongMessage(bot, chatId, result.markdown);
+    await sender.send(userId, result.markdown);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error('Workout error', { error: message });
-    await bot.sendMessage(chatId, 'Workout generation failed. Check server logs for details.');
+    await sender.send(userId, 'Workout generation failed. Check server logs for details.');
   } finally {
-    stopTyping(typing);
+    sender.stopTyping(userId);
   }
 }

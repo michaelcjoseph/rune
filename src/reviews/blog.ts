@@ -1,11 +1,10 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
+import type { MessageSender } from '../transport/sender.js';
 import { registerReviewHandler } from './orchestrator.js';
 import { askClaudeWithContext } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
-import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('blog');
@@ -53,15 +52,15 @@ function buildSystemPrompt(topic: string): string {
 }
 
 const blogHandler: ReviewTypeHandler = {
-  async start(session: ReviewSession, bot: TelegramBot): Promise<void> {
+  async start(session: ReviewSession, sender: MessageSender): Promise<void> {
     const topic = session.topic || 'untitled';
 
     const systemPrompt = buildSystemPrompt(topic);
     sessionPrompts.set(session.claudeSessionId, systemPrompt);
     updateReviewSession(session.chatId, { prepContext: systemPrompt });
 
-    await bot.sendMessage(session.chatId, `Blog session started: "${topic}"\nSend /done when finished.`);
-    const typing = startTyping(bot, session.chatId);
+    await sender.send(session.chatId, `Blog session started: "${topic}"\nSend /done when finished.`);
+    sender.startTyping(session.chatId);
 
     try {
       const result = await askClaudeWithContext(
@@ -69,28 +68,28 @@ const blogHandler: ReviewTypeHandler = {
         session.claudeSessionId,
         systemPrompt,
       );
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       if (result.error) {
         log.error('Blog start failed', { error: result.error });
-        await bot.sendMessage(session.chatId, `Failed to start blog session: ${result.error}`);
+        await sender.send(session.chatId, `Failed to start blog session: ${result.error}`);
         updateReviewSession(session.chatId, { phase: 'done' });
         return;
       }
 
       updateReviewSession(session.chatId, { phase: 'interview' });
-      await sendLongMessage(bot, session.chatId, result.text || 'Ready to write together.');
+      await sender.send(session.chatId, result.text || 'Ready to write together.');
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       throw err;
     }
   },
 
-  async handleMessage(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+  async handleMessage(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
     if (text.toLowerCase().trim() === '/done') {
       updateReviewSession(session.chatId, { phase: 'done' });
       sessionPrompts.delete(session.claudeSessionId);
-      await bot.sendMessage(session.chatId, 'Blog session ended.');
+      await sender.send(session.chatId, 'Blog session ended.');
       return;
     }
 
@@ -102,25 +101,25 @@ const blogHandler: ReviewTypeHandler = {
     }
     if (!systemPrompt) {
       log.error('Missing system prompt for blog session', { sessionId: session.claudeSessionId });
-      await bot.sendMessage(session.chatId, 'Session context lost. Start a new /blog session.');
+      await sender.send(session.chatId, 'Session context lost. Start a new /blog session.');
       updateReviewSession(session.chatId, { phase: 'done' });
       return;
     }
 
-    const typing = startTyping(bot, session.chatId);
+    sender.startTyping(session.chatId);
     try {
       const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt);
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       if (result.error) {
         log.error('Blog message failed', { error: result.error });
-        await bot.sendMessage(session.chatId, `Error: ${result.error}`);
+        await sender.send(session.chatId, `Error: ${result.error}`);
         return;
       }
 
-      await sendLongMessage(bot, session.chatId, result.text || '');
+      await sender.send(session.chatId, result.text || '');
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       throw err;
     }
   },

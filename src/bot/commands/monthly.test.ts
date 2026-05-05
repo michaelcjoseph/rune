@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-10');
@@ -25,8 +26,13 @@ vi.mock('../../utils/logger.js', () => ({
 
 const { resolveMonth, handleMonthly } = await import('./monthly.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 const CHAT_ID = 100;
@@ -90,21 +96,21 @@ describe('handleMonthly', () => {
 
   it('calls startReview with resolved date for valid month', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleMonthly(bot, CHAT_ID, 'april');
+    await handleMonthly(sender, CHAT_ID, 'april');
 
     expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'monthly', '2026-04-30', bot);
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'monthly', '2026-04-30', sender);
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it('sends error message for invalid input and does not call startReview', async () => {
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleMonthly(bot, CHAT_ID, 'not-a-month');
+    await handleMonthly(sender, CHAT_ID, 'not-a-month');
 
-    expect(bot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       CHAT_ID,
       'Invalid month format. Use: /monthly, /monthly april, /monthly 04, or /monthly 2026-04',
     );
@@ -113,10 +119,10 @@ describe('handleMonthly', () => {
 
   it('calls startReview with current month when args is empty', async () => {
     mockStartReview.mockResolvedValue(undefined);
-    const bot = mockBot();
+    const sender = makeSender();
 
-    await handleMonthly(bot, CHAT_ID, '');
+    await handleMonthly(sender, CHAT_ID, '');
 
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'monthly', '2026-04-30', bot);
+    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'monthly', '2026-04-30', sender);
   });
 });

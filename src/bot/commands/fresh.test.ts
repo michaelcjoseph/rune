@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 vi.mock('../../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
@@ -17,10 +18,6 @@ vi.mock('../../utils/time.js', () => ({
 vi.mock('../../vault/files.js', () => ({ writeVaultFile: vi.fn() }));
 vi.mock('../../kb/queue.js', () => ({ enqueue: vi.fn() }));
 vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
-vi.mock('../../integrations/telegram/client.js', () => ({
-  startTyping: vi.fn(() => 'typing-handle'),
-  stopTyping: vi.fn(),
-}));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
@@ -189,29 +186,34 @@ describe('bot/commands/fresh', () => {
   });
 
   describe('handleFresh', () => {
-    function makeBotMock() {
-      return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+    function makeSender(): MessageSender {
+      return {
+        name: 'telegram' as const,
+        send: vi.fn().mockResolvedValue(undefined),
+        startTyping: vi.fn(),
+        stopTyping: vi.fn(),
+      };
     }
 
     it('sends "No active conversation" when no session exists', async () => {
       getSessionMock.mockReturnValue(null);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(123, 'No active conversation to summarize.');
+      expect(sender.send).toHaveBeenCalledWith(123, 'No active conversation to summarize.');
       expect(summarizeMock).not.toHaveBeenCalled();
     });
 
     it('sends error message when summarizeSession returns error', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-1' });
       summarizeMock.mockResolvedValue({ text: null, error: 'Claude broke' });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123);
-      expect(bot.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining('Could not summarize'));
+      expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('Could not summarize'));
       expect(appendMock).not.toHaveBeenCalled();
     });
 
@@ -221,9 +223,9 @@ describe('bot/commands/fresh', () => {
         text: 'Deep discussion about transformers\nKB-worthy: yes',
         error: null,
       });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       expect(writeVaultMock).toHaveBeenCalledWith(
         expect.stringContaining('knowledge/raw/conversations/'),
@@ -232,7 +234,7 @@ describe('bot/commands/fresh', () => {
       expect(enqueueMock).toHaveBeenCalledWith(
         expect.stringContaining('knowledge/raw/conversations/'),
       );
-      const msg = bot.sendMessage.mock.calls[0][1] as string;
+      const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
       expect(msg).toContain('Saved to KB sources');
       expect(msg).not.toContain('KB-worthy: yes');
       expect(msg).toContain('Conversation logged');
@@ -244,13 +246,13 @@ describe('bot/commands/fresh', () => {
         text: 'Quick chat about weather\nKB-worthy: no',
         error: null,
       });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       expect(writeVaultMock).not.toHaveBeenCalled();
       expect(enqueueMock).not.toHaveBeenCalled();
-      const msg = bot.sendMessage.mock.calls[0][1] as string;
+      const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
       expect(msg).not.toContain('KB-worthy');
       expect(msg).toContain('Conversation logged');
     });
@@ -261,9 +263,9 @@ describe('bot/commands/fresh', () => {
         text: 'Summary line\nKB-worthy: yes',
         error: null,
       });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('14:30');
@@ -278,9 +280,9 @@ describe('bot/commands/fresh', () => {
         text: 'A summary\nKB-worthy: no',
         error: null,
       });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123);
       expect(gitMock).toHaveBeenCalledWith('TG conversation logged');
@@ -289,12 +291,12 @@ describe('bot/commands/fresh', () => {
     it('handles exception by resetting session and notifying user', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-1' });
       summarizeMock.mockRejectedValue(new Error('CLI timeout'));
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFresh(bot, 123);
+      await handleFresh(sender, 123);
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123);
-      expect(bot.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining('CLI timeout'));
+      expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('CLI timeout'));
     });
   });
 });

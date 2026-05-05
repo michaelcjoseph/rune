@@ -23,14 +23,16 @@ src/
 ├── config.ts                # Typed env vars and constants
 ├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession
 ├── bot/
-│   ├── telegram.ts          # Bot init and message dispatch
-│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler
+│   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
+│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
 │   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
 │   ├── resolver.ts          # Classify free-form TG messages against skill registry via Haiku; returns ClassifyResult {skill, args, confidence, second_skill, second_confidence, ambiguous}
 │   └── commands/
 │       ├── fresh.ts         # /fresh — summarize active chat, append to journal, optionally enqueue KB-worthy summary, commit, reset session. Exports `closeConversation` helper reused by /journal.
+│       ├── fresh-full.ts    # /fresh-full — verbatim conversation transcript logging (no summarization)
+│       ├── clear.ts         # /clear — discard active session without journaling
 │       ├── journal.ts       # /journal — append literal entry to today's journal; if a chat session is active, also calls closeConversation (mirrors /fresh)
 │       ├── ask.ts           # /ask — one-shot freeform Claude question (legacy escape hatch; no longer a resolver route)
 │       ├── kb.ts            # /kb — one-shot knowledge base query (legacy escape hatch; no longer a resolver route)
@@ -52,7 +54,8 @@ src/
 │       ├── career.ts        # /career — career reflection/planning
 │       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
 │       ├── learn-list.ts    # /learn-list — echo the current prepended learnings
-│       └── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
+│       ├── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
+│       └── seed.ts          # /seed — bulk-seed KB from vault files via seedAndProcess()
 ├── transport/
 │   ├── sender.ts            # MessageSender interface, SendOpts type, createSenders(bot, bus) factory; subscribes both senders to bus; returns { tg, webview, destroy }
 │   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; fault-isolates failing subscribers
@@ -82,7 +85,8 @@ src/
 │   ├── lint.ts              # Spawn wiki-linter agent → health report
 │   ├── search.ts            # ripgrep-based full-text search across vault + wiki
 │   ├── queue.ts             # JSON-file ingestion queue (enqueue/dequeue/clear)
-│   └── schema.ts            # Default schema.md content for new knowledge bases
+│   ├── schema.ts            # Default schema.md content for new knowledge bases
+│   └── seed.ts              # seedAndProcess(): enumerate vault files → enqueue new/mutable sources → process queue
 ├── jobs/
 │   ├── scheduler.ts         # Cron job registration: startScheduler(bot), stopScheduler()
 │   ├── morning-prep.ts      # Gather vault data → synthesize morning prep → write to journal
@@ -188,6 +192,7 @@ Mutable sources (world-view, playbook, active projects, journals, library/lenny)
 - All timestamps use `America/Chicago` timezone
 - Config reads from env vars; defaults in `src/config.ts`
 - Claude CLI spawning is centralized in `src/ai/claude.ts` — never spawn `claude` directly elsewhere
+- Message delivery uses the `MessageSender` interface (`src/transport/sender.ts`) — handlers and commands never import `TelegramBot` directly for sending; bot is only passed where needed for file downloads (photo handler)
 - Session locks prevent concurrent CLI writes to the same session ID
 - Git commits happen at key moments (morning prep, /fresh, nightly), not on timers
 - Vault files use `readVaultFile` / `writeVaultFile` / `appendVaultFile` from `src/vault/files.ts` — paths are relative to vault root

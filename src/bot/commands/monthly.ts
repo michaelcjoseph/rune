@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Side-effect import: registers the monthly review handler
 import '../../reviews/monthly.js';
@@ -50,13 +50,13 @@ export function resolveMonth(args: string): string | null {
   return null;
 }
 
-export async function handleMonthly(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleMonthly(sender: MessageSender, userId: number, args: string): Promise<void> {
   const date = resolveMonth(args);
   if (!date) {
-    await bot.sendMessage(chatId, 'Invalid month format. Use: /monthly, /monthly april, /monthly 04, or /monthly 2026-04');
+    await sender.send(userId, 'Invalid month format. Use: /monthly, /monthly april, /monthly 04, or /monthly 2026-04');
     return;
   }
 
-  log.info('Starting monthly review', { chatId, date });
-  await startReview(chatId, 'monthly', date, bot);
+  log.info('Starting monthly review', { userId, date });
+  await startReview(userId, 'monthly', date, sender);
 }

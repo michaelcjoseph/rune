@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockReadVaultFile = vi.fn();
 
 vi.mock('../../vault/files.js', () => ({
   readVaultFile: mockReadVaultFile,
-}));
-
-const mockSendLongMessage = vi.fn();
-
-vi.mock('../../integrations/telegram/client.js', () => ({
-  sendLongMessage: mockSendLongMessage,
 }));
 
 vi.mock('../../utils/logger.js', () => ({
@@ -24,9 +19,14 @@ vi.mock('../../utils/logger.js', () => ({
 const { handleStudy } = await import('./study.js');
 
 describe('handleStudy', () => {
-  const mockBot = {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  } as any;
+  function makeSender(): MessageSender {
+    return {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
   const chatId = 123;
 
   beforeEach(() => {
@@ -43,12 +43,12 @@ describe('handleStudy', () => {
       return null;
     });
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('study/syllabus.md');
     expect(mockReadVaultFile).toHaveBeenCalledWith('study/progress.json');
-    expect(mockSendLongMessage).toHaveBeenCalledWith(
-      mockBot,
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'Progress: completed: 3 | total: 10 | current: Chapter 4\n\n# CS101\n\n- Chapter 1\n- Chapter 2',
     );
@@ -63,10 +63,10 @@ describe('handleStudy', () => {
       return null;
     });
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockSendLongMessage).toHaveBeenCalledWith(
-      mockBot,
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'Progress: completed: 3 | total: 10',
     );
@@ -81,10 +81,10 @@ describe('handleStudy', () => {
       return null;
     });
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockSendLongMessage).toHaveBeenCalledWith(
-      mockBot,
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       '# CS101\n\n- Chapter 1',
     );
@@ -93,9 +93,10 @@ describe('handleStudy', () => {
   it('returns "No study data found" when both files are missing', async () => {
     mockReadVaultFile.mockReturnValue(null);
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'No study data found (study/syllabus.md and study/progress.json missing).',
     );
@@ -104,9 +105,10 @@ describe('handleStudy', () => {
   it('returns "No study data found" when both files are empty', async () => {
     mockReadVaultFile.mockReturnValue('   ');
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'No study data found (study/syllabus.md and study/progress.json missing).',
     );
@@ -121,10 +123,10 @@ describe('handleStudy', () => {
       return null;
     });
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockSendLongMessage).toHaveBeenCalledWith(
-      mockBot,
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'Progress: {not valid json',
     );
@@ -135,8 +137,9 @@ describe('handleStudy', () => {
       throw new Error('disk read failed');
     });
 
-    await handleStudy(mockBot, chatId);
+    const sender = makeSender();
+    await handleStudy(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, 'Error: disk read failed');
+    expect(sender.send).toHaveBeenCalledWith(chatId, 'Error: disk read failed');
   });
 });

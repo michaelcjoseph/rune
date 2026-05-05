@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdirSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MessageSender } from '../../transport/sender.js';
 
 const tmpDir = join(tmpdir(), `jarvis-learn-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
@@ -108,8 +109,13 @@ describe('appendLearning', () => {
 });
 
 describe('handleLearn', () => {
-  function makeBotMock() {
-    return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+  function makeSender(): MessageSender {
+    return {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
   }
 
   beforeEach(() => {
@@ -117,44 +123,44 @@ describe('handleLearn', () => {
   });
 
   it('sends usage hint and does not write file when text is empty', async () => {
-    const bot = makeBotMock();
-    await handleLearn(bot, 123, '');
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg: string = bot.sendMessage.mock.calls[0][1];
+    const sender = makeSender();
+    await handleLearn(sender, 123, '');
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg: string = vi.mocked(sender.send).mock.calls[0]![1]!;
     expect(msg).toMatch(/usage/i);
     expect(existsSync(learningsFile)).toBe(false);
   });
 
   it('sends usage hint and does not write file when text is whitespace-only', async () => {
-    const bot = makeBotMock();
-    await handleLearn(bot, 123, '   \t\n  ');
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg: string = bot.sendMessage.mock.calls[0][1];
+    const sender = makeSender();
+    await handleLearn(sender, 123, '   \t\n  ');
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg: string = vi.mocked(sender.send).mock.calls[0]![1]!;
     expect(msg).toMatch(/usage/i);
     expect(existsSync(learningsFile)).toBe(false);
   });
 
   it('with real text writes to file and sends confirmation', async () => {
-    const bot = makeBotMock();
-    await handleLearn(bot, 456, 'prefer short answers');
+    const sender = makeSender();
+    await handleLearn(sender, 456, 'prefer short answers');
     expect(existsSync(learningsFile)).toBe(true);
     const content = readFileSync(learningsFile, 'utf8').trim();
     const parsed = JSON.parse(content);
     expect(parsed.text).toBe('prefer short answers');
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg: string = bot.sendMessage.mock.calls[0][1];
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg: string = vi.mocked(sender.send).mock.calls[0]![1]!;
     expect(msg).toMatch(/logged/i);
   });
 
   it('sends to the correct chatId', async () => {
-    const bot = makeBotMock();
-    await handleLearn(bot, 789, 'some learning');
-    expect(bot.sendMessage.mock.calls[0][0]).toBe(789);
+    const sender = makeSender();
+    await handleLearn(sender, 789, 'some learning');
+    expect(vi.mocked(sender.send).mock.calls[0]![0]).toBe(789);
   });
 
   it('trims surrounding whitespace before writing', async () => {
-    const bot = makeBotMock();
-    await handleLearn(bot, 123, '  trimmed text  ');
+    const sender = makeSender();
+    await handleLearn(sender, 123, '  trimmed text  ');
     const content = readFileSync(learningsFile, 'utf8').trim();
     const parsed = JSON.parse(content);
     expect(parsed.text).toBe('trimmed text');

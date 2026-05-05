@@ -4,7 +4,7 @@ import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
 import { markSessionCreated, killActiveProcesses, waitForActiveProcesses } from './ai/claude.js';
 import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
-import { createBot } from './bot/telegram.js';
+import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
@@ -31,7 +31,8 @@ restoreReviewSessions();
 // Start services
 const bot = createBot();
 const bus = new NotificationBus();
-const { destroy } = createSenders(bot, bus);
+const { tg, destroy } = createSenders(bot, bus);
+wireHandlers(bot, tg);
 const server = startHttpServer();
 startScheduler({ bus });
 startWatcher(bus);

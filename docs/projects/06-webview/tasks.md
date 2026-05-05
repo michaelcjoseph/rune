@@ -21,16 +21,16 @@ Not started. See [spec.md](spec.md) for details.
   - [x] `src/jobs/nudges.ts`
   - [x] `src/vault/watcher.ts`
   - [x] `src/jobs/intent-scan.ts`
-- [ ] Refactor handler / command / review callsites to use `senders.tg` instead of `bot.sendMessage`:
-  - [ ] `src/bot/handlers/text.ts`
-  - [ ] `src/bot/handlers/url.ts`
-  - [ ] `src/bot/handlers/photo.ts`
-  - [ ] `src/bot/commands/*.ts` (sweep all 25 files)
-  - [ ] `src/reviews/orchestrator.ts`
-  - [ ] `src/reviews/interview.ts`
-  - [ ] `src/reviews/{daily,weekly,monthly,quarterly,yearly,think,health,blog}.ts`
-- [ ] Refactor typing-indicator usage: replace inline `startTyping(bot, chatId)` with `senders.startTyping(chatId)` (sender chooses how to render).
-- [ ] Update existing handler tests to inject a fake `MessageSender` instead of stubbing `bot.sendMessage`.
+- [x] Refactor handler / command / review callsites to use `senders.tg` instead of `bot.sendMessage`:
+  - [x] `src/bot/handlers/text.ts`
+  - [x] `src/bot/handlers/url.ts`
+  - [x] `src/bot/handlers/photo.ts`
+  - [x] `src/bot/commands/*.ts` (sweep all 25 files)
+  - [x] `src/reviews/orchestrator.ts`
+  - [x] `src/reviews/interview.ts`
+  - [x] `src/reviews/{daily,weekly,monthly,quarterly,yearly,think,health,blog}.ts`
+- [x] Refactor typing-indicator usage: replace inline `startTyping(bot, chatId)` with `senders.startTyping(chatId)` (sender chooses how to render).
+- [x] Update existing handler tests to inject a fake `MessageSender` instead of stubbing `bot.sendMessage`.
 - [ ] Smoke test: run `npm run dev`, exchange a TG message, run morning-prep manually (`/prep`), confirm chunking and content unchanged.
 - [ ] Update `CLAUDE.md` Project Structure section: add `src/transport/` row.
 

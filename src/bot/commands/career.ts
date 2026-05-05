@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { readVaultFile } from '../../vault/files.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-career');
 
@@ -27,25 +27,25 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export async function handleCareer(bot: TelegramBot, chatId: number): Promise<void> {
+export async function handleCareer(sender: MessageSender, userId: number): Promise<void> {
   try {
     const raw = readVaultFile('career/applications.json');
 
     if (!raw?.trim()) {
-      await bot.sendMessage(chatId, 'No applications file found (career/applications.json).');
+      await sender.send(userId, 'No applications file found (career/applications.json).');
       return;
     }
 
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
-      await bot.sendMessage(chatId, 'Invalid format: career/applications.json should be a JSON array.');
+      await sender.send(userId, 'Invalid format: career/applications.json should be a JSON array.');
       return;
     }
     const apps: Application[] = parsed;
     const active = apps.filter((a) => !INACTIVE_STATUSES.includes(a.status.toLowerCase()));
 
     if (active.length === 0) {
-      await bot.sendMessage(chatId, 'No active applications.');
+      await sender.send(userId, 'No active applications.');
       return;
     }
 
@@ -70,9 +70,9 @@ export async function handleCareer(bot: TelegramBot, chatId: number): Promise<vo
 
     lines.push(`${active.length} active | ${staleCount} stale (${STALE_DAYS}+ days)`);
 
-    await bot.sendMessage(chatId, lines.join('\n'));
+    await sender.send(userId, lines.join('\n'));
   } catch (err) {
     log.error('Career error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+    await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }

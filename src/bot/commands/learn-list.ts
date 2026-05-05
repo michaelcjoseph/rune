@@ -1,4 +1,4 @@
-import TelegramBot from 'node-telegram-bot-api';
+import type { MessageSender } from '../../transport/sender.js';
 import {
   recentLearnings,
   DEFAULT_LEARNINGS_LIMIT,
@@ -23,7 +23,7 @@ export function formatLearningsList(
   return [header, ...lines].join('\n');
 }
 
-export async function handleLearnList(bot: TelegramBot, chatId: number): Promise<void> {
+export async function handleLearnList(sender: MessageSender, userId: number): Promise<void> {
   const entries = recentLearnings();
-  await bot.sendMessage(chatId, formatLearningsList(entries));
+  await sender.send(userId, formatLearningsList(entries));
 }

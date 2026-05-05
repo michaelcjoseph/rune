@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 vi.mock('../../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
@@ -15,10 +16,6 @@ vi.mock('../../utils/time.js', () => ({
   getTodayDate: vi.fn(() => '2026-04-14'),
 }));
 vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
-vi.mock('../../integrations/telegram/client.js', () => ({
-  startTyping: vi.fn(() => 'typing-handle'),
-  stopTyping: vi.fn(),
-}));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
@@ -34,8 +31,13 @@ const deleteSessionMock = deleteSession as unknown as ReturnType<typeof vi.fn>;
 const appendMock = appendToJournal as unknown as ReturnType<typeof vi.fn>;
 const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 
-function makeBotMock() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 describe('bot/commands/fresh-full', () => {
@@ -44,11 +46,11 @@ describe('bot/commands/fresh-full', () => {
   describe('no active session', () => {
     it('sends "No active conversation" and does not log or commit', async () => {
       getSessionMock.mockReturnValue(null);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(123, 'No active conversation to log.');
+      expect(sender.send).toHaveBeenCalledWith(123, 'No active conversation to log.');
       expect(appendMock).not.toHaveBeenCalled();
       expect(gitMock).not.toHaveBeenCalled();
       expect(deleteSessionMock).not.toHaveBeenCalled();
@@ -59,11 +61,11 @@ describe('bot/commands/fresh-full', () => {
     it('tells user to use /fresh instead, deletes session, does not commit', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-1' });
       getSessionMessagesMock.mockReturnValue([]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(
+      expect(sender.send).toHaveBeenCalledWith(
         123,
         'No messages captured in this session — use /fresh for a summary instead.',
       );
@@ -80,9 +82,9 @@ describe('bot/commands/fresh-full', () => {
         { role: 'user', text: 'Hello', ts: '2026-04-14T14:00:00Z' },
         { role: 'assistant', text: 'Hi there!', ts: '2026-04-14T14:00:01Z' },
       ]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
       expect(appendMock).toHaveBeenCalledTimes(1);
       const entry = appendMock.mock.calls[0]![0] as string;
@@ -99,9 +101,9 @@ describe('bot/commands/fresh-full', () => {
       getSessionMessagesMock.mockReturnValue([
         { role: 'user', text: 'Test', ts: '2026-04-14T14:00:00Z' },
       ]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
       expect(gitMock).toHaveBeenCalledWith('TG conversation logged (full)');
     });
@@ -111,9 +113,9 @@ describe('bot/commands/fresh-full', () => {
       getSessionMessagesMock.mockReturnValue([
         { role: 'user', text: 'Test', ts: '2026-04-14T14:00:00Z' },
       ]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123);
     });
@@ -125,11 +127,11 @@ describe('bot/commands/fresh-full', () => {
         { role: 'assistant', text: 'Reply A', ts: '2026-04-14T14:00:01Z' },
         { role: 'user', text: 'Msg B', ts: '2026-04-14T14:00:02Z' },
       ]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(
+      expect(sender.send).toHaveBeenCalledWith(
         123,
         'Full conversation logged (3 messages). Session reset.',
       );
@@ -140,9 +142,9 @@ describe('bot/commands/fresh-full', () => {
       getSessionMessagesMock.mockReturnValue([
         { role: 'assistant', text: 'Line one\nLine two\nLine three', ts: '2026-04-14T14:00:00Z' },
       ]);
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('\t- [Jarvis] Line one');
@@ -158,12 +160,12 @@ describe('bot/commands/fresh-full', () => {
         { role: 'user', text: 'Test', ts: '2026-04-14T14:00:00Z' },
       ]);
       appendMock.mockImplementation(() => { throw new Error('disk full'); });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await handleFreshFull(bot, 123);
+      await handleFreshFull(sender, 123);
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123);
-      expect(bot.sendMessage).toHaveBeenCalledWith(
+      expect(sender.send).toHaveBeenCalledWith(
         123,
         expect.stringContaining('disk full'),
       );
@@ -176,9 +178,9 @@ describe('bot/commands/fresh-full', () => {
         { role: 'user', text: 'Test', ts: '2026-04-14T14:00:00Z' },
       ]);
       appendMock.mockImplementation(() => { throw new Error('unexpected'); });
-      const bot = makeBotMock();
+      const sender = makeSender();
 
-      await expect(handleFreshFull(bot, 123)).resolves.not.toThrow();
+      await expect(handleFreshFull(sender, 123)).resolves.not.toThrow();
     });
   });
 });

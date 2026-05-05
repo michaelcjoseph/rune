@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockReadVaultFile = vi.fn();
 const mockGetTodayDate = vi.fn();
@@ -23,9 +24,14 @@ vi.mock('../../utils/logger.js', () => ({
 const { handleCareer } = await import('./career.js');
 
 describe('handleCareer', () => {
-  const mockBot = {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  } as any;
+  function makeSender(): MessageSender {
+    return {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
   const chatId = 123;
 
   beforeEach(() => {
@@ -42,9 +48,10 @@ describe('handleCareer', () => {
       ]),
     );
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     const lines = msg.split('\n');
     // Globex (25d) should appear before Initech (4d) before Acme (2d)
     const globexIdx = lines.findIndex((l: string) => l.includes('Globex'));
@@ -62,9 +69,10 @@ describe('handleCareer', () => {
       ]),
     );
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('!! StaleCorps');
     expect(msg).not.toContain('!! FreshCo');
     expect(msg).toContain('FreshCo');
@@ -80,9 +88,10 @@ describe('handleCareer', () => {
       ]),
     );
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Active');
     expect(msg).not.toContain('Rejected');
     expect(msg).not.toContain('Withdrawn');
@@ -92,9 +101,10 @@ describe('handleCareer', () => {
   it('shows "No applications file found" when file is missing', async () => {
     mockReadVaultFile.mockReturnValue(null);
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'No applications file found (career/applications.json).',
     );
@@ -108,17 +118,19 @@ describe('handleCareer', () => {
       ]),
     );
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, 'No active applications.');
+    expect(sender.send).toHaveBeenCalledWith(chatId, 'No active applications.');
   });
 
   it('handles malformed JSON gracefully (error message)', async () => {
     mockReadVaultFile.mockReturnValue('not valid json {{{');
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toMatch(/^Error:/);
   });
 
@@ -132,9 +144,10 @@ describe('handleCareer', () => {
       ]),
     );
 
-    await handleCareer(mockBot, chatId);
+    const sender = makeSender();
+    await handleCareer(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('3 active | 2 stale (14+ days)');
   });
 });

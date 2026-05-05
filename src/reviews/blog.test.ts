@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../transport/sender.js';
 
 // --- Mocks ---
 
@@ -28,27 +29,17 @@ vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
 }));
 
-vi.mock('../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn().mockResolvedValue(undefined),
-  startTyping: vi.fn().mockReturnValue('typing-handle'),
-  stopTyping: vi.fn(),
-}));
-
 // --- Imports ---
 
 const { registerReviewHandler } = await import('./orchestrator.js');
 const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext } = await import('../ai/claude.js');
 const { readVaultFile } = await import('../vault/files.js');
-const { sendLongMessage, startTyping, stopTyping } = await import('../integrations/telegram/client.js');
 
 const registerMock = registerReviewHandler as ReturnType<typeof vi.fn>;
 const updateSessionMock = updateReviewSession as ReturnType<typeof vi.fn>;
 const askClaudeMock = askClaudeWithContext as ReturnType<typeof vi.fn>;
 const readVaultMock = readVaultFile as ReturnType<typeof vi.fn>;
-const sendLongMock = sendLongMessage as ReturnType<typeof vi.fn>;
-const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
-const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
 await import('./blog.js');
@@ -78,19 +69,23 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
   };
 }
 
-function makeBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 // --- Tests ---
 
 describe('reviews/blog', () => {
-  let bot: ReturnType<typeof makeBot>;
+  let sender: MessageSender;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bot = makeBot();
-    startTypingMock.mockReturnValue('typing-handle');
+    sender = makeSender();
   });
 
   describe('registration', () => {
@@ -110,13 +105,13 @@ describe('reviews/blog', () => {
       });
       askClaudeMock.mockResolvedValue({ text: 'What angle are you thinking for this post?', error: null });
 
-      await blogHandler.start(session, bot);
+      await blogHandler.start(session, sender);
 
       expect(readVaultMock).toHaveBeenCalledWith('.claude/skills/blog/SKILL.md');
       expect(readVaultMock).toHaveBeenCalledWith('writing/voice.md');
       expect(readVaultMock).toHaveBeenCalledWith('writing/topics.md');
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Blog session started: "why testing matters"\nSend /done when finished.');
-      expect(startTypingMock).toHaveBeenCalledWith(bot, 100);
+      expect(sender.send).toHaveBeenCalledWith(100, 'Blog session started: "why testing matters"\nSend /done when finished.');
+      expect(sender.startTyping).toHaveBeenCalledWith(100);
       expect(askClaudeMock).toHaveBeenCalledWith(
         'I want to write about: why testing matters',
         'claude-blog-001',
@@ -133,9 +128,9 @@ describe('reviews/blog', () => {
         expect.any(String),
         expect.stringContaining('- testing'),
       );
-      expect(stopTypingMock).toHaveBeenCalledWith('typing-handle');
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'What angle are you thinking for this post?');
+      expect(sender.send).toHaveBeenCalledWith(100, 'What angle are you thinking for this post?');
     });
 
     it('uses default instructions when skill file is missing', async () => {
@@ -143,7 +138,7 @@ describe('reviews/blog', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Tell me more about what you mean.', error: null });
 
-      await blogHandler.start(session, bot);
+      await blogHandler.start(session, sender);
 
       expect(askClaudeMock).toHaveBeenCalledWith(
         'I want to write about: productivity systems',
@@ -165,7 +160,7 @@ describe('reviews/blog', () => {
       });
       askClaudeMock.mockResolvedValue({ text: 'Response', error: null });
 
-      await blogHandler.start(session, bot);
+      await blogHandler.start(session, sender);
 
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
@@ -186,22 +181,22 @@ describe('reviews/blog', () => {
       const session = makeSession({ topic: 'test topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial response', error: null });
-      await blogHandler.start(session, bot);
+      await blogHandler.start(session, sender);
 
       vi.clearAllMocks();
-      startTypingMock.mockReturnValue('typing-handle');
+      sender = makeSender();
       askClaudeMock.mockResolvedValue({ text: 'Great point, what about X?', error: null });
 
-      await blogHandler.handleMessage(session, 'The key argument is Y', bot);
+      await blogHandler.handleMessage(session, 'The key argument is Y', sender);
 
-      expect(startTypingMock).toHaveBeenCalledWith(bot, session.chatId);
+      expect(sender.startTyping).toHaveBeenCalledWith(session.chatId);
       expect(askClaudeMock).toHaveBeenCalledWith(
         'The key argument is Y',
         'claude-blog-001',
         expect.stringContaining('test topic'),
       );
-      expect(stopTypingMock).toHaveBeenCalledWith('typing-handle');
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'Great point, what about X?');
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
+      expect(sender.send).toHaveBeenCalledWith(100, 'Great point, what about X?');
     });
 
     it('ends the session on /done', async () => {
@@ -209,14 +204,15 @@ describe('reviews/blog', () => {
       const session = makeSession({ topic: 'wrap up topic' });
       readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Initial', error: null });
-      await blogHandler.start(session, bot);
+      await blogHandler.start(session, sender);
 
       vi.clearAllMocks();
+      sender = makeSender();
 
-      await blogHandler.handleMessage(session, '/done', bot);
+      await blogHandler.handleMessage(session, '/done', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Blog session ended.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Blog session ended.');
       expect(askClaudeMock).not.toHaveBeenCalled();
     });
 
@@ -228,16 +224,15 @@ describe('reviews/blog', () => {
       });
 
       askClaudeMock.mockResolvedValue({ text: 'Continuing the conversation', error: null });
-      startTypingMock.mockReturnValue('typing-handle');
 
-      await blogHandler.handleMessage(session, 'picking up where we left off', bot);
+      await blogHandler.handleMessage(session, 'picking up where we left off', sender);
 
       expect(askClaudeMock).toHaveBeenCalledWith(
         'picking up where we left off',
         'fresh-session-id',
         'Reconstructed system prompt for blog',
       );
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'Continuing the conversation');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Continuing the conversation');
     });
   });
 });

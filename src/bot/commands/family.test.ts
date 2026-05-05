@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 const mockReadVaultFile = vi.fn();
 const mockGetRecentFilenames = vi.fn();
@@ -28,9 +29,14 @@ const config = (await import('../../config.js')).default as { FAMILY_NAMES: stri
 const { handleFamily } = await import('./family.js');
 
 describe('handleFamily', () => {
-  const mockBot = {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  } as any;
+  function makeSender(): MessageSender {
+    return {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
   const chatId = 123;
 
   beforeEach(() => {
@@ -45,9 +51,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Alice and Bob played together.')
       .mockReturnValueOnce('Bob napped all afternoon.');
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Alice: 2 mentions across 2 days');
     expect(msg).toContain('Bob: 3 mentions across 3 days');
   });
@@ -58,9 +65,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Bob Bob Alice')
       .mockReturnValueOnce(null);
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Imbalance');
     expect(msg).toContain('Bob');
     expect(msg).toMatch(/\d+\.\dx more than Alice/);
@@ -72,9 +80,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Bob Bob')
       .mockReturnValueOnce(null);
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Alice: 3 mentions');
     expect(msg).toContain('Bob: 2 mentions');
     expect(msg).not.toContain('Imbalance');
@@ -86,9 +95,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Went to the store.')
       .mockReturnValueOnce('Read a book.');
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(
+    expect(sender.send).toHaveBeenCalledWith(
       chatId,
       'No mentions of Alice or Bob in the last 14 days.',
     );
@@ -100,9 +110,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce(null)
       .mockReturnValueOnce('Alice had a great day.');
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Alice: 1 mention across 1 day');
     expect(msg).toContain('Bob: 0 mentions across 0 days');
   });
@@ -113,9 +124,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Bobby played outside. Bob read a book.')
       .mockReturnValueOnce(null);
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Alice: 1 mention across 1 day');
     expect(msg).toContain('Bob: 1 mention across 1 day');
   });
@@ -125,17 +137,19 @@ describe('handleFamily', () => {
       throw new Error('time exploded');
     });
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    expect(mockBot.sendMessage).toHaveBeenCalledWith(chatId, 'Error: time exploded');
+    expect(sender.send).toHaveBeenCalledWith(chatId, 'Error: time exploded');
   });
 
   it('prompts to configure FAMILY_NAMES when the env var is empty', async () => {
     config.FAMILY_NAMES = [];
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('FAMILY_NAMES');
     expect(mockGetRecentFilenames).not.toHaveBeenCalled();
   });
@@ -147,9 +161,10 @@ describe('handleFamily', () => {
       .mockReturnValueOnce('Bob')
       .mockReturnValueOnce('Carol Carol');
 
-    await handleFamily(mockBot, chatId);
+    const sender = makeSender();
+    await handleFamily(sender, chatId);
 
-    const msg = mockBot.sendMessage.mock.calls[0][1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Alice: 5 mentions');
     expect(msg).toContain('Bob: 1 mention');
     expect(msg).toContain('Carol: 2 mentions');

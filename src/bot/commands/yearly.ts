@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Side-effect import: registers the yearly review handler
 import '../../reviews/yearly.js';
@@ -20,13 +20,13 @@ export function resolveYear(args: string): string | null {
   return null;
 }
 
-export async function handleYearly(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleYearly(sender: MessageSender, userId: number, args: string): Promise<void> {
   const date = resolveYear(args);
   if (!date) {
-    await bot.sendMessage(chatId, 'Invalid year format. Use: /yearly or /yearly 2025');
+    await sender.send(userId, 'Invalid year format. Use: /yearly or /yearly 2025');
     return;
   }
 
-  log.info('Starting yearly review', { chatId, date });
-  await startReview(chatId, 'yearly', date, bot);
+  log.info('Starting yearly review', { userId, date });
+  await startReview(userId, 'yearly', date, sender);
 }

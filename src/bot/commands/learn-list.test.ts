@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Isolated temp dir — must be created before mocking so learningsPath() sees it.
 const tmpDir = join(tmpdir(), `jarvis-learn-list-test-${Date.now()}`);
@@ -28,8 +29,13 @@ function writeLines(lines: string[]) {
   writeFileSync(learningsFile, lines.join('\n'));
 }
 
-function makeBotMock() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 function makeEntry(ts: string, text: string) {
@@ -205,16 +211,16 @@ describe('formatLearningsList', () => {
 describe('handleLearnList', () => {
   beforeEach(clearFile);
 
-  it('calls bot.sendMessage with the formatted string and correct chatId', async () => {
+  it('calls sender.send with the formatted string and correct chatId', async () => {
     writeLines([
       makeEntry('2025-04-01T08:00:00.000Z', 'alpha'),
       makeEntry('2025-04-02T08:00:00.000Z', 'beta'),
     ]);
-    const bot = makeBotMock();
-    await handleLearnList(bot, 42);
+    const sender = makeSender();
+    await handleLearnList(sender, 42);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const [calledChatId, calledMsg] = bot.sendMessage.mock.calls[0] as [number, string];
+    expect(sender.send).toHaveBeenCalledOnce();
+    const [calledChatId, calledMsg] = vi.mocked(sender.send).mock.calls[0]! as [number, string];
     expect(calledChatId).toBe(42);
     expect(calledMsg).toContain('[2025-04-01]');
     expect(calledMsg).toContain('alpha');
@@ -223,17 +229,17 @@ describe('handleLearnList', () => {
   });
 
   it('sends no-learnings message when file is missing', async () => {
-    const bot = makeBotMock();
-    await handleLearnList(bot, 99);
+    const sender = makeSender();
+    await handleLearnList(sender, 99);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg: string = bot.sendMessage.mock.calls[0]![1];
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg: string = vi.mocked(sender.send).mock.calls[0]![1]!;
     expect(msg).toBe('No learnings yet. Use /learn <text> to add one.');
   });
 
-  it('uses the correct chatId for the sendMessage call', async () => {
-    const bot = makeBotMock();
-    await handleLearnList(bot, 777);
-    expect(bot.sendMessage.mock.calls[0]![0]).toBe(777);
+  it('uses the correct chatId for the send call', async () => {
+    const sender = makeSender();
+    await handleLearnList(sender, 777);
+    expect(vi.mocked(sender.send).mock.calls[0]![0]).toBe(777);
   });
 });

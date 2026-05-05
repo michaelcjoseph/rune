@@ -1,8 +1,8 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { appendToJournal } from '../../vault/journal.js';
 import { createLogger } from '../../utils/logger.js';
 import config from '../../config.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-done-workout');
 
@@ -73,14 +73,14 @@ function formatBlock(entry: LastWorkout): string {
   return `#workout\n\n**Generated workout** (${tag}) — ${ts}\n\n${entry.markdown}`;
 }
 
-export async function handleDoneWorkout(bot: TelegramBot, chatId: number): Promise<void> {
+export async function handleDoneWorkout(sender: MessageSender, userId: number): Promise<void> {
   const result = readLastWorkout();
   if (result.status === 'missing') {
-    await bot.sendMessage(chatId, "Nothing to log — run /workout first.");
+    await sender.send(userId, "Nothing to log — run /workout first.");
     return;
   }
   if (result.status === 'corrupt') {
-    await bot.sendMessage(chatId, 'Could not parse the last workout file.');
+    await sender.send(userId, 'Could not parse the last workout file.');
     return;
   }
   const entry = result.entry;
@@ -92,8 +92,7 @@ export async function handleDoneWorkout(bot: TelegramBot, chatId: number): Promi
       lastStaleWarnAt = null;
     } else {
       lastStaleWarnAt = now;
-      await bot.sendMessage(
-        chatId,
+      await sender.send(userId,
         `This workout was generated ${Math.round(age)} hours ago. Run /done-workout again within 10 minutes to confirm.`,
       );
       return;
@@ -106,7 +105,7 @@ export async function handleDoneWorkout(bot: TelegramBot, chatId: number): Promi
     appendToJournal(formatBlock(entry));
   } catch (err) {
     log.error('Journal append failed', { error: String(err) });
-    await bot.sendMessage(chatId, 'Could not append to today\'s journal. The workout file is preserved — try again.');
+    await sender.send(userId, 'Could not append to today\'s journal. The workout file is preserved — try again.');
     return;
   }
 
@@ -117,7 +116,7 @@ export async function handleDoneWorkout(bot: TelegramBot, chatId: number): Promi
     // a second /done-workout. Log but don't surface to the user.
     log.warn('Could not delete last-workout.json after successful append', { error: String(err) });
   }
-  await bot.sendMessage(chatId, 'Logged. Nightly /daily will parse into workouts.json.');
+  await sender.send(userId, 'Logged. Nightly /daily will parse into workouts.json.');
 }
 
 /** Test-only — reset the in-memory stale-warning timestamp between tests. */

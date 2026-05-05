@@ -1,11 +1,10 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { updateReviewSession, onReviewSessionDeleted } from './session.js';
 import type { ReviewSession, ReviewType } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
+import type { MessageSender } from '../transport/sender.js';
 import { askClaudeWithContext, askClaudeOneShot, runAgent, AGENT_NOT_FOUND_PREFIX, type ClaudeResult } from '../ai/claude.js';
 import { readVaultFile, vaultFileExists } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
-import { sendLongMessage, startTyping, stopTyping } from '../integrations/telegram/client.js';
 import { createLogger } from '../utils/logger.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals, clearApprovedProposals } from '../jobs/proposal-queue.js';
@@ -81,9 +80,9 @@ function getSkillInstructions(config: InterviewReviewConfig): string {
 }
 
 export function createInterviewHandler(config: InterviewReviewConfig): ReviewTypeHandler {
-  async function start(session: ReviewSession, bot: TelegramBot): Promise<void> {
-    await bot.sendMessage(session.chatId, `Starting ${config.type} review. Running prep agents...`);
-    const typing = startTyping(bot, session.chatId);
+  async function start(session: ReviewSession, sender: MessageSender): Promise<void> {
+    await sender.send(session.chatId, `Starting ${config.type} review. Running prep agents...`);
+    sender.startTyping(session.chatId);
 
     try {
       const prepCalls = config.prepAgents(session);
@@ -93,9 +92,9 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
 
       // Check if ALL agents failed
       if (results.every(r => !!r.error)) {
-        stopTyping(typing);
+        sender.stopTyping(session.chatId);
         log.error('All prep agents failed', { type: config.type });
-        await bot.sendMessage(session.chatId, 'Prep agents failed. Cannot start review.');
+        await sender.send(session.chatId, 'Prep agents failed. Cannot start review.');
         updateReviewSession(session.chatId, { phase: 'done' });
         return;
       }
@@ -149,39 +148,39 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         session.claudeSessionId,
         systemPrompt,
       );
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       if (result.error) {
         log.error('Interview start failed', { error: result.error, type: config.type });
-        await bot.sendMessage(session.chatId, `Failed to start interview: ${result.error}`);
+        await sender.send(session.chatId, `Failed to start interview: ${result.error}`);
         updateReviewSession(session.chatId, { phase: 'done' });
         return;
       }
 
       updateReviewSession(session.chatId, { phase: 'interview' });
-      await sendLongMessage(bot, session.chatId, result.text || 'Interview started.');
+      await sender.send(session.chatId, result.text || 'Interview started.');
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       throw err;
     }
   }
 
-  async function handleMessage(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+  async function handleMessage(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
     switch (session.phase) {
       case 'interview':
-        return handleInterview(session, text, bot);
+        return handleInterview(session, text, sender);
       case 'approval':
-        return handleApproval(session, text, bot);
+        return handleApproval(session, text, sender);
       case 'writeup':
       case 'updates':
-        await bot.sendMessage(session.chatId, 'Still processing... please wait.');
+        await sender.send(session.chatId, 'Still processing... please wait.');
         return;
       default:
         log.warn('Unexpected message in review', { phase: session.phase, type: config.type, chatId: session.chatId });
     }
   }
 
-  async function handleInterview(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+  async function handleInterview(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
     let systemPrompt = sessionPrompts.get(session.claudeSessionId);
     if (!systemPrompt) {
       if (session.prepContext) {
@@ -192,20 +191,20 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         sessionPrompts.set(session.claudeSessionId, systemPrompt);
       } else {
         log.error('Missing system prompt and prepContext', { sessionId: session.claudeSessionId });
-        await bot.sendMessage(session.chatId, `Session error — review context lost. Try starting a new /${config.type} review.`);
+        await sender.send(session.chatId, `Session error — review context lost. Try starting a new /${config.type} review.`);
         updateReviewSession(session.chatId, { phase: 'done' });
         return;
       }
     }
 
-    const typing = startTyping(bot, session.chatId);
+    sender.startTyping(session.chatId);
     try {
       const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt);
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       if (result.error) {
         log.error('Interview message failed', { error: result.error });
-        await bot.sendMessage(session.chatId, `Error: ${result.error}`);
+        await sender.send(session.chatId, `Error: ${result.error}`);
         return;
       }
 
@@ -213,36 +212,36 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
       const outline = detectOutline(responseText, config.outlineMarker);
       if (outline) {
         updateReviewSession(session.chatId, { outline, phase: 'approval' });
-        await sendLongMessage(bot, session.chatId, responseText);
-        await bot.sendMessage(session.chatId, '\nReply *yes* to approve this outline, *cancel* to stop, or send edits.');
+        await sender.send(session.chatId, responseText);
+        await sender.send(session.chatId, '\nReply *yes* to approve this outline, *cancel* to stop, or send edits.');
       } else {
-        await sendLongMessage(bot, session.chatId, responseText);
+        await sender.send(session.chatId, responseText);
       }
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       throw err;
     }
   }
 
-  async function handleApproval(session: ReviewSession, text: string, bot: TelegramBot): Promise<void> {
+  async function handleApproval(session: ReviewSession, text: string, sender: MessageSender): Promise<void> {
     const lower = text.toLowerCase().trim();
 
     if (['yes', 'y', 'approve', 'confirm', 'ok'].includes(lower)) {
-      await runWriteupAndUpdates(session, bot);
+      await runWriteupAndUpdates(session, sender);
     } else if (['no', 'n', 'cancel', 'skip'].includes(lower)) {
       updateReviewSession(session.chatId, { phase: 'done' });
       sessionPrompts.delete(session.claudeSessionId);
-      await bot.sendMessage(session.chatId, `${capitalize(config.type)} review cancelled.`);
+      await sender.send(session.chatId, `${capitalize(config.type)} review cancelled.`);
     } else {
       updateReviewSession(session.chatId, { outline: text });
-      await bot.sendMessage(session.chatId, 'Outline updated. Reply *yes* to approve or *cancel* to stop.');
+      await sender.send(session.chatId, 'Outline updated. Reply *yes* to approve or *cancel* to stop.');
     }
   }
 
-  async function runWriteupAndUpdates(session: ReviewSession, bot: TelegramBot): Promise<void> {
+  async function runWriteupAndUpdates(session: ReviewSession, sender: MessageSender): Promise<void> {
     updateReviewSession(session.chatId, { phase: 'writeup' });
-    await bot.sendMessage(session.chatId, 'Writing review...');
-    const typing = startTyping(bot, session.chatId);
+    await sender.send(session.chatId, 'Writing review...');
+    sender.startTyping(session.chatId);
 
     try {
       const journalPath = `journals/${toScannerDate(session.targetDate)}.md`;
@@ -256,8 +255,8 @@ conversation_context: ${session.prepContext}`);
 
       if (writerResult.error) {
         log.error('review-writer failed', { error: writerResult.error, type: config.type });
-        stopTyping(typing);
-        await bot.sendMessage(session.chatId, `Review write-up failed: ${writerResult.error}`);
+        sender.stopTyping(session.chatId);
+        await sender.send(session.chatId, `Review write-up failed: ${writerResult.error}`);
         updateReviewSession(session.chatId, { phase: 'done' });
         sessionPrompts.delete(session.claudeSessionId);
         return;
@@ -393,7 +392,7 @@ Reply ONLY with the JSON object, nothing else.`);
         log.error('Git commit failed', { error: (err as Error).message });
       }
 
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
 
       const summarize = (key: string, ok: string, failed: string, missing: string): string | null => {
         const state = agentResults[key];
@@ -417,9 +416,9 @@ Reply ONLY with the JSON object, nothing else.`);
 
       updateReviewSession(session.chatId, { phase: 'done' });
       sessionPrompts.delete(session.claudeSessionId);
-      await sendLongMessage(bot, session.chatId, `${capitalize(config.type)} review complete.\n\n${agentSummary}`);
+      await sender.send(session.chatId, `${capitalize(config.type)} review complete.\n\n${agentSummary}`);
     } catch (err) {
-      stopTyping(typing);
+      sender.stopTyping(session.chatId);
       sessionPrompts.delete(session.claudeSessionId);
       throw err;
     }

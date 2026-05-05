@@ -1,8 +1,8 @@
-import TelegramBot from 'node-telegram-bot-api';
 import config from '../../config.js';
 import { readVaultFile } from '../../vault/files.js';
 import { getRecentFilenames } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-family');
 
@@ -13,12 +13,11 @@ function countMentions(content: string, name: string): number {
   return (content.match(regex) || []).length;
 }
 
-export async function handleFamily(bot: TelegramBot, chatId: number): Promise<void> {
+export async function handleFamily(sender: MessageSender, userId: number): Promise<void> {
   try {
     const NAMES = config.FAMILY_NAMES;
     if (NAMES.length === 0) {
-      await bot.sendMessage(
-        chatId,
+      await sender.send(userId,
         'No family names configured. Set FAMILY_NAMES env var (e.g. FAMILY_NAMES=Alice,Bob) to use /family.',
       );
       return;
@@ -46,7 +45,7 @@ export async function handleFamily(bot: TelegramBot, chatId: number): Promise<vo
 
     const allZero = NAMES.every((name) => counts[name]!.total === 0);
     if (allZero) {
-      await bot.sendMessage(chatId, `No mentions of ${NAMES.join(' or ')} in the last ${SCAN_DAYS} days.`);
+      await sender.send(userId, `No mentions of ${NAMES.join(' or ')} in the last ${SCAN_DAYS} days.`);
       return;
     }
 
@@ -69,9 +68,9 @@ export async function handleFamily(bot: TelegramBot, chatId: number): Promise<vo
       }
     }
 
-    await bot.sendMessage(chatId, lines.join('\n'));
+    await sender.send(userId, lines.join('\n'));
   } catch (err) {
     log.error('Family error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+    await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }

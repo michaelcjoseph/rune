@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../../transport/sender.js';
 
 vi.mock('../../config.js', () => ({
   default: {
@@ -33,11 +34,6 @@ vi.mock('../skill-registry.js', () => ({
   ]),
 }));
 vi.mock('../../utils/intent-log.js', () => ({ appendIntent: vi.fn() }));
-vi.mock('../../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn(),
-  startTyping: vi.fn(() => setInterval(() => {}, 99999)),
-  stopTyping: vi.fn((i: NodeJS.Timeout) => clearInterval(i)),
-}));
 vi.mock('../commands/fresh.js', () => ({ handleFresh: vi.fn() }));
 vi.mock('../commands/fresh-full.js', () => ({ handleFreshFull: vi.fn() }));
 vi.mock('../commands/clear.js', () => ({ handleClear: vi.fn() }));
@@ -88,8 +84,13 @@ const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { handleTextMessage } = await import('./text.js');
 
-function mockBot() {
-  return { sendMessage: vi.fn().mockResolvedValue({}), sendChatAction: vi.fn().mockResolvedValue(true) } as any;
+function mockSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 function msg(text: string, userId = 42): any {
@@ -100,78 +101,78 @@ describe('text handler routing', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('ignores messages from unauthorized users', async () => {
-    const bot = mockBot();
-    await handleTextMessage(bot, msg('hello', 999));
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('hello', 999));
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it('routes /fresh', async () => {
-    await handleTextMessage(mockBot(), msg('/fresh'));
+    await handleTextMessage(mockSender(), msg('/fresh'));
     expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
   });
 
   it('routes /fresh-full before /fresh so the more-specific prefix wins', async () => {
-    await handleTextMessage(mockBot(), msg('/fresh-full'));
+    await handleTextMessage(mockSender(), msg('/fresh-full'));
     expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100);
     expect(handleFresh).not.toHaveBeenCalled();
   });
 
   it('routes /clear to handleClear', async () => {
-    await handleTextMessage(mockBot(), msg('/clear'));
+    await handleTextMessage(mockSender(), msg('/clear'));
     expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100);
   });
 
   it('/clear does not invoke handleFresh or handleFreshFull', async () => {
-    await handleTextMessage(mockBot(), msg('/clear'));
+    await handleTextMessage(mockSender(), msg('/clear'));
     expect(handleFresh).not.toHaveBeenCalled();
     expect(handleFreshFull).not.toHaveBeenCalled();
   });
 
   it('/start help text includes /clear description', async () => {
-    const bot = mockBot();
-    await handleTextMessage(bot, msg('/start'));
-    const helpText = bot.sendMessage.mock.calls[0][1] as string;
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/start'));
+    const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(helpText).toContain('/clear');
     expect(helpText).toContain('discard active session');
   });
 
   it('routes /journal with text', async () => {
-    await handleTextMessage(mockBot(), msg('/journal bought groceries'));
+    await handleTextMessage(mockSender(), msg('/journal bought groceries'));
     expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'bought groceries');
   });
 
   it('routes /ask with question', async () => {
-    await handleTextMessage(mockBot(), msg('/ask meaning of life'));
+    await handleTextMessage(mockSender(), msg('/ask meaning of life'));
     expect(handleAsk).toHaveBeenCalledWith(expect.anything(), 100, 'meaning of life');
   });
 
   it('routes /kb with args', async () => {
-    await handleTextMessage(mockBot(), msg('/kb query test'));
+    await handleTextMessage(mockSender(), msg('/kb query test'));
     expect(handleKB).toHaveBeenCalledWith(expect.anything(), 100, 'query test');
   });
 
   it('routes /ingest with path', async () => {
-    await handleTextMessage(mockBot(), msg('/ingest raw/test.md'));
+    await handleTextMessage(mockSender(), msg('/ingest raw/test.md'));
     expect(handleIngest).toHaveBeenCalledWith(expect.anything(), 100, 'raw/test.md');
   });
 
   it('routes /status', async () => {
-    await handleTextMessage(mockBot(), msg('/status'));
+    await handleTextMessage(mockSender(), msg('/status'));
     expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100);
   });
 
   it('routes /learn with text', async () => {
-    await handleTextMessage(mockBot(), msg('/learn prefer terse answers'));
+    await handleTextMessage(mockSender(), msg('/learn prefer terse answers'));
     expect(handleLearn).toHaveBeenCalledWith(expect.anything(), 100, 'prefer terse answers');
   });
 
   it('routes bare /learn as empty-args (usage hint path)', async () => {
-    await handleTextMessage(mockBot(), msg('/learn'));
+    await handleTextMessage(mockSender(), msg('/learn'));
     expect(handleLearn).toHaveBeenCalledWith(expect.anything(), 100, '');
   });
 
   it('routes /learn-list to its own handler, not /learn', async () => {
-    await handleTextMessage(mockBot(), msg('/learn-list'));
+    await handleTextMessage(mockSender(), msg('/learn-list'));
     expect(handleLearnList).toHaveBeenCalledWith(expect.anything(), 100);
     expect(handleLearn).not.toHaveBeenCalled();
   });
@@ -191,21 +192,20 @@ describe('text handler routing', () => {
       model: 'haiku',
     });
     askMock.mockResolvedValue({ text: 'ok', error: null });
-    await handleTextMessage(mockBot(), msg('/learning curve question'));
+    await handleTextMessage(mockSender(), msg('/learning curve question'));
     expect(handleLearn).not.toHaveBeenCalled();
   });
 
   it('routes /start and sends help', async () => {
-    const bot = mockBot();
-    await handleTextMessage(bot, msg('/start'));
-    expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('Commands:'));
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/start'));
+    expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Commands:'));
   });
 
   it('routes /lint', async () => {
-    const bot = mockBot();
-    await handleTextMessage(bot, msg('/lint'));
-    const { sendLongMessage } = await import('../../integrations/telegram/client.js');
-    expect(sendLongMessage).toHaveBeenCalledWith(expect.anything(), 100, 'clean');
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/lint'));
+    expect(sender.send).toHaveBeenCalledWith(100, 'clean');
   });
 
   it('falls through to conversation for plain text', async () => {
@@ -223,7 +223,7 @@ describe('text handler routing', () => {
     });
     askMock.mockResolvedValue({ text: 'hi there!', error: null });
 
-    await handleTextMessage(mockBot(), msg('hello'));
+    await handleTextMessage(mockSender(), msg('hello'));
     expect(createSessionMock).toHaveBeenCalled();
     expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
   });
@@ -232,8 +232,6 @@ describe('text handler routing', () => {
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
-    const { sendLongMessage } = await import('../../integrations/telegram/client.js');
-    const sendLongMock = sendLongMessage as unknown as ReturnType<typeof vi.fn>;
 
     getSessionMock.mockReturnValue(null);
     createSessionMock.mockReturnValue({
@@ -245,16 +243,17 @@ describe('text handler routing', () => {
     });
     askMock.mockResolvedValue({ text: 'hi there!', error: null });
 
-    await handleTextMessage(mockBot(), msg('hello'));
-    const reply = sendLongMock.mock.calls.at(-1)?.[2] as string;
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('hello'));
+    const reply = vi.mocked(sender.send).mock.calls.at(-1)?.[1] as string;
     expect(reply).toContain('hi there!');
     expect(reply).toContain('— chatting · /fresh to end');
   });
 
   it('ignores empty text', async () => {
-    const bot = mockBot();
-    await handleTextMessage(bot, msg(''));
-    expect(bot.sendMessage).not.toHaveBeenCalled();
+    const sender = mockSender();
+    await handleTextMessage(sender, msg(''));
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it('routes to review handler when review is active and message is not a command', async () => {
@@ -263,11 +262,11 @@ describe('text handler routing', () => {
     hasActiveReviewMock.mockReturnValue(true);
     handleReviewMessageMock.mockResolvedValue(undefined);
 
-    const bot = mockBot();
-    await handleTextMessage(bot, msg('looks good to me'));
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('looks good to me'));
 
     expect(hasActiveReviewMock).toHaveBeenCalledWith(100);
-    expect(handleReviewMessageMock).toHaveBeenCalledWith(100, 'looks good to me', bot);
+    expect(handleReviewMessageMock).toHaveBeenCalledWith(100, 'looks good to me', sender);
     // Should NOT fall through to conversation
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
     expect(askMock).not.toHaveBeenCalled();
@@ -291,7 +290,7 @@ describe('text handler routing', () => {
     });
     askMock.mockResolvedValue({ text: 'reply', error: null });
 
-    await handleTextMessage(mockBot(), msg('some text'));
+    await handleTextMessage(mockSender(), msg('some text'));
 
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
@@ -302,7 +301,7 @@ describe('text handler routing', () => {
     const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
     hasActiveReviewMock.mockReturnValue(true);
 
-    await handleTextMessage(mockBot(), msg('/fresh'));
+    await handleTextMessage(mockSender(), msg('/fresh'));
 
     expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
@@ -345,14 +344,14 @@ describe('resolver wiring in text handler', () => {
   }
 
   it('skips the resolver for messages below the word-count threshold', async () => {
-    await handleTextMessage(mockBot(), msg('short msg here'));
+    await handleTextMessage(mockSender(), msg('short msg here'));
     expect(mockClassify).not.toHaveBeenCalled();
     expect(appendIntent).not.toHaveBeenCalled();
   });
 
   it('calls the resolver for messages at or above the word-count threshold', async () => {
     vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0 }));
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     expect(mockClassify).toHaveBeenCalled();
   });
 
@@ -360,7 +359,7 @@ describe('resolver wiring in text handler', () => {
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'journal', args: '11am, called dad', confidence: 0.95 }),
     );
-    await handleTextMessage(mockBot(), msg('add this to my journal: 11am, called dad'));
+    await handleTextMessage(mockSender(), msg('add this to my journal: 11am, called dad'));
     expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, '11am, called dad');
   });
 
@@ -371,7 +370,7 @@ describe('resolver wiring in text handler', () => {
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'kb_query', args: 'what do I know about world models', confidence: 0.9 }),
     );
-    await handleTextMessage(mockBot(), msg('what do I know about world models'));
+    await handleTextMessage(mockSender(), msg('what do I know about world models'));
     expect(handleKB).not.toHaveBeenCalled();
     expect(askClaudeWithContext).toHaveBeenCalled();
     // The intent log records the failure so it is auditable.
@@ -385,7 +384,7 @@ describe('resolver wiring in text handler', () => {
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'content-triager', args: 'some link', confidence: 0.9 }),
     );
-    await handleTextMessage(mockBot(), msg('classify this content for me please'));
+    await handleTextMessage(mockSender(), msg('classify this content for me please'));
     expect(runAgent).toHaveBeenCalledWith('content-triager', 'some link');
   });
 
@@ -393,13 +392,13 @@ describe('resolver wiring in text handler', () => {
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'journal', confidence: 0.5 }),
     );
-    await handleTextMessage(mockBot(), msg('this is a five word test'));
+    await handleTextMessage(mockSender(), msg('this is a five word test'));
     expect(handleJournal).not.toHaveBeenCalled();
     expect(askClaudeWithContext).toHaveBeenCalled();
   });
 
   it('falls through with disambiguation note when top-2 is ambiguous', async () => {
-    const bot = mockBot();
+    const sender = mockSender();
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({
         skill: 'journal',
@@ -409,9 +408,9 @@ describe('resolver wiring in text handler', () => {
         ambiguous: true,
       }),
     );
-    await handleTextMessage(bot, msg('this could go either way honestly'));
+    await handleTextMessage(sender, msg('this could go either way honestly'));
     expect(handleJournal).not.toHaveBeenCalled();
-    const notice = bot.sendMessage.mock.calls[0][1] as string;
+    const notice = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(notice).toContain('/journal');
     expect(notice).toContain('/weekly');
     expect(askClaudeWithContext).toHaveBeenCalled();
@@ -419,7 +418,7 @@ describe('resolver wiring in text handler', () => {
 
   it('appends an intent log entry on every resolver call — outcome routed', async () => {
     vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0.95 }));
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     expect(appendIntent).toHaveBeenCalledTimes(1);
     const entry = vi.mocked(appendIntent).mock.calls[0]![0];
     expect(entry.outcome).toBe('routed');
@@ -429,7 +428,7 @@ describe('resolver wiring in text handler', () => {
 
   it('appends outcome=low_confidence when classification is below threshold', async () => {
     vi.mocked(mockClassify).mockResolvedValue(classifyResult({ confidence: 0.3 }));
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     expect(appendIntent).toHaveBeenCalledTimes(1);
     expect(vi.mocked(appendIntent).mock.calls[0]![0].outcome).toBe('low_confidence');
     expect(vi.mocked(appendIntent).mock.calls[0]![0].skill_invoked).toBeNull();
@@ -445,7 +444,7 @@ describe('resolver wiring in text handler', () => {
         ambiguous: true,
       }),
     );
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     expect(vi.mocked(appendIntent).mock.calls[0]![0].outcome).toBe('ambiguous');
     expect(vi.mocked(appendIntent).mock.calls[0]![0].skill_invoked).toBeNull();
   });
@@ -455,7 +454,7 @@ describe('resolver wiring in text handler', () => {
       classifyResult({ skill: 'family', confidence: 0.9 }),
     );
     vi.mocked(handleFamily).mockRejectedValueOnce(new Error('boom'));
-    await handleTextMessage(mockBot(), msg('what did I note about family'));
+    await handleTextMessage(mockSender(), msg('what did I note about family'));
     const entry = vi.mocked(appendIntent).mock.calls[0]![0];
     expect(entry.outcome).toBe('failed');
     expect(entry.skill_invoked).toBe('family');
@@ -466,13 +465,13 @@ describe('resolver wiring in text handler', () => {
   it('does NOT call the resolver when an active review is in progress', async () => {
     const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
     hasActiveReviewMock.mockReturnValue(true);
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     expect(mockClassify).not.toHaveBeenCalled();
     expect(appendIntent).not.toHaveBeenCalled();
   });
 
   it('does NOT call the resolver for slash commands', async () => {
-    await handleTextMessage(mockBot(), msg('/weekly 2025-W10'));
+    await handleTextMessage(mockSender(), msg('/weekly 2025-W10'));
     expect(mockClassify).not.toHaveBeenCalled();
   });
 
@@ -480,14 +479,14 @@ describe('resolver wiring in text handler', () => {
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({ skill: 'ghost-skill', confidence: 0.9 }),
     );
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     const entry = vi.mocked(appendIntent).mock.calls[0]![0];
     expect(entry.outcome).toBe('failed');
     expect(entry.skill_invoked).toBe('ghost-skill');
   });
 
   it('shows slash labels for both skills in the ambiguity notice', async () => {
-    const bot = mockBot();
+    const sender = mockSender();
     vi.mocked(mockClassify).mockResolvedValue(
       classifyResult({
         skill: 'family',
@@ -497,15 +496,15 @@ describe('resolver wiring in text handler', () => {
         ambiguous: true,
       }),
     );
-    await handleTextMessage(bot, msg('one two three four five six'));
-    const notice = bot.sendMessage.mock.calls[0][1] as string;
+    await handleTextMessage(sender, msg('one two three four five six'));
+    const notice = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(notice).toContain('/family');
     expect(notice).toContain('/journal');
   });
 
   it('falls through cleanly when classifyIntent itself throws', async () => {
     vi.mocked(mockClassify).mockRejectedValue(new Error('classifier exploded'));
-    await handleTextMessage(mockBot(), msg('one two three four five'));
+    await handleTextMessage(mockSender(), msg('one two three four five'));
     // Outer try/catch in tryResolveAndDispatch must swallow the throw and
     // allow the freeform fallback to run; the Telegram polling loop must not
     // see an uncaught rejection.

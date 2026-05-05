@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import type { MessageSender } from '../src/transport/sender.js';
 
 const COMMANDS: Record<string, string> = {
   query: 'Query the knowledge base',
@@ -226,27 +227,25 @@ async function cmdSearch(args: string[]): Promise<void> {
   }
 }
 
-/** Stub a Telegram bot that prints `sendMessage` calls to stdout. Lets the
- *  CLI reuse the TG handler functions verbatim — single source of truth for
- *  workout generation and logging behavior. */
-function makeStdoutBot(): import('node-telegram-bot-api') {
+/** Stub a MessageSender that prints to stdout. Lets the CLI reuse handler
+ *  functions without a real TG connection. */
+function makeStdoutSender(): MessageSender {
   return {
-    sendMessage: async (_chatId: number, text: string) => {
-      console.log(text);
-      return undefined as never;
-    },
-    sendChatAction: async () => undefined as never,
-  } as unknown as import('node-telegram-bot-api');
+    name: 'telegram' as const,
+    send: async (_userId: number, text: string) => { console.log(text); },
+    startTyping: (_userId: number) => {},
+    stopTyping: (_userId: number) => {},
+  };
 }
 
 async function cmdWorkout(args: string[]): Promise<void> {
   const { handleWorkout } = await import('../src/bot/commands/workout.js');
-  await handleWorkout(makeStdoutBot(), 0, args.join(' '));
+  await handleWorkout(makeStdoutSender(), 0, args.join(' '));
 }
 
 async function cmdDoneWorkout(): Promise<void> {
   const { handleDoneWorkout } = await import('../src/bot/commands/done-workout.js');
-  await handleDoneWorkout(makeStdoutBot(), 0);
+  await handleDoneWorkout(makeStdoutSender(), 0);
 }
 
 async function cmdNightly(args: string[]): Promise<void> {

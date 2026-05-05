@@ -1,29 +1,27 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { executeMorningPrep } from '../../jobs/morning-prep.js';
-import { startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-prep');
 
-export async function handlePrep(bot: TelegramBot, chatId: number): Promise<void> {
-  const typing = startTyping(bot, chatId);
+export async function handlePrep(sender: MessageSender, userId: number): Promise<void> {
+  sender.startTyping(userId);
   try {
     const result = await executeMorningPrep();
-    stopTyping(typing);
+    sender.stopTyping(userId);
 
     if (result.status === 'written') {
-      await bot.sendMessage(chatId, 'Morning prep complete. Your journal is ready.');
+      await sender.send(userId, 'Morning prep complete. Your journal is ready.');
     } else if (result.status === 'fallback') {
-      await bot.sendMessage(
-        chatId,
+      await sender.send(userId,
         `Morning prep wrote a fallback — Claude synth failed: ${result.synthError}. Review and edit.`
       );
     } else if (result.status === 'skipped') {
-      await bot.sendMessage(chatId, 'Morning prep already written today.');
+      await sender.send(userId, 'Morning prep already written today.');
     }
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('Prep command error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Morning prep failed: ${(err as Error).message}`);
+    await sender.send(userId, `Morning prep failed: ${(err as Error).message}`);
   }
 }

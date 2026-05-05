@@ -1,7 +1,7 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { startReview } from '../../reviews/orchestrator.js';
 import { getTodayDate } from '../../utils/time.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Side-effect import: registers the daily review handler
 import '../../reviews/daily.js';
@@ -27,13 +27,13 @@ export function resolveDate(args: string): string | null {
   return null;
 }
 
-export async function handleDaily(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleDaily(sender: MessageSender, userId: number, args: string): Promise<void> {
   const date = resolveDate(args);
   if (!date) {
-    await bot.sendMessage(chatId, 'Invalid date format. Use: /daily, /daily 2026-04-10, or /daily 4/10');
+    await sender.send(userId, 'Invalid date format. Use: /daily, /daily 2026-04-10, or /daily 4/10');
     return;
   }
 
-  log.info('Starting daily review', { chatId, date });
-  await startReview(chatId, 'daily', date, bot);
+  log.info('Starting daily review', { userId, date });
+  await startReview(userId, 'daily', date, sender);
 }

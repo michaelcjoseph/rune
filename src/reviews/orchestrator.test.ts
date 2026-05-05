@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../transport/sender.js';
 
 // Mock the session module
 vi.mock('./session.js', () => ({
@@ -44,16 +45,21 @@ function makeFakeSession(overrides: Partial<ReviewSession> = {}): ReviewSession 
   };
 }
 
-function makeFakeBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 describe('reviews/orchestrator', () => {
-  let bot: ReturnType<typeof makeFakeBot>;
+  let sender: MessageSender;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bot = makeFakeBot();
+    sender = makeSender();
   });
 
   describe('registerReviewHandler', () => {
@@ -67,9 +73,9 @@ describe('reviews/orchestrator', () => {
       createMock.mockReturnValue(session);
 
       registerReviewHandler('weekly', handler);
-      await startReview(100, 'weekly', '2026-04-07', bot);
+      await startReview(100, 'weekly', '2026-04-07', sender);
 
-      expect(handler.start).toHaveBeenCalledWith(session, bot);
+      expect(handler.start).toHaveBeenCalledWith(session, sender);
     });
   });
 
@@ -84,17 +90,17 @@ describe('reviews/orchestrator', () => {
       createMock.mockReturnValue(session);
 
       registerReviewHandler('daily', handler);
-      await startReview(100, 'daily', '2026-04-10', bot);
+      await startReview(100, 'daily', '2026-04-10', sender);
 
       expect(createMock).toHaveBeenCalledWith(100, 'daily', '2026-04-10', undefined);
-      expect(handler.start).toHaveBeenCalledWith(session, bot);
+      expect(handler.start).toHaveBeenCalledWith(session, sender);
     });
 
     it('sends error message if no handler registered and does NOT create a session', async () => {
       // 'yearly' has no registered handler
-      await startReview(100, 'yearly', '2026-01-01', bot);
+      await startReview(100, 'yearly', '2026-01-01', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Review type "yearly" is not yet implemented.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Review type "yearly" is not yet implemented.');
       expect(createMock).not.toHaveBeenCalled();
     });
 
@@ -109,9 +115,9 @@ describe('reviews/orchestrator', () => {
       createMock.mockReturnValue(newSession);
 
       registerReviewHandler('daily', handler);
-      await startReview(100, 'daily', '2026-04-10', bot);
+      await startReview(100, 'daily', '2026-04-10', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(
+      expect(sender.send).toHaveBeenCalledWith(
         100,
         'Cancelling your in-progress daily review to start a new one.',
       );
@@ -129,10 +135,10 @@ describe('reviews/orchestrator', () => {
       createMock.mockReturnValue(session);
 
       registerReviewHandler('daily', handler);
-      await startReview(100, 'daily', '2026-04-10', bot);
+      await startReview(100, 'daily', '2026-04-10', sender);
 
       expect(deleteMock).toHaveBeenCalledWith(100);
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Error starting daily review: prep failed');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Error starting daily review: prep failed');
     });
   });
 
@@ -146,17 +152,17 @@ describe('reviews/orchestrator', () => {
       getActiveMock.mockReturnValue(session);
 
       registerReviewHandler('daily', handler);
-      await handleReviewMessage(100, 'my response', bot);
+      await handleReviewMessage(100, 'my response', sender);
 
-      expect(handler.handleMessage).toHaveBeenCalledWith(session, 'my response', bot);
+      expect(handler.handleMessage).toHaveBeenCalledWith(session, 'my response', sender);
     });
 
     it('does nothing if no active session', async () => {
       getActiveMock.mockReturnValue(null);
 
-      await handleReviewMessage(100, 'hello', bot);
+      await handleReviewMessage(100, 'hello', sender);
 
-      expect(bot.sendMessage).not.toHaveBeenCalled();
+      expect(sender.send).not.toHaveBeenCalled();
       expect(deleteMock).not.toHaveBeenCalled();
     });
 
@@ -167,9 +173,9 @@ describe('reviews/orchestrator', () => {
       // We need a type that definitely has no handler. Use a fresh import approach.
       // Since 'quarterly' was never registered in these tests, it should work.
 
-      await handleReviewMessage(100, 'hello', bot);
+      await handleReviewMessage(100, 'hello', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Review type "quarterly" handler is missing.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Review type "quarterly" handler is missing.');
       expect(deleteMock).toHaveBeenCalledWith(100);
     });
 
@@ -182,9 +188,9 @@ describe('reviews/orchestrator', () => {
       getActiveMock.mockReturnValue(session);
 
       registerReviewHandler('monthly', handler);
-      await handleReviewMessage(100, 'my input', bot);
+      await handleReviewMessage(100, 'my input', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Error during monthly review: something broke');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Error during monthly review: something broke');
       expect(deleteMock).not.toHaveBeenCalled();
     });
   });

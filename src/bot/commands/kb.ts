@@ -1,11 +1,10 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { queryKB, getKBStats } from '../../kb/engine.js';
-import { sendLongMessage, startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-kb');
 
-export async function handleKB(bot: TelegramBot, chatId: number, args: string): Promise<void> {
+export async function handleKB(sender: MessageSender, userId: number, args: string): Promise<void> {
   const [subcommand, ...rest] = args.split(' ');
   const body = rest.join(' ').trim();
 
@@ -13,43 +12,42 @@ export async function handleKB(bot: TelegramBot, chatId: number, args: string): 
     case 'query':
     case 'q':
       if (!body) {
-        await bot.sendMessage(chatId, 'Usage: /kb query <question>');
+        await sender.send(userId, 'Usage: /kb query <question>');
         return;
       }
-      return handleKBQuery(bot, chatId, body);
+      return handleKBQuery(sender, userId, body);
 
     case 'stats':
-      return handleKBStats(bot, chatId);
+      return handleKBStats(sender, userId);
 
     case 'recent':
-      return handleKBRecent(bot, chatId);
+      return handleKBRecent(sender, userId);
 
     default:
       // If no subcommand, treat the entire args as a query
       if (args.trim()) {
-        return handleKBQuery(bot, chatId, args.trim());
+        return handleKBQuery(sender, userId, args.trim());
       }
-      await bot.sendMessage(
-        chatId,
+      await sender.send(userId,
         'KB Commands:\n/kb query <question>\n/kb stats\n/kb recent',
       );
   }
 }
 
-async function handleKBQuery(bot: TelegramBot, chatId: number, question: string): Promise<void> {
-  const typing = startTyping(bot, chatId);
+async function handleKBQuery(sender: MessageSender, userId: number, question: string): Promise<void> {
+  sender.startTyping(userId);
   try {
     const result = await queryKB(question);
-    stopTyping(typing);
-    await sendLongMessage(bot, chatId, result.answer);
+    sender.stopTyping(userId);
+    await sender.send(userId, result.answer);
   } catch (err) {
-    stopTyping(typing);
+    sender.stopTyping(userId);
     log.error('KB query error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `KB query error: ${(err as Error).message}`);
+    await sender.send(userId, `KB query error: ${(err as Error).message}`);
   }
 }
 
-async function handleKBStats(bot: TelegramBot, chatId: number): Promise<void> {
+async function handleKBStats(sender: MessageSender, userId: number): Promise<void> {
   const stats = getKBStats();
   const lines = [
     'Knowledge Base Stats',
@@ -60,14 +58,14 @@ async function handleKBStats(bot: TelegramBot, chatId: number): Promise<void> {
     `  Topics: ${stats.topics}`,
     `  Comparisons: ${stats.comparisons}`,
   ];
-  await bot.sendMessage(chatId, lines.join('\n'));
+  await sender.send(userId, lines.join('\n'));
 }
 
-async function handleKBRecent(bot: TelegramBot, chatId: number): Promise<void> {
+async function handleKBRecent(sender: MessageSender, userId: number): Promise<void> {
   const stats = getKBStats();
   if (stats.recentLog.length === 0) {
-    await bot.sendMessage(chatId, 'No recent KB activity.');
+    await sender.send(userId, 'No recent KB activity.');
     return;
   }
-  await sendLongMessage(bot, chatId, `Recent KB Activity:\n\n${stats.recentLog.join('\n')}`);
+  await sender.send(userId, `Recent KB Activity:\n\n${stats.recentLog.join('\n')}`);
 }

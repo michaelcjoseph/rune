@@ -1,7 +1,6 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { readVaultFile } from '../../vault/files.js';
-import { sendLongMessage } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-study');
 
@@ -18,13 +17,13 @@ function formatProgress(raw: string): string {
   }
 }
 
-export async function handleStudy(bot: TelegramBot, chatId: number): Promise<void> {
+export async function handleStudy(sender: MessageSender, userId: number): Promise<void> {
   try {
     const syllabus = readVaultFile('study/syllabus.md');
     const progress = readVaultFile('study/progress.json');
 
     if (!syllabus?.trim() && !progress?.trim()) {
-      await bot.sendMessage(chatId, 'No study data found (study/syllabus.md and study/progress.json missing).');
+      await sender.send(userId, 'No study data found (study/syllabus.md and study/progress.json missing).');
       return;
     }
 
@@ -38,9 +37,9 @@ export async function handleStudy(bot: TelegramBot, chatId: number): Promise<voi
       sections.push(syllabus.trim());
     }
 
-    await sendLongMessage(bot, chatId, sections.join('\n\n'));
+    await sender.send(userId, sections.join('\n\n'));
   } catch (err) {
     log.error('Study error', { error: (err as Error).message });
-    await bot.sendMessage(chatId, `Error: ${(err as Error).message}`);
+    await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }

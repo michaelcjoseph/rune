@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { MessageSender } from '../transport/sender.js';
 
 // --- Mocks ---
 
@@ -40,18 +41,12 @@ vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
   listVaultFiles: vi.fn(() => []),
   // Default to "exists" so post-review enqueueTouchedFiles tests assert the
-  // happy path. Tests that need a missing file override per-case.
+  // happy path. Tests that need to simulate a missing file override per-case.
   vaultFileExists: vi.fn(() => true),
 }));
 
 vi.mock('../vault/git.js', () => ({
   gitCommitAndPush: vi.fn(),
-}));
-
-vi.mock('../integrations/telegram/client.js', () => ({
-  sendLongMessage: vi.fn().mockResolvedValue(undefined),
-  startTyping: vi.fn().mockReturnValue('typing-handle'),
-  stopTyping: vi.fn(),
 }));
 
 vi.mock('../jobs/proposal-queue.js', () => ({
@@ -79,7 +74,6 @@ const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext, askClaudeOneShot, runAgent } = await import('../ai/claude.js');
 const { readVaultFile, vaultFileExists } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
-const { sendLongMessage, startTyping, stopTyping } = await import('../integrations/telegram/client.js');
 const { enqueue: enqueueKB } = await import('../kb/queue.js');
 
 const registerMock = registerReviewHandler as ReturnType<typeof vi.fn>;
@@ -89,9 +83,6 @@ const askClaudeOneShotMock = askClaudeOneShot as ReturnType<typeof vi.fn>;
 const runAgentMock = runAgent as ReturnType<typeof vi.fn>;
 const readVaultMock = readVaultFile as ReturnType<typeof vi.fn>;
 const gitCommitMock = gitCommitAndPush as ReturnType<typeof vi.fn>;
-const sendLongMock = sendLongMessage as ReturnType<typeof vi.fn>;
-const startTypingMock = startTyping as ReturnType<typeof vi.fn>;
-const stopTypingMock = stopTyping as ReturnType<typeof vi.fn>;
 const enqueueKBMock = enqueueKB as ReturnType<typeof vi.fn>;
 const vaultFileExistsMock = vaultFileExists as ReturnType<typeof vi.fn>;
 
@@ -122,19 +113,23 @@ function makeSession(overrides: Partial<ReviewSession> = {}): ReviewSession {
   };
 }
 
-function makeBot() {
-  return { sendMessage: vi.fn().mockResolvedValue(undefined) } as any;
+function makeSender(): MessageSender {
+  return {
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 // --- Tests ---
 
 describe('reviews/weekly', () => {
-  let bot: ReturnType<typeof makeBot>;
+  let sender: MessageSender;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    bot = makeBot();
-    startTypingMock.mockReturnValue('typing-handle');
+    sender = makeSender();
     // Default to "everything exists" so enqueue-touched-files tests assert the
     // happy path. Tests that need to simulate a missing file override per-case.
     vaultFileExistsMock.mockReturnValue(true);
@@ -176,7 +171,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Hello, let us begin.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(runAgentMock).toHaveBeenCalledTimes(2);
       expect(runAgentMock).toHaveBeenCalledWith('journal-scanner', expect.stringContaining('start_date: 2026_04_04'));
@@ -193,7 +188,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Starting interview.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         prepContext: expect.stringContaining('journal data'),
@@ -222,7 +217,7 @@ describe('reviews/weekly', () => {
       });
       askClaudeCtxMock.mockResolvedValue({ text: 'Beginning.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         prepContext: expect.stringContaining('# KB Activity'),
@@ -239,7 +234,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null); // log.md missing
       askClaudeCtxMock.mockResolvedValue({ text: 'Beginning.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       // No call with a prepContext that includes "# KB Activity"
       const kbCalls = updateSessionMock.mock.calls.filter(
@@ -255,7 +250,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue('## Step 2: Interview\nAsk about goals.\n## Step 4: Writeup');
       askClaudeCtxMock.mockResolvedValue({ text: 'Let us review.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(readVaultMock).toHaveBeenCalledWith('.claude/skills/weekly/SKILL.md');
       // System prompt passed to askClaudeWithContext should contain extracted instructions
@@ -273,7 +268,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Welcome to the review.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(askClaudeCtxMock).toHaveBeenCalledWith(
         "Let's begin the weekly review.",
@@ -289,11 +284,11 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Let us start.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'Let us start.');
-      expect(stopTypingMock).toHaveBeenCalledWith('typing-handle');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Let us start.');
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
     });
 
     // 7. If both scanners fail -> sends error, sets phase to done
@@ -303,12 +298,12 @@ describe('reviews/weekly', () => {
         .mockResolvedValueOnce({ text: null, error: 'journal failed' })
         .mockResolvedValueOnce({ text: null, error: 'system failed' });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Prep agents failed. Cannot start review.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Prep agents failed. Cannot start review.');
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
       expect(askClaudeCtxMock).not.toHaveBeenCalled();
-      expect(stopTypingMock).toHaveBeenCalledWith('typing-handle');
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
     });
 
     // 8. Falls back to default instructions if SKILL.md not found
@@ -318,7 +313,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Starting.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       expect(askClaudeCtxMock).toHaveBeenCalledWith(
         expect.any(String),
@@ -334,9 +329,9 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: null, error: 'Claude down' });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Failed to start interview: Claude down');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Failed to start interview: Claude down');
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
     });
 
@@ -348,7 +343,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Starting.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       // Should still proceed (not both failed)
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
@@ -366,9 +361,9 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Hi.', error: null });
 
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('weekly review'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('weekly review'));
     });
   });
 
@@ -380,14 +375,14 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'data', error: null });
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Welcome.', error: null });
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       vi.clearAllMocks();
-      startTypingMock.mockReturnValue('typing-handle');
+      sender = makeSender();
       const interviewSession = makeSession({ phase: 'interview' });
       askClaudeCtxMock.mockResolvedValue({ text: 'Tell me more about projects.', error: null });
 
-      await weeklyHandler.handleMessage(interviewSession, 'I worked on thesis', bot);
+      await weeklyHandler.handleMessage(interviewSession, 'I worked on thesis', sender);
 
       expect(askClaudeCtxMock).toHaveBeenCalledWith(
         'I worked on thesis',
@@ -402,24 +397,24 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'data', error: null });
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Welcome.', error: null });
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       vi.clearAllMocks();
-      startTypingMock.mockReturnValue('typing-handle');
+      sender = makeSender();
       const interviewSession = makeSession({ phase: 'interview' });
       askClaudeCtxMock.mockResolvedValue({
         text: 'Great summary.\n\nWeek in Review outline:\n- Projects\n- Health',
         error: null,
       });
 
-      await weeklyHandler.handleMessage(interviewSession, 'That covers everything', bot);
+      await weeklyHandler.handleMessage(interviewSession, 'That covers everything', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         outline: 'Week in Review outline:\n- Projects\n- Health',
         phase: 'approval',
       });
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Week in Review outline:'));
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('Reply *yes*'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Week in Review outline:'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Reply *yes*'));
     });
 
     // 12. When response has no outline -> sends response, stays in interview
@@ -428,16 +423,16 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'data', error: null });
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Welcome.', error: null });
-      await weeklyHandler.start(session, bot);
+      await weeklyHandler.start(session, sender);
 
       vi.clearAllMocks();
-      startTypingMock.mockReturnValue('typing-handle');
+      sender = makeSender();
       const interviewSession = makeSession({ phase: 'interview' });
       askClaudeCtxMock.mockResolvedValue({ text: 'What about your health this week?', error: null });
 
-      await weeklyHandler.handleMessage(interviewSession, 'I did some running', bot);
+      await weeklyHandler.handleMessage(interviewSession, 'I did some running', sender);
 
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'What about your health this week?');
+      expect(sender.send).toHaveBeenCalledWith(100, 'What about your health this week?');
       expect(updateSessionMock).not.toHaveBeenCalledWith(100, expect.objectContaining({ phase: 'approval' }));
     });
 
@@ -448,7 +443,7 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: 'Continuing interview.', error: null });
 
-      await weeklyHandler.handleMessage(session, 'Where were we?', bot);
+      await weeklyHandler.handleMessage(session, 'Where were we?', sender);
 
       expect(readVaultMock).toHaveBeenCalledWith('.claude/skills/weekly/SKILL.md');
       expect(askClaudeCtxMock).toHaveBeenCalledWith(
@@ -456,16 +451,16 @@ describe('reviews/weekly', () => {
         session.claudeSessionId,
         expect.stringContaining('recovered context data'),
       );
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, 'Continuing interview.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Continuing interview.');
     });
 
     // 14. If system prompt and prepContext both missing -> error, sets done
     it('sends error when both system prompt and prepContext are missing', async () => {
       const session = makeSession({ phase: 'interview', prepContext: null, claudeSessionId: 'orphan-session' });
 
-      await weeklyHandler.handleMessage(session, 'hello', bot);
+      await weeklyHandler.handleMessage(session, 'hello', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('Session error'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Session error'));
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
     });
 
@@ -474,10 +469,10 @@ describe('reviews/weekly', () => {
       readVaultMock.mockReturnValue(null);
       askClaudeCtxMock.mockResolvedValue({ text: null, error: 'timeout' });
 
-      await weeklyHandler.handleMessage(session, 'hello', bot);
+      await weeklyHandler.handleMessage(session, 'hello', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Error: timeout');
-      expect(stopTypingMock).toHaveBeenCalledWith('typing-handle');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Error: timeout');
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
     });
   });
 
@@ -497,7 +492,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'writeup' });
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('weekly'));
@@ -514,7 +509,7 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
       askClaudeOneShotMock.mockResolvedValue({ text: '{}', error: null });
 
-      await weeklyHandler.handleMessage(session, word, bot);
+      await weeklyHandler.handleMessage(session, word, sender);
 
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.any(String));
     });
@@ -523,31 +518,31 @@ describe('reviews/weekly', () => {
     it('cancels review on "cancel"', async () => {
       const session = makeSession({ phase: 'approval', outline: 'outline' });
 
-      await weeklyHandler.handleMessage(session, 'cancel', bot);
+      await weeklyHandler.handleMessage(session, 'cancel', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Weekly review cancelled.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Weekly review cancelled.');
       expect(runAgentMock).not.toHaveBeenCalled();
     });
 
     it.each(['no', 'n', 'cancel', 'skip'])('accepts cancel word: "%s"', async (word) => {
       const session = makeSession({ phase: 'approval', outline: 'outline' });
 
-      await weeklyHandler.handleMessage(session, word, bot);
+      await weeklyHandler.handleMessage(session, word, sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Weekly review cancelled.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Weekly review cancelled.');
     });
 
     // 17. Other text -> stores as edited outline, asks for confirmation
     it('stores edited outline on unrecognized text', async () => {
       const session = makeSession({ phase: 'approval', outline: 'old outline' });
 
-      await weeklyHandler.handleMessage(session, 'Here is my revised outline with more detail', bot);
+      await weeklyHandler.handleMessage(session, 'Here is my revised outline with more detail', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, {
         outline: 'Here is my revised outline with more detail',
       });
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, expect.stringContaining('Outline updated'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Outline updated'));
     });
   });
 
@@ -556,17 +551,17 @@ describe('reviews/weekly', () => {
     it('sends still processing for writeup phase', async () => {
       const session = makeSession({ phase: 'writeup' });
 
-      await weeklyHandler.handleMessage(session, 'hello', bot);
+      await weeklyHandler.handleMessage(session, 'hello', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Still processing... please wait.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Still processing... please wait.');
     });
 
     it('sends still processing for updates phase', async () => {
       const session = makeSession({ phase: 'updates' });
 
-      await weeklyHandler.handleMessage(session, 'what is happening', bot);
+      await weeklyHandler.handleMessage(session, 'what is happening', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Still processing... please wait.');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Still processing... please wait.');
     });
   });
 
@@ -586,7 +581,7 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'Written.', error: null });
       askClaudeOneShotMock.mockResolvedValue({ text: '{}', error: null });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('review_type: weekly'));
       // toScannerDate converts hyphens to underscores for agent prompts.
@@ -604,7 +599,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(askClaudeOneShotMock).toHaveBeenCalledWith(expect.stringContaining('post-interview updates'));
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'updates' });
@@ -620,7 +615,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       // review-writer + project-updater + json-updater = 3 calls (no psychology-updater, no worldview, no playbook)
       expect(runAgentMock).toHaveBeenCalledTimes(3);
@@ -639,10 +634,10 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Worldview updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Worldview updated.'));
     });
 
     it('spawns playbook-updater when playbook flag is true', async () => {
@@ -653,10 +648,10 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Playbook entries added.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Playbook entries added.'));
     });
 
     it('enqueues playbook.md for KB ingestion after playbook-updater succeeds', async () => {
@@ -667,7 +662,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('pages/playbook.md');
     });
@@ -681,11 +676,11 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String));
       expect(vi.mocked(clearApprovedProposals)).toHaveBeenCalled();
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Ask-Twice proposals actioned'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Ask-Twice proposals actioned'));
     });
 
     it('does NOT call clearApprovedProposals when proposal-updater fails', async () => {
@@ -699,7 +694,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(vi.mocked(clearApprovedProposals)).not.toHaveBeenCalled();
     });
@@ -714,7 +709,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
       expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-beta.md');
@@ -730,7 +725,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('world-view/ai.md');
     });
@@ -749,7 +744,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
       expect(enqueueKBMock).not.toHaveBeenCalledWith('projects/ghost.md');
@@ -765,7 +760,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(enqueueKBMock).toHaveBeenCalledWith('projects/project-alpha.md');
       expect(enqueueKBMock).not.toHaveBeenCalledWith('projects/archive/old.md');
@@ -776,7 +771,7 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
       askClaudeOneShotMock.mockResolvedValue({ text: 'not valid json', error: null });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       // review-writer + all 6 post agents = 7
       expect(runAgentMock).toHaveBeenCalledTimes(7);
@@ -796,7 +791,7 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       // Only review-writer
       expect(runAgentMock).toHaveBeenCalledTimes(1);
@@ -809,7 +804,7 @@ describe('reviews/weekly', () => {
       runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
       askClaudeOneShotMock.mockResolvedValue({ text: '{}', error: null });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(gitCommitMock).toHaveBeenCalledWith('Weekly review: 2026-04-10');
     });
@@ -820,11 +815,11 @@ describe('reviews/weekly', () => {
       askClaudeOneShotMock.mockResolvedValue({ text: '{}', error: null });
       gitCommitMock.mockImplementation(() => { throw new Error('git failed'); });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
       // Should still complete
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Weekly review complete'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Weekly review complete'));
     });
 
     // 23. Sends completion summary with accurate agent results
@@ -846,12 +841,12 @@ describe('reviews/weekly', () => {
         return null;
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Review written to journal.'));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Project pages updated.'));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Psychology profile updated.'));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('JSON data updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Review written to journal.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Project pages updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Psychology profile updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('JSON data updated.'));
     });
 
     it('reports failed post agents in summary', async () => {
@@ -865,10 +860,10 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Project update failed.'));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('JSON data updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Project update failed.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('JSON data updated.'));
     });
 
     it('reports missing post agents distinctly from failures', async () => {
@@ -882,11 +877,11 @@ describe('reviews/weekly', () => {
         error: null,
       });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('Projects skipped (agent missing)'));
-      expect(sendLongMock).not.toHaveBeenCalledWith(bot, 100, expect.stringContaining('Project update failed.'));
-      expect(sendLongMock).toHaveBeenCalledWith(bot, 100, expect.stringContaining('JSON data updated.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Projects skipped (agent missing)'));
+      expect(sender.send).not.toHaveBeenCalledWith(100, expect.stringContaining('Project update failed.'));
+      expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('JSON data updated.'));
     });
 
     // 24. review-writer failure -> sends error, sets done
@@ -894,9 +889,9 @@ describe('reviews/weekly', () => {
       const session = approvalSession();
       runAgentMock.mockResolvedValue({ text: null, error: 'Writer crashed' });
 
-      await weeklyHandler.handleMessage(session, 'yes', bot);
+      await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(bot.sendMessage).toHaveBeenCalledWith(100, 'Review write-up failed: Writer crashed');
+      expect(sender.send).toHaveBeenCalledWith(100, 'Review write-up failed: Writer crashed');
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
       // Should not proceed to post-agents or git
       expect(askClaudeOneShotMock).not.toHaveBeenCalled();
@@ -907,7 +902,7 @@ describe('reviews/weekly', () => {
   describe('handleMessage - unexpected phase', () => {
     it('does not throw for unexpected phase', async () => {
       const session = makeSession({ phase: 'done' });
-      await expect(weeklyHandler.handleMessage(session, 'hello', bot)).resolves.toBeUndefined();
+      await expect(weeklyHandler.handleMessage(session, 'hello', sender)).resolves.toBeUndefined();
     });
   });
 });

@@ -1,15 +1,14 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
 import { getSession } from '../../vault/sessions.js';
 import { closeConversation } from './fresh.js';
-import { startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-journal');
 
-export async function handleJournal(bot: TelegramBot, chatId: number, text: string): Promise<void> {
+export async function handleJournal(sender: MessageSender, userId: number, text: string): Promise<void> {
   const ts = getTimestamp();
   const entry = `- ${ts} [[jarvis]] telegram chat\n\t- ${text}`;
   appendToJournal(entry);
@@ -19,19 +18,19 @@ export async function handleJournal(bot: TelegramBot, chatId: number, text: stri
   // KB-worthy, commit, delete the session. The user's literal entry above
   // remains uncommitted here so closeConversation's single commit captures
   // both the literal entry and the summary together.
-  if (!getSession(chatId)) {
+  if (!getSession(userId)) {
     await gitCommitAndPush('TG journal entry');
-    await bot.sendMessage(chatId, 'Logged to journal.');
+    await sender.send(userId, 'Logged to journal.');
     return;
   }
 
-  const typing = startTyping(bot, chatId);
-  const result = await closeConversation(chatId);
-  stopTyping(typing);
+  sender.startTyping(userId);
+  const result = await closeConversation(userId);
+  sender.stopTyping(userId);
 
   if (!result.ok) {
     if (result.error !== 'no-session') {
-      log.error('Journal session-close failed', { chatId, error: result.error });
+      log.error('Journal session-close failed', { userId, error: result.error });
     }
     // closeConversation only commits on its success path. On failure (or the
     // 'no-session' race) the literal entry above is still uncommitted, so we
@@ -40,13 +39,12 @@ export async function handleJournal(bot: TelegramBot, chatId: number, text: stri
     const detail = result.error === 'no-session'
       ? ''
       : `\n(Conversation summary failed: ${result.error}. Session reset.)`;
-    await bot.sendMessage(chatId, `Logged to journal.${detail}`);
+    await sender.send(userId, `Logged to journal.${detail}`);
     return;
   }
 
   const kbLabel = result.isKBWorthy ? '\n\nSaved to KB sources for ingestion.' : '';
-  await bot.sendMessage(
-    chatId,
+  await sender.send(userId,
     `Logged to journal. Conversation summary saved, session reset.\n\n${result.journalSummary}${kbLabel}`,
   );
 }

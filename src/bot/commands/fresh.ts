@@ -1,4 +1,3 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { getSession, deleteSession } from '../../vault/sessions.js';
 import { summarizeSession } from '../../ai/claude.js';
 import { appendToJournal } from '../../vault/journal.js';
@@ -6,8 +5,8 @@ import { getTimestamp, getTodayDate } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
 import { writeVaultFile } from '../../vault/files.js';
 import { enqueue } from '../../kb/queue.js';
-import { startTyping, stopTyping } from '../../integrations/telegram/client.js';
 import { createLogger } from '../../utils/logger.js';
+import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-fresh');
 
@@ -78,23 +77,23 @@ export async function closeConversation(chatId: number): Promise<CloseConversati
   }
 }
 
-export async function handleFresh(bot: TelegramBot, chatId: number): Promise<void> {
-  const session = getSession(chatId);
+export async function handleFresh(sender: MessageSender, userId: number): Promise<void> {
+  const session = getSession(userId);
   if (!session) {
-    await bot.sendMessage(chatId, 'No active conversation to summarize.');
+    await sender.send(userId, 'No active conversation to summarize.');
     return;
   }
 
-  const typing = startTyping(bot, chatId);
-  const result = await closeConversation(chatId);
-  stopTyping(typing);
+  sender.startTyping(userId);
+  const result = await closeConversation(userId);
+  sender.stopTyping(userId);
 
   if (!result.ok) {
     log.error('Fresh: closeConversation failed', { error: result.error });
-    await bot.sendMessage(chatId, `Could not summarize conversation — session reset. Error: ${result.error}`);
+    await sender.send(userId, `Could not summarize conversation — session reset. Error: ${result.error}`);
     return;
   }
 
   const kbLabel = result.isKBWorthy ? '\n\nSaved to KB sources for ingestion.' : '';
-  await bot.sendMessage(chatId, `Conversation logged. Session reset.\n\n${result.journalSummary}${kbLabel}`);
+  await sender.send(userId, `Conversation logged. Session reset.\n\n${result.journalSummary}${kbLabel}`);
 }

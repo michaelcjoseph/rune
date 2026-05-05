@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { MessageSender } from '../../transport/sender.js';
 
 // Create temp dirs before any mocks — vi.hoisted must be synchronous.
 const { logsTmpDir } = vi.hoisted(() => {
@@ -66,10 +67,13 @@ function deleteLastWorkout(): void {
 
 const CHAT_ID = 42;
 
-function mockBot() {
+function makeSender(): MessageSender {
   return {
-    sendMessage: vi.fn().mockResolvedValue(undefined),
-  } as any;
+    name: 'telegram' as const,
+    send: vi.fn().mockResolvedValue(undefined),
+    startTyping: vi.fn(),
+    stopTyping: vi.fn(),
+  };
 }
 
 // ─── 1. No prior workout path ─────────────────────────────────────────────────
@@ -82,25 +86,25 @@ describe('handleDoneWorkout — no prior workout', () => {
   });
 
   it('sends "Nothing to log" when LAST_WORKOUT_FILE does not exist', async () => {
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Nothing to log');
     expect(msg).toContain('/workout');
   });
 
   it('does not call appendToJournal when file is missing', async () => {
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).not.toHaveBeenCalled();
   });
 
   it('does not create LAST_WORKOUT_FILE when it is missing', async () => {
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(existsSync(LAST_WORKOUT_PATH)).toBe(false);
   });
@@ -118,19 +122,19 @@ describe('handleDoneWorkout — corrupt JSON', () => {
   it('sends parse-error message when file contains invalid JSON', async () => {
     writeFileSync(LAST_WORKOUT_PATH, '{not valid json');
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Could not parse');
   });
 
   it('does not call appendToJournal when file is corrupt', async () => {
     writeFileSync(LAST_WORKOUT_PATH, '{not valid json');
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).not.toHaveBeenCalled();
   });
@@ -154,11 +158,11 @@ describe('handleDoneWorkout — shape validation', () => {
       structured: {},
     }));
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Could not parse');
     expect(mockAppendToJournal).not.toHaveBeenCalled();
   });
@@ -172,11 +176,11 @@ describe('handleDoneWorkout — shape validation', () => {
       structured: {},
     }));
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Could not parse');
     expect(mockAppendToJournal).not.toHaveBeenCalled();
   });
@@ -185,8 +189,8 @@ describe('handleDoneWorkout — shape validation', () => {
     writeLastWorkout({ location: null, focus: null });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).toHaveBeenCalledOnce();
   });
@@ -205,11 +209,11 @@ describe('handleDoneWorkout — stale warning + confirm flow', () => {
     const sixtyHoursAgo = new Date(Date.now() - 60 * 60 * 60 * 1000).toISOString();
     writeLastWorkout({ generated_at: sixtyHoursAgo });
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toMatch(/\d+ hours ago/);
     expect(msg).toContain('/done-workout');
   });
@@ -218,8 +222,8 @@ describe('handleDoneWorkout — stale warning + confirm flow', () => {
     const sixtyHoursAgo = new Date(Date.now() - 60 * 60 * 60 * 1000).toISOString();
     writeLastWorkout({ generated_at: sixtyHoursAgo });
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).not.toHaveBeenCalled();
   });
@@ -229,19 +233,19 @@ describe('handleDoneWorkout — stale warning + confirm flow', () => {
     writeLastWorkout({ generated_at: sixtyHoursAgo });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
+    const sender = makeSender();
 
     // First call — stale warning
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
     expect(mockAppendToJournal).not.toHaveBeenCalled();
 
     // Second call within 10 minutes — confirm
     vi.clearAllMocks();
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).toHaveBeenCalledOnce();
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Logged');
   });
 
@@ -250,12 +254,12 @@ describe('handleDoneWorkout — stale warning + confirm flow', () => {
     writeLastWorkout({ generated_at: sixtyHoursAgo });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
+    const sender = makeSender();
 
     // First call — warn
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
     // Second call — confirm
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(existsSync(LAST_WORKOUT_PATH)).toBe(false);
   });
@@ -265,18 +269,18 @@ describe('handleDoneWorkout — stale warning + confirm flow', () => {
     writeLastWorkout({ generated_at: sixtyHoursAgo });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
+    const sender = makeSender();
 
     // First — warn; Second — confirm + delete
-    await handleDoneWorkout(bot, CHAT_ID);
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
 
     // Third — file is gone
     vi.clearAllMocks();
     _resetDoneWorkoutState();
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Nothing to log');
   });
 });
@@ -299,10 +303,10 @@ describe('handleDoneWorkout — stale warning window expiry', () => {
     const sixtyHoursAgo = new Date(Date.now() - 60 * 60 * 60 * 1000).toISOString();
     writeLastWorkout({ generated_at: sixtyHoursAgo });
 
-    const bot = mockBot();
+    const sender = makeSender();
 
     // First call — stale warning
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
     expect(mockAppendToJournal).not.toHaveBeenCalled();
 
     // Advance time by 11 minutes (beyond the 10-min confirm window)
@@ -310,10 +314,10 @@ describe('handleDoneWorkout — stale warning window expiry', () => {
 
     // Second call — window has expired, should warn again (not append)
     vi.clearAllMocks();
-    await handleDoneWorkout(bot, CHAT_ID);
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).not.toHaveBeenCalled();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toMatch(/\d+ hours ago/);
   });
 });
@@ -331,8 +335,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'gym', focus: 'strength', markdown: '## Warmup\n\nJog 5 min' });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(mockAppendToJournal).toHaveBeenCalledOnce();
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
@@ -343,8 +347,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'gym', focus: 'strength', markdown: '## Main\n\nSquats 5x5' });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(block).toContain('**Generated workout** (');
@@ -354,8 +358,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'home', focus: 'mobility', markdown: '## Warmup\n\nStretch' });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(block).toContain('home');
@@ -365,8 +369,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'home', focus: 'mobility', markdown: '## Warmup\n\nStretch' });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(block).toContain('mobility');
@@ -377,8 +381,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'gym', focus: 'strength', markdown });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(block).toContain(markdown);
@@ -388,8 +392,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: null, focus: null, markdown: '## Warmup\n\nWalk 5 min' });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     expect(block).toContain('session');
@@ -400,8 +404,8 @@ describe('handleDoneWorkout — journal block format', () => {
     writeLastWorkout({ location: 'gym', focus: 'strength', markdown });
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     const block = (mockAppendToJournal as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
     // Leading #workout tag — required for json-updater to identify the block
@@ -428,8 +432,8 @@ describe('handleDoneWorkout — file cleared on success', () => {
     writeLastWorkout();
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(existsSync(LAST_WORKOUT_PATH)).toBe(false);
   });
@@ -438,11 +442,11 @@ describe('handleDoneWorkout — file cleared on success', () => {
     writeLastWorkout();
     mockAppendToJournal.mockReturnValue(undefined);
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Logged');
     expect(msg).toContain('workouts.json');
   });
@@ -463,8 +467,8 @@ describe('handleDoneWorkout — file preserved on append failure', () => {
       throw new Error('filesystem full');
     });
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     expect(existsSync(LAST_WORKOUT_PATH)).toBe(true);
   });
@@ -475,11 +479,11 @@ describe('handleDoneWorkout — file preserved on append failure', () => {
       throw new Error('filesystem full');
     });
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
-    expect(bot.sendMessage).toHaveBeenCalledOnce();
-    const msg = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    expect(sender.send).toHaveBeenCalledOnce();
+    const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(msg).toContain('Could not append');
   });
 
@@ -489,8 +493,8 @@ describe('handleDoneWorkout — file preserved on append failure', () => {
       throw new Error('write error');
     });
 
-    const bot = mockBot();
-    await handleDoneWorkout(bot, CHAT_ID);
+    const sender = makeSender();
+    await handleDoneWorkout(sender, CHAT_ID);
 
     // File should still be there for retry
     expect(existsSync(LAST_WORKOUT_PATH)).toBe(true);
