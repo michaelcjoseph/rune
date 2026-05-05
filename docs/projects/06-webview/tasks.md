@@ -32,13 +32,13 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Refactor typing-indicator usage: replace inline `startTyping(bot, chatId)` with `senders.startTyping(chatId)` (sender chooses how to render).
 - [x] Update existing handler tests to inject a fake `MessageSender` instead of stubbing `bot.sendMessage`.
 - [ ] Smoke test: run `npm run dev`, exchange a TG message, run morning-prep manually (`/prep`), confirm chunking and content unchanged.
-- [ ] Update `CLAUDE.md` Project Structure section: add `src/transport/` row.
+- [x] Update `CLAUDE.md` Project Structure section: add `src/transport/` row.
 
 ## Phase B — Webview chat surface
 
 > Depends on: Phase A.
 
-- [ ] Create `src/server/auth.ts`: `verifyAuth(req): { ok: true; userId } | { ok: false }`. Reads `jarvis-auth` cookie or `Authorization: Bearer …` header. Validates against `JARVIS_HTTP_SECRET`.
+- [x] Create `src/server/auth.ts`: `verifyAuth(req): { ok: true; userId } | { ok: false }`. Reads `jarvis-auth` cookie or `Authorization: Bearer …` header. Validates against `JARVIS_HTTP_SECRET`.
 - [ ] Create `src/server/webview.ts`: `mountWebviewRoutes(server, bus, senders, deps)`. Wires:
   - `GET /` → serve `index.html` with server-rendered `<meta name="obsidian-vault" content="…">`.
   - `GET /static/*` → serve `src/server/static/*` with path-traversal guard.
@@ -46,7 +46,7 @@ Not started. See [spec.md](spec.md) for details.
   - `WS /api/ws` upgrade → auth check → register on `WebviewSender`. On `message` frame → dispatch. On `close` → unregister.
   - `GET /api/state` → 503 if not ready, else 200 with `getStateSnapshot()` (Phase C wires this fully; Phase B returns a stub).
   - 401 on missing/invalid auth; 403 on Host header not in `JARVIS_ALLOWED_HOSTS` (port stripped before comparison).
-- [ ] Modify `src/config.ts`: add `JARVIS_ALLOWED_HOSTS` env var. Parsed at startup (split on `,`, trim + lower-case each entry) into a `Set<string>` exported alongside the rest of the config; default `localhost,127.0.0.1`.
+- [x] Modify `src/config.ts`: add `JARVIS_ALLOWED_HOSTS` env var. Parsed at startup (split on `,`, trim + lower-case each entry) into a `Set<string>` exported alongside the rest of the config; default `localhost,127.0.0.1`.
 - [ ] Wire `JARVIS_ALLOWED_HOSTS` into the Host-guard in `src/server/webview.ts` (requirement 14). The guard runs before auth so a misrouted request never advances to the secret-comparison codepath.
 - [ ] In the `POST /api/auth-bootstrap` handler (cookie-set path): set `Secure` on the `jarvis-auth` cookie iff `req.headers['x-forwarded-proto'] === 'https'` AND `req.socket.remoteAddress` is `127.0.0.1` / `::1`. Always set `HttpOnly` and `SameSite=Strict`. (Requirement 63.)
 - [ ] Create `src/server/webview-bootstrap.ts`: extracted dispatch entrypoint that mirrors `handleTextMessage` but takes a plain `{ userId, text }` instead of a TG `Message`. Handles slash-command branch, review-active branch, resolver branch, freeform branch.
@@ -70,7 +70,7 @@ Not started. See [spec.md](spec.md) for details.
   - Model dropdown: bound to `/opus` / `/sonnet` / `/haiku` — selecting an option sends the slash command as the next message.
 - [ ] Create `src/server/static/app.css`: minimal dark theme. Sidebar layout placeholder (Phase C fills it).
 - [ ] Add `POST /api/auth-bootstrap` route: validates `?token=` body, sets `jarvis-auth` cookie (HttpOnly, SameSite=Strict).
-- [ ] Vitest: `src/server/auth.test.ts` — 401 missing, 401 wrong, 200 cookie, 200 bearer, 403 non-localhost.
+- [x] Vitest: `src/server/auth.test.ts` — 401 missing, 401 wrong, 200 cookie, 200 bearer, 403 non-localhost.
 - [ ] Vitest: `src/server/webview.test.ts` — integration: stub Claude CLI, POST `/api/chat`, assert response shape; open WS, send a message frame, assert outbound chunks.
 - [ ] Manual smoke: `npm run dev` → browser to `http://127.0.0.1:3847/?token=$JARVIS_HTTP_SECRET` → exchange a message → verify rendering and wikilink click opens Obsidian.
 - [ ] Update `CLAUDE.md`:

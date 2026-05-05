@@ -49,6 +49,11 @@ const config = {
 
   JARVIS_HTTP_SECRET: process.env['JARVIS_HTTP_SECRET'] || '',
 
+  JARVIS_ALLOWED_HOSTS: new Set(
+    (process.env['JARVIS_ALLOWED_HOSTS'] || 'localhost,127.0.0.1')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+  ),
+
   FAMILY_NAMES: (process.env['FAMILY_NAMES'] || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 

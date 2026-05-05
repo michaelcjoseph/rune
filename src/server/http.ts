@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import config from '../config.js';
+import { verifyAuth } from './auth.js';
 import { getAllSessions } from '../vault/sessions.js';
 import { captureSessions } from '../jobs/capture.js';
 import { isConfigured, exchangeCode, verifyOAuthState } from '../integrations/whoop/client.js';
@@ -19,8 +20,8 @@ async function handleHealth(_req: IncomingMessage, res: ServerResponse): Promise
 }
 
 async function handleCaptureSessions(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const auth = req.headers['authorization'];
-  if (!config.JARVIS_HTTP_SECRET || auth !== `Bearer ${config.JARVIS_HTTP_SECRET}`) {
+  const authResult = verifyAuth(req);
+  if (!authResult.ok) {
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'unauthorized' }));
     return;
