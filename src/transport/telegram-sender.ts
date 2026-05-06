@@ -20,7 +20,7 @@ export class TelegramSender implements MessageSender {
     await sendLongMessage(this.bot, userId, text);
   }
 
-  startTyping(userId: number): void {
+  startTyping(userId: number, _label?: string): void {
     if (this.typingTimers.has(userId)) return;
     this.typingTimers.set(userId, startTyping(this.bot, userId));
   }

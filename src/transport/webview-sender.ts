@@ -29,56 +29,46 @@ export class WebviewSender implements MessageSender {
   }
 
   async send(userId: number, text: string, opts?: SendOpts): Promise<void> {
-    const conns = this.connections.get(userId);
-    if (!conns || conns.size === 0) return;
     const frame = JSON.stringify({
       kind: 'message',
       text,
       ...(opts?.approval ? { approval: opts.approval } : {}),
     });
-    for (const ws of conns) {
-      if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(frame);
-        } catch (err) {
-          log.error('ws.send error', { error: (err as Error).message });
-        }
-      }
-    }
+    this.broadcast(userId, frame, true);
   }
 
-  startTyping(_userId: number): void {
-    // Typing indicator is client-side in the webview.
+  startTyping(userId: number, label = 'Thinking…'): void {
+    this.broadcast(userId, JSON.stringify({ kind: 'status', label }));
   }
 
-  stopTyping(_userId: number): void {
-    // No-op.
+  stopTyping(userId: number): void {
+    this.broadcast(userId, JSON.stringify({ kind: 'status', label: null }));
   }
 
   /** Forward an agent-event bus message to all connected WS clients for the given userId.
    *  Strips userId from the WS frame — it is used only for routing and must not cross the WS boundary. */
   onAgentEvent(event: BusAgentEvent): void {
-    const conns = this.connections.get(event.userId);
-    if (!conns || conns.size === 0) return;
-    const { userId: _drop, ...rest } = event;
-    const frame = JSON.stringify(rest);
-    for (const ws of conns) {
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(frame); } catch { /* drop if closed */ }
-      }
-    }
+    const { userId, ...rest } = event;
+    this.broadcast(userId, JSON.stringify(rest));
   }
 
   /** Forward a mutation-event bus message to all connected WS clients for the given userId.
    *  Strips userId before forwarding — it is used only for routing. */
   onMutationEvent(event: BusMutationEvent): void {
-    const conns = this.connections.get(event.userId);
+    const { userId, ...rest } = event;
+    this.broadcast(userId, JSON.stringify(rest));
+  }
+
+  private broadcast(userId: number, frame: string, logErrors = false): void {
+    const conns = this.connections.get(userId);
     if (!conns || conns.size === 0) return;
-    const { userId: _drop, ...rest } = event;
-    const frame = JSON.stringify(rest);
     for (const ws of conns) {
       if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(frame); } catch { /* drop if closed */ }
+        try {
+          ws.send(frame);
+        } catch (err) {
+          if (logErrors) log.error('ws.send error', { error: (err as Error).message });
+        }
       }
     }
   }

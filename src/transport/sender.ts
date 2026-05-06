@@ -13,7 +13,7 @@ export interface SendOpts {
 export interface MessageSender {
   name: 'telegram' | 'webview';
   send(userId: number, text: string, opts?: SendOpts): Promise<void>;
-  startTyping(userId: number): void;
+  startTyping(userId: number, label?: string): void;
   stopTyping(userId: number): void;
 }
 

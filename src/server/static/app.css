@@ -265,6 +265,31 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   padding: .35rem .9rem; border-radius: 5px; cursor: pointer; font-size: .85rem;
 }
 
+/* Activity/thinking indicator in chat */
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .35rem .6rem;
+  color: var(--text2);
+  font-size: .82rem;
+  align-self: flex-start;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
 /* Run detail drawer */
 .drawer {
   position: fixed; right: 0; top: 0; bottom: 0;

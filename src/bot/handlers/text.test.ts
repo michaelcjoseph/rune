@@ -199,7 +199,7 @@ describe('text handler routing', () => {
   it('routes /start and sends help', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/start'));
-    expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Commands:'));
+    expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('**Commands**'));
   });
 
   it('routes /lint', async () => {
@@ -512,5 +512,83 @@ describe('resolver wiring in text handler', () => {
     // No intent-log entry is emitted when the classifier throws before we
     // know the outcome — the log only captures completed classifications.
     expect(appendIntent).not.toHaveBeenCalled();
+  });
+
+  describe('invokeSkill — agent kind: startTyping/stopTyping wrapping', () => {
+    function agentClassifyResult(overrides: Record<string, unknown> = {}) {
+      return {
+        skill: 'content-triager',
+        args: 'some link',
+        confidence: 0.9,
+        second_skill: null,
+        second_confidence: 0,
+        ambiguous: false,
+        raw: '',
+        ...overrides,
+      };
+    }
+
+    it('calls startTyping with agent name label before invoking runAgent', async () => {
+      vi.mocked(runAgent).mockResolvedValue({ text: 'result', error: null });
+      vi.mocked(mockClassify).mockResolvedValue(agentClassifyResult());
+
+      const sender = mockSender();
+      await handleTextMessage(sender, msg('classify this content for me please'));
+
+      expect(sender.startTyping).toHaveBeenCalledWith(100, 'Running content-triager…');
+    });
+
+    it('calls stopTyping after runAgent succeeds', async () => {
+      vi.mocked(runAgent).mockResolvedValue({ text: 'result', error: null });
+      vi.mocked(mockClassify).mockResolvedValue(agentClassifyResult());
+
+      const sender = mockSender();
+      await handleTextMessage(sender, msg('classify this content for me please'));
+
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
+    });
+
+    it('calls stopTyping in the finally block even when runAgent returns an error', async () => {
+      vi.mocked(runAgent).mockResolvedValue({ text: null, error: 'agent failed' });
+      vi.mocked(mockClassify).mockResolvedValue(agentClassifyResult());
+
+      const sender = mockSender();
+      // The skill throw is caught by tryResolveAndDispatch; no uncaught rejection
+      await handleTextMessage(sender, msg('classify this content for me please'));
+
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
+    });
+
+    it('calls stopTyping in the finally block when runAgent throws', async () => {
+      vi.mocked(runAgent).mockRejectedValue(new Error('spawn failed'));
+      vi.mocked(mockClassify).mockResolvedValue(agentClassifyResult());
+
+      const sender = mockSender();
+      await handleTextMessage(sender, msg('classify this content for me please'));
+
+      expect(sender.stopTyping).toHaveBeenCalledWith(100);
+    });
+  });
+});
+
+describe('handleLint — startTyping label', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+  });
+
+  it('calls startTyping with the knowledge base label when /lint is invoked', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/lint'));
+
+    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Checking knowledge base…');
+  });
+
+  it('sends the lint report after lintKB completes', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/lint'));
+
+    expect(sender.send).toHaveBeenCalledWith(100, 'clean');
   });
 });

@@ -111,6 +111,7 @@
       try { frame = JSON.parse(event.data); } catch { return; }
 
       if (frame.kind === 'message') {
+        clearStatusIndicator();
         if (streamingDiv) {
           // Finalize streaming tail
           streamingDiv.innerHTML = renderMarkdown(streamingText);
@@ -122,6 +123,8 @@
         if (frame.approval) {
           renderApproval(frame.approval, div);
         }
+      } else if (frame.kind === 'status') {
+        handleStatusEvent(frame);
       } else if (frame.kind === 'chunk') {
         // Streaming chunk — append to tail node
         streamingText += frame.text;
@@ -145,6 +148,7 @@
       activeAgentRuns.clear();
       if (activeRunsInterval) { clearInterval(activeRunsInterval); activeRunsInterval = null; }
       document.querySelectorAll('.run-live').forEach(el => el.remove());
+      clearStatusIndicator();
       setTimeout(() => {
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         connect();
@@ -234,6 +238,24 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
+
+  // Activity/thinking indicator
+  function clearStatusIndicator() {
+    const el = document.getElementById('status-indicator');
+    if (el) el.remove();
+  }
+
+  function handleStatusEvent(frame) {
+    clearStatusIndicator();
+    if (frame.label != null && frame.label !== '') {
+      const div = document.createElement('div');
+      div.id = 'status-indicator';
+      div.className = 'status-indicator';
+      div.innerHTML = `<span class="status-dot"></span><span class="status-label">${escHtml(frame.label)}</span>`;
+      messagesEl.appendChild(div);
+      scrollToBottom();
+    }
+  }
 
   // Live agent-run tracking (from WS agent-event frames)
   const activeAgentRuns = new Map(); // runId → { agent, startedAt, timerEl }

@@ -88,6 +88,12 @@ describe('TelegramSender', () => {
       expect(mockStartTyping).toHaveBeenCalledWith(bot, 100);
     });
 
+    it('accepts an optional label and ignores it (Telegram uses the native typing indicator)', () => {
+      sender.startTyping(100, 'Running agent…');
+      // Telegram client is called with only bot and userId — label is not forwarded
+      expect(mockStartTyping).toHaveBeenCalledWith(bot, 100);
+    });
+
     it('stores the returned interval so stopTyping can clear it', () => {
       const fakeHandle = 99 as unknown as ReturnType<typeof setInterval>;
       mockStartTyping.mockReturnValue(fakeHandle);

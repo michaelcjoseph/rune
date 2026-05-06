@@ -193,11 +193,16 @@ async function invokeSkill(
   args: string,
 ): Promise<void> {
   if (skill.kind === 'agent') {
-    const result = await runAgent(skill.name, args || message);
-    if (result.error || !result.text) {
-      throw new Error(result.error ?? 'Agent returned empty output');
+    sender.startTyping(userId, `Running ${skill.name}…`);
+    try {
+      const result = await runAgent(skill.name, args || message);
+      if (result.error || !result.text) {
+        throw new Error(result.error ?? 'Agent returned empty output');
+      }
+      await sender.send(userId, result.text);
+    } finally {
+      sender.stopTyping(userId);
     }
-    await sender.send(userId, result.text);
     return;
   }
   // Slash-kind dispatch. Mirrors the prefix chain at the top of
@@ -279,7 +284,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
 
   appendMessageToSession(userId, 'user', text);
 
-  sender.startTyping(userId);
+  sender.startTyping(userId, 'Thinking…');
   try {
     const result = await askClaudeWithContext(
       text,
@@ -288,7 +293,6 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
       session.model,
       CONVERSATION_TOOLS,
     );
-    sender.stopTyping(userId);
 
     if (result.error) {
       log.error('Conversation error', { error: result.error, sessionId: session.sessionId });
@@ -305,23 +309,24 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
     const reply = `${rawReply}\n\n_— chatting · /fresh to end_`;
     await sender.send(userId, reply);
   } catch (err) {
-    sender.stopTyping(userId);
     log.error('Conversation exception', { error: (err as Error).message });
     await sender.send(userId, `Error: ${(err as Error).message}`);
+  } finally {
+    sender.stopTyping(userId);
   }
 }
 
 async function handleLint(sender: MessageSender, userId: number): Promise<void> {
   const { lintKB } = await import('../../kb/engine.js');
-  sender.startTyping(userId);
+  sender.startTyping(userId, 'Checking knowledge base…');
   try {
     const result = await lintKB();
-    sender.stopTyping(userId);
     await sender.send(userId, result.report);
   } catch (err) {
-    sender.stopTyping(userId);
     log.error('Lint error', { error: (err as Error).message });
     await sender.send(userId, `Lint error: ${(err as Error).message}`);
+  } finally {
+    sender.stopTyping(userId);
   }
 }
 

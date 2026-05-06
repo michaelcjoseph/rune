@@ -29,15 +29,93 @@ describe('WebviewSender', () => {
     });
   });
 
-  describe('startTyping / stopTyping — no-ops', () => {
-    it('startTyping does not throw', () => {
+  describe('startTyping()', () => {
+    it('does nothing when no connections are registered', () => {
       const sender = new WebviewSender();
       expect(() => sender.startTyping(1)).not.toThrow();
     });
 
-    it('stopTyping does not throw', () => {
+    it('does nothing when the registered connection set is empty after unregister', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(1, ws);
+      sender.unregister(1, ws);
+      sender.startTyping(1, 'Working…');
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('sends a status frame with the provided label to open connections', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(1, ws);
+      sender.startTyping(1, 'Running agent…');
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual({ kind: 'status', label: 'Running agent…' });
+    });
+
+    it('uses the default label "Thinking…" when no label is provided', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(1, ws);
+      sender.startTyping(1);
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual({ kind: 'status', label: 'Thinking…' });
+    });
+
+    it('fans out the status frame to all open connections for the userId', () => {
+      const sender = new WebviewSender();
+      const ws1 = makeWs();
+      const ws2 = makeWs();
+      sender.register(1, ws1);
+      sender.register(1, ws2);
+      sender.startTyping(1, 'Loading…');
+      expect(ws1.send).toHaveBeenCalledOnce();
+      expect(ws2.send).toHaveBeenCalledOnce();
+    });
+
+    it('skips connections that are not OPEN', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs(3); // CLOSING
+      sender.register(1, ws);
+      sender.startTyping(1, 'Thinking…');
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stopTyping()', () => {
+    it('does nothing when no connections are registered', () => {
       const sender = new WebviewSender();
       expect(() => sender.stopTyping(1)).not.toThrow();
+    });
+
+    it('sends a status frame with label null to clear the indicator', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(1, ws);
+      sender.stopTyping(1);
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual({ kind: 'status', label: null });
+    });
+
+    it('fans out the clear frame to all open connections for the userId', () => {
+      const sender = new WebviewSender();
+      const ws1 = makeWs();
+      const ws2 = makeWs();
+      sender.register(1, ws1);
+      sender.register(1, ws2);
+      sender.stopTyping(1);
+      expect(ws1.send).toHaveBeenCalledOnce();
+      expect(ws2.send).toHaveBeenCalledOnce();
+    });
+
+    it('skips connections that are not OPEN', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs(3); // CLOSING
+      sender.register(1, ws);
+      sender.stopTyping(1);
+      expect(ws.send).not.toHaveBeenCalled();
     });
   });
 
