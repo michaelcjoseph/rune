@@ -1,3 +1,4 @@
+- Have Jarvis support both claude and gpt
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB
 - Update pyschology agent to use Adler's approach vs Freud's approach
