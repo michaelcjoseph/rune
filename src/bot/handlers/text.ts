@@ -384,54 +384,58 @@ async function handleModelSwitch(sender: MessageSender, userId: number, model: s
 }
 
 async function handleStart(sender: MessageSender, userId: number): Promise<void> {
-  const lines = [
-    'Jarvis — Second Brain',
-    '',
-    'Send any message to start a multi-turn chat with your vault. Jarvis leans Socratic — expect questions before answers on strategy/reflection. /fresh ends the thread; logging to journal also ends it.',
-    '',
-    'Commands:',
-    '/priorities — yesterday\'s priorities',
-    '/workout [home|gym] [mobility|endurance|strength|speed|power] — generate a tailored workout from goals, equipment, recent training, and Whoop recovery',
-    '/done-workout — log the last generated workout to today\'s journal',
-    '/study — current study progress and assignments',
-    '/family — 14-day family mention scan',
-    '/career — active job applications',
-    '/fresh — log conversation to journal, reset session',
-    '/fresh-full — log full verbatim transcript to journal with speaker labels, reset session',
-    '/clear — discard active session without journaling',
-    '/journal <text> — append entry to today\'s journal',
-    '/ask <question> — one-shot vault query',
-    '/kb <question> — query the knowledge base',
-    '/ingest [path] — ingest source into knowledge base',
-    '/seed [--dry-run] — bulk-seed KB from vault content',
-    '/lint — run wiki health check',
-    '/prep — run morning prep now',
-    '/status — show uptime and session info',
-    '/learn <text> — append a runtime learning (auto-prepended to future agents)',
-    '/learn-list — show current prepended learnings',
-    '',
-    'Sessions:',
-    '/health [focus] — health coaching session',
-    '/blog <topic> — blog writing session',
-    '',
-    'Library:',
-    '/library-sync — pull new Lenny posts and podcasts into the vault',
-    '',
-    'Reviews:',
-    '/daily [date] — process journal tags into JSON updates',
-    '/weekly [date] — end-of-week review interview',
-    '/monthly [month] — monthly review interview',
-    '/quarterly [Q1-Q4] — quarterly review interview',
-    '/yearly [year] — yearly review (7 Questions)',
-    '',
-    'Health:',
-    '/whoop — Whoop connection status or auth link',
-    '',
-    'Model (conversation defaults to opus):',
-    '/opus — max capability',
-    '/sonnet — balanced',
-    '/haiku — fast responses',
-  ];
+  const text = `# Jarvis — Second Brain
 
-  await sender.send(userId, lines.join('\n'));
+Send any message to start a multi-turn chat with your vault. Jarvis leans Socratic — expect questions before answers on strategy/reflection. \`/fresh\` ends the thread; logging to journal also ends it.
+
+**Commands**
+
+- \`/priorities\` — yesterday's priorities
+- \`/workout [home|gym] [mobility|endurance|strength|speed|power]\` — generate a tailored workout from goals, equipment, recent training, and Whoop recovery
+- \`/done-workout\` — log the last generated workout to today's journal
+- \`/study\` — current study progress and assignments
+- \`/family\` — 14-day family mention scan
+- \`/career\` — active job applications
+- \`/fresh\` — log conversation to journal, reset session
+- \`/fresh-full\` — log full verbatim transcript to journal with speaker labels, reset session
+- \`/clear\` — discard active session without journaling
+- \`/journal <text>\` — append entry to today's journal
+- \`/ask <question>\` — one-shot vault query
+- \`/kb <question>\` — query the knowledge base
+- \`/ingest [path]\` — ingest source into knowledge base
+- \`/seed [--dry-run]\` — bulk-seed KB from vault content
+- \`/lint\` — run wiki health check
+- \`/prep\` — run morning prep now
+- \`/status\` — show uptime and session info
+- \`/learn <text>\` — append a runtime learning (auto-prepended to future agents)
+- \`/learn-list\` — show current prepended learnings
+
+**Sessions**
+
+- \`/health [focus]\` — health coaching session
+- \`/blog <topic>\` — blog writing session
+
+**Library**
+
+- \`/library-sync\` — pull new Lenny posts and podcasts into the vault
+
+**Reviews**
+
+- \`/daily [date]\` — process journal tags into JSON updates
+- \`/weekly [date]\` — end-of-week review interview
+- \`/monthly [month]\` — monthly review interview
+- \`/quarterly [Q1-Q4]\` — quarterly review interview
+- \`/yearly [year]\` — yearly review (7 Questions)
+
+**Health**
+
+- \`/whoop\` — Whoop connection status or auth link
+
+**Model** (conversation defaults to opus)
+
+- \`/opus\` — max capability
+- \`/sonnet\` — balanced
+- \`/haiku\` — fast responses`;
+
+  await sender.send(userId, text);
 }
