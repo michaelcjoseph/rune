@@ -101,13 +101,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .message p:last-child { margin-bottom: 0; }
 .message ul, .message ol { padding-left: 1.4rem; margin-bottom: .5rem; }
 .message code { background: var(--bg3); padding: .1em .35em; border-radius: 3px; font-size: .88em; font-family: 'SF Mono', Menlo, monospace; }
-.message pre { margin: .5rem 0; border-radius: 6px; overflow: auto; }
-.message pre code { background: none; padding: 0; font-size: .82em; }
+.message pre { margin: .5rem 0; border-radius: 6px; overflow: auto; background: var(--bg3); }
+.message pre code { background: transparent; padding: .75rem 1rem; display: block; font-size: .82em; }
 .message h1,.message h2,.message h3 { margin: .75rem 0 .35rem; font-weight: 600; }
 .message blockquote { border-left: 3px solid var(--border); padding-left: .75rem; color: var(--text2); margin: .5rem 0; }
 .message a { color: var(--accent); text-decoration: none; }
 .message a:hover { text-decoration: underline; }
 .message .wikilink { color: #a8c8ff; }
+.message hr { border: none; border-top: 1px solid var(--border); margin: .75rem 0; }
+.message table { border-collapse: collapse; width: 100%; margin: .5rem 0; font-size: .88em; }
+.message th, .message td { border: 1px solid var(--border); padding: .3rem .6rem; text-align: left; }
+.message th { background: var(--bg3); font-weight: 600; }
+.message tr:nth-child(even) td { background: rgba(255,255,255,.025); }
 
 /* Approval buttons */
 .approval-bar { margin-top: .75rem; display: flex; flex-direction: column; gap: .4rem; }

@@ -22,8 +22,24 @@
     return; // Don't init app while redirecting
   }
 
-  // Markdown renderer
-  const md = window.markdownit({ html: false, linkify: true, typographer: true });
+  // Markdown renderer — highlight.js runs inline during rendering so language
+  // hints from fenced code blocks (```python) are respected and streaming
+  // re-renders don't re-run hljs on already-highlighted DOM nodes.
+  const md = window.markdownit({
+    html: false,
+    linkify: true,
+    typographer: true,
+    highlight: function(str, lang) {
+      if (lang && window.hljs.getLanguage(lang)) {
+        try {
+          return '<pre><code class="hljs">' +
+            window.hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+            '</code></pre>';
+        } catch (_) {}
+      }
+      return ''; // markdown-it escapes and wraps the fallback
+    },
+  });
   const vaultName = document.querySelector('meta[name="obsidian-vault"]')?.content ?? '';
 
   function escHtml(s) {
@@ -38,12 +54,6 @@
       return `<a href="${escHtml(href)}" class="wikilink">${escHtml(title)}</a>`;
     });
     return html;
-  }
-
-  function highlightBlocks(container) {
-    container.querySelectorAll('pre code').forEach(block => {
-      window.hljs.highlightElement(block);
-    });
   }
 
   // Message history ring buffer (last 20 user messages)
@@ -76,7 +86,6 @@
     div.className = `message ${role}`;
     if (id) div.id = id;
     div.innerHTML = html;
-    highlightBlocks(div);
     messagesEl.appendChild(div);
     scrollToBottom();
     return div;
