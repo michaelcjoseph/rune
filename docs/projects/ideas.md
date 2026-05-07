@@ -2,6 +2,9 @@
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB
 - Update pyschology agent to use Adler's approach vs Freud's approach
+- Multiple tabs for webview for different sessions
+- Update /study to be like spaced repetition quizes for learning
+- Stream Claude CLI permission prompts to the webview as approval events. (the same { approval: { prompt, options } } mechanism already used by review sessions), then piping the user's response back to Claude's stdin. That's non-trivial — requires switching from stdin: 'ignore' to a piped stdin, parsing the permission prompt format from Claude CLI's output stream, and wiring a round-trip through the WebSocket.
 - Track relay roadmap and priorities in pkms as well alongside decisions (that way I don't have to reiterate certain priorities on projects in convo with Jarvis)
 - set up child developmental agent support to help with monitoring progress and planning weekly
 - Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook

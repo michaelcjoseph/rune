@@ -236,7 +236,7 @@ async function invokeSkill(
   }
 }
 
-const VAULT_SYSTEM_PROMPT = `You are Jarvis, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
+const VAULT_SYSTEM_PROMPT_BASE = `You are Jarvis, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
 
 DEFAULT POSTURE — thinking partner. Lean Socratic. For strategic, reflective, or open-ended questions, your first move is to ask before you answer. Don't solve the problem for them; help them clarify their own thinking. Open with one or two sharp probing questions grounded in something specific you found in their vault. After they respond, offer your view.
 
@@ -265,6 +265,11 @@ HOW TO ANSWER:
 - Never write files. If the question implies a write, say so and point to the right slash command.
 - The user can end the thread with /fresh, or by asking you to log the conversation to the journal.`;
 
+function getVaultSystemPrompt(): string {
+  if (!config.WORKSPACE_DIR) return VAULT_SYSTEM_PROMPT_BASE;
+  return `${VAULT_SYSTEM_PROMPT_BASE}\n\nWORKSPACE: You also have read access to ${config.WORKSPACE_DIR}. When the user references workspace files or project code, read them directly from that path.`;
+}
+
 const CONVERSATION_TOOLS = [
   'Read',
   'Glob',
@@ -289,7 +294,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
-      VAULT_SYSTEM_PROMPT,
+      getVaultSystemPrompt(),
       session.model,
       CONVERSATION_TOOLS,
     );

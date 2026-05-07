@@ -87,8 +87,9 @@ export async function waitForActiveProcesses(timeoutMs = 5_000): Promise<void> {
 
 function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
+  const fullArgs = config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR, ...args] : args;
   return new Promise((resolve) => {
-    const child = spawn(CLAUDE_BIN, args, {
+    const child = spawn(CLAUDE_BIN, fullArgs, {
       cwd: config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Expose PROJECT_ROOT so agents that shell out can locate the Jarvis
