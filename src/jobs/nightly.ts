@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { platform } from 'node:os';
 import type { NotificationBus } from '../transport/notification-bus.js';
 import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
@@ -6,7 +8,7 @@ import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import { extractMeetings, appendProjectDecisions } from './meeting-extract.js';
-import { askClaudeOneShot, runAgent } from '../ai/claude.js';
+import { askClaudeOneShot, runAgent, registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { getTodayDate, getTodayFilename, getDayOfWeek } from '../utils/time.js';
@@ -443,13 +445,30 @@ export function formatSummary(result: NightlyResult): string {
   return `Nightly complete:\n${lines.join('\n')}`;
 }
 
-export async function runNightly(bus: NotificationBus): Promise<void> {
+/** Prevent macOS idle/system sleep while fn runs. No-op on non-darwin platforms. */
+async function withNoSleep<T>(fn: () => Promise<T>): Promise<T> {
+  if (platform() !== 'darwin') return fn();
+  // -i: prevent idle sleep  -s: prevent system sleep (ignored on battery)
+  const caffeinate = spawn('caffeinate', ['-is'], { stdio: 'ignore' });
+  caffeinate.on('error', (err) => log.warn('caffeinate spawn error', { error: err.message }));
+  registerActiveProcess(caffeinate);
   try {
-    const result = await executeNightly();
-    const summary = formatSummary(result);
-    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: summary });
-  } catch (err) {
-    log.error('Nightly processing failed', { error: String(err) });
-    bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Nightly processing failed: ${sanitizeErrorForTelegram(String(err))}` });
+    return await fn();
+  } finally {
+    unregisterActiveProcess(caffeinate);
+    if (!caffeinate.killed) caffeinate.kill();
   }
+}
+
+export async function runNightly(bus: NotificationBus): Promise<void> {
+  await withNoSleep(async () => {
+    try {
+      const result = await executeNightly();
+      const summary = formatSummary(result);
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: summary });
+    } catch (err) {
+      log.error('Nightly processing failed', { error: String(err) });
+      bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: `Nightly processing failed: ${sanitizeErrorForTelegram(String(err))}` });
+    }
+  });
 }
