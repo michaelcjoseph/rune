@@ -22,7 +22,11 @@ interface ClassifyResult {
 }
 
 function parseClassifyResult(text: string): ClassifyResult | null {
-  const lines = text.split('\n');
+  // Strip markdown noise (code fences, headers, bold labels) before matching
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => !l.startsWith('```') && !/^#{1,6}\s/.test(l) && !l.startsWith('**'));
   const get = (prefix: string): string | undefined =>
     lines.find((l) => l.startsWith(prefix))?.slice(prefix.length).trim();
 
@@ -40,6 +44,12 @@ function parseClassifyResult(text: string): ClassifyResult | null {
     title,
     details,
   };
+}
+
+// Returns the first #tag in the caption; first-wins is intentional (captions are short).
+function extractCaptionTag(caption: string): string | null {
+  const match = caption.match(/#(\w+)/);
+  return match ? `#${match[1]}` : null;
 }
 
 async function downloadPhoto(bot: TelegramBot, fileId: string): Promise<string> {
@@ -103,12 +113,15 @@ Read the image file above to see the photo.${captionNote}`;
     log.info('Photo classified', { classification: classified.classification, route: classified.route, title: classified.title });
 
     const ts = getTimestamp();
+    const captionTag = extractCaptionTag(caption);
 
     switch (classified.route) {
-      case 'journal':
-        appendToJournal(`- ${ts} ${classified.title}\n\t- ${classified.details}`);
-        await sender.send(userId, `Logged to journal: ${classified.title}`);
+      case 'journal': {
+        const prefix = captionTag ? `${captionTag} ` : '';
+        appendToJournal(`- ${ts} ${prefix}${classified.title}\n\t- ${classified.details}`);
+        await sender.send(userId, `Logged to journal${captionTag ? ` with ${captionTag}` : ''}: ${classified.title}`);
         break;
+      }
 
       case 'kb-ingest': {
         const filename = `photo-${photo.file_id.slice(0, 12)}.md`;
@@ -120,9 +133,12 @@ Read the image file above to see the photo.${captionNote}`;
       }
 
       case 'data-update': {
-        const tag = classified.classification === 'book' ? '#books'
+        const classTag = classified.classification === 'book' ? '#books'
           : classified.classification === 'receipt' ? '#receipt'
           : `#${classified.classification}`;
+        // Caption tag supplements the classification tag (e.g. #diet alongside #food),
+        // but never replaces it — #books and #receipt are required for nightly routing.
+        const tag = captionTag && captionTag !== classTag ? `${classTag} ${captionTag}` : classTag;
         appendToJournal(`- ${ts} ${tag} ${classified.title}\n\t- ${classified.details}`);
         await sender.send(userId, `Logged to journal with ${tag}: ${classified.title}\n\nWill be processed in nightly tag review.`);
         break;

@@ -83,10 +83,10 @@ describe('ai/claude', () => {
       await askClaudeOneShot('test prompt');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'opus'],
+        ['--dangerously-skip-permissions', '-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'opus'],
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
-      const prompt = spawnMock.mock.calls[0]![1][1] as string;
+      const prompt = spawnMock.mock.calls[0]![1][2] as string;
       expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);
     });
 
@@ -120,7 +120,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'new-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--session-id', 'new-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', '-p', 'hello', '--session-id', 'new-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -134,7 +134,7 @@ describe('ai/claude', () => {
       expect(result.text).toBe('second');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'msg2', '--resume', 'resume-test', '--model', 'opus'],
+        ['--dangerously-skip-permissions', '-p', 'msg2', '--resume', 'resume-test', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -145,7 +145,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'restored-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--resume', 'restored-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', '-p', 'hello', '--resume', 'restored-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -155,7 +155,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'haiku-sess', 'haiku');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'hello', '--session-id', 'haiku-sess', '--model', 'haiku'],
+        ['--dangerously-skip-permissions', '-p', 'hello', '--session-id', 'haiku-sess', '--model', 'haiku'],
         expect.any(Object),
       );
     });
@@ -168,7 +168,7 @@ describe('ai/claude', () => {
       await askClaude('retry', 'fail-sess');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['-p', 'retry', '--session-id', 'fail-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', '-p', 'retry', '--session-id', 'fail-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });

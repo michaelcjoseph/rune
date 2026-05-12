@@ -50,6 +50,8 @@ vi.mock('../kb/engine.js', () => ({
 vi.mock('../ai/claude.js', () => ({
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
+  registerActiveProcess: vi.fn(),
+  unregisterActiveProcess: vi.fn(),
 }));
 vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn(), writeVaultFile: vi.fn() }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));

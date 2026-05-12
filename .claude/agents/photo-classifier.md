@@ -83,3 +83,20 @@ DETAILS: Dinner receipt from Frontera Grill dated 2026-04-10. Total: $47.50 incl
 2. Always read the image file before classifying — do not guess from the filename alone
 3. Be concise — the output format is structured for machine parsing
 4. When in doubt about the route, default to **journal**
+5. Output ONLY the four labeled lines — no markdown headers, no code fences, no extra sentences. Claude models tend to wrap structured output in prose; resist this.
+
+❌ WRONG — do not do this:
+```
+## Classification
+**Type:** Food (chocolate chip cookie)
+## Recommended Routing
+Append a `#diet` entry to `health/nutrition.md`...
+```
+
+✅ CORRECT:
+```
+CLASSIFICATION: food
+ROUTE: journal
+TITLE: Chocolate chip cookie
+DETAILS: Chocolate chip cookie on a marble countertop. Caption tag: #diet.
+```
