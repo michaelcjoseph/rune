@@ -87,6 +87,10 @@ export function deleteReviewSession(chatId: number): void {
   persistReviewSessions();
 }
 
+export function getAllReviewSessions(): Map<number, ReviewSession> {
+  return sessions;
+}
+
 export function restoreReviewSessions(): void {
   try {
     const data = readFileSync(config.REVIEW_SESSIONS_FILE, 'utf8');

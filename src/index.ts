@@ -6,7 +6,7 @@ import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus
 import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
 import { workRunApplier } from './jobs/work-runner.js';
-import { restoreReviewSessions, persistReviewSessions } from './reviews/session.js';
+import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
@@ -33,6 +33,9 @@ for (const [, session] of getAllSessions()) {
   markSessionCreated(session.sessionId);
 }
 restoreReviewSessions();
+for (const [, session] of getAllReviewSessions()) {
+  markSessionCreated(session.claudeSessionId);
+}
 
 // Start services
 const bot = createBot();
