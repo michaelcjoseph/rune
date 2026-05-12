@@ -87,7 +87,9 @@ export async function waitForActiveProcesses(timeoutMs = 5_000): Promise<void> {
 
 function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
-  const fullArgs = config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR, ...args] : args;
+  const fullArgs = config.WORKSPACE_DIR
+    ? ['--dangerouslySkipPermissions', '--add-dir', config.WORKSPACE_DIR, ...args]
+    : ['--dangerouslySkipPermissions', ...args];
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
       cwd: config.VAULT_DIR,
