@@ -149,6 +149,17 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['show my learnings', 'what have you learned', 'list my preferences'],
   },
   {
+    name: 'new-project',
+    description: 'Start a product interview to plan a new Jarvis project and generate spec, tasks, and test plan.',
+    triggers: [
+      'plan a new project',
+      'start a new feature',
+      'I want to build something new',
+      'new project setup',
+      'create a project spec',
+    ],
+  },
+  {
     name: 'fresh',
     description: 'Save the conversation to the journal and reset the session.',
     triggers: ['start fresh', 'reset the session', 'clear the context'],

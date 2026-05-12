@@ -26,6 +26,7 @@ import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
 import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
+import { handleNewProject } from '../commands/new-project.js';
 import { handleLibrarySync } from '../commands/library-sync.js';
 import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
@@ -78,6 +79,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/career')) return handleCareer(sender, userId);
   if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
   if (text.startsWith('/blog')) return handleBlog(sender, userId, text.slice('/blog'.length).trim());
+  if (text.startsWith('/new-project')) return handleNewProject(sender, userId, text.slice('/new-project'.length).trim());
   if (text.startsWith('/library-sync')) return handleLibrarySync(sender, userId);
   // /learn-list must come before /learn so the longer prefix wins.
   if (text.startsWith('/learn-list')) return handleLearnList(sender, userId);

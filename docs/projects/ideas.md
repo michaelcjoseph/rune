@@ -1,5 +1,8 @@
 - Update /study to be like spaced repetition quizes for learning
 - Have Jarvis support both claude and codex
+- Identify if we can benefit from https://github.com/everyinc/compound-engineering-plugin
+- Identify if we there are takeaways from OpenClaw we can add to Jarvis
+- Revisit the structure of Jarvis to see how much of it can be simplified to use Claude/Opex setups and its just a harness that triggers things
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB
 - Update pyschology agent to use Adler's approach vs Freud's approach
