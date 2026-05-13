@@ -28,7 +28,8 @@ vi.mock('../kb/queue.js', () => ({
 }));
 
 type WatchCallback = (event: string, filename: string | null) => void;
-let capturedWatchCallback: WatchCallback | null = null;
+// Map from watched dir path to captured callback, so tests can fire events for specific dirs
+const capturedWatchCallbacks = new Map<string, WatchCallback>();
 const mockWatcherClose = vi.fn();
 let mockedReaddirContents: string[] = [];
 
@@ -40,12 +41,21 @@ vi.mock('node:fs', async (importOriginal) => {
     readdirSync: vi.fn().mockImplementation(() => mockedReaddirContents),
     statSync: vi.fn().mockReturnValue({ size: 100 }),
     readFileSync: vi.fn().mockReturnValue(''),
-    watch: vi.fn().mockImplementation((_dir: string, cb: WatchCallback) => {
-      capturedWatchCallback = cb;
+    watch: vi.fn().mockImplementation((dir: string, cb: WatchCallback) => {
+      capturedWatchCallbacks.set(dir, cb);
       return { close: mockWatcherClose };
     }),
   };
 });
+
+// Helper: fire a watch event as if it came from the given Readwise sub-directory.
+// tmpDir is defined below; we reference it here via closure.
+function fireEvent(subDir: string, event: string, filename: string | null) {
+  const dir = join(tmpDir, subDir);
+  const cb = capturedWatchCallbacks.get(dir);
+  if (!cb) throw new Error(`No watch callback registered for ${dir}`);
+  cb(event, filename);
+}
 
 // All module imports at the top level (ESM top-level await)
 const { extractTitle, startWatcher, stopWatcher } = await import('./watcher.js');
@@ -100,7 +110,7 @@ describe('extractTitle', () => {
 
 describe('startWatcher + event handling', () => {
   beforeEach(() => {
-    capturedWatchCallback = null;
+    capturedWatchCallbacks.clear();
     mockedReaddirContents = [];
     mockEnqueue.mockReset();
     mockWatcherClose.mockReset();
@@ -119,18 +129,19 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'existing.md');
+    // Fire event for a file that was already present when the watcher started
+    fireEvent('Readwise/Articles', 'rename', 'existing.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
     expect(bus.publish).not.toHaveBeenCalled();
   });
 
-  it('calls enqueue with the correct relative path for a new file', () => {
+  it('calls enqueue with the correct relative path for a new file in Articles', () => {
     mockedReaddirContents = [];
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'new-article.md');
+    fireEvent('Readwise/Articles', 'rename', 'new-article.md');
 
     expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Articles/new-article.md');
   });
@@ -140,7 +151,7 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'cool-article.md');
+    fireEvent('Readwise/Articles', 'rename', 'cool-article.md');
 
     expect(bus.publish).toHaveBeenCalledOnce();
     const { userId, text } = bus.publish.mock.calls[0]![0] as { kind: string; userId: number; text: string };
@@ -154,8 +165,8 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'dup.md');
-    capturedWatchCallback?.('rename', 'dup.md');
+    fireEvent('Readwise/Articles', 'rename', 'dup.md');
+    fireEvent('Readwise/Articles', 'rename', 'dup.md');
 
     expect(mockEnqueue).toHaveBeenCalledOnce();
     expect(bus.publish).toHaveBeenCalledOnce();
@@ -166,8 +177,8 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'image.png');
-    capturedWatchCallback?.('rename', 'document.pdf');
+    fireEvent('Readwise/Articles', 'rename', 'image.png');
+    fireEvent('Readwise/Articles', 'rename', 'document.pdf');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
     expect(bus.publish).not.toHaveBeenCalled();
@@ -178,7 +189,7 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('change', 'article.md');
+    fireEvent('Readwise/Articles', 'change', 'article.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
     expect(bus.publish).not.toHaveBeenCalled();
@@ -189,7 +200,7 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', null);
+    fireEvent('Readwise/Articles', 'rename', null as unknown as string);
 
     expect(mockEnqueue).not.toHaveBeenCalled();
   });
@@ -202,7 +213,7 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'deleted.md');
+    fireEvent('Readwise/Articles', 'rename', 'deleted.md');
 
     expect(mockEnqueue).not.toHaveBeenCalled();
     expect(bus.publish).not.toHaveBeenCalled();
@@ -214,37 +225,133 @@ describe('startWatcher + event handling', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
 
-    capturedWatchCallback?.('rename', 'my-article.md');
+    fireEvent('Readwise/Articles', 'rename', 'my-article.md');
 
     expect(bus.publish).toHaveBeenCalledOnce();
     const { text } = bus.publish.mock.calls[0]![0] as { kind: string; userId: number; text: string };
     expect(text).toContain('my-article');
   });
 
-  it('does not start watcher when Readwise directory does not exist', () => {
+  it('does not start any watcher when all Readwise directories do not exist', () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.watch).mockClear();
+    capturedWatchCallbacks.clear();
     const bus = makeFakeBus();
 
     startWatcher(bus as never);
 
     expect(fs.watch).not.toHaveBeenCalled();
-    expect(capturedWatchCallback).toBeNull();
+    expect(capturedWatchCallbacks.size).toBe(0);
+  });
+});
+
+describe('multi-directory watching', () => {
+  beforeEach(() => {
+    capturedWatchCallbacks.clear();
+    mockedReaddirContents = [];
+    mockEnqueue.mockReset();
+    mockWatcherClose.mockReset();
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.statSync).mockReturnValue({ size: 100 } as ReturnType<typeof fs.statSync>);
+    vi.mocked(fs.readFileSync).mockReturnValue('# Title\n\nContent.');
+    vi.mocked(fs.readdirSync).mockImplementation(() => mockedReaddirContents as unknown as ReturnType<typeof fs.readdirSync>);
+  });
+
+  afterEach(() => {
+    stopWatcher();
+  });
+
+  it('registers watch callbacks for all three Readwise directories', () => {
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+    expect(capturedWatchCallbacks.size).toBe(3);
+    expect(capturedWatchCallbacks.has(join(tmpDir, 'Readwise/Articles'))).toBe(true);
+    expect(capturedWatchCallbacks.has(join(tmpDir, 'Readwise/Tweets'))).toBe(true);
+    expect(capturedWatchCallbacks.has(join(tmpDir, 'Readwise/Books'))).toBe(true);
+  });
+
+  it('enqueues with Readwise/Tweets prefix for a new tweet file', () => {
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    fireEvent('Readwise/Tweets', 'rename', 'my-tweet.md');
+
+    expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Tweets/my-tweet.md');
+  });
+
+  it('enqueues with Readwise/Books prefix for a new book file', () => {
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    fireEvent('Readwise/Books', 'rename', 'my-book.md');
+
+    expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Books/my-book.md');
+  });
+
+  it('same filename in different directories are tracked independently (no cross-dir dedup)', () => {
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    fireEvent('Readwise/Articles', 'rename', 'note.md');
+    fireEvent('Readwise/Tweets', 'rename', 'note.md');
+    fireEvent('Readwise/Books', 'rename', 'note.md');
+
+    expect(mockEnqueue).toHaveBeenCalledTimes(3);
+    expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Articles/note.md');
+    expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Tweets/note.md');
+    expect(mockEnqueue).toHaveBeenCalledWith('Readwise/Books/note.md');
+  });
+
+  it('seeds seen-set with full relative path so Tweets pre-existing file is not re-notified', () => {
+    mockedReaddirContents = ['preexisting.md'];
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    fireEvent('Readwise/Tweets', 'rename', 'preexisting.md');
+
+    expect(mockEnqueue).not.toHaveBeenCalled();
+    expect(bus.publish).not.toHaveBeenCalled();
+  });
+
+  it('starts only available directories when some do not exist', () => {
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      // Only Articles exists
+      return String(p).endsWith('Readwise/Articles');
+    });
+    vi.mocked(fs.watch).mockClear();
+    capturedWatchCallbacks.clear();
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    expect(capturedWatchCallbacks.size).toBe(1);
+    expect(capturedWatchCallbacks.has(join(tmpDir, 'Readwise/Articles'))).toBe(true);
+  });
+
+  it('notification text says "New Readwise content" (updated message)', () => {
+    const bus = makeFakeBus();
+    startWatcher(bus as never);
+
+    fireEvent('Readwise/Tweets', 'rename', 'tweet.md');
+
+    const { text } = bus.publish.mock.calls[0]![0] as { text: string };
+    expect(text).toContain('New Readwise content:');
   });
 });
 
 describe('stopWatcher', () => {
   beforeEach(() => {
+    capturedWatchCallbacks.clear();
     mockWatcherClose.mockReset();
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readdirSync).mockImplementation(() => [] as unknown as ReturnType<typeof fs.readdirSync>);
   });
 
-  it('closes the fs.watch handle when called after startWatcher', () => {
+  it('closes all fs.watch handles (one per watched directory) when called after startWatcher', () => {
     const bus = makeFakeBus();
     startWatcher(bus as never);
     stopWatcher();
-    expect(mockWatcherClose).toHaveBeenCalledOnce();
+    // Three dirs: Articles, Tweets, Books
+    expect(mockWatcherClose).toHaveBeenCalledTimes(3);
   });
 
   it('is safe to call stopWatcher when watcher was never started', () => {

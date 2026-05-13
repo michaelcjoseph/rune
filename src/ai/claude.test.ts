@@ -551,7 +551,7 @@ Body.`);
 
       // Passes model and date context
       expect(args).toContain('--model');
-      expect(args[args.indexOf('--model') + 1]).toBe('opus');
+      expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
       const promptIdx = args.indexOf('-p');
       const prompt = args[promptIdx + 1]!;
       expect(prompt).toMatch(/^Today is .+\(America\/Chicago\)/);

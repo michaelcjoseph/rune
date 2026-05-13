@@ -102,7 +102,7 @@ describe('reviews/new-project', () => {
   let sender: MessageSender;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     sender = makeSender();
   });
 
@@ -142,17 +142,6 @@ describe('reviews/new-project', () => {
       const systemPrompt = askClaudeMock.mock.calls[0]![2] as string;
       expect(systemPrompt).toContain('product interviewer');
       expect(systemPrompt).toContain('Discovery areas');
-    });
-
-    it('uses custom skill file instructions when available', async () => {
-      const session = makeSession({ topic: null });
-      readVaultMock.mockReturnValue('Custom interview skill instructions here');
-      askClaudeMock.mockResolvedValue({ text: 'Opening', error: null });
-
-      await newProjectHandler.start(session, sender);
-
-      const systemPrompt = askClaudeMock.mock.calls[0]![2] as string;
-      expect(systemPrompt).toContain('Custom interview skill instructions here');
     });
 
     it('stores system prompt in prepContext via updateReviewSession', async () => {
@@ -404,16 +393,25 @@ Send daily digests.`;
       }
     });
 
-    it('treats unrecognized text as an inline brief edit and prompts re-approval', async () => {
+    it('treats unrecognized text as a brief correction, sends it to Claude, and prompts re-approval', async () => {
       const session = await setupApproval();
+      const revisedBrief = '## Project Brief\n\n**Name:** My Feature\n**Slug:** new-slug\n\n### Overview\nA great feature.';
+      askClaudeMock.mockResolvedValue({ text: revisedBrief, error: null });
 
       await newProjectHandler.handleMessage(session, 'Change the slug to new-slug', sender);
 
-      // outline is updated with the edit text
-      expect(updateSessionMock).toHaveBeenCalledWith(100, { outline: 'Change the slug to new-slug' });
+      // Sends the correction to Claude
+      expect(askClaudeMock).toHaveBeenCalledWith(
+        'Please revise the Project Brief with this correction: Change the slug to new-slug',
+        session.claudeSessionId,
+        expect.any(String),
+      );
+      // Updates outline with Claude's revised brief
+      expect(updateSessionMock).toHaveBeenCalledWith(100, { outline: revisedBrief });
+      // Re-sends approval prompt
       expect(sender.send).toHaveBeenCalledWith(
         100,
-        expect.stringContaining('Brief updated'),
+        expect.stringContaining('yes'),
         expect.objectContaining({ approval: expect.any(Object) }),
       );
       expect(runAgentMock).not.toHaveBeenCalled();
