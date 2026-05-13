@@ -72,6 +72,18 @@ When ready, output the brief using EXACTLY this format (the ## header triggers t
 ### Open Questions
 - [Unresolved items, or "None" if resolved]`;
 
+const SELF_CRITIQUE_PROMPT = `Review the Project Brief you just wrote and perform a self-critique before presenting it to the user.
+
+Check for:
+1. Vague or placeholder sections — every section should have concrete, specific content
+2. Requirements — must be in WHEN/THEN style and implementable
+3. Technical Approach — should name real Jarvis modules (src/ paths, existing patterns) and specific integration points
+4. Implementation Phases — should be realistic, sequenced, and scoped to actual deliverables
+5. Gaps — anything discussed in the interview that didn't make it into the brief
+6. Open Questions — only list truly unresolved items; resolve anything you can from the interview context
+
+Fix all issues you find, then output the improved Project Brief using the exact same ## Project Brief format.`;
+
 const APPROVAL_OPTIONS = [
   { value: 'yes', label: 'Approve & write spec' },
   { value: 'cancel', label: 'Cancel' },
@@ -169,9 +181,21 @@ async function handleInterview(session: ReviewSession, text: string, sender: Mes
     const briefIdx = responseText.toLowerCase().indexOf(OUTLINE_MARKER_LOWER);
 
     if (briefIdx !== -1) {
-      const brief = responseText.slice(briefIdx).trim();
-      updateReviewSession(session.chatId, { outline: brief, phase: 'approval' });
-      await sender.send(session.chatId, responseText);
+      const preamble = responseText.slice(0, briefIdx).trim();
+      if (preamble) await sender.send(session.chatId, preamble);
+
+      await sender.send(session.chatId, 'Brief drafted — reviewing for gaps...');
+      sender.startTyping(session.chatId);
+
+      const improvedBrief = await applySelfCritique(
+        responseText.slice(briefIdx).trim(),
+        session.claudeSessionId,
+        systemPrompt,
+      );
+      sender.stopTyping(session.chatId);
+
+      updateReviewSession(session.chatId, { outline: improvedBrief, phase: 'approval' });
+      await sender.send(session.chatId, improvedBrief);
       await sender.send(session.chatId, '\nReply *yes* to generate spec/tasks/test-plan, *cancel* to stop, or send corrections to the brief.', {
         approval: { prompt: 'Approve and write project files?', options: APPROVAL_OPTIONS },
       });
@@ -181,6 +205,17 @@ async function handleInterview(session: ReviewSession, text: string, sender: Mes
   } catch (err) {
     sender.stopTyping(session.chatId);
     throw err;
+  }
+}
+
+async function applySelfCritique(draft: string, sessionId: string, systemPrompt: string): Promise<string> {
+  try {
+    const result = await askClaudeWithContext(SELF_CRITIQUE_PROMPT, sessionId, systemPrompt);
+    if (result.error || !result.text) return draft;
+    const idx = result.text.toLowerCase().indexOf(OUTLINE_MARKER_LOWER);
+    return idx !== -1 ? result.text.slice(idx).trim() : draft;
+  } catch {
+    return draft;
   }
 }
 

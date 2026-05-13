@@ -288,40 +288,85 @@ describe('reviews/new-project', () => {
   });
 
   describe('handleMessage — interview phase (brief detected)', () => {
-    it('transitions to approval when Claude response contains "## project brief"', async () => {
-      // First call start() to populate sessionPrompts
-      const session = makeSession({ phase: 'prep' });
-      readVaultMock.mockReturnValue(null);
-      askClaudeMock.mockResolvedValue({ text: 'Opening question', error: null });
-      await newProjectHandler.start(session, sender);
-
-      vi.clearAllMocks();
-      sender = makeSender();
-
-      const briefResponse = `Here's your project brief:
-
-## Project Brief
+    const preamble = "Here's your project brief:";
+    const firstDraft = `## Project Brief
 
 **Name:** Email Digest
 **Slug:** email-digest
 
 ### Overview
 Send daily digests.`;
-      askClaudeMock.mockResolvedValue({ text: briefResponse, error: null });
+    const briefResponse = `${preamble}\n\n${firstDraft}`;
 
-      const interviewSession = makeSession({ phase: 'interview', claudeSessionId: session.claudeSessionId });
+    const improvedBrief = `## Project Brief
+
+**Name:** Email Digest
+**Slug:** email-digest
+
+### Overview
+Send daily digests to keep you informed.
+
+### Requirements
+WHEN the user runs /digest THEN Jarvis sends a summary of today's articles.`;
+
+    async function setupInterview() {
+      const session = makeSession({ phase: 'prep' });
+      readVaultMock.mockReturnValue(null);
+      askClaudeMock.mockResolvedValueOnce({ text: 'Opening question', error: null });
+      await newProjectHandler.start(session, sender);
+      vi.clearAllMocks();
+      sender = makeSender();
+      return makeSession({ phase: 'interview', claudeSessionId: session.claudeSessionId });
+    }
+
+    it('runs self-critique, stores improved brief, and transitions to approval', async () => {
+      const interviewSession = await setupInterview();
+      askClaudeMock.mockResolvedValueOnce({ text: briefResponse, error: null }); // interview turn
+      askClaudeMock.mockResolvedValueOnce({ text: improvedBrief, error: null }); // self-critique
+
       await newProjectHandler.handleMessage(interviewSession, 'sounds good', sender);
 
-      expect(updateSessionMock).toHaveBeenCalledWith(
-        100,
-        expect.objectContaining({ phase: 'approval', outline: expect.stringContaining('## Project Brief') }),
-      );
-      // Sends the full response and the approval prompt
-      expect(sender.send).toHaveBeenCalledWith(100, briefResponse);
+      // Sends preamble, status message, improved brief, then approval prompt
+      expect(sender.send).toHaveBeenCalledWith(100, preamble);
+      expect(sender.send).toHaveBeenCalledWith(100, 'Brief drafted — reviewing for gaps...');
+      expect(sender.send).toHaveBeenCalledWith(100, improvedBrief);
       expect(sender.send).toHaveBeenCalledWith(
         100,
         expect.stringContaining('yes'),
         expect.objectContaining({ approval: expect.any(Object) }),
+      );
+      // Stores improved brief, not the first draft
+      expect(updateSessionMock).toHaveBeenCalledWith(
+        100,
+        expect.objectContaining({ phase: 'approval', outline: improvedBrief }),
+      );
+    });
+
+    it('falls back to original brief if self-critique returns no ## Project Brief marker', async () => {
+      const interviewSession = await setupInterview();
+      askClaudeMock.mockResolvedValueOnce({ text: briefResponse, error: null });
+      askClaudeMock.mockResolvedValueOnce({ text: 'I could not improve this brief.', error: null });
+
+      await newProjectHandler.handleMessage(interviewSession, 'sounds good', sender);
+
+      // Falls back to the first draft
+      expect(updateSessionMock).toHaveBeenCalledWith(
+        100,
+        expect.objectContaining({ outline: firstDraft }),
+      );
+      expect(sender.send).toHaveBeenCalledWith(100, firstDraft);
+    });
+
+    it('falls back to original brief if self-critique call errors', async () => {
+      const interviewSession = await setupInterview();
+      askClaudeMock.mockResolvedValueOnce({ text: briefResponse, error: null });
+      askClaudeMock.mockResolvedValueOnce({ text: null, error: 'timeout' });
+
+      await newProjectHandler.handleMessage(interviewSession, 'sounds good', sender);
+
+      expect(updateSessionMock).toHaveBeenCalledWith(
+        100,
+        expect.objectContaining({ outline: firstDraft }),
       );
     });
   });
