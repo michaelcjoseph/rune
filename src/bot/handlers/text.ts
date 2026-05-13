@@ -424,6 +424,7 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 
 **Sessions**
 
+- \`/new-project [topic]\` — product interview → spec/tasks/test-plan for a new Jarvis project
 - \`/health [focus]\` — health coaching session
 - \`/blog <topic>\` — blog writing session
 
