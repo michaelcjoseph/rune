@@ -205,6 +205,10 @@ export async function askHaikuOneShot(prompt: string, timeoutMs?: number): Promi
 export interface AgentDef {
   prompt: string;
   tools: string[];
+  /** Claude model override for this agent (e.g. 'sonnet', 'haiku'). When set,
+   *  takes precedence over config.AGENT_MODEL so individual agents can opt into
+   *  a lighter or more instruction-following model without a global setting change. */
+  model?: string;
   /** One-line agent description from frontmatter. Used by the skill registry
    *  to give the resolver a compact label for each routable skill. */
   description?: string;
@@ -263,6 +267,7 @@ export function loadAgentDef(agentName: string): AgentDef {
   const tools = parseYamlListField(frontmatter, 'tools');
   const triggers = parseYamlListField(frontmatter, 'triggers');
 
+  const model = parseYamlScalarField(frontmatter, 'model');
   const description = parseYamlScalarField(frontmatter, 'description');
   const cron = parseYamlScalarField(frontmatter, 'cron');
   const cronArgs = parseYamlScalarField(frontmatter, 'cron_args');
@@ -272,6 +277,7 @@ export function loadAgentDef(agentName: string): AgentDef {
   const def: AgentDef = {
     prompt: body,
     tools,
+    ...(model !== undefined ? { model } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(cron !== undefined ? { cron } : {}),
     ...(cronArgs !== undefined ? { cronArgs } : {}),
@@ -361,7 +367,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     '--agents', agentsJson,
     '-p', `${learningsBlock}${dateCtx}${config.WORKSPACE_DIR ? `\nWorkspace directory (read-only): ${config.WORKSPACE_DIR}` : ''}\n\n${prompt}`,
     '--no-session-persistence',
-    '--model', config.AGENT_MODEL,
+    '--model', def.model ?? config.AGENT_MODEL,
   ];
   // Only restrict tools if the agent frontmatter declares them. Vault agents
   // (authored for standalone Claude Code use) may omit `tools:`, in which case
@@ -369,7 +375,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   if (def.tools.length > 0) {
     args.push('--allowedTools', ...def.tools);
   }
-  log.info(`Running agent: ${agentName}`, { model: config.AGENT_MODEL });
+  log.info(`Running agent: ${agentName}`, { model: def.model ?? config.AGENT_MODEL });
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
