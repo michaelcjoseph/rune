@@ -36,6 +36,35 @@ function resolveClaudePath(): string {
  *  spawn claude directly (e.g. work-runner) to keep binary resolution centralized. */
 export const CLAUDE_BIN = resolveClaudePath();
 
+/** Absolute path to Jarvis's project-local Claude settings (declares the
+ *  single `jarvis-kb` MCP server). Passed to every spawn via
+ *  `--mcp-config` + `--strict-mcp-config` so the CLI ignores the user's
+ *  global `~/.claude/settings.json`. */
+const PROJECT_SETTINGS_PATH = join(PROJECT_ROOT, '.claude', 'settings.json');
+
+/** Args that pin a Claude CLI spawn to Jarvis's project-local MCP config.
+ *  Exported so external spawners (work-runner) can apply the same isolation
+ *  — without this the spawn would inherit every MCP server the user has
+ *  globally registered (claude.ai Knowledge Base, Linear, Gmail, …), each
+ *  adding ~7s of ToolSearch latency and remote round-trips. */
+export function getProjectMcpArgs(): string[] {
+  return ['--strict-mcp-config', '--mcp-config', PROJECT_SETTINGS_PATH];
+}
+
+/** Fail-fast assertion that the project-local Claude settings file is on
+ *  disk before we start spawning. Called from `src/index.ts` startup so a
+ *  missing file produces one clear error rather than per-call CLI failures
+ *  across every chat / agent / cron invocation. */
+export function assertProjectMcpConfig(): void {
+  if (!existsSync(PROJECT_SETTINGS_PATH)) {
+    throw new Error(
+      `Missing ${PROJECT_SETTINGS_PATH}. Every Claude CLI spawn passes ` +
+      `--mcp-config to this file; it must exist (it declares the jarvis-kb ` +
+      `MCP server). Restore it from git or re-create with the jarvis-kb entry.`,
+    );
+  }
+}
+
 export interface ClaudeResult {
   text: string | null;
   error: string | null;
@@ -187,9 +216,11 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
   // through ClaudeResult.text, which still resolves correctly via the stream's
   // `result` event (or the text-block fallback on early exit).
   const streaming = !!opMeta && opMeta.kind !== 'classifier';
-  const baseArgs = config.WORKSPACE_DIR
-    ? ['--dangerously-skip-permissions', '--add-dir', config.WORKSPACE_DIR]
-    : ['--dangerously-skip-permissions'];
+  const baseArgs = [
+    '--dangerously-skip-permissions',
+    ...getProjectMcpArgs(),
+    ...(config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : []),
+  ];
   const streamArgs = streaming
     ? ['--output-format', 'stream-json', '--verbose']
     : [];

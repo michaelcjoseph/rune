@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
-import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
+import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
@@ -107,6 +107,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     const t0 = Date.now();
 
     const child = spawn(CLAUDE_BIN, [
+      // Match execClaude's MCP isolation — keep user-global MCP servers
+      // (claude.ai KB, Linear, Gmail, …) out of /work runs too.
+      ...getProjectMcpArgs(),
       '--add-dir', join('docs', 'projects', dirName),
       '-p', prompt,
     ], {

@@ -9,6 +9,8 @@ const reviewSessionsFile = join(tmpDir, 'review-sessions.json');
 
 vi.mock('../config.js', () => ({
   default: { REVIEW_SESSIONS_FILE: reviewSessionsFile, LOGS_DIR: tmpDir, TIMEZONE: 'America/Chicago' },
+  // Required by transitively-imported ai/claude.js (module-load const).
+  PROJECT_ROOT: '/tmp/test-project',
 }));
 
 const {

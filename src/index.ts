@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
-import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge } from './ai/claude.js';
+import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge, assertProjectMcpConfig } from './ai/claude.js';
 import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
@@ -21,6 +21,12 @@ const log = createLogger('main');
 
 // Ensure logs directory exists
 mkdirSync(config.LOGS_DIR, { recursive: true });
+
+// Fail fast if .claude/settings.json (declaring the jarvis-kb MCP server) is
+// missing — every Claude CLI spawn passes --mcp-config to it. Without this
+// check a missing file would surface as per-call CLI errors across chat,
+// agents, and cron.
+assertProjectMcpConfig();
 
 // Ensure knowledge base structure exists
 initKB();

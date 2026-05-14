@@ -645,3 +645,61 @@ describe('handleLint — startTyping label', () => {
     expect(sender.send).toHaveBeenCalledWith(100, 'clean');
   });
 });
+
+describe('VAULT_SYSTEM_PROMPT_BASE — kb_query guidance', () => {
+  // These tests verify the updated system prompt content introduced in the diff:
+  // the KB section was expanded from a single MCP TOOLS line into structured
+  // bullet points that make kb_query the first move for domain questions.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'prompt-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+  });
+
+  it('passes a system prompt that names kb_query as the FIRST move for domain questions', async () => {
+    await handleTextMessage(mockSender(), msg('hello there'));
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const systemPrompt = askMock.mock.calls[0]![2] as string;
+    // The updated prompt makes kb_query the explicit first move
+    expect(systemPrompt).toContain('kb_query');
+    expect(systemPrompt).toMatch(/FIRST move/i);
+  });
+
+  it('passes a system prompt that includes kb_search bullet with tag-filter description', async () => {
+    await handleTextMessage(mockSender(), msg('hello there'));
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const systemPrompt = askMock.mock.calls[0]![2] as string;
+    expect(systemPrompt).toContain('kb_search');
+    // The new bullet explicitly mentions type/tag filtering
+    expect(systemPrompt).toContain('type (entity/concept/topic/comparison)');
+  });
+
+  it('passes a system prompt that includes "When to skip the KB" guidance', async () => {
+    await handleTextMessage(mockSender(), msg('hello there'));
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const systemPrompt = askMock.mock.calls[0]![2] as string;
+    // New bullet added in the diff
+    expect(systemPrompt).toContain('When to skip the KB');
+  });
+
+  it('passes a system prompt that frames kb_query output as synthesis-quality', async () => {
+    await handleTextMessage(mockSender(), msg('hello there'));
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const systemPrompt = askMock.mock.calls[0]![2] as string;
+    // The softened phrasing — allows minimal adaptation but discourages re-querying.
+    expect(systemPrompt).toContain('synthesis-quality');
+    expect(systemPrompt).toContain('adapt minimally');
+  });
+});

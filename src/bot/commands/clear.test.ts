@@ -3,6 +3,8 @@ import type { MessageSender } from '../../transport/sender.js';
 
 vi.mock('../../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
+  // Required by transitively-imported ai/claude.js (module-load const).
+  PROJECT_ROOT: '/tmp/test-project',
 }));
 
 vi.mock('../../vault/sessions.js', () => ({

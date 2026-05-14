@@ -59,6 +59,9 @@ vi.mock('../ai/claude.js', () => ({
   CLAUDE_BIN: '/usr/local/bin/claude',
   registerActiveProcess: mockRegisterActiveProcess,
   unregisterActiveProcess: mockUnregisterActiveProcess,
+  // Same flags execClaude prepends. Tests look up args by indexOf so the
+  // exact values don't matter, only that the call resolves to something.
+  getProjectMcpArgs: () => ['--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json'],
 }));
 
 // --- Dynamic imports after mocks ---

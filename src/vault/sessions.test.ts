@@ -9,6 +9,9 @@ const sessionsFile = join(tmpDir, 'tg-sessions.json');
 
 vi.mock('../config.js', () => ({
   default: { SESSIONS_FILE: sessionsFile, LOGS_DIR: tmpDir, TIMEZONE: 'America/Chicago' },
+  // Required by transitively-imported ai/claude.js, which builds an MCP
+  // config path at module load.
+  PROJECT_ROOT: '/tmp/test-project',
 }));
 
 const {
