@@ -69,7 +69,7 @@ ${content}
 
 Extract all #playbook tags into structured draft entries. Return a JSON array as specified.`;
 
-  const result = await runAgent('playbook-proposer', prompt);
+  const result = await runAgent('playbook-proposer', prompt, undefined, false);
   if (result.error || !result.text) {
     log.error('playbook-proposer failed', { error: result.error });
     return { status: 'error', detail: result.error || 'Empty response' };

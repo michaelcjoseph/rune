@@ -196,7 +196,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly();
       const step = result.steps.find((s) => s.step === 'Daily tags')!;
       expect(step.status).toBe('success');
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('#workout'));
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('#workout'), undefined, false);
       expect(gitMock).toHaveBeenCalledWith(expect.stringContaining('Daily tag processing'));
     });
 
@@ -262,7 +262,7 @@ describe('jobs/nightly', () => {
       const step = result.steps.find((s) => s.step === 'Daily tags')!;
       expect(step.status).toBe('success');
       // daily-content-updater was invoked; json-updater was NOT
-      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.stringContaining('#idea'));
+      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.stringContaining('#idea'), undefined, false);
       const jsonCalls = agentMock.mock.calls.filter((c) => c[0] === 'json-updater');
       expect(jsonCalls).toHaveLength(0);
       expect(step.detail).toContain('daily-content-updater');
@@ -278,8 +278,8 @@ describe('jobs/nightly', () => {
 
       await executeNightly();
 
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
-      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.any(String));
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.any(String), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.any(String), undefined, false);
     });
 
     it('accepts the new "No updates needed" phrasing as well as legacy "No JSON updates needed"', async () => {
@@ -389,11 +389,11 @@ describe('jobs/nightly', () => {
         '2026-04-11',
       );
       // json-updater was invoked with a CRM-update prompt referencing attendees, today's journal_ref, and dedup
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('pages/crm.json'));
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('2026_04_11'));
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('alice'));
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('bob'));
-      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('dedup'));
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('pages/crm.json'), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('2026_04_11'), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('alice'), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('bob'), undefined, false);
+      expect(agentMock).toHaveBeenCalledWith('json-updater', expect.stringContaining('dedup'), undefined, false);
     });
 
     it('skips json-updater call when meetings have no attendees (decisions-only)', async () => {

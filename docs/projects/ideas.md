@@ -1,7 +1,7 @@
 - Update /study to be like spaced repetition quizes for learning
 - Have Jarvis support both claude and codex
 - Identify if we can benefit from https://github.com/everyinc/compound-engineering-plugin
-- Identify if we there are takeaways from OpenClaw we can add to Jarvis. Or if Jarvis should use OpenClaw
+- Identify if we there are takeaways from OpenClaw we can add to Jarvis. Or if Jarvis should use OpenClaw/Hermes
 - Revisit the structure of Jarvis to see how much of it can be simplified to use Claude/Opex setups and its just a harness that triggers things
 - Integrate Slack and Linear MCPs for Jarvis to update and monitor status of items and report to me
 - Integrate my "voice" guidelines into the AI persona and outputs
@@ -9,6 +9,6 @@
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Update pyschology agent to use Adler's approach vs Freud's approach
 - Multiple tabs for webview for different sessions
-- Integrate Relay Linear MCP for Jarvis to query
+- Integrate work Linear MCP for Jarvis to query
 - set up child developmental agent support to help with monitoring progress and planning weekly
 - Add a section to the playbook to capture which items need to be tested before being verified as truly part of the playbook

@@ -314,4 +314,123 @@ describe('WebviewSender', () => {
       expect(ws1.send).not.toHaveBeenCalled();
     });
   });
+
+  describe('onOpEvent()', () => {
+    const TS = '2026-05-14T12:00:00.000Z';
+
+    function makeOpEventStart(userId: number, opId = 'op-abc-123') {
+      return {
+        kind: 'op-event' as const,
+        subKind: 'start' as const,
+        opId,
+        userId,
+        opKind: 'agent' as const,
+        label: 'wiki-compiler',
+        startedAt: TS,
+        elapsedMs: 0,
+      };
+    }
+
+    function makeOpEventProgress(userId: number, opId = 'op-abc-123') {
+      return {
+        kind: 'op-event' as const,
+        subKind: 'progress' as const,
+        opId,
+        userId,
+        opKind: 'agent' as const,
+        label: 'wiki-compiler',
+        startedAt: TS,
+        elapsedMs: 5000,
+      };
+    }
+
+    function makeOpEventEnd(userId: number, opId = 'op-abc-123') {
+      return {
+        kind: 'op-event' as const,
+        subKind: 'end' as const,
+        opId,
+        userId,
+        opKind: 'agent' as const,
+        label: 'wiki-compiler',
+        startedAt: TS,
+        elapsedMs: 12000,
+        status: 'success' as const,
+      };
+    }
+
+    it('forwards op-event start frame to registered open connections for the userId', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      sender.onOpEvent(makeOpEventStart(42) as any);
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame.kind).toBe('op-event');
+      expect(frame.subKind).toBe('start');
+      expect(frame.label).toBe('wiki-compiler');
+      // userId must be stripped before crossing the WS boundary
+      expect('userId' in frame).toBe(false);
+    });
+
+    it('forwards op-event progress frame', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      sender.onOpEvent(makeOpEventProgress(42) as any);
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame.subKind).toBe('progress');
+      expect(frame.elapsedMs).toBe(5000);
+    });
+
+    it('forwards op-event end frame', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      sender.onOpEvent(makeOpEventEnd(42) as any);
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame.subKind).toBe('end');
+      expect(frame.status).toBe('success');
+    });
+
+    it('does not forward to connections for a different userId', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      sender.onOpEvent(makeOpEventStart(99) as any); // different user
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when no connections are registered', () => {
+      const sender = new WebviewSender();
+      expect(() => sender.onOpEvent(makeOpEventStart(1) as any)).not.toThrow();
+    });
+
+    it('skips connections that are not OPEN', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs(3); // CLOSING
+      sender.register(1, ws);
+      sender.onOpEvent(makeOpEventStart(1) as any);
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('fans out to multiple connections for the same userId', () => {
+      const sender = new WebviewSender();
+      const ws1 = makeWs();
+      const ws2 = makeWs();
+      sender.register(1, ws1);
+      sender.register(1, ws2);
+      sender.onOpEvent(makeOpEventStart(1) as any);
+      expect(ws1.send).toHaveBeenCalledOnce();
+      expect(ws2.send).toHaveBeenCalledOnce();
+    });
+
+    it('strips userId from the forwarded frame', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(55, ws);
+      sender.onOpEvent(makeOpEventStart(55) as any);
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect('userId' in frame).toBe(false);
+    });
+  });
 });

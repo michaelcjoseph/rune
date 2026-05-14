@@ -1,6 +1,6 @@
 import { WebSocket } from 'ws';
 import type { MessageSender, SendOpts } from './sender.js';
-import type { BusAgentEvent, BusMutationEvent } from './notification-bus.js';
+import type { BusAgentEvent, BusMutationEvent, BusOpEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('webview-sender');
@@ -55,6 +55,16 @@ export class WebviewSender implements MessageSender {
   /** Forward a mutation-event bus message to all connected WS clients for the given userId.
    *  Strips userId before forwarding — it is used only for routing. */
   onMutationEvent(event: BusMutationEvent): void {
+    const { userId, ...rest } = event;
+    this.broadcast(userId, JSON.stringify(rest));
+  }
+
+  /** Forward an op-event bus message to all connected WS clients for the given userId.
+   *  Strips userId before forwarding — it is used only for routing.
+   *  Classifier ops (sub-second resolver calls) are dropped at the boundary
+   *  so they never reach the wire, matching TelegramSender behaviour. */
+  onOpEvent(event: BusOpEvent): void {
+    if (event.opKind === 'classifier') return;
     const { userId, ...rest } = event;
     this.broadcast(userId, JSON.stringify(rest));
   }

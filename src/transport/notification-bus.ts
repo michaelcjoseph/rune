@@ -39,7 +39,39 @@ export interface BusMutationEvent {
   userId: number;
 }
 
-export type BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent;
+/** Granular per-Claude-CLI-spawn lifecycle. Distinct from BusAgentEvent
+ *  (one-per-runAgent) — every execClaude() call emits an op-event so chat /
+ *  one-shot / classifier paths get the same visibility + cancel surface. */
+export type OpKind = 'agent' | 'chat' | 'one-shot' | 'classifier';
+
+export interface BusOpEventBase {
+  kind: 'op-event';
+  opId: string;
+  userId: number;
+  opKind: OpKind;
+  label: string;
+  agent?: string;
+  startedAt: string;
+  elapsedMs: number;
+}
+
+export interface BusOpEventStart extends BusOpEventBase {
+  subKind: 'start';
+}
+
+export interface BusOpEventProgress extends BusOpEventBase {
+  subKind: 'progress';
+}
+
+export interface BusOpEventEnd extends BusOpEventBase {
+  subKind: 'end';
+  status: 'success' | 'error' | 'cancelled';
+  error?: string;
+}
+
+export type BusOpEvent = BusOpEventStart | BusOpEventProgress | BusOpEventEnd;
+
+export type BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent | BusOpEvent;
 
 type BusEventKind = BusEvent['kind'];
 type HandlerFor<K extends BusEventKind> = (event: Extract<BusEvent, { kind: K }>) => void;

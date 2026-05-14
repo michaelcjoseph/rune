@@ -1,6 +1,6 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { createLogger } from '../utils/logger.js';
-import type { NotificationBus, BusMessageEvent, BusAgentEvent, BusMutationEvent } from './notification-bus.js';
+import type { NotificationBus, BusMessageEvent, BusAgentEvent, BusMutationEvent, BusOpEvent } from './notification-bus.js';
 import { TelegramSender } from './telegram-sender.js';
 import { WebviewSender } from './webview-sender.js';
 
@@ -50,10 +50,17 @@ export function createSenders(
   };
   bus.on('mutation-event', mutationEventHandler);
 
+  const opEventHandler = (event: BusOpEvent) => {
+    webview.onOpEvent(event);
+    tg.onOpEvent(event);
+  };
+  bus.on('op-event', opEventHandler);
+
   const destroy = () => {
     bus.off('message', handler);
     bus.off('agent-event', agentEventHandler);
     bus.off('mutation-event', mutationEventHandler);
+    bus.off('op-event', opEventHandler);
     tg.shutdown();
     webview.shutdown();
   };

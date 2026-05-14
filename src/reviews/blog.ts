@@ -67,6 +67,9 @@ const blogHandler: ReviewTypeHandler = {
         `I want to write about: ${topic}`,
         session.claudeSessionId,
         systemPrompt,
+        undefined,
+        undefined,
+        'review:blog',
       );
       sender.stopTyping(session.chatId);
 
@@ -108,7 +111,7 @@ const blogHandler: ReviewTypeHandler = {
 
     sender.startTyping(session.chatId);
     try {
-      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt);
+      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, 'review:blog');
       sender.stopTyping(session.chatId);
 
       if (result.error) {

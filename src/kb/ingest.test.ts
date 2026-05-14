@@ -69,7 +69,7 @@ describe('kb/ingest', () => {
 
     const result = await ingestSource('notes/test.md');
     expect(result.success).toBe(true);
-    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.stringContaining('notes/test.md'), expect.any(Number));
+    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.stringContaining('notes/test.md'), expect.any(Number), false);
   });
 
   it('passes the dedicated CLAUDE_INGEST_TIMEOUT_MS to the wiki-compiler call', async () => {
@@ -87,7 +87,7 @@ describe('kb/ingest', () => {
 
     // Real ingests can run long; wiki-compiler uses the dedicated timeout
     // constant so it can diverge from the generic default. (Mocked config sets it to 1_800_000.)
-    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.any(String), 1_800_000);
+    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.any(String), 1_800_000, false);
   });
 
   it('includes guidance in agent prompt', async () => {
@@ -102,7 +102,7 @@ describe('kb/ingest', () => {
     agentMock.mockResolvedValue({ text: 'ok', error: null });
 
     await ingestSource('notes/test.md', { guidance: 'focus on APIs' });
-    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.stringContaining('focus on APIs'), expect.any(Number));
+    expect(agentMock).toHaveBeenCalledWith('wiki-compiler', expect.stringContaining('focus on APIs'), expect.any(Number), false);
   });
 
   it('returns error when agent fails', async () => {

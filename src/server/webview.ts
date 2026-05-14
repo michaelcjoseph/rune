@@ -14,6 +14,7 @@ import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
 import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
+import { cancelOp } from '../transport/in-flight.js';
 
 const log = createLogger('webview');
 
@@ -223,6 +224,17 @@ function handleApiMutationsCancel(res: ServerResponse, id: string): void {
   res.end(JSON.stringify({ ok: true }));
 }
 
+function handleApiOpsCancel(res: ServerResponse, id: string): void {
+  const ok = cancelOp(id);
+  if (!ok) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'op not found or already terminal' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export interface WebviewDeps {
   webview: WebviewSender;
   isReady: () => boolean;
@@ -381,6 +393,12 @@ export function mountWebviewRoutes(
       const cancelMatch = pathname.match(/^\/api\/mutations\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && cancelMatch) {
         handleApiMutationsCancel(res, cancelMatch[1]!);
+        return true;
+      }
+
+      const opCancelMatch = pathname.match(/^\/api\/ops\/([^/]+)\/cancel$/);
+      if (req.method === 'POST' && opCancelMatch) {
+        handleApiOpsCancel(res, opCancelMatch[1]!);
         return true;
       }
 

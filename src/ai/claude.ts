@@ -10,7 +10,8 @@ import { getDateContext } from '../utils/time.js';
 // pick up /learn-authored guidance without each caller re-implementing the prepend.
 // If vault/learnings ever needs Claude help (e.g., dedup), extract a context/ layer.
 import { buildLearningsPrompt } from '../vault/learnings.js';
-import type { NotificationBus } from '../transport/notification-bus.js';
+import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
+import { registerOp, unregisterOp, isCancelled } from '../transport/in-flight.js';
 
 const log = createLogger('claude');
 
@@ -85,7 +86,14 @@ export async function waitForActiveProcesses(timeoutMs = 5_000): Promise<void> {
   }
 }
 
-function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
+export interface OpMeta {
+  kind: OpKind;
+  label: string;
+  agentName?: string;
+  userId?: number;
+}
+
+function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   const fullArgs = config.WORKSPACE_DIR
     ? ['--dangerously-skip-permissions', '--add-dir', config.WORKSPACE_DIR, ...args]
@@ -105,6 +113,20 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
     });
 
     activeProcesses.add(child);
+
+    // Register an in-flight op so this spawn surfaces to TG/webview with
+    // elapsed time + cancel button. Default userId to the single TG user.
+    let opId: string | null = null;
+    if (opMeta) {
+      const op = registerOp({
+        kind: opMeta.kind,
+        label: opMeta.label,
+        ...(opMeta.agentName ? { agentName: opMeta.agentName } : {}),
+        userId: opMeta.userId ?? config.TELEGRAM_USER_ID,
+        child,
+      });
+      opId = op.opId;
+    }
 
     let stdout = '';
     let stderr = '';
@@ -127,7 +149,10 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
       // signal: null}` — not `{code: null, signal: 'SIGTERM'}`. Treat both as
       // timeouts so the TG summary stays readable.
       const timedOut = signal === 'SIGTERM' || code === 143;
-      if (timedOut) {
+      if (opId !== null && isCancelled(opId)) {
+        unregisterOp(opId, 'cancelled', 'Cancelled by user');
+        resolve({ text: null, error: 'Cancelled by user' });
+      } else if (timedOut) {
         const tail = (s: string) => s.slice(-500).trim();
         log.error('Claude CLI timed out', {
           args: args.slice(0, 3),
@@ -136,12 +161,16 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
           stdoutTail: tail(stdout) || null,
           stderrTail: tail(stderr) || null,
         });
-        resolve({ text: null, error: `Claude timed out after ${timeout / 1000}s` });
+        const error = `Claude timed out after ${timeout / 1000}s`;
+        if (opId) unregisterOp(opId, 'error', error);
+        resolve({ text: null, error });
       } else if (code !== 0) {
         const error = stderr.trim() || `Claude exited with code ${code}`;
         log.error('Claude CLI failed', { code, error, args: args.slice(0, 3) });
+        if (opId) unregisterOp(opId, 'error', error);
         resolve({ text: null, error });
       } else {
+        if (opId) unregisterOp(opId, 'success');
         resolve({ text: stdout.trim(), error: null });
       }
     });
@@ -149,13 +178,21 @@ function execClaude(args: string[], timeoutMs?: number): Promise<ClaudeResult> {
     child.on('error', (err) => {
       clearTimeout(timer);
       activeProcesses.delete(child);
+      if (opId) unregisterOp(opId, 'error', err.message);
       log.error('Claude CLI spawn error', { error: err.message, args: args.slice(0, 3) });
       resolve({ text: null, error: err.message });
     });
   });
 }
 
-function askClaudeSession(message: string, sessionId: string, model?: string, systemPrompt?: string, allowedTools?: string[]): Promise<ClaudeResult> {
+function askClaudeSession(
+  message: string,
+  sessionId: string,
+  model?: string,
+  systemPrompt?: string,
+  allowedTools?: string[],
+  opLabel?: string,
+): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
     const args = createdSessions.has(sessionId)
@@ -164,7 +201,8 @@ function askClaudeSession(message: string, sessionId: string, model?: string, sy
     if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
-    const result = await execClaude(args);
+    const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
+    const result = await execClaude(args, undefined, opMeta);
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -172,21 +210,27 @@ function askClaudeSession(message: string, sessionId: string, model?: string, sy
   return current;
 }
 
-/** Multi-turn conversation with session persistence */
-export async function askClaude(message: string, sessionId: string, model?: string): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model);
+/** Multi-turn conversation with session persistence. Pass `opLabel` to surface
+ *  the call as a cancellable in-flight op (tracker message on TG, pill on
+ *  webview); omit for background/non-interactive callers. */
+export async function askClaude(message: string, sessionId: string, model?: string, opLabel?: string): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model, undefined, undefined, opLabel);
 }
 
-/** Multi-turn conversation with session persistence and appended system prompt */
-export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string, allowedTools?: string[]): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model, systemPrompt, allowedTools);
+/** Multi-turn conversation with session persistence and appended system prompt.
+ *  Pass `opLabel` to surface as a cancellable in-flight op. */
+export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string, allowedTools?: string[], opLabel?: string): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model, systemPrompt, allowedTools, opLabel);
 }
 
-/** One-shot query with no session persistence */
-export async function askClaudeOneShot(message: string, timeoutMs?: number): Promise<ClaudeResult> {
+/** One-shot query with no session persistence. Pass `opLabel` to surface as a
+ *  cancellable in-flight op; omit for background callers (nightly, cron,
+ *  meeting/book extraction) so they don't spam tracker messages. */
+export async function askClaudeOneShot(message: string, timeoutMs?: number, opLabel?: string): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
-  return execClaude(args, timeoutMs);
+  const opMeta: OpMeta | undefined = opLabel ? { kind: 'one-shot', label: opLabel } : undefined;
+  return execClaude(args, timeoutMs, opMeta);
 }
 
 /** Thin Haiku one-shot wrapper — no session, no date-context prefix, short
@@ -198,7 +242,7 @@ export async function askClaudeOneShot(message: string, timeoutMs?: number): Pro
  *  a larger explicit `timeoutMs`. */
 export async function askHaikuOneShot(prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
   const args = ['-p', prompt, '--no-session-persistence', '--model', config.CLASSIFIER_MODEL];
-  return execClaude(args, timeoutMs ?? config.CLASSIFIER_TIMEOUT_MS);
+  return execClaude(args, timeoutMs ?? config.CLASSIFIER_TIMEOUT_MS, { kind: 'classifier', label: 'classifier' });
 }
 
 
@@ -337,8 +381,10 @@ function parseYamlListField(frontmatter: string, key: string): string[] {
 /** Prefix used on runAgent error messages when the agent file cannot be loaded. */
 export const AGENT_NOT_FOUND_PREFIX = 'Agent not found:';
 
-/** Run a named agent (defined in .claude/agents/) */
-export async function runAgent(agentName: string, prompt: string, timeoutMs?: number): Promise<ClaudeResult> {
+/** Run a named agent (defined in .claude/agents/). Set `userVisible: false`
+ *  for background callers (nightly, cron, scheduled jobs) so they don't send
+ *  tracker messages while the user is asleep. */
+export async function runAgent(agentName: string, prompt: string, timeoutMs?: number, userVisible = true): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   let def: AgentDef;
   try {
@@ -381,7 +427,10 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   const t0 = Date.now();
   const userId = config.TELEGRAM_USER_ID;
   _bus?.publish({ kind: 'agent-event', subKind: 'start', agent: agentName, runId, userId, startedAt });
-  const result = await execClaude(args, timeoutMs);
+  const opMeta: OpMeta | undefined = userVisible
+    ? { kind: 'agent', label: agentName, agentName, userId }
+    : undefined;
+  const result = await execClaude(args, timeoutMs, opMeta);
   const durationMs = Date.now() - t0;
   const status = result.error ? 'error' : 'success';
   _bus?.publish({ kind: 'agent-event', subKind: 'end', agent: agentName, runId, userId, startedAt, durationMs, status });

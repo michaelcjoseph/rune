@@ -116,6 +116,9 @@ describe('reviews/health', () => {
         'I want to discuss: sleep optimization',
         'claude-health-001',
         expect.stringContaining('Custom health skill instructions'),
+        undefined,
+        undefined,
+        'review:health',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
@@ -133,11 +136,17 @@ describe('reviews/health', () => {
         'I want to discuss: nutrition',
         'claude-health-001',
         expect.stringContaining('You are a health coach'),
+        undefined,
+        undefined,
+        'review:health',
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Ask clarifying questions before giving advice'),
+        undefined,
+        undefined,
+        'review:health',
       );
     });
 
@@ -156,11 +165,17 @@ describe('reviews/health', () => {
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Recovery score: 85%, HRV: 65ms'),
+        undefined,
+        undefined,
+        'review:health',
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Recent Health Trends'),
+        undefined,
+        undefined,
+        'review:health',
       );
     });
 
@@ -196,6 +211,9 @@ describe('reviews/health', () => {
         'I have trouble falling asleep',
         'claude-health-001',
         expect.stringContaining('sleep'),
+        undefined,
+        undefined,
+        'review:health',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(sender.send).toHaveBeenCalledWith(100, 'You should try magnesium before bed.');
@@ -233,6 +251,9 @@ describe('reviews/health', () => {
         'continuing conversation',
         'reconstructed-session',
         'Persisted system prompt from previous run',
+        undefined,
+        undefined,
+        'review:health',
       );
       expect(sender.send).toHaveBeenCalledWith(100, 'Reconstructed response');
     });

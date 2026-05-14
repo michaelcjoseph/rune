@@ -58,6 +58,7 @@ vi.mock('../commands/health.js', () => ({ handleHealth: vi.fn() }));
 vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
 vi.mock('../commands/seed.js', () => ({ handleSeed: vi.fn() }));
 vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
+vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
@@ -79,6 +80,7 @@ const { handleKB } = await import('../commands/kb.js');
 const { handleIngest } = await import('../commands/ingest.js');
 const { handleLearn } = await import('../commands/learn.js');
 const { handleLearnList } = await import('../commands/learn-list.js');
+const { handleCancel } = await import('../commands/cancel.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -134,6 +136,21 @@ describe('text handler routing', () => {
     const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(helpText).toContain('/clear');
     expect(helpText).toContain('discard active session');
+  });
+
+  it('routes bare /cancel to handleCancel with empty arg', async () => {
+    await handleTextMessage(mockSender(), msg('/cancel'));
+    expect(handleCancel).toHaveBeenCalledWith(expect.anything(), 100, '');
+  });
+
+  it('routes /cancel <prefix> to handleCancel with the prefix arg', async () => {
+    await handleTextMessage(mockSender(), msg('/cancel abc123de'));
+    expect(handleCancel).toHaveBeenCalledWith(expect.anything(), 100, 'abc123de');
+  });
+
+  it('/cancel does not invoke handleClear', async () => {
+    await handleTextMessage(mockSender(), msg('/cancel'));
+    expect(handleClear).not.toHaveBeenCalled();
   });
 
   it('routes /journal with text', async () => {
@@ -225,7 +242,7 @@ describe('text handler routing', () => {
 
     await handleTextMessage(mockSender(), msg('hello'));
     expect(createSessionMock).toHaveBeenCalled();
-    expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
+    expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array), 'chat');
   });
 
   it('appends the mode-visibility footer to conversation replies', async () => {
@@ -294,7 +311,7 @@ describe('text handler routing', () => {
 
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
-    expect(askMock).toHaveBeenCalledWith('some text', 'test-sess', expect.any(String), 'haiku', expect.any(Array));
+    expect(askMock).toHaveBeenCalledWith('some text', 'test-sess', expect.any(String), 'haiku', expect.any(Array), 'chat');
   });
 
   it('routes /fresh to command handler even during active review', async () => {

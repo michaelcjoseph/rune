@@ -258,6 +258,9 @@ describe('reviews/weekly', () => {
         expect.any(String),
         session.claudeSessionId,
         expect.stringContaining('Ask about goals'),
+        undefined,
+        undefined,
+        'review:weekly',
       );
     });
 
@@ -274,6 +277,9 @@ describe('reviews/weekly', () => {
         "Let's begin the weekly review.",
         session.claudeSessionId,
         expect.stringContaining('weekly review interview'),
+        undefined,
+        undefined,
+        'review:weekly',
       );
     });
 
@@ -319,6 +325,9 @@ describe('reviews/weekly', () => {
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Conduct a weekly review interview'),
+        undefined,
+        undefined,
+        'review:weekly',
       );
     });
 
@@ -388,6 +397,9 @@ describe('reviews/weekly', () => {
         'I worked on thesis',
         session.claudeSessionId,
         expect.stringContaining('weekly review interview'),
+        undefined,
+        undefined,
+        'review:weekly',
       );
     });
 
@@ -450,6 +462,9 @@ describe('reviews/weekly', () => {
         'Where were we?',
         session.claudeSessionId,
         expect.stringContaining('recovered context data'),
+        undefined,
+        undefined,
+        'review:weekly',
       );
       expect(sender.send).toHaveBeenCalledWith(100, 'Continuing interview.');
     });
@@ -601,7 +616,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(askClaudeOneShotMock).toHaveBeenCalledWith(expect.stringContaining('post-interview updates'));
+      expect(askClaudeOneShotMock).toHaveBeenCalledWith(expect.stringContaining('post-interview updates'), undefined, 'review:weekly-routing');
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'updates' });
     });
 

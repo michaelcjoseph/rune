@@ -11,13 +11,13 @@ export interface LibrarySyncResult {
   detail: string;
 }
 
-export async function runLibrarySync(): Promise<LibrarySyncResult> {
+export async function runLibrarySync(opts?: { userVisible?: boolean }): Promise<LibrarySyncResult> {
   if (!config.LENNY_MCP_TOKEN) {
     return { status: 'skipped', detail: 'LENNY_MCP_TOKEN not set' };
   }
 
   const startMs = Date.now();
-  const result = await runAgent('lenny-sync', '');
+  const result = await runAgent('lenny-sync', '', undefined, opts?.userVisible ?? false);
 
   if (result.error) {
     log.error('lenny-sync agent failed', { error: result.error });

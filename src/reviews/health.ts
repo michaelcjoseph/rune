@@ -66,6 +66,9 @@ const healthHandler: ReviewTypeHandler = {
         `I want to discuss: ${focus}`,
         session.claudeSessionId,
         systemPrompt,
+        undefined,
+        undefined,
+        'review:health',
       );
       sender.stopTyping(session.chatId);
 
@@ -107,7 +110,7 @@ const healthHandler: ReviewTypeHandler = {
 
     sender.startTyping(session.chatId);
     try {
-      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt);
+      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, 'review:health');
       sender.stopTyping(session.chatId);
 
       if (result.error) {

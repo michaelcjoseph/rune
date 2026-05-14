@@ -232,7 +232,7 @@ export function scanAgentCronJobs(bus: NotificationBus): JobDefinition[] {
     const cronArgs = def.cronArgs ?? '';
     const cronChat = def.cronChat === true;
     const run = async () => {
-      const result = await runAgent(name, cronArgs);
+      const result = await runAgent(name, cronArgs, undefined, cronChat);
       if (result.error) {
         log.error(`Scheduled agent ${name} failed`, { error: result.error });
         return;

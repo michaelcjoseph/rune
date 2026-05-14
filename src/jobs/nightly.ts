@@ -159,14 +159,14 @@ Date context: ${date}`;
 
   const results: string[] = [];
   if (mentionsJson) {
-    const r = await runAgent('json-updater', agentPrompt);
+    const r = await runAgent('json-updater', agentPrompt, undefined, false);
     if (r.error) {
       return { step: 'Daily tags', status: 'error', detail: `json-updater failed: ${r.error}` };
     }
     results.push('json-updater');
   }
   if (mentionsMarkdown) {
-    const r = await runAgent('daily-content-updater', agentPrompt);
+    const r = await runAgent('daily-content-updater', agentPrompt, undefined, false);
     if (r.error) {
       return { step: 'Daily tags', status: 'error', detail: `daily-content-updater failed: ${r.error}` };
     }
@@ -308,7 +308,7 @@ Report a one-line summary per attendee. Use one of these exact prefixes so the n
 
 Do not create a new entry when rule (c) fires; conservative bias prevents silent CRM pollution.`;
 
-  const result = await runAgent('json-updater', crmPrompt);
+  const result = await runAgent('json-updater', crmPrompt, undefined, false);
   if (result.error) {
     log.error('CRM update via json-updater failed', { error: result.error, attendees });
     return { step: 'Meeting extract', status: 'error', detail: `${meetings.length} meeting(s) extracted, CRM update failed: ${result.error}` };

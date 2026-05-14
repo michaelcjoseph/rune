@@ -290,6 +290,40 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   50% { opacity: 1; transform: scale(1.15); }
 }
 
+/* In-flight Claude op pills (cancellable) */
+.op-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  align-self: flex-start;
+  padding: .35rem .65rem;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: .82rem;
+  color: var(--text);
+}
+.op-pill .op-spinner {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+.op-pill .op-label { color: var(--text); }
+.op-pill .op-elapsed { color: var(--text2); }
+.op-pill .op-cancel {
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 .15rem;
+}
+.op-pill .op-cancel:hover { color: #ff6b6b; }
+.op-pill .op-cancel:disabled { opacity: .4; cursor: default; }
+
 /* Run detail drawer */
 .drawer {
   position: fixed; right: 0; top: 0; bottom: 0;

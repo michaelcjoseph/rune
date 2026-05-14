@@ -57,7 +57,7 @@ If no actionable tags are found (i.e., nothing that maps to a JSON data file), s
 
 Be concise. Only propose updates for tags that clearly map to a data file.`;
 
-    const result = await askClaudeOneShot(prompt);
+    const result = await askClaudeOneShot(prompt, undefined, 'review:daily');
     sender.stopTyping(session.chatId);
 
     if (result.error || !result.text) {

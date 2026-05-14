@@ -31,6 +31,7 @@ import { handleLibrarySync } from '../commands/library-sync.js';
 import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
 import { handleLearnList } from '../commands/learn-list.js';
+import { handleCancel } from '../commands/cancel.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
@@ -61,6 +62,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId);
   if (text.startsWith('/fresh')) return handleFresh(sender, userId);
   if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId);
+  if (text === '/cancel' || text.startsWith('/cancel ')) return handleCancel(sender, userId, text.slice('/cancel'.length).trim());
   if (text.startsWith('/journal ')) return handleJournal(sender, userId, text.slice('/journal '.length).trim());
   if (text.startsWith('/ask ')) return handleAsk(sender, userId, text.slice('/ask '.length).trim());
   if (text.startsWith('/kb ')) return handleKB(sender, userId, text.slice('/kb '.length).trim());
@@ -299,6 +301,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
       getVaultSystemPrompt(),
       session.model,
       CONVERSATION_TOOLS,
+      'chat',
     );
 
     if (result.error) {

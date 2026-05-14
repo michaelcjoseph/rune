@@ -45,6 +45,11 @@ vi.mock('../transport/mutations.js', () => ({
   setMutationBus: vi.fn(),
 }));
 
+const mockListOps = vi.fn<() => any[]>(() => []);
+vi.mock('../transport/in-flight.js', () => ({
+  listOps: mockListOps,
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockGetProjectSummaries = vi.fn<() => any>(() => []);
 vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSummaries }));
@@ -95,6 +100,7 @@ describe('state-snapshot / getStateSnapshot', () => {
     mockGetPendingProposals.mockReturnValue([]);
     mockReadRecentMutations.mockReturnValue([]);
     mockGetProjectSummaries.mockReturnValue([]);
+    mockListOps.mockReturnValue([]);
     // Default: no files exist
     mockReadFileSync.mockImplementation(() => {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -226,5 +232,59 @@ describe('state-snapshot / getStateSnapshot', () => {
     });
     const snap = getStateSnapshot();
     expect(snap.warnings).toEqual([]);
+  });
+
+  describe('inFlight field', () => {
+    it('returns an empty inFlight array when no ops are active', () => {
+      mockListOps.mockReturnValue([]);
+      const snap = getStateSnapshot();
+      expect(snap.inFlight).toEqual([]);
+    });
+
+    it('returns in-flight ops from listOps()', () => {
+      const ops = [
+        {
+          opId: 'aaa-111',
+          kind: 'agent' as const,
+          label: 'wiki-compiler',
+          userId: 42,
+          startedAt: '2026-05-14T12:00:00.000Z',
+          elapsedMs: 3500,
+        },
+        {
+          opId: 'bbb-222',
+          kind: 'one-shot' as const,
+          label: 'one-shot',
+          userId: 42,
+          startedAt: '2026-05-14T12:00:05.000Z',
+          elapsedMs: 500,
+        },
+      ];
+      mockListOps.mockReturnValue(ops);
+      const snap = getStateSnapshot();
+      expect(snap.inFlight).toHaveLength(2);
+      expect(snap.inFlight[0]!.opId).toBe('aaa-111');
+      expect(snap.inFlight[1]!.label).toBe('one-shot');
+    });
+
+    it('passes through all public fields from listOps', () => {
+      const op = {
+        opId: 'ccc-333',
+        kind: 'chat' as const,
+        label: 'chat',
+        agentName: undefined,
+        userId: 42,
+        startedAt: '2026-05-14T12:01:00.000Z',
+        elapsedMs: 1000,
+      };
+      mockListOps.mockReturnValue([op]);
+      const snap = getStateSnapshot();
+      expect(snap.inFlight[0]).toMatchObject({
+        opId: 'ccc-333',
+        kind: 'chat',
+        label: 'chat',
+        elapsedMs: 1000,
+      });
+    });
   });
 });

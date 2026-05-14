@@ -5,7 +5,7 @@ export async function handleLibrarySync(sender: MessageSender, userId: number): 
   await sender.send(userId, 'Syncing Lenny library...');
   sender.startTyping(userId);
   try {
-    const result = await runLibrarySync();
+    const result = await runLibrarySync({ userVisible: true });
     const msg = result.status === 'error'
       ? `Library sync failed: ${result.detail}`
       : `Library sync complete: ${result.detail}`;

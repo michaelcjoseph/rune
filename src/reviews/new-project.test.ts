@@ -126,6 +126,9 @@ describe('reviews/new-project', () => {
         "Let's plan a new Jarvis project.",
         'claude-np-001',
         expect.any(String),
+        undefined,
+        undefined,
+        'review:new-project',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
@@ -172,6 +175,9 @@ describe('reviews/new-project', () => {
         'I want to build: email digest feature',
         'claude-np-001',
         expect.any(String),
+        undefined,
+        undefined,
+        'review:new-project',
       );
     });
 
@@ -237,6 +243,9 @@ describe('reviews/new-project', () => {
         'I want to build a digest feature',
         'claude-np-001',
         'System prompt context stored',
+        undefined,
+        undefined,
+        'review:new-project',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(sender.send).toHaveBeenCalledWith(100, 'What pain point does this solve?');
@@ -256,6 +265,9 @@ describe('reviews/new-project', () => {
         'continuing',
         'fresh-session-id',
         'Persisted prompt from disk',
+        undefined,
+        undefined,
+        'review:new-project',
       );
     });
 
@@ -450,6 +462,9 @@ WHEN the user runs /digest THEN Jarvis sends a summary of today's articles.`;
         'Please revise the Project Brief with this correction: Change the slug to new-slug',
         session.claudeSessionId,
         expect.any(String),
+        undefined,
+        undefined,
+        'review:new-project',
       );
       // Updates outline with Claude's revised brief
       expect(updateSessionMock).toHaveBeenCalledWith(100, { outline: revisedBrief });

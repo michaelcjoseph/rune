@@ -116,17 +116,26 @@ describe('reviews/blog', () => {
         'I want to write about: why testing matters',
         'claude-blog-001',
         expect.stringContaining('Custom blog skill instructions'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       // Verify writing context is included in system prompt
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Conversational, direct tone'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('- testing'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
@@ -144,11 +153,17 @@ describe('reviews/blog', () => {
         'I want to write about: productivity systems',
         'claude-blog-001',
         expect.stringContaining('interview-style conversation'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('No artifacts or documents until I approve the outline'),
+        undefined,
+        undefined,
+        'review:blog',
       );
     });
 
@@ -166,11 +181,17 @@ describe('reviews/blog', () => {
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Writing Voice & Style'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('My voice: plain English, no jargon'),
+        undefined,
+        undefined,
+        'review:blog',
       );
     });
   });
@@ -194,6 +215,9 @@ describe('reviews/blog', () => {
         'The key argument is Y',
         'claude-blog-001',
         expect.stringContaining('test topic'),
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(sender.send).toHaveBeenCalledWith(100, 'Great point, what about X?');
@@ -231,6 +255,9 @@ describe('reviews/blog', () => {
         'picking up where we left off',
         'fresh-session-id',
         'Reconstructed system prompt for blog',
+        undefined,
+        undefined,
+        'review:blog',
       );
       expect(sender.send).toHaveBeenCalledWith(100, 'Continuing the conversation');
     });

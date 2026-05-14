@@ -8,6 +8,8 @@ import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals } from '../jobs/proposal-queue.js';
 import { readRecentMutations } from '../jobs/mutations-log.js';
 import { activeRuns } from '../transport/mutations.js';
+import { listOps } from '../transport/in-flight.js';
+import type { InFlightOpPublic } from '../transport/in-flight.js';
 import { getProjectSummaries } from './projects-snapshot.js';
 import type { ProjectSummary } from './projects-snapshot.js';
 import type { MutationDescriptor } from '../transport/mutations.js';
@@ -31,6 +33,7 @@ export interface StateSnapshot {
   lastNightlyAt: string | null;
   projects: ProjectSummary[];
   mutations: { active: MutationDescriptor[]; recent: MutationDescriptor[] };
+  inFlight: InFlightOpPublic[];
   warnings: string[];
 }
 
@@ -111,6 +114,7 @@ export function getStateSnapshot(): StateSnapshot {
     lastNightlyAt: nightlyTs ? new Date(nightlyTs).toISOString() : null,
     projects,
     mutations: { active: activeMutations, recent: recentMutations },
+    inFlight: listOps(),
     warnings,
   };
 }

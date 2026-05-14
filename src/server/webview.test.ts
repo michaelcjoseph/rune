@@ -14,6 +14,13 @@ vi.mock('../transport/mutations.js', () => ({
   activeRuns: mockActiveRunsMap,
 }));
 
+// In-flight op mocks for POST /api/ops/:id/cancel
+const mockCancelOp = vi.fn();
+vi.mock('../transport/in-flight.js', () => ({
+  cancelOp: mockCancelOp,
+  listOps: vi.fn(() => []),
+}));
+
 const mockReadRecentMutations = vi.fn(() => []);
 vi.mock('../jobs/mutations-log.js', () => ({
   readRecentMutations: mockReadRecentMutations,
@@ -529,6 +536,61 @@ describe('server/webview', () => {
         body: JSON.stringify({ kind: 'work-run', payload: {} }),
       });
       expect(res.status).toBe(401);
+    });
+  });
+
+  // ---- POST /api/ops/:id/cancel ----
+
+  describe('POST /api/ops/:id/cancel', () => {
+    beforeEach(() => {
+      mockCancelOp.mockReset();
+    });
+
+    it('returns 200 { ok: true } when cancelOp returns true', async () => {
+      mockCancelOp.mockReturnValue(true);
+      const res = await makeRequest(port, '/api/ops/abc123/cancel', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(mockCancelOp).toHaveBeenCalledWith('abc123');
+    });
+
+    it('returns 409 when cancelOp returns false (op not found)', async () => {
+      mockCancelOp.mockReturnValue(false);
+      const res = await makeRequest(port, '/api/ops/not-found-id/cancel', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('not found');
+    });
+
+    it('passes the opId from the URL path to cancelOp', async () => {
+      mockCancelOp.mockReturnValue(true);
+      const opId = 'ff00aa11-bbcc-ddee-0011-223344556677';
+      await makeRequest(port, `/api/ops/${opId}/cancel`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(mockCancelOp).toHaveBeenCalledWith(opId);
+    });
+
+    it('returns 401 without auth header', async () => {
+      const res = await makeRequest(port, '/api/ops/some-op/cancel', {
+        method: 'POST',
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 404 for GET /api/ops/:id/cancel (wrong method)', async () => {
+      const res = await makeRequest(port, '/api/ops/some-op/cancel', {
+        method: 'GET',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      // GET doesn't match the POST route — falls through to the unknown /api/* 404
+      expect(res.status).toBe(404);
     });
   });
 

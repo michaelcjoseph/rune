@@ -139,6 +139,8 @@
         handleAgentEvent(frame);
       } else if (frame.kind === 'mutation-event') {
         handleMutationEvent(frame);
+      } else if (frame.kind === 'op-event') {
+        handleOpEvent(frame);
       }
     };
 
@@ -149,6 +151,10 @@
       if (activeRunsInterval) { clearInterval(activeRunsInterval); activeRunsInterval = null; }
       document.querySelectorAll('.run-live').forEach(el => el.remove());
       clearStatusIndicator();
+      // Drop op pills — /api/state poll will rehydrate any still-active ops
+      activeOps.clear();
+      if (opTickerInterval) { clearInterval(opTickerInterval); opTickerInterval = null; }
+      document.querySelectorAll('.op-pill').forEach(el => el.remove());
       setTimeout(() => {
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         connect();
@@ -297,6 +303,76 @@
     }
   }
 
+  // ---- In-flight op pills ----
+  // Each visible Claude CLI spawn renders a cancellable pill in the chat
+  // until it ends. Classifier ops (sub-second resolver calls) are filtered
+  // out by the bus → sender layer before reaching the WS, so we only see
+  // user-facing ops here.
+  const activeOps = new Map(); // opId → { label, startedAt (ms), pillEl, elapsedEl }
+  let opTickerInterval = null;
+
+  function upsertOpPill(op) {
+    // op: { opId, label, startedAt (iso string), elapsedMs }
+    const startedAtMs = new Date(op.startedAt).getTime();
+    const existing = activeOps.get(op.opId);
+    if (existing) {
+      existing.startedAt = startedAtMs;
+      return;
+    }
+    const pill = document.createElement('div');
+    pill.className = 'op-pill';
+    pill.id = `op-pill-${op.opId}`;
+    pill.innerHTML =
+      `<span class="op-spinner"></span>` +
+      `<span class="op-label">${escHtml(op.label)}</span>` +
+      `<span class="op-elapsed">${Math.floor((op.elapsedMs ?? 0) / 1000)}s</span>` +
+      `<button class="op-cancel" title="Cancel">✕</button>`;
+    const cancelBtn = pill.querySelector('.op-cancel');
+    cancelBtn.addEventListener('click', () => {
+      cancelBtn.disabled = true;
+      fetch(`/api/ops/${encodeURIComponent(op.opId)}/cancel`, { method: 'POST' })
+        .catch(() => { cancelBtn.disabled = false; });
+    });
+    messagesEl.appendChild(pill);
+    activeOps.set(op.opId, {
+      label: op.label,
+      startedAt: startedAtMs,
+      pillEl: pill,
+      elapsedEl: pill.querySelector('.op-elapsed'),
+    });
+    scrollToBottom();
+    if (!opTickerInterval) {
+      opTickerInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [, entry] of activeOps) {
+          const secs = Math.floor((now - entry.startedAt) / 1000);
+          entry.elapsedEl.textContent = `${secs}s`;
+        }
+      }, 1000);
+    }
+  }
+
+  function removeOpPill(opId) {
+    const entry = activeOps.get(opId);
+    if (!entry) return;
+    entry.pillEl.remove();
+    activeOps.delete(opId);
+    if (activeOps.size === 0 && opTickerInterval) {
+      clearInterval(opTickerInterval);
+      opTickerInterval = null;
+    }
+  }
+
+  function handleOpEvent(frame) {
+    // frame: { kind, opId, opKind, label, agent?, startedAt, elapsedMs, subKind, ... }
+    if (frame.opKind === 'classifier') return; // safety net — sender already filters
+    if (frame.subKind === 'start' || frame.subKind === 'progress') {
+      upsertOpPill(frame);
+    } else if (frame.subKind === 'end') {
+      removeOpPill(frame.opId);
+    }
+  }
+
   // Cockpit state polling with diff-render
   let lastStateJson = '';
 
@@ -384,6 +460,18 @@
 
     // Mutations panel
     renderMutations(state.mutations ?? { active: [], recent: [] });
+
+    // In-flight op pills — hydrate any ops we don't already track. End-frame
+    // arrival via WS still removes them; this just covers tab-opened-mid-run.
+    const inFlight = (state.inFlight ?? []).filter(op => op.kind !== 'classifier');
+    const seen = new Set();
+    for (const op of inFlight) {
+      seen.add(op.opId);
+      upsertOpPill(op);
+    }
+    for (const opId of activeOps.keys()) {
+      if (!seen.has(opId)) removeOpPill(opId);
+    }
   }
 
   // ---- Projects panel ----

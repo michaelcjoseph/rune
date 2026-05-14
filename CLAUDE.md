@@ -6,7 +6,8 @@ Always-on personal second brain server. TypeScript/Node.js.
 
 Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
-- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints (`POST /api/mutations`, `POST /api/mutations/:id/cancel`), and a WebSocket for real-time messaging
+- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints (`POST /api/mutations`, `POST /api/mutations/:id/cancel`, `POST /api/ops/:id/cancel`), and a WebSocket for real-time messaging
+- **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` (`src/transport/in-flight.ts`) and emits `BusOpEvent` frames (start/progress/end). TG shows a tracker message ("🤔 agent · 12s · /cancel") that edits every ~10s and deletes on end; webview shows a cancellable pill. `cancelOp(id)` SIGTERMs the child. `/cancel [opId-prefix]` kills the user's most recent op (or by id). Classifier ops are filtered from senders to avoid resolver spam.
 - **Mutation pipeline** — `src/transport/mutations.ts` is the central registry for autonomous codebase operations (MutationDescriptor, applier registry, createMutation/cancelMutation). `workRunApplier` in `src/jobs/work-runner.ts` is the first applier: spawns Claude CLI with `spec.md + tasks.md + /work --auto` for a project slug. Mutations are logged append-only to `logs/mutations.jsonl`; orphaned `running` entries are flipped to `failed` at startup via `reconcileOrphans()`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
 - **Review system** — multi-phase session-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog sessions. Free-form Telegram messages default to a multi-turn Socratic chat (`handleConversation` in `src/bot/handlers/text.ts`) — `/fresh` or a journal write closes the thread.
@@ -55,14 +56,16 @@ src/
 │       ├── career.ts        # /career — career reflection/planning
 │       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
 │       ├── learn-list.ts    # /learn-list — echo the current prepended learnings
+│       ├── cancel.ts        # /cancel [opId-prefix] — SIGTERM an in-flight Claude op (most recent for user, or by id prefix)
 │       ├── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
 │       └── seed.ts          # /seed — bulk-seed KB from vault files via seedAndProcess()
 ├── transport/
-│   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg/webview to bus 'message', 'agent-event', and 'mutation-event'; returns { tg, webview, destroy }
-│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent; BusMutationEvent has kind 'mutation-event', subKind 'log'|'progress'|'output'|'completed'|'failed'; fault-isolates failing subscribers
+│   ├── sender.ts            # MessageSender interface, SendOpts (approval?: {prompt, options[]}) type, createSenders(bot, bus) factory; subscribes tg/webview to bus 'message', 'agent-event', 'mutation-event', and 'op-event'; returns { tg, webview, destroy }
+│   ├── notification-bus.ts  # NotificationBus: typed event bus with publish/on/off; BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent | BusOpEvent; BusOpEvent has subKind 'start'|'progress'|'end' with opKind 'agent'|'chat'|'one-shot'|'classifier'; fault-isolates failing subscribers
 │   ├── mutations.ts         # Mutation pipeline: MutationDescriptor/MutationKind/MutationStatus types, applier registry, createMutation(), cancelMutation(), activeRuns map, setMutationBus(); autoApprove appliers start immediately
-│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; onMutationEvent() sends one-line TG summary on completed/failed, ignores output/log/progress; shutdown() drains timers
-│   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent() and onMutationEvent() forward bus frames to connected WS clients
+│   ├── in-flight.ts         # In-flight Claude-op registry: registerOp/unregisterOp/cancelOp/cancelMostRecentForUser/listOps; 5s heartbeat ticker emits op-event:progress; setInFlightBus(bus) wires bus emission; cancelled flag overrides exit status to 'cancelled'
+│   ├── telegram-sender.ts   # TelegramSender implements MessageSender; delegates to sendLongMessage; per-user typing timer map; onMutationEvent() sends one-line TG summary on completed/failed; onOpEvent() sends/edits/deletes "🤔 label · Xs · /cancel" tracker messages (10s edit throttle, skips classifier ops); shutdown() drains timers
+│   └── webview-sender.ts    # WebviewSender implements MessageSender; register(userId, ws), unregister(userId, ws), per-user WS fan-out; onAgentEvent(), onMutationEvent(), and onOpEvent() forward bus frames to connected WS clients
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
@@ -79,10 +82,10 @@ src/
 ├── server/
 │   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
 │   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
-│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, POST /api/mutations, POST /api/mutations/:id/cancel, WS /api/ws
+│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, POST /api/mutations, POST /api/mutations/:id/cancel, POST /api/ops/:id/cancel, WS /api/ws
 │   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
 │   ├── projects-snapshot.ts # getProjectSummaries(): reads docs/projects/index.md + tasks.md per project; returns ProjectSummary[] with slug, status, task progress (done/total/perPhase), specPath, lastModified
-│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal counts, project summaries, active+recent mutations; used by GET /api/state
+│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal counts, project summaries, active+recent mutations, in-flight Claude ops; used by GET /api/state
 │   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS)
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue

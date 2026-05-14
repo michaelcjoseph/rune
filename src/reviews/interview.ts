@@ -152,6 +152,9 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         `Let's begin the ${config.type} review.`,
         session.claudeSessionId,
         systemPrompt,
+        undefined,
+        undefined,
+        `review:${config.type}`,
       );
       sender.stopTyping(session.chatId);
 
@@ -204,7 +207,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
 
     sender.startTyping(session.chatId);
     try {
-      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt);
+      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, `review:${config.type}`);
       sender.stopTyping(session.chatId);
 
       if (result.error) {
@@ -333,7 +336,7 @@ ${session.prepContext}
 Approved outline:
 ${session.outline}
 
-Reply ONLY with the JSON object, nothing else.`);
+Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.type}-routing`);
 
         let updates = { projects: false, psychology: false, json_updates: false, worldview: false, playbook: false, proposals: false };
         if (analysisResult.text) {

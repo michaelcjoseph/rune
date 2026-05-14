@@ -261,7 +261,7 @@ describe('jobs/scheduler', () => {
       const jobs = scanAgentCronJobs(bus);
       await jobs[0]!.run();
 
-      expect(vi.mocked(runAgent)).toHaveBeenCalledWith('chatty', 'do it');
+      expect(vi.mocked(runAgent)).toHaveBeenCalledWith('chatty', 'do it', undefined, true);
       expect(bus.publish).toHaveBeenCalledWith({ kind: 'message', userId: 42, text: 'chatty output' });
     });
 
@@ -282,7 +282,7 @@ describe('jobs/scheduler', () => {
       const jobs = scanAgentCronJobs(bus);
       await jobs[0]!.run();
 
-      expect(vi.mocked(runAgent)).toHaveBeenCalledWith('quiet', '');
+      expect(vi.mocked(runAgent)).toHaveBeenCalledWith('quiet', '', undefined, false);
       expect(bus.publish).not.toHaveBeenCalled();
     });
 

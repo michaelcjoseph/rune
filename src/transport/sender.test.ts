@@ -138,4 +138,58 @@ describe('createSenders', () => {
       expect(webviewSendSpy).toHaveBeenCalledWith(1, 'error test');
     });
   });
+
+  describe('bus "op-event" fan-out', () => {
+    const TS = '2026-05-14T12:00:00.000Z';
+
+    function makeOpEventStart(userId: number) {
+      return {
+        kind: 'op-event' as const,
+        subKind: 'start' as const,
+        opId: 'op-fan-out-test',
+        userId,
+        opKind: 'agent' as const,
+        label: 'wiki-compiler',
+        startedAt: TS,
+        elapsedMs: 0,
+      };
+    }
+
+    it('publishing an op-event calls tg.onOpEvent', () => {
+      const { tg } = createSenders(bot, bus);
+      const spy = vi.spyOn(tg, 'onOpEvent');
+      const event = makeOpEventStart(42);
+      bus.publish(event as any);
+      expect(spy).toHaveBeenCalledOnce();
+      expect(spy).toHaveBeenCalledWith(event);
+    });
+
+    it('publishing an op-event calls webview.onOpEvent', () => {
+      const { webview } = createSenders(bot, bus);
+      const spy = vi.spyOn(webview, 'onOpEvent');
+      const event = makeOpEventStart(42);
+      bus.publish(event as any);
+      expect(spy).toHaveBeenCalledOnce();
+      expect(spy).toHaveBeenCalledWith(event);
+    });
+
+    it('publishing an op-event fans out to both tg and webview', () => {
+      const { tg, webview } = createSenders(bot, bus);
+      const tgSpy = vi.spyOn(tg, 'onOpEvent');
+      const wvSpy = vi.spyOn(webview, 'onOpEvent');
+      bus.publish(makeOpEventStart(42) as any);
+      expect(tgSpy).toHaveBeenCalledOnce();
+      expect(wvSpy).toHaveBeenCalledOnce();
+    });
+
+    it('after destroy(), op-events are no longer delivered', () => {
+      const { tg, webview, destroy } = createSenders(bot, bus);
+      const tgSpy = vi.spyOn(tg, 'onOpEvent');
+      const wvSpy = vi.spyOn(webview, 'onOpEvent');
+      destroy();
+      bus.publish(makeOpEventStart(42) as any);
+      expect(tgSpy).not.toHaveBeenCalled();
+      expect(wvSpy).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 // Mock config before any module import that reads it
 vi.mock('../config.js', () => ({
@@ -154,6 +154,158 @@ describe('TelegramSender', () => {
     it('is a no-op when the userId is not typing', () => {
       sender.stopTyping(999); // Never started
       expect(mockStopTyping).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---- op-event tracker tests (onOpEvent) ----
+
+  const TS = '2026-05-14T12:00:00.000Z';
+
+  function makeOpEventStart(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: 'op-event' as const,
+      subKind: 'start' as const,
+      opId: 'test-op-id-1234',
+      userId: 100,
+      opKind: 'agent' as const,
+      label: 'wiki-compiler',
+      startedAt: TS,
+      elapsedMs: 0,
+      ...overrides,
+    };
+  }
+
+  function makeOpEventProgress(opId = 'test-op-id-1234', overrides: Record<string, unknown> = {}) {
+    return {
+      kind: 'op-event' as const,
+      subKind: 'progress' as const,
+      opId,
+      userId: 100,
+      opKind: 'agent' as const,
+      label: 'wiki-compiler',
+      startedAt: TS,
+      elapsedMs: 5000,
+      ...overrides,
+    };
+  }
+
+  function makeOpEventEnd(opId = 'test-op-id-1234', overrides: Record<string, unknown> = {}) {
+    return {
+      kind: 'op-event' as const,
+      subKind: 'end' as const,
+      opId,
+      userId: 100,
+      opKind: 'agent' as const,
+      label: 'wiki-compiler',
+      startedAt: TS,
+      elapsedMs: 12000,
+      status: 'success' as const,
+      ...overrides,
+    };
+  }
+
+  describe('onOpEvent — classifier filter', () => {
+    it('ignores start events for classifier ops', () => {
+      const event = makeOpEventStart({ opKind: 'classifier' });
+      sender.onOpEvent(event as any);
+      expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('ignores progress events for classifier ops', () => {
+      const event = makeOpEventProgress('x', { opKind: 'classifier' });
+      sender.onOpEvent(event as any);
+      expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('ignores end events for classifier ops', () => {
+      const event = makeOpEventEnd('x', { opKind: 'classifier' });
+      sender.onOpEvent(event as any);
+      expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onOpEvent — start sends tracker message', () => {
+    it('calls bot.sendMessage with a formatted tracker text on start', () => {
+      const event = makeOpEventStart();
+      sender.onOpEvent(event as any);
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      const [userId, text] = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(userId).toBe(100);
+      expect(text).toContain('wiki-compiler');
+      expect(text).toContain('/cancel');
+    });
+
+    it('formats elapsed seconds from elapsedMs', async () => {
+      const event = makeOpEventStart({ elapsedMs: 15000 });
+      sender.onOpEvent(event as any);
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      const [, text] = (bot.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(text).toContain('15s');
+    });
+  });
+
+  describe('onOpEvent — progress edits tracker message (throttled)', () => {
+    it('does not edit when no tracker exists for that opId', async () => {
+      const event = makeOpEventProgress('unknown-op');
+      sender.onOpEvent(event as any);
+      expect(bot.editMessageText).toBeUndefined();
+    });
+
+    it('does not call editMessageText before throttle window expires', async () => {
+      // The bot already has sendMessage from mockBot().
+      // Ensure editMessageText is defined on bot so we can spy on it.
+      bot.editMessageText = vi.fn().mockResolvedValue({});
+
+      const start = makeOpEventStart();
+      sender.onOpEvent(start as any);
+      // Flush microtasks so the sendMessage .then() callback fires and stores the tracker.
+      await new Promise(r => setTimeout(r, 0));
+
+      // Immediately send a progress event — the tracker was just stored but
+      // lastEditTs was set to Date.now() at creation, so the 10s throttle
+      // prevents any edit call this soon.
+      const progress = makeOpEventProgress(start.opId, { elapsedMs: 100 });
+      sender.onOpEvent(progress as any);
+      expect(bot.editMessageText).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onOpEvent — end deletes tracker message', () => {
+    it('does not call deleteMessage when no tracker exists for that opId', async () => {
+      bot.deleteMessage = vi.fn().mockResolvedValue(true);
+      const event = makeOpEventEnd('unknown-op-id');
+      sender.onOpEvent(event as any);
+      expect(bot.deleteMessage).not.toHaveBeenCalled();
+    });
+
+    it('calls deleteMessage after start+end sequence (async resolve)', async () => {
+      bot.sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+      bot.deleteMessage = vi.fn().mockResolvedValue(true);
+
+      const start = makeOpEventStart({ opId: 'del-op-1' });
+      sender.onOpEvent(start as any);
+
+      // Flush microtasks so the .then() callback runs and tracker is stored
+      await new Promise(r => setTimeout(r, 0));
+
+      const end = makeOpEventEnd('del-op-1');
+      sender.onOpEvent(end as any);
+
+      // Flush again for the delete promise
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(bot.deleteMessage).toHaveBeenCalledOnce();
+      const [chatId, msgId] = (bot.deleteMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(chatId).toBe(100); // userId
+      expect(msgId).toBe(999);  // message_id from sendMessage
+    });
+  });
+
+  describe('shutdown — trackers cleared', () => {
+    it('clears trackers map without throwing', () => {
+      // Just verify shutdown doesn't throw even with pending trackers
+      sender.onOpEvent(makeOpEventStart() as any);
+      expect(() => sender.shutdown()).not.toThrow();
     });
   });
 });

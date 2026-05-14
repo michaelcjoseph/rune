@@ -127,6 +127,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
       'wiki-compiler',
       expect.stringContaining('knowledge/raw/conversations/'),
       expect.any(Number),
+      false,
     );
 
     // 6. Queue is now empty after processing

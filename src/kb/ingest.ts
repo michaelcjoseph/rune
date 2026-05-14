@@ -143,7 +143,10 @@ Read the source file, then follow the ingestion workflow defined in knowledge/sc
   const projectsBefore = snapshotProjectsMtimes();
   const wikiBefore = snapshotWikiMtimes();
 
-  const result = await runAgent('wiki-compiler', prompt, config.CLAUDE_INGEST_TIMEOUT_MS);
+  // Ingestion is dominated by the nightly batch (often 10-50 files in a row);
+  // surfacing each as a tracker would spam Telegram. /ingest still shows
+  // typing dots and a final summary so the user knows it ran.
+  const result = await runAgent('wiki-compiler', prompt, config.CLAUDE_INGEST_TIMEOUT_MS, false);
 
   const projectsAfter = snapshotProjectsMtimes();
   const wikiAfter = snapshotWikiMtimes();
