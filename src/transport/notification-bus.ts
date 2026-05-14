@@ -53,6 +53,10 @@ export interface BusOpEventBase {
   agent?: string;
   startedAt: string;
   elapsedMs: number;
+  /** Short user-facing description of the current activity inside this op,
+   *  e.g. "Read: knowledge/index.md" or "KB query: capital flows". Populated
+   *  from Claude's stream-json tool_use events when the op is user-visible. */
+  detail?: string;
 }
 
 export interface BusOpEventStart extends BusOpEventBase {

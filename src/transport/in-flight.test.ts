@@ -22,6 +22,7 @@ const {
   listOps,
   isCancelled,
   setInFlightBus,
+  setOpDetail,
 } = await import('./in-flight.js');
 
 // Helpers
@@ -293,6 +294,72 @@ describe('in-flight op registry', () => {
       registerOp(makeOp());
       const pub = listOps()[0]!;
       expect('child' in pub).toBe(false);
+    });
+  });
+
+  describe('setOpDetail', () => {
+    it('is a no-op when opId is unknown', () => {
+      // Should not throw for an unregistered opId
+      expect(() => setOpDetail('nonexistent-id', 'Read: foo.md')).not.toThrow();
+    });
+
+    it('sets detail on the op and includes it in listOps public shape', () => {
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'detail-test', userId: 42, child });
+      setOpDetail(op.opId, 'Read: knowledge/index.md');
+      const pub = listOps().find(o => o.opId === op.opId)!;
+      expect(pub.detail).toBe('Read: knowledge/index.md');
+    });
+
+    it('updates detail when called a second time', () => {
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'detail-update', userId: 42, child });
+      setOpDetail(op.opId, 'Read: a.md');
+      setOpDetail(op.opId, 'Write: b.md');
+      const pub = listOps().find(o => o.opId === op.opId)!;
+      expect(pub.detail).toBe('Write: b.md');
+    });
+
+    it('publishes a progress event with detail when bus is set', () => {
+      const publishMock = vi.fn();
+      setInFlightBus({ publish: publishMock, on: vi.fn(), off: vi.fn() } as any);
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'detail-bus', userId: 42, child });
+      publishMock.mockClear(); // ignore start event
+
+      setOpDetail(op.opId, 'Grep: capital markets');
+
+      expect(publishMock).toHaveBeenCalledOnce();
+      const event = publishMock.mock.calls[0]![0];
+      expect(event.kind).toBe('op-event');
+      expect(event.subKind).toBe('progress');
+      expect(event.detail).toBe('Grep: capital markets');
+
+      setInFlightBus(null as any);
+    });
+
+    it('detail is absent from public shape when never set', () => {
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'no-detail', userId: 42, child });
+      const pub = listOps().find(o => o.opId === op.opId)!;
+      expect('detail' in pub).toBe(false);
+    });
+
+    it('detail is included in the end event published on unregisterOp', () => {
+      const publishMock = vi.fn();
+      setInFlightBus({ publish: publishMock, on: vi.fn(), off: vi.fn() } as any);
+      const child = makeChildProcess();
+      const op = registerOp({ kind: 'agent', label: 'end-detail', userId: 42, child });
+      setOpDetail(op.opId, 'WebSearch: AI trends');
+      publishMock.mockClear(); // ignore start + progress
+
+      unregisterOp(op.opId, 'success');
+
+      const event = publishMock.mock.calls[0]![0];
+      expect(event.subKind).toBe('end');
+      expect(event.detail).toBe('WebSearch: AI trends');
+
+      setInFlightBus(null as any);
     });
   });
 

@@ -16,6 +16,10 @@ export interface InFlightOp {
   startedAtIso: string;
   child: ChildProcess;
   cancelled: boolean;
+  /** Latest one-line description of what the op is currently doing
+   *  (e.g. "Read: knowledge/index.md"). Updated by setOpDetail() and emitted
+   *  on every subsequent op-event publish. */
+  detail?: string;
 }
 
 /** Public-shaped view (no `child`) for callers that want to surface ops without
@@ -28,6 +32,7 @@ export interface InFlightOpPublic {
   userId: number;
   startedAt: string;
   elapsedMs: number;
+  detail?: string;
 }
 
 const ops = new Map<string, InFlightOp>();
@@ -53,6 +58,7 @@ function toPublic(op: InFlightOp): InFlightOpPublic {
     userId: op.userId,
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
+    ...(op.detail ? { detail: op.detail } : {}),
   };
 }
 
@@ -68,6 +74,7 @@ function publishStart(op: InFlightOp): void {
     ...(op.agentName ? { agent: op.agentName } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: 0,
+    ...(op.detail ? { detail: op.detail } : {}),
   };
   _bus.publish(event);
 }
@@ -84,6 +91,7 @@ function publishProgress(op: InFlightOp): void {
     ...(op.agentName ? { agent: op.agentName } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
+    ...(op.detail ? { detail: op.detail } : {}),
   };
   _bus.publish(event);
 }
@@ -102,8 +110,19 @@ function publishEnd(op: InFlightOp, status: 'success' | 'error' | 'cancelled', e
     elapsedMs: Date.now() - op.startedAt,
     status,
     ...(error ? { error } : {}),
+    ...(op.detail ? { detail: op.detail } : {}),
   };
   _bus.publish(event);
+}
+
+/** Update the op's current activity description and immediately publish a
+ *  progress event with the new detail — used by execClaude's stream-json
+ *  parser as each tool_use arrives. No-op for unknown opIds. */
+export function setOpDetail(opId: string, detail: string): void {
+  const op = ops.get(opId);
+  if (!op) return;
+  op.detail = detail;
+  publishProgress(op);
 }
 
 function ensureTicker(): void {

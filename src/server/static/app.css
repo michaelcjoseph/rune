@@ -270,6 +270,28 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   50% { opacity: 1; transform: scale(1.15); }
 }
 
+/* Claude Activity sidebar panel — live trace of tool calls inside the
+ * current op. Capped at ~220px; older rows scroll out of view. */
+#panel-activity #activity-content {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.activity-row {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: .76rem;
+  line-height: 1.5;
+  color: var(--text2);
+  padding: .15rem 0;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-row.activity-start { color: var(--text); }
+.activity-row.activity-done { color: var(--accent); }
+.activity-row.activity-cancelled { color: #ff6b6b; }
+
 /* Unified chat status pill — pinned just above the input form.
  * Driven by `status` frames (passive label) and `op-event` frames
  * (rich label + elapsed counter + cancel button). */

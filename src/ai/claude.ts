@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFile, appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,8 @@ import { getDateContext } from '../utils/time.js';
 // If vault/learnings ever needs Claude help (e.g., dedup), extract a context/ layer.
 import { buildLearningsPrompt } from '../vault/learnings.js';
 import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
-import { registerOp, unregisterOp, isCancelled } from '../transport/in-flight.js';
+import { registerOp, unregisterOp, isCancelled, setOpDetail } from '../transport/in-flight.js';
+import { formatToolUse } from './tool-labels.js';
 
 const log = createLogger('claude');
 
@@ -93,11 +94,107 @@ export interface OpMeta {
   userId?: number;
 }
 
+/** Append a single stream-json event line (envelope) to logs/claude-stream.jsonl.
+ *  Best-effort + async: a log-write failure must not surface to the caller, and
+ *  the fs write must not block the stdout `data` handler (which fires per line
+ *  during streaming and would otherwise stall the event loop on every event). */
+function appendStreamLogLine(line: string): void {
+  // Fire-and-forget. Errors swallowed by design — if logs/ is unwritable we
+  // continue serving requests rather than crash the chat turn.
+  appendFile(config.CLAUDE_STREAM_LOG, line + '\n', () => { /* ignore */ });
+}
+
+const STREAM_LOG_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/** Rotate logs/claude-stream.jsonl if it has grown past 10 MB. Renames the
+ *  current file to claude-stream.jsonl.old (overwriting any previous one).
+ *  Idempotent — safe to call once at startup. Best-effort: missing file or
+ *  rename error is logged and ignored. */
+export function rotateStreamLogIfLarge(): void {
+  const path = config.CLAUDE_STREAM_LOG;
+  let size: number;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return; // file doesn't exist yet — nothing to rotate.
+  }
+  if (size < STREAM_LOG_MAX_BYTES) return;
+  try {
+    renameSync(path, path + '.old');
+    log.info('Rotated claude-stream.jsonl', { sizeMb: (size / 1024 / 1024).toFixed(1) });
+  } catch (err) {
+    log.warn('Failed to rotate claude-stream.jsonl', { error: (err as Error).message });
+  }
+}
+
+interface StreamState {
+  finalText: string;
+  resultText: string | null;
+}
+
+/** Parse one stream-json event from the CLI's stdout. Side-effects:
+ *  - calls setOpDetail(opId, …) for each tool_use content block
+ *  - appends the envelope to logs/claude-stream.jsonl
+ *  - accumulates assistant text + result into `state`
+ *  Unknown event types are still logged. */
+function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | undefined, state: StreamState): void {
+  let event: unknown;
+  try {
+    event = JSON.parse(raw);
+  } catch {
+    return; // not JSON — ignore (claude prints occasional non-JSON banners)
+  }
+  appendStreamLogLine(JSON.stringify({
+    ts: new Date().toISOString(),
+    opId,
+    ...(opMeta?.agentName ? { agent: opMeta.agentName } : {}),
+    event,
+  }));
+  if (!event || typeof event !== 'object') return;
+  const e = event as Record<string, unknown>;
+  const type = e['type'];
+
+  if (type === 'assistant') {
+    const message = e['message'];
+    if (message && typeof message === 'object') {
+      const content = (message as Record<string, unknown>)['content'];
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue;
+          const b = block as Record<string, unknown>;
+          if (b['type'] === 'tool_use' && opId) {
+            const name = typeof b['name'] === 'string' ? b['name'] : 'tool';
+            setOpDetail(opId, formatToolUse(name, b['input']));
+          } else if (b['type'] === 'text' && typeof b['text'] === 'string') {
+            // Fallback accumulator — only used if the final `result` event
+            // doesn't arrive (e.g. on early exit).
+            state.finalText += b['text'];
+          }
+        }
+      }
+    }
+  } else if (type === 'result' && typeof e['result'] === 'string') {
+    state.resultText = e['result'] as string;
+  }
+}
+
 function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
-  const fullArgs = config.WORKSPACE_DIR
-    ? ['--dangerously-skip-permissions', '--add-dir', config.WORKSPACE_DIR, ...args]
-    : ['--dangerously-skip-permissions', ...args];
+  // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
+  // Haiku calls) bypass it because their callers expect a single JSON blob on
+  // stdout, and the path is latency-sensitive. `one-shot` IS included — its
+  // callers (askClaudeOneShot, /ask, review:* routing) read the final text
+  // through ClaudeResult.text, which still resolves correctly via the stream's
+  // `result` event (or the text-block fallback on early exit).
+  const streaming = !!opMeta && opMeta.kind !== 'classifier';
+  const baseArgs = config.WORKSPACE_DIR
+    ? ['--dangerously-skip-permissions', '--add-dir', config.WORKSPACE_DIR]
+    : ['--dangerously-skip-permissions'];
+  const streamArgs = streaming
+    ? ['--output-format', 'stream-json', '--verbose']
+    : [];
+  const fullArgs = [...baseArgs, ...streamArgs, ...args];
+
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
       cwd: config.VAULT_DIR,
@@ -128,14 +225,37 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
       opId = op.opId;
     }
 
+    // In non-streaming mode `stdout` is the result text. In streaming mode the
+    // result comes from `streamState.resultText` and `stdout` is only used for
+    // the timeout-tail log message, so we keep a small rolling tail instead of
+    // an unbounded buffer (avoids holding 100s of KB for long agent runs).
+    const STREAM_STDOUT_TAIL_BYTES = 1500;
     let stdout = '';
     let stderr = '';
+    let lineBuf = '';
+    const streamState: StreamState = { finalText: '', resultText: null };
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
     }, timeout);
 
     child.stdout.on('data', (data: Buffer) => {
-      stdout += data;
+      if (streaming) {
+        // Rolling tail — only the last STREAM_STDOUT_TAIL_BYTES bytes are kept
+        // for the timeout error path. The structured result comes from the
+        // parsed stream events below.
+        stdout = (stdout + data.toString('utf8')).slice(-STREAM_STDOUT_TAIL_BYTES);
+        // Mirrors the line-buffering pattern from work-runner.streamProcess:
+        // bytes can split JSON lines mid-token, so accumulate the remainder.
+        lineBuf += data.toString('utf8');
+        let nl: number;
+        while ((nl = lineBuf.indexOf('\n')) !== -1) {
+          const line = lineBuf.slice(0, nl);
+          lineBuf = lineBuf.slice(nl + 1);
+          if (line.trim()) handleStreamEvent(line, opId, opMeta, streamState);
+        }
+      } else {
+        stdout += data;
+      }
     });
     child.stderr.on('data', (data: Buffer) => {
       stderr += data;
@@ -144,11 +264,19 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       activeProcesses.delete(child);
+      // Flush any trailing partial line as a best-effort parse.
+      if (streaming && lineBuf.trim()) {
+        handleStreamEvent(lineBuf, opId, opMeta, streamState);
+        lineBuf = '';
+      }
       // Claude CLI installs a SIGTERM handler that exits cleanly with code 143
       // (POSIX convention: 128 + SIGTERM=15), so Node reports `{code: 143,
       // signal: null}` — not `{code: null, signal: 'SIGTERM'}`. Treat both as
       // timeouts so the TG summary stays readable.
       const timedOut = signal === 'SIGTERM' || code === 143;
+      const successText = streaming
+        ? (streamState.resultText ?? streamState.finalText)
+        : stdout;
       if (opId !== null && isCancelled(opId)) {
         unregisterOp(opId, 'cancelled', 'Cancelled by user');
         resolve({ text: null, error: 'Cancelled by user' });
@@ -171,7 +299,7 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
         resolve({ text: null, error });
       } else {
         if (opId) unregisterOp(opId, 'success');
-        resolve({ text: stdout.trim(), error: null });
+        resolve({ text: successText.trim(), error: null });
       }
     });
 

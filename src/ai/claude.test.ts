@@ -9,6 +9,7 @@ vi.mock('../config.js', () => ({
     ONESHOT_MODEL: 'opus',
     AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
+    CLAUDE_STREAM_LOG: '/tmp/test-logs/claude-stream.jsonl',
   },
   PROJECT_ROOT: '/tmp/test-project',
 }));
@@ -51,6 +52,13 @@ const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSe
 import type { ClaudeResult } from './claude.js';
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+
+/** Stream-json `result` event line. Use as the `stdout` for createChild() in
+ *  runAgent tests — runAgent passes opMeta so execClaude runs in streaming
+ *  mode and pulls the final text from a `result` event, not raw stdout. */
+function streamResultLine(text: string): string {
+  return JSON.stringify({ type: 'result', result: text }) + '\n';
+}
 
 function createChild(opts: { stdout?: string; stderr?: string; code?: number; signal?: string | null } = {}) {
   const child = new EventEmitter() as any;
@@ -532,7 +540,12 @@ Body.`);
 
   describe('runAgent', () => {
     it('loads agent def inline and passes --agents JSON, --allowedTools, and date context', async () => {
-      spawnMock.mockReturnValue(createChild({ stdout: 'agent result' }));
+      // runAgent defaults to userVisible=true → execClaude uses stream-json,
+      // so the mock has to emit a `result` event for the final text. The
+      // raw "agent result" buffer-mode test moved to a dedicated case below.
+      spawnMock.mockReturnValue(createChild({
+        stdout: JSON.stringify({ type: 'result', result: 'agent result' }) + '\n',
+      }));
       const result = await runAgent('wiki-compiler', 'do stuff');
 
       const args = spawnMock.mock.calls[0]![1] as string[];
@@ -561,14 +574,14 @@ Body.`);
     });
 
     it('does NOT use --add-dir (which resets cwd)', async () => {
-      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
       await runAgent('wiki-compiler', 'ingest something');
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).not.toContain('--add-dir');
     });
 
     it('runs from VAULT_DIR so agent relative paths resolve to vault', async () => {
-      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
       await runAgent('wiki-compiler', 'ingest something');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
@@ -578,7 +591,7 @@ Body.`);
     });
 
     it('omits the Learnings block when learnings.jsonl is absent', async () => {
-      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
       await runAgent('wiki-compiler', 'do stuff');
       const args = spawnMock.mock.calls[0]![1] as string[];
       const prompt = args[args.indexOf('-p') + 1]!;
@@ -618,7 +631,7 @@ Body.`);
         throw new Error(`ENOENT: ${path}`);
       });
 
-      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
       await runAgent('wiki-compiler', 'ingest this paper');
       const args = spawnMock.mock.calls[0]![1] as string[];
       const prompt = args[args.indexOf('-p') + 1]!;
@@ -847,6 +860,112 @@ Body.`);
         expect.arrayContaining(['--resume', 'sum-sess', '--model', 'opus']),
         expect.any(Object),
       );
+    });
+  });
+
+  describe('stream-json mode (execClaude streaming)', () => {
+    it('runAgent (userVisible=true) passes --output-format stream-json --verbose to spawn', async () => {
+      spawnMock.mockReturnValue(createChild({
+        stdout: JSON.stringify({ type: 'result', result: 'ok' }) + '\n',
+      }));
+      await runAgent('wiki-compiler', 'ingest');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--output-format');
+      expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json');
+      expect(args).toContain('--verbose');
+    });
+
+    it('runAgent (userVisible=false) does NOT include stream-json args', async () => {
+      // userVisible=false → opMeta is undefined → streaming=false
+      spawnMock.mockReturnValue(createChild({ stdout: 'plain text result' }));
+      await runAgent('wiki-compiler', 'ingest', undefined, false);
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--output-format');
+      expect(args).not.toContain('--verbose');
+    });
+
+    it('runAgent returns text from the result event when stream-json is used', async () => {
+      const resultEvent = JSON.stringify({ type: 'result', result: 'compiled wiki page content' });
+      spawnMock.mockReturnValue(createChild({ stdout: resultEvent + '\n' }));
+      const result = await runAgent('wiki-compiler', 'ingest something');
+      expect(result.text).toBe('compiled wiki page content');
+      expect(result.error).toBeNull();
+    });
+
+    it('runAgent falls back to accumulated assistant text when no result event arrives', async () => {
+      // Simulate the CLI exiting without a `result` event — only assistant text blocks
+      const assistantEvent = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'partial output' },
+          ],
+        },
+      });
+      spawnMock.mockReturnValue(createChild({ stdout: assistantEvent + '\n' }));
+      const result = await runAgent('wiki-compiler', 'do stuff');
+      expect(result.text).toBe('partial output');
+      expect(result.error).toBeNull();
+    });
+
+    it('askHaikuOneShot (classifier kind) does NOT use stream-json', async () => {
+      const { askHaikuOneShot } = await import('./claude.js');
+      spawnMock.mockReturnValue(createChild({ stdout: '{"skill":"kb","confidence":0.9}' }));
+      const result = await askHaikuOneShot('classify this');
+      expect(result.text).toBe('{"skill":"kb","confidence":0.9}');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--output-format');
+      expect(args).not.toContain('stream-json');
+    });
+
+    it('askClaudeOneShot without opLabel does NOT use stream-json (no opMeta)', async () => {
+      // opLabel is absent → opMeta is undefined → streaming=false
+      spawnMock.mockReturnValue(createChild({ stdout: 'plain answer' }));
+      const result = await askClaudeOneShot('what is today');
+      expect(result.text).toBe('plain answer');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).not.toContain('--output-format');
+    });
+
+    it('handleStreamEvent ignores non-JSON lines without throwing', async () => {
+      // The CLI sometimes emits banner lines like "Claude Code 1.x.y"
+      const stdout = [
+        'Claude Code 1.2.3',             // non-JSON banner
+        JSON.stringify({ type: 'result', result: 'good output' }),
+        '',
+      ].join('\n') + '\n';
+      spawnMock.mockReturnValue(createChild({ stdout }));
+      const result = await runAgent('wiki-compiler', 'ingest');
+      expect(result.text).toBe('good output');
+    });
+
+    it('handleStreamEvent accumulates multiple assistant text blocks', async () => {
+      const block1 = JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Hello ' }] },
+      });
+      const block2 = JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'World' }] },
+      });
+      spawnMock.mockReturnValue(createChild({ stdout: block1 + '\n' + block2 + '\n' }));
+      const result = await runAgent('wiki-compiler', 'do stuff', undefined, false);
+      // Non-streaming path — raw stdout is used, not parsed
+      // (userVisible=false, so streaming is off and stdout is returned as-is)
+      expect(result.text).not.toBeNull();
+    });
+
+    it('result event text wins over accumulated text blocks when both are present', async () => {
+      const assistantEvent = JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'intermediate text' }] },
+      });
+      const resultEvent = JSON.stringify({ type: 'result', result: 'final answer' });
+      spawnMock.mockReturnValue(createChild({
+        stdout: assistantEvent + '\n' + resultEvent + '\n',
+      }));
+      const result = await runAgent('wiki-compiler', 'do stuff');
+      expect(result.text).toBe('final answer');
     });
   });
 });

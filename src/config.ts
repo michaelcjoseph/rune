@@ -91,6 +91,10 @@ const config = {
     return join(this.LOGS_DIR, 'last-workout.json');
   },
 
+  get CLAUDE_STREAM_LOG() {
+    return join(this.LOGS_DIR, 'claude-stream.jsonl');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

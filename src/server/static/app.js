@@ -145,10 +145,13 @@
         if (frame.opKind === 'classifier') return; // safety net — sender filters
         if (frame.subKind === 'start') {
           chatStatus.attachOp(frame.opId, frame.label, frame.startedAt);
+          activityPanel.start(frame.label);
         } else if (frame.subKind === 'progress') {
           chatStatus.tickOp(frame.opId, frame.startedAt);
+          if (frame.detail) activityPanel.append(frame.detail);
         } else if (frame.subKind === 'end') {
           chatStatus.detachOp(frame.opId);
+          activityPanel.markDone(frame.status);
         }
       }
     };
@@ -392,6 +395,71 @@
     };
   })();
 
+  // Sidebar "Claude Activity" panel — live trace of tool calls inside the
+  // current Claude op. Driven by op-event progress frames with `detail`.
+  // Capped at 50 rows (oldest dropped). Persists until the next op starts.
+  const activityPanel = (() => {
+    const contentEl = document.getElementById('activity-content');
+    const MAX_ROWS = 50;
+    let rowCount = 0;
+    let lastDetail = '';
+
+    function ts() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function reset() {
+      contentEl.innerHTML = '<span class="muted">Idle</span>';
+      rowCount = 0;
+      lastDetail = '';
+    }
+
+    function appendRow(text, extraClass) {
+      // First real row replaces the "Idle" placeholder.
+      if (rowCount === 0) contentEl.innerHTML = '';
+      const row = document.createElement('div');
+      row.className = extraClass ? `activity-row ${extraClass}` : 'activity-row';
+      row.textContent = `[${ts()}] · ${text}`;
+      contentEl.appendChild(row);
+      rowCount++;
+      // Drop oldest if over cap.
+      while (rowCount > MAX_ROWS) {
+        const first = contentEl.firstChild;
+        if (!first) break; // defensive: invariant says rowCount tracks children
+        contentEl.removeChild(first);
+        rowCount--;
+      }
+      contentEl.scrollTop = contentEl.scrollHeight;
+    }
+
+    return {
+      start(label) {
+        reset();
+        appendRow(label || 'Started', 'activity-start');
+      },
+      append(detail) {
+        // Skip duplicate consecutive details (the same tool_use can republish
+        // on the 5s heartbeat after the immediate setOpDetail emission).
+        if (detail === lastDetail) return;
+        lastDetail = detail;
+        appendRow(detail);
+      },
+      markDone(status) {
+        const cls = status === 'cancelled' ? 'activity-cancelled' : 'activity-done';
+        const text = status === 'cancelled' ? '⊘ cancelled' : '✓ done';
+        appendRow(text, cls);
+      },
+      // Used by /api/state hydration when a tab opens mid-flight.
+      hydrate(label, detail) {
+        if (rowCount > 0) return;
+        appendRow(label || 'Running', 'activity-start');
+        if (detail) appendRow(detail);
+      },
+    };
+  })();
+
   // Live agent-run tracking (from WS agent-event frames)
   const activeAgentRuns = new Map(); // runId → { agent, startedAt, timerEl }
   let activeRunsInterval = null;
@@ -532,6 +600,7 @@
     if (!chatStatus.hasOp() && inFlight.length > 0) {
       const op = inFlight[0];
       chatStatus.attachOp(op.opId, op.label, op.startedAt);
+      activityPanel.hydrate(op.label, op.detail);
     }
     chatStatus.setMoreCount(Math.max(0, inFlight.length - (chatStatus.hasOp() ? 1 : 0)));
   }

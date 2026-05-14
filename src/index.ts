@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
-import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus } from './ai/claude.js';
+import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus, rotateStreamLogIfLarge } from './ai/claude.js';
 import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
@@ -27,6 +27,10 @@ initKB();
 
 // Flip any stale 'running' mutations from a prior interrupted run to 'failed'
 reconcileOrphans();
+
+// Rotate the Claude stream log if it has grown past the size cap. Idempotent
+// and best-effort — never blocks startup.
+rotateStreamLogIfLarge();
 
 // Restore sessions from previous run
 restoreSessions();
