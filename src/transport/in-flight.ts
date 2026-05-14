@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus, BusOpEvent, OpKind } from './notification-bus.js';
+import { formatOpLabel } from './op-labels.js';
 
 const log = createLogger('in-flight');
 
@@ -42,10 +43,12 @@ export function setInFlightBus(bus: NotificationBus): void {
 function toPublic(op: InFlightOp): InFlightOpPublic {
   // Spread conditionally so `'agentName' in pub` is false when the op had no
   // agent (one-shot, chat, classifier). Tests rely on this absence semantic.
+  // Use the friendly label so /cancel replies and state-snapshot consumers
+  // see the same user-facing text as the bus events.
   return {
     opId: op.opId,
     kind: op.kind,
-    label: op.label,
+    label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agentName: op.agentName } : {}),
     userId: op.userId,
     startedAt: op.startedAtIso,
@@ -61,7 +64,7 @@ function publishStart(op: InFlightOp): void {
     opId: op.opId,
     userId: op.userId,
     opKind: op.kind,
-    label: op.label,
+    label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: 0,
@@ -77,7 +80,7 @@ function publishProgress(op: InFlightOp): void {
     opId: op.opId,
     userId: op.userId,
     opKind: op.kind,
-    label: op.label,
+    label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,
@@ -93,7 +96,7 @@ function publishEnd(op: InFlightOp, status: 'success' | 'error' | 'cancelled', e
     opId: op.opId,
     userId: op.userId,
     opKind: op.kind,
-    label: op.label,
+    label: formatOpLabel(op.kind, op.label, op.agentName),
     ...(op.agentName ? { agent: op.agentName } : {}),
     startedAt: op.startedAtIso,
     elapsedMs: Date.now() - op.startedAt,

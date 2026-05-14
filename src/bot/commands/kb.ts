@@ -35,7 +35,7 @@ export async function handleKB(sender: MessageSender, userId: number, args: stri
 }
 
 async function handleKBQuery(sender: MessageSender, userId: number, question: string): Promise<void> {
-  sender.startTyping(userId);
+  sender.startTyping(userId, 'Querying knowledge base');
   try {
     const result = await queryKB(question);
     sender.stopTyping(userId);

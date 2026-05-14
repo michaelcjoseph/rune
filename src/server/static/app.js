@@ -111,7 +111,9 @@
       try { frame = JSON.parse(event.data); } catch { return; }
 
       if (frame.kind === 'message') {
-        clearStatusIndicator();
+        // Reply arrived. If an op is still attached we leave the pill alone —
+        // its op-event:end will clean up. Otherwise drop the passive pill.
+        if (!chatStatus.hasOp()) chatStatus.clear();
         if (streamingDiv) {
           // Finalize streaming tail
           streamingDiv.innerHTML = renderMarkdown(streamingText);
@@ -124,7 +126,7 @@
           renderApproval(frame.approval, div);
         }
       } else if (frame.kind === 'status') {
-        handleStatusEvent(frame);
+        chatStatus.setStatus(frame.label);
       } else if (frame.kind === 'chunk') {
         // Streaming chunk — append to tail node
         streamingText += frame.text;
@@ -140,7 +142,14 @@
       } else if (frame.kind === 'mutation-event') {
         handleMutationEvent(frame);
       } else if (frame.kind === 'op-event') {
-        handleOpEvent(frame);
+        if (frame.opKind === 'classifier') return; // safety net — sender filters
+        if (frame.subKind === 'start') {
+          chatStatus.attachOp(frame.opId, frame.label, frame.startedAt);
+        } else if (frame.subKind === 'progress') {
+          chatStatus.tickOp(frame.opId, frame.startedAt);
+        } else if (frame.subKind === 'end') {
+          chatStatus.detachOp(frame.opId);
+        }
       }
     };
 
@@ -150,11 +159,8 @@
       activeAgentRuns.clear();
       if (activeRunsInterval) { clearInterval(activeRunsInterval); activeRunsInterval = null; }
       document.querySelectorAll('.run-live').forEach(el => el.remove());
-      clearStatusIndicator();
-      // Drop op pills — /api/state poll will rehydrate any still-active ops
-      activeOps.clear();
-      if (opTickerInterval) { clearInterval(opTickerInterval); opTickerInterval = null; }
-      document.querySelectorAll('.op-pill').forEach(el => el.remove());
+      // Drop chat status pill — /api/state poll will rehydrate any still-active op.
+      chatStatus.clear();
       setTimeout(() => {
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);
         connect();
@@ -245,23 +251,146 @@
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
   });
 
-  // Activity/thinking indicator
-  function clearStatusIndicator() {
-    const el = document.getElementById('status-indicator');
-    if (el) el.remove();
-  }
+  // Unified chat status pill. Driven by both `status` frames (startTyping /
+  // stopTyping) and `op-event` frames (cancellable, with elapsed timer).
+  // Pinned above the input form so it stays visible regardless of scroll.
+  const chatStatus = (() => {
+    const mainEl = document.getElementById('main');
+    const formEl = document.getElementById('input-form');
+    let el = null;
+    let labelEl = null;
+    let elapsedEl = null;
+    let moreEl = null;
+    let cancelBtn = null;
+    let ticker = null;
+    let currentOpId = null;
+    let opStartedAtMs = 0;
+    let currentLabel = '';
+    let moreCount = 0;
 
-  function handleStatusEvent(frame) {
-    clearStatusIndicator();
-    if (frame.label != null && frame.label !== '') {
-      const div = document.createElement('div');
-      div.id = 'status-indicator';
-      div.className = 'status-indicator';
-      div.innerHTML = `<span class="status-dot"></span><span class="status-label">${escHtml(frame.label)}</span>`;
-      messagesEl.appendChild(div);
-      scrollToBottom();
+    function ensure() {
+      if (el) return;
+      el = document.createElement('div');
+      el.id = 'chat-status';
+      el.className = 'chat-status';
+      el.setAttribute('aria-live', 'polite');
+      const spinner = document.createElement('span');
+      spinner.className = 'cs-spinner';
+      labelEl = document.createElement('span');
+      labelEl.className = 'cs-label';
+      elapsedEl = document.createElement('span');
+      elapsedEl.className = 'cs-elapsed';
+      moreEl = document.createElement('span');
+      moreEl.className = 'cs-more';
+      el.append(spinner, labelEl, elapsedEl, moreEl);
+      mainEl.insertBefore(el, formEl);
+      paintMore();
     }
-  }
+
+    function destroy() {
+      if (ticker) { clearInterval(ticker); ticker = null; }
+      if (cancelBtn) cancelBtn = null;
+      if (el) { el.remove(); el = null; }
+      labelEl = elapsedEl = moreEl = null;
+      currentOpId = null;
+      currentLabel = '';
+      opStartedAtMs = 0;
+      moreCount = 0;
+    }
+
+    function paintLabel(text) {
+      currentLabel = text;
+      if (labelEl) labelEl.textContent = text;
+    }
+
+    function paintElapsed() {
+      if (!elapsedEl) return;
+      if (opStartedAtMs > 0) {
+        const secs = Math.floor((Date.now() - opStartedAtMs) / 1000);
+        elapsedEl.textContent = `· ${secs}s`;
+      } else {
+        elapsedEl.textContent = '';
+      }
+    }
+
+    function paintMore() {
+      if (!moreEl) return;
+      moreEl.textContent = moreCount > 0 ? `· +${moreCount} more` : '';
+    }
+
+    function addCancelButton(opId) {
+      if (cancelBtn) return;
+      cancelBtn = document.createElement('button');
+      cancelBtn.className = 'cs-cancel';
+      cancelBtn.title = 'Cancel';
+      cancelBtn.textContent = '✕';
+      cancelBtn.addEventListener('click', () => {
+        cancelBtn.disabled = true;
+        fetch(`/api/ops/${encodeURIComponent(opId)}/cancel`, { method: 'POST' })
+          .catch(() => { if (cancelBtn) cancelBtn.disabled = false; });
+      });
+      el.appendChild(cancelBtn);
+    }
+
+    function removeCancelButton() {
+      if (cancelBtn) { cancelBtn.remove(); cancelBtn = null; }
+    }
+
+    return {
+      // Called on { kind: 'status', label } frames. Plain spinner + label, no cancel.
+      setStatus(label) {
+        if (label == null || label === '') {
+          // stopTyping arrived. If an op is still attached, keep the pill;
+          // otherwise drop it.
+          if (currentOpId) return;
+          destroy();
+          return;
+        }
+        ensure();
+        paintLabel(label);
+        paintElapsed();
+      },
+      // Called on { kind: 'op-event', subKind: 'start' }. Upgrades pill with
+      // friendly label + elapsed counter + cancel button.
+      attachOp(opId, label, startedAtIso) {
+        ensure();
+        currentOpId = opId;
+        opStartedAtMs = new Date(startedAtIso).getTime();
+        paintLabel(label);
+        paintElapsed();
+        addCancelButton(opId);
+        if (!ticker) ticker = setInterval(paintElapsed, 1000);
+      },
+      // Called on { subKind: 'progress' }. Reconciler if local ticker drifted.
+      tickOp(opId, startedAtIso) {
+        if (currentOpId !== opId) return;
+        opStartedAtMs = new Date(startedAtIso).getTime();
+        paintElapsed();
+      },
+      // Called on { subKind: 'end' }. Removes elapsed + cancel; keeps the pill
+      // only if a passive status is still active.
+      detachOp(opId) {
+        if (currentOpId !== opId) return;
+        currentOpId = null;
+        opStartedAtMs = 0;
+        if (ticker) { clearInterval(ticker); ticker = null; }
+        removeCancelButton();
+        paintElapsed();
+        // If we never had a passive label (just the op), drop the pill.
+        if (!currentLabel) destroy();
+      },
+      // Force-clear (used on WS disconnect or when a message reply arrives).
+      clear() { destroy(); },
+      // Whether an op is currently attached — used to keep `message` frame
+      // arrival from yanking the pill out from under an in-flight op.
+      hasOp() { return currentOpId !== null; },
+      // Concurrent-op count beyond the attached one; rendered as "+N more".
+      setMoreCount(n) {
+        moreCount = n;
+        paintMore();
+      },
+    };
+  })();
 
   // Live agent-run tracking (from WS agent-event frames)
   const activeAgentRuns = new Map(); // runId → { agent, startedAt, timerEl }
@@ -300,76 +429,6 @@
       // Remove live row by stored reference; bust poll cache so recent-runs panel updates
       if (run) run.row.remove();
       lastStateJson = '';
-    }
-  }
-
-  // ---- In-flight op pills ----
-  // Each visible Claude CLI spawn renders a cancellable pill in the chat
-  // until it ends. Classifier ops (sub-second resolver calls) are filtered
-  // out by the bus → sender layer before reaching the WS, so we only see
-  // user-facing ops here.
-  const activeOps = new Map(); // opId → { label, startedAt (ms), pillEl, elapsedEl }
-  let opTickerInterval = null;
-
-  function upsertOpPill(op) {
-    // op: { opId, label, startedAt (iso string), elapsedMs }
-    const startedAtMs = new Date(op.startedAt).getTime();
-    const existing = activeOps.get(op.opId);
-    if (existing) {
-      existing.startedAt = startedAtMs;
-      return;
-    }
-    const pill = document.createElement('div');
-    pill.className = 'op-pill';
-    pill.id = `op-pill-${op.opId}`;
-    pill.innerHTML =
-      `<span class="op-spinner"></span>` +
-      `<span class="op-label">${escHtml(op.label)}</span>` +
-      `<span class="op-elapsed">${Math.floor((op.elapsedMs ?? 0) / 1000)}s</span>` +
-      `<button class="op-cancel" title="Cancel">✕</button>`;
-    const cancelBtn = pill.querySelector('.op-cancel');
-    cancelBtn.addEventListener('click', () => {
-      cancelBtn.disabled = true;
-      fetch(`/api/ops/${encodeURIComponent(op.opId)}/cancel`, { method: 'POST' })
-        .catch(() => { cancelBtn.disabled = false; });
-    });
-    messagesEl.appendChild(pill);
-    activeOps.set(op.opId, {
-      label: op.label,
-      startedAt: startedAtMs,
-      pillEl: pill,
-      elapsedEl: pill.querySelector('.op-elapsed'),
-    });
-    scrollToBottom();
-    if (!opTickerInterval) {
-      opTickerInterval = setInterval(() => {
-        const now = Date.now();
-        for (const [, entry] of activeOps) {
-          const secs = Math.floor((now - entry.startedAt) / 1000);
-          entry.elapsedEl.textContent = `${secs}s`;
-        }
-      }, 1000);
-    }
-  }
-
-  function removeOpPill(opId) {
-    const entry = activeOps.get(opId);
-    if (!entry) return;
-    entry.pillEl.remove();
-    activeOps.delete(opId);
-    if (activeOps.size === 0 && opTickerInterval) {
-      clearInterval(opTickerInterval);
-      opTickerInterval = null;
-    }
-  }
-
-  function handleOpEvent(frame) {
-    // frame: { kind, opId, opKind, label, agent?, startedAt, elapsedMs, subKind, ... }
-    if (frame.opKind === 'classifier') return; // safety net — sender already filters
-    if (frame.subKind === 'start' || frame.subKind === 'progress') {
-      upsertOpPill(frame);
-    } else if (frame.subKind === 'end') {
-      removeOpPill(frame.opId);
     }
   }
 
@@ -461,17 +520,20 @@
     // Mutations panel
     renderMutations(state.mutations ?? { active: [], recent: [] });
 
-    // In-flight op pills — hydrate any ops we don't already track. End-frame
-    // arrival via WS still removes them; this just covers tab-opened-mid-run.
-    const inFlight = (state.inFlight ?? []).filter(op => op.kind !== 'classifier');
-    const seen = new Set();
-    for (const op of inFlight) {
-      seen.add(op.opId);
-      upsertOpPill(op);
+    // Chat status pill — hydrate from in-flight ops when we don't already have
+    // one attached (covers tab-opened-mid-run). End frames over WS still drive
+    // detach for the active op. Single-pill design: when multiple ops are
+    // running, attach the most-recently-started one and append a "+N more"
+    // hint so the user knows the rest exist. (The recent-runs sidebar panel
+    // shows full agent-level history.)
+    const inFlight = (state.inFlight ?? [])
+      .filter(op => op.kind !== 'classifier')
+      .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+    if (!chatStatus.hasOp() && inFlight.length > 0) {
+      const op = inFlight[0];
+      chatStatus.attachOp(op.opId, op.label, op.startedAt);
     }
-    for (const opId of activeOps.keys()) {
-      if (!seen.has(opId)) removeOpPill(opId);
-    }
+    chatStatus.setMoreCount(Math.max(0, inFlight.length - (chatStatus.hasOp() ? 1 : 0)));
   }
 
   // ---- Projects panel ----

@@ -66,19 +66,22 @@ describe('in-flight op registry', () => {
       expect(op.opId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
-    it('adds the op to the registry (visible via listOps)', () => {
-      registerOp(makeOp({ label: 'wiki-compiler' }));
+    it('adds the op to the registry (visible via listOps) with friendly label', () => {
+      // Use an agent name that has no entry in the friendly map so the
+      // result is just titleCased — keeps the test independent of the table.
+      registerOp({ kind: 'agent', label: 'one-of-a-kind', agentName: 'one-of-a-kind', userId: 42, child: makeChildProcess() });
       const list = listOps();
       expect(list).toHaveLength(1);
-      expect(list[0]!.label).toBe('wiki-compiler');
+      expect(list[0]!.label).toBe('One Of A Kind');
     });
 
-    it('stores kind, label, userId, startedAt correctly', () => {
+    it('stores kind, label (friendly), userId, startedAt correctly', () => {
       const before = Date.now();
-      const op = registerOp(makeOp({ userId: 99, kind: 'one-shot', label: 'kb-query' }));
+      // raw label 'ask' maps to 'Asking Claude' in the friendly table
+      const op = registerOp(makeOp({ userId: 99, kind: 'one-shot', label: 'ask' }));
       const pub = listOps().find(o => o.opId === op.opId)!;
       expect(pub.kind).toBe('one-shot');
-      expect(pub.label).toBe('kb-query');
+      expect(pub.label).toBe('Asking Claude');
       expect(pub.userId).toBe(99);
       expect(new Date(pub.startedAt).getTime()).toBeGreaterThanOrEqual(before);
     });
@@ -119,6 +122,7 @@ describe('in-flight op registry', () => {
       unregisterOp(a.opId, 'success');
       const list = listOps();
       expect(list).toHaveLength(1);
+      // Single-char labels pass through titleCase unchanged.
       expect(list[0]!.label).toBe('B');
     });
 
@@ -200,7 +204,8 @@ describe('in-flight op registry', () => {
 
       const cancelled = cancelMostRecentForUser(42);
       expect(cancelled).not.toBeNull();
-      expect(cancelled!.label).toBe('second');
+      // 'second' has no friendly mapping, falls through to titleCase.
+      expect(cancelled!.label).toBe('Second');
       expect(child2.kill).toHaveBeenCalledWith('SIGTERM');
       expect(child1.kill).not.toHaveBeenCalled();
       // op1 is still active
@@ -259,7 +264,8 @@ describe('in-flight op registry', () => {
       const child = makeChildProcess();
       const op = registerOp({ kind: 'one-shot', label: 'prefix-pub', userId: 55, child });
       const pub = cancelByPrefix(op.opId.slice(0, 4));
-      expect(pub!.label).toBe('prefix-pub');
+      // 'prefix-pub' has no friendly mapping → titleCase.
+      expect(pub!.label).toBe('Prefix Pub');
       expect(pub!.userId).toBe(55);
       expect('child' in pub!).toBe(false);
     });
@@ -275,7 +281,8 @@ describe('in-flight op registry', () => {
       registerOp(makeOp({ label: 'beta', userId: 2 }));
       const list = listOps();
       expect(list).toHaveLength(2);
-      expect(list.map(o => o.label).sort()).toEqual(['alpha', 'beta']);
+      // Labels are formatted (titleCased for unknown raw labels).
+      expect(list.map(o => o.label).sort()).toEqual(['Alpha', 'Beta']);
       // Each entry should have elapsedMs (numeric)
       for (const o of list) {
         expect(typeof o.elapsedMs).toBe('number');
@@ -300,7 +307,8 @@ describe('in-flight op registry', () => {
       const event = publishMock.mock.calls[0]![0];
       expect(event.kind).toBe('op-event');
       expect(event.subKind).toBe('start');
-      expect(event.label).toBe('bus-test');
+      // Bus events carry the friendly label.
+      expect(event.label).toBe('Bus Test');
       expect(event.elapsedMs).toBe(0);
 
       // clean up

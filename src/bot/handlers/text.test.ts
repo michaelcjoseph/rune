@@ -545,14 +545,15 @@ describe('resolver wiring in text handler', () => {
       };
     }
 
-    it('calls startTyping with agent name label before invoking runAgent', async () => {
+    it('calls startTyping with no explicit label before invoking runAgent (op-event fills it in)', async () => {
       vi.mocked(runAgent).mockResolvedValue({ text: 'result', error: null });
       vi.mocked(mockClassify).mockResolvedValue(agentClassifyResult());
 
       const sender = mockSender();
       await handleTextMessage(sender, msg('classify this content for me please'));
 
-      expect(sender.startTyping).toHaveBeenCalledWith(100, 'Running content-triager…');
+      // No label passed — runAgent's op-event:start carries the friendly phrase from op-labels.ts.
+      expect(sender.startTyping).toHaveBeenCalledWith(100);
     });
 
     it('calls stopTyping after runAgent succeeds', async () => {
@@ -588,6 +589,41 @@ describe('resolver wiring in text handler', () => {
   });
 });
 
+describe('handleConversation — startTyping label', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'conv-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hi',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'hello back', error: null });
+  });
+
+  it('calls startTyping with "Asking Claude" for conversation turn', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('hi there'));
+
+    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Asking Claude');
+  });
+
+  it('does not call startTyping with the old "Thinking…" label', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('hi there'));
+
+    const calls = vi.mocked(sender.startTyping).mock.calls;
+    expect(calls.every(([, label]) => label !== 'Thinking…')).toBe(true);
+  });
+});
+
 describe('handleLint — startTyping label', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -599,7 +635,7 @@ describe('handleLint — startTyping label', () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/lint'));
 
-    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Checking knowledge base…');
+    expect(sender.startTyping).toHaveBeenCalledWith(100, 'Checking knowledge base');
   });
 
   it('sends the lint report after lintKB completes', async () => {

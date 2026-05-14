@@ -265,54 +265,38 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   padding: .35rem .9rem; border-radius: 5px; cursor: pointer; font-size: .85rem;
 }
 
-/* Activity/thinking indicator in chat */
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: .4rem;
-  padding: .35rem .6rem;
-  color: var(--text2);
-  font-size: .82rem;
-  align-self: flex-start;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-  animation: status-pulse 1.2s ease-in-out infinite;
-}
-
 @keyframes status-pulse {
   0%, 100% { opacity: .25; transform: scale(.8); }
   50% { opacity: 1; transform: scale(1.15); }
 }
 
-/* In-flight Claude op pills (cancellable) */
-.op-pill {
-  display: inline-flex;
+/* Unified chat status pill — pinned just above the input form.
+ * Driven by `status` frames (passive label) and `op-event` frames
+ * (rich label + elapsed counter + cancel button). */
+.chat-status {
+  display: flex;
   align-items: center;
   gap: .5rem;
-  align-self: flex-start;
-  padding: .35rem .65rem;
+  margin: 0 1.25rem .5rem;
+  padding: .45rem .75rem;
   background: var(--bg3);
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: .82rem;
+  font-size: .85rem;
   color: var(--text);
+  align-self: flex-start;
 }
-.op-pill .op-spinner {
+.chat-status .cs-spinner {
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
   animation: status-pulse 1.2s ease-in-out infinite;
 }
-.op-pill .op-label { color: var(--text); }
-.op-pill .op-elapsed { color: var(--text2); }
-.op-pill .op-cancel {
+.chat-status .cs-label { color: var(--text); }
+.chat-status .cs-elapsed { color: var(--text2); }
+.chat-status .cs-more { color: var(--text2); font-style: italic; }
+.chat-status .cs-cancel {
   background: transparent;
   border: none;
   color: var(--text2);
@@ -320,9 +304,10 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   font-size: 1rem;
   line-height: 1;
   padding: 0 .15rem;
+  margin-left: .25rem;
 }
-.op-pill .op-cancel:hover { color: #ff6b6b; }
-.op-pill .op-cancel:disabled { opacity: .4; cursor: default; }
+.chat-status .cs-cancel:hover { color: #ff6b6b; }
+.chat-status .cs-cancel:disabled { opacity: .4; cursor: default; }
 
 /* Run detail drawer */
 .drawer {

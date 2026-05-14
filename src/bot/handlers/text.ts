@@ -197,7 +197,9 @@ async function invokeSkill(
   args: string,
 ): Promise<void> {
   if (skill.kind === 'agent') {
-    sender.startTyping(userId, `Running ${skill.name}…`);
+    // No explicit label here — runAgent's op-event:start arrives within ms
+    // and fills the pill with the agent's friendly phrase from op-labels.ts.
+    sender.startTyping(userId);
     try {
       const result = await runAgent(skill.name, args || message);
       if (result.error || !result.text) {
@@ -293,7 +295,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
 
   appendMessageToSession(userId, 'user', text);
 
-  sender.startTyping(userId, 'Thinking…');
+  sender.startTyping(userId, 'Asking Claude');
   try {
     const result = await askClaudeWithContext(
       text,
@@ -328,7 +330,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
 
 async function handleLint(sender: MessageSender, userId: number): Promise<void> {
   const { lintKB } = await import('../../kb/engine.js');
-  sender.startTyping(userId, 'Checking knowledge base…');
+  sender.startTyping(userId, 'Checking knowledge base');
   try {
     const result = await lintKB();
     await sender.send(userId, result.report);
