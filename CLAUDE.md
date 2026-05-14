@@ -119,6 +119,8 @@ src/
 │   ├── whoop/keychain.ts    # macOS Keychain token storage via security CLI
 │   ├── whoop/client.ts      # OAuth2 token management + Whoop API calls
 │   └── readwise/client.ts   # Save articles to Readwise Reader API
+├── workspace/
+│   └── files.ts             # Read/write/append/list workspace files (assertWithinWorkspace-guarded); mirrors vault/files.ts but rooted at WORKSPACE_DIR ?? PROJECT_ROOT
 ├── vault/
 │   ├── files.ts             # Read/write/append/list vault markdown files (assertWithinVault-guarded)
 │   ├── journal.ts           # Journal file creation, append, writeMorningPrep, parseTag
@@ -206,6 +208,7 @@ Mutable sources (world-view, playbook, active projects, journals, library/lenny)
 - Session locks prevent concurrent CLI writes to the same session ID
 - Git commits happen at key moments (morning prep, /fresh, nightly), not on timers
 - Vault files use `readVaultFile` / `writeVaultFile` / `appendVaultFile` from `src/vault/files.ts` — paths are relative to vault root
+- Workspace files use `readWorkspaceFile` / `writeWorkspaceFile` / `appendWorkspaceFile` from `src/workspace/files.ts` — paths are relative to `WORKSPACE_DIR` (falls back to `PROJECT_ROOT`)
 - KB agents **must not** write outside `knowledge/`
 - Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
 - Autonomous codebase operations go through the mutation pipeline (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`, never spawn Claude CLI for project work directly. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` from `src/ai/claude.ts` keep binary resolution and shutdown tracking centralized for external spawners.
