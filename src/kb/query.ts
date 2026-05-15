@@ -49,7 +49,7 @@ Follow the query workflow:
 3. Search the vault with grep for additional context from personal notes
 4. Synthesize an answer with [[wikilink]] citations to your sources${filteredContext}${vaultContext}`;
 
-  const result = await runAgent('kb-query', prompt);
+  const result = await runAgent('kb-query', prompt, undefined, undefined, true);
 
   if (result.error) {
     log.error('Query failed', { error: result.error });

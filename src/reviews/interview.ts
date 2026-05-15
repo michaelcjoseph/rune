@@ -152,9 +152,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
         `Let's begin the ${config.type} review.`,
         session.claudeSessionId,
         systemPrompt,
-        undefined,
-        undefined,
-        `review:${config.type}`,
+        { opLabel: `review:${config.type}`, voice: true },
       );
       sender.stopTyping(session.chatId);
 
@@ -207,7 +205,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
 
     sender.startTyping(session.chatId);
     try {
-      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, `review:${config.type}`);
+      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, { opLabel: `review:${config.type}`, voice: true });
       sender.stopTyping(session.chatId);
 
       if (result.error) {
@@ -263,7 +261,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
       const writerResult = await runAgent('review-writer', `review_type: ${config.type}
 target_date: ${toScannerDate(session.targetDate)}
 approved_outline: ${session.outline}
-conversation_context: ${session.prepContext}`);
+conversation_context: ${session.prepContext}`, undefined, undefined, true);
 
       if (writerResult.error) {
         log.error('review-writer failed', { error: writerResult.error, type: config.type });
@@ -292,8 +290,12 @@ conversation_context: ${session.prepContext}`);
       const agentResults: Record<string, AgentStatus> = {};
       const agentPromises: Promise<void>[] = [];
 
-      const runPostAgent = (key: string, agentName: string, prompt: string, onSuccess?: (r: ClaudeResult) => void): Promise<void> =>
-        runAgent(agentName, prompt).then(r => {
+      // voice=true on agents that write prose the user reads (project-updater,
+      // worldview-updater, psychology-updater); voice=false on agents that emit
+      // structured data or apply queue actions (json-updater, playbook-updater,
+      // proposal-updater) so their output stays deterministic.
+      const runPostAgent = (key: string, agentName: string, prompt: string, voice: boolean, onSuccess?: (r: ClaudeResult) => void): Promise<void> =>
+        runAgent(agentName, prompt, undefined, undefined, voice).then(r => {
           if (!r.error) {
             agentResults[key] = 'ok';
             try { onSuccess?.(r); } catch (err) { log.error(`${agentName} onSuccess failed`, { error: (err as Error).message }); }
@@ -321,6 +323,8 @@ conversation_context: ${session.prepContext}`);
       };
 
       if (config.postAgents === 'dynamic') {
+        // Structured JSON routing call — deliberately no voice prepend (output
+        // must be a parseable JSON object, not stylized prose).
         const analysisResult = await askClaudeOneShot(`Based on this ${config.type} review prep context and approved outline, determine which post-interview updates are needed. Reply with a JSON object containing boolean fields: "projects", "psychology", "json_updates", "worldview", "playbook", "proposals".
 
 Set "projects" to true if active projects were discussed with meaningful updates (thesis changes, new risks, decisions).
@@ -352,28 +356,33 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
         if (updates.projects) {
           agentPromises.push(runPostAgent('projects', 'project-updater',
             `Update project pages based on this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            true,
             r => enqueueTouchedFiles(r.text || '', /projects\/[a-z0-9-]+\.md/g, f => !f.startsWith('projects/archive/'))));
         }
 
         if (updates.psychology) {
           agentPromises.push(runPostAgent('psychology', 'psychology-updater',
-            `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
+            `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            true));
         }
 
         if (updates.json_updates) {
           agentPromises.push(runPostAgent('json_updates', 'json-updater',
-            `Apply any JSON data updates from this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
+            `Apply any JSON data updates from this ${config.type} review.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            false));
         }
 
         if (updates.worldview) {
           agentPromises.push(runPostAgent('worldview', 'worldview-updater',
             `Apply approved worldview diffs from this ${config.type} review outline to world-view/*.md. Only apply changes explicitly present in the outline.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            true,
             r => enqueueTouchedFiles(r.text || '', /world-view\/[a-z0-9-]+\.md/g)));
         }
 
         if (updates.playbook) {
           agentPromises.push(runPostAgent('playbook', 'playbook-updater',
             `Apply approved playbook drafts from logs/playbook-queue.json. Only apply drafts the outline approves; leave the rest in the queue.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            false,
             () => enqueueKB('pages/playbook.md')));
         }
 
@@ -386,12 +395,14 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
           // vault, not the Jarvis repo.
           agentPromises.push(runPostAgent('proposals', 'proposal-updater',
             `Action approved Ask-Twice proposals from \`${PROJECT_ROOT}/logs/proposal-queue.json\`. Create new agent files at \`${PROJECT_ROOT}/.claude/agents/<slug>.md\` for approved skills. Register cron frontmatter on existing agents at the same path for approved crons. Leave unapproved entries as 'pending'. Jarvis project root: \`${PROJECT_ROOT}\`.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            false,
             () => clearApprovedProposals()));
         }
       } else {
         // psychology-only mode
         agentPromises.push(runPostAgent('psychology', 'psychology-updater',
-          `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`));
+          `scope: ${config.psychologyScope}\nchanges: Based on ${config.type} review observations\nchangelog_entry: ${session.targetDate} ${config.type} review\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+          true));
       }
 
       if (agentPromises.length > 0) {

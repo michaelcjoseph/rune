@@ -26,11 +26,9 @@ onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 function gatherWritingContext(): string {
   const sections: string[] = [];
 
-  const voice = readVaultFile('writing/voice.md');
-  if (voice?.trim()) {
-    sections.push(`## Writing Voice & Style\n${voice.trim()}`);
-  }
-
+  // Voice is no longer read here — it's injected centrally via the `voice: true`
+  // flag on askClaudeWithContext below, so a single source of truth (the system
+  // prompt) carries it through every turn of the session.
   const topics = readVaultFile('writing/topics.md');
   if (topics?.trim()) {
     sections.push(`## Topic Queue\n${topics.trim()}`);
@@ -67,9 +65,7 @@ const blogHandler: ReviewTypeHandler = {
         `I want to write about: ${topic}`,
         session.claudeSessionId,
         systemPrompt,
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
       sender.stopTyping(session.chatId);
 
@@ -111,7 +107,7 @@ const blogHandler: ReviewTypeHandler = {
 
     sender.startTyping(session.chatId);
     try {
-      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, 'review:blog');
+      const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, { opLabel: 'review:blog', voice: true });
       sender.stopTyping(session.chatId);
 
       if (result.error) {

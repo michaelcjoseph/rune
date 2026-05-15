@@ -87,6 +87,7 @@ describe('handleAsk', () => {
       'how does photosynthesis work',
       undefined,
       'ask',
+      true,
     );
   });
 });

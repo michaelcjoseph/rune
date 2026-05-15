@@ -108,7 +108,6 @@ describe('reviews/blog', () => {
       await blogHandler.start(session, sender);
 
       expect(readVaultMock).toHaveBeenCalledWith('.claude/skills/blog/SKILL.md');
-      expect(readVaultMock).toHaveBeenCalledWith('writing/voice.md');
       expect(readVaultMock).toHaveBeenCalledWith('writing/topics.md');
       expect(sender.send).toHaveBeenCalledWith(100, 'Blog session started: "why testing matters"\nSend /done when finished.');
       expect(sender.startTyping).toHaveBeenCalledWith(100);
@@ -116,26 +115,15 @@ describe('reviews/blog', () => {
         'I want to write about: why testing matters',
         'claude-blog-001',
         expect.stringContaining('Custom blog skill instructions'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
-      // Verify writing context is included in system prompt
-      expect(askClaudeMock).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.stringContaining('Conversational, direct tone'),
-        undefined,
-        undefined,
-        'review:blog',
-      );
+      // Topic queue is still inlined in the system prompt; writing voice is
+      // now injected centrally via the `voice: true` flag (asserted above).
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('- testing'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'interview' });
@@ -153,26 +141,22 @@ describe('reviews/blog', () => {
         'I want to write about: productivity systems',
         'claude-blog-001',
         expect.stringContaining('interview-style conversation'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
         expect.stringContaining('No artifacts or documents until I approve the outline'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
     });
 
-    it('includes voice.md in system prompt when available', async () => {
+    it('opts the blog session into the writing-voice prepend', async () => {
+      // Voice.md is no longer inlined here; it's injected centrally inside
+      // askClaudeWithContext when the `voice: true` flag is passed. The flag
+      // is the contract this handler owes the user — assert it directly.
       const session = makeSession({ topic: 'some topic' });
-      readVaultMock.mockImplementation((path: string) => {
-        if (path === 'writing/voice.md') return 'My voice: plain English, no jargon';
-        return null;
-      });
+      readVaultMock.mockReturnValue(null);
       askClaudeMock.mockResolvedValue({ text: 'Response', error: null });
 
       await blogHandler.start(session, sender);
@@ -180,18 +164,8 @@ describe('reviews/blog', () => {
       expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.stringContaining('Writing Voice & Style'),
-        undefined,
-        undefined,
-        'review:blog',
-      );
-      expect(askClaudeMock).toHaveBeenCalledWith(
         expect.any(String),
-        expect.any(String),
-        expect.stringContaining('My voice: plain English, no jargon'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
     });
   });
@@ -215,9 +189,7 @@ describe('reviews/blog', () => {
         'The key argument is Y',
         'claude-blog-001',
         expect.stringContaining('test topic'),
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
       expect(sender.stopTyping).toHaveBeenCalledWith(100);
       expect(sender.send).toHaveBeenCalledWith(100, 'Great point, what about X?');
@@ -255,9 +227,7 @@ describe('reviews/blog', () => {
         'picking up where we left off',
         'fresh-session-id',
         'Reconstructed system prompt for blog',
-        undefined,
-        undefined,
-        'review:blog',
+        { opLabel: 'review:blog', voice: true },
       );
       expect(sender.send).toHaveBeenCalledWith(100, 'Continuing the conversation');
     });

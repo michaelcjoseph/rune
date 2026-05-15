@@ -164,6 +164,14 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 
 **Relationship:** `knowledge/` is the neutral reference layer and *cites* the other three as raw sources (via `knowledge/raw/{world-view,playbook,projects}/`). The flow is one-way — human-authored layers feed the KB as sources; the KB does not own them.
 
+### Writing voice
+
+`writing/voice.md` is the user-authored source of truth for Jarvis's writing voice. `src/vault/voice.ts` exposes `buildVoicePromptSection()`, which re-reads the file on every call (no cache) so edits take effect without a restart; content is truncated at `VOICE_PROMPT_CHAR_BUDGET` (8000 chars) to bound prompt growth. The four Claude entry points in `src/ai/claude.ts` — `askClaude`, `askClaudeOneShot`, `runAgent`, and `askClaudeWithContext` (options-bag form: `{ voice: true }`) — each accept an optional `voice` flag (default `false`). When `true`, the block is appended to the system prompt (`--append-system-prompt`) so it persists across turns and carries system-level authority across all three call paths.
+
+**Opted in** (prose the user reads): `handleConversation` (TG/webview chat), `/ask`, `summarizeSession` (/fresh + nightly capture), `morning-prep`, the blog/health/interview/new-project review sessions, the `review-writer` agent, `kb-query`, and the prose-writing post-agents `project-updater`, `worldview-updater`, and `psychology-updater`.
+
+**Deliberately not opted in** (structured / classifier output): resolver Haiku, content-triager, photo-classifier, meeting/book extract, the review-routing one-shot JSON extract, wiki-compiler, wiki-linter, `json-updater`, `playbook-updater`, `proposal-updater`, and prep agents (journal-scanner, project-scanner, system-scanner). These stay deterministic.
+
 ### Review → post-agent flow
 
 `src/reviews/interview.ts` drives review sessions. At outline-approval points the interview emits a structured approval signal via `sender.send(userId, text, { approval: { prompt, options } })`. On the webview this renders as clickable button rows; on Telegram the text is the fallback (the `opts` are ignored by TelegramSender). After the user approves the outline:

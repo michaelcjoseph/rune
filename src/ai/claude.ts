@@ -6,10 +6,13 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDateContext } from '../utils/time.js';
-// Deliberate one-way dependency ai/ → vault/: every runAgent() should transparently
-// pick up /learn-authored guidance without each caller re-implementing the prepend.
-// If vault/learnings ever needs Claude help (e.g., dedup), extract a context/ layer.
+// Deliberate one-way dependency ai/ → vault/: learnings (user-authored
+// corrections) and voice (style/tone source of truth) are both prepended
+// transparently so each caller need not re-implement the read. If either
+// module ever needs Claude help (e.g., dedup, summarization), extract a
+// context/ layer to break the cycle.
 import { buildLearningsPrompt } from '../vault/learnings.js';
+import { buildVoicePromptSection } from '../vault/voice.js';
 import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
 import { registerOp, unregisterOp, isCancelled, setOpDetail } from '../transport/in-flight.js';
 import { formatToolUse } from './tool-labels.js';
@@ -351,13 +354,20 @@ function askClaudeSession(
   systemPrompt?: string,
   allowedTools?: string[],
   opLabel?: string,
+  voice?: boolean,
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
     const args = createdSessions.has(sessionId)
       ? ['-p', message, '--resume', sessionId]
       : ['-p', message, '--session-id', sessionId];
-    if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
+    // Voice is appended to the system prompt so it persists across all turns in
+    // the session without being repeated in every user message.
+    const voiceBlock = voice ? buildVoicePromptSection() : '';
+    const composedSystemPrompt = voiceBlock
+      ? (systemPrompt ? `${systemPrompt}\n\n${voiceBlock}` : voiceBlock)
+      : systemPrompt;
+    if (composedSystemPrompt) args.push('--append-system-prompt', composedSystemPrompt);
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
@@ -371,23 +381,52 @@ function askClaudeSession(
 
 /** Multi-turn conversation with session persistence. Pass `opLabel` to surface
  *  the call as a cancellable in-flight op (tracker message on TG, pill on
- *  webview); omit for background/non-interactive callers. */
-export async function askClaude(message: string, sessionId: string, model?: string, opLabel?: string): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model, undefined, undefined, opLabel);
+ *  webview); omit for background/non-interactive callers. Pass `voice: true`
+ *  for callers that produce prose the user reads (see src/vault/voice.ts). */
+export async function askClaude(message: string, sessionId: string, model?: string, opLabel?: string, voice?: boolean): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, model, undefined, undefined, opLabel, voice);
 }
 
-/** Multi-turn conversation with session persistence and appended system prompt.
- *  Pass `opLabel` to surface as a cancellable in-flight op. */
-export async function askClaudeWithContext(message: string, sessionId: string, systemPrompt: string, model?: string, allowedTools?: string[], opLabel?: string): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, model, systemPrompt, allowedTools, opLabel);
+/** Options for `askClaudeWithContext`. Bag-shaped because this entry point
+ *  carries the most knobs (model, tools, op-label, voice) — positional made
+ *  call sites pass `undefined, undefined` to reach the trailing flags. */
+export interface AskClaudeWithContextOpts {
+  /** Override the default chat model (`config.DEFAULT_CHAT_MODEL`). */
+  model?: string;
+  /** Restrict the CLI tool allowlist. Omit to use Claude's defaults. */
+  allowedTools?: string[];
+  /** Friendly label for the in-flight op tracker (TG message, webview pill).
+   *  Omit for background/non-interactive callers. */
+  opLabel?: string;
+  /** Prepend the user's writing voice (see src/vault/voice.ts). Set for callers
+   *  that produce prose the user reads; leave unset for structured output. */
+  voice?: boolean;
+}
+
+/** Multi-turn conversation with session persistence and appended system prompt. */
+export async function askClaudeWithContext(
+  message: string,
+  sessionId: string,
+  systemPrompt: string,
+  opts: AskClaudeWithContextOpts = {},
+): Promise<ClaudeResult> {
+  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice);
 }
 
 /** One-shot query with no session persistence. Pass `opLabel` to surface as a
  *  cancellable in-flight op; omit for background callers (nightly, cron,
- *  meeting/book extraction) so they don't spam tracker messages. */
-export async function askClaudeOneShot(message: string, timeoutMs?: number, opLabel?: string): Promise<ClaudeResult> {
+ *  meeting/book extraction) so they don't spam tracker messages. Pass
+ *  `voice: true` for callers that produce prose the user reads. */
+export async function askClaudeOneShot(message: string, timeoutMs?: number, opLabel?: string, voice?: boolean): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   const args = ['-p', `${dateCtx}\n\n${message}`, '--no-session-persistence', '--model', config.ONESHOT_MODEL];
+  // Voice goes via --append-system-prompt (same channel as askClaudeSession), not
+  // the -p user payload, so it carries system-prompt authority and stays out of
+  // the args.slice(0, 3) error-log window.
+  if (voice) {
+    const voiceBlock = buildVoicePromptSection();
+    if (voiceBlock) args.push('--append-system-prompt', voiceBlock);
+  }
   const opMeta: OpMeta | undefined = opLabel ? { kind: 'one-shot', label: opLabel } : undefined;
   return execClaude(args, timeoutMs, opMeta);
 }
@@ -542,8 +581,11 @@ export const AGENT_NOT_FOUND_PREFIX = 'Agent not found:';
 
 /** Run a named agent (defined in .claude/agents/). Set `userVisible: false`
  *  for background callers (nightly, cron, scheduled jobs) so they don't send
- *  tracker messages while the user is asleep. */
-export async function runAgent(agentName: string, prompt: string, timeoutMs?: number, userVisible = true): Promise<ClaudeResult> {
+ *  tracker messages while the user is asleep. Pass `voice: true` for agents
+ *  that produce prose the user reads (kb-query, review-writer, etc.); leave
+ *  unset for classifiers and JSON/structured agents so their output stays
+ *  deterministic. */
+export async function runAgent(agentName: string, prompt: string, timeoutMs?: number, userVisible = true, voice?: boolean): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   let def: AgentDef;
   try {
@@ -557,20 +599,18 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     return { text: null, error: message };
   }
   const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
-  // Prepend /learn-authored runtime learnings so agents adapt without code changes.
-  // Read failures here must not break agent invocation — fall back to empty.
-  let learningsBlock = '';
-  try {
-    learningsBlock = buildLearningsPrompt();
-  } catch (err) {
-    log.warn('Failed to load learnings; proceeding without prepend', {
-      error: (err as Error).message,
-    });
-  }
+  // Both builders go through readVaultFile, which swallows read errors and
+  // returns null — they each return '' on missing/empty. No try/catch needed.
+  const learningsBlock = buildLearningsPrompt();
+  const voiceBlock = voice ? buildVoicePromptSection() : '';
+  // Prepend ordering: learnings → voice → dateCtx → workspace → prompt.
+  // Learnings (user-authored corrections) come first so /learn guidance retains
+  // recency-weight precedence over voice (a stable style baseline) when the
+  // two would otherwise conflict.
   const args = [
     '--agent', agentName,
     '--agents', agentsJson,
-    '-p', `${learningsBlock}${dateCtx}${config.WORKSPACE_DIR ? `\nWorkspace directory (read-only): ${config.WORKSPACE_DIR}` : ''}\n\n${prompt}`,
+    '-p', `${learningsBlock}${voiceBlock}${dateCtx}${config.WORKSPACE_DIR ? `\nWorkspace directory (read-only): ${config.WORKSPACE_DIR}` : ''}\n\n${prompt}`,
     '--no-session-persistence',
     '--model', def.model ?? config.AGENT_MODEL,
   ];
@@ -613,5 +653,5 @@ KB-worthy: <yes or no>
 
 KB-worthy means this conversation produced insights worth ingesting into the knowledge base. Answer yes if it produced a new insight, framework, mental model, factual information worth preserving, or explored a topic in depth. Answer no if it was purely operational, casual chat, or covered topics already well-documented.`;
 
-  return askClaude(prompt, sessionId, config.DEFAULT_CHAT_MODEL);
+  return askClaude(prompt, sessionId, config.DEFAULT_CHAT_MODEL, undefined, true);
 }

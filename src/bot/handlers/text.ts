@@ -309,9 +309,7 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
       text,
       session.sessionId,
       getVaultSystemPrompt(),
-      session.model,
-      CONVERSATION_TOOLS,
-      'chat',
+      { model: session.model, allowedTools: CONVERSATION_TOOLS, opLabel: 'chat', voice: true },
     );
 
     if (result.error) {

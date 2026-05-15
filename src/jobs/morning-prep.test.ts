@@ -357,6 +357,22 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
     expect(prompt).not.toMatch(/\(from \d{4}-\d{2}-\d{2}\)/);
     expect(prompt).toContain('No weekly goals set.');
   });
+
+  it('passes voice: true to askClaudeOneShot so prose output respects the writing voice file', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({ text: 'synthesized', error: null });
+
+    await synthesizeMorningPrep(sampleData);
+
+    // The 4th argument to askClaudeOneShot is the voice flag.
+    // synthesizeMorningPrep produces prose the user reads (journal section),
+    // so it must opt into the writing-voice prepend.
+    expect(mockAskClaudeOneShot).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      undefined,
+      true,
+    );
+  });
 });
 
 describe('jobs/morning-prep — executeMorningPrep', () => {

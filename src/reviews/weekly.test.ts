@@ -258,9 +258,7 @@ describe('reviews/weekly', () => {
         expect.any(String),
         session.claudeSessionId,
         expect.stringContaining('Ask about goals'),
-        undefined,
-        undefined,
-        'review:weekly',
+        { opLabel: 'review:weekly', voice: true },
       );
     });
 
@@ -277,9 +275,7 @@ describe('reviews/weekly', () => {
         "Let's begin the weekly review.",
         session.claudeSessionId,
         expect.stringContaining('weekly review interview'),
-        undefined,
-        undefined,
-        'review:weekly',
+        { opLabel: 'review:weekly', voice: true },
       );
     });
 
@@ -325,9 +321,7 @@ describe('reviews/weekly', () => {
         expect.any(String),
         expect.any(String),
         expect.stringContaining('Conduct a weekly review interview'),
-        undefined,
-        undefined,
-        'review:weekly',
+        { opLabel: 'review:weekly', voice: true },
       );
     });
 
@@ -397,9 +391,7 @@ describe('reviews/weekly', () => {
         'I worked on thesis',
         session.claudeSessionId,
         expect.stringContaining('weekly review interview'),
-        undefined,
-        undefined,
-        'review:weekly',
+        { opLabel: 'review:weekly', voice: true },
       );
     });
 
@@ -462,9 +454,7 @@ describe('reviews/weekly', () => {
         'Where were we?',
         session.claudeSessionId,
         expect.stringContaining('recovered context data'),
-        undefined,
-        undefined,
-        'review:weekly',
+        { opLabel: 'review:weekly', voice: true },
       );
       expect(sender.send).toHaveBeenCalledWith(100, 'Continuing interview.');
     });
@@ -510,7 +500,7 @@ describe('reviews/weekly', () => {
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'writeup' });
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('weekly'));
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('weekly'), undefined, undefined, true);
       expect(gitCommitMock).toHaveBeenCalledWith('Weekly review: 2026-04-10');
       expect(updateSessionMock).toHaveBeenCalledWith(100, { phase: 'done' });
     });
@@ -526,7 +516,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, word, sender);
 
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.any(String), undefined, undefined, true);
     });
 
     // 16. "cancel" -> sets done
@@ -598,11 +588,11 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('review_type: weekly'));
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('review_type: weekly'), undefined, undefined, true);
       // toScannerDate converts hyphens to underscores for agent prompts.
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('target_date: 2026_04_10'));
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('approved_outline:'));
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('conversation_context:'));
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('target_date: 2026_04_10'), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('approved_outline:'), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.stringContaining('conversation_context:'), undefined, undefined, true);
     });
 
     // 20. Uses askClaudeOneShot to determine needed post-agents
@@ -634,11 +624,11 @@ describe('reviews/weekly', () => {
 
       // review-writer + project-updater + json-updater = 3 calls (no psychology-updater, no worldview, no playbook)
       expect(runAgentMock).toHaveBeenCalledTimes(3);
-      expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
-      expect(runAgentMock).not.toHaveBeenCalledWith('psychology-updater', expect.any(String));
-      expect(runAgentMock).not.toHaveBeenCalledWith('worldview-updater', expect.any(String));
-      expect(runAgentMock).not.toHaveBeenCalledWith('playbook-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String), undefined, undefined, false);
+      expect(runAgentMock).not.toHaveBeenCalledWith('psychology-updater', expect.anything(), expect.anything(), expect.anything(), expect.anything());
+      expect(runAgentMock).not.toHaveBeenCalledWith('worldview-updater', expect.anything(), expect.anything(), expect.anything(), expect.anything());
+      expect(runAgentMock).not.toHaveBeenCalledWith('playbook-updater', expect.anything(), expect.anything(), expect.anything(), expect.anything());
     });
 
     it('spawns worldview-updater when worldview flag is true', async () => {
@@ -651,7 +641,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String), undefined, undefined, true);
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Worldview updated.'));
     });
 
@@ -665,7 +655,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String), undefined, undefined, false);
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Playbook entries added.'));
     });
 
@@ -693,7 +683,7 @@ describe('reviews/weekly', () => {
 
       await weeklyHandler.handleMessage(session, 'yes', sender);
 
-      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String), undefined, undefined, false);
       expect(vi.mocked(clearApprovedProposals)).toHaveBeenCalled();
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Ask-Twice proposals actioned'));
     });
@@ -790,12 +780,12 @@ describe('reviews/weekly', () => {
 
       // review-writer + all 6 post agents = 7
       expect(runAgentMock).toHaveBeenCalledTimes(7);
-      expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('psychology-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String));
-      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('project-updater', expect.any(String), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('psychology-updater', expect.any(String), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('json-updater', expect.any(String), undefined, undefined, false);
+      expect(runAgentMock).toHaveBeenCalledWith('worldview-updater', expect.any(String), undefined, undefined, true);
+      expect(runAgentMock).toHaveBeenCalledWith('playbook-updater', expect.any(String), undefined, undefined, false);
+      expect(runAgentMock).toHaveBeenCalledWith('proposal-updater', expect.any(String), undefined, undefined, false);
     });
 
     it('spawns no post agents when none are flagged', async () => {
@@ -810,7 +800,7 @@ describe('reviews/weekly', () => {
 
       // Only review-writer
       expect(runAgentMock).toHaveBeenCalledTimes(1);
-      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.any(String));
+      expect(runAgentMock).toHaveBeenCalledWith('review-writer', expect.any(String), undefined, undefined, true);
     });
 
     // 22. Git commits

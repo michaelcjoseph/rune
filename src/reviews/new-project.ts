@@ -112,7 +112,7 @@ const newProjectHandler: ReviewTypeHandler = {
       const opener = session.topic
         ? `I want to build: ${session.topic}`
         : "Let's plan a new Jarvis project.";
-      const result = await askClaudeWithContext(opener, session.claudeSessionId, systemPrompt, undefined, undefined, 'review:new-project');
+      const result = await askClaudeWithContext(opener, session.claudeSessionId, systemPrompt, { opLabel: 'review:new-project', voice: true });
       sender.stopTyping(session.chatId);
 
       if (result.error) {
@@ -168,7 +168,7 @@ async function handleInterview(session: ReviewSession, text: string, sender: Mes
 
   sender.startTyping(session.chatId);
   try {
-    const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, undefined, undefined, 'review:new-project');
+    const result = await askClaudeWithContext(text, session.claudeSessionId, systemPrompt, { opLabel: 'review:new-project', voice: true });
     sender.stopTyping(session.chatId);
 
     if (result.error) {
@@ -210,7 +210,7 @@ async function handleInterview(session: ReviewSession, text: string, sender: Mes
 
 async function applySelfCritique(draft: string, sessionId: string, systemPrompt: string): Promise<string> {
   try {
-    const result = await askClaudeWithContext(SELF_CRITIQUE_PROMPT, sessionId, systemPrompt, undefined, undefined, 'review:new-project');
+    const result = await askClaudeWithContext(SELF_CRITIQUE_PROMPT, sessionId, systemPrompt, { opLabel: 'review:new-project', voice: true });
     if (result.error || !result.text) return draft;
     const idx = result.text.toLowerCase().indexOf(OUTLINE_MARKER_LOWER);
     return idx !== -1 ? result.text.slice(idx).trim() : draft;
@@ -245,9 +245,7 @@ async function applyBriefCorrection(session: ReviewSession, correction: string, 
       `Please revise the Project Brief with this correction: ${correction}`,
       session.claudeSessionId,
       systemPrompt,
-      undefined,
-      undefined,
-      'review:new-project',
+      { opLabel: 'review:new-project', voice: true },
     );
     sender.stopTyping(session.chatId);
 

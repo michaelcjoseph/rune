@@ -272,7 +272,7 @@ describe('ai/claude', () => {
 
     it('passes custom model when specified', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'reply' }));
-      await askClaudeWithContext('hello', 'ctx-haiku-sess', 'sys', 'haiku');
+      await askClaudeWithContext('hello', 'ctx-haiku-sess', 'sys', { model: 'haiku' });
 
       const args = spawnMock.mock.calls[0]![1] as string[];
       expect(args).toContain('--model');

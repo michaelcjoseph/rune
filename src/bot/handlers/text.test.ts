@@ -59,6 +59,8 @@ vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
 vi.mock('../commands/seed.js', () => ({ handleSeed: vi.fn() }));
 vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
 vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
+vi.mock('../commands/new-project.js', () => ({ handleNewProject: vi.fn() }));
+vi.mock('../../reviews/new-project.js', () => ({}));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
@@ -81,6 +83,7 @@ const { handleIngest } = await import('../commands/ingest.js');
 const { handleLearn } = await import('../commands/learn.js');
 const { handleLearnList } = await import('../commands/learn-list.js');
 const { handleCancel } = await import('../commands/cancel.js');
+const { handleNewProject } = await import('../commands/new-project.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -213,6 +216,16 @@ describe('text handler routing', () => {
     expect(handleLearn).not.toHaveBeenCalled();
   });
 
+  it('routes /new-project to handleNewProject with no args', async () => {
+    await handleTextMessage(mockSender(), msg('/new-project'));
+    expect(handleNewProject).toHaveBeenCalledWith(expect.anything(), 100, '');
+  });
+
+  it('routes /new-project with topic args', async () => {
+    await handleTextMessage(mockSender(), msg('/new-project email digest feature'));
+    expect(handleNewProject).toHaveBeenCalledWith(expect.anything(), 100, 'email digest feature');
+  });
+
   it('routes /start and sends help', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/start'));
@@ -242,7 +255,7 @@ describe('text handler routing', () => {
 
     await handleTextMessage(mockSender(), msg('hello'));
     expect(createSessionMock).toHaveBeenCalled();
-    expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), 'haiku', expect.any(Array), 'chat');
+    expect(askMock).toHaveBeenCalledWith('hello', 'test-sess', expect.any(String), { model: 'haiku', allowedTools: expect.any(Array), opLabel: 'chat', voice: true });
   });
 
   it('appends the mode-visibility footer to conversation replies', async () => {
@@ -311,7 +324,7 @@ describe('text handler routing', () => {
 
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
-    expect(askMock).toHaveBeenCalledWith('some text', 'test-sess', expect.any(String), 'haiku', expect.any(Array), 'chat');
+    expect(askMock).toHaveBeenCalledWith('some text', 'test-sess', expect.any(String), { model: 'haiku', allowedTools: expect.any(Array), opLabel: 'chat', voice: true });
   });
 
   it('routes /fresh to command handler even during active review', async () => {

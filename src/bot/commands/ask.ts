@@ -7,7 +7,7 @@ const log = createLogger('cmd-ask');
 export async function handleAsk(sender: MessageSender, userId: number, question: string): Promise<void> {
   sender.startTyping(userId, 'Asking Claude');
   try {
-    const result = await askClaudeOneShot(question, undefined, 'ask');
+    const result = await askClaudeOneShot(question, undefined, 'ask', true);
     sender.stopTyping(userId);
 
     if (result.error) {

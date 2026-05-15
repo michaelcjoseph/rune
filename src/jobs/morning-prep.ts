@@ -126,7 +126,7 @@ Be concise — this is a morning glance, not a report. Use bullet points (or num
 
   let result: { text: string | null; error: string | null };
   try {
-    result = await askClaudeOneShot(prompt);
+    result = await askClaudeOneShot(prompt, undefined, undefined, true);
   } catch (err) {
     const errMsg = String(err);
     log.error('Claude synthesis threw', { error: errMsg });

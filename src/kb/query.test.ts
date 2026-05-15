@@ -34,7 +34,7 @@ describe('kb/query', () => {
     agentMock.mockResolvedValue({ text: 'answer', error: null });
 
     await queryKB('test query');
-    expect(agentMock).toHaveBeenCalledWith('kb-query', expect.stringContaining('relevant'));
+    expect(agentMock).toHaveBeenCalledWith('kb-query', expect.stringContaining('relevant'), undefined, undefined, true);
   });
 
   it('infers entity type filter for "who is" questions', async () => {
