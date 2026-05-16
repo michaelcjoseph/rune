@@ -61,6 +61,13 @@ const config = {
   FAMILY_NAMES: (process.env['FAMILY_NAMES'] || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
+  /** Wikilink slugs (e.g. `sam,jude`) the daily-tags analyzer treats as
+   *  implicit CRM references — a journal mention like `[[sam]]` produces a
+   *  CRM update for that contact even without an explicit `#crm` tag. Empty
+   *  disables the rule. Keep names out of source so the repo stays shareable. */
+  IMPLICIT_CRM_NAMES: (process.env['IMPLICIT_CRM_NAMES'] || '')
+    .split(',').map(s => s.trim()).filter(Boolean),
+
   LOGS_DIR: join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {

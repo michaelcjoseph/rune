@@ -245,6 +245,7 @@ Required:
 
 Optional:
 - `FAMILY_NAMES` — comma-separated names scanned by `/family` (e.g. `Alice,Bob`). Empty disables the command.
+- `IMPLICIT_CRM_NAMES` — comma-separated wikilink slugs (e.g. `sam,jude`) the nightly daily-tags analyzer treats as implicit CRM references — a journal mention like `[[sam]]` produces a CRM update for that contact even without an explicit `#crm` tag. Empty disables the rule (the implicit-CRM bullet is omitted from the analyzer prompt).
 - `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET` — Whoop OAuth credentials
 - `READWISE_TOKEN` — Readwise Reader API
 - `JARVIS_HTTP_SECRET` — shared secret for authenticated HTTP endpoints

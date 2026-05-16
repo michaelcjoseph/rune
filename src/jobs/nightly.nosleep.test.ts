@@ -144,18 +144,21 @@ describe('jobs/nightly — withNoSleep wrapper', () => {
       expect(mockKill).toHaveBeenCalledOnce();
     });
 
-    it('kills caffeinate even when executeNightly throws (finally guard)', async () => {
-      // Force executeNightly to throw by making the final gitCommitAndPush fail
+    it('kills caffeinate after a final-commit failure (finally guard still fires)', async () => {
+      // safeFinalCommit now captures git failures as a 'Final commit' step
+      // rather than letting them escape. The wrapper's finally guard must
+      // still run — caffeinate cleanup is the invariant under test.
       gitMock.mockImplementation(() => { throw new Error('git exploded'); });
 
       const bus = makeBus();
       await runNightly(bus);
 
-      // caffeinate was still killed despite the error
       expect(mockKill).toHaveBeenCalledOnce();
-      // bus received the error message, not a success message
       const { text } = bus.publish.mock.calls[0][0] as { text: string };
-      expect(text).toContain('failed');
+      // Structured summary is delivered with the Final commit error step.
+      expect(text).toContain('Nightly complete');
+      expect(text).toContain('Final commit');
+      expect(text).toContain('git exploded');
     });
 
     it('publishes the nightly summary on success (wrapper is transparent)', async () => {
@@ -201,7 +204,7 @@ describe('jobs/nightly — withNoSleep wrapper', () => {
       expect(text).toContain('Nightly complete');
     });
 
-    it('still publishes error when pipeline throws on non-darwin', async () => {
+    it('still publishes the structured summary when final commit fails on non-darwin', async () => {
       gitMock.mockImplementation(() => { throw new Error('git broke'); });
 
       const bus = makeBus();
@@ -209,7 +212,9 @@ describe('jobs/nightly — withNoSleep wrapper', () => {
 
       expect(bus.publish).toHaveBeenCalledOnce();
       const { text } = bus.publish.mock.calls[0][0] as { text: string };
-      expect(text).toContain('failed');
+      expect(text).toContain('Nightly complete');
+      expect(text).toContain('Final commit');
+      expect(text).toContain('git broke');
     });
 
     it('does not call kill (no caffeinate process was created)', async () => {

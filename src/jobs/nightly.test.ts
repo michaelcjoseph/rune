@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../config.js', () => ({
-  default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
+  default: {
+    VAULT_DIR: '/test/vault',
+    TIMEZONE: 'America/Chicago',
+    TELEGRAM_USER_ID: 12345,
+    IMPLICIT_CRM_NAMES: ['alice', 'bob'],
+  },
 }));
 
 vi.mock('./capture.js', () => ({ captureSessions: vi.fn() }));
@@ -60,6 +65,10 @@ function setDefaults() {
   agentMock.mockResolvedValue({ text: null, error: null });
   readMock.mockReturnValue(null);
   dayMock.mockReturnValue('Saturday');
+  // vi.clearAllMocks() clears call history but NOT implementations, so a test
+  // that points gitMock at a thrower would leak into the next test and add a
+  // spurious 'Final commit' error step to its result. Reset to a no-op here.
+  gitMock.mockReturnValue(undefined);
 }
 
 describe('jobs/nightly', () => {
@@ -221,16 +230,113 @@ describe('jobs/nightly', () => {
       expect(step.detail).toContain('Agent crashed');
     });
 
-    it('includes special rules (sam/jude CRM, study status, #health flags) in the daily-tags analysis prompt', async () => {
+    // -- Daily-tags abort gate --
+    it('aborts the nightly pipeline when Daily tags fails (json-updater error)', async () => {
+      readMock.mockReturnValue('# Journal\n- 10:00 #books read Dune');
+      askMock.mockResolvedValue({ text: '**#books** -> books.json', error: null });
+      agentMock.mockResolvedValue({ text: null, error: 'Agent crashed' });
+
+      const result = await executeNightly();
+
+      // Session capture + Daily tags + Aborted sentinel — nothing else
+      expect(result.steps.map((s) => s.step)).toEqual([
+        'Session capture',
+        'Daily tags',
+        'Aborted',
+      ]);
+      expect(result.steps[2]!.status).toBe('error');
+      expect(result.steps[2]!.detail).toContain('processed marker not written');
+
+      // Downstream steps did NOT run
+      expect(extractMeetingsMock).not.toHaveBeenCalled();
+      expect(queueMock).not.toHaveBeenCalled();
+
+      // Marker was NOT appended to the journal
+      const markerWrites = writeMock.mock.calls.filter(
+        (c) => typeof c[1] === 'string' && c[1].includes('<!-- daily-processed:'),
+      );
+      expect(markerWrites).toHaveLength(0);
+
+      // Final commit still ran, with the aborted label
+      expect(gitMock).toHaveBeenCalledWith('Nightly processing (aborted after Daily tags)');
+      // Normal final commit was NOT called (early return prevents double commit)
+      expect(gitMock).not.toHaveBeenCalledWith('Nightly processing');
+    });
+
+    it('aborts the nightly pipeline when daily-content-updater errors', async () => {
+      readMock.mockReturnValue('# Journal\n- 11:30 #idea cool product concept');
+      askMock.mockResolvedValue({ text: '**#idea** → projects/ideas.md\n- Cool concept', error: null });
+      agentMock.mockResolvedValue({ text: null, error: 'content-updater crashed' });
+
+      const result = await executeNightly();
+
+      expect(result.steps.map((s) => s.step)).toEqual([
+        'Session capture',
+        'Daily tags',
+        'Aborted',
+      ]);
+      expect(result.steps[2]!.status).toBe('error');
+      expect(result.steps[2]!.detail).toContain('processed marker not written');
+      expect(gitMock).toHaveBeenCalledWith('Nightly processing (aborted after Daily tags)');
+      expect(gitMock).not.toHaveBeenCalledWith('Nightly processing');
+    });
+
+    it('aborts the nightly pipeline when Daily tags analysis errors', async () => {
+      readMock.mockReturnValue('# Journal\n- stuff');
+      askMock.mockResolvedValue({ text: null, error: 'Claude timed out' });
+
+      const result = await executeNightly();
+
+      expect(result.steps.map((s) => s.step)).toEqual([
+        'Session capture',
+        'Daily tags',
+        'Aborted',
+      ]);
+      expect(gitMock).toHaveBeenCalledWith('Nightly processing (aborted after Daily tags)');
+    });
+
+    it('does NOT abort when Daily tags is skipped (no actionable tags)', async () => {
+      readMock.mockReturnValue('# Journal\n- 10:00 light reading');
+      askMock.mockResolvedValue({ text: 'No updates needed. Light day.', error: null });
+
+      const result = await executeNightly();
+
+      const markStep = result.steps.find((s) => s.step === 'Mark processed')!;
+      expect(markStep.status).toBe('success');
+    });
+
+    it('preserves the structured abort summary when the abort-path git commit fails', async () => {
+      // Regression guard for the original motivation behind safeFinalCommit:
+      // a failing vault push during the abort path must not swallow the
+      // Aborted step or escape executeNightly.
+      readMock.mockReturnValue('# Journal\n- 10:00 #books read Dune');
+      askMock.mockResolvedValue({ text: '**#books** -> books.json', error: null });
+      agentMock.mockResolvedValue({ text: null, error: 'Agent crashed' });
+      gitMock.mockImplementation(() => { throw new Error('push refused'); });
+
+      const result = await executeNightly();
+
+      expect(result.steps.map((s) => s.step)).toEqual([
+        'Session capture',
+        'Daily tags',
+        'Aborted',
+        'Final commit',
+      ]);
+      expect(result.steps[3]!.status).toBe('error');
+      expect(result.steps[3]!.detail).toContain('push refused');
+    });
+
+    it('includes special rules (implicit CRM, study status, #health flags) in the daily-tags analysis prompt', async () => {
       readMock.mockReturnValue('# Journal\n- something');
       askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
 
       await executeNightly();
 
       const prompt = askMock.mock.calls[0]![0] as string;
-      expect(prompt).toContain('[[sam]]');
-      expect(prompt).toContain('[[jude]]');
-      expect(prompt).toContain('implicit');
+      // Implicit CRM names come from config.IMPLICIT_CRM_NAMES (mocked to ['alice', 'bob']).
+      expect(prompt).toContain('[[alice]]');
+      expect(prompt).toContain('[[bob]]');
+      expect(prompt).toContain('Implicit CRM');
       expect(prompt).toMatch(/status:\s*"in_progress"/);
       expect(prompt).toMatch(/status:\s*"completed"/);
       expect(prompt).toContain('#health');
@@ -564,17 +670,17 @@ describe('jobs/nightly', () => {
     });
 
     it('aggregates decisions from multiple meetings tagged to the same project into ONE helper call', async () => {
-      // Real-world case from logs: 5 meetings all tagged to `relay` flooded the
-      // Decisions Log with 12 separate headings. Now they collapse into one call
-      // with all decisions combined → one heading per project per day.
+      // Regression guard: when N meetings share one project, the prior implementation
+      // wrote N separate dated headings to the Decisions Log; they should now
+      // collapse into one heading per project per day.
       readMock.mockReturnValue('# Journal\n#meeting');
       askMock.mockResolvedValue({ text: 'No JSON updates needed.', error: null });
       extractMeetingsMock.mockResolvedValue([
-        { attendees: ['a'], project: 'relay', decisions: ['d1'] },
-        { attendees: ['b'], project: 'relay', decisions: ['d2', 'd3'] },
-        { attendees: ['c'], project: 'relay', decisions: ['d4'] },
-        { attendees: ['d'], project: 'relay', decisions: ['d5', 'd6', 'd7'] },
-        { attendees: ['e'], project: 'relay', decisions: ['d8'] },
+        { attendees: ['a'], project: 'project-x', decisions: ['d1'] },
+        { attendees: ['b'], project: 'project-x', decisions: ['d2', 'd3'] },
+        { attendees: ['c'], project: 'project-x', decisions: ['d4'] },
+        { attendees: ['d'], project: 'project-x', decisions: ['d5', 'd6', 'd7'] },
+        { attendees: ['e'], project: 'project-x', decisions: ['d8'] },
       ]);
       agentMock.mockResolvedValue({ text: 'updated', error: null });
       appendDecisionsMock.mockReturnValue({ status: 'success', appended: 8, detail: 'ok' });
@@ -584,7 +690,7 @@ describe('jobs/nightly', () => {
       // ONE call to the helper, not five — all decisions combined
       expect(appendDecisionsMock).toHaveBeenCalledTimes(1);
       expect(appendDecisionsMock).toHaveBeenCalledWith(
-        'relay',
+        'project-x',
         '2026-04-11',
         ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8'],
       );
@@ -889,8 +995,9 @@ describe('jobs/nightly', () => {
       expect(text).toContain('Nightly complete');
     });
 
-    it('publishes error message when executeNightly throws', async () => {
-      // gitCommitAndPush at the end of executeNightly will throw:
+    it('publishes summary with Final commit error step when final git commit fails', async () => {
+      // Git failure is captured as a step by safeFinalCommit, not thrown out
+      // of executeNightly. The structured summary is still delivered.
       gitMock.mockImplementation(() => { throw new Error('total failure'); });
 
       const bus = mockBus();
@@ -898,10 +1005,12 @@ describe('jobs/nightly', () => {
 
       expect(bus.publish).toHaveBeenCalledOnce();
       const { text } = bus.publish.mock.calls[0][0] as { kind: string; userId: number; text: string };
-      expect(text).toContain('failed');
+      expect(text).toContain('Nightly complete');
+      expect(text).toContain('Final commit');
+      expect(text).toContain('total failure');
     });
 
-    it('does not throw when executeNightly throws', async () => {
+    it('does not throw when final git commit fails', async () => {
       gitMock.mockImplementation(() => { throw new Error('git broke'); });
       const bus = mockBus();
 

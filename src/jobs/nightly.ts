@@ -81,6 +81,10 @@ async function stepDailyTags(date: string, content: string | null): Promise<Nigh
     ? content.slice(0, MAX_JOURNAL_CHARS) + '\n\n[truncated]'
     : content;
 
+  const implicitCrmRule = config.IMPLICIT_CRM_NAMES.length > 0
+    ? `\n- **Implicit CRM references**: even without an explicit \`#crm\` tag, any mention of ${config.IMPLICIT_CRM_NAMES.map((n) => `\`[[${n}]]\``).join(' or ')} should produce a CRM update for that contact (append today's journal_ref, add any new context).`
+    : '';
+
   const analysisPrompt = `Analyze this journal entry and identify all inline tags (words prefixed with #, like #workout, #crm, #place, #books, #priorities, #diet, #idea, etc.). For each tagged item, extract the relevant data from the surrounding text and propose an update.
 
 ## Known targets
@@ -103,8 +107,7 @@ For each tag found, output a proposed update in this format:
 
 ## Special rules
 
-- **\`#books\` summaries**: when you propose a \`#books\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.
-- **Implicit CRM references**: even without an explicit \`#crm\` tag, any mention of \`[[sam]]\` or \`[[jude]]\` should produce a CRM update for that contact (append today's journal_ref, add any new context).
+- **\`#books\` summaries**: when you propose a \`#books\` → \`pages/books.json\` update and the journal doesn't already include a summary, include a 1-2 sentence \`summary:\` field derived from your general knowledge of the book (premise + core themes, neutral tone). If you are not confident you know the specific book, omit the summary field and note \`summary: UNKNOWN\` so a downstream helper can fill it in.${implicitCrmRule}
 - **\`#study\` status inference**: when the journal describes *starting* a study topic, set \`status: "in_progress"\`. When it describes *finishing* a topic, set \`status: "completed"\`. Use journal wording as the signal ("started reading X", "finished X", "completed X course").
 - **\`#diet\` tags** → \`health/nutrition.md\`. Propose the meal line in the form expected by \`daily-content-updater\`: a date + time + meal description. Multiple \`#diet\` mentions in one journal can share the same date heading.
 - **\`#idea\` tags** → \`projects/ideas.md\`. Propose a short title (3-6 words) and a one-to-two sentence description distilled from the tagged passage. Always include a \`Source: [[${date.replace(/-/g, '_')}]]\` pointer.
@@ -369,6 +372,20 @@ function toJournalFilename(isoDate: string): string {
   return `${isoDate.replace(/-/g, '_')}.md`;
 }
 
+/** Run the final `gitCommitAndPush` outside the per-step `run()` helper but
+ *  with the same fault-isolation contract: a git failure is captured as a
+ *  `Final commit` step on the result instead of escaping out of
+ *  `executeNightly()`. Preserves the structured nightly summary even when
+ *  the vault push fails (network down, merge conflict, etc.). */
+async function safeFinalCommit(message: string, steps: NightlyStepResult[]): Promise<void> {
+  try {
+    await gitCommitAndPush(message);
+  } catch (err) {
+    steps.push({ step: 'Final commit', status: 'error', detail: `${message}: ${String(err)}` });
+    log.error('Final commit failed', { message, error: String(err) });
+  }
+}
+
 /** Run the full nightly pipeline. If `targetDate` is provided (ISO `YYYY-MM-DD`),
  *  processes that day's journal instead of today's — useful for backfilling a
  *  missed day via `npm run cli -- nightly --date 2026-04-17`.
@@ -385,15 +402,20 @@ export async function executeNightly(
   log.info('Nightly processing started', { targetDate: targetDate ?? '(today)', force: options?.force ?? false });
   const steps: NightlyStepResult[] = [];
 
-  const run = async (name: string, fn: () => NightlyStepResult | Promise<NightlyStepResult>) => {
+  const run = async (
+    name: string,
+    fn: () => NightlyStepResult | Promise<NightlyStepResult>,
+  ): Promise<NightlyStepResult> => {
     try {
       const result = await fn();
       steps.push(result);
       log.info(`Step complete: ${result.step}`, { status: result.status, detail: result.detail });
+      return result;
     } catch (err) {
       const result: NightlyStepResult = { step: name, status: 'error', detail: String(err) };
       steps.push(result);
       log.error(`Step failed: ${name}`, { error: String(err) });
+      return result;
     }
   };
 
@@ -417,7 +439,21 @@ export async function executeNightly(
   }
 
   await run('Session capture', stepCaptureSession);
-  await run('Daily tags', () => stepDailyTags(todayDate, todayJournal));
+  const dailyTags = await run('Daily tags', () => stepDailyTags(todayDate, todayJournal));
+
+  if (dailyTags.status === 'error') {
+    const abort: NightlyStepResult = {
+      step: 'Aborted',
+      status: 'error',
+      detail: 'Daily tags failed — remaining steps skipped, processed marker not written',
+    };
+    steps.push(abort);
+    log.error('Nightly aborted after Daily tags failure', { detail: dailyTags.detail });
+    await safeFinalCommit('Nightly processing (aborted after Daily tags)', steps);
+    log.info('Nightly processing complete', { steps: steps.length, aborted: true });
+    return { steps };
+  }
+
   await run('Birthday alerts', () => stepBirthdayAlerts(todayDate));
   await run('Playbook extract', stepPlaybookExtract);
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
@@ -429,7 +465,7 @@ export async function executeNightly(
   await run('Mark processed', () => stepMarkProcessed(todayFilename, todayJournal, todayDate));
 
   // Final commit for any residual uncommitted changes
-  await gitCommitAndPush('Nightly processing');
+  await safeFinalCommit('Nightly processing', steps);
 
   log.info('Nightly processing complete', { steps: steps.length });
   return { steps };
