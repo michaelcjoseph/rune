@@ -180,7 +180,7 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
     res.end(JSON.stringify({ error: 'internal error' }));
     return;
   }
-  const session = getSession(userId);
+  const session = getSession(userId, 'webview');
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     text: chunks.join('\n\n'),

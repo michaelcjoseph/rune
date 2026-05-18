@@ -40,6 +40,7 @@ vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(() => ({ sessionId: 'test-session-1', messageCount: 5, firstMessage: 'hello' })),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
@@ -97,7 +98,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     });
 
     const sender = makeSender();
-    await handleFresh(sender, 123);
+    await handleFresh(sender, 123, 'telegram');
 
     // 1. File saved to knowledge/raw/conversations/
     const conversationsDir = join(tmpDir, 'knowledge', 'raw', 'conversations');
@@ -151,7 +152,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     mockSummarizeSession.mockResolvedValue({ text: summaryText, error: null });
 
     const sender = makeSender();
-    await handleFresh(sender, 123);
+    await handleFresh(sender, 123, 'telegram');
 
     // No file saved
     const conversationsDir = join(tmpDir, 'knowledge', 'raw', 'conversations');
@@ -180,7 +181,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     mockSummarizeSession.mockResolvedValue({ text: summaryText, error: null });
 
     const sender = makeSender();
-    await handleFresh(sender, 123);
+    await handleFresh(sender, 123, 'telegram');
 
     const journalFile = join(tmpDir, 'journals', '2026_04_14.md');
     expect(existsSync(journalFile)).toBe(true);

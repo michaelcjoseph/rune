@@ -7,6 +7,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../vault/sessions.js', () => ({
   getAllSessions: vi.fn(),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
 vi.mock('../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
@@ -39,8 +40,8 @@ describe('jobs/capture', () => {
 
   it('summarizes each session, appends to journal, deletes, and commits', async () => {
     getAllMock.mockReturnValue([
-      [101, { sessionId: 'sess-1', lastActivity: '', messageCount: 2, firstMessage: 'hi' }],
-      [202, { sessionId: 'sess-2', lastActivity: '', messageCount: 5, firstMessage: 'hey' }],
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-1', lastActivity: '', messageCount: 2, firstMessage: 'hi' } },
+      { userId: 202, transport: 'webview', session: { sessionId: 'sess-2', lastActivity: '', messageCount: 5, firstMessage: 'hey' } },
     ]);
     summaryMock
       .mockResolvedValueOnce({ text: 'Summary line 1', error: null })
@@ -51,14 +52,14 @@ describe('jobs/capture', () => {
     expect(summaryMock).toHaveBeenCalledWith('sess-1');
     expect(summaryMock).toHaveBeenCalledWith('sess-2');
     expect(appendMock).toHaveBeenCalledTimes(2);
-    expect(deleteMock).toHaveBeenCalledWith(101);
-    expect(deleteMock).toHaveBeenCalledWith(202);
-    expect(gitMock).toHaveBeenCalledWith('TG sessions captured (nightly)');
+    expect(deleteMock).toHaveBeenCalledWith(101, 'telegram');
+    expect(deleteMock).toHaveBeenCalledWith(202, 'webview');
+    expect(gitMock).toHaveBeenCalledWith('Conversations captured (nightly)');
   });
 
   it('does not delete sessions with empty summary text', async () => {
     getAllMock.mockReturnValue([
-      [101, { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' }],
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
     ]);
     summaryMock.mockResolvedValue({ text: '', error: null });
 
@@ -71,8 +72,8 @@ describe('jobs/capture', () => {
 
   it('continues processing when one session fails to summarize', async () => {
     getAllMock.mockReturnValue([
-      [101, { sessionId: 'sess-bad', lastActivity: '', messageCount: 1, firstMessage: 'hi' }],
-      [202, { sessionId: 'sess-good', lastActivity: '', messageCount: 1, firstMessage: 'hey' }],
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-bad', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
+      { userId: 202, transport: 'telegram', session: { sessionId: 'sess-good', lastActivity: '', messageCount: 1, firstMessage: 'hey' } },
     ]);
     summaryMock
       .mockRejectedValueOnce(new Error('Claude CLI crashed'))
@@ -81,24 +82,24 @@ describe('jobs/capture', () => {
     const result = await captureSessions();
     expect(result).toEqual({ captured: 1 });
     // Only the successfully captured session (202) is deleted
-    expect(deleteMock).not.toHaveBeenCalledWith(101);
-    expect(deleteMock).toHaveBeenCalledWith(202);
+    expect(deleteMock).not.toHaveBeenCalledWith(101, 'telegram');
+    expect(deleteMock).toHaveBeenCalledWith(202, 'telegram');
     expect(gitMock).toHaveBeenCalled();
   });
 
   it('passes source parameter to git commit message', async () => {
     getAllMock.mockReturnValue([
-      [101, { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' }],
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
     ]);
     summaryMock.mockResolvedValue({ text: 'Summary', error: null });
 
     await captureSessions('http');
-    expect(gitMock).toHaveBeenCalledWith('TG sessions captured (http)');
+    expect(gitMock).toHaveBeenCalledWith('Conversations captured (http)');
   });
 
   it('formats journal entry with timestamp and indented summary lines', async () => {
     getAllMock.mockReturnValue([
-      [101, { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' }],
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-1', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
     ]);
     summaryMock.mockResolvedValue({ text: 'Line A\nLine B', error: null });
 
@@ -109,5 +110,21 @@ describe('jobs/capture', () => {
     expect(entry).toContain('[[jarvis]]');
     expect(entry).toContain('\t- Line A');
     expect(entry).toContain('\t- Line B');
+  });
+
+  it('uses webview chat label for webview sessions and telegram chat for tg', async () => {
+    getAllMock.mockReturnValue([
+      { userId: 101, transport: 'telegram', session: { sessionId: 'sess-tg', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
+      { userId: 202, transport: 'webview', session: { sessionId: 'sess-web', lastActivity: '', messageCount: 1, firstMessage: 'hi' } },
+    ]);
+    summaryMock
+      .mockResolvedValueOnce({ text: 'A', error: null })
+      .mockResolvedValueOnce({ text: 'B', error: null });
+
+    await captureSessions();
+
+    const entries = appendMock.mock.calls.map(c => c[0] as string);
+    expect(entries.some(e => e.includes('telegram chat'))).toBe(true);
+    expect(entries.some(e => e.includes('webview chat'))).toBe(true);
   });
 });

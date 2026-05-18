@@ -40,7 +40,7 @@ rotateStreamLogIfLarge();
 
 // Restore sessions from previous run
 restoreSessions();
-for (const [, session] of getAllSessions()) {
+for (const { session } of getAllSessions()) {
   markSessionCreated(session.sessionId);
 }
 restoreReviewSessions();

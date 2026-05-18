@@ -70,7 +70,11 @@ export function getStateSnapshot(): StateSnapshot {
   const userId = config.TELEGRAM_USER_ID;
   const warnings: string[] = [];
 
-  const session = getSession(userId);
+  // State snapshot is webview-consumed; prefer the webview session so the UI
+  // reflects its own thread. Fall back to the telegram session when none
+  // exists on webview — operator-level state should still surface a TG-only
+  // conversation rather than show "no active session" misleadingly.
+  const session = getSession(userId, 'webview') ?? getSession(userId, 'telegram');
   const review = getActiveReviewSession(userId);
   const schedulerState = readSchedulerState();
 

@@ -8,6 +8,7 @@ vi.mock('../../config.js', () => ({
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
 vi.mock('../../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
@@ -121,7 +122,7 @@ describe('bot/commands/fresh', () => {
     it('returns { ok: false, error: "no-session" } when no session exists', async () => {
       getSessionMock.mockReturnValue(null);
 
-      const result = await closeConversation(123);
+      const result = await closeConversation(123, 'telegram');
 
       expect(result).toEqual({ ok: false, error: 'no-session' });
       expect(summarizeMock).not.toHaveBeenCalled();
@@ -134,12 +135,12 @@ describe('bot/commands/fresh', () => {
         error: null,
       });
 
-      const result = await closeConversation(123);
+      const result = await closeConversation(123, 'telegram');
 
       expect(result).toMatchObject({ ok: true, journalSummary: 'Good discussion', isKBWorthy: true });
       expect(appendMock).toHaveBeenCalled();
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
-      expect(gitMock).toHaveBeenCalledWith('TG conversation logged');
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
+      expect(gitMock).toHaveBeenCalledWith('Conversation logged');
     });
 
     it('returns { ok: true, isKBWorthy: false } and does not enqueue when KB-worthy: no', async () => {
@@ -149,7 +150,7 @@ describe('bot/commands/fresh', () => {
         error: null,
       });
 
-      const result = await closeConversation(123);
+      const result = await closeConversation(123, 'telegram');
 
       expect(result).toMatchObject({ ok: true, isKBWorthy: false });
       expect(writeVaultMock).not.toHaveBeenCalled();
@@ -160,10 +161,10 @@ describe('bot/commands/fresh', () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-err' });
       summarizeMock.mockResolvedValue({ text: null, error: 'CLI timeout' });
 
-      const result = await closeConversation(123);
+      const result = await closeConversation(123, 'telegram');
 
       expect(result).toEqual({ ok: false, error: 'CLI timeout' });
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(appendMock).not.toHaveBeenCalled();
     });
 
@@ -171,17 +172,47 @@ describe('bot/commands/fresh', () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-throw' });
       summarizeMock.mockRejectedValue(new Error('network error'));
 
-      const result = await closeConversation(123);
+      const result = await closeConversation(123, 'telegram');
 
       expect(result).toEqual({ ok: false, error: 'network error' });
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
     });
 
     it('never throws — catches all exceptions and returns ok: false', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-x' });
       summarizeMock.mockRejectedValue(new Error('unexpected boom'));
 
-      await expect(closeConversation(123)).resolves.toMatchObject({ ok: false });
+      await expect(closeConversation(123, 'telegram')).resolves.toMatchObject({ ok: false });
+    });
+  });
+
+  describe('closeConversation — webview transport label', () => {
+    it('writes "webview chat" in the journal entry when transport is webview', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-web' });
+      summarizeMock.mockResolvedValue({
+        text: 'Webview convo summary\nKB-worthy: no',
+        error: null,
+      });
+
+      await closeConversation(123, 'webview');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] webview chat');
+      expect(entry).not.toContain('telegram chat');
+    });
+
+    it('writes "telegram chat" in the journal entry when transport is telegram', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-tg' });
+      summarizeMock.mockResolvedValue({
+        text: 'Telegram convo\nKB-worthy: no',
+        error: null,
+      });
+
+      await closeConversation(456, 'telegram');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] telegram chat');
+      expect(entry).not.toContain('webview chat');
     });
   });
 
@@ -199,7 +230,7 @@ describe('bot/commands/fresh', () => {
       getSessionMock.mockReturnValue(null);
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
       expect(sender.send).toHaveBeenCalledWith(123, 'No active conversation to summarize.');
       expect(summarizeMock).not.toHaveBeenCalled();
@@ -210,9 +241,9 @@ describe('bot/commands/fresh', () => {
       summarizeMock.mockResolvedValue({ text: null, error: 'Claude broke' });
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('Could not summarize'));
       expect(appendMock).not.toHaveBeenCalled();
     });
@@ -225,7 +256,7 @@ describe('bot/commands/fresh', () => {
       });
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
       expect(writeVaultMock).toHaveBeenCalledWith(
         expect.stringContaining('knowledge/raw/conversations/'),
@@ -248,7 +279,7 @@ describe('bot/commands/fresh', () => {
       });
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
       expect(writeVaultMock).not.toHaveBeenCalled();
       expect(enqueueMock).not.toHaveBeenCalled();
@@ -265,7 +296,7 @@ describe('bot/commands/fresh', () => {
       });
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('14:30');
@@ -282,10 +313,10 @@ describe('bot/commands/fresh', () => {
       });
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
-      expect(gitMock).toHaveBeenCalledWith('TG conversation logged');
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
+      expect(gitMock).toHaveBeenCalledWith('Conversation logged');
     });
 
     it('handles exception by resetting session and notifying user', async () => {
@@ -293,9 +324,9 @@ describe('bot/commands/fresh', () => {
       summarizeMock.mockRejectedValue(new Error('CLI timeout'));
       const sender = makeSender();
 
-      await handleFresh(sender, 123);
+      await handleFresh(sender, 123, 'telegram');
 
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('CLI timeout'));
     });
   });

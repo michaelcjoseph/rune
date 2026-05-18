@@ -9,6 +9,7 @@ vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
   getSessionMessages: vi.fn(),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
 vi.mock('../../utils/time.js', () => ({
@@ -48,7 +49,7 @@ describe('bot/commands/fresh-full', () => {
       getSessionMock.mockReturnValue(null);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
       expect(sender.send).toHaveBeenCalledWith(123, 'No active conversation to log.');
       expect(appendMock).not.toHaveBeenCalled();
@@ -63,13 +64,13 @@ describe('bot/commands/fresh-full', () => {
       getSessionMessagesMock.mockReturnValue([]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
       expect(sender.send).toHaveBeenCalledWith(
         123,
         'No messages captured in this session — use /fresh for a summary instead.',
       );
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(appendMock).not.toHaveBeenCalled();
       expect(gitMock).not.toHaveBeenCalled();
     });
@@ -84,7 +85,7 @@ describe('bot/commands/fresh-full', () => {
       ]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
       expect(appendMock).toHaveBeenCalledTimes(1);
       const entry = appendMock.mock.calls[0]![0] as string;
@@ -96,16 +97,16 @@ describe('bot/commands/fresh-full', () => {
       expect(entry).toContain('Hi there!');
     });
 
-    it('commits with message "TG conversation logged (full)"', async () => {
+    it('commits with message "Conversation logged (full)"', async () => {
       getSessionMock.mockReturnValue({ sessionId: 'sess-ok' });
       getSessionMessagesMock.mockReturnValue([
         { role: 'user', text: 'Test', ts: '2026-04-14T14:00:00Z' },
       ]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
-      expect(gitMock).toHaveBeenCalledWith('TG conversation logged (full)');
+      expect(gitMock).toHaveBeenCalledWith('Conversation logged (full)');
     });
 
     it('deletes session after logging', async () => {
@@ -115,9 +116,9 @@ describe('bot/commands/fresh-full', () => {
       ]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
     });
 
     it('sends confirmation with message count', async () => {
@@ -129,7 +130,7 @@ describe('bot/commands/fresh-full', () => {
       ]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
       expect(sender.send).toHaveBeenCalledWith(
         123,
@@ -144,12 +145,42 @@ describe('bot/commands/fresh-full', () => {
       ]);
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('\t- [Jarvis] Line one');
       expect(entry).toContain('\t  Line two');
       expect(entry).toContain('\t  Line three');
+    });
+  });
+
+  describe('webview transport label', () => {
+    it('writes "webview chat" in the journal entry when transport is webview', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-web' });
+      getSessionMessagesMock.mockReturnValue([
+        { role: 'user', text: 'Hello from webview', ts: '2026-04-14T14:00:00Z' },
+      ]);
+      const sender = makeSender();
+
+      await handleFreshFull(sender, 123, 'webview');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] webview chat (full transcript)');
+      expect(entry).not.toContain('telegram chat');
+    });
+
+    it('writes "telegram chat" in the journal entry when transport is telegram', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'sess-tg' });
+      getSessionMessagesMock.mockReturnValue([
+        { role: 'user', text: 'Hello from TG', ts: '2026-04-14T14:00:00Z' },
+      ]);
+      const sender = makeSender();
+
+      await handleFreshFull(sender, 456, 'telegram');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] telegram chat (full transcript)');
+      expect(entry).not.toContain('webview chat');
     });
   });
 
@@ -162,9 +193,9 @@ describe('bot/commands/fresh-full', () => {
       appendMock.mockImplementation(() => { throw new Error('disk full'); });
       const sender = makeSender();
 
-      await handleFreshFull(sender, 123);
+      await handleFreshFull(sender, 123, 'telegram');
 
-      expect(deleteSessionMock).toHaveBeenCalledWith(123);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(sender.send).toHaveBeenCalledWith(
         123,
         expect.stringContaining('disk full'),
@@ -180,7 +211,7 @@ describe('bot/commands/fresh-full', () => {
       appendMock.mockImplementation(() => { throw new Error('unexpected'); });
       const sender = makeSender();
 
-      await expect(handleFreshFull(sender, 123)).resolves.not.toThrow();
+      await expect(handleFreshFull(sender, 123, 'telegram')).resolves.not.toThrow();
     });
   });
 });

@@ -10,6 +10,8 @@ const log = createLogger('sessions');
 
 const MAX_SESSION_MESSAGES = 200;
 
+export type Transport = 'telegram' | 'webview';
+
 export interface ConversationMessage {
   role: 'user' | 'assistant';
   text: string;
@@ -25,13 +27,31 @@ interface Session {
   messages: ConversationMessage[];
 }
 
-const sessions = new Map<number, Session>();
-
-export function getSession(chatId: number): Session | null {
-  return sessions.get(chatId) || null;
+/** Composite key shape: `${transport}:${userId}` — lets TG and webview hold
+ *  independent threads under the same numeric userId. */
+function sessionKey(userId: number, transport: Transport): string {
+  return `${transport}:${userId}`;
 }
 
-export function createSession(chatId: number, firstMessage: string, model?: string): Session {
+/** Journal-entry source label used wherever a "[[jarvis]] <label>" line is
+ *  written for a transport. Centralized so the four call sites (fresh,
+ *  fresh-full, journal, capture) stay in sync if a third transport is added. */
+export function transportLabel(transport: Transport): string {
+  return transport === 'webview' ? 'webview chat' : 'telegram chat';
+}
+
+const sessions = new Map<string, Session>();
+
+export function getSession(userId: number, transport: Transport): Session | null {
+  return sessions.get(sessionKey(userId, transport)) || null;
+}
+
+export function createSession(
+  userId: number,
+  transport: Transport,
+  firstMessage: string,
+  model?: string,
+): Session {
   const session: Session = {
     sessionId: randomUUID(),
     lastActivity: new Date().toISOString(),
@@ -40,58 +60,112 @@ export function createSession(chatId: number, firstMessage: string, model?: stri
     model: model || config.DEFAULT_CHAT_MODEL,
     messages: [],
   };
-  sessions.set(chatId, session);
+  sessions.set(sessionKey(userId, transport), session);
   persistSessions();
   return session;
 }
 
-export function updateSession(chatId: number): void {
-  const session = sessions.get(chatId);
+export function updateSession(userId: number, transport: Transport): void {
+  const session = sessions.get(sessionKey(userId, transport));
   if (!session) return;
   session.lastActivity = new Date().toISOString();
   session.messageCount++;
   persistSessions();
 }
 
-export function setSessionModel(chatId: number, model: string): void {
-  const session = sessions.get(chatId);
+export function setSessionModel(userId: number, transport: Transport, model: string): void {
+  const session = sessions.get(sessionKey(userId, transport));
   if (!session) return;
   session.model = model;
   persistSessions();
 }
 
-export function deleteSession(chatId: number): void {
-  const session = sessions.get(chatId);
+export function deleteSession(userId: number, transport: Transport): void {
+  const key = sessionKey(userId, transport);
+  const session = sessions.get(key);
   if (session) cleanupSession(session.sessionId);
-  sessions.delete(chatId);
+  sessions.delete(key);
   persistSessions();
 }
 
-export function appendMessageToSession(chatId: number, role: 'user' | 'assistant', text: string): void {
-  const session = sessions.get(chatId);
+export function appendMessageToSession(
+  userId: number,
+  transport: Transport,
+  role: 'user' | 'assistant',
+  text: string,
+): void {
+  const session = sessions.get(sessionKey(userId, transport));
   if (!session) return;
   if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
   session.messages.push({ role, text, ts: `${getTodayDate()} ${getTimestamp()}` });
   // Persistence is deferred to updateSession to avoid 3 synchronous disk writes per turn.
 }
 
-export function getSessionMessages(chatId: number): ConversationMessage[] {
-  return sessions.get(chatId)?.messages ?? [];
+export function getSessionMessages(userId: number, transport: Transport): ConversationMessage[] {
+  return sessions.get(sessionKey(userId, transport))?.messages ?? [];
 }
 
-export function getAllSessions(): [number, Session][] {
-  return [...sessions.entries()];
+export interface SessionEntry {
+  userId: number;
+  transport: Transport;
+  session: Session;
+}
+
+/** Snapshot of every active session. Callers that need to act on a specific
+ *  session (e.g. nightly capture deletes after summarizing) get the
+ *  destructured pair so they don't have to parse the composite key. */
+export function getAllSessions(): SessionEntry[] {
+  const out: SessionEntry[] = [];
+  for (const [key, session] of sessions.entries()) {
+    const parsed = parseSessionKey(key);
+    if (!parsed) continue;
+    out.push({ ...parsed, session });
+  }
+  return out;
+}
+
+/** Parse a composite key. Returns null for malformed keys so callers can skip
+ *  rather than throw — useful during the legacy-format migration. */
+function parseSessionKey(key: string): { userId: number; transport: Transport } | null {
+  const colon = key.indexOf(':');
+  if (colon <= 0) return null;
+  const transport = key.slice(0, colon);
+  if (transport !== 'telegram' && transport !== 'webview') return null;
+  const userId = Number(key.slice(colon + 1));
+  if (!Number.isFinite(userId)) return null;
+  return { userId, transport };
 }
 
 export function restoreSessions(): void {
   try {
     const data = readFileSync(config.SESSIONS_FILE, 'utf8');
-    const entries = JSON.parse(data) as [number, Session][];
-    for (const [chatId, session] of entries) {
+    const entries = JSON.parse(data) as [string | number, Session][];
+    let migrated = 0;
+    for (const [rawKey, session] of entries) {
       if (!session.messages) session.messages = [];
-      sessions.set(Number(chatId), session);
+      // Legacy format: bare numeric key with no transport prefix. Treat
+      // these as 'telegram' since they predate the webview transport.
+      let key: string;
+      if (typeof rawKey === 'number') {
+        key = sessionKey(rawKey, 'telegram');
+        migrated++;
+      } else if (parseSessionKey(rawKey)) {
+        key = rawKey;
+      } else {
+        // Unrecognized string key — log it rather than dropping silently so
+        // hand-edited or partially-migrated files surface in operator logs.
+        log.warn('Skipping session with unrecognized key', { rawKey });
+        continue;
+      }
+      sessions.set(key, session);
     }
-    log.info(`Restored ${sessions.size} session(s) from disk`);
+    if (migrated > 0) {
+      log.info(`Restored ${sessions.size} session(s) from disk (${migrated} migrated from legacy format)`);
+      // Persist immediately so the file is in the new format from here on.
+      persistSessions();
+    } else {
+      log.info(`Restored ${sessions.size} session(s) from disk`);
+    }
   } catch {
     // Missing or corrupt file — start fresh
   }

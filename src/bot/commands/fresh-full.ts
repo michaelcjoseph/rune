@@ -1,4 +1,4 @@
-import { getSession, getSessionMessages, deleteSession } from '../../vault/sessions.js';
+import { getSession, getSessionMessages, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
@@ -16,17 +16,21 @@ function formatMessage(role: 'user' | 'assistant', text: string): string {
   return `${first}\n${rest}`;
 }
 
-export async function handleFreshFull(sender: MessageSender, userId: number): Promise<void> {
-  const session = getSession(userId);
+export async function handleFreshFull(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+): Promise<void> {
+  const session = getSession(userId, transport);
   if (!session) {
     await sender.send(userId, 'No active conversation to log.');
     return;
   }
 
-  const messages = getSessionMessages(userId);
+  const messages = getSessionMessages(userId, transport);
   if (messages.length === 0) {
     await sender.send(userId, 'No messages captured in this session — use /fresh for a summary instead.');
-    deleteSession(userId);
+    deleteSession(userId, transport);
     return;
   }
 
@@ -34,16 +38,16 @@ export async function handleFreshFull(sender: MessageSender, userId: number): Pr
   try {
     const transcript = messages.map((m) => formatMessage(m.role, m.text)).join('\n');
     const ts = getTimestamp();
-    const entry = `- ${ts} [[jarvis]] telegram chat (full transcript)\n${transcript}`;
+    const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)} (full transcript)\n${transcript}`;
     appendToJournal(entry);
-    log.info('Full transcript logged', { userId, messageCount: messages.length });
+    log.info('Full transcript logged', { userId, transport, messageCount: messages.length });
 
-    await gitCommitAndPush('TG conversation logged (full)');
-    deleteSession(userId);
+    await gitCommitAndPush('Conversation logged (full)');
+    deleteSession(userId, transport);
     await sender.send(userId, `Full conversation logged (${messages.length} messages). Session reset.`);
   } catch (err) {
     log.error('fresh-full exception', { error: (err as Error).message });
-    deleteSession(userId);
+    deleteSession(userId, transport);
     await sender.send(userId, `Internal error logging conversation — session reset. Error: ${(err as Error).message}`);
   } finally {
     sender.stopTyping(userId);

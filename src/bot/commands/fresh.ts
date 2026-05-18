@@ -1,4 +1,4 @@
-import { getSession, deleteSession } from '../../vault/sessions.js';
+import { getSession, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
 import { summarizeSession } from '../../ai/claude.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp, getTodayDate } from '../../utils/time.js';
@@ -41,8 +41,11 @@ export type CloseConversationResult =
  *  /fresh and by /journal (which closes the thread after a journal write).
  *  Returns metadata so callers can surface a tailored confirmation. Never
  *  throws — errors are returned as { ok: false }. */
-export async function closeConversation(chatId: number): Promise<CloseConversationResult> {
-  const session = getSession(chatId);
+export async function closeConversation(
+  chatId: number,
+  transport: Transport,
+): Promise<CloseConversationResult> {
+  const session = getSession(chatId, transport);
   if (!session) return { ok: false, error: 'no-session' };
 
   try {
@@ -50,7 +53,7 @@ export async function closeConversation(chatId: number): Promise<CloseConversati
 
     if (result.error) {
       log.error('Summarize error', { error: result.error, sessionId: session.sessionId });
-      deleteSession(chatId);
+      deleteSession(chatId, transport);
       return { ok: false, error: result.error };
     }
 
@@ -59,7 +62,7 @@ export async function closeConversation(chatId: number): Promise<CloseConversati
 
     const ts = getTimestamp();
     const summaryLines = journalSummary.split('\n').map((l) => `\t- ${l}`).join('\n');
-    const entry = `- ${ts} [[jarvis]] telegram chat\n${summaryLines}`;
+    const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n${summaryLines}`;
     appendToJournal(entry);
 
     if (isKBWorthy) {
@@ -67,25 +70,29 @@ export async function closeConversation(chatId: number): Promise<CloseConversati
       enqueue(sourcePath);
     }
 
-    await gitCommitAndPush('TG conversation logged');
-    deleteSession(chatId);
+    await gitCommitAndPush('Conversation logged');
+    deleteSession(chatId, transport);
     return { ok: true, journalSummary, isKBWorthy };
   } catch (err) {
     log.error('closeConversation exception', { error: (err as Error).message });
-    deleteSession(chatId);
+    deleteSession(chatId, transport);
     return { ok: false, error: (err as Error).message };
   }
 }
 
-export async function handleFresh(sender: MessageSender, userId: number): Promise<void> {
-  const session = getSession(userId);
+export async function handleFresh(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+): Promise<void> {
+  const session = getSession(userId, transport);
   if (!session) {
     await sender.send(userId, 'No active conversation to summarize.');
     return;
   }
 
   sender.startTyping(userId);
-  const result = await closeConversation(userId);
+  const result = await closeConversation(userId, transport);
   sender.stopTyping(userId);
 
   if (!result.ok) {

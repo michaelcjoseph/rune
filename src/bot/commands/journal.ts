@@ -1,16 +1,21 @@
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
-import { getSession } from '../../vault/sessions.js';
+import { getSession, transportLabel, type Transport } from '../../vault/sessions.js';
 import { closeConversation } from './fresh.js';
 import { createLogger } from '../../utils/logger.js';
 import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-journal');
 
-export async function handleJournal(sender: MessageSender, userId: number, text: string): Promise<void> {
+export async function handleJournal(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+  text: string,
+): Promise<void> {
   const ts = getTimestamp();
-  const entry = `- ${ts} [[jarvis]] telegram chat\n\t- ${text}`;
+  const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n\t- ${text}`;
   appendToJournal(entry);
 
   // If a multi-turn conversation is active, journaling closes the thread.
@@ -18,14 +23,14 @@ export async function handleJournal(sender: MessageSender, userId: number, text:
   // KB-worthy, commit, delete the session. The user's literal entry above
   // remains uncommitted here so closeConversation's single commit captures
   // both the literal entry and the summary together.
-  if (!getSession(userId)) {
+  if (!getSession(userId, transport)) {
     await gitCommitAndPush('TG journal entry');
     await sender.send(userId, 'Logged to journal.');
     return;
   }
 
   sender.startTyping(userId);
-  const result = await closeConversation(userId);
+  const result = await closeConversation(userId, transport);
   sender.stopTyping(userId);
 
   if (!result.ok) {

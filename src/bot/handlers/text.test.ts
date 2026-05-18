@@ -87,7 +87,7 @@ const { handleNewProject } = await import('../commands/new-project.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
-const { handleTextMessage } = await import('./text.js');
+const { handleTextMessage, dispatchText } = await import('./text.js');
 
 function mockSender(): MessageSender {
   return {
@@ -113,18 +113,18 @@ describe('text handler routing', () => {
 
   it('routes /fresh', async () => {
     await handleTextMessage(mockSender(), msg('/fresh'));
-    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
   });
 
   it('routes /fresh-full before /fresh so the more-specific prefix wins', async () => {
     await handleTextMessage(mockSender(), msg('/fresh-full'));
-    expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
     expect(handleFresh).not.toHaveBeenCalled();
   });
 
   it('routes /clear to handleClear', async () => {
     await handleTextMessage(mockSender(), msg('/clear'));
-    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
   });
 
   it('/clear does not invoke handleFresh or handleFreshFull', async () => {
@@ -158,7 +158,7 @@ describe('text handler routing', () => {
 
   it('routes /journal with text', async () => {
     await handleTextMessage(mockSender(), msg('/journal bought groceries'));
-    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'bought groceries');
+    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'telegram', 'bought groceries');
   });
 
   it('routes /ask with question', async () => {
@@ -178,7 +178,7 @@ describe('text handler routing', () => {
 
   it('routes /status', async () => {
     await handleTextMessage(mockSender(), msg('/status'));
-    expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
   });
 
   it('routes /learn with text', async () => {
@@ -333,7 +333,7 @@ describe('text handler routing', () => {
 
     await handleTextMessage(mockSender(), msg('/fresh'));
 
-    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100);
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
     const handleReviewMessageMock = handleReviewMessage as unknown as ReturnType<typeof vi.fn>;
     expect(handleReviewMessageMock).not.toHaveBeenCalled();
   });
@@ -390,7 +390,7 @@ describe('resolver wiring in text handler', () => {
       classifyResult({ skill: 'journal', args: '11am, called dad', confidence: 0.95 }),
     );
     await handleTextMessage(mockSender(), msg('add this to my journal: 11am, called dad'));
-    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, '11am, called dad');
+    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'telegram', '11am, called dad');
   });
 
   it('falls through to conversation for KB-shaped questions (kb_query is no longer a route)', async () => {
@@ -714,5 +714,154 @@ describe('VAULT_SYSTEM_PROMPT_BASE — kb_query guidance', () => {
     // The softened phrasing — allows minimal adaptation but discourages re-querying.
     expect(systemPrompt).toContain('synthesis-quality');
     expect(systemPrompt).toContain('adapt minimally');
+  });
+});
+
+describe('dispatchText — active-session bypass (new behavior)', () => {
+  // When an in-flight chat session exists the resolver must be skipped entirely
+  // and the message must be routed directly to handleConversation. This prevents
+  // continuation messages in an active thread from being hijacked by the resolver
+  // at ≥0.7 confidence and accidentally closing the session.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+  });
+
+  it('skips the resolver when a session is active and goes straight to conversation', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    // Session already exists — continuation message
+    getSessionMock.mockReturnValue({
+      sessionId: 'existing-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 3,
+      firstMessage: 'earlier message',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'reply', error: null });
+
+    const sender = mockSender();
+    // Long enough message that the resolver would normally run (≥5 words)
+    await dispatchText(sender, 100, 'one two three four five words here');
+
+    // Resolver must NOT have been called
+    expect(mockClassify).not.toHaveBeenCalled();
+    // Conversation path was taken (askClaudeWithContext invoked)
+    expect(askMock).toHaveBeenCalled();
+  });
+
+  it('does NOT bypass the resolver when no session exists', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'new-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'x',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+    vi.mocked(mockClassify).mockResolvedValue({
+      skill: 'journal',
+      args: '',
+      confidence: 0,
+      second_skill: null,
+      second_confidence: 0,
+      ambiguous: false,
+      raw: '',
+    });
+
+    const sender = mockSender();
+    await dispatchText(sender, 100, 'one two three four five words here');
+
+    // Resolver was called because no session was active
+    expect(mockClassify).toHaveBeenCalled();
+  });
+});
+
+describe('dispatchText — webview transport derivation', () => {
+  // sender.name === 'webview' must cause transport='webview' to be derived.
+  // Commands that accept a transport argument must receive 'webview', not 'telegram'.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const hasActiveReviewMock = hasActiveReview as unknown as ReturnType<typeof vi.fn>;
+    hasActiveReviewMock.mockReturnValue(false);
+  });
+
+  function webviewSender(): MessageSender {
+    return {
+      name: 'webview' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
+
+  it('derives transport=webview from sender.name for /fresh', async () => {
+    await dispatchText(webviewSender(), 100, '/fresh');
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'webview');
+  });
+
+  it('derives transport=webview from sender.name for /fresh-full', async () => {
+    await dispatchText(webviewSender(), 100, '/fresh-full');
+    expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100, 'webview');
+  });
+
+  it('derives transport=webview from sender.name for /clear', async () => {
+    await dispatchText(webviewSender(), 100, '/clear');
+    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100, 'webview');
+  });
+
+  it('derives transport=webview from sender.name for /journal', async () => {
+    await dispatchText(webviewSender(), 100, '/journal bought coffee');
+    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'webview', 'bought coffee');
+  });
+
+  it('derives transport=webview from sender.name for /status', async () => {
+    await dispatchText(webviewSender(), 100, '/status');
+    expect(handleStatus).toHaveBeenCalledWith(expect.anything(), 100, 'webview');
+  });
+
+  it('derives transport=telegram for any non-webview sender name', async () => {
+    // A hypothetical future sender name that is not 'webview' should still
+    // derive telegram transport (the else branch of the ternary).
+    const unknownSender: MessageSender = {
+      name: 'telegram' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+    await dispatchText(unknownSender, 100, '/fresh');
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
+  });
+
+  it('passes webview transport to handleConversation → createSession', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'web-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hi from webview',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'hi back', error: null });
+
+    await dispatchText(webviewSender(), 100, 'hi from webview');
+
+    // createSession must have been called with 'webview' transport (4th arg is model from config, may be undefined in test env)
+    expect(createSessionMock).toHaveBeenCalledOnce();
+    const [uid, transport, firstMsg] = createSessionMock.mock.calls[0] as [number, string, string];
+    expect(uid).toBe(100);
+    expect(transport).toBe('webview');
+    expect(firstMsg).toBe('hi from webview');
   });
 });

@@ -128,6 +128,26 @@ describe('state-snapshot / getStateSnapshot', () => {
     });
   });
 
+  it('prefers the webview session and queries it first', () => {
+    mockGetSession.mockReturnValue(makeSession());
+    getStateSnapshot();
+    expect(mockGetSession).toHaveBeenNthCalledWith(1, mockConfig.TELEGRAM_USER_ID, 'webview');
+  });
+
+  it('falls back to the telegram session when no webview session exists', () => {
+    const tgSession = makeSession();
+    mockGetSession
+      .mockReturnValueOnce(null)        // webview lookup misses
+      .mockReturnValueOnce(tgSession);  // telegram lookup hits
+    const snap = getStateSnapshot();
+    expect(mockGetSession).toHaveBeenNthCalledWith(2, mockConfig.TELEGRAM_USER_ID, 'telegram');
+    expect(snap.activeSession).toEqual({
+      sessionId: tgSession.sessionId,
+      model: tgSession.model,
+      messageCount: tgSession.messageCount,
+    });
+  });
+
   it('returns null activeReview when no review session exists', () => {
     expect(getStateSnapshot().activeReview).toBeNull();
   });

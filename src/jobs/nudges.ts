@@ -21,7 +21,7 @@ export async function runWeeklyNudge(bus: NotificationBus): Promise<void> {
     // Session stats
     const sessions = getAllSessions();
     const sessionCount = sessions.length;
-    const messageCount = sessions.reduce((sum, [, s]) => sum + s.messageCount, 0);
+    const messageCount = sessions.reduce((sum, { session }) => sum + session.messageCount, 0);
 
     // KB stats
     const kb = getKBStats();

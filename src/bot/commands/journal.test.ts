@@ -8,6 +8,7 @@ vi.mock('../../config.js', () => ({
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
 vi.mock('../../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
@@ -46,11 +47,35 @@ function makeSender(): MessageSender {
 describe('handleJournal', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  describe('source label by transport', () => {
+    it('writes "telegram chat" label in journal entry when transport is telegram', async () => {
+      getSessionMock.mockReturnValue(null);
+      const sender = makeSender();
+
+      await handleJournal(sender, 100, 'telegram', 'walked the dog');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] telegram chat');
+      expect(entry).not.toContain('webview chat');
+    });
+
+    it('writes "webview chat" label in journal entry when transport is webview', async () => {
+      getSessionMock.mockReturnValue(null);
+      const sender = makeSender();
+
+      await handleJournal(sender, 100, 'webview', 'logged from browser');
+
+      const entry = appendMock.mock.calls[0]![0] as string;
+      expect(entry).toContain('[[jarvis]] webview chat');
+      expect(entry).not.toContain('telegram chat');
+    });
+  });
+
   it('appends a literal entry and commits when no session is active', async () => {
     getSessionMock.mockReturnValue(null);
     const sender = makeSender();
 
-    await handleJournal(sender, 100, 'bought groceries');
+    await handleJournal(sender, 100, 'telegram', 'bought groceries');
 
     const entry = appendMock.mock.calls[0]![0] as string;
     expect(entry).toContain('14:30');
@@ -69,7 +94,7 @@ describe('handleJournal', () => {
     });
     const sender = makeSender();
 
-    await handleJournal(sender, 100, 'log this thread');
+    await handleJournal(sender, 100, 'telegram', 'log this thread');
 
     // Literal entry written first
     const literalEntry = appendMock.mock.calls[0]![0] as string;
@@ -81,7 +106,7 @@ describe('handleJournal', () => {
     expect(summaryEntry).toContain('Summary of conversation');
 
     expect(summarizeMock).toHaveBeenCalledWith('sess-active');
-    expect(deleteSessionMock).toHaveBeenCalledWith(100);
+    expect(deleteSessionMock).toHaveBeenCalledWith(100, 'telegram');
     const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('session reset');
   });
@@ -97,7 +122,7 @@ describe('handleJournal', () => {
     });
     const sender = makeSender();
 
-    await handleJournal(sender, 100, 'log kb conversation');
+    await handleJournal(sender, 100, 'telegram', 'log kb conversation');
 
     expect(enqueueMock).toHaveBeenCalled();
     const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
@@ -110,9 +135,9 @@ describe('handleJournal', () => {
     summarizeMock.mockResolvedValue({ text: null, error: 'CLI timeout' });
     const sender = makeSender();
 
-    await handleJournal(sender, 100, 'log this');
+    await handleJournal(sender, 100, 'telegram', 'log this');
 
-    expect(deleteSessionMock).toHaveBeenCalledWith(100);
+    expect(deleteSessionMock).toHaveBeenCalledWith(100, 'telegram');
     const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('Logged to journal');
     expect(reply).toContain('CLI timeout');
@@ -128,7 +153,7 @@ describe('handleJournal', () => {
 
     const sender = makeSender();
 
-    await handleJournal(sender, 100, 'log racing message');
+    await handleJournal(sender, 100, 'telegram', 'log racing message');
 
     const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('Logged to journal');

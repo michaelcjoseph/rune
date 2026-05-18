@@ -38,7 +38,7 @@ describe('handleClear', () => {
     getSessionMock.mockReturnValue(null);
     const sender = makeSender();
 
-    await handleClear(sender, 123);
+    await handleClear(sender, 123, 'telegram');
 
     expect(sender.send).toHaveBeenCalledWith(123, 'No active session to clear.');
     expect(deleteSessionMock).not.toHaveBeenCalled();
@@ -48,9 +48,9 @@ describe('handleClear', () => {
     getSessionMock.mockReturnValue({ sessionId: 'sess-abc' });
     const sender = makeSender();
 
-    await handleClear(sender, 456);
+    await handleClear(sender, 456, 'telegram');
 
-    expect(deleteSessionMock).toHaveBeenCalledWith(456);
+    expect(deleteSessionMock).toHaveBeenCalledWith(456, 'telegram');
     expect(sender.send).toHaveBeenCalledWith(456, 'Session cleared.');
   });
 
@@ -58,7 +58,7 @@ describe('handleClear', () => {
     getSessionMock.mockReturnValue({ sessionId: 'sess-xyz' });
     const sender = makeSender();
 
-    await handleClear(sender, 789);
+    await handleClear(sender, 789, 'telegram');
 
     // Only one message sent: the confirmation
     expect(sender.send).toHaveBeenCalledTimes(1);
@@ -72,10 +72,10 @@ describe('handleClear', () => {
     getSessionMock.mockReturnValue({ sessionId: 'sess-q' });
     const sender = makeSender();
 
-    await handleClear(sender, chatId);
+    await handleClear(sender, chatId, 'telegram');
 
-    expect(getSessionMock).toHaveBeenCalledWith(chatId);
-    expect(deleteSessionMock).toHaveBeenCalledWith(chatId);
+    expect(getSessionMock).toHaveBeenCalledWith(chatId, 'telegram');
+    expect(deleteSessionMock).toHaveBeenCalledWith(chatId, 'telegram');
     expect(sender.send).toHaveBeenCalledWith(chatId, 'Session cleared.');
   });
 });

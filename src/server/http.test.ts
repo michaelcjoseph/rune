@@ -17,6 +17,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../vault/sessions.js', () => ({
   getAllSessions: vi.fn(() => []),
   deleteSession: vi.fn(),
+  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../ai/claude.js', () => ({ summarizeSession: vi.fn(), cleanupSession: vi.fn() }));
 vi.mock('../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
@@ -90,7 +91,7 @@ describe('server/http', () => {
 
   it('POST /capture-sessions summarizes and logs each session', async () => {
     getAllMock.mockReturnValue([
-      [123, { sessionId: 'sess-1', lastActivity: '', messageCount: 3, firstMessage: 'hi' }],
+      { userId: 123, transport: 'telegram', session: { sessionId: 'sess-1', lastActivity: '', messageCount: 3, firstMessage: 'hi' } },
     ]);
     summaryMock.mockResolvedValue({ text: 'Topic: test', error: null });
 
@@ -100,7 +101,7 @@ describe('server/http', () => {
     });
     expect(res.body.captured).toBe(1);
     expect(appendToJournal).toHaveBeenCalled();
-    expect(deleteSession).toHaveBeenCalledWith(123);
+    expect(deleteSession).toHaveBeenCalledWith(123, 'telegram');
     expect(gitCommitAndPush).toHaveBeenCalled();
   });
 

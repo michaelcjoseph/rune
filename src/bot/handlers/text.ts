@@ -1,7 +1,7 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import type { MessageSender } from '../../transport/sender.js';
 import config from '../../config.js';
-import { getSession, createSession, updateSession, setSessionModel, appendMessageToSession } from '../../vault/sessions.js';
+import { getSession, createSession, updateSession, setSessionModel, appendMessageToSession, type Transport } from '../../vault/sessions.js';
 import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
 import { createLogger } from '../../utils/logger.js';
 import { handleFresh } from '../commands/fresh.js';
@@ -55,15 +55,18 @@ export async function handleTextMessage(sender: MessageSender, msg: TelegramBot.
 }
 
 /** Core routing chain shared by TG and webview transports. Auth/userId extraction
- *  happens upstream; callers must pass the verified userId. */
+ *  happens upstream; callers must pass the verified userId. Transport is taken
+ *  from `sender.name` (its discriminant union matches `Transport`) so session
+ *  and journal writes are keyed independently per channel. */
 export async function dispatchText(sender: MessageSender, userId: number, text: string): Promise<void> {
   if (!text) return;
+  const transport: Transport = sender.name;
 
-  if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId);
-  if (text.startsWith('/fresh')) return handleFresh(sender, userId);
-  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId);
+  if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId, transport);
+  if (text.startsWith('/fresh')) return handleFresh(sender, userId, transport);
+  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId, transport);
   if (text === '/cancel' || text.startsWith('/cancel ')) return handleCancel(sender, userId, text.slice('/cancel'.length).trim());
-  if (text.startsWith('/journal ')) return handleJournal(sender, userId, text.slice('/journal '.length).trim());
+  if (text.startsWith('/journal ')) return handleJournal(sender, userId, transport, text.slice('/journal '.length).trim());
   if (text.startsWith('/ask ')) return handleAsk(sender, userId, text.slice('/ask '.length).trim());
   if (text.startsWith('/kb ')) return handleKB(sender, userId, text.slice('/kb '.length).trim());
   if (text.startsWith('/ingest')) return handleIngest(sender, userId, text.slice('/ingest'.length).trim());
@@ -89,10 +92,10 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/prep')) return handlePrep(sender, userId);
   if (text.startsWith('/seed')) return handleSeed(sender, userId, text.slice('/seed'.length).trim());
   if (text.startsWith('/lint')) return handleLint(sender, userId);
-  if (text.startsWith('/opus')) return handleModelSwitch(sender, userId, 'opus');
-  if (text.startsWith('/sonnet')) return handleModelSwitch(sender, userId, 'sonnet');
-  if (text.startsWith('/haiku')) return handleModelSwitch(sender, userId, 'haiku');
-  if (text.startsWith('/status')) return handleStatus(sender, userId);
+  if (text.startsWith('/opus')) return handleModelSwitch(sender, userId, transport, 'opus');
+  if (text.startsWith('/sonnet')) return handleModelSwitch(sender, userId, transport, 'sonnet');
+  if (text.startsWith('/haiku')) return handleModelSwitch(sender, userId, transport, 'haiku');
+  if (text.startsWith('/status')) return handleStatus(sender, userId, transport);
   if (text.startsWith('/whoop')) return handleWhoop(sender, userId);
   if (text.startsWith('/start')) return handleStart(sender, userId);
 
@@ -102,18 +105,26 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // Active review session takes priority over default conversation
   if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
 
+  // In-flight chat session — skip the resolver and continue the thread.
+  // The classifier's job is to route opening intent; continuation messages
+  // can read as journal/note status updates and get hijacked at ≥0.7
+  // confidence, which closes the active session (handleJournal calls
+  // closeConversation when a session exists). Slash escape hatches
+  // (/fresh, /journal, /clear) already short-circuited above.
+  if (getSession(userId, transport)) return handleConversation(sender, userId, transport, text);
+
   // Resolver: classify free-form messages against the skill registry. Skipped
   // for short messages (rarely encode a routable intent) to save the Haiku
   // call. Slash commands already short-circuited above; active-session above.
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   if (wordCount >= config.RESOLVER_MIN_WORDS) {
-    const routed = await tryResolveAndDispatch(sender, userId, text);
+    const routed = await tryResolveAndDispatch(sender, userId, transport, text);
     if (routed) return;
     // Fall through — the resolver already logged the intent-log entry.
   }
 
   // Default: multi-turn conversation
-  return handleConversation(sender, userId, text);
+  return handleConversation(sender, userId, transport, text);
 }
 
 /** Run the resolver and, if confidence ≥ threshold and the top-2 aren't
@@ -123,7 +134,12 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
  *  freeform handler. Any thrown error — including from getSkillRegistry or
  *  classifyIntent itself — is caught and treated as "not routed" so the
  *  Telegram polling handler never sees an uncaught rejection. */
-async function tryResolveAndDispatch(sender: MessageSender, userId: number, text: string): Promise<boolean> {
+async function tryResolveAndDispatch(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+  text: string,
+): Promise<boolean> {
   try {
     const registry = getSkillRegistry();
     const result = await classifyIntent(text, registry);
@@ -154,7 +170,7 @@ async function tryResolveAndDispatch(sender: MessageSender, userId: number, text
     }
 
     try {
-      await invokeSkill(sender, userId, text, entry, result.args);
+      await invokeSkill(sender, userId, transport, text, entry, result.args);
       logIntent(text, result, 'routed', entry.name);
       return true;
     } catch (err) {
@@ -192,6 +208,7 @@ function logIntent(
 async function invokeSkill(
   sender: MessageSender,
   userId: number,
+  transport: Transport,
   message: string,
   skill: SkillEntry,
   args: string,
@@ -216,7 +233,7 @@ async function invokeSkill(
   // listed — model-switch (/opus, /sonnet, /haiku), auth (/whoop, /start),
   // and admin (/status, /lint, /seed) commands are intentionally omitted.
   switch (skill.name) {
-    case 'journal': return handleJournal(sender, userId, args);
+    case 'journal': return handleJournal(sender, userId, transport, args);
     case 'ingest': return handleIngest(sender, userId, args);
     case 'priorities': return handlePriorities(sender, userId, args);
     case 'workout': return handleWorkout(sender, userId, args);
@@ -235,8 +252,8 @@ async function invokeSkill(
     case 'library-sync': return handleLibrarySync(sender, userId);
     case 'learn': return handleLearn(sender, userId, args || message);
     case 'learn-list': return handleLearnList(sender, userId);
-    case 'fresh': return handleFresh(sender, userId);
-    case 'fresh-full': return handleFreshFull(sender, userId);
+    case 'fresh': return handleFresh(sender, userId, transport);
+    case 'fresh-full': return handleFreshFull(sender, userId, transport);
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
   }
@@ -295,13 +312,18 @@ const CONVERSATION_TOOLS = [
   'mcp__jarvis-kb__kb_stats',
 ];
 
-async function handleConversation(sender: MessageSender, userId: number, text: string): Promise<void> {
-  let session = getSession(userId);
+async function handleConversation(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+  text: string,
+): Promise<void> {
+  let session = getSession(userId, transport);
   if (!session) {
-    session = createSession(userId, text, config.CONVERSATION_MODEL);
+    session = createSession(userId, transport, text, config.CONVERSATION_MODEL);
   }
 
-  appendMessageToSession(userId, 'user', text);
+  appendMessageToSession(userId, transport, 'user', text);
 
   sender.startTyping(userId, 'Asking Claude');
   try {
@@ -319,8 +341,8 @@ async function handleConversation(sender: MessageSender, userId: number, text: s
     }
 
     const rawReply = result.text!;
-    appendMessageToSession(userId, 'assistant', rawReply);
-    updateSession(userId);
+    appendMessageToSession(userId, transport, 'assistant', rawReply);
+    updateSession(userId, transport);
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
@@ -394,15 +416,20 @@ async function handleWhoop(sender: MessageSender, userId: number): Promise<void>
   }
 }
 
-async function handleModelSwitch(sender: MessageSender, userId: number, model: string): Promise<void> {
-  const session = getSession(userId);
+async function handleModelSwitch(
+  sender: MessageSender,
+  userId: number,
+  transport: Transport,
+  model: string,
+): Promise<void> {
+  const session = getSession(userId, transport);
   if (!session) {
-    createSession(userId, `/${model}`);
-    setSessionModel(userId, model);
+    createSession(userId, transport, `/${model}`);
+    setSessionModel(userId, transport, model);
     await sender.send(userId, `Switched to ${model}. New session started.`);
     return;
   }
-  setSessionModel(userId, model);
+  setSessionModel(userId, transport, model);
   await sender.send(userId, `Switched to ${model}.`);
 }
 
