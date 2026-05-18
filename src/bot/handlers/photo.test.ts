@@ -190,15 +190,123 @@ describe('parseClassifyResult — markdown noise stripping', () => {
     expect(vi.mocked(appendToJournal)).toHaveBeenCalledWith(expect.stringContaining('My Food'));
   });
 
-  it('rejects an unknown route value', async () => {
+  it('falls back to synthesis (no silent drop) when ROUTE value is unknown', async () => {
+    // An unknown route used to surface as "couldn't parse" and drop the photo.
+    // Synthesis fallback now journals it instead — the prose still carries the
+    // category signal ("food") and route defaults to journal. Recovery is
+    // logged at warn level so prompt drift remains visible.
     const output = 'CLASSIFICATION: food\nROUTE: unknown-route\nTITLE: Foo\nDETAILS: Bar';
     vi.mocked(runAgent).mockResolvedValue({ text: output, error: null });
     const sender = mockSender();
     await handlePhotoMessage(mockBot(), sender, photoMsg());
-    expect(vi.mocked(sender.send)).toHaveBeenCalledWith(
-      100,
-      expect.stringContaining("couldn't parse result"),
-    );
+    expect(vi.mocked(appendToJournal)).toHaveBeenCalled();
+    const replies = vi.mocked(sender.send).mock.calls.map(c => c[1] as string);
+    expect(replies.some(r => r.includes("couldn't parse"))).toBe(false);
+  });
+});
+
+// ── parseClassifyResult — real-world Sonnet outputs (regression fixtures) ──
+//
+// Verbatim agent payloads captured from a production photo-classification
+// failure: Sonnet emitted markdown-wrapped prose instead of the strict
+// `CLASSIFICATION:/ROUTE:/TITLE:/DETAILS:` line format the agent prompt
+// teaches. The parser must recover these specific shapes (relaxed extractor
+// + synthesis fallback). Don't paraphrase — any rewrite that loses the
+// bytes loses the regression coverage.
+
+const COOKIE_FIXTURE =
+  '## Classification\n\n' +
+  '**Type:** Food (chocolate chip cookie on a marble countertop)\n\n' +
+  '**Caption tag:** `#diet`\n\n' +
+  '## Recommended Routing\n\n' +
+  'Append a `#diet` entry to `health/nutrition.md` for today (2026-05-12) noting a chocolate chip cookie. ' +
+  'No JSON store update needed — `#diet` routes to the nutrition markdown log per CLAUDE.md.\n\n' +
+  'Suggested log line:\n```\n- 2026-05-12 — chocolate chip cookie #diet\n```';
+
+const CURRY_FIXTURE =
+  '**Classification:** Food/meal photo — Panang curry with chicken, rice, carrots, broccoli, and yellow squash in a black bowl.\n\n' +
+  '**Routing recommendation:** `#diet` tag → append to `health/nutrition.md` as a meal log entry for 2026-05-12. ' +
+  'No JSON store update needed (diet entries are markdown, not structured).\n\n' +
+  '**Suggested entry:**\n```\n- 2026-05-12: Panang curry — chicken, jasmine rice, carrots, broccoli, yellow squash\n```';
+
+const BREAKFAST_FIXTURE =
+  '**Classification: `#diet` — meal log**\n\n' +
+  'Breakfast plate: egg omelet, turkey/beef sausage, sliced avocado, blackberries, whole grain toast.\n\n' +
+  '**Route:** Append to `health/nutrition.md` as a diet entry.\n\n' +
+  'Suggested log entry:\n```\n- 2026-05-18 breakfast: egg omelet, beef/turkey sausage, avocado, blackberries, whole grain toast\n```\n\n' +
+  'Solid, protein-heavy breakfast. Healthy fats from the avocado, antioxidants from the blackberries.';
+
+describe('parseClassifyResult — real-world Sonnet failures (recovered via synthesis)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stubFetchOk();
+  });
+
+  it('recovers the chocolate-cookie failure (markdown-headered prose, no labeled fields)', async () => {
+    vi.mocked(runAgent).mockResolvedValue({ text: COOKIE_FIXTURE, error: null });
+    const sender = mockSender();
+    await handlePhotoMessage(mockBot(), sender, photoMsg({ caption: '#diet' }));
+
+    expect(vi.mocked(appendToJournal)).toHaveBeenCalledTimes(1);
+    const entry = vi.mocked(appendToJournal).mock.calls[0]![0] as string;
+    expect(entry).toMatch(/chocolate chip cookie/i);
+    // Caption tag must survive so nightly daily-tags routes the entry into
+    // health/nutrition.md per the #diet rule.
+    expect(entry).toContain('#diet');
+
+    // No "couldn't parse" reply to user — the photo IS logged.
+    const replies = vi.mocked(sender.send).mock.calls.map(c => c[1] as string);
+    expect(replies.some(r => r.includes("couldn't parse"))).toBe(false);
+  });
+
+  it('recovers the Panang-curry failure (inline bold Classification label, no other labeled fields)', async () => {
+    vi.mocked(runAgent).mockResolvedValue({ text: CURRY_FIXTURE, error: null });
+    const sender = mockSender();
+    await handlePhotoMessage(mockBot(), sender, photoMsg({ caption: '#diet' }));
+
+    expect(vi.mocked(appendToJournal)).toHaveBeenCalledTimes(1);
+    const entry = vi.mocked(appendToJournal).mock.calls[0]![0] as string;
+    expect(entry).toMatch(/Panang curry/i);
+    expect(entry).toContain('#diet');
+
+    const replies = vi.mocked(sender.send).mock.calls.map(c => c[1] as string);
+    expect(replies.some(r => r.includes("couldn't parse"))).toBe(false);
+  });
+
+  it('recovers the breakfast-plate failure (caption tag in category slot, must map #diet → food)', async () => {
+    // This one is the worst: Sonnet wrote `Classification: #diet` — the
+    // caption tag in the *category* slot. The recovery must map #diet → food
+    // and not treat "#diet" as the literal category, because `food` is what
+    // the data-update tag mapping (or in this case the synthesizer)
+    // understands.
+    vi.mocked(runAgent).mockResolvedValue({ text: BREAKFAST_FIXTURE, error: null });
+    const sender = mockSender();
+    await handlePhotoMessage(mockBot(), sender, photoMsg({ caption: '#diet' }));
+
+    expect(vi.mocked(appendToJournal)).toHaveBeenCalledTimes(1);
+    const entry = vi.mocked(appendToJournal).mock.calls[0]![0] as string;
+    expect(entry).toMatch(/breakfast|egg omelet|sausage/i);
+    expect(entry).toContain('#diet');
+
+    const replies = vi.mocked(sender.send).mock.calls.map(c => c[1] as string);
+    expect(replies.some(r => r.includes("couldn't parse"))).toBe(false);
+  });
+
+  it('does not silently drop when the agent response has no extractable category signal', async () => {
+    // The input contains no category keyword (no `food`/`book`/`other`/etc.)
+    // and no `#tag` mention, so `synthesizeClassifyResult` returns null and
+    // the handler sends the unparseable-reply path. The OR-assertion below
+    // covers both behaviors so this test stays valid if synthesis later
+    // learns to recover a wider set of inputs — but the contract that
+    // matters today is: no silent drop. Either the photo gets journaled,
+    // or the user is told the result couldn't be parsed.
+    vi.mocked(runAgent).mockResolvedValue({ text: 'I cannot determine what this photo shows.', error: null });
+    const sender = mockSender();
+    await handlePhotoMessage(mockBot(), sender, photoMsg());
+    const journaled = vi.mocked(appendToJournal).mock.calls.length > 0;
+    const replies = vi.mocked(sender.send).mock.calls.map(c => c[1] as string);
+    const unparseable = replies.some(r => r.includes("couldn't parse"));
+    expect(journaled || unparseable).toBe(true);
   });
 });
 
