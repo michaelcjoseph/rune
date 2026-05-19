@@ -329,6 +329,7 @@ upgrades succeed.
 
 63. WHEN the auth-bootstrap handler sets the `jarvis-auth` cookie THEN it sets `Secure` iff the request arrived with `X-Forwarded-Proto: https` AND the immediate peer (`req.socket.remoteAddress`) is `127.0.0.1` / `::1`. `HttpOnly` and `SameSite=Strict` are set unconditionally. Trusting `X-Forwarded-Proto` from any other peer would be a header-spoofing bug, so the proxy hop is only honoured for the localhost-loopback case (which is exactly the Tailscale Serve topology).
 64. WHEN `JARVIS_ALLOWED_HOSTS` is parsed at startup THEN the value is split on commas, each entry is trimmed and lower-cased, and the result is held as a `Set<string>` queried by the Host-header guard (requirement 14). An empty / unset env var falls back to `localhost,127.0.0.1`.
+65. WHEN deploying behind Tailscale THEN the only supported front-end is `tailscale serve` bound to the tailnet. `tailscale funnel` (which publishes the origin to the public internet) is forbidden — it would bypass the tailnet trust boundary on which the single-shared-secret auth model depends. Verification at deploy time: `tailscale serve status` must show only `serve` entries, never `funnel`, and `lsof -iTCP:3847 -sTCP:LISTEN` must show only loopback (`127.0.0.1` / `::1`) for the Jarvis process.
 
 ---
 
@@ -338,7 +339,9 @@ upgrades succeed.
 
 Goal: reach the webview from a laptop while Jarvis runs unattended on a Mac mini, without giving up the localhost-only listener binding and without standing up real OAuth.
 
-**Why Tailscale Serve specifically:** Jarvis stays bound to `127.0.0.1`, so even if the macOS application firewall is off, port 3847 remains unreachable from the home LAN. Tailscale Serve proxies the tailnet origin (`https://mac-mini.tail-xxxx.ts.net`) to `127.0.0.1:3847` over the loopback interface; the wire between laptop and Mac mini is encrypted by WireGuard and the browser hop is HTTPS, which lets the auth cookie carry the `Secure` flag.
+**Why Tailscale Serve specifically:** Jarvis stays bound to `127.0.0.1`, so even if the macOS application firewall is off, port 3847 remains unreachable from the home LAN. Tailscale Serve listens on its own tailnet-only socket at `https://<host>.tail-xxxx.ts.net:443` and proxies inbound traffic to `127.0.0.1:3847` over the loopback interface on the same host. Port 3847 is never exposed beyond loopback — only members of the tailnet can reach the proxy, and only the proxy can reach port 3847. The wire between laptop and Mac mini is encrypted by WireGuard, and the browser hop is HTTPS, which lets the auth cookie carry the `Secure` flag.
+
+**`tailscale serve` vs `tailscale funnel`:** Use `tailscale serve` only. `tailscale funnel` publishes the same origin to the public internet via Tailscale's edge infrastructure — that would bypass the tailnet trust boundary on which the single-shared-secret auth model depends and is explicitly out of scope for this deployment (see requirement 65 and "What's out of scope" below).
 
 **On the Mac mini (one-time setup):**
 
@@ -366,8 +369,14 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 - Auth is still the single shared `JARVIS_HTTP_SECRET`; the tailnet is the trust boundary, the cookie is the session-level convenience.
 - `requirement 14` (Host-header allowlist) enforces the tailnet hostname at the application layer in addition to the bind.
 
+**Verification (run on the Mac mini after first setup):**
+
+- `lsof -iTCP:3847 -sTCP:LISTEN` lists only `127.0.0.1` (and/or `::1`) — never `*`, a LAN address, or a tailnet address. If 3847 is bound externally, the listener invariant has been broken.
+- `tailscale serve status` shows a single `serve` entry mapping `https://<host>.tail-xxxx.ts.net` → `http://127.0.0.1:3847`, with no `funnel` entry.
+
 **What's out of scope here:**
 
+- `tailscale funnel` — would expose the origin to the public internet, bypassing the tailnet trust boundary. Forbidden by requirement 65.
 - Daemonising Jarvis itself on Mac mini boot (`launchd` plist) — separate concern; `tailscale serve --bg` already persists across reboots.
 - Off-tailnet access (cellular, public internet, an arbitrary LAN device) — needs real auth, deliberately deferred.
 - Self-signed certs / a local reverse proxy (nginx/Caddy) — Tailscale Serve already terminates TLS with a real `*.ts.net` cert.
