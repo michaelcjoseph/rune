@@ -20,7 +20,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 ### State + helpers
 
 - [x] Create `study/spaced-repetition.json` with empty `{ concepts: {}, meta: { last_session_at: null, last_session_summary: null } }`.
-- [ ] Add `src/study/sr-state.ts` exporting:
+- [x] Add `src/study/sr-state.ts` exporting:
   - `readSRState()` / `writeSRState(state)`
   - `advanceRung(state, conceptPath, grade)` — pure function returning the next state given the ladder rules in spec Requirements #13–#18
   - `resetRung(state, conceptPath)` and `repeatRung(state, conceptPath)` helpers

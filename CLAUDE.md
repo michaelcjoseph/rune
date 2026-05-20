@@ -116,6 +116,8 @@ src/
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
 │   └── index.ts             # Standalone stdio entry point for Claude Code
+├── study/
+│   └── sr-state.ts          # Spaced-repetition state engine: read/write study/spaced-repetition.json, interval-ladder transitions (advanceRung, resetRung, repeatRung, admitConcept)
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
 │   ├── whoop/types.ts       # Whoop API response types and daily data format
