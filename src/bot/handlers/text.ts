@@ -16,6 +16,7 @@ import { handlePriorities } from '../commands/priorities.js';
 import { handleWorkout } from '../commands/workout.js';
 import { handleDoneWorkout } from '../commands/done-workout.js';
 import { handleSyllabus } from '../commands/syllabus.js';
+import { handleStudy } from '../commands/study.js';
 import { handleFamily } from '../commands/family.js';
 import { handleCareer } from '../commands/career.js';
 import { handlePrep } from '../commands/prep.js';
@@ -81,6 +82,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/done-workout')) return handleDoneWorkout(sender, userId);
   if (text.startsWith('/workout')) return handleWorkout(sender, userId, text.slice('/workout'.length).trim());
   if (text.startsWith('/syllabus')) return handleSyllabus(sender, userId);
+  if (text.startsWith('/study')) return handleStudy(sender, userId, text.slice('/study'.length).trim());
   if (text.startsWith('/family')) return handleFamily(sender, userId);
   if (text.startsWith('/career')) return handleCareer(sender, userId);
   if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
@@ -243,6 +245,7 @@ async function invokeSkill(
     case 'workout': return handleWorkout(sender, userId, args);
     case 'done-workout': return handleDoneWorkout(sender, userId);
     case 'syllabus': return handleSyllabus(sender, userId);
+    case 'study': return handleStudy(sender, userId, args);
     case 'family': return handleFamily(sender, userId);
     case 'career': return handleCareer(sender, userId);
     case 'prep': return handlePrep(sender, userId);
@@ -448,6 +451,7 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 - \`/workout [home|gym] [mobility|endurance|strength|speed|power]\` — generate a tailored workout from goals, equipment, recent training, and Whoop recovery
 - \`/done-workout\` — log the last generated workout to today's journal
 - \`/syllabus\` — current study progress and assignments
+- \`/study [N|status]\` — spaced-repetition quiz over due wiki concepts
 - \`/family\` — 14-day family mention scan
 - \`/career\` — active job applications
 - \`/fresh\` — log conversation to journal, reset session

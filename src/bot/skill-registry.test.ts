@@ -113,6 +113,23 @@ describe('SLASH_COMMAND_METADATA', () => {
       expect(names.has(removed), `${removed} should not be a resolver route`).toBe(false);
     }
   });
+
+  it('includes both study and syllabus as distinct slash entries', () => {
+    const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
+    expect(names.has('study'), 'missing slash metadata for /study').toBe(true);
+    expect(names.has('syllabus'), 'missing slash metadata for /syllabus').toBe(true);
+    // They must be separate entries — study is a quiz session, syllabus is progress view.
+    const studyEntry = SLASH_COMMAND_METADATA.find(m => m.name === 'study')!;
+    const syllabusEntry = SLASH_COMMAND_METADATA.find(m => m.name === 'syllabus')!;
+    expect(studyEntry.description).not.toBe(syllabusEntry.description);
+  });
+
+  it('study entry has the expected trigger phrases', () => {
+    const studyEntry = SLASH_COMMAND_METADATA.find(m => m.name === 'study')!;
+    expect(studyEntry).toBeDefined();
+    expect(studyEntry.triggers).toContain('quiz me');
+    expect(studyEntry.triggers).toContain('spaced repetition');
+  });
 });
 
 describe('getSkillRegistry', () => {

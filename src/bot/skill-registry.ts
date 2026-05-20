@@ -84,6 +84,11 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     triggers: ['study progress', 'what am i studying'],
   },
   {
+    name: 'study',
+    description: 'Spaced-repetition quiz session over due wiki concepts.',
+    triggers: ['quiz me', 'review wiki', 'spaced repetition', 'lunch review'],
+  },
+  {
     name: 'family',
     description: '14-day scan of family mentions across journals.',
     triggers: ['what did i note about family', 'recent family mentions'],
