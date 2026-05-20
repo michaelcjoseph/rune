@@ -15,7 +15,7 @@ import { handleIngest } from '../commands/ingest.js';
 import { handlePriorities } from '../commands/priorities.js';
 import { handleWorkout } from '../commands/workout.js';
 import { handleDoneWorkout } from '../commands/done-workout.js';
-import { handleStudy } from '../commands/study.js';
+import { handleSyllabus } from '../commands/syllabus.js';
 import { handleFamily } from '../commands/family.js';
 import { handleCareer } from '../commands/career.js';
 import { handlePrep } from '../commands/prep.js';
@@ -79,7 +79,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // /done-workout must come before /workout so the longer prefix wins.
   if (text.startsWith('/done-workout')) return handleDoneWorkout(sender, userId);
   if (text.startsWith('/workout')) return handleWorkout(sender, userId, text.slice('/workout'.length).trim());
-  if (text.startsWith('/study')) return handleStudy(sender, userId);
+  if (text.startsWith('/study')) return handleSyllabus(sender, userId);
   if (text.startsWith('/family')) return handleFamily(sender, userId);
   if (text.startsWith('/career')) return handleCareer(sender, userId);
   if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
@@ -238,7 +238,7 @@ async function invokeSkill(
     case 'priorities': return handlePriorities(sender, userId, args);
     case 'workout': return handleWorkout(sender, userId, args);
     case 'done-workout': return handleDoneWorkout(sender, userId);
-    case 'study': return handleStudy(sender, userId);
+    case 'study': return handleSyllabus(sender, userId);
     case 'family': return handleFamily(sender, userId);
     case 'career': return handleCareer(sender, userId);
     case 'prep': return handlePrep(sender, userId);

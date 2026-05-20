@@ -2,7 +2,7 @@ import { readVaultFile } from '../../vault/files.js';
 import { createLogger } from '../../utils/logger.js';
 import type { MessageSender } from '../../transport/sender.js';
 
-const log = createLogger('cmd-study');
+const log = createLogger('cmd-syllabus');
 
 function formatProgress(raw: string): string {
   try {
@@ -17,7 +17,7 @@ function formatProgress(raw: string): string {
   }
 }
 
-export async function handleStudy(sender: MessageSender, userId: number): Promise<void> {
+export async function handleSyllabus(sender: MessageSender, userId: number): Promise<void> {
   try {
     const syllabus = readVaultFile('study/syllabus.md');
     const progress = readVaultFile('study/progress.json');
@@ -39,7 +39,7 @@ export async function handleStudy(sender: MessageSender, userId: number): Promis
 
     await sender.send(userId, sections.join('\n\n'));
   } catch (err) {
-    log.error('Study error', { error: (err as Error).message });
+    log.error('Syllabus error', { error: (err as Error).message });
     await sender.send(userId, `Error: ${(err as Error).message}`);
   }
 }

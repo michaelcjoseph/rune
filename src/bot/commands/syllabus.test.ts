@@ -16,9 +16,9 @@ vi.mock('../../utils/logger.js', () => ({
   }),
 }));
 
-const { handleStudy } = await import('./study.js');
+const { handleSyllabus } = await import('./syllabus.js');
 
-describe('handleStudy', () => {
+describe('handleSyllabus', () => {
   function makeSender(): MessageSender {
     return {
       name: 'telegram' as const,
@@ -44,7 +44,7 @@ describe('handleStudy', () => {
     });
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(mockReadVaultFile).toHaveBeenCalledWith('study/syllabus.md');
     expect(mockReadVaultFile).toHaveBeenCalledWith('study/progress.json');
@@ -64,7 +64,7 @@ describe('handleStudy', () => {
     });
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(
       chatId,
@@ -82,7 +82,7 @@ describe('handleStudy', () => {
     });
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(
       chatId,
@@ -94,7 +94,7 @@ describe('handleStudy', () => {
     mockReadVaultFile.mockReturnValue(null);
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(
       chatId,
@@ -106,7 +106,7 @@ describe('handleStudy', () => {
     mockReadVaultFile.mockReturnValue('   ');
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(
       chatId,
@@ -124,7 +124,7 @@ describe('handleStudy', () => {
     });
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(
       chatId,
@@ -138,7 +138,7 @@ describe('handleStudy', () => {
     });
 
     const sender = makeSender();
-    await handleStudy(sender, chatId);
+    await handleSyllabus(sender, chatId);
 
     expect(sender.send).toHaveBeenCalledWith(chatId, 'Error: disk read failed');
   });
