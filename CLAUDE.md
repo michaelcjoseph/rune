@@ -119,7 +119,8 @@ src/
 ├── study/
 │   ├── sr-state.ts          # Spaced-repetition state engine: read/write study/spaced-repetition.json, interval-ladder transitions (advanceRung, resetRung, repeatRung, admitConcept)
 │   ├── sr-pool.ts           # SR pool source: Phase 1 readPool() reads the hand-seeded study/sr-seed.json
-│   └── sr-select.ts         # SR selection: selectDueConcepts() — due concepts, most-overdue first, capped at N
+│   ├── sr-select.ts         # SR selection: selectDueConcepts() — due concepts, most-overdue first, capped at N
+│   └── sr-session.ts        # SR session orchestrator: runSRSession()/handleSRMessage() — event-driven question→grade→advance loop
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
 │   ├── whoop/types.ts       # Whoop API response types and daily data format

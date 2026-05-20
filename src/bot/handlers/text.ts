@@ -33,6 +33,7 @@ import { handleLearn } from '../commands/learn.js';
 import { handleLearnList } from '../commands/learn-list.js';
 import { handleCancel } from '../commands/cancel.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
+import { hasActiveSRSession, handleSRMessage } from '../../study/sr-session.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
 import { WHOOP_REDIRECT_URI } from '../../server/http.js';
@@ -104,6 +105,9 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
 
   // Active review session takes priority over default conversation
   if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
+
+  // Active spaced-repetition session — route the reply as the answer
+  if (hasActiveSRSession(userId)) return handleSRMessage(userId, text, sender);
 
   // In-flight chat session — skip the resolver and continue the thread.
   // The classifier's job is to route opening intent; continuation messages
