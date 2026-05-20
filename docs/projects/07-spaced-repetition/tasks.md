@@ -24,7 +24,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
   - `readSRState()` / `writeSRState(state)`
   - `advanceRung(state, conceptPath, grade)` — pure function returning the next state given the ladder rules in spec Requirements #13–#18
   - `resetRung(state, conceptPath)` and `repeatRung(state, conceptPath)` helpers
-- [ ] Add `src/study/sr-pool.ts` exporting `readPool({ statusFilter = ['evergreen', 'active'] })` — Phase 1 reads from a hand-seeded JSON list (e.g., `study/sr-seed.json`) since wiki `status` is not yet present. Replaced in Phase 3 by a frontmatter walker.
+- [x] Add `src/study/sr-pool.ts` exporting `readPool({ statusFilter = ['evergreen', 'active'] })` — Phase 1 reads from a hand-seeded JSON list (e.g., `study/sr-seed.json`) since wiki `status` is not yet present. Replaced in Phase 3 by a frontmatter walker.
 - [ ] Add `src/study/sr-select.ts` exporting `selectDueConcepts({ pool, today, cap })` — sort by most overdue first, then random, cap at N.
 - [ ] Vitest coverage for `sr-state.ts` (ladder transitions on each grade, edge cases at the 120d cap) and `sr-select.ts` (sort + cap behavior).
 
