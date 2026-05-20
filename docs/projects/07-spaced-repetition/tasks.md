@@ -45,7 +45,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 ### Hand-seeded pool
 
 - [x] Curate ~20 non-stale concepts from `knowledge/wiki/concepts/` into `study/sr-seed.json` as `{ concepts: string[] }` (paths). Bias toward concepts Michael has touched in the last 60 days and toward playbook-derived ones.
-- [ ] Document the seed approach in `study/index.md` and note it gets retired in Phase 3.
+- [x] Document the seed approach in `study/index.md` and note it gets retired in Phase 3.
 
 ### Manual usage
 
