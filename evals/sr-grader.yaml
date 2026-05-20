@@ -1,0 +1,125 @@
+# Evals for sr-grader — see evals/README.md for the schema.
+# The agent emits a single JSON object: { grade, core_points, missed_points,
+# explanation }. Each fixture below pairs one synthetic concept with an answer
+# crafted to land on a specific grade, and asserts the grade plus the
+# missed_points invariant: non-empty for grades below `good`, empty for `good`
+# and `easy`. Regex patterns are single-quoted so the JSON quote characters
+# and `\s` stay literal.
+#
+# All four fixtures reuse one concept (the sunk cost fallacy) with four
+# different answers, isolating the grade boundary as the only variable.
+
+agent: sr-grader
+fixtures:
+  - name: "Complete answer in own words grades easy"
+    input: |
+      ## Concept content
+
+      The sunk cost fallacy is the tendency to keep investing in a course of
+      action because of resources already committed to it, even when continuing
+      is no longer the rational choice. The key insight: costs already spent are
+      unrecoverable, so they should carry zero weight in a forward-looking
+      decision — only future costs and future benefits matter. A rational
+      decision to continue or abandon should come out the same whether you have
+      invested nothing or invested heavily. Ignoring this leads to escalating
+      commitment: throwing good resources after bad into losing projects.
+
+      ## Answer
+
+      Whatever you've already spent — money, time, effort — is gone and you
+      can't recover it, so it shouldn't affect the decision at all. The only
+      thing to weigh is the costs and benefits from here forward. If you'd walk
+      away from a project you'd put nothing into, you should equally walk away
+      from the same project you've sunk a fortune into.
+    assertions:
+      - type: json_shape
+        required_keys: ["grade", "core_points", "missed_points", "explanation"]
+      - type: regex
+        pattern: '"grade"\s*:\s*"easy"'
+      - type: regex
+        pattern: '"missed_points"\s*:\s*\[\s*\]'
+      - type: max_length_chars
+        value: 2000
+
+  - name: "Mostly-covered answer with a minor gap grades good"
+    input: |
+      ## Concept content
+
+      The sunk cost fallacy is the tendency to keep investing in a course of
+      action because of resources already committed to it, even when continuing
+      is no longer the rational choice. The key insight: costs already spent are
+      unrecoverable, so they should carry zero weight in a forward-looking
+      decision — only future costs and future benefits matter. A rational
+      decision to continue or abandon should come out the same whether you have
+      invested nothing or invested heavily. Ignoring this leads to escalating
+      commitment: throwing good resources after bad into losing projects.
+
+      ## Answer
+
+      It's continuing with something mainly because you've already put so much
+      into it. The right approach is to set aside what's already gone and judge
+      it only on what's still to come — the call should be the same whether
+      you'd invested nothing or invested heavily.
+    assertions:
+      - type: json_shape
+        required_keys: ["grade", "core_points", "missed_points", "explanation"]
+      - type: regex
+        pattern: '"grade"\s*:\s*"good"'
+      - type: regex
+        pattern: '"missed_points"\s*:\s*\[\s*\]'
+      - type: max_length_chars
+        value: 2000
+
+  - name: "Answer that misses the core lesson grades hard with missed points"
+    input: |
+      ## Concept content
+
+      The sunk cost fallacy is the tendency to keep investing in a course of
+      action because of resources already committed to it, even when continuing
+      is no longer the rational choice. The key insight: costs already spent are
+      unrecoverable, so they should carry zero weight in a forward-looking
+      decision — only future costs and future benefits matter. A rational
+      decision to continue or abandon should come out the same whether you have
+      invested nothing or invested heavily. Ignoring this leads to escalating
+      commitment: throwing good resources after bad into losing projects.
+
+      ## Answer
+
+      It's the feeling that you shouldn't waste all the effort you've already
+      put into something.
+    assertions:
+      - type: json_shape
+        required_keys: ["grade", "core_points", "missed_points", "explanation"]
+      - type: regex
+        pattern: '"grade"\s*:\s*"hard"'
+      - type: regex
+        pattern: '"missed_points"\s*:\s*\[\s*"'
+      - type: max_length_chars
+        value: 2000
+
+  - name: "Answer that fails to recall the concept grades again with missed points"
+    input: |
+      ## Concept content
+
+      The sunk cost fallacy is the tendency to keep investing in a course of
+      action because of resources already committed to it, even when continuing
+      is no longer the rational choice. The key insight: costs already spent are
+      unrecoverable, so they should carry zero weight in a forward-looking
+      decision — only future costs and future benefits matter. A rational
+      decision to continue or abandon should come out the same whether you have
+      invested nothing or invested heavily. Ignoring this leads to escalating
+      commitment: throwing good resources after bad into losing projects.
+
+      ## Answer
+
+      Hmm, I think it's something about budgeting or being careful with money?
+      I don't really remember.
+    assertions:
+      - type: json_shape
+        required_keys: ["grade", "core_points", "missed_points", "explanation"]
+      - type: regex
+        pattern: '"grade"\s*:\s*"again"'
+      - type: regex
+        pattern: '"missed_points"\s*:\s*\[\s*"'
+      - type: max_length_chars
+        value: 2000
