@@ -79,8 +79,8 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     ],
   },
   {
-    name: 'study',
-    description: 'Current study progress and assignments.',
+    name: 'syllabus',
+    description: 'Current study syllabus progress and assignments.',
     triggers: ['study progress', 'what am i studying'],
   },
   {
