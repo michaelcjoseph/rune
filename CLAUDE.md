@@ -118,7 +118,8 @@ src/
 │   └── index.ts             # Standalone stdio entry point for Claude Code
 ├── study/
 │   ├── sr-state.ts          # Spaced-repetition state engine: read/write study/spaced-repetition.json, interval-ladder transitions (advanceRung, resetRung, repeatRung, admitConcept)
-│   └── sr-pool.ts           # SR pool source: Phase 1 readPool() reads the hand-seeded study/sr-seed.json
+│   ├── sr-pool.ts           # SR pool source: Phase 1 readPool() reads the hand-seeded study/sr-seed.json
+│   └── sr-select.ts         # SR selection: selectDueConcepts() — due concepts, most-overdue first, capped at N
 ├── integrations/
 │   ├── telegram/client.ts   # Message chunking, typing indicators
 │   ├── whoop/types.ts       # Whoop API response types and daily data format
