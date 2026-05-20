@@ -10,6 +10,7 @@ const COMMANDS: Record<string, string> = {
   search: 'Search vault and wiki',
   workout: 'Generate today\'s workout. Args: [home|gym] [mobility|endurance|strength|speed|power]',
   'done-workout': 'Log the most recently generated workout to today\'s journal',
+  study: 'Run a spaced-repetition session. Args: [N] for N questions (1-10), or "status"',
   nightly: 'Run the full nightly pipeline (commits + pushes). Default: today. Use `--date YYYY-MM-DD` to backfill. Add `--force` to re-run a date already marked processed.',
   help: 'Show this help text',
 };
@@ -87,6 +88,9 @@ async function main(): Promise<void> {
       break;
     case 'done-workout':
       await cmdDoneWorkout();
+      break;
+    case 'study':
+      await cmdStudy(args);
       break;
     case 'nightly':
       await cmdNightly(args);
@@ -246,6 +250,55 @@ async function cmdWorkout(args: string[]): Promise<void> {
 async function cmdDoneWorkout(): Promise<void> {
   const { handleDoneWorkout } = await import('../src/bot/commands/done-workout.js');
   await handleDoneWorkout(makeStdoutSender(), 0);
+}
+
+/** Run a spaced-repetition session in the terminal. `handleStudy` starts the
+ *  session (or prints `status`); the session is event-driven, so the loop reads
+ *  each answer from stdin and feeds it to `handleSRMessage` until the session
+ *  ends. The loop serialises calls with await — no re-entrant session-map access. */
+async function cmdStudy(args: string[]): Promise<void> {
+  const arg = args.join(' ').trim();
+
+  // A real session needs an interactive terminal for the answer loop; the
+  // `status` query just prints one line, so it is exempt.
+  if (arg.toLowerCase() !== 'status' && !process.stdin.isTTY) {
+    console.error(
+      '`jarvis study` needs an interactive terminal — use `jarvis study status` for a non-interactive summary.',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const { handleStudy } = await import('../src/bot/commands/study.js');
+  const { hasActiveSRSession, handleSRMessage } = await import('../src/study/sr-session.js');
+  const sender = makeStdoutSender();
+  const userId = 0;
+
+  await handleStudy(sender, userId, arg);
+  // `status`, an empty pool, or nothing due → no session was created.
+  if (!hasActiveSRSession(userId)) return;
+
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    while (hasActiveSRSession(userId)) {
+      const answer = await new Promise<string | null>((resolve) => {
+        const onClose = (): void => resolve(null);
+        rl.once('close', onClose);
+        rl.question('\nYour answer: ', (a) => {
+          rl.removeListener('close', onClose);
+          resolve(a);
+        });
+      });
+      if (answer === null) {
+        console.log('\n(session abandoned)');
+        break;
+      }
+      await handleSRMessage(userId, answer, sender);
+    }
+  } finally {
+    rl.close();
+  }
 }
 
 async function cmdNightly(args: string[]): Promise<void> {
