@@ -32,7 +32,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 
 - [x] Author `.claude/agents/sr-question-generator.md` in Jarvis (NOT vault). Frontmatter: name, description, triggers (none — invoked programmatically), tools allow-list (Read only). Body covers the rubric in spec Requirements #20–#23 and the structured output shape.
 - [x] Author `.claude/agents/sr-grader.md` in Jarvis with the rubric in Requirements #24–#30 and the structured output shape (`{ grade, core_points, missed_points, explanation }`).
-- [ ] Add `evals/sr-question-generator.yaml` with at least three fixtures: (a) a content-rich concept producing a mechanism-focused question, (b) a content-thin concept producing a `skip` signal, (c) a concept with three prior questions where the new question must differ from all three.
+- [x] Add `evals/sr-question-generator.yaml` with at least three fixtures: (a) a content-rich concept producing a mechanism-focused question, (b) a content-thin concept producing a `skip` signal, (c) a concept with three prior questions where the new question must differ from all three.
 - [ ] Add `evals/sr-grader.yaml` with fixtures covering each of the four grades (again/hard/good/easy), each asserting both grade and a non-empty `missed_points` array when grade < `good`.
 
 ### Session orchestrator + command

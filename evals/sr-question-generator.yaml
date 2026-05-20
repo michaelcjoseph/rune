@@ -1,0 +1,88 @@
+# Evals for sr-question-generator — see evals/README.md for the schema.
+# The agent emits exactly one line: `QUESTION: <text>` or `SKIP: <reason>`.
+# Inputs are synthetic (no vault content) and define the prompt shape the
+# orchestrator (sr-session) will use: a "## Concept content" section and a
+# "## Recent questions" section (newline-separated bare questions, or a
+# "(none yet)" placeholder).
+#
+# max_length_chars is 220: the question itself is bounded at <= 200 chars by the
+# agent contract, plus the "QUESTION: " / "SKIP: " prefix and trailing newline.
+
+agent: sr-question-generator
+fixtures:
+  - name: "Content-rich concept yields a mechanism-focused question"
+    input: |
+      ## Concept content
+
+      Jevons paradox: when a technology makes the use of a resource more
+      efficient, total consumption of that resource often rises rather than
+      falls. The efficiency gain lowers the effective cost of the resource,
+      which expands demand — new uses become economical and existing uses
+      scale up. The demand expansion can outweigh the per-unit saving, so
+      aggregate consumption grows. This is why efficiency mandates alone
+      rarely cut total resource use; they must be paired with a cap or a
+      price floor that blocks the rebound.
+
+      ## Recent questions
+
+      (none yet)
+    assertions:
+      - type: regex
+        pattern: "^QUESTION:"
+        flags: "m"
+      - type: substring
+        value: "?"
+      - type: max_length_chars
+        value: 220
+
+  - name: "Content-thin stub concept yields a skip signal"
+    input: |
+      ## Concept content
+
+      Barbell strategy.
+
+      (Stub — this concept page has not been written yet.)
+
+      ## Recent questions
+
+      (none yet)
+    assertions:
+      - type: regex
+        pattern: "^SKIP:"
+        flags: "m"
+      - type: max_length_chars
+        value: 220
+
+  - name: "Concept with three prior questions yields a distinct new question"
+    input: |
+      ## Concept content
+
+      Compound growth: returns themselves earn returns, so a balance grows
+      geometrically rather than linearly. Three forces govern the outcome:
+      time in the market (each year multiplies the whole accumulated base,
+      so early years are disproportionately valuable), the rate of return
+      (small rate differences diverge enormously over decades), and the
+      compounding interval (more frequent compounding raises the effective
+      annual yield). Because growth is geometric the curve looks almost flat
+      for years before it turns sharply upward — which is why people
+      underestimate it and abandon it too early.
+
+      ## Recent questions
+
+      Why does beginning to invest ten years earlier beat a much larger sum invested later?
+      How does the compounding interval change the final balance over a long horizon?
+      What makes compound growth feel deceptively flat in its early years?
+    assertions:
+      - type: substring
+        value: "?"
+      # Each prior question is guarded separately so a failure pinpoints which
+      # one was echoed. Anchored at the QUESTION: line; `i` for case-insensitive.
+      - type: regex
+        pattern: "^QUESTION:(?!.*invest ten years earlier)"
+        flags: "im"
+      - type: regex
+        pattern: "^QUESTION:(?!.*compounding interval change the final balance)"
+        flags: "im"
+      - type: regex
+        pattern: "^QUESTION:(?!.*deceptively flat in its early years)"
+        flags: "im"
