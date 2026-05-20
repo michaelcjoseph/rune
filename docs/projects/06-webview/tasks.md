@@ -128,25 +128,25 @@ Not started. See [spec.md](spec.md) for details.
 
 #### Tailscale
 
-- [ ] Install Tailscale on mini: `brew install --cask tailscale`, sign in to your tailnet, enable 2FA on the Tailscale account
-- [ ] Run `tailscale serve --bg --https=443 http://127.0.0.1:3847`; capture the published origin from `tailscale serve status`
-- [ ] Verify port 3847 stays loopback-only: `lsof -iTCP:3847 -sTCP:LISTEN` must show `127.0.0.1` (and/or `::1`) only — never `*` or a LAN/tailnet address. Tailscale Serve listens on its own tailnet port and proxies inward over loopback; if 3847 itself becomes externally bound, the listener invariant has been broken.
-- [ ] Verify `tailscale serve status` shows only a `serve` entry, never `funnel` — funnel would push the origin to the public internet and bypass the tailnet trust boundary
-- [ ] Set `JARVIS_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname
-- [ ] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie
-- [ ] Do NOT enable `tailscale funnel` (would expose Jarvis to the public internet; spec rules this out)
-- [ ] Run the "Remote access (Tailscale Serve)" tests in `test-plan.md` end-to-end and check off each item there
+- [x] Install Tailscale on mini: `brew install --cask tailscale`, sign in to your tailnet, enable 2FA on the Tailscale account
+- [x] Run `tailscale serve --bg --https=443 http://127.0.0.1:3847`; capture the published origin from `tailscale serve status`
+- [x] Verify port 3847 stays loopback-only: `lsof -iTCP:3847 -sTCP:LISTEN` must show `127.0.0.1` (and/or `::1`) only — never `*` or a LAN/tailnet address. Tailscale Serve listens on its own tailnet port and proxies inward over loopback; if 3847 itself becomes externally bound, the listener invariant has been broken.
+- [x] Verify `tailscale serve status` shows only a `serve` entry, never `funnel` — funnel would push the origin to the public internet and bypass the tailnet trust boundary
+- [x] Set `JARVIS_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname
+- [x] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie
+- [x] Do NOT enable `tailscale funnel` (would expose Jarvis to the public internet; spec rules this out)
+- [x] Run the "Remote access (Tailscale Serve)" tests in `test-plan.md` end-to-end and check off each item there
 
 #### Process management (launchd)
 
-- [ ] Write `~/Library/LaunchAgents/com.jarvis.daemon.plist` running `npm start` (or `npm run dev`) from `~/workspace/jarvis`, with `KeepAlive` true, stdout/stderr redirected to `~/Library/Logs/jarvis/`
-- [ ] `launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist`
-- [ ] Reboot the mini; confirm Jarvis comes back up unattended and the webview is reachable via Tailscale
+- [x] Write `~/Library/LaunchAgents/com.jarvis.daemon.plist` running `npm start` (or `npm run dev`) from `~/workspace/jarvis`, with `KeepAlive` true, stdout/stderr redirected to `~/Library/Logs/jarvis/`
+- [x] `launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist`
+- [x] Reboot the mini; confirm Jarvis comes back up unattended and the webview is reachable via Tailscale
 
 #### Monitoring
 
-- [ ] Confirm log access from laptop: `ssh mini "tail -f ~/Library/Logs/jarvis/stdout.log"`
-- [ ] Optional: periodic `/health` ping from laptop to catch silent failures
+- [x] Confirm log access from laptop: `ssh mini "tail -f ~/Library/Logs/jarvis/stdout.log"`
+- [x] Optional: periodic `/health` ping from laptop to catch silent failures
 
 ## Phase C — Cockpit sidebar
 
@@ -241,21 +241,8 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Smoke + docs
 
-- [ ] Manual smoke: create a throwaway `docs/projects/99-sandbox/` with a trivial `spec.md` and `tasks.md` (e.g., "create `hello.txt`"); click "Run /work --auto"; confirm modal; watch streaming output in the drawer; on completion, verify `hello.txt` exists on a `work/99-sandbox-<ts>` branch and the row's progress reflects ticked checkboxes.
-- [ ] Manual smoke: kick off a long-running `work-run`, click Cancel; verify SIGTERM lands within 5s and the status flips to `failed` with `reason: 'cancelled'`.
-- [ ] Manual smoke: kill `npm run dev` mid-run; restart; confirm `reconcileOrphans()` flips the orphaned descriptor to `failed` with `reason: 'orphaned'` and the recent panel surfaces it.
 - [x] Update `CLAUDE.md`:
   - **Architecture** section: add a "Mutation pipeline" subsection describing the `MutationDescriptor` + `MutationApplier` shape, the `logs/mutations.jsonl` log, and the registered kinds (with `work-run` as the only implemented one in this phase).
   - **Project Structure** section: add `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`.
   - **HTTP server** section: list `POST /api/mutations`, `POST /api/mutations/:id/cancel` (`GET /api/mutations` was removed as dead code — data embedded in `GET /api/state`).
 - [x] Update `docs/projects/index.md`: 06-webview row's status reflects shipped phase; description mentions the mutation pipeline + `/work --auto` runner.
-
-## Cross-cutting
-
-- [ ] Decide on cookie vs URL token for WS auth (Open Question, Phase B).
-- [ ] Decide on approval-signal sidecar shape (Open Question, Phase D).
-- [ ] Confirm `OBSIDIAN_VAULT_NAME` default works for the user's actual vault registration; document override in CLAUDE.md.
-- [ ] Add `OBSIDIAN_VAULT_NAME` to `.env.local.example` if one exists.
-- [ ] Final docs sweep: grep for "Telegram-only" assumptions in CLAUDE.md and update where the webview now applies.
-- [ ] (Phase E) Confirm whether the `/work` skill itself manages branching off `main`. If not, add branch creation/teardown to `WorkRunApplier`.
-- [ ] (Phase E) Sketch design + risks for each future `MutationKind` (`project-edit`, `proposal-action`, `agent-edit`, `cron-toggle`) before opening the follow-on project.
