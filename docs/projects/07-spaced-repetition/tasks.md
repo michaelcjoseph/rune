@@ -53,8 +53,8 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
   - Question quality (too easy, too rote, repeating themselves)
   - Grading accuracy (over-harsh, over-lenient, missed-points relevance)
 - [ ] Tune `sr-question-generator.md` and `sr-grader.md` based on the notes. Update eval fixtures to lock in the improvements.
-- [ ] Documentation: update `CLAUDE.md` Agents table with `sr-question-generator` and `sr-grader` rows.
-- [ ] Documentation: update `docs/projects/index.md` row for `07-spaced-repetition` from "Planned" → "In Progress (Phase 1)".
+- [x] Documentation: update `CLAUDE.md` Agents table with `sr-question-generator` and `sr-grader` rows.
+- [x] Documentation: update `docs/projects/index.md` row for `07-spaced-repetition` from "Planned" → "In Progress (Phase 1)".
 
 ## Phase 2 — Daily cron + session semantics
 
