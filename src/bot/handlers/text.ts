@@ -79,7 +79,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // /done-workout must come before /workout so the longer prefix wins.
   if (text.startsWith('/done-workout')) return handleDoneWorkout(sender, userId);
   if (text.startsWith('/workout')) return handleWorkout(sender, userId, text.slice('/workout'.length).trim());
-  if (text.startsWith('/study')) return handleSyllabus(sender, userId);
+  if (text.startsWith('/syllabus')) return handleSyllabus(sender, userId);
   if (text.startsWith('/family')) return handleFamily(sender, userId);
   if (text.startsWith('/career')) return handleCareer(sender, userId);
   if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
@@ -238,7 +238,7 @@ async function invokeSkill(
     case 'priorities': return handlePriorities(sender, userId, args);
     case 'workout': return handleWorkout(sender, userId, args);
     case 'done-workout': return handleDoneWorkout(sender, userId);
-    case 'study': return handleSyllabus(sender, userId);
+    case 'syllabus': return handleSyllabus(sender, userId);
     case 'family': return handleFamily(sender, userId);
     case 'career': return handleCareer(sender, userId);
     case 'prep': return handlePrep(sender, userId);
@@ -443,7 +443,7 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 - \`/priorities\` — yesterday's priorities
 - \`/workout [home|gym] [mobility|endurance|strength|speed|power]\` — generate a tailored workout from goals, equipment, recent training, and Whoop recovery
 - \`/done-workout\` — log the last generated workout to today's journal
-- \`/study\` — current study progress and assignments
+- \`/syllabus\` — current study progress and assignments
 - \`/family\` — 14-day family mention scan
 - \`/career\` — active job applications
 - \`/fresh\` — log conversation to journal, reset session

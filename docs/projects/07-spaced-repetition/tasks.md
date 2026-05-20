@@ -9,7 +9,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 ### Syllabus rename
 
 - [x] Rename `src/bot/commands/study.ts` → `src/bot/commands/syllabus.ts`. Update the exported handler name + internal references.
-- [ ] Update `src/bot/handlers/text.ts` to route `/syllabus` to the renamed handler.
+- [x] Update `src/bot/handlers/text.ts` to route `/syllabus` to the renamed handler.
 - [ ] Update `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA` — remove `study` row (will be re-added for SR), add `syllabus` row with the old triggers.
 - [ ] Update `CLAUDE.md` Reference System note for `#study` — clarify the tag routes to `study/progress.json` via the renamed `/syllabus` command.
 - [ ] Update `CLAUDE.md` Claude Code Commands table — replace the `/study` row's "Current study progress…" description by moving it under `/syllabus`. Leave `/study` row blank for now (gets re-added in this phase below).

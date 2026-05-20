@@ -30,6 +30,7 @@ vi.mock('../skill-registry.js', () => ({
     { name: 'journal', kind: 'slash', description: 'Add to journal.' },
     { name: 'weekly', kind: 'slash', description: 'Weekly review.' },
     { name: 'family', kind: 'slash', description: 'Family mentions.' },
+    { name: 'syllabus', kind: 'slash', description: 'Study syllabus.' },
     { name: 'content-triager', kind: 'agent', description: 'Triage content.' },
   ]),
 }));
@@ -84,6 +85,7 @@ const { handleLearn } = await import('../commands/learn.js');
 const { handleLearnList } = await import('../commands/learn-list.js');
 const { handleCancel } = await import('../commands/cancel.js');
 const { handleNewProject } = await import('../commands/new-project.js');
+const { handleSyllabus } = await import('../commands/syllabus.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
@@ -226,10 +228,17 @@ describe('text handler routing', () => {
     expect(handleNewProject).toHaveBeenCalledWith(expect.anything(), 100, 'email digest feature');
   });
 
-  it('routes /start and sends help', async () => {
+  it('routes /syllabus to handleSyllabus', async () => {
+    await handleTextMessage(mockSender(), msg('/syllabus'));
+    expect(handleSyllabus).toHaveBeenCalledWith(expect.anything(), 100);
+  });
+
+  it('routes /start and sends help listing /syllabus', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/start'));
-    expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('**Commands**'));
+    const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    expect(helpText).toContain('**Commands**');
+    expect(helpText).toContain('/syllabus');
   });
 
   it('routes /lint', async () => {
@@ -391,6 +400,14 @@ describe('resolver wiring in text handler', () => {
     );
     await handleTextMessage(mockSender(), msg('add this to my journal: 11am, called dad'));
     expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'telegram', '11am, called dad');
+  });
+
+  it('routes resolver-dispatched syllabus skill to handleSyllabus via invokeSkill', async () => {
+    vi.mocked(mockClassify).mockResolvedValue(
+      classifyResult({ skill: 'syllabus', args: '', confidence: 0.9 }),
+    );
+    await handleTextMessage(mockSender(), msg('show me my current study syllabus please'));
+    expect(handleSyllabus).toHaveBeenCalledWith(expect.anything(), 100);
   });
 
   it('falls through to conversation for KB-shaped questions (kb_query is no longer a route)', async () => {
