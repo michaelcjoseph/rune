@@ -290,6 +290,7 @@ Optional:
 | intent-scan | `.claude/agents/intent-scan.md` | Saturday 3pm cron: runs `npm run intent-scan` to process intent-log and write skill proposals |
 | workout-generator | `.claude/agents/workout-generator.md` | Generates a one-shot daily workout (warmup → main → cooldown) tailored to goals, equipment, recent training load, Whoop recovery, and exercise preferences |
 | lenny-sync | `.claude/agents/lenny-sync.md` | Pull new Lenny posts/podcasts via MCP into library/lenny/, update logs/lenny-sync-state.json |
+| sr-question-generator | `.claude/agents/sr-question-generator.md` | Generate one open-ended spaced-repetition question from a wiki concept, or signal SKIP |
 
 ### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
 

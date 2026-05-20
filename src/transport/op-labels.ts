@@ -26,6 +26,7 @@ const AGENT_LABELS: Record<string, string> = {
   'system-scanner':        'Scanning subsystem',
   'intent-scan':           'Scanning intent log',
   'project-setup-writer':  'Writing project files',
+  'sr-question-generator': 'Generating review question',
   // Vault-resident agents (loaded from $VAULT_DIR/.claude/agents/)
   'journal-scanner':       'Scanning journals',
   'project-scanner':       'Scanning projects',
