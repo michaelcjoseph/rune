@@ -166,6 +166,14 @@ describe('advanceRung — hard grade', () => {
     expect(next.concepts[CONCEPT]!.current_rung).toBe('30d');
     expect(next.concepts[CONCEPT]!.next_due).toBe('2026-06-19');
   });
+
+  it('hard at cap (120d) stays at 120d and schedules next_due 120 days out', () => {
+    const state = makeConceptAt('120d');
+    const next = advanceRung(state, CONCEPT, 'hard', TODAY);
+    expect(next.concepts[CONCEPT]!.current_rung).toBe('120d');
+    // 2026-05-20 + 120 = 2026-09-17
+    expect(next.concepts[CONCEPT]!.next_due).toBe('2026-09-17');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -188,6 +196,13 @@ describe('advanceRung — again grade', () => {
   it('again schedules next_due 1 day from today', () => {
     const state = makeConceptAt('60d');
     const next = advanceRung(state, CONCEPT, 'again', TODAY);
+    expect(next.concepts[CONCEPT]!.next_due).toBe('2026-05-21');
+  });
+
+  it('again at cap (120d) resets current_rung to 1d and schedules next_due tomorrow', () => {
+    const state = makeConceptAt('120d');
+    const next = advanceRung(state, CONCEPT, 'again', TODAY);
+    expect(next.concepts[CONCEPT]!.current_rung).toBe('1d');
     expect(next.concepts[CONCEPT]!.next_due).toBe('2026-05-21');
   });
 });
