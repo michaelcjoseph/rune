@@ -11,11 +11,11 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 - [x] Rename `src/bot/commands/study.ts` → `src/bot/commands/syllabus.ts`. Update the exported handler name + internal references.
 - [x] Update `src/bot/handlers/text.ts` to route `/syllabus` to the renamed handler.
 - [x] Update `src/bot/skill-registry.ts` `SLASH_COMMAND_METADATA` — remove `study` row (will be re-added for SR), add `syllabus` row with the old triggers.
-- [ ] Update `CLAUDE.md` Reference System note for `#study` — clarify the tag routes to `study/progress.json` via the renamed `/syllabus` command.
-- [ ] Update `CLAUDE.md` Claude Code Commands table — replace the `/study` row's "Current study progress…" description by moving it under `/syllabus`. Leave `/study` row blank for now (gets re-added in this phase below).
-- [ ] Update `study/index.md` to reflect the rename and document the upcoming `study/spaced-repetition.json` file.
-- [ ] Update `.claude/commands/study.md` (if it exists in the vault) → rename to `.claude/commands/syllabus.md`. Confirm `/daily` parsing notes do not need changes (still routes `#study` → syllabus progress).
-- [ ] `grep -r "/study" docs/ CLAUDE.md study/` and clean up any references the rename missed.
+- [x] Update `CLAUDE.md` Reference System note for `#study` — clarify the tag routes to `study/progress.json` via the renamed `/syllabus` command.
+- [x] Update `CLAUDE.md` Claude Code Commands table — replace the `/study` row's "Current study progress…" description by moving it under `/syllabus`. Leave `/study` row blank for now (gets re-added in this phase below).
+- [x] Update `study/index.md` to reflect the rename and document the upcoming `study/spaced-repetition.json` file.
+- [x] Update `.claude/commands/study.md` (if it exists in the vault) → rename to `.claude/commands/syllabus.md`. Confirm `/daily` parsing notes do not need changes (still routes `#study` → syllabus progress).
+- [x] `grep -r "/study" docs/ CLAUDE.md study/` and clean up any references the rename missed.
 
 ### State + helpers
 
