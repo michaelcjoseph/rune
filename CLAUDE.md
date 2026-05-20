@@ -51,7 +51,8 @@ src/
 │       ├── blog.ts          # /blog — blog post drafting session
 │       ├── workout.ts       # /workout — invoke workout-generator agent with goals/equipment/exercises/Whoop recovery; persist logs/last-workout.json; chunk-send markdown to TG; pre-syncs Whoop via ensureWhoopSyncedForToday()
 │       ├── done-workout.ts  # /done-workout — append most recent generated workout to today's journal
-│       ├── study.ts         # /study — study session planning
+│       ├── syllabus.ts      # /syllabus — current study syllabus progress and assignments
+│       ├── study.ts         # /study — spaced-repetition session: quiz over due wiki concepts
 │       ├── family.ts        # /family — family planning/review
 │       ├── career.ts        # /career — career reflection/planning
 │       ├── learn.ts         # /learn — append a runtime learning; auto-prepended to future agents
