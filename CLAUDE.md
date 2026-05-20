@@ -291,6 +291,7 @@ Optional:
 | workout-generator | `.claude/agents/workout-generator.md` | Generates a one-shot daily workout (warmup → main → cooldown) tailored to goals, equipment, recent training load, Whoop recovery, and exercise preferences |
 | lenny-sync | `.claude/agents/lenny-sync.md` | Pull new Lenny posts/podcasts via MCP into library/lenny/, update logs/lenny-sync-state.json |
 | sr-question-generator | `.claude/agents/sr-question-generator.md` | Generate one open-ended spaced-repetition question from a wiki concept, or signal SKIP |
+| sr-grader | `.claude/agents/sr-grader.md` | Grade a free-form spaced-repetition answer against the wiki concept — returns grade + core/missed points + explanation |
 
 ### Vault-resident agents (personal content, loaded from `$VAULT_DIR/.claude/agents/`)
 
