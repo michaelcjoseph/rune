@@ -117,13 +117,29 @@ Generate test scenarios based on the requirements in the spec. Focus on:
 
 ## Step 5: Update the index
 
-Edit `{PROJECT_ROOT}/docs/projects/index.md` by appending a new row to the table:
+`{PROJECT_ROOT}/docs/projects/index.md` has two parts that both need a new entry — the at-a-glance table and the per-project detail sections below it. Update both.
 
-```
-| [NN-slug](NN-slug/spec.md) | Not Started | [one-line description from Core Value Proposition] |
-```
+1. Append a row to the table (the last column is a single tight sentence):
 
-Insert it before the closing blank line at the end of the table. Do not disturb existing rows.
+   ```
+   | [NN-slug](NN-slug/spec.md) | Not Started | [one-line summary from Core Value Proposition] |
+   ```
+
+   Insert it as the last table row, before the `---` that separates the table from the sections. Do not disturb existing rows.
+
+2. Append a detail section to the end of the file, matching the format of the existing sections:
+
+   ```
+   ## NN-slug — Not Started
+
+   [Spec](NN-slug/spec.md)
+
+   [one-line summary from Core Value Proposition]
+
+   - [3-6 bullets covering the main scope/phases of the project]
+   ```
+
+Do not disturb existing sections.
 
 ## Output
 
