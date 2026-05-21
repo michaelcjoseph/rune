@@ -6,7 +6,8 @@
   - Extended memory: https://shellbrain.ai/
   - Leverage multiple models (claude / codex / etc) to review work
   - https://github.com/everyinc/compound-engineering-plugin
-- Orchestration between Claude and Codex to repeatedly review, critique and refine each others specs
+  - Orchestration between Claude and Codex to repeatedly review, critique and refine each others specs and work for repos in the workspace
+  - Self context management for long conversations
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily
