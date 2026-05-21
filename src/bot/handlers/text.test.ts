@@ -75,6 +75,10 @@ vi.mock('../../study/sr-session.js', () => ({
   hasActiveSRSession: vi.fn(() => false),
   handleSRMessage: vi.fn(),
 }));
+vi.mock('./url.js', () => ({
+  containsURL: vi.fn((text: string) => /https?:\/\//.test(text)),
+  handleURLMessage: vi.fn().mockResolvedValue(undefined),
+}));
 
 const { classifyIntent: mockClassify } = await import('../resolver.js');
 const { appendIntent } = await import('../../utils/intent-log.js');
@@ -97,6 +101,8 @@ const { handleStudy } = await import('../commands/study.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
+const { hasActiveSRSession, handleSRMessage } = await import('../../study/sr-session.js');
+const { handleURLMessage } = await import('./url.js');
 const { handleTextMessage, dispatchText } = await import('./text.js');
 
 function mockSender(): MessageSender {
@@ -925,5 +931,88 @@ describe('dispatchText — webview transport derivation', () => {
     expect(uid).toBe(100);
     expect(transport).toBe('webview');
     expect(firstMsg).toBe('hi from webview');
+  });
+});
+
+describe('dispatchText — URL routing position (new behavior)', () => {
+  // The key change in the diff: URL detection is now checked AFTER
+  // review/SR/chat-session checks, not before them. A URL shared
+  // mid-thread must stay in the conversation handler; only URL messages
+  // with no active session/review/SR should be triaged independently.
+
+  const URL_MSG = 'Check this out https://example.com';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: no active review, no active SR session
+    vi.mocked(hasActiveReview).mockReturnValue(false);
+    vi.mocked(hasActiveSRSession).mockReturnValue(false);
+  });
+
+  it('routes a URL message to handleURLMessage when no session, review, or SR session is active', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+
+    await dispatchText(mockSender(), 100, URL_MSG);
+
+    expect(handleURLMessage).toHaveBeenCalledWith(expect.anything(), 100, URL_MSG);
+  });
+
+  it('keeps a URL message in the conversation when a chat session is already active', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue({
+      sessionId: 'existing-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 3,
+      firstMessage: 'earlier message',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'here is what I found', error: null });
+
+    await dispatchText(mockSender(), 100, URL_MSG);
+
+    // URL triage must NOT have fired
+    expect(handleURLMessage).not.toHaveBeenCalled();
+    // The conversation path ran instead
+    expect(askMock).toHaveBeenCalled();
+  });
+
+  it('routes a URL message to handleReviewMessage when an active review is running', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+
+    vi.mocked(hasActiveReview).mockReturnValue(true);
+    vi.mocked(handleReviewMessage).mockResolvedValue(undefined);
+
+    await dispatchText(mockSender(), 100, URL_MSG);
+
+    expect(handleReviewMessage).toHaveBeenCalledWith(100, URL_MSG, expect.anything());
+    expect(handleURLMessage).not.toHaveBeenCalled();
+  });
+
+  it('routes a URL message to handleSRMessage when an active SR session is running', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+
+    vi.mocked(hasActiveSRSession).mockReturnValue(true);
+    vi.mocked(handleSRMessage).mockResolvedValue(undefined);
+
+    await dispatchText(mockSender(), 100, URL_MSG);
+
+    expect(handleSRMessage).toHaveBeenCalledWith(100, URL_MSG, expect.anything());
+    expect(handleURLMessage).not.toHaveBeenCalled();
+  });
+
+  it('still routes a URL-only message to handleURLMessage when nothing else is active', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+
+    const sender = mockSender();
+    await dispatchText(sender, 100, 'https://example.com/article');
+
+    expect(handleURLMessage).toHaveBeenCalledTimes(1);
+    expect(handleURLMessage).toHaveBeenCalledWith(sender, 100, 'https://example.com/article');
   });
 });

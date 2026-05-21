@@ -102,9 +102,6 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/whoop')) return handleWhoop(sender, userId);
   if (text.startsWith('/start')) return handleStart(sender, userId);
 
-  // URL detection — messages containing URLs go to content triage
-  if (containsURL(text)) return handleURLMessage(sender, userId, text);
-
   // Active review session takes priority over default conversation
   if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
 
@@ -118,6 +115,14 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // closeConversation when a session exists). Slash escape hatches
   // (/fresh, /journal, /clear) already short-circuited above.
   if (getSession(userId, transport)) return handleConversation(sender, userId, transport, text);
+
+  // URL detection — messages containing URLs go to content triage. Checked
+  // AFTER the review/SR/chat-session checks above: a URL shared mid-thread
+  // belongs to that thread, so an active chat (which has the WebFetch tool to
+  // fetch it), a review interview, or an SR session each absorb the message as
+  // normal text rather than having it siphoned off to independent triage.
+  // Triage runs only when no conversational context is open.
+  if (containsURL(text)) return handleURLMessage(sender, userId, text);
 
   // Resolver: classify free-form messages against the skill registry. Skipped
   // for short messages (rarely encode a routable intent) to save the Haiku
