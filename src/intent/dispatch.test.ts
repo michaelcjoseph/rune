@@ -1,15 +1,12 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §13 — multi-model dispatch, Layer 5 (08-intent-layer,
+ * Test suite for test-plan.md §13 — multi-model dispatch, Layer 5 (08-intent-layer,
  * Phase 4).
  *
- * Written BEFORE the implementation. `src/intent/dispatch.ts` ships as a contract stub whose
- * functions throw 'not implemented', and `compileToCodex` in `agent-def.ts` still throws its
- * "deferred to Phase 4" error — so every test here is RED. That is the intended, correct
- * state: this is a "Tests (write first)" task. The suite goes green when the Phase 4 Layer-5
- * implementation tasks land (the dispatch core, and `compileToCodex`). Do not implement
- * either to make these pass.
+ * Written test-first. `compileToCodex` (in `agent-def.ts`) is implemented, so its 3 tests
+ * are green; the dispatch core (`buildHandoff`, `recordDispatch`) is still a contract stub,
+ * so the other 6 tests stay RED until the next Phase 4 task lands.
  *
  * Scope note: actually spawning a Claude or Codex executor, and the "worktree intact for
  * retry" property of a failed dispatch, are integration concerns. This suite pins the

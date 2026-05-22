@@ -7,16 +7,15 @@ import { fileURLToPath } from 'node:url';
  * Test suite for test-plan.md §4 — model-agnostic agent definitions (08-intent-layer,
  * Phase 1).
  *
- * Written test-first; `src/intent/agent-def.ts` now implements `parseClaudeAgent` and
- * `compileToClaude`, so the suite is green. `compileToCodex` / `compileToGemini` throw
- * their "deferred to Phase 4" error until the Codex/Gemini targets are built in Phase 4 —
- * asserted by the deferred-targets test.
+ * Written test-first; `src/intent/agent-def.ts` now implements `parseClaudeAgent`,
+ * `compileToClaude`, and (since Phase 4) `compileToCodex`, so the suite is green.
+ * `compileToCodex`'s behavior is pinned by `dispatch.test.ts` (§13). `compileToGemini`
+ * still throws "deferred to Phase 4" — Gemini is not in the v1 wedge.
  */
 
 import {
   parseClaudeAgent,
   compileToClaude,
-  compileToCodex,
   compileToGemini,
   type NeutralAgentDef,
 } from './agent-def.js';
@@ -123,11 +122,9 @@ describe('model-agnostic agent definitions — Claude compiler (test-plan §4)',
 });
 
 describe('model-agnostic agent definitions — deferred targets (test-plan §4)', () => {
-  // NOTE: when the Phase 4 Layer-5 task implements `compileToCodex`, drop the `compileToCodex`
-  // assertion below (keep `compileToGemini` — Gemini stays deferred). `dispatch.test.ts`
-  // (test-plan §13) pins `compileToCodex`'s implemented behavior.
-  it('the Codex and Gemini compiler targets are deferred to Phase 4', () => {
-    expect(() => compileToCodex(neutralDef())).toThrow(/deferred|phase 4/i);
+  // Codex is now implemented — its behavior is pinned by `dispatch.test.ts` (§13). Gemini
+  // is not in the v1 wedge and still throws.
+  it('the Gemini compiler target is deferred to a later phase', () => {
     expect(() => compileToGemini(neutralDef())).toThrow(/deferred|phase 4/i);
   });
 });

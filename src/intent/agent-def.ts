@@ -9,11 +9,12 @@
  * selection policy's decision (test-plan §5), never an agent property. An agent declares
  * the *capabilities* its role needs; the policy binds those to a model.
  *
- * STATUS: the Claude path is implemented. `parseClaudeAgent` reads a `.claude/agents/*.md`
- * into the neutral format and `compileToClaude` emits it back; the contract is pinned by
- * `agent-def.test.ts` (test-plan.md §4). `compileToCodex` and `compileToGemini` throw a
- * "deferred to Phase 4" error — their correct behavior until the Codex/Gemini targets are
- * built in Phase 4 (multi-model dispatch).
+ * STATUS: the Claude and Codex paths are implemented. `parseClaudeAgent` reads a
+ * `.claude/agents/*.md` into the neutral format, `compileToClaude` emits it back, and
+ * `compileToCodex` emits the same neutral definition as a structured markdown agent
+ * document for Codex (pinned by `agent-def.test.ts` (§4) and `dispatch.test.ts` (§13)).
+ * `compileToGemini` still throws a "deferred to Phase 4" error — Gemini is not in the v1
+ * wedge.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Model-agnostic agent definitions"), test-plan.md (§4)}.
  */
@@ -116,14 +117,21 @@ export function parseClaudeAgent(markdown: string): NeutralAgentDef {
  * re-emits every `extraFrontmatter` key. Throws a clear error naming the field when a
  * required field is missing.
  */
-export function compileToClaude(def: NeutralAgentDef): string {
-  // name / role / instructions are the required non-empty fields; tools, capabilities, and
-  // constraints may legitimately be empty (many agents declare no tools or constraints).
+/**
+ * Assert the neutral definition carries the required non-empty fields: `name`, `role`, and
+ * `instructions`. `tools` / `capabilities` / `constraints` may legitimately be empty. Used
+ * by every compiler target so the error message names the caller and the missing field.
+ */
+function assertRequiredFields(def: NeutralAgentDef, caller: string): void {
   for (const field of ['name', 'role', 'instructions'] as const) {
     if (typeof def[field] !== 'string' || def[field].trim() === '') {
-      throw new Error(`compileToClaude: required field '${field}' is missing or empty`);
+      throw new Error(`${caller}: required field '${field}' is missing or empty`);
     }
   }
+}
+
+export function compileToClaude(def: NeutralAgentDef): string {
+  assertRequiredFields(def, 'compileToClaude');
 
   // Neutral keys first, then the opaque extras. `model` is never emitted.
   const frontmatter: Record<string, unknown> = { name: def.name, description: def.role };
@@ -141,14 +149,28 @@ export function compileToClaude(def: NeutralAgentDef): string {
 }
 
 /**
- * Compile a neutral definition to the Codex target. The Codex target is built in Phase 4
- * (multi-model dispatch); until then this throws a clear "deferred to Phase 4" error and
- * does not affect the Claude path.
+ * Compile a neutral definition to the Codex target — a structured markdown agent document
+ * Codex consumes. It carries the agent's role, declared capabilities, tools, constraints,
+ * and instructions; like the Claude target it names no model (model resolution is the
+ * policy's job). Claude-specific `extraFrontmatter` keys (e.g. Jarvis's cron fields) are
+ * not emitted — those apply only to Jarvis-internal Claude agents, not a Codex executor.
+ * Throws naming any missing required field, mirroring `compileToClaude`.
  */
-export function compileToCodex(_def: NeutralAgentDef): string {
-  throw new Error(
-    'compileToCodex: deferred to Phase 4 — the Codex compiler target is built in Phase 4 (multi-model dispatch)',
-  );
+export function compileToCodex(def: NeutralAgentDef): string {
+  assertRequiredFields(def, 'compileToCodex');
+  // Newlines stripped from `name` so it cannot inject a section header into the H1; `role`
+  // and `instructions` each sit in their own labeled `##` section, so multi-line content is
+  // unambiguous and never bleeds into a sibling section.
+  const safeName = def.name.replace(/\n/g, ' ');
+  const lines: string[] = [`# Agent: ${safeName}`, '', '## Role', '', def.role.trim()];
+  const section = (heading: string, items: string[]): void => {
+    if (items.length > 0) lines.push('', `## ${heading}`, ...items.map((item) => `- ${item}`));
+  };
+  section('Capabilities', def.capabilities);
+  section('Tools', def.tools);
+  section('Constraints', def.constraints);
+  lines.push('', '## Instructions', '', def.instructions.trim());
+  return `${lines.join('\n')}\n`;
 }
 
 /**
