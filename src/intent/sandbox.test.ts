@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §11 — sandboxing and security, Layer 4 (08-intent-layer,
+ * Test suite for test-plan.md §11 — sandboxing and security, Layer 4 (08-intent-layer,
  * Phase 3).
  *
- * Written BEFORE the implementation. `src/intent/sandbox.ts` ships as a contract stub whose
- * functions throw 'not implemented', so every test here is RED. That is the intended,
- * correct state: this is a "Tests (write first)" task — the suite goes green when a Phase 3
- * sandboxing implementation task lands. Do not implement the sandbox to make these pass.
+ * Written test-first; `src/intent/sandbox.ts` now implements the boundary-policy core, so
+ * the suite is green.
  *
  * Scope note: the system-level enforcement (creating/removing the git worktree, injecting
  * scoped credentials, blocking egress at the network layer) and the §11 items "one project
@@ -97,6 +95,17 @@ describe('sandbox — write boundary (test-plan §11)', () => {
   it('does not let one run write into another run\'s worktree', () => {
     const relayPath = '/tmp/jarvis-worktrees/relay/01-relay-core/src/index.ts';
     expect(isWriteAllowed(relayPath, sandbox())).toBe(false);
+  });
+
+  it('allows a write at the worktree root itself', () => {
+    expect(isWriteAllowed('/tmp/jarvis-worktrees/aura/02-growth', sandbox())).toBe(true);
+  });
+
+  it('throws when the sandbox worktree is not an absolute path', () => {
+    // A relative worktree would silently anchor to the process cwd — reject it loudly.
+    expect(() => isWriteAllowed('/x/y', sandbox({ worktree: 'relative/worktree' }))).toThrow(
+      /absolute/i,
+    );
   });
 });
 

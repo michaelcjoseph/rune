@@ -10,15 +10,16 @@
  * blocking egress at the network layer) is integration that builds on these checks; what is
  * pinned here is the boundary logic, including path-traversal defense on the write check.
  *
- * STATUS: partially implemented. `worktreePathFor`, `isEgressAllowed`, and
- * `canReachCredential` are implemented. `isWriteAllowed` remains a contract stub, filled in
- * by the final Phase 3 Layer-4 task; its tests in `sandbox.test.ts` (test-plan.md §11)
- * stay RED until then.
+ * STATUS: implemented. All four policy checks — `worktreePathFor`, `isWriteAllowed`,
+ * `isEgressAllowed`, `canReachCredential` — are live; the contract is pinned by the test
+ * suite in `sandbox.test.ts` (test-plan.md §11). Prompt-injection defense is structural:
+ * these checks are enforced around the agent, not by it, so an injected agent cannot talk
+ * its way past the write boundary, the egress allowlist, or credential scoping.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 4"), test-plan.md (§11)}.
  */
 
-import { join } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 
 /** The sandbox a single Regime B run executes inside. */
 export interface SandboxSpec {
@@ -32,9 +33,6 @@ export interface SandboxSpec {
   /** Hosts the run may make network egress to; anything else is denied. */
   egressAllowlist: string[];
 }
-
-const NOT_IMPLEMENTED =
-  'sandbox: not implemented — a Phase 3 sandboxing task (docs/projects/08-intent-layer) fills this in';
 
 /**
  * A valid product/project slug — non-empty, lowercase alphanumeric-or-hyphen with an
@@ -73,11 +71,28 @@ export function worktreePathFor(
 
 /**
  * Whether `targetPath` may be written by the run — true only when it resolves to a location
- * inside `sandbox.worktree`. Resolves the path first, so `..` traversal that escapes the
- * worktree is denied; a vault path, another run's worktree, or any path outside is denied.
+ * inside `sandbox.worktree`. Both paths are resolved to absolute, normalized form first, so
+ * `..` traversal that escapes the worktree collapses away and is denied. The containment
+ * check requires either an exact match or a `worktree + separator` prefix, so a sibling
+ * that merely shares the worktree name (`…/02-growth-evil`) does not pass. A vault path,
+ * another run's worktree, or any path outside the worktree is denied — Regime B writes only
+ * within its own worktree, never the vault.
+ *
+ * This is a **lexical** containment check: it collapses `..` but does not dereference
+ * symlinks. The system-level enforcement layer must pass a real (symlink-resolved) path, or
+ * keep the worktree free of symlinks, so a symlink inside the worktree cannot redirect a
+ * write out of it. `sandbox.worktree` must be an absolute path — `isWriteAllowed` throws
+ * otherwise rather than silently anchoring a relative worktree to the process cwd.
  */
-export function isWriteAllowed(_targetPath: string, _sandbox: SandboxSpec): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+export function isWriteAllowed(targetPath: string, sandbox: SandboxSpec): boolean {
+  if (!isAbsolute(sandbox.worktree)) {
+    throw new Error(
+      `isWriteAllowed: sandbox.worktree must be an absolute path — got '${sandbox.worktree}'`,
+    );
+  }
+  const root = resolve(sandbox.worktree);
+  const target = resolve(targetPath);
+  return target === root || target.startsWith(root + sep);
 }
 
 /**
