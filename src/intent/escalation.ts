@@ -17,13 +17,17 @@
  * The specific rules are deliberately left to fill in over time; what is pinned here is the
  * mechanism — escalation is policy-driven, deterministic, and auditable, never ad hoc.
  *
- * STATUS: partially implemented. `parseEscalationPolicy` validates the declarative policy
- * file (`policies/escalation-policy.json`). `decide` and `decideFailClosed` remain contract
- * stubs, filled in by the Phase 1 escalation decision-module task; their tests in
- * `escalation.test.ts` (test-plan.md §6) stay RED until then.
+ * STATUS: implemented. `parseEscalationPolicy` validates the declarative policy file
+ * (`policies/escalation-policy.json`); `decide` is the deterministic decision module and
+ * `decideFailClosed` the fail-closed entry point. The contract is pinned by the test suite
+ * in `escalation.test.ts` (test-plan.md §6).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Escalation policy"), test-plan.md (§6)}.
  */
+
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('escalation');
 
 /** The blocked-on-Michael state (Layer 3) vs. proceeding unattended. */
 export type EscalationVerdict = 'escalate' | 'proceed';
@@ -110,9 +114,6 @@ export interface EscalationDecision {
   failClosed?: boolean;
 }
 
-const NOT_IMPLEMENTED =
-  'escalation: not implemented — Phase 1 escalation-policy tasks (docs/projects/08-intent-layer) fill this in';
-
 /** The four escalation conditions the policy understands. */
 const ESCALATION_CONDITIONS = new Set<EscalationCondition>([
   'high-risk-change-class',
@@ -152,7 +153,16 @@ function parseEscalationRule(value: unknown, index: number): EscalationRule {
           'a non-empty pathPatterns string array',
       );
     }
-    rule.pathPatterns = patterns as string[];
+    const pathPatterns = patterns as string[];
+    // Reject 3+ consecutive `*`: only `*` and `**` are meaningful glob tokens, and a longer
+    // run compiles to catastrophic-backtracking `.*.*` adjacency. Fail fast at parse time.
+    if (pathPatterns.some((p) => p.includes('***'))) {
+      throw new Error(
+        `escalation policy is invalid — rules[${index}] (high-risk-change-class) has a ` +
+          "pathPatterns glob with 3+ consecutive '*' (only '*' and '**' are valid)",
+      );
+    }
+    rule.pathPatterns = pathPatterns;
   }
 
   // A run-exceeded-bounds rule needs the Evaluator-round cap it compares against. A cap of
@@ -204,6 +214,70 @@ export function parseEscalationPolicy(raw: string): EscalationPolicy {
   return { version, rules };
 }
 
+/** Compiled glob RegExps, memoized by glob string — patterns recur across decide() calls. */
+const globRegExpCache = new Map<string, RegExp>();
+
+/**
+ * Compile a `pathPatterns` glob to an anchored RegExp. `**` matches any characters
+ * including `/` (and `**​/` also matches zero path segments); `*` matches any characters
+ * except `/`; every other regex metacharacter is escaped literally. Globs are validated at
+ * parse time (no run of 3+ `*`), so the compiled regex carries no catastrophic-backtracking
+ * `.*.*` adjacency.
+ */
+function globToRegExp(glob: string): RegExp {
+  const cached = globRegExpCache.get(glob);
+  if (cached) return cached;
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === '*' && glob[i + 1] === '*') {
+      // `i += N` plus the loop header's `i++` together consume the whole token.
+      if (glob[i + 2] === '/') {
+        re += '(?:.*/)?'; // `**​/` — zero or more leading path segments
+        i += 2; // consume the second `*` and the `/`
+      } else {
+        re += '.*'; // `**` — any characters, including `/`
+        i += 1; // consume the second `*`
+      }
+    } else if (c === '*') {
+      re += '[^/]*'; // `*` — any characters except `/`
+    } else if ('.+?^${}()|[]\\'.includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  const compiled = new RegExp(`^${re}$`);
+  globRegExpCache.set(glob, compiled);
+  return compiled;
+}
+
+/** Whether a single rule fires for a change — the per-condition match logic. */
+function ruleMatches(rule: EscalationRule, change: ChangeContext): boolean {
+  switch (rule.condition) {
+    case 'high-risk-change-class': {
+      const patterns = rule.pathPatterns ?? [];
+      return (change.changedPaths ?? []).some((path) =>
+        patterns.some((pattern) => globToRegExp(pattern).test(path)),
+      );
+    }
+    case 'unresolvable-cross-model-review':
+      return change.crossModelReview === 'unresolved';
+    case 'run-exceeded-bounds':
+      return (
+        rule.maxEvaluatorRounds !== undefined &&
+        change.evaluatorRounds !== undefined &&
+        change.evaluatorRounds > rule.maxEvaluatorRounds
+      );
+    case 'consequential-self-generated-spec':
+      return change.specOrigin === 'self-generated' && change.specConsequence === 'consequential';
+    default: {
+      const exhaustive: never = rule.condition;
+      throw new Error(`escalation: unhandled condition ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
 /**
  * Deterministically decide escalate/proceed for a change — no LLM call, no I/O, pure over
  * `(change, policy)`. Every rule in the policy is evaluated against the change; the verdict
@@ -212,8 +286,25 @@ export function parseEscalationPolicy(raw: string): EscalationPolicy {
  * regardless. Every decision is logged; an escalation is logged with the firing rule's id
  * and condition so it is auditable.
  */
-export function decide(_change: ChangeContext, _policy: EscalationPolicy): EscalationDecision {
-  throw new Error(NOT_IMPLEMENTED);
+export function decide(change: ChangeContext, policy: EscalationPolicy): EscalationDecision {
+  for (const rule of policy.rules) {
+    if (ruleMatches(rule, change)) {
+      const decision: EscalationDecision = {
+        verdict: 'escalate',
+        condition: rule.condition,
+        ruleId: rule.id,
+        reason: `escalation rule '${rule.id}' fired (${rule.condition}) — escalated for human review`,
+      };
+      log.warn('escalation decision', { ...decision });
+      return decision;
+    }
+  }
+  const decision: EscalationDecision = {
+    verdict: 'proceed',
+    reason: 'no escalation rule matched — proceeding unattended',
+  };
+  log.info('escalation decision', { ...decision });
+  return decision;
 }
 
 /**
@@ -224,8 +315,23 @@ export function decide(_change: ChangeContext, _policy: EscalationPolicy): Escal
  * valid policy this delegates to {@link decide}.
  */
 export function decideFailClosed(
-  _change: ChangeContext,
-  _rawPolicy: string | null,
+  change: ChangeContext,
+  rawPolicy: string | null,
 ): EscalationDecision {
-  throw new Error(NOT_IMPLEMENTED);
+  let policy: EscalationPolicy;
+  try {
+    if (rawPolicy === null) throw new Error('policy file is missing');
+    policy = parseEscalationPolicy(rawPolicy);
+  } catch (err) {
+    // Fail closed: a missing or malformed policy escalates — it never falls open to a
+    // permissive proceed/auto-merge.
+    const decision: EscalationDecision = {
+      verdict: 'escalate',
+      reason: `escalation policy unavailable — failing closed, escalated for human review (${(err as Error).message})`,
+      failClosed: true,
+    };
+    log.error('escalation decision (fail-closed)', { ...decision });
+    return decision;
+  }
+  return decide(change, policy);
 }

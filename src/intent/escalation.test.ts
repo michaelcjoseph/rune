@@ -13,8 +13,11 @@ import { fileURLToPath } from 'node:url';
  */
 
 // --- Mocks (must precede the module import) ---
-// Every escalation decision is logged for auditability; the implementation imports createLogger.
-const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+// Every escalation decision is logged for auditability; escalation.ts imports createLogger
+// at module load. vi.hoisted so mockLog exists before that module-load createLogger() call.
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
 
 import {
