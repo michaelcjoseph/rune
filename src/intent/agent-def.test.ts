@@ -123,6 +123,9 @@ describe('model-agnostic agent definitions — Claude compiler (test-plan §4)',
 });
 
 describe('model-agnostic agent definitions — deferred targets (test-plan §4)', () => {
+  // NOTE: when the Phase 4 Layer-5 task implements `compileToCodex`, drop the `compileToCodex`
+  // assertion below (keep `compileToGemini` — Gemini stays deferred). `dispatch.test.ts`
+  // (test-plan §13) pins `compileToCodex`'s implemented behavior.
   it('the Codex and Gemini compiler targets are deferred to Phase 4', () => {
     expect(() => compileToCodex(neutralDef())).toThrow(/deferred|phase 4/i);
     expect(() => compileToGemini(neutralDef())).toThrow(/deferred|phase 4/i);

@@ -137,7 +137,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **multi-model dispatch (Layer 5)** — test-plan.md §13.
+- [x] Write the test suite for **multi-model dispatch (Layer 5)** — test-plan.md §13.
 - [ ] Write the test suite for **cross-model adjudication (Layer 2 upgrade)** — test-plan.md §14.
 - [ ] Write the test suite for the **concurrency scheduler** — test-plan.md §15.
 - [ ] Confirm red before implementation.
