@@ -106,6 +106,12 @@ const config = {
     return join(this.LOGS_DIR, 'registry.json');
   },
 
+  /** Declarative model selection policy (project 08). A committed repo file, not
+   *  runtime state, so it lives under `policies/` rather than `LOGS_DIR`. */
+  get MODEL_POLICY_FILE() {
+    return join(PROJECT_ROOT, 'policies', 'model-policy.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

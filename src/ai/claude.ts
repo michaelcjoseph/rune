@@ -13,6 +13,9 @@ import { getDateContext } from '../utils/time.js';
 // context/ layer to break the cycle.
 import { buildLearningsPrompt } from '../vault/learnings.js';
 import { buildVoicePromptSection } from '../vault/voice.js';
+// ai/ → intent/: runAgent resolves its model through the model selection policy.
+// model-policy.ts is a leaf (node:fs + logger only) — no import cycle.
+import { resolveModel, loadModelPolicy } from '../intent/model-policy.js';
 import type { NotificationBus, OpKind } from '../transport/notification-bus.js';
 import { registerOp, unregisterOp, isCancelled, setOpDetail } from '../transport/in-flight.js';
 import { formatToolUse } from './tool-labels.js';
@@ -579,6 +582,20 @@ function parseYamlListField(frontmatter: string, key: string): string[] {
 /** Prefix used on runAgent error messages when the agent file cannot be loaded. */
 export const AGENT_NOT_FOUND_PREFIX = 'Agent not found:';
 
+/** Resolve the model for an agent run through the model selection policy (project 08).
+ *  The agent's frontmatter `model:` is mapped onto the policy's explicit-pin precedence.
+ *  When no policy file is present the resolver is skipped and the pre-policy default
+ *  applies (`def.model ?? config.AGENT_MODEL`), so a missing policy never breaks a run; a
+ *  present-but-malformed policy throws and the caller surfaces it as a run error. */
+function resolveAgentModel(agentName: string, def: AgentDef): string {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  if (!policy) return def.model ?? config.AGENT_MODEL;
+  // capabilities: [] for now — agents do not yet declare capability tags in frontmatter
+  // (the capability-tag vocabulary is a spec open question). Resolution therefore runs on
+  // pin → role-default → global-fallback, which preserves every current agent's model.
+  return resolveModel({ role: agentName, capabilities: [], pin: def.model }, policy).model;
+}
+
 /** Run a named agent (defined in .claude/agents/). Set `userVisible: false`
  *  for background callers (nightly, cron, scheduled jobs) so they don't send
  *  tracker messages while the user is asleep. Pass `voice: true` for agents
@@ -598,6 +615,16 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     log.error(message, { agentName });
     return { text: null, error: message };
   }
+  let model: string;
+  try {
+    model = resolveAgentModel(agentName, def);
+  } catch (err) {
+    // A malformed model policy fails loudly as a run error rather than silently
+    // defaulting — see resolveAgentModel / the model selection policy (project 08).
+    const message = `Failed to resolve model for agent ${agentName}: ${(err as Error).message}`;
+    log.error(message, { agentName });
+    return { text: null, error: message };
+  }
   const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
   // Both builders go through readVaultFile, which swallows read errors and
   // returns null — they each return '' on missing/empty. No try/catch needed.
@@ -612,7 +639,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     '--agents', agentsJson,
     '-p', `${learningsBlock}${voiceBlock}${dateCtx}${config.WORKSPACE_DIR ? `\nWorkspace directory (read-only): ${config.WORKSPACE_DIR}` : ''}\n\n${prompt}`,
     '--no-session-persistence',
-    '--model', def.model ?? config.AGENT_MODEL,
+    '--model', model,
   ];
   // Only restrict tools if the agent frontmatter declares them. Vault agents
   // (authored for standalone Claude Code use) may omit `tools:`, in which case
@@ -620,7 +647,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   if (def.tools.length > 0) {
     args.push('--allowedTools', ...def.tools);
   }
-  log.info(`Running agent: ${agentName}`, { model: def.model ?? config.AGENT_MODEL });
+  log.info(`Running agent: ${agentName}`, { model });
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const t0 = Date.now();

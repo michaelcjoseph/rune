@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /*
@@ -23,6 +22,7 @@ vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
 import {
   parsePolicy,
   resolveModel,
+  loadModelPolicy,
   type ModelPolicy,
 } from './model-policy.js';
 
@@ -203,17 +203,24 @@ describe('model selection policy — integration with runAgent (test-plan §5)',
   });
 });
 
-describe('model selection policy — the shipped policy file (test-plan §5)', () => {
-  it('the shipped policies/model-policy.json parses cleanly and registers the current models', () => {
+describe('model selection policy — loadModelPolicy and the shipped file (test-plan §5)', () => {
+  it('loadModelPolicy reads and validates the shipped policies/model-policy.json', () => {
     // Regression guard: a future hand-edit that breaks the policy file fails here, not at
     // runtime. The file is resolved relative to this test, not the cwd.
     const policyPath = fileURLToPath(new URL('../../policies/model-policy.json', import.meta.url));
-    const policy = parsePolicy(readFileSync(policyPath, 'utf8'));
-    const aliases = policy.models.map((m) => m.alias);
+    const policy = loadModelPolicy(policyPath);
+    expect(policy).not.toBeNull();
+    const aliases = policy!.models.map((m) => m.alias);
     expect(aliases).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku']));
     // The global fallback is `opus` — it preserves today's config.AGENT_MODEL default —
     // and must itself be a registered model.
-    expect(policy.globalFallback).toBe('opus');
-    expect(aliases).toContain(policy.globalFallback);
+    expect(policy!.globalFallback).toBe('opus');
+    expect(aliases).toContain(policy!.globalFallback);
+  });
+
+  it('loadModelPolicy returns null when the policy file is absent', () => {
+    // A missing policy file is tolerated — callers fall back to pre-policy behavior — so
+    // loadModelPolicy returns null rather than throwing.
+    expect(loadModelPolicy('/tmp/jarvis-nonexistent-model-policy.json')).toBeNull();
   });
 });

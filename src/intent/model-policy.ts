@@ -18,6 +18,7 @@
  * See docs/projects/08-intent-layer/{spec.md (§"Model selection policy"), test-plan.md (§5)}.
  */
 
+import { readFileSync } from 'node:fs';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('model-policy');
@@ -185,6 +186,40 @@ export function parsePolicy(raw: string): ModelPolicy {
   }
 
   return { models, globalFallback, roleDefaults, evaluatorDistinctFromGenerator };
+}
+
+/** Validated model policies by path. A cached `null` means a known-absent file;
+ *  `undefined` (a Map miss) means not yet looked up — hence the `!== undefined` check.
+ *  A malformed file is never cached: `parsePolicy` throws before the `set`. */
+const policyCache = new Map<string, ModelPolicy | null>();
+
+/**
+ * Load and validate the declarative model policy from `policyPath`. Returns `null` when
+ * the file is absent — callers fall back to pre-policy behavior rather than failing. A
+ * present-but-malformed file throws (via {@link parsePolicy}): a broken policy fails fast
+ * and loudly, it is never silently treated as a permissive default. The path is injected
+ * by the caller so this module stays free of config and the cwd. The result is cached per
+ * path; the startup load warms the cache so per-`runAgent` resolution does not re-read.
+ */
+export function loadModelPolicy(policyPath: string): ModelPolicy | null {
+  const cached = policyCache.get(policyPath);
+  if (cached !== undefined) return cached;
+  let raw: string;
+  try {
+    raw = readFileSync(policyPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      policyCache.set(policyPath, null);
+      return null;
+    }
+    // Pathless on purpose — this message can reach the user via a runAgent error result.
+    throw new Error(
+      `model policy file is unreadable (${(err as NodeJS.ErrnoException).code ?? 'I/O error'})`,
+    );
+  }
+  const policy = parsePolicy(raw);
+  policyCache.set(policyPath, policy);
+  return policy;
 }
 
 /**

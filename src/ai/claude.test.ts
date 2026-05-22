@@ -10,6 +10,7 @@ vi.mock('../config.js', () => ({
     AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
     CLAUDE_STREAM_LOG: '/tmp/test-logs/claude-stream.jsonl',
+    MODEL_POLICY_FILE: '/tmp/test-project/policies/model-policy.json',
   },
   PROJECT_ROOT: '/tmp/test-project',
 }));
@@ -33,12 +34,36 @@ tools:
 
 You are the wiki compiler for a personal knowledge base.`;
 
+// An agent with no `model:` frontmatter — its model comes from the policy.
+const PLAIN_AGENT_FILE = `---
+name: plain-agent
+tools:
+  - Read
+---
+
+You are a plain agent with no pinned model.`;
+
+// A model policy whose roleDefaults route `plain-agent` to haiku — proving runAgent
+// resolves through the policy (a role default is impossible without the wiring).
+const MOCK_MODEL_POLICY = JSON.stringify({
+  models: [
+    { alias: 'opus', provider: 'anthropic', format: 'claude', capabilities: ['coding'], costTier: 'high', status: 'preferred' },
+    { alias: 'sonnet', provider: 'anthropic', format: 'claude', capabilities: ['coding'], costTier: 'medium', status: 'active' },
+    { alias: 'haiku', provider: 'anthropic', format: 'claude', capabilities: ['coding'], costTier: 'low', status: 'active' },
+  ],
+  globalFallback: 'opus',
+  roleDefaults: { 'plain-agent': 'haiku' },
+  evaluatorDistinctFromGenerator: false,
+});
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
     existsSync: vi.fn(() => false),
     readFileSync: vi.fn((path: string) => {
+      if (typeof path === 'string' && path.includes('model-policy.json')) return MOCK_MODEL_POLICY;
+      if (typeof path === 'string' && path.includes('.claude/agents/plain-agent.md')) return PLAIN_AGENT_FILE;
       if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
       throw new Error(`ENOENT: ${path}`);
     }),
@@ -576,6 +601,24 @@ Body.`);
       expect(result.text).toBe('agent result');
     });
 
+    it('passes the frontmatter model: as an explicit pin through the policy resolver', async () => {
+      // wiki-compiler pins `model: sonnet`; the resolver honors it as an explicit pin.
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
+      await runAgent('wiki-compiler', 'do stuff');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args[args.indexOf('--model') + 1]).toBe('sonnet');
+    });
+
+    it('resolves an unpinned agent through the model policy (role default beats AGENT_MODEL)', async () => {
+      // plain-agent has no `model:` frontmatter; the policy's roleDefaults routes it to
+      // haiku. Pre-wiring runAgent would have used config.AGENT_MODEL ('opus') — resolving
+      // to haiku proves runAgent now goes through the policy resolver.
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
+      await runAgent('plain-agent', 'do stuff');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args[args.indexOf('--model') + 1]).toBe('haiku');
+    });
+
     it('does NOT use --add-dir (which resets cwd)', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
       await runAgent('wiki-compiler', 'ingest something');
@@ -619,6 +662,7 @@ Body.`);
             JSON.stringify({ ts: '2025-02-01T00:00:00.000Z', text: 'cite sources when discussing papers' }),
           ].join('\n') + '\n';
         }
+        if (typeof path === 'string' && path.includes('model-policy.json')) return MOCK_MODEL_POLICY;
         if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
         throw new Error(`ENOENT: ${path}`);
       });
@@ -630,6 +674,7 @@ Body.`);
             JSON.stringify({ ts: '2025-02-01T00:00:00.000Z', text: 'cite sources when discussing papers' }),
           ].join('\n') + '\n';
         }
+        if (typeof path === 'string' && path.includes('model-policy.json')) return MOCK_MODEL_POLICY;
         if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
         throw new Error(`ENOENT: ${path}`);
       });

@@ -13,6 +13,7 @@ import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { getSkillRegistry } from './bot/skill-registry.js';
+import { loadModelPolicy } from './intent/model-policy.js';
 import { createLogger, flushLogger } from './utils/logger.js';
 import { NotificationBus } from './transport/notification-bus.js';
 import { createSenders } from './transport/sender.js';
@@ -27,6 +28,12 @@ mkdirSync(config.LOGS_DIR, { recursive: true });
 // check a missing file would surface as per-call CLI errors across chat,
 // agents, and cron.
 assertProjectMcpConfig();
+
+// Fail fast on a malformed model selection policy — runAgent() resolves every agent's
+// model through it, so a present-but-broken file crashes the boot here rather than
+// surfacing per agent run. Also warms the policy cache. A missing file is tolerated
+// (pre-policy fallback).
+loadModelPolicy(config.MODEL_POLICY_FILE);
 
 // Ensure knowledge base structure exists
 initKB();

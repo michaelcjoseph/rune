@@ -14,6 +14,9 @@ vi.mock('../config.js', () => ({
     AGENT_MODEL: 'opus',
     TIMEZONE: 'America/Chicago',
     WORKSPACE_DIR: '/home/user/workspace',
+    CLAUDE_STREAM_LOG: '/tmp/test-logs/claude-stream.jsonl',
+    // Points to a nonexistent path so loadModelPolicy returns null → pre-policy fallback.
+    MODEL_POLICY_FILE: '/tmp/jarvis-nonexistent-model-policy.json',
   },
   PROJECT_ROOT: '/tmp/test-project',
 }));
@@ -40,7 +43,10 @@ vi.mock('node:fs', async () => {
     existsSync: vi.fn(() => false),
     readFileSync: vi.fn((path: string) => {
       if (typeof path === 'string' && path.includes('.claude/agents/')) return MOCK_AGENT_FILE;
-      throw new Error(`ENOENT: ${path}`);
+      // Throw a proper ENOENT so loadModelPolicy sees code==='ENOENT' and returns null.
+      const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
     }),
   };
 });
