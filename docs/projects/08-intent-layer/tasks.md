@@ -91,7 +91,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` and `docs/projects/index.md`.
+- [x] Update `CLAUDE.md` and `docs/projects/index.md`.
 
 ## Phase 3 — Deliberative intent layer and v1 wedge core
 

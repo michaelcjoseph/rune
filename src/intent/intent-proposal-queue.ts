@@ -1,7 +1,7 @@
 /**
  * Journal-to-intent proposal queue — persists the proposals produced by the journal-to-
  * intent flow (`planJournalIntent`) so they surface for approval (test-plan §8). Pending
- * entries show in the cockpit's Pending Approvals panel (via the state snapshot) and in the
+ * entries show in the webview's Pending Approvals panel (via the state snapshot) and in the
  * prep context of the next dynamic review (a Telegram conversation).
  *
  * Mirrors `src/jobs/proposal-queue.ts` — the same shape used for Ask-Twice proposals.

@@ -6,7 +6,7 @@ Always-on personal second brain server. TypeScript/Node.js.
 
 Single Node.js process handles everything:
 - **Telegram bot** (polling mode) — chat, commands, content triage, photos
-- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints (`POST /api/mutations`, `POST /api/mutations/:id/cancel`, `POST /api/ops/:id/cancel`), and a WebSocket for real-time messaging
+- **HTTP server** (localhost:3847) — health endpoint, session capture for nightly; webview UI (Phase B) serves a vanilla HTML/JS chat interface at `/` with cookie auth, REST endpoints (`GET /api/cockpit`, `POST /api/mutations`, `POST /api/mutations/:id/cancel`, `POST /api/ops/:id/cancel`), and a WebSocket for real-time messaging; the cockpit sidebar panel polls `GET /api/cockpit` and renders each product's projects with lifecycle status, run-status, and per-project action buttons (start / continue / enter-planning-mode)
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` (`src/transport/in-flight.ts`) and emits `BusOpEvent` frames (start/progress/end). TG shows a tracker message ("🤔 agent · 12s · /cancel") that edits every ~10s and deletes on end; webview shows a cancellable pill. `cancelOp(id)` SIGTERMs the child. `/cancel [opId-prefix]` kills the user's most recent op (or by id). Classifier ops are filtered from senders to avoid resolver spam.
 - **Mutation pipeline** — `src/transport/mutations.ts` is the central registry for autonomous codebase operations (MutationDescriptor, applier registry, createMutation/cancelMutation). `workRunApplier` in `src/jobs/work-runner.ts` is the first applier: spawns Claude CLI with `spec.md + tasks.md + /work --auto` for a project slug. Mutations are logged append-only to `logs/mutations.jsonl`; orphaned `running` entries are flipped to `failed` at startup via `reconcileOrphans()`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges
@@ -70,7 +70,7 @@ src/
 ├── reviews/
 │   ├── session.ts           # ReviewSession type, persistence, lifecycle management
 │   ├── orchestrator.ts      # Review flow orchestrator: start, route messages, handler registry
-│   ├── interview.ts         # Interactive interview phase for review sessions
+│   ├── interview.ts         # Interactive interview phase for review sessions; review prep surfaces pending playbook drafts, Ask-Twice proposals, and journal-to-intent proposals for approval
 │   ├── worldview-drift.ts   # Detect world-view changelog entries affecting active projects
 │   ├── kb-activity.ts       # Scan knowledge/log.md INGEST entries → structured digest for review prep
 │   ├── daily.ts             # Daily review handler
@@ -83,11 +83,11 @@ src/
 ├── server/
 │   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
 │   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
-│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, POST /api/mutations, POST /api/mutations/:id/cancel, POST /api/ops/:id/cancel, WS /api/ws
+│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, GET /api/cockpit, POST /api/mutations, POST /api/mutations/:id/cancel, POST /api/ops/:id/cancel, WS /api/ws
 │   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
 │   ├── projects-snapshot.ts # getProjectSummaries(): reads docs/projects/index.md + tasks.md per project; returns ProjectSummary[] with slug, status, task progress (done/total/perPhase), specPath, lastModified
-│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal counts, project summaries, active+recent mutations, in-flight Claude ops; used by GET /api/state
-│   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS)
+│   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal/intent counts (pendingApprovals.intent), project summaries, active+recent mutations, in-flight Claude ops; used by GET /api/state
+│   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS); includes cockpit sidebar panel that polls GET /api/cockpit and renders products/projects with lifecycle status, run-status, and per-project action buttons
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue
 │   ├── init.ts              # KB directory scaffolding and schema initialization
@@ -118,6 +118,9 @@ src/
 │   ├── registry.ts          # Product/project registry: buildRegistry, readRegistry/writeRegistry, getAllProjects; aggregating index (product → projects → lifecycle-status); buildRegistry takes pre-scanned RegistrySources (the caller scans repos + vault product files); persists to logs/registry.json (config.REGISTRY_FILE)
 │   ├── registration.ts      # Product registration: planRegistration, planReconciliation, applyRegistration; propose-and-approve flow — planning is pure and never writes; applyRegistration drives effects via injected RegistrationEffects interface
 │   ├── overlay.ts           # Product-overlay index: buildOverlayManifest, scopedRetrieval, findStalePointers; per-product pointer manifest into the type-organized vault — never re-orgs the vault, only points into it
+│   ├── cockpit.ts           # buildCockpitView(registry, runStatus): pure projection of registry + supervision run-status into CockpitView (CockpitProduct/CockpitProject with lifecycleStatus + runStatus + actions); null registry yields available:false; served by GET /api/cockpit
+│   ├── journal-intent.ts    # planJournalIntent(input): deterministic journal-to-intent planner; routes JournalNote + RoadmapCandidate into IntentProposal discriminated union (vault-intake / roadmap / register-product / disambiguation); pure — never writes; the propose half of propose-and-approve
+│   ├── intent-proposal-queue.ts # Journal-to-intent proposal queue: QueuedIntentProposal CRUD over logs/intent-proposal-queue.json (config.INTENT_PROPOSAL_QUEUE_FILE); readIntentProposalQueue, appendIntentProposals, getPendingIntentProposals, clearApprovedIntentProposals; mirrors src/jobs/proposal-queue.ts
 │   ├── agent-def.ts         # Model-agnostic agent definitions: NeutralAgentDef, parseClaudeAgent, compileToClaude; Codex/Gemini compilers deferred to Phase 4; model key is dropped from the neutral format — which model runs is the policy's decision
 │   ├── model-policy.ts      # Model selection policy: parsePolicy, loadModelPolicy, resolveModel; deterministic resolver (pin → role-default → global-fallback); policy loaded from policies/model-policy.json (config.MODEL_POLICY_FILE); cached per path — startup load warms cache
 │   └── escalation.ts        # Escalation policy: parseEscalationPolicy, decide, decideFailClosed; deterministic (no LLM); fail-closed — a missing or malformed policy escalates rather than falls open to auto-proceed
@@ -277,7 +280,7 @@ Optional:
 - `WORK_RUN_PER_PROJECT_CAP` — max concurrent `work-run` mutations per project slug (default `1`, min `1`)
 - `WORK_RUN_GLOBAL_CAP` — max concurrent `work-run` mutations across all projects (default `2`, min `1`)
 
-`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`. `logs/mutations.jsonl` is a rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`. `logs/registry.json` is the intent-layer product/project registry, exposed via `config.REGISTRY_FILE`; it is always rebuildable (not source of truth). `policies/model-policy.json` is the declarative model selection policy, exposed via `config.MODEL_POLICY_FILE`; it is committed config (not runtime state) and lives under `policies/` rather than `LOGS_DIR`.
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`. `logs/mutations.jsonl` is a rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`. `logs/registry.json` is the intent-layer product/project registry, exposed via `config.REGISTRY_FILE`; it is always rebuildable (not source of truth). `logs/intent-proposal-queue.json` is the journal-to-intent proposal queue (project 08), exposed via `config.INTENT_PROPOSAL_QUEUE_FILE`; pending entries surface in the webview's Pending Approvals panel and in review prep. The post-approval actioning path (synthesize the note into the vault file / carry the roadmap item into the repo) is a later task — until it lands, approved proposals are not actioned automatically. `policies/model-policy.json` is the declarative model selection policy, exposed via `config.MODEL_POLICY_FILE`; it is committed config (not runtime state) and lives under `policies/` rather than `LOGS_DIR`.
 
 ## Agents
 
