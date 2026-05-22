@@ -17,6 +17,7 @@ import {
   approvePlan,
   abandonPlan,
   isScaffoldReady,
+  buildSetupWriterBrief,
   type SpecArtifact,
   type PlanningSurface,
 } from './planner.js';
@@ -76,6 +77,30 @@ describe('Planner — the spec artifact (test-plan §9)', () => {
     const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
     // The approved session carries exactly the proposed artifact — spec, tasks, test-plan.
     expect(approved.artifact).toEqual(sampleArtifact());
+  });
+});
+
+describe('Planner — scaffolding the approved plan (test-plan §9)', () => {
+  it('builds a project-setup-writer brief carrying all three artifact parts', () => {
+    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+    const brief = buildSetupWriterBrief(approved);
+    const art = sampleArtifact();
+    expect(brief).toContain(art.title);
+    expect(brief).toContain(art.product);
+    expect(brief).toContain(art.spec); // → spec.md
+    expect(brief).toContain(art.tasks); // → tasks.md
+    expect(brief).toContain(art.testPlan); // → test-plan.md
+  });
+
+  it('carries the per-phase Tests (write first) block into the brief', () => {
+    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+    expect(buildSetupWriterBrief(approved)).toContain('Tests (write first)');
+  });
+
+  it('refuses to build a scaffold brief before the plan is approved', () => {
+    // Nothing is scaffolded before approval.
+    const proposed = proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact());
+    expect(() => buildSetupWriterBrief(proposed)).toThrow(/approv|scaffold/i);
   });
 });
 

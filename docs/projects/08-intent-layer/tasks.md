@@ -108,7 +108,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 1 — Planner
 
 - [x] Build the idea-to-spec conversation: asks questions, surfaces assumptions, scopes, produces a spec artifact that is approved before anything is dispatched. Works on chat and in the cockpit's planning mode.
-- [ ] Wire the approved artifact into `project-setup-writer` so it scaffolds `spec.md` / `tasks.md` / `test-plan.md`, with the per-phase Tests block baked into the generated `tasks.md`.
+- [x] Wire the approved artifact into `project-setup-writer` so it scaffolds `spec.md` / `tasks.md` / `test-plan.md`, with the per-phase Tests block baked into the generated `tasks.md`.
 
 ### Layer 3 — Supervision
 

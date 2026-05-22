@@ -115,3 +115,34 @@ export function abandonPlan(session: PlanningSession): PlanningSession {
 export function isScaffoldReady(session: PlanningSession): boolean {
   return session.status === 'approved';
 }
+
+/**
+ * Build the project brief that the `project-setup-writer` agent consumes to scaffold
+ * `spec.md`, `tasks.md`, and `test-plan.md` for the approved plan — the wiring from an
+ * approved planning session to project scaffolding. The brief carries the artifact's spec,
+ * tasks (with its per-phase Tests blocks intact), and test plan. Throws unless the session
+ * is scaffold-ready (approved): nothing is scaffolded before approval.
+ */
+export function buildSetupWriterBrief(session: PlanningSession): string {
+  const { artifact } = session;
+  if (!isScaffoldReady(session) || artifact === undefined) {
+    throw new Error(
+      `buildSetupWriterBrief: the plan is not approved — nothing is scaffolded before ` +
+        `approval (session status is '${session.status}')`,
+    );
+  }
+  return [
+    `# Project Brief: ${artifact.title}`,
+    '',
+    `Product: ${artifact.product}`,
+    '',
+    '## Spec',
+    artifact.spec,
+    '',
+    '## Tasks',
+    artifact.tasks,
+    '',
+    '## Test Plan',
+    artifact.testPlan,
+  ].join('\n');
+}
