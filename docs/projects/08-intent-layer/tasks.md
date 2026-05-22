@@ -28,7 +28,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Write the test suite for the **product-overlay index** — test-plan.md §3.
 - [x] Write the test suite for **model-agnostic agent definitions** — test-plan.md §4.
 - [x] Write the test suite for the **model selection policy** — test-plan.md §5.
-- [ ] Write the test suite for the **escalation policy** — test-plan.md §6.
+- [x] Write the test suite for the **escalation policy** — test-plan.md §6.
 - [x] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Product/project registry
