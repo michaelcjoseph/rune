@@ -150,7 +150,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 2 — cross-model upgrade
 
 - [x] Make the Evaluator resolve to a different-provider model from the Generator for autonomous engine runs (the policy's `evaluator.distinct_from` constraint); cross-model review is mandatory before every merge.
-- [ ] Enable autonomous merge: with the full merge contract (cross-model review plus tests) in place and the escalation policy not flagging the change, the run merges to the product repo's main line itself.
+- [x] Enable autonomous merge: with the full merge contract (cross-model review plus tests) in place and the escalation policy not flagging the change, the run merges to the product repo's main line itself.
 - [ ] Add the `/review --cross-model` opt-in flag for manual reviews; keep manual `/review` single-model by default.
 
 ### Concurrency

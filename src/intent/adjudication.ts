@@ -11,15 +11,17 @@
  * cross-model constraint, and evaluating the merge contract. Running the two model reviews
  * and performing the git merge are the orchestration this builds on.
  *
- * STATUS: partially implemented. `resolveReviewMode` and `isCrossModel` — the review-mode
- * resolver and the cross-model constraint — are live; `evaluateMergeContract` remains a
- * contract stub that the next Phase 4 task fills in. The contract is pinned by the test
- * suite in `adjudication.test.ts` (test-plan.md §14).
+ * STATUS: implemented. `resolveReviewMode`, `isCrossModel`, and `evaluateMergeContract` are
+ * all live; the contract is pinned by the test suite in `adjudication.test.ts` (test-plan
+ * §14). Running the two model reviews and performing the git merge are orchestration that
+ * builds on this core.
  *
  * Implementer note: enabling the cross-model path end-to-end also requires flipping
  * `evaluatorDistinctFromGenerator` to `true` in `policies/model-policy.json` — otherwise the
  * model-selection policy resolves one provider for both Generator and Evaluator and
- * `isCrossModel` would reject every autonomous merge.
+ * `isCrossModel` would reject every autonomous merge. The orchestrator that builds the
+ * `Adjudication` must populate `evaluatorProvider` from the actual executor's reported
+ * provider — never synthesize a value to satisfy the cross-model gate.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 2"), test-plan.md (§14)}.
  */
@@ -48,9 +50,6 @@ export interface Adjudication {
  * caller surfaces — typically escalating to blocked-on-Michael).
  */
 export type MergeOutcome = { merge: true } | { merge: false; reason: string };
-
-const NOT_IMPLEMENTED =
-  'adjudication: not implemented — a Phase 4 Layer-2-upgrade task (docs/projects/08-intent-layer) fills this in';
 
 /**
  * Resolve the review mode. An autonomous engine run is **always** cross-model — cross-model
@@ -82,10 +81,29 @@ export function isCrossModel(adjudication: Adjudication): boolean {
  * unavailable) — the contract is not satisfied and the run holds; it never degrades to a
  * single-model review and merges unreviewed.
  */
-export function evaluateMergeContract(_input: {
+export function evaluateMergeContract(input: {
   adjudication: Adjudication | null;
   testsPass: boolean;
   escalationFlags: boolean;
 }): MergeOutcome {
-  throw new Error(NOT_IMPLEMENTED);
+  // Each gate runs in order; the first failure decides — the run holds with a specific
+  // reason, it never degrades the merge contract to slip through unreviewed.
+  if (input.adjudication === null) {
+    return { merge: false, reason: 'cross-model review unavailable — second provider was down' };
+  }
+  if (!isCrossModel(input.adjudication)) {
+    return { merge: false, reason: 'review was not cross-model — autonomous merge requires distinct providers' };
+  }
+  if (input.adjudication.verdict !== 'pass') {
+    // Fail-closed: anything other than an explicit 'pass' verdict (including an unknown
+    // value from a deserialized payload) blocks the merge.
+    return { merge: false, reason: 'cross-model review verdict was not pass' };
+  }
+  if (!input.testsPass) {
+    return { merge: false, reason: 'the test suite did not pass' };
+  }
+  if (input.escalationFlags) {
+    return { merge: false, reason: 'the escalation policy flagged the change' };
+  }
+  return { merge: true };
 }
