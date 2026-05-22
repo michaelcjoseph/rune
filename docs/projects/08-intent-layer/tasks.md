@@ -33,7 +33,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Product/project registry
 
 - [x] Build the registry data model: the uniform product → projects → lifecycle-status index, rebuildable from product repos + vault product files, holding lifecycle status only (not run-status).
-- [ ] Build the registry read/write module and a query API the cockpit consumes ("every project across every product and its status" in one call).
+- [x] Build the registry read/write module and a query API the cockpit consumes ("every project across every product and its status" in one call).
 
 ### Product registration
 

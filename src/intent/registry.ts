@@ -7,13 +7,13 @@
  * done) only; live **run-status** (running, blocked on Michael) lives in the supervision
  * layer and is surfaced to the cockpit separately.
  *
- * STATUS: partial. `buildRegistry` is implemented; `getAllProjects`, `writeRegistry`, and
- * `readRegistry` remain stubs, filled in by the registry read/write task. The contract is
- * pinned by the test-first suite in `registry.test.ts` (test-plan.md §1).
+ * The contract is pinned by the test-first suite in `registry.test.ts` (test-plan.md §1).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product/project registry"), test-plan.md (§1)}.
  */
 
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -77,9 +77,6 @@ export interface RegistryProjectRef extends RegistryProject {
 /** Absolute path of the persisted registry file. */
 export const REGISTRY_FILE = config.REGISTRY_FILE;
 
-const NOT_IMPLEMENTED =
-  'registry: not implemented — Phase 1 registry tasks (docs/projects/08-intent-layer) fill this in';
-
 /** Normalize an `index.md` Status-column string to a canonical lifecycle status. */
 function parseStatus(raw: string): LifecycleStatus {
   switch (raw.trim().toLowerCase()) {
@@ -131,16 +128,35 @@ export function buildRegistry(sources: RegistrySources): Registry {
  * Flatten the registry into every project across every product — the single-call query
  * the cockpit consumes ("show me every project and its status").
  */
-export function getAllProjects(_registry: Registry): RegistryProjectRef[] {
-  throw new Error(NOT_IMPLEMENTED);
+export function getAllProjects(registry: Registry): RegistryProjectRef[] {
+  return registry.products.flatMap((product) =>
+    product.projects.map((project) => ({ ...project, product: product.name })),
+  );
 }
 
 /**
  * Persist the registry atomically: write a temp file, then rename it over the target, so
  * a concurrent reader never observes a torn write.
  */
-export function writeRegistry(_registry: Registry): void {
-  throw new Error(NOT_IMPLEMENTED);
+export function writeRegistry(registry: Registry): void {
+  mkdirSync(dirname(REGISTRY_FILE), { recursive: true });
+  const tempPath = `${REGISTRY_FILE}.tmp`;
+  writeFileSync(tempPath, JSON.stringify(registry, null, 2), 'utf8');
+  renameSync(tempPath, REGISTRY_FILE);
+}
+
+/** Shape check: a parsed value carries the registry's required fields and product shape. */
+function isRegistryShape(value: unknown): value is Registry {
+  if (typeof value !== 'object' || value === null) return false;
+  const r = value as Record<string, unknown>;
+  if (typeof r['version'] !== 'number' || typeof r['builtAt'] !== 'string' || !Array.isArray(r['products'])) {
+    return false;
+  }
+  return r['products'].every((p) => {
+    if (typeof p !== 'object' || p === null) return false;
+    const product = p as Record<string, unknown>;
+    return typeof product['name'] === 'string' && Array.isArray(product['projects']);
+  });
 }
 
 /**
@@ -148,5 +164,23 @@ export function writeRegistry(_registry: Registry): void {
  * a corrupt registry is never silently treated as an empty model.
  */
 export function readRegistry(): Registry {
-  throw new Error(NOT_IMPLEMENTED);
+  let raw: string;
+  try {
+    raw = readFileSync(REGISTRY_FILE, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`registry not yet built — ${REGISTRY_FILE} does not exist; run the registry builder first`);
+    }
+    throw new Error(`registry file is unreadable — ${REGISTRY_FILE}: ${(err as Error).message}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`registry file is malformed — could not parse ${REGISTRY_FILE}: ${(err as Error).message}`);
+  }
+  if (!isRegistryShape(parsed)) {
+    throw new Error(`registry file is malformed — ${REGISTRY_FILE} does not match the registry schema`);
+  }
+  return parsed;
 }

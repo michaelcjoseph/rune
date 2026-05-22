@@ -23,13 +23,18 @@ vi.mock('../config.js', () => ({
   PROJECT_ROOT: '/test/jarvis',
 }));
 
-const mockWriteFileSync = vi.fn();
-const mockRenameSync = vi.fn();
-const mockReadFileSync = vi.fn();
+// vi.hoisted so the mocks exist before registry.ts's module-load `node:fs` import.
+const { mockWriteFileSync, mockRenameSync, mockReadFileSync, mockMkdirSync } = vi.hoisted(() => ({
+  mockWriteFileSync: vi.fn(),
+  mockRenameSync: vi.fn(),
+  mockReadFileSync: vi.fn(),
+  mockMkdirSync: vi.fn(),
+}));
 vi.mock('node:fs', () => ({
   writeFileSync: mockWriteFileSync,
   renameSync: mockRenameSync,
   readFileSync: mockReadFileSync,
+  mkdirSync: mockMkdirSync,
 }));
 
 import {
