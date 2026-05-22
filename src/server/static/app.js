@@ -576,8 +576,14 @@
     const approvalsEl = document.getElementById('approvals-content');
     const pb = state.pendingApprovals?.playbook ?? 0;
     const pr = state.pendingApprovals?.proposal ?? 0;
-    const total = pb + pr;
-    setText(approvalsEl, total === 0 ? 'None' : `${pb} playbook · ${pr} proposal`, total === 0);
+    const it = state.pendingApprovals?.intent ?? 0;
+    const total = pb + pr + it;
+    const parts = [
+      pb && `${pb} playbook`,
+      pr && `${pr} proposal`,
+      it && `${it} intent`,
+    ].filter(Boolean);
+    setText(approvalsEl, total === 0 ? 'None' : parts.join(' · '), total === 0);
 
     // Recent agent runs panel
     const runsEl = document.getElementById('runs-content');

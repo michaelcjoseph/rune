@@ -112,6 +112,11 @@ const config = {
     return join(PROJECT_ROOT, 'policies', 'model-policy.json');
   },
 
+  /** Journal-to-intent proposal queue (project 08) — runtime state, gitignored. */
+  get INTENT_PROPOSAL_QUEUE_FILE() {
+    return join(this.LOGS_DIR, 'intent-proposal-queue.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

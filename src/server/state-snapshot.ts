@@ -6,6 +6,7 @@ import { getActiveReviewSession } from '../reviews/session.js';
 import { getQueue } from '../kb/queue.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals } from '../jobs/proposal-queue.js';
+import { getPendingIntentProposals } from '../intent/intent-proposal-queue.js';
 import { readRecentMutations } from '../jobs/mutations-log.js';
 import { activeRuns } from '../transport/mutations.js';
 import { listOps } from '../transport/in-flight.js';
@@ -28,7 +29,7 @@ export interface StateSnapshot {
   activeReview: { type: string; phase: string; targetDate: string } | null;
   ingestionQueueDepth: number;
   recentAgentRuns: AgentRunEntry[];
-  pendingApprovals: { playbook: number; proposal: number };
+  pendingApprovals: { playbook: number; proposal: number; intent: number };
   lastMorningPrepAt: string | null;
   lastNightlyAt: string | null;
   projects: ProjectSummary[];
@@ -89,6 +90,10 @@ export function getStateSnapshot(): StateSnapshot {
   try { proposalCount = getPendingProposals().length; }
   catch { warnings.push('proposal-queue: read error'); }
 
+  let intentCount = 0;
+  try { intentCount = getPendingIntentProposals().length; }
+  catch { warnings.push('intent-proposal-queue: read error'); }
+
   const morningTs = schedulerState['morning-prep'] ?? null;
   const nightlyTs = schedulerState['nightly'] ?? null;
 
@@ -113,7 +118,7 @@ export function getStateSnapshot(): StateSnapshot {
       : null,
     ingestionQueueDepth: getQueue().length,
     recentAgentRuns,
-    pendingApprovals: { playbook: playbookCount, proposal: proposalCount },
+    pendingApprovals: { playbook: playbookCount, proposal: proposalCount, intent: intentCount },
     lastMorningPrepAt: morningTs ? new Date(morningTs).toISOString() : null,
     lastNightlyAt: nightlyTs ? new Date(nightlyTs).toISOString() : null,
     projects,

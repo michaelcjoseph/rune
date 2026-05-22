@@ -8,6 +8,7 @@ import { gitCommitAndPush } from '../vault/git.js';
 import { createLogger } from '../utils/logger.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals, clearApprovedProposals } from '../jobs/proposal-queue.js';
+import { getPendingIntentProposals } from '../intent/intent-proposal-queue.js';
 import { PROJECT_ROOT } from '../config.js';
 import { enqueue as enqueueKB } from '../kb/queue.js';
 
@@ -133,6 +134,25 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
             return parts.join('\n');
           }).join('\n\n');
           prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved proposals are actioned after outline approval: the proposal-updater agent creates new files in .claude/agents/ and registers cron frontmatter. Restart Jarvis to pick up any newly-registered crons.*`);
+        }
+
+        // Journal-to-intent proposals surface here for approval. The post-approval
+        // actioning path — marking entries approved, running an apply agent that
+        // synthesizes the note into the vault file / carries the roadmap item into the
+        // repo, and calling clearApprovedIntentProposals() to drain the queue — is a
+        // later task; until it lands, these stay pending and re-surface each review.
+        const intentProposals = getPendingIntentProposals();
+        if (intentProposals.length > 0) {
+          const intentList = intentProposals.map(({ proposal: p }) => {
+            switch (p.kind) {
+              case 'vault-intake': return `- **vault intake → ${p.product}**: ${p.note}`;
+              case 'roadmap': return `- **roadmap → ${p.product}**: ${p.item}`;
+              case 'register-product': return `- **register product → ${p.product}**: ${p.note}`;
+              case 'disambiguation':
+                return `- **disambiguate**: "${p.note}" — could be ${p.candidates.join(' or ')}`;
+            }
+          }).join('\n');
+          prepSections.push(`# Pending Journal-to-Intent Proposals (${intentProposals.length})\n${intentList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved proposals synthesize journal notes into the product's vault file or carry roadmap items into the product repo.*`);
         }
       }
 

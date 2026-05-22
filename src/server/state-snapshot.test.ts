@@ -30,6 +30,12 @@ const mockGetPendingProposals = vi.fn<() => any>(() => []);
 vi.mock('../jobs/proposal-queue.js', () => ({ getPendingProposals: mockGetPendingProposals }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetPendingIntentProposals = vi.fn<() => any>(() => []);
+vi.mock('../intent/intent-proposal-queue.js', () => ({
+  getPendingIntentProposals: mockGetPendingIntentProposals,
+}));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockReadRecentMutations = vi.fn<() => any>(() => []);
 vi.mock('../jobs/mutations-log.js', () => ({
   readRecentMutations: mockReadRecentMutations,
@@ -98,6 +104,7 @@ describe('state-snapshot / getStateSnapshot', () => {
     mockGetQueue.mockReturnValue([]);
     mockGetPendingPlaybookDrafts.mockReturnValue([]);
     mockGetPendingProposals.mockReturnValue([]);
+    mockGetPendingIntentProposals.mockReturnValue([]);
     mockReadRecentMutations.mockReturnValue([]);
     mockGetProjectSummaries.mockReturnValue([]);
     mockListOps.mockReturnValue([]);
@@ -219,15 +226,16 @@ describe('state-snapshot / getStateSnapshot', () => {
     expect(snap.lastNightlyAt).toBe(new Date(1746003600000).toISOString());
   });
 
-  it('returns { playbook: 0, proposal: 0 } when no pending approvals', () => {
-    expect(getStateSnapshot().pendingApprovals).toEqual({ playbook: 0, proposal: 0 });
+  it('returns { playbook: 0, proposal: 0, intent: 0 } when no pending approvals', () => {
+    expect(getStateSnapshot().pendingApprovals).toEqual({ playbook: 0, proposal: 0, intent: 0 });
   });
 
-  it('counts pending playbook drafts and proposals', () => {
+  it('counts pending playbook drafts, proposals, and journal-to-intent proposals', () => {
     mockGetPendingPlaybookDrafts.mockReturnValue([{}, {}]);
     mockGetPendingProposals.mockReturnValue([{}]);
+    mockGetPendingIntentProposals.mockReturnValue([{}, {}, {}]);
     const snap = getStateSnapshot();
-    expect(snap.pendingApprovals).toEqual({ playbook: 2, proposal: 1 });
+    expect(snap.pendingApprovals).toEqual({ playbook: 2, proposal: 1, intent: 3 });
   });
 
   it('includes a warning when getPendingPlaybookDrafts throws', () => {
@@ -242,6 +250,13 @@ describe('state-snapshot / getStateSnapshot', () => {
     const snap = getStateSnapshot();
     expect(snap.pendingApprovals.proposal).toBe(0);
     expect(snap.warnings).toContain('proposal-queue: read error');
+  });
+
+  it('includes a warning when getPendingIntentProposals throws', () => {
+    mockGetPendingIntentProposals.mockImplementation(() => { throw new Error('intent boom'); });
+    const snap = getStateSnapshot();
+    expect(snap.pendingApprovals.intent).toBe(0);
+    expect(snap.warnings).toContain('intent-proposal-queue: read error');
   });
 
   it('returns empty warnings array on a clean run', () => {
