@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §12 — single-model Generator-Evaluator loop, Layer 2
+ * Test suite for test-plan.md §12 — single-model Generator-Evaluator loop, Layer 2
  * (08-intent-layer, Phase 3).
  *
- * Written BEFORE the implementation. `src/intent/gen-eval-loop.ts` ships as a contract stub
- * whose functions throw 'not implemented', so every test here is RED. That is the intended,
- * correct state: this is a "Tests (write first)" task — the suite goes green when a Phase 3
- * Layer-2 implementation task lands. Do not implement the loop to make these pass.
+ * Written test-first; `src/intent/gen-eval-loop.ts` now implements the loop decision core,
+ * so the suite is green.
  *
  * Scope note: §12's "the Generator works test-first" is a property of the `/work` skill
  * itself (it writes failing tests before implementation) — covered by `/work`'s own
@@ -93,6 +91,11 @@ describe('Generator-Evaluator loop — the bound (test-plan §12)', () => {
       3,
     );
     expect(outcome.status).toBe('escalated');
+  });
+
+  it('rejects a non-positive maxEvaluatorRounds bound', () => {
+    expect(() => evaluateLoop([], 0)).toThrow(/positive|maxEvaluatorRounds/i);
+    expect(() => evaluateLoop([], -1)).toThrow(/positive|maxEvaluatorRounds/i);
   });
 });
 

@@ -14,27 +14,24 @@
  * outcome from its round history. Running the actual `/work` and `/review` skills is
  * orchestration that drives this core.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `gen-eval-loop.test.ts` (test-plan.md §12). The function bodies
- * are intentionally unimplemented — a Phase 3 Layer-2 task fills them in. Until then the
- * suite is RED by design.
+ * STATUS: implemented. The decision core — `recordRound` and `evaluateLoop` — is live; the
+ * contract is pinned by the test suite in `gen-eval-loop.test.ts` (test-plan.md §12).
+ * Running the actual `/work` Generator and `/review` Evaluator against a repo-backed
+ * product is orchestration that drives this core.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 2"), test-plan.md (§12)}.
  */
 
 /**
- * The Evaluator's verdict for a loop round. `not-run` means the round's own tests failed,
- * so the run never reached the Evaluator as "ready".
+ * One pass of the Generator-Evaluator loop — a discriminated union on `testsPass`. A
+ * tests-passed round carries a real Evaluator verdict (`pass` or `fail`); a tests-failed
+ * round never reached the Evaluator, so its verdict is `not-run`. The incoherent
+ * combinations — tests passed but `not-run`, or tests failed with a real verdict — are
+ * unrepresentable by construction.
  */
-export type EvaluatorVerdict = 'pass' | 'fail' | 'not-run';
-
-/** One pass of the Generator-Evaluator loop. */
-export interface LoopRound {
-  /** Whether the project's own test suite passed this round. */
-  testsPass: boolean;
-  /** The Evaluator's verdict — `not-run` whenever `testsPass` is false. */
-  evaluatorVerdict: EvaluatorVerdict;
-}
+export type LoopRound =
+  | { testsPass: true; evaluatorVerdict: 'pass' | 'fail' }
+  | { testsPass: false; evaluatorVerdict: 'not-run' };
 
 /**
  * The loop's status. `on-branch` is the Phase 3 success terminal — the result sits on a
@@ -49,9 +46,6 @@ export interface LoopOutcome {
   failedEvaluatorRounds: number;
 }
 
-const NOT_IMPLEMENTED =
-  'gen-eval-loop: not implemented — a Phase 3 Layer-2 task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Record a loop round. When `testsPass` is false the Evaluator is never consulted, so the
  * round's verdict is forced to `not-run` regardless of `evaluatorVerdict` — a run that
@@ -59,10 +53,12 @@ const NOT_IMPLEMENTED =
  * `evaluatorVerdict` (`pass` or `fail`) is recorded.
  */
 export function recordRound(
-  _testsPass: boolean,
-  _evaluatorVerdict: 'pass' | 'fail',
+  testsPass: boolean,
+  evaluatorVerdict: 'pass' | 'fail',
 ): LoopRound {
-  throw new Error(NOT_IMPLEMENTED);
+  return testsPass
+    ? { testsPass: true, evaluatorVerdict }
+    : { testsPass: false, evaluatorVerdict: 'not-run' };
 }
 
 /**
@@ -75,7 +71,27 @@ export function recordRound(
  * Rounds are evaluated in order; the first terminal reached decides the outcome — a `pass`
  * recorded only after the bound was already hit does not rescue an escalated run (the loop
  * would have stopped escalating before that round could run).
+ *
+ * `maxEvaluatorRounds` must be a positive integer (`>= 1`) — a bound of zero or below is
+ * rejected, since a loop cannot escalate before its first Evaluator round runs.
  */
-export function evaluateLoop(_rounds: LoopRound[], _maxEvaluatorRounds: number): LoopOutcome {
-  throw new Error(NOT_IMPLEMENTED);
+export function evaluateLoop(rounds: LoopRound[], maxEvaluatorRounds: number): LoopOutcome {
+  if (maxEvaluatorRounds < 1) {
+    throw new RangeError(
+      `evaluateLoop: maxEvaluatorRounds must be a positive integer — got ${maxEvaluatorRounds}`,
+    );
+  }
+  let failedEvaluatorRounds = 0;
+  for (const round of rounds) {
+    if (round.evaluatorVerdict === 'pass') {
+      return { status: 'on-branch', failedEvaluatorRounds };
+    }
+    if (round.evaluatorVerdict === 'fail') {
+      failedEvaluatorRounds += 1;
+      if (failedEvaluatorRounds >= maxEvaluatorRounds) {
+        return { status: 'escalated', failedEvaluatorRounds };
+      }
+    }
+  }
+  return { status: 'in-progress', failedEvaluatorRounds };
 }
