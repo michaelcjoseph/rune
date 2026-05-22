@@ -13,8 +13,11 @@ import { fileURLToPath } from 'node:url';
  */
 
 // --- Mocks (must precede the module import) ---
-// The resolver logs every resolution; the implementation will import createLogger.
-const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+// The resolver logs every resolution; the implementation imports createLogger at module
+// load. vi.hoisted so mockLog exists before model-policy.ts's module-load createLogger().
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
 
 import {

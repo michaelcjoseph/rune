@@ -11,13 +11,16 @@
  * Resolution precedence, highest first: explicit pin → role default → global fallback.
  * Every resolution is logged with the chosen model and the rule that fired.
  *
- * STATUS: partially implemented. `parsePolicy` validates the declarative policy file
- * (`policies/model-policy.json`). `resolveModel` remains a contract stub, filled in by the
- * Phase 1 model-selection-policy resolver task; its tests in `model-policy.test.ts`
- * (test-plan.md §5) stay RED until then.
+ * STATUS: implemented. `parsePolicy` validates the declarative policy file
+ * (`policies/model-policy.json`); `resolveModel` is the deterministic resolver. The
+ * contract is pinned by the test suite in `model-policy.test.ts` (test-plan.md §5).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Model selection policy"), test-plan.md (§5)}.
  */
+
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('model-policy');
 
 /** Lifecycle status of a model in the registry. */
 export type ModelStatus = 'preferred' | 'active' | 'deprecated';
@@ -75,9 +78,6 @@ export interface Resolution {
   /** Which precedence rule produced this resolution. */
   rule: 'explicit-pin' | 'role-default' | 'global-fallback';
 }
-
-const NOT_IMPLEMENTED =
-  'model-policy: not implemented — Phase 1 model-selection-policy tasks (docs/projects/08-intent-layer) fill this in';
 
 const MODEL_FORMATS = new Set(['claude', 'codex', 'gemini']);
 const COST_TIERS = new Set(['low', 'medium', 'high']);
@@ -202,6 +202,100 @@ export function parsePolicy(raw: string): ModelPolicy {
  * must include `distinctFromProvider`; the resolver throws if it does not. Every
  * resolution logs the chosen model and the precedence rule that fired.
  */
-export function resolveModel(_request: ResolveRequest, _policy: ModelPolicy): Resolution {
-  throw new Error(NOT_IMPLEMENTED);
+export function resolveModel(request: ResolveRequest, policy: ModelPolicy): Resolution {
+  // The cross-model adjudication constraint: when it is set, an evaluator resolution must
+  // declare the generator's provider so the resolver can exclude it. Refuse loudly rather
+  // than silently skip the constraint.
+  if (
+    policy.evaluatorDistinctFromGenerator &&
+    request.role === 'evaluator' &&
+    request.distinctFromProvider === undefined
+  ) {
+    throw new Error(
+      'model policy: the evaluator.distinct_from constraint is set — an evaluator ' +
+        "resolution must supply distinctFromProvider (the generator's provider)",
+    );
+  }
+
+  // Explicit pin — highest precedence. A pin must name a registered, non-deprecated model;
+  // a deprecated pin fails loudly rather than silently rerouting.
+  if (request.pin !== undefined) {
+    const pinned = policy.models.find((m) => m.alias === request.pin);
+    if (!pinned) {
+      throw new Error(`model policy: pinned model '${request.pin}' is not a registered model`);
+    }
+    if (pinned.status === 'deprecated') {
+      throw new Error(`model policy: pinned model '${request.pin}' is deprecated`);
+    }
+    // A pin still cannot silently violate a declared distinct-provider constraint —
+    // honoring it would defeat the cross-model adjudication the caller asked for.
+    if (request.distinctFromProvider !== undefined && pinned.provider === request.distinctFromProvider) {
+      throw new Error(
+        `model policy: pinned model '${request.pin}' (provider '${pinned.provider}') ` +
+          'violates the evaluator.distinct_from constraint',
+      );
+    }
+    return logResolution(request.role, {
+      model: pinned.alias,
+      provider: pinned.provider,
+      rule: 'explicit-pin',
+    });
+  }
+
+  // Capability satisfaction, non-deprecated status, and the distinct-provider filter are a
+  // hard filter applied first; precedence then orders selection within the eligible set.
+  const capabilityFit = policy.models.filter(
+    (m) =>
+      m.status !== 'deprecated' && request.capabilities.every((cap) => m.capabilities.includes(cap)),
+  );
+  const eligible = capabilityFit.filter(
+    (m) => request.distinctFromProvider === undefined || m.provider !== request.distinctFromProvider,
+  );
+
+  if (eligible.length === 0) {
+    // Diagnose why nothing is eligible so the error names the actual blocker.
+    if (capabilityFit.length > 0 && request.distinctFromProvider !== undefined) {
+      throw new Error(
+        'model policy: cannot satisfy the evaluator.distinct_from constraint — every ' +
+          `capability-fit model is provider '${request.distinctFromProvider}'`,
+      );
+    }
+    const unmet = request.capabilities.filter(
+      (cap) => !policy.models.some((m) => m.status !== 'deprecated' && m.capabilities.includes(cap)),
+    );
+    throw new Error(
+      unmet.length > 0
+        ? `model policy: no registered model satisfies the required capabilities: ${unmet.join(', ')}`
+        : 'model policy: no registered model satisfies all required capabilities ' +
+          `simultaneously: ${request.capabilities.join(', ')}`,
+    );
+  }
+
+  // Role default — the per-role preferred alias, when it is itself eligible.
+  const roleDefaultAlias = policy.roleDefaults[request.role];
+  if (roleDefaultAlias !== undefined) {
+    const candidate = eligible.find((m) => m.alias === roleDefaultAlias);
+    if (candidate) {
+      return logResolution(request.role, {
+        model: candidate.alias,
+        provider: candidate.provider,
+        rule: 'role-default',
+      });
+    }
+  }
+
+  // Global fallback — when it is eligible; otherwise the first eligible model. The fallback
+  // being unfit still beats failing, since an eligible model satisfies every hard filter.
+  const fallback = eligible.find((m) => m.alias === policy.globalFallback) ?? eligible[0]!;
+  return logResolution(request.role, {
+    model: fallback.alias,
+    provider: fallback.provider,
+    rule: 'global-fallback',
+  });
+}
+
+/** Log a resolution with the chosen model and the precedence rule that fired, then return it. */
+function logResolution(role: string, resolution: Resolution): Resolution {
+  log.info('model resolved', { role, ...resolution });
+  return resolution;
 }

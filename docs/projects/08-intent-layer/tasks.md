@@ -56,7 +56,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] Build the model registry as a declarative policy file: per-model alias, provider, agent-definition format, capability tags, cost tier, status (`preferred`/`active`/`deprecated`). Referenced by alias, not pinned ID.
 - [x] Add role-to-capability binding to agent definitions — roles declare needed capabilities; no model is named in an agent.
-- [ ] Build the deterministic resolver: (role, capabilities, policy) → model, precedence pin → role-default → global-fallback, logging the chosen model and the rule that fired. Include the `evaluator.distinct_from: generator` constraint (exercised in Phase 4).
+- [x] Build the deterministic resolver: (role, capabilities, policy) → model, precedence pin → role-default → global-fallback, logging the chosen model and the rule that fired. Include the `evaluator.distinct_from: generator` constraint (exercised in Phase 4).
 - [ ] Wire the resolver into `runAgent`, replacing the hardcoded `config.AGENT_MODEL` default while preserving today's effective model for every unchanged agent.
 
 ### Escalation policy
