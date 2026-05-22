@@ -27,7 +27,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] Write the test suite for **product registration** — test-plan.md §2.
 - [x] Write the test suite for the **product-overlay index** — test-plan.md §3.
 - [x] Write the test suite for **model-agnostic agent definitions** — test-plan.md §4.
-- [ ] Write the test suite for the **model selection policy** — test-plan.md §5.
+- [x] Write the test suite for the **model selection policy** — test-plan.md §5.
 - [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Product/project registry
