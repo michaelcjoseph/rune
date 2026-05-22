@@ -185,7 +185,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` and `docs/projects/index.md`; move the index row to "Done" once the v1 wedge and the observation loop run cleanly.
+- [x] Update `CLAUDE.md` and `docs/projects/index.md`; move the index row to "Done" once the v1 wedge and the observation loop run cleanly.
 
 ## Cross-cutting (verify throughout)
 
