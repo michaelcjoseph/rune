@@ -156,7 +156,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Concurrency
 
 - [x] Build the scheduler: one project per product at a time, plus a global cap across all repo-backed products. Generalize `WORK_RUN_GLOBAL_CAP` and tighten the per-project cap into a per-product cap of one; queue work beyond a cap.
-- [ ] Verify the completed v1 wedge against spec § Definition of done (every line observable end to end).
+- [x] Verify the completed v1 wedge against spec § Definition of done (every line observable end to end).
 
 ### Documentation
 
