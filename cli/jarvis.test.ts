@@ -372,16 +372,16 @@ describe('cli/jarvis', () => {
     let originalIsTTY: boolean | undefined;
 
     beforeEach(() => {
-      originalIsTTY = (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY;
+      originalIsTTY = (process.stdin as unknown as { isTTY?: boolean }).isTTY;
     });
 
     afterEach(() => {
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = originalIsTTY;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = originalIsTTY;
     });
 
     it('calls handleStudy with joined positional args and exits cleanly when no session is created', async () => {
       // Set isTTY so the TTY guard passes for a session-start call (no arg)
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = true;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = true;
       // hasActiveSRSession returns false → cmdStudy exits before the readline loop
       handleStudyMock.mockResolvedValue(undefined);
       hasActiveSRSessionMock.mockReturnValue(false);
@@ -394,7 +394,7 @@ describe('cli/jarvis', () => {
 
     it('passes the N argument to handleStudy as a joined string', async () => {
       // Set isTTY so the TTY guard passes for a session-start call (numeric arg)
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = true;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = true;
       handleStudyMock.mockResolvedValue(undefined);
       hasActiveSRSessionMock.mockReturnValue(false);
 
@@ -408,7 +408,7 @@ describe('cli/jarvis', () => {
 
     it('passes "status" argument to handleStudy without requiring a TTY', async () => {
       // isTTY is falsy (default in test runner) — status is exempt from the guard
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = false;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = false;
       handleStudyMock.mockResolvedValue(undefined);
       hasActiveSRSessionMock.mockReturnValue(false);
 
@@ -420,7 +420,7 @@ describe('cli/jarvis', () => {
 
     it('uses userId=0 (the CLI stub sentinel value)', async () => {
       // Set isTTY so the TTY guard passes for a session-start call
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = true;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = true;
       handleStudyMock.mockResolvedValue(undefined);
       hasActiveSRSessionMock.mockReturnValue(false);
 
@@ -431,7 +431,7 @@ describe('cli/jarvis', () => {
     });
 
     it('does NOT call handleStudy, sets exitCode=1, and prints an error when arg is non-status and stdin is not a TTY', async () => {
-      (process.stdin as NodeJS.ReadStream & { isTTY?: boolean }).isTTY = false;
+      (process.stdin as unknown as { isTTY?: boolean }).isTTY = false;
       handleStudyMock.mockResolvedValue(undefined);
       hasActiveSRSessionMock.mockReturnValue(false);
 

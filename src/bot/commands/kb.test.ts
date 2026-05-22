@@ -34,7 +34,7 @@ describe('handleKB', () => {
 
   describe('query subcommand', () => {
     it('calls startTyping with "Querying knowledge base" when /kb query is invoked', async () => {
-      vi.mocked(queryKB).mockResolvedValue({ answer: 'wiki answer' });
+      vi.mocked(queryKB).mockResolvedValue({ success: true, answer:'wiki answer' });
       const sender = makeSender();
 
       await handleKB(sender, USER_ID, 'query what is attention');
@@ -43,7 +43,7 @@ describe('handleKB', () => {
     });
 
     it('calls startTyping with "Querying knowledge base" when /kb q is used', async () => {
-      vi.mocked(queryKB).mockResolvedValue({ answer: 'result' });
+      vi.mocked(queryKB).mockResolvedValue({ success: true, answer:'result' });
       const sender = makeSender();
 
       await handleKB(sender, USER_ID, 'q transformer architecture');
@@ -52,7 +52,7 @@ describe('handleKB', () => {
     });
 
     it('calls startTyping with "Querying knowledge base" for bare /kb <question> shorthand', async () => {
-      vi.mocked(queryKB).mockResolvedValue({ answer: 'inline answer' });
+      vi.mocked(queryKB).mockResolvedValue({ success: true, answer:'inline answer' });
       const sender = makeSender();
 
       await handleKB(sender, USER_ID, 'reinforcement learning');
@@ -61,7 +61,7 @@ describe('handleKB', () => {
     });
 
     it('calls stopTyping after queryKB resolves', async () => {
-      vi.mocked(queryKB).mockResolvedValue({ answer: 'ok' });
+      vi.mocked(queryKB).mockResolvedValue({ success: true, answer:'ok' });
       const sender = makeSender();
 
       await handleKB(sender, USER_ID, 'query something');
@@ -70,7 +70,7 @@ describe('handleKB', () => {
     });
 
     it('sends the answer returned by queryKB', async () => {
-      vi.mocked(queryKB).mockResolvedValue({ answer: 'The answer is 42.' });
+      vi.mocked(queryKB).mockResolvedValue({ success: true, answer:'The answer is 42.' });
       const sender = makeSender();
 
       await handleKB(sender, USER_ID, 'query ultimate question');

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { MessageSender } from '../../transport/sender.js';
 
-const mockStartReview = vi.fn<() => Promise<void>>();
+const mockStartReview =
+  vi.fn<(chatId: number, type: string, targetDate: string, sender: MessageSender, topic?: string) => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-05-12');
 
 vi.mock('../../reviews/orchestrator.js', () => ({

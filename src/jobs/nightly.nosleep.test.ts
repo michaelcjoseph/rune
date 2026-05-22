@@ -28,7 +28,9 @@ function makeFakeCaffeinate() {
   return child;
 }
 
-const mockSpawn = vi.fn(() => makeFakeCaffeinate());
+const mockSpawn = vi.fn<(command: string, args: string[], options: { stdio?: string }) => unknown>(
+  () => makeFakeCaffeinate(),
+);
 vi.mock('node:child_process', () => ({ spawn: mockSpawn }));
 
 // ── Shared module mocks (mirrors nightly.test.ts) ────────────────────────────

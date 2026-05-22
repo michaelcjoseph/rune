@@ -93,7 +93,7 @@ function freshUid(): number {
 function makeSender(): MessageSender & { sent: string[] } {
   const sent: string[] = [];
   return {
-    name: 'tg' as const,
+    name: 'telegram' as const,
     send: vi.fn(async (_userId: number, text: string) => {
       sent.push(text);
     }),
