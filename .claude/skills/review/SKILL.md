@@ -7,10 +7,20 @@ Use this as a pre-commit gate, after exploratory work outside `/work`, or any ti
 ## Usage
 
 ```
-/review
+/review [--cross-model]
 ```
 
-No arguments. The skill always operates on the current working tree (staged + unstaged + untracked).
+One optional flag, `--cross-model`. The skill always operates on the current working tree (staged + unstaged + untracked).
+
+## Modes
+
+`/review` is **single-model by default** — every reviewer runs on the same Claude session. Pass `--cross-model` to opt into cross-model adjudication.
+
+**Current state:** `--cross-model` is recognized and the chosen mode is logged, but the second-model pass is not yet executed — the skill returns the single-model verdict with a note that the cross-model pass is pending the Codex executor integration.
+
+**Once that integration lands:** the panel will additionally run on a different-provider Evaluator (Codex via OpenAI), and the two verdicts will be reconciled into one consolidated answer. The cross-model dispatch will be built via `src/intent/dispatch.ts`'s `buildHandoff` / `recordDispatch`.
+
+The mode itself is resolved by `resolveReviewMode` in `src/intent/adjudication.ts` (with `autonomous: false` for any manual `/review`). An autonomous engine run forces cross-model regardless of this flag — per `docs/projects/08-intent-layer/test-plan.md` §14, autonomous merges always require cross-model review.
 
 ## Scope
 
