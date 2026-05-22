@@ -1,6 +1,6 @@
 # Intent Layer Test Plan
 
-Behavior and error-handling checklist for the intent-layer orchestrator: the foundational tier (registry, product registration, overlay index, agent definitions, model selection policy), the cockpit and journal intake, the five execution layers, and operational self-improvement.
+Behavior and error-handling checklist for the intent-layer orchestrator: the foundational tier (registry, product registration, overlay index, agent definitions, model selection policy, escalation policy), the cockpit and journal intake, the five execution layers, and operational self-improvement.
 
 > See also: existing tests under `src/` — `src/jobs/work-runner.test.ts`, `src/ai/claude.test.ts`, `src/server/webview.test.ts`, `src/server/state-snapshot.test.ts`, `src/bot/resolver.test.ts` — and the eval framework under `evals/`.
 
@@ -16,12 +16,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 
 | Phase | Sections |
 |---|---|
-| Phase 1 — Foundational tier | 1, 2, 3, 4, 5 |
-| Phase 2 — Cockpit and journal intake | 6, 7 |
-| Phase 3 — Intent layer and v1 wedge core | 8, 9, 10, 11 |
-| Phase 4 — Multi-model dispatch and cross-review | 12, 13, 14 |
-| Phase 5 — Operational self-improvement | 15 |
-| Cross-cutting | 16, 17 |
+| Phase 1 — Foundational tier | 1, 2, 3, 4, 5, 6 |
+| Phase 2 — Cockpit and journal intake | 7, 8 |
+| Phase 3 — Intent layer and v1 wedge core | 9, 10, 11, 12 |
+| Phase 4 — Multi-model dispatch and cross-review | 13, 14, 15 |
+| Phase 5 — Operational self-improvement | 16 |
+| Cross-cutting | 17, 18 |
 
 ---
 
@@ -33,7 +33,7 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🔴 A project's lifecycle status (planned / active / done) in the registry matches the Status column in its repo's project docs.
 - [ ] 🔴 The registry is rebuildable: deleting it and regenerating from repos + vault product files yields an identical model.
 - [ ] 🟡 A repo with no project docs surfaces as a product with zero projects, not an error.
-- [ ] 🟡 The registry never reports run-status (running / blocked) — that lives in supervision (§9). Registry output carries lifecycle status only.
+- [ ] 🟡 The registry never reports run-status (running / blocked) — that lives in supervision (§10). Registry output carries lifecycle status only.
 - [ ] 🟢 A cold-start registry build logs its timing and the count of products/projects scanned.
 
 ### Writes and corruption
@@ -106,7 +106,18 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🔴 `runAgent` resolves its model through the policy; agents unchanged by this project keep their current effective model.
 - [ ] 🟡 An agent's frontmatter `model:` override still wins, mapped onto the policy's explicit-pin precedence.
 
-## 6. Product/project cockpit (Phase 2)
+## 6. Escalation policy (Phase 1)
+
+- [ ] 🔴 The escalation policy is a declarative file, data not code — adding or changing a rule needs no code change or deploy.
+- [ ] 🔴 Given a change the policy classifies as high-risk, the decision is "escalate to blocked-on-Michael"; given one that matches no condition, the decision is "proceed".
+- [ ] 🔴 The decision is deterministic — the same inputs always yield the same escalate/proceed verdict, with no LLM call in the resolver.
+- [ ] 🔴 A malformed or missing escalation policy fails closed: the engine escalates or halts, it never falls open to permissive auto-merge.
+- [ ] 🔴 The policy covers all four escalation conditions from the spec — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, and a self-generated spec too consequential to approve unattended.
+- [ ] 🔴 Every escalation decision is logged with the condition or rule that fired (auditable).
+- [ ] 🟡 A change matching no escalation condition resolves to "proceed" without consulting Michael.
+- [ ] 🟢 An escalation surfaces in the supervision visibility surface (§10) and the cockpit as blocked-on-Michael.
+
+## 7. Product/project cockpit (Phase 2)
 
 - [ ] 🔴 The cockpit shows every product, its projects, and each project's lifecycle status, read from the registry.
 - [ ] 🔴 The cockpit owns no state — deleting it and rebuilding from the registry + repos + vault loses nothing.
@@ -116,7 +127,7 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The registry being briefly unavailable shows a clear "registry unavailable" state, not a blank or broken page.
 - [ ] 🟢 A product with zero projects renders cleanly.
 
-## 7. Journal-to-intent flow (Phase 2)
+## 8. Journal-to-intent flow (Phase 2)
 
 - [ ] 🔴 Raw notes about a product in the daily journal are synthesized into that product's vault file, propose-and-approve.
 - [ ] 🔴 The flow never silently rewrites scope — Michael sees the inferred change and confirms it.
@@ -126,16 +137,16 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 Intake proposals and carried-over roadmap items both surface for approval on Telegram and in the cockpit.
 - [ ] 🟢 A journal day with no product-relevant notes produces no proposals and no noise.
 
-## 8. Planner — Layer 1 (Phase 3)
+## 9. Planner — Layer 1 (Phase 3)
 
 - [ ] 🔴 The Planner turns a fuzzy idea into an approved spec through conversation — it asks questions and surfaces assumptions rather than accepting a one-line task.
-- [ ] 🔴 Nothing is dispatched before Michael approves the spec artifact.
+- [ ] 🔴 Nothing is dispatched before the spec artifact is approved; for a Michael-initiated project, that approval is Michael's.
 - [ ] 🔴 On approval, the artifact is scaffolded into `spec.md`, `tasks.md`, and `test-plan.md` via `project-setup-writer`, and the `tasks.md` carries the per-phase Tests block.
 - [ ] 🟡 The Planner conversation works identically on chat and in the cockpit's planning mode.
 - [ ] 🟡 An idea abandoned mid-scoping leaves no half-written project files.
 - [ ] 🟢 Planner retrieval is product-scoped via the overlay index (§3).
 
-## 9. Supervision — Layer 3 (Phase 3)
+## 10. Supervision — Layer 3 (Phase 3)
 
 - [ ] 🔴 A long-running run is dispatched in the background and tracked; the engine does not block on it.
 - [ ] 🔴 The visibility surface correctly reports which runs are active and which are blocked on Michael.
@@ -145,28 +156,28 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The visibility surface survives a Jarvis restart — in-flight runs are recovered or marked unknown, not lost.
 - [ ] 🟢 Heartbeat checks are cheap and do not spam logs.
 
-## 10. Sandboxing and security — Layer 4 (Phase 3)
+## 11. Sandboxing and security — Layer 4 (Phase 3)
 
 - [ ] 🔴 Each project runs in its own git worktree; two concurrent projects cannot touch each other's working tree, branches, or build state.
-- [ ] 🔴 Two projects on the *same* product repo still get separate worktrees.
+- [ ] 🔴 Because only one project runs per product at a time, two runs never share a repo or its main line (see §15).
 - [ ] 🔴 A run reaches only its own repo's scoped credentials — it cannot read another product's secrets.
 - [ ] 🔴 Egress is allowlisted; a run cannot reach a host outside the allowlist.
-- [ ] 🔴 Regime B execution writes to a branch/worktree only; it never writes to the vault and never lands on a repo's main line on its own.
+- [ ] 🔴 Regime B execution writes only within its worktree and never to the vault; a change reaches the repo's main line only by passing the merge contract (cross-model review and tests) and clearing the escalation policy.
 - [ ] 🟡 Untrusted inbound content (a fetched page, an issue body) cannot escalate a run's permissions — prompt-injection defense holds.
 - [ ] 🟡 A worktree is cleaned up after its project finishes or is abandoned; worktrees do not accumulate.
 - [ ] 🟢 A worktree-creation failure aborts the run cleanly with a clear error.
 
-## 11. Generator-Evaluator loop, single-model — Layer 2 (Phase 3)
+## 12. Generator-Evaluator loop, single-model — Layer 2 (Phase 3)
 
 - [ ] 🔴 The full loop runs end to end on one model against one repo-backed product: approved spec → `/work` Generator → `/review` Evaluator → result on a branch.
 - [ ] 🔴 The Generator works test-first: tests mirroring `test-plan.md` are written and failing before implementation for a task begins.
 - [ ] 🔴 The Evaluator is a separate, skeptical pass — it is not the Generator grading its own output.
 - [ ] 🔴 The loop is bounded: after a few failed Evaluator rounds the run is escalated to blocked-on-Michael, not retried forever.
-- [ ] 🔴 Merging the result into the product repo's main line stays Michael's explicit action.
-- [ ] 🟡 The Evaluator loop is invoked deliberately (Oracle-style) — trivial work is not forced through a second opinion.
+- [ ] 🔴 The Phase 3 single-model loop stops at a branch and never merges to main on its own — autonomous merge is held until Phase 4, when cross-model review exists.
+- [ ] 🟡 The Evaluator runs as a step of every loop pass, establishing the loop shape that Phase 4's cross-model upgrade slots into.
 - [ ] 🟡 A run that fails its own tests never reaches the Evaluator as "ready."
 
-## 12. Multi-model dispatch — Layer 5 (Phase 4)
+## 13. Multi-model dispatch — Layer 5 (Phase 4)
 
 - [ ] 🔴 Codex is wired as a dispatchable executor; an agent definition compiles to the Codex target and runs.
 - [ ] 🔴 A dispatch carries an explicit, structured handoff message — no reliance on in-place context compaction.
@@ -174,47 +185,55 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 A model/provider being unavailable mid-dispatch fails the run cleanly with a clear error, leaving the worktree intact for retry.
 - [ ] 🟢 Dispatch logs record which model and provider executed each run (for cost attribution).
 
-## 13. Cross-model adjudication — Layer 2 upgrade (Phase 4)
+## 14. Cross-model adjudication — Layer 2 upgrade (Phase 4)
 
-- [ ] 🔴 For an autonomous engine run, the Evaluator resolves to a different provider family than the Generator by default.
+- [ ] 🔴 For an autonomous engine run, the Evaluator resolves to a different provider family than the Generator, on every run — cross-model review is mandatory before every merge.
+- [ ] 🔴 When cross-model review and the test suite pass and the escalation policy does not flag the change, Jarvis merges the result to the product repo's main line itself, with no human action.
 - [ ] 🔴 Manual `/review` stays single-model by default; `/review --cross-model` opts into adjudication.
 - [ ] 🔴 The single-model loop from Phase 3 still works — cross-model is an upgrade, not a replacement.
-- [ ] 🟡 A cross-model run where the second provider is unavailable degrades to single-model with a clear warning rather than failing outright.
+- [ ] 🔴 If the second provider is unavailable, the run cannot satisfy the merge contract — it escalates to blocked-on-Michael, it does not degrade to single-model and merge unreviewed.
 - [ ] 🟢 The adjudication result records both models and the verdict.
 
-## 14. Concurrency scheduler (Phase 4)
+## 15. Concurrency scheduler (Phase 4)
 
 - [ ] 🔴 The scheduler enforces a global cap of N concurrent projects across all products.
-- [ ] 🔴 Concurrency is global, not per-product — two Aura projects and one Assay project is valid under the global N.
+- [ ] 🔴 Only one project runs per product at a time — a second project for a product that already has an active project is queued, not started.
 - [ ] 🔴 An (N+1)th project is queued, not dropped, and starts when a slot frees.
-- [ ] 🟡 The scheduler generalizes the existing `WORK_RUN_GLOBAL_CAP` / per-project cap rather than introducing a parallel concurrency model.
-- [ ] 🟡 Two projects finishing at once and editing overlapping roadmap items reconcile without losing either edit.
+- [ ] 🟡 The scheduler generalizes `WORK_RUN_GLOBAL_CAP` and tightens the per-project cap into a per-product cap of one, rather than introducing a parallel concurrency model.
+- [ ] 🟡 Two projects on different products auto-merging at the same time each land cleanly on their own repo — there is no shared main line to contend for.
 - [ ] 🟢 The cockpit reflects queued-vs-running accurately.
 
-## 15. Operational self-improvement — observation loop (Phase 5)
+## 16. Operational self-improvement — observation loop (Phase 5)
 
 - [ ] 🔴 The observation loop extends the existing Ask-Twice telemetry — it does not duplicate or break it.
-- [ ] 🔴 A repeated question, a fixed bug, and recurring friction are each detected and filed as a project into `docs/projects/ideas.md`.
-- [ ] 🔴 Filing uses the existing project-execution engine pointed at the Jarvis product — no new execution subsystem.
+- [ ] 🔴 The sensor layer ingests all three sources: vault signals, product telemetry, and logged Jarvis interactions.
+- [ ] 🔴 Every Jarvis interaction is logged, successful or not; failed, mis-routed, and rephrased interactions are captured as signal, not only repeated questions.
+- [ ] 🔴 The synthesis stage diarizes raw sensor signal into a compact, structured digest before the loop reasons over it — the loop never consumes raw logs directly.
+- [ ] 🔴 The loop has a discard half: a friction signal not worth a project is dropped, not filed.
+- [ ] 🔴 A friction signal worth acting on is filed as a project into `docs/projects/ideas.md`, and the loop dispatches the execution engine to run it, within the concurrency and escalation rules.
+- [ ] 🔴 Execution uses the existing project-execution engine pointed at the Jarvis product — no new execution subsystem.
+- [ ] 🔴 A low-risk self-generated project is specced and run unattended; a self-generated spec the escalation policy flags waits for Michael.
 - [ ] 🟡 The loop de-dupes — the same friction observed repeatedly does not file a new project each time.
-- [ ] 🟡 A filed item is proposed for Michael's approval, not silently turned into an active project.
-- [ ] 🟢 A quiet period with no friction files nothing.
+- [ ] 🟡 The loop runs nightly, extending the existing nightly vault review rather than as a separate job.
+- [ ] 🟢 A quiet period with no friction files and runs nothing.
 
-## 16. Two-regime safety and integration (cross-cutting)
+## 17. Two-regime safety and integration (cross-cutting)
 
 - [ ] 🔴 Regime A (raw-note processing, KB, second-brain memory, reviews, morning prep) behaves exactly as before — this project does not change it.
 - [ ] 🔴 The only Regime B → vault write is a generalizable lesson promoted to playbook/world-view, and it runs propose-and-approve.
 - [ ] 🔴 Every vault write in the system (registration, journal-to-intent, lesson promotion) is propose-and-approve; none is silent.
+- [ ] 🔴 No change reaches a product repo's main line without passing the merge contract (cross-model review and the test suite) and clearing the escalation policy; there is no ungated autonomous merge.
 - [ ] 🟡 The five write rules in the spec's write-rules table each behave as the table specifies (direction and gate).
 - [ ] 🟡 The existing skills `/work`, `/work --auto`, and `/review` remain directly invokable by Michael throughout all phases.
 - [ ] 🟡 The test-first change to `/work` does not break its existing non-`--auto` and `--auto` flows.
 - [ ] 🟢 Phase-to-phase: state created in an earlier phase (registry, manifests, policy) survives later phases without migration surprises.
 
-## 17. Resilience (cross-cutting)
+## 18. Resilience (cross-cutting)
 
 - [ ] 🔴 A failed execution run is discardable — it corrupts no vault state and no product-repo main line.
-- [ ] 🔴 A Jarvis restart mid-run does not lose the registry, the policy, or a project's worktree; in-flight runs recover or are clearly marked unknown.
+- [ ] 🔴 A Jarvis restart mid-run does not lose the registry, the policies, or a project's worktree; in-flight runs recover or are clearly marked unknown.
 - [ ] 🟡 A model timeout or CLI crash surfaces as a clear run error, not a silent hang.
-- [ ] 🟡 A corrupt registry / policy / manifest file fails fast with a clear error and does not overwrite the good file with empty state.
+- [ ] 🟡 A corrupt registry, model policy, escalation policy, or manifest file fails fast with a clear error and does not overwrite the good file with empty state.
+- [ ] 🟡 A change that merged but proves wrong can be reverted cleanly — autonomous merge does not preclude rollback.
 - [ ] 🟡 An approval that is never answered leaves the proposal pending — it never auto-applies or auto-discards.
 - [ ] 🟢 Disk-write failure on any state file surfaces the error and keeps in-memory state for manual recovery.

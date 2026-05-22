@@ -6,7 +6,7 @@ Jarvis today is a reactive command-router. A message arrives on Telegram, the re
 
 This project evolves Jarvis from a command-router into an **orchestrator with a persistent intent layer**. The intent layer reasons about Michael's goals, discusses them with him to turn fuzzy ideas into approved specs, then dispatches and supervises sub-agents across multiple foundation models (Claude, Codex, and others) and multiple domains (coding first, content and marketing later). Jarvis stops being a thing Michael drives turn-by-turn and becomes a thing that carries goals forward between turns.
 
-The project builds on two existing pieces of Jarvis. It **extends the cockpit** that [06-webview](../06-webview/spec.md) shipped: that localhost surface becomes the intent layer's web cockpit, one of its three I/O surfaces. And it **widens self-improvement**: today's self-improvement only compiles raw notes into the wiki, and this project extends it to improve how Jarvis itself runs, by detecting fixed bugs, repeated questions that should become commands, and recurring friction, then filing them as projects in Jarvis's own backlog.
+The project builds on two existing pieces of Jarvis. It **extends the cockpit** that [06-webview](../06-webview/spec.md) shipped: that localhost surface becomes the intent layer's web cockpit, one of its three I/O surfaces. And it **widens self-improvement**: today's self-improvement only compiles raw notes into the wiki, and this project extends it to improve how Jarvis itself runs, by detecting fixed bugs, repeated questions that should become commands, and recurring friction, then filing the worthwhile ones as projects in Jarvis's own backlog and executing them.
 
 This is a large project. The spec covers vision, architecture, and the v1 wedge. The phase-by-phase task breakdown lives in [tasks.md](tasks.md) and the verification checklist in [test-plan.md](test-plan.md); both follow this spec's phase structure, and the project is built test-first (each phase opens by writing its tests).
 
@@ -16,9 +16,9 @@ Jarvis holds a persistent model of what Michael is building across all his produ
 
 ### Goals
 
-1. **Primary:** A deliberative intent layer that turns a fuzzy idea into an approved spec through conversation, then dispatches sub-agents (across Claude, Codex, and other models) to execute and cross-review the work in isolated sandboxes, supervises the runs, and reports back.
+1. **Primary:** A deliberative intent layer that turns a fuzzy idea into an approved spec through conversation, then dispatches sub-agents (across Claude, Codex, and other models) to execute and cross-review the work in isolated sandboxes, supervises the runs, merges the result when the automated gates pass, and reports back.
 2. **Secondary:** A federated memory model and a product/project registry that give Jarvis a single, uniform picture of every product, its projects, and their status, spanning the vault and the individual product repos.
-3. **Tertiary:** Operational self-improvement, where Jarvis observes its own friction (bugs, repeated questions, recurring pain) and files projects into its own backlog, treating itself as one of the products it orchestrates.
+3. **Tertiary:** Operational self-improvement, where Jarvis observes its own friction (bugs, repeated questions, recurring pain), files improvement projects into its own backlog, and runs them, treating itself as one of the products it orchestrates.
 
 ### Non-Goals
 
@@ -27,7 +27,7 @@ Jarvis holds a persistent model of what Michael is building across all his produ
 - **Touching the Relay repo.** Relay is the employer's product with a different authorization and security surface. v1 does not dispatch coding work against the Relay repo. Relay-repo access is explicitly future and out of scope.
 - **Coding-style execution for products without a code repo.** Family and health (not code products) are tracked in the cockpit and registry and route raw notes in v1, but get no coding-style project execution.
 - **Adopting OpenClaw or Hermes wholesale.** Jarvis keeps its own Node/TS spine. Patterns are borrowed; neither framework is taken on as a dependency.
-- **A consensus-voting or ensemble model layer.** Cross-model review is adjudication (one model produces, a different model verifies), invoked deliberately. It is not a quorum of models on every call.
+- **A consensus-voting or ensemble model layer.** Cross-model review is adjudication: one model produces, a different model verifies. It runs before every merge, but it is never a quorum of models voting on a call.
 - **A new UI framework.** The cockpit is the existing webview surface (vanilla HTML/JS). The intent layer is an engine with I/O surfaces, not a UI project.
 
 ### Research Foundation
@@ -43,8 +43,8 @@ The architecture below is grounded in a survey of open-source personal-agent fra
 
 ### Scale Considerations
 
-- **Concurrency:** the design target is multiple projects running at once, across products (a global cap of N concurrent projects), each in its own isolated workspace. Parallelism here is cheap. The cost that scales is reconciliation (see Open Questions).
-- **Model calls:** the deliberative intent layer is conversational and bounded by Michael's pace. The Generator-Evaluator loop is the call-heavy part, but it is invoked deliberately (Oracle-style), not on every dispatch.
+- **Concurrency:** the design target is one project per product at a time, multiple products running in parallel, each in its own isolated workspace. Parallelism here is cheap. The cost that scales is reconciliation (see Open Questions).
+- **Model calls:** the deliberative intent layer is conversational and bounded by Michael's pace. The Generator-Evaluator loop is the call-heavy part: the Generator's calls scale with the number of tasks in a run, and a mandatory cross-model review adds a bounded few rounds before each merge.
 - **Memory footprint:** the registry is an aggregating index, small. Per-product structured memory lives in each product repo and scales with that product's history, not with Jarvis. The vault's raw layer is unchanged.
 - **Cost:** dispatching across multiple foundation models means dispatch cost is no longer a single subscription line. Cost visibility per project is an open question (see Open Questions).
 
@@ -62,7 +62,7 @@ Concretely, Jarvis gains the ability to:
 
 - Hold a fuzzy idea and refine it into an approved spec through conversation, instead of requiring Michael to arrive with a fully-formed task.
 - Dispatch that spec to sub-agents on the right foundation model for the job, run them in isolation, and have a different model cross-review the output.
-- Run several such projects concurrently across several products, and keep a live picture of which are running and which are blocked on Michael.
+- Run a project on each of several products concurrently, and keep a live picture of which are running and which are blocked on Michael.
 - Treat itself as one of those products, observing its own friction and filing improvement projects into its own backlog.
 
 The vision is not "Jarvis writes all the code." It is "Jarvis carries the goal." Execution quality rides on the foundation models and improves as they do. Jarvis's durable contribution is the intent layer (the planning, the memory, the supervision), which is the part the models do not provide.
@@ -83,13 +83,13 @@ This regime is not changed by this project, except that it gains a new intake pa
 
 This is the new capability: kicking off and running coding projects (and, later, content and marketing projects). It is **Amp-style**. It bets on model progress and keeps the harness light. The guiding rule: do not over-build scaffolding that improving models will absorb. A failed execution run in this regime is cheap to discard and retry; it does not corrupt anything durable. So the harness is thin by design.
 
-Thin does not mean ungated. Regime B execution writes to a **branch or worktree in the product repo and surfaces a diff**; landing that diff on the repo's main line is Michael's explicit action. This is a lighter gate than Regime A's propose-and-approve (the cost of a bad run here is a discarded branch, not a corrupted second brain), but it is still a human gate. Jarvis prepares the change; it does not merge it.
+Thin does not mean ungated, but the gate is **automated, not human**. Regime B execution writes to a **branch or worktree in the product repo**, and what lands it on the main line is a chain of automated gates: mandatory cross-model review (Layer 2), the project's own test suite, and the **escalation policy** (Foundational Tier) that decides which classes of change are too high-risk to merge unattended. When the gates pass, Jarvis merges the change itself. The human merge gate is removed because the cost of a bad run here is a discarded branch or a revert, not a corrupted second brain. Michael is involved by exception, when the escalation policy stops a run, not on every change.
 
 ### Why the split matters
 
-The regimes have opposite cost functions. In Regime A, a heavy harness is correct, because the cost of an error is permanent and the cost of slowness is tolerable. In Regime B, a heavy harness is a liability, because the cost of an error is a discarded run and the cost of slowness compounds across many runs and across model upgrades that would have made the scaffolding redundant.
+The regimes have opposite cost functions. In Regime A, a heavy harness is correct, because the cost of an error is permanent and the cost of slowness is tolerable. In Regime B, a heavy harness is a liability, because the cost of an error is a discarded run or a revert and the cost of slowness compounds across many runs and across model upgrades that would have made the scaffolding redundant.
 
-The two regimes meet at exactly one place, and the contact point is tightly controlled: the only write-back from Regime B into the reliability-critical vault is for **generalizable cross-product lessons**, promoted into the playbook or world-view. That single channel runs propose-and-approve, the Regime A way. Everything else in Regime B writes only to product repos, never to the vault.
+Regime B writes back into the reliability-critical vault through exactly one tightly-controlled channel: **generalizable cross-product lessons**, promoted into the playbook or world-view. That channel runs propose-and-approve, the Regime A way. Everything else in Regime B writes only to product repos, never to the vault.
 
 ---
 
@@ -147,9 +147,9 @@ The cockpit is an **aggregating overlay**. It reads status across all product re
 
 ---
 
-## Foundational Tier: Registry, Overlay Index, Agent Definitions, Model Policy
+## Foundational Tier: Registry, Overlay Index, Agent Definitions, Model Policy, Escalation Policy
 
-Four pieces sit beneath the five layers as prerequisites. They are unglamorous plumbing, and they are likely the first things built.
+Five pieces sit beneath the five layers as prerequisites. They are unglamorous plumbing, and they are likely the first things built.
 
 ### Product/project registry
 
@@ -201,6 +201,12 @@ Selection precedence, highest first, mirrors the `def.model ?? config.AGENT_MODE
 
 This settles the mechanism. Two judgment calls stay open and are listed in Open Questions: the capability-tag vocabulary, and whether the Planner may pin models or only recommend them.
 
+### Escalation policy
+
+With the human merge gate removed (see **Two-Regime Model**), Regime B runs to completion and merges on its own. That makes one question load-bearing: **when does Jarvis stop and ask Michael instead of proceeding?** The answer is an **escalation policy**, a declarative file in the same shape as the model selection policy above: data not code, editing it is not a deploy.
+
+The policy enumerates the conditions under which Jarvis must escalate to the **blocked-on-Michael state** (Layer 3) rather than proceed unattended: a self-generated spec too consequential to approve without Michael, a class of change too high-risk to merge unattended, a cross-model review the Evaluator cannot resolve, a run that exceeds its bounds. The policy is the component to build now; the specific rules are deliberately left to fill in over time. What matters at the spec level is that escalation is **policy-driven and auditable**, not ad hoc, and that "Jarvis decides for itself" and "Jarvis escalates by exception" are the same system, not opposites.
+
 ---
 
 ## The Five Layers
@@ -209,19 +215,19 @@ The project-execution engine is five layers. They are numbered for reference, no
 
 ### Layer 1: Deliberative intent layer (the Planner)
 
-Turns a fuzzy idea into an approved spec through conversation. This is the **Planner** in the Planner/Generator/Evaluator split. It is the deliberative core: it asks questions, surfaces assumptions, scopes, and produces a spec artifact that Michael approves before anything is dispatched. Once approved, the artifact is scaffolded into the project's `spec.md`, `tasks.md`, and `test-plan.md` (the existing `project-setup-writer` agent already does exactly this); the `tasks.md` task list is the unit the Generator consumes. Per the compound-engineering finding (planning roughly 80%, execution roughly 20%), this layer carries most of the project's value.
+Turns a fuzzy idea into an approved spec through conversation. This is the **Planner** in the Planner/Generator/Evaluator split. It is the deliberative core: it asks questions, surfaces assumptions, scopes, and produces a spec artifact that is approved before anything is dispatched. For a Michael-initiated project he approves it; for a low-risk self-generated project the escalation policy stands in (see **Operational Self-Improvement**). Once approved, the artifact is scaffolded into the project's `spec.md`, `tasks.md`, and `test-plan.md` (the existing `project-setup-writer` agent already does exactly this); the `tasks.md` task list is the unit the Generator consumes. Per the compound-engineering finding (planning roughly 80%, execution roughly 20%), this layer carries most of the project's value.
 
 ### Layer 2: Generator-Evaluator loop
 
-Execution with review. A **separate, skeptical Evaluator**, because an agent grading its own output skews positive. Review uses **cross-model adjudication**: one model produces, a *different* model verifies ("is this reproducible and correct?"). The loop is **invoked deliberately, Oracle-style**, not forced on every dispatch. Trivial work does not need a second model's opinion; consequential work does. The loop is bounded: a run the Evaluator cannot bring to a passing verdict within a few rounds is not retried indefinitely, it is escalated to the blocked-on-Michael state (Layer 3) for a human decision.
+Execution with review. A **separate, skeptical Evaluator**, because an agent grading its own output skews positive. Review uses **cross-model adjudication**: one model produces, a *different* model verifies ("is this reproducible and correct?"). With the human merge gate removed, cross-model review and the project's test suite together are the **merge contract**: review is **mandatory before every merge**, not an Oracle-style opt-in, and the tests are the objective bar the autonomous merge is checked against. The loop is bounded: a run the Evaluator cannot bring to a passing verdict within a few rounds is not retried indefinitely, it is escalated to the blocked-on-Michael state (Layer 3), per the escalation policy, for a human decision.
 
-Jarvis already implements both halves of this loop as skills Michael drives directly: **`/work`** is the Generator (it takes a project's task list and drives each task through plan, implement, test, fix, and simplify), and **`/review`** is the Evaluator (a five-agent review panel that returns one consolidated verdict). Both stay, and both stay directly invokable by Michael. Today they run single-model. Layer 2 adds **cross-model adjudication**: the Evaluator resolves to a model from a different provider family than the Generator (see **Model selection policy**). When the engine runs a project autonomously, cross-model adjudication is the default. When Michael runs `/review` by hand, it stays single-model by default (fast and cheap for the everyday dev loop) and takes a **`--cross-model`** flag to opt into adjudication for a change that warrants it. Either way Layer 2 wraps the existing skills; it does not replace them.
+Jarvis already implements both halves of this loop as skills Michael drives directly: **`/work`** is the Generator (it takes a project's task list and drives each task through plan, implement, test, fix, and simplify), and **`/review`** is the Evaluator (a five-agent review panel that returns one consolidated verdict). Both stay, and both stay directly invokable by Michael. Today they run single-model. Layer 2 adds **cross-model adjudication**: the Evaluator resolves to a model from a different provider family than the Generator (see **Model selection policy**). When the engine runs a project autonomously, cross-model adjudication is **mandatory before every merge**, because there is no human gate behind it to catch a miss. When Michael runs `/review` by hand, it stays single-model by default (fast and cheap for the everyday dev loop) and takes a **`--cross-model`** flag to opt into adjudication for a change that warrants it. Either way Layer 2 wraps the existing skills; it does not replace them.
 
 The Generator works **test-first**. For each task it writes the tests that mirror the project's `test-plan.md`, watches them fail, then writes implementation until they pass. Fixing the contract before the code exists is what gives the Evaluator something objective to check and keeps the loop from grading vibes. This is the engine's default execution discipline, established early as a change to how `/work` runs and applied from the first phase onward. This project's own [tasks.md](tasks.md) is built the same way: every phase opens with its tests.
 
 ### Layer 3: Supervision infrastructure
 
-Long-running work needs to be watched. This layer provides background dispatch for long-running runs, a **visibility surface** showing which agents are running and which are blocked on Michael, and **heartbeat check-ins** so a run that has gone quiet is noticed rather than silently stalled. The visibility surface feeds the cockpit.
+Long-running work needs to be watched. This layer provides background dispatch for long-running runs, a **visibility surface** showing which agents are running and which are blocked on Michael, and **heartbeat check-ins** so a run that has gone quiet is noticed rather than silently stalled. A run enters the **blocked-on-Michael state** when the escalation policy (Foundational Tier) flags it, not by default; absent an escalation, a successful run completes and merges on its own. The visibility surface feeds the cockpit.
 
 Background dispatch already exists in embryo. **`/work --auto`** is the unattended execution mode: one invocation sweeps a task list end to end with no interaction gates (no plan-mode approval, no per-task confirmation, auto-commit per task), stopping only on hard errors. The work-runner already spawns `/work --auto` from a cockpit button (shipped in 06-webview). Layer 3 takes `/work --auto` as its unit of background work and adds the visibility surface, the blocked-on-Michael state, and heartbeats around it. `--auto` stays a mode Michael can trigger himself; Layer 3 is what lets the engine trigger it, and watch it, unattended.
 
@@ -238,7 +244,7 @@ Wire Codex and other foundation models as **dispatchable executors**. A dispatch
 | Layer | Role | Key principle |
 |---|---|---|
 | 1. Deliberative intent | Planner: idea to approved spec | Planning is most of the value |
-| 2. Generator-Evaluator | Execution with cross-model review | Skeptical, separate evaluator; deliberate invocation |
+| 2. Generator-Evaluator | Execution with cross-model review | Skeptical, separate evaluator; mandatory before every merge |
 | 3. Supervision | Background dispatch, visibility, heartbeats | A quiet run must be noticed |
 | 4. Sandboxing & security | Isolation, scoped creds, untrusted inbound | Progressive trust, APIs over browsers |
 | 5. Multi-model dispatch | Codex and others as executors | Explicit handoffs over compaction |
@@ -275,13 +281,29 @@ When the intent layer needs to ask questions to scope or plan, it asks on Telegr
 
 Self-improvement today is narrow: the nightly job compiles raw notes into the wiki. That is improvement of the *knowledge base*, not of *Jarvis*.
 
-This project adds self-improvement about **how Jarvis itself operates**: detecting bugs that were fixed (so the fix becomes a remembered pattern), repeated user questions that should become commands, and recurring friction in how Jarvis is used.
+This project adds self-improvement about **how Jarvis itself operates**: detecting bugs that were fixed (so the fix becomes a remembered pattern), repeated user questions that should become commands, and recurring friction in how Jarvis is used. It runs as a **nightly loop** that extends the nightly vault review Jarvis already does: today that loop reads the vault and updates the vault; this widens it to read Jarvis's own operation and improve Jarvis itself.
 
-One of these inputs already exists. The **Ask-Twice telemetry** from [03-resolver](../03-resolver/spec.md) already logs repeated intents and proposes new skills or crons. The observation loop generalizes that mechanism: it widens the signal from repeated questions to bugs and friction, and routes the output as full projects rather than only skill-or-cron proposals.
+### The sensor layer
 
-The key recursion: **Jarvis is itself a product.** It has a repo (`~/workspace/jarvis`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Jarvis product, fed by an **observation loop** that watches Jarvis's own operation and files friction, bugs, and repeated questions as projects in Jarvis's own backlog.
+The loop is only as good as what it can sense. Three sources feed it:
 
-So the engine that takes "build feature X for Aura" from idea to shipped is the same engine that takes "Michael keeps asking the same thing, that should be a command" from observation to a filed project. The observation loop is the main new piece, and even it extends the existing Ask-Twice telemetry rather than starting fresh; everything downstream of it is the engine already being built.
+- **The vault.** Already the largest sensor surface, and a shared one: journals, reviews, and project notes carry friction signals for every product, Jarvis included.
+- **Product telemetry.** As Aura and Assay go live they emit usage and product telemetry. Jarvis has access to those streams, and they become sensor input for each product's self-improvement.
+- **Jarvis's own interactions.** Every Jarvis interaction is logged, successful or not. Failed, mis-routed, or rephrased interactions are the highest-value signal: direct evidence of where Jarvis falls short.
+
+### The synthesis stage
+
+Raw sensor signal cannot go straight into a decision. A night of interaction logs and vault diffs is too much, too noisy, and too unstructured to reason over directly. A **synthesis stage** sits between sensing and deciding: it diarizes and aggregates the raw signal into a compact, structured digest the loop can reason about. This mirrors how the nightly vault review already synthesizes raw notes; the interaction stream gets its own synthesis path.
+
+### The observation loop
+
+The loop reads the synthesized digest and decides what to do about it. It has two halves. It files the friction signals worth acting on as projects, and it **discards the rest**. The discard half is not optional: a system that watches its own friction will generate marginal self-work without bound, so admission control on the backlog matters as much as detection.
+
+The key recursion: **Jarvis is itself a product.** It has a repo (`~/workspace/jarvis`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Jarvis product, fed by the observation loop above. The loop both files projects and, within the concurrency and escalation rules, dispatches the engine to execute them, improving Jarvis overnight. A self-generated project has no Michael awake at 3am to approve its spec, so the escalation policy governs that gate too: a low-risk self-improvement is specced and run unattended; anything the policy flags waits for Michael's review.
+
+One input already exists. The **Ask-Twice telemetry** from [03-resolver](../03-resolver/spec.md) logs repeated intents and proposes new skills or crons. The observation loop generalizes it: it widens the signal from repeated questions to bugs, friction, and failed interactions, adds the synthesis and discard stages, and routes survivors as full projects rather than only skill-or-cron proposals.
+
+So the engine that takes "build feature X for Aura" from idea to shipped is the same engine that takes "Michael keeps asking the same thing, that should be a command" from observation to a shipped change. Everything downstream of the observation loop is the engine already being built.
 
 ---
 
@@ -289,7 +311,7 @@ So the engine that takes "build feature X for Aura" from idea to shipped is the 
 
 The v1 wedge, stated as a single sentence:
 
-> **Jarvis takes a coding idea, discusses it into a spec, dispatches Claude plus Codex to build and cross-review it in a sandbox, supervises the run, and reports back.**
+> **Jarvis takes a coding idea, discusses it into a spec, dispatches Claude plus Codex to build and cross-review it in a sandbox, supervises the run, merges the result when the gates pass, and reports back.**
 
 ### Scope constraints
 
@@ -300,13 +322,13 @@ The v1 wedge, stated as a single sentence:
 
 ### Concurrency model
 
-Jarvis must run **multiple projects concurrently**: a global cap of N projects across all products at once. The intent layer schedules within that cap. Concurrency is global, not per-product (two Aura projects and one Assay project is a valid state, subject to the global N).
+Jarvis runs **multiple products concurrently, but only one project per product at a time**. Two products advancing in parallel (an Aura project and an Assay project) is the target state; two projects on the same product is not. Serializing per product is deliberate: with merges now autonomous (no human gate), one-project-per-product guarantees no two runs ever touch the same repo at once, so concurrent auto-merges cannot collide. A global cap still bounds total parallelism across products.
 
-The work-runner already enforces this shape at small scale: a global cap (`WORK_RUN_GLOBAL_CAP`) and a per-project cap (one run per project at a time). The intent layer's scheduler generalizes those caps; it does not introduce a new concurrency model.
+The work-runner already enforces this shape at small scale: a global cap (`WORK_RUN_GLOBAL_CAP`) and a per-project cap (one run per project at a time). The intent layer's scheduler tightens the per-project cap into a **per-product** cap of one and generalizes the global cap; it does not introduce a new concurrency model.
 
 ### Isolation model
 
-Per-project isolation via a **git worktree per project**. Each concurrent project gets its own worktree (and, where warranted, its own Docker container per Layer 4) so concurrent runs cannot interfere with each other's working tree, branches, or build state. Isolation is per-project, not per-product: two projects on the same product repo still get separate worktrees.
+Per-project isolation via a **git worktree per project**. Each running project gets its own worktree (and, where warranted, its own Docker container per Layer 4) so concurrent runs across products cannot interfere with each other's working tree, branches, or build state. Because only one project runs per product at a time, two runs never share a repo: isolation separates products from each other, and the one-project-per-product rule (see **Concurrency model**) handles isolation within a product.
 
 ### Build-vs-adopt
 
@@ -317,9 +339,9 @@ Settled: **keep Jarvis's own Node/TS spine.** Borrow patterns from OpenClaw, Her
 The wedge is done when, for a repo-backed product, all of the following hold:
 
 - A coding idea, raised in chat or surfaced from the journal, becomes an **approved spec** through conversation. Michael's only required inputs are answering scoping questions and approving the spec.
-- The approved spec is **dispatched into a sandboxed run** (git worktree, scoped credentials), a **different model cross-reviews** the output, and the result returns as a **branch or PR** on the product repo, never a direct write to its main line.
+- The approved spec is **dispatched into a sandboxed run** (git worktree, scoped credentials), a **different model cross-reviews** the output, and when cross-review and the test suite pass, Jarvis **merges the result itself** onto the product repo's main line.
 - The cockpit shows, without Michael asking, **which projects are running and which are blocked on him.**
-- **Merging the result is Michael's explicit action.** Jarvis prepares the change; it does not land it.
+- **Merging is autonomous.** When the automated gates pass, Jarvis lands the change; Michael is involved only when the escalation policy flags a change as too high-risk to merge unattended.
 - Two projects running concurrently across two products do not corrupt either repo's working tree.
 
 This is observable behavior, not a metric. [test-plan.md](test-plan.md) turns each line into a concrete check.
@@ -341,6 +363,7 @@ The ordering principle: build the foundational tier first (everything depends on
 - Product-overlay index (per-product knowledge manifests over the type-organized vault).
 - Model-agnostic agent-definition format and a compiler to the Claude format (the Codex and other targets follow in Phase 4).
 - Model selection policy: the model registry, role-to-capability bindings, and the deterministic resolver. The cross-model adjudication constraint is exercised in Phase 4, but the policy file and resolver are foundational and built here.
+- Escalation policy: the declarative policy file and the mechanism for entering the blocked-on-Michael state. The component is built here; the specific escalation rules fill in over time.
 
 ### Phase 2: Cockpit and journal intake
 
@@ -356,23 +379,24 @@ The ordering principle: build the foundational tier first (everything depends on
 - Layer 1 (Planner): idea-to-spec conversation, on chat and in the cockpit's planning mode.
 - Layer 3 (supervision): background dispatch, visibility surface, heartbeats.
 - Layer 4 (sandboxing): git worktree per project, per-repo scoped credentials, egress allowlists.
-- Layer 2, single-model: the `/work` Generator and `/review` Evaluator running end to end on one model, against one repo-backed product, to prove the loop. Cross-model adjudication is added in Phase 4.
+- Layer 2, single-model: the `/work` Generator and `/review` Evaluator running end to end on one model, against one repo-backed product, to prove the loop. The loop stops at a branch; autonomous merge is held until Phase 4, because cross-model review (the other half of the merge contract) does not exist until then. Cross-model adjudication and autonomous merge are added in Phase 4.
 
 ### Phase 4: Multi-model dispatch and cross-review
 
 > Depends on: Phase 3.
 
 - Layer 5: Codex wired as a dispatchable executor; explicit handoff messages; agent definitions compiling to the Codex target.
-- Layer 2, cross-model upgrade: the Evaluator resolves to a different-provider model from the Generator (cross-model adjudication), invoked Oracle-style. Cross-model is the default for autonomous engine runs; manual `/review` gains a `--cross-model` opt-in flag.
-- Concurrency: the global N-project scheduler across all repo-backed products.
+- Layer 2, cross-model upgrade: the Evaluator resolves to a different-provider model from the Generator (cross-model adjudication). Cross-model review becomes **mandatory before every merge** for autonomous engine runs, and with the full merge contract (cross-model review plus tests) now in place, **autonomous merge is enabled**. Manual `/review` gains a `--cross-model` opt-in flag.
+- Concurrency: the scheduler enforcing one project per product plus a global cap across all repo-backed products.
 - This phase completes the v1 wedge.
 
 ### Phase 5: Operational self-improvement
 
 > Depends on: the engine from Phases 3 and 4.
 
-- The observation loop: extend the existing Ask-Twice intent telemetry to also notice fixed bugs and recurring friction, and file all three as projects into `docs/projects/ideas.md`.
-- Point the existing engine at the Jarvis product. No new execution subsystem.
+- The sensor layer (vault, product telemetry, logged Jarvis interactions) and the synthesis stage that diarizes raw signal into a digest.
+- The observation loop: extend the existing Ask-Twice telemetry to also notice fixed bugs, recurring friction, and failed interactions; triage candidates, file the survivors as projects into `docs/projects/ideas.md`, discard the rest.
+- Point the existing engine at the Jarvis product, running as a nightly loop. No new execution subsystem.
 
 ### Later (out of v1)
 
@@ -388,10 +412,11 @@ The ordering principle: build the foundational tier first (everything depends on
 - [ ] **Keeping the product-overlay index in sync.** The overlay index points at slices of a type-organized vault that grows every night. As the vault grows, the manifest drifts unless something maintains it. Is the index rebuilt on a schedule, updated incrementally on each ingest, or recomputed on demand at retrieval time? Each has a different staleness-versus-cost tradeoff.
 - [ ] **The vault's hand-written product list.** The vault's `CLAUDE.md` carries a hand-curated "What I'm Working On" list, separate from the `projects/*.md` product files. Product registration keeps the product files and the registry honest. Should it also rewrite that hand-written list, or only flag drift between the list and the registry and leave the edit to Michael? Auto-rewriting touches the vault's identity file; flagging keeps it human-owned but lets it lag.
 - [ ] **What counts as a "generalizable" lesson.** The one write-back channel from Regime B into the vault is for generalizable cross-product lessons (playbook or world-view). What is the criterion that separates a genuinely cross-product lesson from a project-specific detail that should stay in the product repo? Too loose and the playbook fills with noise; too strict and real lessons never compound.
-- [ ] **Cost and reconciliation overhead at concurrency.** Running many projects at once is cheap (parallelism is cheap). Reconciling their outputs is not: merges, conflicting roadmap edits, cross-project dependencies surfacing late. How does the intent layer schedule and reconcile N concurrent projects without the reconciliation cost swamping the parallelism gain? What is a sane value for N?
+- [ ] **Cost and reconciliation overhead at concurrency.** One-project-per-product removes same-repo merge conflicts, but reconciliation across products is not free: conflicting cross-product roadmap edits, cross-product dependencies surfacing late, and total token cost across many parallel products. What is a sane global cap, and how does the intent layer keep cross-product reconciliation cost from swamping the parallelism gain?
 - [ ] **Per-project cost visibility.** Dispatching across multiple foundation models means cost is no longer a single subscription line (see Scale Considerations). The model resolver logs the model per call, so per-project cost is computable, but the spec does not say where it surfaces. Does the cockpit show running cost per project, and is there a budget cap that pauses a project that overruns?
 - [ ] **When and how to strip harness layers.** The harness-design research says build layers removable and strip them as models improve. What is the concrete signal that a given harness layer (an evaluator step, a scaffolding prompt) is now redundant, and what is the process for removing it without a regression?
 - [ ] **Standard for model-agnostic agent definitions.** The neutral agent-definition representation must compile to Claude, Codex, and Gemini formats. Is there an existing standard to adopt, or is this a small bespoke schema? What is the minimum set of fields (role, tools, constraints) that survives translation to every target?
 - [ ] **Capability vocabulary for the model registry.** The model selection policy routes by capability tags (`coding`, `long-context`, and so on). Too few tags and the resolver cannot tell a coding model from a classifier; too many and every new model needs a hand-assigned tag set that drifts from reality. What is the minimum viable tag vocabulary, and is it hand-maintained or derived from eval scores?
 - [ ] **Who may pin a model.** Model selection precedence puts an explicit pin above the role default. Should the Planner be allowed to pin a model during scoping, given it holds the most context on the job, or is pinning reserved for Michael with the Planner only able to recommend?
+- [ ] **The escalation rules.** The escalation policy ships as a component in Phase 1 with its specific rules deferred. What classes of change are too high-risk to merge unattended (schema migrations, auth, credentials, payment code, public-facing surfaces)? Is the risk classification hand-maintained, derived from which paths a diff touches, or judged per-run by a model? And does it tighten or loosen as trust in the autonomous loop grows?
 - [ ] **Eventual structured store for the life-products.** Family and health are tracked but not executed in v1, and may never be code products. If they later warrant structured execution, do they get real code repos, or a different repo-shaped store for structured durable memory? The federated-memory model assumes "product repo" but family and health may never have code.

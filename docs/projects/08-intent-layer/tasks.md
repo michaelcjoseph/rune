@@ -1,6 +1,6 @@
 # Intent Layer — Tasks
 
-Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
 > **Test-driven by default.** Every phase below opens with a **Tests (write first)** block.
 > Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
@@ -28,6 +28,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] Write the test suite for the **product-overlay index** — test-plan.md §3.
 - [x] Write the test suite for **model-agnostic agent definitions** — test-plan.md §4.
 - [x] Write the test suite for the **model selection policy** — test-plan.md §5.
+- [ ] Write the test suite for the **escalation policy** — test-plan.md §6.
 - [x] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Product/project registry
@@ -58,6 +59,11 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [ ] Build the deterministic resolver: (role, capabilities, policy) → model, precedence pin → role-default → global-fallback, logging the chosen model and the rule that fired. Include the `evaluator.distinct_from: generator` constraint (exercised in Phase 4).
 - [ ] Wire the resolver into `runAgent`, replacing the hardcoded `config.AGENT_MODEL` default while preserving today's effective model for every unchanged agent.
 
+### Escalation policy
+
+- [ ] Build the escalation policy as a declarative file (data not code): the conditions under which Jarvis escalates to the blocked-on-Michael state rather than proceeding — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, a self-generated spec too consequential to approve unattended.
+- [ ] Build the decision module that reads the policy and returns escalate/proceed for a given change, deterministically, logging the rule that fired. Fails closed on a malformed or missing policy.
+
 ### Documentation
 
 - [ ] Update `CLAUDE.md` and `docs/projects/index.md` for the new foundational modules.
@@ -68,8 +74,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for the **product/project cockpit** — test-plan.md §6.
-- [ ] Write the test suite for the **journal-to-intent flow** — test-plan.md §7.
+- [ ] Write the test suite for the **product/project cockpit** — test-plan.md §7.
+- [ ] Write the test suite for the **journal-to-intent flow** — test-plan.md §8.
 - [ ] Confirm red before implementation.
 
 ### Cockpit
@@ -93,15 +99,15 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for the **Planner (Layer 1)** — test-plan.md §8.
-- [ ] Write the test suite for **supervision (Layer 3)** — test-plan.md §9.
-- [ ] Write the test suite for **sandboxing and security (Layer 4)** — test-plan.md §10.
-- [ ] Write the test suite for the **single-model Generator-Evaluator loop (Layer 2)** — test-plan.md §11.
+- [ ] Write the test suite for the **Planner (Layer 1)** — test-plan.md §9.
+- [ ] Write the test suite for **supervision (Layer 3)** — test-plan.md §10.
+- [ ] Write the test suite for **sandboxing and security (Layer 4)** — test-plan.md §11.
+- [ ] Write the test suite for the **single-model Generator-Evaluator loop (Layer 2)** — test-plan.md §12.
 - [ ] Confirm red before implementation.
 
 ### Layer 1 — Planner
 
-- [ ] Build the idea-to-spec conversation: asks questions, surfaces assumptions, scopes, produces a spec artifact Michael approves before anything is dispatched. Works on chat and in the cockpit's planning mode.
+- [ ] Build the idea-to-spec conversation: asks questions, surfaces assumptions, scopes, produces a spec artifact that is approved before anything is dispatched. Works on chat and in the cockpit's planning mode.
 - [ ] Wire the approved artifact into `project-setup-writer` so it scaffolds `spec.md` / `tasks.md` / `test-plan.md`, with the per-phase Tests block baked into the generated `tasks.md`.
 
 ### Layer 3 — Supervision
@@ -112,13 +118,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Layer 4 — Sandboxing and security
 
-- [ ] Git worktree per project; separate worktrees even for two projects on the same product repo.
+- [ ] Git worktree per project; worktrees isolate products from each other, and the one-project-per-product rule means two runs never share a repo.
 - [ ] Per-repo scoped credentials and egress allowlists.
-- [ ] Untrusted-inbound / prompt-injection handling; enforce that Regime B writes to a branch/worktree only, never the vault or a repo's main line.
+- [ ] Untrusted-inbound / prompt-injection handling; enforce that Regime B writes only within its worktree and never to the vault — a change reaches a repo's main line only through the merge contract.
 
 ### Layer 2 — single-model Generator-Evaluator
 
-- [ ] Prove the loop end to end on one model against one repo-backed product (Assay or Aura): approved spec → `/work` Generator (test-first) → `/review` Evaluator → result on a branch, merge gate held for Michael.
+- [ ] Prove the loop end to end on one model against one repo-backed product (Assay or Aura): approved spec → `/work` Generator (test-first) → `/review` Evaluator → result on a branch. The single-model loop stops at a branch; autonomous merge is held until Phase 4, because cross-model review (the other half of the merge contract) does not exist yet.
 - [ ] Implement the bounded loop with escalation to the blocked-on-Michael state after N failed Evaluator rounds.
 
 ### Documentation
@@ -131,9 +137,9 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **multi-model dispatch (Layer 5)** — test-plan.md §12.
-- [ ] Write the test suite for **cross-model adjudication (Layer 2 upgrade)** — test-plan.md §13.
-- [ ] Write the test suite for the **concurrency scheduler** — test-plan.md §14.
+- [ ] Write the test suite for **multi-model dispatch (Layer 5)** — test-plan.md §13.
+- [ ] Write the test suite for **cross-model adjudication (Layer 2 upgrade)** — test-plan.md §14.
+- [ ] Write the test suite for the **concurrency scheduler** — test-plan.md §15.
 - [ ] Confirm red before implementation.
 
 ### Layer 5 — Multi-model dispatch
@@ -143,12 +149,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Layer 2 — cross-model upgrade
 
-- [ ] Make the Evaluator resolve to a different-provider model from the Generator for autonomous engine runs (the policy's `evaluator.distinct_from` constraint).
+- [ ] Make the Evaluator resolve to a different-provider model from the Generator for autonomous engine runs (the policy's `evaluator.distinct_from` constraint); cross-model review is mandatory before every merge.
+- [ ] Enable autonomous merge: with the full merge contract (cross-model review plus tests) in place and the escalation policy not flagging the change, the run merges to the product repo's main line itself.
 - [ ] Add the `/review --cross-model` opt-in flag for manual reviews; keep manual `/review` single-model by default.
 
 ### Concurrency
 
-- [ ] Build the global N-project scheduler across all repo-backed products, generalizing `WORK_RUN_GLOBAL_CAP` and the per-project cap; queue work beyond N.
+- [ ] Build the scheduler: one project per product at a time, plus a global cap across all repo-backed products. Generalize `WORK_RUN_GLOBAL_CAP` and tighten the per-project cap into a per-product cap of one; queue work beyond a cap.
 - [ ] Verify the completed v1 wedge against spec § Definition of done (every line observable end to end).
 
 ### Documentation
@@ -161,14 +168,20 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for the **observation loop** — test-plan.md §15.
+- [ ] Write the test suite for the **observation loop** — test-plan.md §16.
 - [ ] Confirm red before implementation.
+
+### Sensor layer and synthesis
+
+- [ ] Build the sensor layer: ingest vault signals, product telemetry, and logged Jarvis interactions (successful and failed). Log every Jarvis interaction.
+- [ ] Build the synthesis stage that diarizes raw sensor signal into a compact, structured digest the loop reasons over.
 
 ### Observation loop
 
-- [ ] Extend the existing Ask-Twice intent telemetry to also detect fixed bugs and recurring friction, with de-duplication.
-- [ ] File detected items as proposed projects into `docs/projects/ideas.md`, for Michael's approval.
-- [ ] Point the existing project-execution engine at the Jarvis product — no new execution subsystem.
+- [ ] Extend the existing Ask-Twice intent telemetry to also detect fixed bugs, recurring friction, and failed or mis-routed interactions, with de-duplication.
+- [ ] Triage detected items: file the worthwhile ones as projects into `docs/projects/ideas.md`, discard the rest.
+- [ ] Dispatch the existing project-execution engine at the Jarvis product to run filed projects, within the concurrency and escalation rules — no new execution subsystem. The escalation policy governs spec approval for self-generated projects.
+- [ ] Run the loop nightly, extending the existing nightly vault review.
 
 ### Documentation
 
@@ -176,8 +189,9 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ## Cross-cutting (verify throughout)
 
-> Not a phase. These run against every phase as it lands — see test-plan.md §16–§17.
+> Not a phase. These run against every phase as it lands — see test-plan.md §17–§18.
 
 - [ ] Two-regime safety: Regime A is unchanged; every vault write is propose-and-approve; the single Regime B → vault channel is generalizable lessons only.
+- [ ] Merge-contract safety: no change reaches a product repo's main line without passing the merge contract (cross-model review and the test suite) and clearing the escalation policy — there is no ungated autonomous merge.
 - [ ] The existing skills `/work`, `/work --auto`, and `/review` stay directly invokable by Michael through all phases.
 - [ ] Resilience: a failed run is discardable, a restart loses no foundational state, corrupt state files fail fast.
