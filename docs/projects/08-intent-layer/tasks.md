@@ -173,7 +173,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Sensor layer and synthesis
 
-- [ ] Build the sensor layer: ingest vault signals, product telemetry, and logged Jarvis interactions (successful and failed). Log every Jarvis interaction.
+- [x] Build the sensor layer: ingest vault signals, product telemetry, and logged Jarvis interactions (successful and failed). Log every Jarvis interaction.
 - [ ] Build the synthesis stage that diarizes raw sensor signal into a compact, structured digest the loop reasons over.
 
 ### Observation loop
