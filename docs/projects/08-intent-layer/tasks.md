@@ -169,7 +169,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Tests (write first)
 
 - [x] Write the test suite for the **observation loop** — test-plan.md §16.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Sensor layer and synthesis
 
