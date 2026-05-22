@@ -7,15 +7,20 @@
  * done) only; live **run-status** (running, blocked on Michael) lives in the supervision
  * layer and is surfaced to the cockpit separately.
  *
- * STATUS: contract stub. The type surface and function signatures below are the contract
- * pinned by the test-first suite in `registry.test.ts` (test-plan.md §1). The function
- * bodies are intentionally unimplemented — Phase 1's registry implementation tasks fill
- * them in. Until then the suite is RED by design.
+ * STATUS: partial. `buildRegistry` is implemented; `getAllProjects`, `writeRegistry`, and
+ * `readRegistry` remain stubs, filled in by the registry read/write task. The contract is
+ * pinned by the test-first suite in `registry.test.ts` (test-plan.md §1).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product/project registry"), test-plan.md (§1)}.
  */
 
 import config from '../config.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('registry');
+
+/** Current registry schema version. */
+const REGISTRY_VERSION = 1;
 
 /** Durable lifecycle status of a project. Never run-status (running / blocked). */
 export type LifecycleStatus = 'planned' | 'active' | 'done';
@@ -75,13 +80,51 @@ export const REGISTRY_FILE = config.REGISTRY_FILE;
 const NOT_IMPLEMENTED =
   'registry: not implemented — Phase 1 registry tasks (docs/projects/08-intent-layer) fill this in';
 
+/** Normalize an `index.md` Status-column string to a canonical lifecycle status. */
+function parseStatus(raw: string): LifecycleStatus {
+  switch (raw.trim().toLowerCase()) {
+    case 'done':
+      return 'done';
+    case 'in progress':
+    case 'active':
+      return 'active';
+    default:
+      // 'Planned', and any unrecognized status, map to 'planned' — the conservative default.
+      return 'planned';
+  }
+}
+
+/** Parse the project rows of a repo's `docs/projects/index.md` into registry projects. */
+function parseProjects(projectsIndex: string | null): RegistryProject[] {
+  if (!projectsIndex) return [];
+  const projects: RegistryProject[] = [];
+  for (const line of projectsIndex.split('\n')) {
+    // Table rows: | [slug](slug/spec.md) | Status | Summary |
+    const m = line.match(/^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/);
+    if (m) projects.push({ slug: m[1]!.trim(), status: parseStatus(m[2]!) });
+  }
+  return projects;
+}
+
 /**
- * Build the registry model from scanned product sources. Pure and deterministic: the same
- * sources always yield the same products/projects model (only `builtAt` varies). Logs the
- * build timing and the count of products/projects scanned.
+ * Build the registry model from scanned product sources. Deterministic: the same sources
+ * always yield the same products/projects model (only `builtAt` varies). Logs the build
+ * timing and the count of products/projects scanned.
  */
-export function buildRegistry(_sources: RegistrySources): Registry {
-  throw new Error(NOT_IMPLEMENTED);
+export function buildRegistry(sources: RegistrySources): Registry {
+  const startedAt = Date.now();
+  const products: RegistryProduct[] = sources.products.map((source) => ({
+    name: source.name,
+    repoBacked: source.repoBacked,
+    projects: parseProjects(source.projectsIndex),
+  }));
+  const projectCount = products.reduce((sum, p) => sum + p.projects.length, 0);
+  log.info('registry built', {
+    products: products.length,
+    projects: projectCount,
+    durationMs: Date.now() - startedAt,
+  });
+  return { version: REGISTRY_VERSION, builtAt: new Date(startedAt).toISOString(), products };
 }
 
 /**

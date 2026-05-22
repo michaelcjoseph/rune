@@ -12,7 +12,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Mocks (must precede the module import) ---
 
-const mockLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+// vi.hoisted so mockLog exists before registry.ts's module-load `createLogger()` call.
+const { mockLog } = vi.hoisted(() => ({
+  mockLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
 
 vi.mock('../config.js', () => ({
