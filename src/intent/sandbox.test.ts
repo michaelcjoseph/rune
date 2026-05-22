@@ -126,6 +126,12 @@ describe('sandbox — egress allowlist (test-plan §11)', () => {
     // A naive includes() match would wrongly allow this.
     expect(isEgressAllowed('evil-github.com', sandbox())).toBe(false);
   });
+
+  it('normalizes case and a trailing FQDN dot before matching', () => {
+    // DNS host names are case-insensitive and a trailing dot denotes the same host.
+    expect(isEgressAllowed('GitHub.COM', sandbox())).toBe(true);
+    expect(isEgressAllowed('github.com.', sandbox())).toBe(true);
+  });
 });
 
 describe('sandbox — credential scoping (test-plan §11)', () => {

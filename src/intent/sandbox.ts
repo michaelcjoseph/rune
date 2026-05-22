@@ -10,10 +10,10 @@
  * blocking egress at the network layer) is integration that builds on these checks; what is
  * pinned here is the boundary logic, including path-traversal defense on the write check.
  *
- * STATUS: partially implemented. `worktreePathFor` allocates the per-project worktree path.
- * `isWriteAllowed`, `isEgressAllowed`, and `canReachCredential` remain contract stubs,
- * filled in by the remaining Phase 3 Layer-4 tasks; their tests in `sandbox.test.ts`
- * (test-plan.md §11) stay RED until then.
+ * STATUS: partially implemented. `worktreePathFor`, `isEgressAllowed`, and
+ * `canReachCredential` are implemented. `isWriteAllowed` remains a contract stub, filled in
+ * by the final Phase 3 Layer-4 task; its tests in `sandbox.test.ts` (test-plan.md §11)
+ * stay RED until then.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 4"), test-plan.md (§11)}.
  */
@@ -81,17 +81,34 @@ export function isWriteAllowed(_targetPath: string, _sandbox: SandboxSpec): bool
 }
 
 /**
- * Whether the run may make network egress to `host` — true only when `host` is on
- * `sandbox.egressAllowlist`. An empty allowlist denies all egress.
+ * Normalize a hostname for allowlist comparison: surrounding whitespace is trimmed, DNS
+ * host names are case-insensitive (RFC 4343) so case is folded, and a single trailing dot
+ * denotes the same FQDN so it is dropped. Comparison stays exact on the normalized form —
+ * no prefix/suffix/substring matching.
  */
-export function isEgressAllowed(_host: string, _sandbox: SandboxSpec): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+function normalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.$/, '');
+}
+
+/**
+ * Whether the run may make network egress to `host` — true only when `host`, normalized, is
+ * an **exact** member of `sandbox.egressAllowlist`. Exact membership (not
+ * prefix/suffix/substring) is what makes a subdomain (`evil.github.com`), a suffix-spoof
+ * (`github.com.evil.example`), and a substring collision (`evil-github.com`) all deny
+ * against a `github.com` allowlist. `host` must be a bare hostname — no scheme, no port;
+ * case and a trailing FQDN dot are normalized away. An empty allowlist denies all egress.
+ */
+export function isEgressAllowed(host: string, sandbox: SandboxSpec): boolean {
+  const target = normalizeHost(host);
+  return sandbox.egressAllowlist.some((entry) => normalizeHost(entry) === target);
 }
 
 /**
  * Whether the run may read credentials owned by `credentialProduct` — true only when it is
- * the run's own product. A run can never reach another product's secrets.
+ * **exactly** the run's own product. A run can never reach another product's secrets,
+ * Jarvis's own credentials, or a prefix/case-variant of its product name. Both values are
+ * registry slugs; a non-slug `credentialProduct` simply fails the exact match (deny).
  */
-export function canReachCredential(_sandbox: SandboxSpec, _credentialProduct: string): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+export function canReachCredential(sandbox: SandboxSpec, credentialProduct: string): boolean {
+  return sandbox.product === credentialProduct;
 }

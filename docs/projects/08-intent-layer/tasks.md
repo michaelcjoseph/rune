@@ -119,7 +119,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 4 — Sandboxing and security
 
 - [x] Git worktree per project; worktrees isolate products from each other, and the one-project-per-product rule means two runs never share a repo.
-- [ ] Per-repo scoped credentials and egress allowlists.
+- [x] Per-repo scoped credentials and egress allowlists.
 - [ ] Untrusted-inbound / prompt-injection handling; enforce that Regime B writes only within its worktree and never to the vault — a change reaches a repo's main line only through the merge contract.
 
 ### Layer 2 — single-model Generator-Evaluator
