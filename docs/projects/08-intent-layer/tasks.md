@@ -81,7 +81,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Cockpit
 
 - [x] Extend the webview 06-webview shipped into the full product/project cockpit reading the registry: every product, its projects, lifecycle status, run-status. 06-webview stays as the historical record; it is not retired or folded in.
-- [ ] Add per-project start / continue / enter-planning-mode actions, each gated per-action.
+- [x] Add per-project start / continue / enter-planning-mode actions, each gated per-action.
 
 ### Journal-to-intent flow
 

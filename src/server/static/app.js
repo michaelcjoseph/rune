@@ -644,7 +644,7 @@
         `<div class="project-footer">` +
         `<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>` +
         `<span class="progress-text">${done}/${total}</span>` +
-        `<button class="run-btn" data-slug="${escHtml(slug)}" onclick="window._runWorkAuto('${escHtml(slug)}')">Run /work --auto</button>` +
+        `<button class="run-btn" data-slug="${escHtml(slug)}">Run /work --auto</button>` +
         `</div>` +
         `</div>`;
     }).join('');
@@ -684,10 +684,21 @@
             const run = proj.runStatus && proj.runStatus !== 'idle'
               ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
               : '';
+            // Each action is its own explicit-click control — gated per-action. Slug and
+            // action ride in data-* attributes (not inline onclick) so a registry-derived
+            // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
+            // #cockpit-content dispatches the click.
+            const actions = (proj.actions || []).map(action =>
+              `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
+                `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
+            ).join('');
             return `<div class="cockpit-project">` +
-              `<span class="project-slug">${escHtml(proj.slug)}</span>` +
-              `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
-              run +
+              `<div class="cockpit-project-header">` +
+                `<span class="project-slug">${escHtml(proj.slug)}</span>` +
+                `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
+                run +
+              `</div>` +
+              `<div class="cockpit-actions">${actions}</div>` +
               `</div>`;
           }).join('');
       const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
@@ -699,10 +710,49 @@
     setHTML(el, html);
   }
 
-  // Expose to onclick handlers (IIFE scope)
-  window._runWorkAuto = function(slug) {
-    showConfirmModal(slug);
-  };
+  function cockpitActionLabel(action) {
+    if (action === 'start') return 'Start';
+    if (action === 'continue') return 'Continue';
+    if (action === 'enter-planning-mode') return 'Plan';
+    return action;
+  }
+
+  // Cockpit per-project actions. start/continue dispatch /work --auto (gated by the
+  // confirmation modal); enter-planning-mode routes to the chat surface — planning mode is
+  // a conversation there (the Planner, Layer 1, lands in Phase 3).
+  function cockpitAction(slug, action) {
+    if (action === 'enter-planning-mode') {
+      const ta = document.getElementById('message-input');
+      if (ta) {
+        ta.value = `Let's plan the next work on ${slug}.`;
+        ta.focus();
+      }
+      return;
+    }
+    if (action === 'start' || action === 'continue') {
+      // start / continue both dispatch /work --auto — explicit per-action confirmation first.
+      showConfirmModal(slug);
+      return;
+    }
+    // Unknown future action — do nothing rather than mis-dispatching a work run.
+  }
+
+  // Delegated click handler — attached once to the static #cockpit-content container so it
+  // survives setHTML re-renders. Reading data-* attributes avoids inline onclick entirely.
+  function handleCockpitClick(e) {
+    const btn = e.target.closest('.cockpit-action-btn');
+    if (!btn) return;
+    cockpitAction(btn.dataset.slug, btn.dataset.action);
+  }
+
+  // Delegated click handler for the projects-panel run buttons — attached once to the
+  // static #projects-content container. data-slug (not inline onclick) keeps slugs out of
+  // a JS-in-HTML-attribute context. A disabled (running) button does not dispatch clicks.
+  function handleProjectsClick(e) {
+    const btn = e.target.closest('.run-btn');
+    if (!btn) return;
+    showConfirmModal(btn.dataset.slug);
+  }
 
   // ---- Confirmation modal ----
 
@@ -916,6 +966,8 @@
   connect();
   pollState();
   setInterval(pollState, 5000);
+  document.getElementById('projects-content')?.addEventListener('click', handleProjectsClick);
+  document.getElementById('cockpit-content')?.addEventListener('click', handleCockpitClick);
   // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.
   setTimeout(() => { pollCockpit(); setInterval(pollCockpit, 5000); }, 2500);
 })();
