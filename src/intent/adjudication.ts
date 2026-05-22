@@ -11,15 +11,15 @@
  * cross-model constraint, and evaluating the merge contract. Running the two model reviews
  * and performing the git merge are the orchestration this builds on.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `adjudication.test.ts` (test-plan.md §14). The function bodies are
- * intentionally unimplemented — a Phase 4 Layer-2-upgrade task fills them in. Until then the
- * suite is RED by design.
+ * STATUS: partially implemented. `resolveReviewMode` and `isCrossModel` — the review-mode
+ * resolver and the cross-model constraint — are live; `evaluateMergeContract` remains a
+ * contract stub that the next Phase 4 task fills in. The contract is pinned by the test
+ * suite in `adjudication.test.ts` (test-plan.md §14).
  *
- * Implementer note: enabling the cross-model path also requires flipping
+ * Implementer note: enabling the cross-model path end-to-end also requires flipping
  * `evaluatorDistinctFromGenerator` to `true` in `policies/model-policy.json` — otherwise the
- * policy resolves one provider for both Generator and Evaluator and `isCrossModel` would
- * reject every autonomous merge.
+ * model-selection policy resolves one provider for both Generator and Evaluator and
+ * `isCrossModel` would reject every autonomous merge.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 2"), test-plan.md (§14)}.
  */
@@ -54,14 +54,16 @@ const NOT_IMPLEMENTED =
 
 /**
  * Resolve the review mode. An autonomous engine run is **always** cross-model — cross-model
- * review is mandatory before every autonomous merge. A manual `/review` is single-model by
- * default; `crossModelFlag` (the `--cross-model` opt-in) makes it cross-model.
+ * review is mandatory before every autonomous merge — so the `--cross-model` flag is
+ * irrelevant for an autonomous run. A manual `/review` is single-model by default;
+ * `crossModelFlag` (the `--cross-model` opt-in) makes a manual review cross-model.
  */
-export function resolveReviewMode(_input: {
+export function resolveReviewMode(input: {
   autonomous: boolean;
   crossModelFlag: boolean;
 }): ReviewMode {
-  throw new Error(NOT_IMPLEMENTED);
+  if (input.autonomous) return 'cross-model';
+  return input.crossModelFlag ? 'cross-model' : 'single-model';
 }
 
 /**
@@ -69,8 +71,8 @@ export function resolveReviewMode(_input: {
  * provider family than its Generator. A same-provider review does not satisfy the
  * cross-model requirement for an autonomous merge.
  */
-export function isCrossModel(_adjudication: Adjudication): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+export function isCrossModel(adjudication: Adjudication): boolean {
+  return adjudication.generatorProvider !== adjudication.evaluatorProvider;
 }
 
 /**
