@@ -103,7 +103,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Write the test suite for **supervision (Layer 3)** — test-plan.md §10.
 - [x] Write the test suite for **sandboxing and security (Layer 4)** — test-plan.md §11.
 - [x] Write the test suite for the **single-model Generator-Evaluator loop (Layer 2)** — test-plan.md §12.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Layer 1 — Planner
 
