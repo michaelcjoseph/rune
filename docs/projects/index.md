@@ -13,7 +13,7 @@ its `spec.md`.
 | [05-library-into-kb](05-library-into-kb/spec.md) | Done | External reading library folded into the KB. |
 | [06-webview](06-webview/spec.md) | Done | A localhost web chat surface mirroring Telegram. |
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
-| [08-intent-layer](08-intent-layer/spec.md) | Planned | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
+| [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 
 ---
 
@@ -98,7 +98,7 @@ over non-stale wiki concepts.
   - Phase 3 — a `status: evergreen | active | stale` field on wiki concept frontmatter; `wiki-compiler` proposes (not applies) status changes via `knowledge/status-proposals.json` for weekly approval.
   - Phase 4 — polish (lapse hotspot report, graduation rule, revive-stale flow), deferred until usage data justifies.
 
-## 08-intent-layer — Planned
+## 08-intent-layer — In Progress
 
 [Spec](08-intent-layer/spec.md)
 

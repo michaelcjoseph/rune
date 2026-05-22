@@ -129,7 +129,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` and `docs/projects/index.md`; move the index row to "In Progress".
+- [x] Update `CLAUDE.md` and `docs/projects/index.md`; move the index row to "In Progress".
 
 ## Phase 4 — Multi-model dispatch and cross-review
 
