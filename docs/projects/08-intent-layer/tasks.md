@@ -50,7 +50,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Model-agnostic agent definitions
 
 - [x] Define the neutral agent-definition representation (role, tools, constraints, declared capabilities) and a compiler to the Claude `.claude/agents/*.md` format. Codex/Gemini targets follow in Phase 4.
-- [ ] Express the existing agents in the neutral format and verify the Claude compiler round-trips each one with no behavior change.
+- [x] Express the existing agents in the neutral format and verify the Claude compiler round-trips each one with no behavior change.
 
 ### Model selection policy
 
