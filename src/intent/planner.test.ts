@@ -1,13 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §9 — Planner, Layer 1 (08-intent-layer, Phase 3).
+ * Test suite for test-plan.md §9 — Planner, Layer 1 (08-intent-layer, Phase 3).
  *
- * Written BEFORE the implementation. `src/intent/planner.ts` ships as a contract stub whose
- * functions throw 'not implemented', so every test here is RED. That is the intended,
- * correct state: this is a "Tests (write first)" task — the suite goes green when a Phase 3
- * Planner implementation task lands. Do not implement the Planner to make these pass; that
- * is a separate task.
+ * Written test-first; `src/intent/planner.ts` now implements the lifecycle state machine,
+ * so the suite is green.
  *
  * Scope note: the conversation itself (the questions the Planner asks, the LLM scoping) is
  * orchestration and not unit-testable here. This suite pins the lifecycle state machine and

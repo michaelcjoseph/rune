@@ -10,10 +10,11 @@
  * approved | abandoned — and the gate that nothing is scaffold-ready before approval. The
  * Planner runs identically on the `chat` and `cockpit` surfaces.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `planner.test.ts` (test-plan.md §9). The function bodies are
- * intentionally unimplemented — a Phase 3 Planner task fills them in. Until then the suite
- * is RED by design.
+ * STATUS: implemented. The lifecycle state machine — `startPlanning` / `proposeSpec` /
+ * `approvePlan` / `abandonPlan` / `isScaffoldReady` — is live; the contract is pinned by
+ * the test suite in `planner.test.ts` (test-plan.md §9). The conversation that drives these
+ * transitions (the LLM scoping, the project-setup-writer scaffolding, overlay retrieval) is
+ * orchestration built on top.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 1"), test-plan.md (§9)}.
  */
@@ -53,27 +54,29 @@ export interface PlanningSession {
   artifact?: SpecArtifact;
 }
 
-const NOT_IMPLEMENTED =
-  'planner: not implemented — a Phase 3 Planner task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Begin a planning conversation from a fuzzy idea. The session starts in `scoping`: the
  * Planner has questions to ask before any spec exists — it never jumps straight to a spec.
  */
 export function startPlanning(
-  _idea: string,
-  _surface: PlanningSurface,
-  _product: string,
+  idea: string,
+  surface: PlanningSurface,
+  product: string,
 ): PlanningSession {
-  throw new Error(NOT_IMPLEMENTED);
+  return { idea, surface, product, status: 'scoping' };
 }
 
 /**
  * Record the spec artifact the Planner has scoped (`scoping` → `spec-proposed`). Throws if
  * the session is not in `scoping` — a spec is proposed once, from an active conversation.
  */
-export function proposeSpec(_session: PlanningSession, _artifact: SpecArtifact): PlanningSession {
-  throw new Error(NOT_IMPLEMENTED);
+export function proposeSpec(session: PlanningSession, artifact: SpecArtifact): PlanningSession {
+  if (session.status !== 'scoping') {
+    throw new Error(
+      `proposeSpec: a spec can only be proposed while scoping — session status is '${session.status}'`,
+    );
+  }
+  return { ...session, status: 'spec-proposed', artifact };
 }
 
 /**
@@ -81,8 +84,13 @@ export function proposeSpec(_session: PlanningSession, _artifact: SpecArtifact):
  * proposed yet — nothing is approved before the artifact exists. Approval is the gate:
  * only an `approved` session is scaffold-ready (see {@link isScaffoldReady}).
  */
-export function approvePlan(_session: PlanningSession): PlanningSession {
-  throw new Error(NOT_IMPLEMENTED);
+export function approvePlan(session: PlanningSession): PlanningSession {
+  if (session.status !== 'spec-proposed') {
+    throw new Error(
+      `approvePlan: cannot approve — no spec has been proposed (session status is '${session.status}')`,
+    );
+  }
+  return { ...session, status: 'approved' };
 }
 
 /**
@@ -90,8 +98,13 @@ export function approvePlan(_session: PlanningSession): PlanningSession {
  * writes no project files, so an abandoned session leaves nothing half-written. Throws if
  * the session is already in a terminal state (`approved` / `abandoned`).
  */
-export function abandonPlan(_session: PlanningSession): PlanningSession {
-  throw new Error(NOT_IMPLEMENTED);
+export function abandonPlan(session: PlanningSession): PlanningSession {
+  if (session.status === 'approved' || session.status === 'abandoned') {
+    throw new Error(
+      `abandonPlan: cannot abandon — session is already in a terminal state ('${session.status}')`,
+    );
+  }
+  return { ...session, status: 'abandoned' };
 }
 
 /**
@@ -99,6 +112,6 @@ export function abandonPlan(_session: PlanningSession): PlanningSession {
  * `project-setup-writer`) and the project dispatched. True only for an `approved` session —
  * the hard gate that nothing is dispatched before approval.
  */
-export function isScaffoldReady(_session: PlanningSession): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+export function isScaffoldReady(session: PlanningSession): boolean {
+  return session.status === 'approved';
 }
