@@ -9,9 +9,7 @@
  * computes what *would* change (`planRegistration` / `planReconciliation`) and never
  * writes; only an explicit, post-approval `applyRegistration` performs the actions.
  *
- * STATUS: partial. `planRegistration` and `applyRegistration` are implemented;
- * `planReconciliation` remains a stub, filled in by the reconciliation-pass task. The
- * contract is pinned by the test-first suite in `registration.test.ts` (test-plan.md §2).
+ * The contract is pinned by the test-first suite in `registration.test.ts` (test-plan.md §2).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product registration"), test-plan.md (§2)}.
  */
@@ -95,16 +93,17 @@ export interface RegistrationEffects {
   linkRepo(repoPath: string): Promise<void>;
 }
 
-const NOT_IMPLEMENTED =
-  'registration: not implemented — Phase 1 registration tasks (docs/projects/08-intent-layer) fill this in';
-
 /**
- * A product name must be a lowercase slug — no path separators and no traversal segments,
- * so it can never escape the `projects/` directory when mapped to a vault file path.
+ * Whether a product name is a valid lowercase slug — 1–64 chars, no path separators and no
+ * traversal segments, so it can never escape the `projects/` directory as a vault path.
  */
+function isValidProductName(product: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(product);
+}
+
+/** Throw a clear error when a product name is not a valid slug (see `isValidProductName`). */
 function assertValidProductName(product: string): void {
-  // Lowercase slug, 1–64 chars: no path separators, no traversal, no over-long filenames.
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(product)) {
+  if (!isValidProductName(product)) {
     throw new Error(
       `invalid product name '${product}' — must be a lowercase slug, 1–64 chars, ` +
         'starting with a letter or digit and containing only [a-z0-9-]',
@@ -144,8 +143,38 @@ export function planRegistration(input: RegistrationInput): RegistrationPlan {
  * (`[]`). A repo that does not look like a product is excluded, or surfaced with
  * `needsProductConfirmation` rather than registered outright.
  */
-export function planReconciliation(_input: ReconciliationInput): RegistrationPlan[] {
-  throw new Error(NOT_IMPLEMENTED);
+export function planReconciliation(input: ReconciliationInput): RegistrationPlan[] {
+  const { repos, journalMentions, registered, vaultFiles, overlayManifests } = input;
+  const reposByName = new Map(repos.map((repo) => [repo.name, repo]));
+  // Every candidate product, from discovered repos and journal mentions, de-duplicated.
+  const candidates = new Set<string>([...reposByName.keys(), ...journalMentions]);
+
+  const plans: RegistrationPlan[] = [];
+  for (const product of candidates) {
+    // A candidate whose name is not a valid slug is skipped, not crashed on.
+    if (!isValidProductName(product)) continue;
+    const repo = reposByName.get(product);
+    // Reconciliation has no finer signal than the registry entry, so a registered
+    // product's repo is treated as already linked. This can miss a registered product
+    // whose repo link was later dropped, but it never proposes a spurious link-repo
+    // action — a future ReconciliationInput.linkedRepos field would close the gap.
+    const isRegistered = registered.includes(product);
+    const plan = planRegistration({
+      product,
+      repoPath: repo ? repo.path : null,
+      vaultFileExists: vaultFiles.includes(product),
+      inRegistry: isRegistered,
+      hasOverlayManifest: overlayManifests.includes(product),
+      repoLinked: isRegistered,
+    });
+    // Nothing missing — idempotent: a settled product proposes nothing.
+    if (plan.actions.length === 0) continue;
+    // A repo that does not clearly look like a product is surfaced for confirmation
+    // rather than registered outright.
+    if (repo && !repo.looksLikeProduct) plan.needsProductConfirmation = true;
+    plans.push(plan);
+  }
+  return plans;
 }
 
 /**
