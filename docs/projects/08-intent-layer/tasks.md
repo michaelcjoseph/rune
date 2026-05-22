@@ -61,7 +61,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Escalation policy
 
-- [ ] Build the escalation policy as a declarative file (data not code): the conditions under which Jarvis escalates to the blocked-on-Michael state rather than proceeding — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, a self-generated spec too consequential to approve unattended.
+- [x] Build the escalation policy as a declarative file (data not code): the conditions under which Jarvis escalates to the blocked-on-Michael state rather than proceeding — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, a self-generated spec too consequential to approve unattended.
 - [ ] Build the decision module that reads the policy and returns escalate/proceed for a given change, deterministically, logging the rule that fired. Fails closed on a malformed or missing policy.
 
 ### Documentation

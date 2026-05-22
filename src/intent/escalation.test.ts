@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /*
  * Test-first suite for test-plan.md §6 — escalation policy (08-intent-layer, Phase 1).
@@ -48,7 +50,7 @@ function benignChange() {
     changedPaths: ['src/intent/registry.ts'],
     crossModelReview: 'resolved' as const,
     evaluatorRounds: 1,
-    specOrigin: 'michael' as const,
+    specOrigin: 'human' as const,
     specConsequence: 'routine' as const,
   };
 }
@@ -67,6 +69,22 @@ beforeEach(() => {
 });
 
 describe('escalation policy — declarative file, data not code (test-plan §6)', () => {
+  it('the shipped policies/escalation-policy.json parses cleanly and covers all four conditions', () => {
+    // Regression guard: a future hand-edit that breaks the policy file fails here, not at
+    // runtime. The file is resolved relative to this test, not the cwd.
+    const policyPath = fileURLToPath(new URL('../../policies/escalation-policy.json', import.meta.url));
+    const policy = parseEscalationPolicy(readFileSync(policyPath, 'utf8'));
+    const conditions = new Set(policy.rules.map((r) => r.condition));
+    expect(conditions).toEqual(
+      new Set([
+        'high-risk-change-class',
+        'unresolvable-cross-model-review',
+        'run-exceeded-bounds',
+        'consequential-self-generated-spec',
+      ]),
+    );
+  });
+
   it('treats the policy as data — a rule added only as file content fires with no code change', () => {
     // The `payment-code` rule is not in samplePolicy(); it exists purely as parsed file
     // content. It driving a verdict proves rules are data the decision module reads, not
