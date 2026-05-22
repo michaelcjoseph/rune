@@ -125,7 +125,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 2 — single-model Generator-Evaluator
 
 - [x] Prove the loop end to end on one model against one repo-backed product (Assay or Aura): approved spec → `/work` Generator (test-first) → `/review` Evaluator → result on a branch. The single-model loop stops at a branch; autonomous merge is held until Phase 4, because cross-model review (the other half of the merge contract) does not exist yet.
-- [ ] Implement the bounded loop with escalation to the blocked-on-Michael state after N failed Evaluator rounds.
+- [x] Implement the bounded loop with escalation to the blocked-on-Michael state after N failed Evaluator rounds.
 
 ### Documentation
 
