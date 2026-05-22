@@ -13,6 +13,7 @@ its `spec.md`.
 | [05-library-into-kb](05-library-into-kb/spec.md) | Done | External reading library folded into the KB. |
 | [06-webview](06-webview/spec.md) | Done | A localhost web chat surface mirroring Telegram. |
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
+| [08-intent-layer](08-intent-layer/spec.md) | Planned | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 
 ---
 
@@ -96,3 +97,23 @@ over non-stale wiki concepts.
   - Phase 2 — daily cron and 30-minute lapse semantics.
   - Phase 3 — a `status: evergreen | active | stale` field on wiki concept frontmatter; `wiki-compiler` proposes (not applies) status changes via `knowledge/status-proposals.json` for weekly approval.
   - Phase 4 — polish (lapse hotspot report, graduation rule, revive-stale flow), deferred until usage data justifies.
+
+## 08-intent-layer — Planned
+
+[Spec](08-intent-layer/spec.md)
+
+Jarvis becomes an intent-layer orchestrator over multi-model sub-agents.
+
+Evolves Jarvis from a reactive command-router into an orchestrator with a persistent intent
+layer: it reasons about Michael's goals, discusses them into approved specs, then dispatches
+and supervises sub-agents across multiple foundation models (Claude, Codex) and domains
+(coding first). Extends the cockpit [06-webview](06-webview/spec.md) shipped, and widens
+self-improvement to cover Jarvis's own operation.
+
+- **Two regimes:** the reliability-first substrate (raw notes, KB, second-brain memory) stays heavy and propose-and-approve; project execution is a new, light, Amp-style regime that bets on model progress.
+- **Federated memory:** vault holds raw thoughts, each product repo holds structured durable memory, a cockpit aggregates status across all of them and owns nothing.
+- **Foundational tier:** a product/project registry, product registration that keeps the vault product files and registry honest, a per-product overlay index over the type-organized vault, model-agnostic agent definitions that compile to Claude/Codex/Gemini, and a declarative model selection policy (registry + capability tags + deterministic resolver) that picks the model per dispatch and updates as models change.
+- **Five layers:** deliberative intent (Planner), Generator-Evaluator loop with cross-model adjudication (the existing `/work` and `/review` skills, made cross-model), supervision infrastructure (background dispatch around `/work --auto`), sandboxing and security, multi-model dispatch.
+- **Three surfaces:** journal as passive intake, the webview cockpit, Telegram chat as dialogue.
+- **v1 wedge:** take a coding idea, discuss it into a spec, dispatch Claude plus Codex to build and cross-review it in a sandbox, supervise, and report back — for the repo-backed products (Assay and Aura), git worktree per project, Relay repo out of scope.
+- **Task breakdown & test plan:** see [tasks.md](08-intent-layer/tasks.md) and [test-plan.md](08-intent-layer/test-plan.md). Built test-first — every phase opens by writing the tests that mirror the test plan, then the implementation that makes them pass.
