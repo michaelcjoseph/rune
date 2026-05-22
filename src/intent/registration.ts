@@ -9,10 +9,9 @@
  * computes what *would* change (`planRegistration` / `planReconciliation`) and never
  * writes; only an explicit, post-approval `applyRegistration` performs the actions.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `registration.test.ts` (test-plan.md §2). The function bodies
- * are intentionally unimplemented — Phase 1's registration tasks fill them in. Until then
- * the suite is RED by design.
+ * STATUS: partial. `planRegistration` and `applyRegistration` are implemented;
+ * `planReconciliation` remains a stub, filled in by the reconciliation-pass task. The
+ * contract is pinned by the test-first suite in `registration.test.ts` (test-plan.md §2).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product registration"), test-plan.md (§2)}.
  */
@@ -42,7 +41,11 @@ export interface RegistrationPlan {
 /** Current known state of a product — the input to planning a registration. */
 export interface RegistrationInput {
   product: string;
-  /** Absolute path of the product's code repo, or null when it has none. */
+  /**
+   * Absolute path of the product's code repo, or null when it has none. The orchestration
+   * layer must validate this path is within the workspace before wiring the `linkRepo`
+   * effect to a real implementation — this pure module forwards it verbatim.
+   */
   repoPath: string | null;
   /** Whether `projects/<product>.md` already exists in the vault. */
   vaultFileExists: boolean;
@@ -96,14 +99,42 @@ const NOT_IMPLEMENTED =
   'registration: not implemented — Phase 1 registration tasks (docs/projects/08-intent-layer) fill this in';
 
 /**
+ * A product name must be a lowercase slug — no path separators and no traversal segments,
+ * so it can never escape the `projects/` directory when mapped to a vault file path.
+ */
+function assertValidProductName(product: string): void {
+  // Lowercase slug, 1–64 chars: no path separators, no traversal, no over-long filenames.
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(product)) {
+    throw new Error(
+      `invalid product name '${product}' — must be a lowercase slug, 1–64 chars, ` +
+        'starting with a letter or digit and containing only [a-z0-9-]',
+    );
+  }
+}
+
+/**
  * Compute the registration plan for a product. Pure — it computes what *would* change and
  * never writes. Applying the plan is a separate, post-approval step (`applyRegistration`).
  * The plan omits any action whose target already exists, so registering an
  * already-present product only fills the missing pieces. A `product` name that would
  * escape the `projects/` directory is rejected.
  */
-export function planRegistration(_input: RegistrationInput): RegistrationPlan {
-  throw new Error(NOT_IMPLEMENTED);
+export function planRegistration(input: RegistrationInput): RegistrationPlan {
+  assertValidProductName(input.product);
+  const actions: RegistrationAction[] = [];
+  if (!input.vaultFileExists) {
+    actions.push({ kind: 'create-vault-file', path: `projects/${input.product}.md` });
+  }
+  if (!input.inRegistry) {
+    actions.push({ kind: 'add-registry-entry', product: input.product });
+  }
+  if (!input.hasOverlayManifest) {
+    actions.push({ kind: 'create-overlay-manifest', path: `projects/overlays/${input.product}.json` });
+  }
+  if (input.repoPath !== null && !input.repoLinked) {
+    actions.push({ kind: 'link-repo', repoPath: input.repoPath });
+  }
+  return { product: input.product, executable: input.repoPath !== null, actions };
 }
 
 /**
@@ -120,11 +151,32 @@ export function planReconciliation(_input: ReconciliationInput): RegistrationPla
 /**
  * Apply an approved registration plan: perform every action via the injected effects.
  * Runs only after the user approves — the propose-and-approve gate is the boundary
- * between planning and applying.
+ * between planning and applying. Effects run sequentially; a rejection halts the rest.
+ * Re-applying a partially-applied plan is safe only when every `RegistrationEffects`
+ * implementation is idempotent.
  */
 export async function applyRegistration(
-  _plan: RegistrationPlan,
-  _effects: RegistrationEffects,
+  plan: RegistrationPlan,
+  effects: RegistrationEffects,
 ): Promise<void> {
-  throw new Error(NOT_IMPLEMENTED);
+  for (const action of plan.actions) {
+    switch (action.kind) {
+      case 'create-vault-file':
+        await effects.createVaultFile(action.path);
+        break;
+      case 'add-registry-entry':
+        await effects.addRegistryEntry(action.product);
+        break;
+      case 'create-overlay-manifest':
+        await effects.createOverlayManifest(action.path);
+        break;
+      case 'link-repo':
+        await effects.linkRepo(action.repoPath);
+        break;
+      default: {
+        const exhaustive: never = action;
+        throw new Error(`applyRegistration: unhandled action kind ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  }
 }

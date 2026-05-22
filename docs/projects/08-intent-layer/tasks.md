@@ -37,7 +37,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Product registration
 
-- [ ] Implement the registration flow: create the vault product file `projects/<product>.md` if missing, add the registry entry, create the product-overlay manifest, link the repo if one exists — all propose-and-approve.
+- [x] Implement the registration flow: create the vault product file `projects/<product>.md` if missing, add the registry entry, create the product-overlay manifest, link the repo if one exists — all propose-and-approve.
 - [ ] Implement the reconciliation pass: detect a product present as a repo, or referenced in journals, but missing its vault file or registry entry, and propose the missing pieces. Idempotent.
 - [ ] Run the first reconciliation pass over the current products (Assay, Aura, Your Nanny, Storytime, family, health, Jarvis, Relay-as-tracked): create every missing vault product file and seed the registry + overlay manifests.
 
