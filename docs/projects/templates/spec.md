@@ -137,6 +137,12 @@ Reference `docs/design/design-brief.md` and `docs/design/style.md` for:
 
 ## Implementation Phases
 
+> The phase-by-phase task breakdown lives in [tasks.md](tasks.md) and the verification
+> checklist in [test-plan.md](test-plan.md); both follow the phase structure below. The
+> project is built **test-first** — every phase in tasks.md opens with a **Tests (write
+> first)** block whose tests must fail (red) before that phase's implementation begins,
+> and a phase is done when its test-plan sections pass.
+
 ### Phase 1: [Name]
 
 - [ ] [Deliverable]
