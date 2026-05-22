@@ -75,7 +75,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Tests (write first)
 
 - [x] Write the test suite for the **product/project cockpit** — test-plan.md §7.
-- [ ] Write the test suite for the **journal-to-intent flow** — test-plan.md §8.
+- [x] Write the test suite for the **journal-to-intent flow** — test-plan.md §8.
 - [ ] Confirm red before implementation.
 
 ### Cockpit
