@@ -59,11 +59,15 @@ describe('sandbox — worktree isolation (test-plan §11)', () => {
     );
   });
 
-  it('keeps a path-traversal product or project name inside the worktree root', () => {
-    // A malicious slug must never let the worktree path escape its root.
-    const p = worktreePathFor('../evil', 'x', WORKTREE_ROOT);
-    expect(p.startsWith(`${WORKTREE_ROOT}/`)).toBe(true);
-    expect(p).not.toContain('..');
+  it('rejects a path-traversal slug rather than letting the worktree path escape the root', () => {
+    // A separator- or dot-bearing slug is rejected outright — no path is produced.
+    expect(() => worktreePathFor('../evil', 'x', WORKTREE_ROOT)).toThrow(/invalid|slug|separator/i);
+    expect(() => worktreePathFor('aura', 'a/b', WORKTREE_ROOT)).toThrow(/invalid|slug|separator/i);
+  });
+
+  it('rejects an empty product or project slug', () => {
+    expect(() => worktreePathFor('', 'x', WORKTREE_ROOT)).toThrow(/invalid|slug/i);
+    expect(() => worktreePathFor('aura', '', WORKTREE_ROOT)).toThrow(/invalid|slug/i);
   });
 });
 

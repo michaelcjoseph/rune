@@ -10,13 +10,15 @@
  * blocking egress at the network layer) is integration that builds on these checks; what is
  * pinned here is the boundary logic, including path-traversal defense on the write check.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `sandbox.test.ts` (test-plan.md §11). The function bodies are
- * intentionally unimplemented — a Phase 3 sandboxing task fills them in. Until then the
- * suite is RED by design.
+ * STATUS: partially implemented. `worktreePathFor` allocates the per-project worktree path.
+ * `isWriteAllowed`, `isEgressAllowed`, and `canReachCredential` remain contract stubs,
+ * filled in by the remaining Phase 3 Layer-4 tasks; their tests in `sandbox.test.ts`
+ * (test-plan.md §11) stay RED until then.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 4"), test-plan.md (§11)}.
  */
+
+import { join } from 'node:path';
 
 /** The sandbox a single Regime B run executes inside. */
 export interface SandboxSpec {
@@ -35,15 +37,38 @@ const NOT_IMPLEMENTED =
   'sandbox: not implemented — a Phase 3 sandboxing task (docs/projects/08-intent-layer) fills this in';
 
 /**
+ * A valid product/project slug — non-empty, lowercase alphanumeric-or-hyphen with an
+ * alphanumeric first character (the same rule the registry enforces). Such a slug carries
+ * no path separator and no `.`, so it is always a single safe path segment, and the
+ * mapping slug → segment is injective (no collisions).
+ */
+const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
  * The deterministic worktree path for a (product, project) under `worktreeRoot`. Distinct
  * projects always get distinct paths, so two concurrent runs never share a working tree.
+ *
+ * A `product` or `project` that is not a valid slug is **rejected** with a clear error — a
+ * traversal-laden, empty, or separator-bearing slug never silently produces a path. Slugs
+ * reaching here come from the registry, which already constrains them; this is the loud
+ * boundary check. `worktreeRoot` is trusted, absolute configuration and is not sanitized.
  */
 export function worktreePathFor(
-  _product: string,
-  _project: string,
-  _worktreeRoot: string,
+  product: string,
+  project: string,
+  worktreeRoot: string,
 ): string {
-  throw new Error(NOT_IMPLEMENTED);
+  // `as const` keeps these as tuples — under noUncheckedIndexedAccess the destructured
+  // `slug` is then `string`, not `string | undefined`.
+  for (const [label, slug] of [['product', product], ['project', project]] as const) {
+    if (!VALID_SLUG.test(slug)) {
+      throw new Error(
+        `worktreePathFor: invalid ${label} slug '${slug}' — must be a non-empty ` +
+          'alphanumeric/hyphen slug with no path separators',
+      );
+    }
+  }
+  return join(worktreeRoot, product, project);
 }
 
 /**
