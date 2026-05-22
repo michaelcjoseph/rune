@@ -44,7 +44,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Product-overlay index
 
-- [ ] Build the per-product knowledge manifest pointing at the journal entries, pages, world-view sections, and wiki concepts relevant to a product. Overlay only — the vault does not move.
+- [x] Build the per-product knowledge manifest pointing at the journal entries, pages, world-view sections, and wiki concepts relevant to a product. Overlay only — the vault does not move.
 - [ ] Provide product-scoped retrieval for sub-agents (planning an Aura project pulls Aura context, not Relay).
 
 ### Model-agnostic agent definitions

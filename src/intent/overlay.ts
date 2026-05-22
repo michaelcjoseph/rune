@@ -7,10 +7,10 @@
  * It is an overlay, not a re-org: the vault never moves. A manifest only points into the
  * existing type-organized structure — every pointer is a vault-relative path.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `overlay.test.ts` (test-plan.md §3). The function bodies are
- * intentionally unimplemented — Phase 1's overlay-index tasks fill them in. Until then the
- * suite is RED by design.
+ * STATUS: partially implemented. `buildOverlayManifest` and `findStalePointers` — the
+ * manifest and its health-check — are implemented. `scopedRetrieval` remains a contract
+ * stub, filled in by the next Phase 1 overlay-index task (product-scoped retrieval for
+ * sub-agents); its tests in `overlay.test.ts` (test-plan.md §3) stay RED until then.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product-overlay index"), test-plan.md (§3)}.
  */
@@ -41,17 +41,20 @@ export interface OverlayCandidate {
   products: string[];
 }
 
-const NOT_IMPLEMENTED =
-  'overlay: not implemented — Phase 1 overlay-index tasks (docs/projects/08-intent-layer) fill this in';
-
 /**
  * Build a product's overlay manifest from scanned vault candidates. Pure: it selects the
  * candidates that relate to `product` and references them in place — it never reads, moves,
  * or rewrites vault content. A product with no related candidates yields a valid manifest
  * with an empty pointer list, not an error.
  */
-export function buildOverlayManifest(_product: string, _candidates: OverlayCandidate[]): OverlayManifest {
-  throw new Error(NOT_IMPLEMENTED);
+export function buildOverlayManifest(product: string, candidates: OverlayCandidate[]): OverlayManifest {
+  // Select the candidates tagged with this product and reference each pointer in place.
+  // Candidate order is preserved, so the same scan always yields the same manifest. A
+  // slice shared between products is kept by each related product's manifest.
+  const pointers = candidates
+    .filter((candidate) => candidate.products.includes(product))
+    .map((candidate) => candidate.pointer);
+  return { product, pointers };
 }
 
 /**
@@ -60,7 +63,9 @@ export function buildOverlayManifest(_product: string, _candidates: OverlayCandi
  * error.
  */
 export function scopedRetrieval(_manifests: OverlayManifest[], _product: string): OverlayPointer[] {
-  throw new Error(NOT_IMPLEMENTED);
+  throw new Error(
+    'overlay: scopedRetrieval not implemented — Phase 1 overlay-index task fills this in',
+  );
 }
 
 /**
@@ -69,8 +74,10 @@ export function scopedRetrieval(_manifests: OverlayManifest[], _product: string)
  * all resolve); never throws on a missing file.
  */
 export function findStalePointers(
-  _manifest: OverlayManifest,
-  _fileExists: (path: string) => boolean,
+  manifest: OverlayManifest,
+  fileExists: (path: string) => boolean,
 ): OverlayPointer[] {
-  throw new Error(NOT_IMPLEMENTED);
+  // A dead pointer is one whose target file no longer resolves — deleted or renamed.
+  // `fileExists` is injected so this stays pure and never touches the filesystem itself.
+  return manifest.pointers.filter((pointer) => !fileExists(pointer.path));
 }
