@@ -193,5 +193,5 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] Two-regime safety: Regime A is unchanged; every vault write is propose-and-approve; the single Regime B → vault channel is generalizable lessons only.
 - [x] Merge-contract safety: no change reaches a product repo's main line without passing the merge contract (cross-model review and the test suite) and clearing the escalation policy — there is no ungated autonomous merge.
-- [ ] The existing skills `/work`, `/work --auto`, and `/review` stay directly invokable by Michael through all phases.
+- [x] The existing skills `/work`, `/work --auto`, and `/review` stay directly invokable by Michael through all phases.
 - [ ] Resilience: a failed run is discardable, a restart loses no foundational state, corrupt state files fail fast.
