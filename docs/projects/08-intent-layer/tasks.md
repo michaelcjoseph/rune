@@ -86,7 +86,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Journal-to-intent flow
 
 - [x] Build the flow that synthesizes journal raw notes into the right product's vault file, propose-and-approve, never silently rewriting scope.
-- [ ] Propose the actionable part of a vault product file as roadmap items into the correct product repo, propose-and-approve.
+- [x] Propose the actionable part of a vault product file as roadmap items into the correct product repo, propose-and-approve.
 - [ ] Surface intake proposals and carried-over roadmap items for approval on Telegram and in the cockpit.
 
 ### Documentation
