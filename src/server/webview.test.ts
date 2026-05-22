@@ -165,6 +165,7 @@ describe('server/webview', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockActiveRunsMap.clear();
     mockConfig.JARVIS_HTTP_SECRET = 'test-secret';
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
@@ -412,6 +413,17 @@ describe('server/webview', () => {
       expect(res.status).toBe(200);
       expect(res.body.available).toBe(false);
       expect(typeof res.body.unavailableReason).toBe('string');
+    });
+
+    it('feeds live run-status — a project with an active work-run shows as running', async () => {
+      mockActiveRunsMap.set('m1', {
+        descriptor: { kind: 'work-run', status: 'running', payload: { projectSlug: '01-mvp' } },
+      });
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.products[0].projects[0]).toMatchObject({ slug: '01-mvp', runStatus: 'running' });
     });
   });
 

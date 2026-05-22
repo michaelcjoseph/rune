@@ -11,10 +11,10 @@
  * builds on `work-runner.ts`; what is pinned here is the bookkeeping that never lets a run
  * be lost or stuck.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `supervision.test.ts` (test-plan.md §10). The function bodies are
- * intentionally unimplemented — a Phase 3 supervision task fills them in. Until then the
- * suite is RED by design.
+ * STATUS: implemented. The visibility-surface core — `isStalled`, `getVisibility`,
+ * `markCrashed`, `recoverRun` — is live; the contract is pinned by the test suite in
+ * `supervision.test.ts` (test-plan.md §10). The background dispatch itself is the existing
+ * work-runner; this module is the surface bookkeeping built around it.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 3"), test-plan.md (§10)}.
  */
@@ -56,20 +56,22 @@ export interface VisibilitySurface {
   stalled: SupervisedRun[];
 }
 
-const NOT_IMPLEMENTED =
-  'supervision: not implemented — a Phase 3 supervision task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Whether a run has gone quiet: it is `running` but its last heartbeat is older than
  * `heartbeatIntervalMs` relative to `now` (epoch ms). Pure and cheap — no I/O, no logging,
  * so it is safe to call on a frequent timer. A terminal or blocked run is never `stalled`.
  */
 export function isStalled(
-  _run: SupervisedRun,
-  _heartbeatIntervalMs: number,
-  _now: number,
+  run: SupervisedRun,
+  heartbeatIntervalMs: number,
+  now: number,
 ): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+  if (run.status !== 'running') return false;
+  const lastHeartbeat = Date.parse(run.lastHeartbeatAt);
+  // A corrupt or unparseable heartbeat is treated as stalled — supervision fails toward
+  // visibility, never silently hiding a run that may be stuck.
+  if (Number.isNaN(lastHeartbeat)) return true;
+  return now - lastHeartbeat > heartbeatIntervalMs;
 }
 
 /**
@@ -78,19 +80,26 @@ export function isStalled(
  * interval). Pure over `(runs, heartbeatIntervalMs, now)`.
  */
 export function getVisibility(
-  _runs: SupervisedRun[],
-  _heartbeatIntervalMs: number,
-  _now: number,
+  runs: SupervisedRun[],
+  heartbeatIntervalMs: number,
+  now: number,
 ): VisibilitySurface {
-  throw new Error(NOT_IMPLEMENTED);
+  return {
+    active: runs.filter((r) => r.status === 'running' || r.status === 'blocked-on-human'),
+    blocked: runs.filter((r) => r.status === 'blocked-on-human'),
+    stalled: runs.filter((r) => isStalled(r, heartbeatIntervalMs, now)),
+  };
 }
 
 /**
  * Transition a crashed or killed run to the terminal `failed` state. A run that died is
- * never left stuck reporting `running` — the surface always reflects a terminal state.
+ * never left stuck reporting `running` — the surface always reflects a terminal state. A
+ * run already in a terminal state is returned unchanged: idempotent on `failed`, and never
+ * overwriting a `completed` run (that would destroy a real completion record).
  */
-export function markCrashed(_run: SupervisedRun): SupervisedRun {
-  throw new Error(NOT_IMPLEMENTED);
+export function markCrashed(run: SupervisedRun): SupervisedRun {
+  if (run.status === 'completed' || run.status === 'failed') return run;
+  return { ...run, status: 'failed' };
 }
 
 /**
@@ -98,6 +107,6 @@ export function markCrashed(_run: SupervisedRun): SupervisedRun {
  * a restart, so it is marked `unknown` rather than left falsely `running` forever. A run
  * already in a terminal or blocked state is returned unchanged — those states are durable.
  */
-export function recoverRun(_run: SupervisedRun): SupervisedRun {
-  throw new Error(NOT_IMPLEMENTED);
+export function recoverRun(run: SupervisedRun): SupervisedRun {
+  return run.status === 'running' ? { ...run, status: 'unknown' } : run;
 }

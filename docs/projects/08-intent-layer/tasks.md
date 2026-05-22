@@ -113,7 +113,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 3 — Supervision
 
 - [x] Generalize the work-runner into background dispatch for long-running runs.
-- [ ] Build the visibility surface: which runs are active, which are blocked on Michael; feed it to the cockpit.
+- [x] Build the visibility surface: which runs are active, which are blocked on Michael; feed it to the cockpit.
 - [ ] Add heartbeat check-ins so a quiet run is flagged rather than silently stalled.
 
 ### Layer 4 — Sandboxing and security

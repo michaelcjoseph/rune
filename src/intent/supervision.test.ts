@@ -58,6 +58,10 @@ describe('supervision — heartbeat staleness (test-plan §10)', () => {
     expect(isStalled(run({ status: 'failed', lastHeartbeatAt: staleHb }), HEARTBEAT_MS, NOW)).toBe(false);
   });
 
+  it('treats a running run with a corrupt heartbeat as stalled — fails toward visibility', () => {
+    expect(isStalled(run({ lastHeartbeatAt: 'not-a-timestamp' }), HEARTBEAT_MS, NOW)).toBe(true);
+  });
+
   it('keys staleness off the passed-in `now`, not a captured clock', () => {
     // Heartbeat at 00:09:00 — fresh at 00:09:30 (30s later), stale at 00:11:00 (2m later).
     // An implementation that read Date.now() instead of the `now` argument would fail this.
@@ -105,6 +109,11 @@ describe('supervision — crashed runs (test-plan §10)', () => {
 
   it('is idempotent — crashing an already-failed run leaves it failed', () => {
     expect(markCrashed(run({ status: 'failed' })).status).toBe('failed');
+  });
+
+  it('never overwrites a completed run — markCrashed leaves a completion record intact', () => {
+    const completed = run({ status: 'completed' });
+    expect(markCrashed(completed)).toEqual(completed);
   });
 });
 

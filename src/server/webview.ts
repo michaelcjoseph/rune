@@ -9,7 +9,7 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
-import { buildCockpitView } from '../intent/cockpit.js';
+import { buildCockpitView, type RunStatusByProject } from '../intent/cockpit.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -154,8 +154,18 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch {
     registry = null;
   }
-  // Run-status comes from the supervision surface (Layer 3, Phase 3) — empty until then.
-  const view = buildCockpitView(registry, {});
+  // Feed live run-status from the supervision surface: a project with an active work-run
+  // shows as `running`. blocked-on-human arrives once the escalation policy is wired into
+  // the loop; a project with no active run defaults to `idle` in buildCockpitView.
+  const runStatus: RunStatusByProject = {};
+  for (const handle of activeRuns.values()) {
+    const d = handle.descriptor;
+    if (d.kind === 'work-run' && d.status === 'running') {
+      const slug = d.payload['projectSlug'];
+      if (typeof slug === 'string') runStatus[slug] = 'running';
+    }
+  }
+  const view = buildCockpitView(registry, runStatus);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }
