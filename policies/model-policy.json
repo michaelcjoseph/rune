@@ -1,0 +1,32 @@
+{
+  "_comment": "Declarative model selection policy for the intent layer (project 08). Data, not code — editing this file is not a deploy. Models are referenced by stable alias, never a pinned version ID. See docs/projects/08-intent-layer/spec.md (the 'Model selection policy' section) and src/intent/model-policy.ts.",
+  "models": [
+    {
+      "alias": "opus",
+      "provider": "anthropic",
+      "format": "claude",
+      "capabilities": ["coding", "long-context", "deep-reasoning", "classify"],
+      "costTier": "high",
+      "status": "preferred"
+    },
+    {
+      "alias": "sonnet",
+      "provider": "anthropic",
+      "format": "claude",
+      "capabilities": ["coding", "long-context", "classify"],
+      "costTier": "medium",
+      "status": "active"
+    },
+    {
+      "alias": "haiku",
+      "provider": "anthropic",
+      "format": "claude",
+      "capabilities": ["classify"],
+      "costTier": "low",
+      "status": "active"
+    }
+  ],
+  "globalFallback": "opus",
+  "roleDefaults": {},
+  "evaluatorDistinctFromGenerator": false
+}

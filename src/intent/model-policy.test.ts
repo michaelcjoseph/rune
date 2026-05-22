@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /*
  * Test-first suite for test-plan.md §5 — model selection policy (08-intent-layer, Phase 1).
@@ -195,5 +197,20 @@ describe('model selection policy — integration with runAgent (test-plan §5)',
       samplePolicy(),
     );
     expect(resolution).toMatchObject({ model: 'opus', rule: 'explicit-pin' });
+  });
+});
+
+describe('model selection policy — the shipped policy file (test-plan §5)', () => {
+  it('the shipped policies/model-policy.json parses cleanly and registers the current models', () => {
+    // Regression guard: a future hand-edit that breaks the policy file fails here, not at
+    // runtime. The file is resolved relative to this test, not the cwd.
+    const policyPath = fileURLToPath(new URL('../../policies/model-policy.json', import.meta.url));
+    const policy = parsePolicy(readFileSync(policyPath, 'utf8'));
+    const aliases = policy.models.map((m) => m.alias);
+    expect(aliases).toEqual(expect.arrayContaining(['opus', 'sonnet', 'haiku']));
+    // The global fallback is `opus` — it preserves today's config.AGENT_MODEL default —
+    // and must itself be a registered model.
+    expect(policy.globalFallback).toBe('opus');
+    expect(aliases).toContain(policy.globalFallback);
   });
 });

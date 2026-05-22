@@ -11,10 +11,10 @@
  * Resolution precedence, highest first: explicit pin → role default → global fallback.
  * Every resolution is logged with the chosen model and the rule that fired.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `model-policy.test.ts` (test-plan.md §5). The function bodies are
- * intentionally unimplemented — Phase 1's model-selection-policy tasks fill them in. Until
- * then the suite is RED by design.
+ * STATUS: partially implemented. `parsePolicy` validates the declarative policy file
+ * (`policies/model-policy.json`). `resolveModel` remains a contract stub, filled in by the
+ * Phase 1 model-selection-policy resolver task; its tests in `model-policy.test.ts`
+ * (test-plan.md §5) stay RED until then.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Model selection policy"), test-plan.md (§5)}.
  */
@@ -79,6 +79,43 @@ export interface Resolution {
 const NOT_IMPLEMENTED =
   'model-policy: not implemented — Phase 1 model-selection-policy tasks (docs/projects/08-intent-layer) fill this in';
 
+const MODEL_FORMATS = new Set(['claude', 'codex', 'gemini']);
+const COST_TIERS = new Set(['low', 'medium', 'high']);
+const MODEL_STATUSES = new Set(['preferred', 'active', 'deprecated']);
+
+/** Validate one raw registry entry into a `ModelEntry`, throwing a clear, indexed error. */
+function parseModelEntry(value: unknown, index: number): ModelEntry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`model policy is invalid — models[${index}] is not an object`);
+  }
+  const m = value as Record<string, unknown>;
+  const requireString = (field: string): string => {
+    const v = m[field];
+    if (typeof v !== 'string' || v === '') {
+      throw new Error(`model policy is invalid — models[${index}].${field} is missing or not a string`);
+    }
+    return v;
+  };
+  const requireEnum = (field: string, allowed: Set<string>): string => {
+    const v = requireString(field);
+    if (!allowed.has(v)) {
+      throw new Error(
+        `model policy is invalid — models[${index}].${field} '${v}' is not one of ${[...allowed].join('|')}`,
+      );
+    }
+    return v;
+  };
+  const alias = requireString('alias');
+  const provider = requireString('provider');
+  const format = requireEnum('format', MODEL_FORMATS) as ModelEntry['format'];
+  const costTier = requireEnum('costTier', COST_TIERS) as ModelEntry['costTier'];
+  const status = requireEnum('status', MODEL_STATUSES) as ModelStatus;
+  if (!Array.isArray(m['capabilities']) || !m['capabilities'].every((c) => typeof c === 'string')) {
+    throw new Error(`model policy is invalid — models[${index}].capabilities must be a string array`);
+  }
+  return { alias, provider, format, capabilities: m['capabilities'] as string[], costTier, status };
+}
+
 /**
  * Parse and validate a model policy from its declarative file content. Throws a clear
  * error — fast, at load time — when the content is malformed or structurally invalid; a
@@ -86,8 +123,68 @@ const NOT_IMPLEMENTED =
  * integrity: `globalFallback` and every `roleDefaults` entry must name a model that exists
  * in the registry.
  */
-export function parsePolicy(_raw: string): ModelPolicy {
-  throw new Error(NOT_IMPLEMENTED);
+export function parsePolicy(raw: string): ModelPolicy {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`model policy is malformed — could not parse: ${(err as Error).message}`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('model policy is malformed — expected a JSON object');
+  }
+  const p = parsed as Record<string, unknown>;
+
+  if (!Array.isArray(p['models'])) {
+    throw new Error('model policy is invalid — `models` must be an array');
+  }
+  const models = p['models'].map((entry, index) => parseModelEntry(entry, index));
+  if (models.length === 0) {
+    throw new Error('model policy is invalid — `models` must contain at least one entry');
+  }
+
+  if (typeof p['globalFallback'] !== 'string' || p['globalFallback'] === '') {
+    throw new Error('model policy is invalid — `globalFallback` is missing or not a string');
+  }
+  const globalFallback = p['globalFallback'];
+
+  const rawRoleDefaults = p['roleDefaults'];
+  if (typeof rawRoleDefaults !== 'object' || rawRoleDefaults === null || Array.isArray(rawRoleDefaults)) {
+    throw new Error('model policy is invalid — `roleDefaults` is missing or not an object');
+  }
+  const roleDefaults: Record<string, string> = {};
+  for (const [role, alias] of Object.entries(rawRoleDefaults)) {
+    if (typeof alias !== 'string') {
+      throw new Error(`model policy is invalid — roleDefaults['${role}'] must be a model alias string`);
+    }
+    roleDefaults[role] = alias;
+  }
+
+  if (typeof p['evaluatorDistinctFromGenerator'] !== 'boolean') {
+    throw new Error('model policy is invalid — `evaluatorDistinctFromGenerator` is missing or not a boolean');
+  }
+  const evaluatorDistinctFromGenerator = p['evaluatorDistinctFromGenerator'];
+
+  // Aliases must be unique — a duplicate makes resolution ambiguous (structural invalidity).
+  const aliases = new Set<string>();
+  for (const model of models) {
+    if (aliases.has(model.alias)) {
+      throw new Error(`model policy is invalid — duplicate model alias '${model.alias}'`);
+    }
+    aliases.add(model.alias);
+  }
+
+  // Referential integrity: globalFallback and every roleDefault must name a registered model.
+  if (!aliases.has(globalFallback)) {
+    throw new Error(`model policy is invalid — globalFallback '${globalFallback}' is not a registered model`);
+  }
+  for (const [role, alias] of Object.entries(roleDefaults)) {
+    if (!aliases.has(alias)) {
+      throw new Error(`model policy is invalid — roleDefaults['${role}'] '${alias}' is not a registered model`);
+    }
+  }
+
+  return { models, globalFallback, roleDefaults, evaluatorDistinctFromGenerator };
 }
 
 /**
