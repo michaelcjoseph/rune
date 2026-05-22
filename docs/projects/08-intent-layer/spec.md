@@ -25,7 +25,7 @@ Jarvis holds a persistent model of what Michael is building across all his produ
 - **Replacing the reliable-substrate regime.** Daily raw-note processing, the knowledge base, and second-brain memory stay reliability-first, heavy, and propose-and-approve. This project adds a second regime alongside it; it does not fold one into the other.
 - **A vault re-organization.** The vault stays organized by type. The product dimension is added as an overlay (a per-product manifest/index), not by moving files.
 - **Touching the Relay repo.** Relay is the employer's product with a different authorization and security surface. v1 does not dispatch coding work against the Relay repo. Relay-repo access is explicitly future and out of scope.
-- **Coding-style execution for products without a code repo.** Family and health (not code products) and Your Nanny and Storytime (code products, no repo yet) are all tracked in the cockpit and registry and route raw notes in v1, but none get coding-style project execution.
+- **Coding-style execution for products without a code repo.** Family and health (not code products) are tracked in the cockpit and registry and route raw notes in v1, but get no coding-style project execution.
 - **Adopting OpenClaw or Hermes wholesale.** Jarvis keeps its own Node/TS spine. Patterns are borrowed; neither framework is taken on as a dependency.
 - **A consensus-voting or ensemble model layer.** Cross-model review is adjudication (one model produces, a different model verifies), invoked deliberately. It is not a quorum of models on every call.
 - **A new UI framework.** The cockpit is the existing webview surface (vanilla HTML/JS). The intent layer is an engine with I/O surfaces, not a UI project.
@@ -295,7 +295,6 @@ The v1 wedge, stated as a single sentence:
 
 - **Multiple products, not one.** v1 applies across multiple products and their projects from the start. It is not a single-product pilot.
 - **Repo-backed products only.** v1 serves **Assay and Aura**, the side products that have code repos today (`~/workspace/assay`, `~/workspace/aura`).
-- **Your Nanny and Storytime: tracked, not executed.** Both are real products but have no code repo yet. In v1 they are tracked in the cockpit and registry and route raw notes; they enter project execution once they have repos (see Later). They are not part of the v1 wedge.
 - **Family and health: tracked, not executed.** Neither has a code repo and neither is a code product. Both are tracked in the cockpit and registry and route raw notes, but they do **not** get coding-style project execution in v1.
 - **Relay repo untouched.** v1 does **not** touch the Relay repo. Relay is the employer's product with a different authorization and security surface. Relay-repo access is explicitly future and out of scope.
 
@@ -378,7 +377,6 @@ The ordering principle: build the foundational tier first (everything depends on
 ### Later (out of v1)
 
 - Content and marketing project execution (the engine generalized beyond coding).
-- Project execution for Your Nanny and Storytime, once each has a code repo.
 - Repos for family and health, if and when they ever warrant code execution.
 - Relay-repo access, contingent on resolving the separate authorization and security surface.
 
@@ -396,4 +394,4 @@ The ordering principle: build the foundational tier first (everything depends on
 - [ ] **Standard for model-agnostic agent definitions.** The neutral agent-definition representation must compile to Claude, Codex, and Gemini formats. Is there an existing standard to adopt, or is this a small bespoke schema? What is the minimum set of fields (role, tools, constraints) that survives translation to every target?
 - [ ] **Capability vocabulary for the model registry.** The model selection policy routes by capability tags (`coding`, `long-context`, and so on). Too few tags and the resolver cannot tell a coding model from a classifier; too many and every new model needs a hand-assigned tag set that drifts from reality. What is the minimum viable tag vocabulary, and is it hand-maintained or derived from eval scores?
 - [ ] **Who may pin a model.** Model selection precedence puts an explicit pin above the role default. Should the Planner be allowed to pin a model during scoping, given it holds the most context on the job, or is pinning reserved for Michael with the Planner only able to recommend?
-- [ ] **Eventual structured store for the life-products.** Family and health are tracked but not executed in v1, and unlike Your Nanny and Storytime they may never be code products. If they later warrant structured execution, do they get real code repos, or a different repo-shaped store for structured durable memory? The federated-memory model assumes "product repo" but family and health may never have code.
+- [ ] **Eventual structured store for the life-products.** Family and health are tracked but not executed in v1, and may never be code products. If they later warrant structured execution, do they get real code repos, or a different repo-shaped store for structured durable memory? The federated-memory model assumes "product repo" but family and health may never have code.

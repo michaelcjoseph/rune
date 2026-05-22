@@ -57,7 +57,7 @@ Each numbered section is tagged with the phase that builds it. This project is *
 
 - [ ] 🔴 A product present as a repo but with no vault product file is detected and its missing pieces proposed.
 - [ ] 🔴 A product referenced in journals but absent from the registry is detected and proposed.
-- [ ] 🔴 The first reconciliation pass over the current products creates a vault product file for every product that lacks one (Your Nanny, Storytime) and seeds the registry + overlay manifests, so the foundational tier starts complete.
+- [ ] 🔴 The first reconciliation pass over the current products creates a vault product file for every product that lacks one (family, health) and seeds the registry + overlay manifests, so the foundational tier starts complete.
 - [ ] 🟡 The reconciliation pass is idempotent — a second run with nothing changed proposes nothing.
 - [ ] 🟡 A repo present on disk but clearly not a product (e.g. `agent-coding-setup`) is not proposed as a product, or is proposed with a clear "confirm this is a product" prompt.
 

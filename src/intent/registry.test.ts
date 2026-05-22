@@ -103,6 +103,29 @@ describe('registry — aggregation (test-plan §1)', () => {
     expect(bySlug['08-intent-layer']).toBe('planned'); // "Planned"
   });
 
+  it('parses an index whose table has a leading column before the project link', () => {
+    // Some repos format docs/projects/index.md as `| # | [Name](slug/) | Status | … |` —
+    // the project link is not the first cell, and the status column sits further right.
+    const leadingColumnIndex = [
+      '# Projects',
+      '',
+      '| # | Project | Status | Start | End |',
+      '| --- | --- | --- | --- | --- |',
+      '| 01 | [MVP](01-mvp/) | Completed | 2025-08 | 2025-08 |',
+      '| 02 | [Daily Aura](02-daily-aura/) | In Progress | 2025-09 | 2026-03 |',
+      '| 03 | [Mobile v1](03-mobile-v1/) | Planned | 2026-04 | — |',
+    ].join('\n');
+    const registry = buildRegistry({
+      products: [{ name: 'aura', repoBacked: true, projectsIndex: leadingColumnIndex }],
+    });
+    const aura = registry.products.find((p) => p.name === 'aura')!;
+    expect(aura.projects).toEqual([
+      { slug: '01-mvp', status: 'done' }, // "Completed"
+      { slug: '02-daily-aura', status: 'active' }, // "In Progress"
+      { slug: '03-mobile-v1', status: 'planned' }, // "Planned"
+    ]);
+  });
+
   it('is rebuildable — regenerating from the same sources yields an identical model', () => {
     const a = buildRegistry(sampleSources());
     const b = buildRegistry(sampleSources());

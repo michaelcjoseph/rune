@@ -81,24 +81,40 @@ export const REGISTRY_FILE = config.REGISTRY_FILE;
 function parseStatus(raw: string): LifecycleStatus {
   switch (raw.trim().toLowerCase()) {
     case 'done':
+    case 'completed':
       return 'done';
     case 'in progress':
     case 'active':
       return 'active';
     default:
-      // 'Planned', and any unrecognized status, map to 'planned' — the conservative default.
+      // 'Planned', 'Specced', and any unrecognized status map to 'planned' — the
+      // conservative default.
       return 'planned';
   }
 }
 
-/** Parse the project rows of a repo's `docs/projects/index.md` into registry projects. */
+/**
+ * Parse the project rows of a repo's `docs/projects/index.md` into registry projects.
+ *
+ * Handles both observed table layouts: the link cell first (`| [slug](slug/) | Status |`)
+ * and a leading index column (`| 01 | [Name](slug/) | Status | … |`). For each row it
+ * finds the cell holding a `[text](href)` link, takes the slug from the first path
+ * segment of the href, and reads the status from the cell immediately after it (expected
+ * to be plain text). Header and separator rows (no link) are skipped.
+ */
 function parseProjects(projectsIndex: string | null): RegistryProject[] {
   if (!projectsIndex) return [];
   const projects: RegistryProject[] = [];
   for (const line of projectsIndex.split('\n')) {
-    // Table rows: | [slug](slug/spec.md) | Status | Summary |
-    const m = line.match(/^\|\s*\[([^\]]+)\]\([^)]+\)\s*\|\s*([^|]+?)\s*\|/);
-    if (m) projects.push({ slug: m[1]!.trim(), status: parseStatus(m[2]!) });
+    if (!line.trimStart().startsWith('|')) continue;
+    const cells = line.split('|').map((cell) => cell.trim());
+    const linkIdx = cells.findIndex((cell) => /\[[^\]]+\]\([^)]+\)/.test(cell));
+    if (linkIdx === -1) continue;
+    const href = cells[linkIdx]!.match(/\]\(([^)]+)\)/)?.[1] ?? '';
+    const slug = href.replace(/^\.?\//, '').split('/')[0]?.trim();
+    // A real project slug — not an absolute URL (`https:`) or a traversal segment (`..`).
+    if (!slug || slug.includes(':') || slug.startsWith('.')) continue;
+    projects.push({ slug, status: parseStatus(cells[linkIdx + 1] ?? '') });
   }
   return projects;
 }
