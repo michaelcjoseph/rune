@@ -502,6 +502,7 @@
 
   // Cockpit state polling with diff-render
   let lastStateJson = '';
+  let lastCockpitJson = '';
 
   function setText(el, text, muted) {
     if (el.textContent !== text) el.textContent = text;
@@ -521,6 +522,15 @@
       if (json === lastStateJson) return;
       lastStateJson = json;
       renderState(state);
+    }).catch(() => {});
+  }
+
+  function pollCockpit() {
+    fetch('/api/cockpit').then(r => r.json()).then(view => {
+      const json = JSON.stringify(view);
+      if (json === lastCockpitJson) return;
+      lastCockpitJson = json;
+      renderCockpit(view);
     }).catch(() => {});
   }
 
@@ -641,12 +651,52 @@
     setHTML(el, html);
   }
 
+  // Returns only fixed CSS-class constants — safe to interpolate into a class attribute.
   function statusPillClass(status) {
     const s = (status || '').toLowerCase();
     if (s === 'done' || s.startsWith('done')) return 'pill-done';
-    if (s === 'in progress') return 'pill-inprogress';
-    if (s === 'spec') return 'pill-spec';
+    if (s === 'in progress' || s === 'active') return 'pill-inprogress';
+    if (s === 'spec' || s === 'planned') return 'pill-spec';
     return 'pill-default';
+  }
+
+  // ---- Cockpit panel (product/project registry view) ----
+
+  function renderCockpit(view) {
+    const el = document.getElementById('cockpit-content');
+    if (!el) return;
+    // buildCockpitView turns a missing or corrupt registry into a clean unavailable view.
+    if (!view || view.available !== true) {
+      const reason = (view && view.unavailableReason) || 'cockpit unavailable';
+      setHTML(el, `<span class="muted">${escHtml(reason)}</span>`);
+      return;
+    }
+    const products = view.products || [];
+    if (products.length === 0) {
+      setHTML(el, '<span class="muted">No products registered</span>');
+      return;
+    }
+    const html = products.map(product => {
+      const projects = product.projects || [];
+      const rows = projects.length === 0
+        ? '<div class="cockpit-empty muted">no projects</div>'
+        : projects.map(proj => {
+            const run = proj.runStatus && proj.runStatus !== 'idle'
+              ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
+              : '';
+            return `<div class="cockpit-project">` +
+              `<span class="project-slug">${escHtml(proj.slug)}</span>` +
+              `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
+              run +
+              `</div>`;
+          }).join('');
+      const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
+      return `<div class="cockpit-product">` +
+        `<div class="cockpit-product-name">${escHtml(product.name)}${trackedLabel}</div>` +
+        rows +
+        `</div>`;
+    }).join('');
+    setHTML(el, html);
   }
 
   // Expose to onclick handlers (IIFE scope)
@@ -866,4 +916,6 @@
   connect();
   pollState();
   setInterval(pollState, 5000);
+  // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.
+  setTimeout(() => { pollCockpit(); setInterval(pollCockpit, 5000); }, 2500);
 })();

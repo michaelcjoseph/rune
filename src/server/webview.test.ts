@@ -64,11 +64,24 @@ vi.mock('./webview-bootstrap.js', () => ({
   handleWebviewMessage: vi.fn(async () => undefined),
 }));
 
+// readRegistry is mocked so GET /api/cockpit has a registry to project; buildCockpitView
+// (from intent/cockpit.ts) is left real — it is the function under test for the endpoint.
+// vi.hoisted so the fixture is shared by the mock factory and the beforeEach restore.
+const { mockRegistry } = vi.hoisted(() => ({
+  mockRegistry: {
+    version: 1,
+    builtAt: '2026-01-15T00:00:00.000Z',
+    products: [{ name: 'aura', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] }],
+  },
+}));
+vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry) }));
+
 // Import after mocks are wired up
 const { mountWebviewRoutes } = await import('./webview.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const { getSession } = await import('../vault/sessions.js');
 const { getStateSnapshot } = await import('./state-snapshot.js');
+const { readRegistry } = await import('../intent/registry.js');
 
 // ---- helpers ----
 
@@ -168,6 +181,7 @@ describe('server/webview', () => {
       lastNightlyAt: null,
       warnings: [],
     });
+    (readRegistry as ReturnType<typeof vi.fn>).mockReturnValue(mockRegistry);
   });
 
   // ---- GET / ----
@@ -360,6 +374,44 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body.ingestionQueueDepth).toBe(2);
+    });
+  });
+
+  // ---- GET /api/cockpit ----
+
+  describe('GET /api/cockpit', () => {
+    it('returns 401 without auth', async () => {
+      const res = await makeRequest(port, '/api/cockpit');
+      expect(res.status).toBe(401);
+      expect(res.body.error).toBe('unauthorized');
+    });
+
+    it('returns the cockpit view built from the registry when authenticated', async () => {
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(true);
+      expect(res.body.products).toHaveLength(1);
+      expect(res.body.products[0]).toMatchObject({ name: 'aura', repoBacked: true });
+      const project = res.body.products[0].projects[0];
+      expect(project).toMatchObject({ slug: '01-mvp', lifecycleStatus: 'active', runStatus: 'idle' });
+      expect(project.actions).toEqual(
+        expect.arrayContaining(['start', 'continue', 'enter-planning-mode']),
+      );
+    });
+
+    it('returns a 200 unavailable view when the registry cannot be read', async () => {
+      (readRegistry as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('registry not yet built');
+      });
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      // A registry read failure is a clear cockpit state, not a server error.
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(false);
+      expect(typeof res.body.unavailableReason).toBe('string');
     });
   });
 

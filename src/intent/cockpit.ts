@@ -10,10 +10,7 @@
  * active / done, from the registry) and `runStatus` (idle / running / blocked-on-human,
  * from supervision — Layer 3, §10).
  *
- * STATUS: contract stub. The type surface and signature below are the contract pinned by
- * the test-first suite in `cockpit.test.ts` (test-plan.md §7). `buildCockpitView` is
- * intentionally unimplemented — a Phase 2 cockpit task fills it in. Until then the suite is
- * RED by design.
+ * The contract is pinned by the test suite in `cockpit.test.ts` (test-plan.md §7).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Cockpit"), test-plan.md (§7)}.
  */
@@ -70,10 +67,27 @@ export type RunStatusByProject = Record<string, CockpitRunStatus>;
  * product with zero projects yields a product with an empty `projects` list, not an error.
  */
 export function buildCockpitView(
-  _registry: Registry | null,
-  _runStatus: RunStatusByProject,
+  registry: Registry | null,
+  runStatus: RunStatusByProject,
 ): CockpitView {
-  throw new Error(
-    'cockpit: not implemented — a Phase 2 cockpit task (docs/projects/08-intent-layer) fills this in',
-  );
+  if (registry === null) {
+    return {
+      available: false,
+      products: [],
+      unavailableReason: 'registry unavailable — it has not been built yet',
+    };
+  }
+  const products: CockpitProduct[] = registry.products.map((product) => ({
+    name: product.name,
+    repoBacked: product.repoBacked,
+    projects: product.projects.map((project) => ({
+      slug: project.slug,
+      lifecycleStatus: project.status,
+      // Run-status comes from the supervision surface; `idle` when it reports nothing.
+      runStatus: runStatus[project.slug] ?? 'idle',
+      // Every project offers all three actions, each its own gated control.
+      actions: ['start', 'continue', 'enter-planning-mode'],
+    })),
+  }));
+  return { available: true, products };
 }

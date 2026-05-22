@@ -230,6 +230,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .pill-spec { background: var(--bg3); color: var(--text2); }
 .pill-default { background: var(--bg3); color: var(--text2); }
 
+/* Cockpit panel (product/project registry view) */
+#cockpit-content { display: flex; flex-direction: column; gap: .5rem; }
+.cockpit-product { display: flex; flex-direction: column; gap: .2rem; }
+.cockpit-product-name { font-size: .8rem; font-weight: 600; color: var(--text); }
+.cockpit-project { display: flex; align-items: center; gap: .35rem; font-size: .76rem; padding: .15rem 0 .15rem .6rem; }
+.cockpit-empty { font-size: .72rem; padding: .1rem 0 .1rem .6rem; }
+.cockpit-tracked { font-size: .66rem; font-weight: 400; }
+.run-pill { font-size: .66rem; padding: .08rem .3rem; border-radius: 3px; font-weight: 600; background: #4a2a1a; color: #d98c4a; white-space: nowrap; }
+
 /* Mutations panel */
 #mutations-active-content, #mutations-recent-content { display: flex; flex-direction: column; gap: .3rem; }
 #panel-mutations h4 { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text2); margin: .5rem 0 .2rem; }

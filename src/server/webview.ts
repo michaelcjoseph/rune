@@ -8,6 +8,8 @@ import { WebSocketServer } from 'ws';
 import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
+import { readRegistry, type Registry } from '../intent/registry.js';
+import { buildCockpitView } from '../intent/cockpit.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -139,6 +141,23 @@ function handleApiState(res: ServerResponse, isReady: () => boolean): void {
   const snapshot = getStateSnapshot();
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(snapshot));
+}
+
+function handleApiCockpit(res: ServerResponse): void {
+  // No bot-ready guard: this endpoint only reads a file and runs a pure projection, so it
+  // works during startup too. A registry not yet built (or corrupt) is a clear cockpit
+  // state, not a server error — buildCockpitView turns a null registry into a clean
+  // "unavailable" view.
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  // Run-status comes from the supervision surface (Layer 3, Phase 3) — empty until then.
+  const view = buildCockpitView(registry, {});
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(view));
 }
 
 async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
@@ -377,6 +396,11 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/state') {
         handleApiState(res, deps.isReady);
+        return true;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/cockpit') {
+        handleApiCockpit(res);
         return true;
       }
 
