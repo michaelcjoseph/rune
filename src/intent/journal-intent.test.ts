@@ -108,10 +108,10 @@ describe('journal-to-intent flow — unregistered and ambiguous products (test-p
       input({ notes: [{ text: 'shared auth idea', products: ['aura', 'relay'] }] }),
     );
     const disambiguation = plan.proposals.find((p) => p.kind === 'disambiguation');
-    expect(disambiguation).toMatchObject({ kind: 'disambiguation' });
-    expect((disambiguation as { candidates: string[] }).candidates).toEqual(
-      expect.arrayContaining(['aura', 'relay']),
-    );
+    expect(disambiguation).toMatchObject({
+      kind: 'disambiguation',
+      candidates: expect.arrayContaining(['aura', 'relay']),
+    });
     // No intake proposal is produced — the flow does not guess which product the note is for.
     expect(plan.proposals.some((p) => p.kind === 'vault-intake')).toBe(false);
   });

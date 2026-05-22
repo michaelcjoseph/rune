@@ -9,10 +9,9 @@
  * itself (raw notes → polished vault prose) and the post-approval apply are separate steps;
  * this module decides *what* to propose and *to which product*.
  *
- * STATUS: contract stub. The type surface and signature below are the contract pinned by
- * the test-first suite in `journal-intent.test.ts` (test-plan.md §8). `planJournalIntent`
- * is intentionally unimplemented — a Phase 2 journal-intake task fills it in. Until then the
- * suite is RED by design.
+ * STATUS: implemented. `planJournalIntent` is the deterministic planner — it routes each
+ * note and roadmap candidate to a proposal. The contract is pinned by the test suite in
+ * `journal-intent.test.ts` (test-plan.md §8).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Journal-to-intent flow"), test-plan.md (§8)}.
  */
@@ -66,9 +65,6 @@ export interface JournalIntentPlan {
   proposals: IntentProposal[];
 }
 
-const NOT_IMPLEMENTED =
-  'journal-intent: not implemented — a Phase 2 journal-intake task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Plan the journal-to-intent proposals for a day. Pure — it computes what *would* change
  * and never writes; applying a proposal is a separate, post-approval step.
@@ -80,6 +76,34 @@ const NOT_IMPLEMENTED =
  * `disambiguation` proposal rather than a silent guess. Each roadmap candidate for a
  * registered product yields a `roadmap` proposal.
  */
-export function planJournalIntent(_input: JournalIntentInput): JournalIntentPlan {
-  throw new Error(NOT_IMPLEMENTED);
+export function planJournalIntent(input: JournalIntentInput): JournalIntentPlan {
+  const registered = new Set(input.registeredProducts);
+  const proposals: IntentProposal[] = [];
+
+  for (const note of input.notes) {
+    // No product signal — nothing to propose, no noise.
+    if (note.products.length === 0) continue;
+    // Ambiguous attribution — surface for the user to pick, never guess silently.
+    if (note.products.length > 1) {
+      proposals.push({ kind: 'disambiguation', note: note.text, candidates: [...note.products] });
+      continue;
+    }
+    const product = note.products[0]!;
+    if (registered.has(product)) {
+      proposals.push({ kind: 'vault-intake', product, note: note.text });
+    } else {
+      // The product has no registry entry — register it first (§2), never drop the note.
+      proposals.push({ kind: 'register-product', product, note: note.text });
+    }
+  }
+
+  // A roadmap item only makes sense for a registered product — there must be a repo to
+  // carry it. A candidate for an unregistered product yields no proposal.
+  for (const candidate of input.roadmapCandidates) {
+    if (registered.has(candidate.product)) {
+      proposals.push({ kind: 'roadmap', product: candidate.product, item: candidate.item });
+    }
+  }
+
+  return { proposals };
 }
