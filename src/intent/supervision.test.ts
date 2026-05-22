@@ -19,6 +19,7 @@ import {
   getVisibility,
   markCrashed,
   recoverRun,
+  recordHeartbeat,
   type SupervisedRun,
 } from './supervision.js';
 
@@ -68,6 +69,19 @@ describe('supervision — heartbeat staleness (test-plan §10)', () => {
     const r = run({ lastHeartbeatAt: '2026-01-15T00:09:00.000Z' });
     expect(isStalled(r, HEARTBEAT_MS, Date.parse('2026-01-15T00:09:30.000Z'))).toBe(false);
     expect(isStalled(r, HEARTBEAT_MS, Date.parse('2026-01-15T00:11:00.000Z'))).toBe(true);
+  });
+});
+
+describe('supervision — heartbeat check-ins (test-plan §10)', () => {
+  it('a heartbeat check-in refreshes lastHeartbeatAt to the check-in time', () => {
+    const after = recordHeartbeat(run({ lastHeartbeatAt: '2026-01-15T00:00:00.000Z' }), NOW);
+    expect(Date.parse(after.lastHeartbeatAt)).toBe(NOW);
+  });
+
+  it('a heartbeat check-in clears a stalled run — it is no longer flagged', () => {
+    const stale = run({ lastHeartbeatAt: '2026-01-15T00:00:00.000Z' });
+    expect(isStalled(stale, HEARTBEAT_MS, NOW)).toBe(true);
+    expect(isStalled(recordHeartbeat(stale, NOW), HEARTBEAT_MS, NOW)).toBe(false);
   });
 });
 

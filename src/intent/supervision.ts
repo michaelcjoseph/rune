@@ -110,3 +110,12 @@ export function markCrashed(run: SupervisedRun): SupervisedRun {
 export function recoverRun(run: SupervisedRun): SupervisedRun {
   return run.status === 'running' ? { ...run, status: 'unknown' } : run;
 }
+
+/**
+ * Record a heartbeat check-in — refresh `lastHeartbeatAt` to `now` (epoch ms). Called as a
+ * run reports progress (e.g. each output line of a `/work --auto` sweep), so a run that is
+ * genuinely working is never mistaken for stalled by {@link isStalled}.
+ */
+export function recordHeartbeat(run: SupervisedRun, now: number): SupervisedRun {
+  return { ...run, lastHeartbeatAt: new Date(now).toISOString() };
+}
