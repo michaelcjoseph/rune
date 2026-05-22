@@ -66,7 +66,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Documentation
 
-- [ ] Update `CLAUDE.md` and `docs/projects/index.md` for the new foundational modules.
+- [x] Update `CLAUDE.md` and `docs/projects/index.md` for the new foundational modules.
 
 ## Phase 2 — Cockpit and journal intake
 

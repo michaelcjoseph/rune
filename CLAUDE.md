@@ -23,7 +23,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 src/
 ├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler
 ├── config.ts                # Typed env vars and constants
-├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner)
+├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner); runAgent() resolves each agent's model through the model selection policy (src/intent/model-policy.ts) — pin → role-default → global-fallback — rather than the old hardcoded def.model ?? config.AGENT_MODEL
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
 │   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview
@@ -114,6 +114,13 @@ src/
 │   ├── work-runner.ts       # workRunApplier: MutationApplier for 'work-run' kind; spawns Claude CLI with spec.md+tasks.md+/work --auto in project dir; streams stdout/stderr as MutationEvents; enforces per-project and global concurrency caps
 │   ├── lenny-sync.ts        # Exports runLibrarySync() + LibrarySyncResult; pulls new Lenny posts/podcasts via lenny-sync agent, updates logs/lenny-sync-state.json
 │   └── nudges.ts            # Weekly and review nudge stubs
+├── intent/
+│   ├── registry.ts          # Product/project registry: buildRegistry, readRegistry/writeRegistry, getAllProjects; aggregating index (product → projects → lifecycle-status); buildRegistry takes pre-scanned RegistrySources (the caller scans repos + vault product files); persists to logs/registry.json (config.REGISTRY_FILE)
+│   ├── registration.ts      # Product registration: planRegistration, planReconciliation, applyRegistration; propose-and-approve flow — planning is pure and never writes; applyRegistration drives effects via injected RegistrationEffects interface
+│   ├── overlay.ts           # Product-overlay index: buildOverlayManifest, scopedRetrieval, findStalePointers; per-product pointer manifest into the type-organized vault — never re-orgs the vault, only points into it
+│   ├── agent-def.ts         # Model-agnostic agent definitions: NeutralAgentDef, parseClaudeAgent, compileToClaude; Codex/Gemini compilers deferred to Phase 4; model key is dropped from the neutral format — which model runs is the policy's decision
+│   ├── model-policy.ts      # Model selection policy: parsePolicy, loadModelPolicy, resolveModel; deterministic resolver (pin → role-default → global-fallback); policy loaded from policies/model-policy.json (config.MODEL_POLICY_FILE); cached per path — startup load warms cache
+│   └── escalation.ts        # Escalation policy: parseEscalationPolicy, decide, decideFailClosed; deterministic (no LLM); fail-closed — a missing or malformed policy escalates rather than falls open to auto-proceed
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
 │   └── index.ts             # Standalone stdio entry point for Claude Code
@@ -153,6 +160,9 @@ scripts/
 ├── run-evals.test.ts        # Unit tests for the eval runner (vitest)
 ├── run-intent-scan.ts       # CLI entry point for intent-scan job (npm run intent-scan)
 └── library-backfill.ts      # CLI entry point for bulk library-to-KB backfill (npm run library-backfill)
+policies/
+├── model-policy.json        # Declarative model registry + routing rules (aliases, providers, role-defaults, global-fallback); committed config, not runtime state — editing it is not a deploy
+└── escalation-policy.json   # Declarative escalation rules (high-risk-change-class, run-exceeded-bounds, etc.); the escalation decision module (src/intent/escalation.ts) fails closed on a missing/malformed file — built and tested, not yet wired into a runtime caller (the engine arrives in a later phase)
 ```
 
 ## Vault Content Model
@@ -229,6 +239,8 @@ Mutable sources (world-view, playbook, active projects, journals, library/lenny)
 - KB agents **must not** write outside `knowledge/`
 - Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
 - Autonomous codebase operations go through the mutation pipeline (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`, never spawn Claude CLI for project work directly. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` from `src/ai/claude.ts` keep binary resolution and shutdown tracking centralized for external spawners.
+- Model selection is policy-driven: `src/intent/model-policy.ts` owns the resolver (`resolveModel`); which model runs an agent is declared in `policies/model-policy.json`, not hardcoded. `src/index.ts` loads and validates the policy at startup, failing fast on a malformed file. A missing file is tolerated — `runAgent()` then falls back to `def.model ?? config.AGENT_MODEL`, so a fresh clone without a policy file still runs.
+- Escalation decisions are deterministic and auditable: `src/intent/escalation.ts` is pure over `(change, policy)` — no LLM call, no I/O. The escalation policy lives in `policies/escalation-policy.json` and fails closed (a missing or malformed policy escalates, never permits).
 - Project work is **test-first**: the `/work` skill writes failing tests before implementation in every task cycle (plan → write failing tests → implement → review → fix → simplify). Project task breakdowns match this — every phase of a `docs/projects/*/tasks.md` opens with a **Tests (write first)** block whose tests must go red before that phase's implementation begins. See `docs/projects/templates/` for the standard shape.
 
 ## Running
@@ -265,7 +277,7 @@ Optional:
 - `WORK_RUN_PER_PROJECT_CAP` — max concurrent `work-run` mutations per project slug (default `1`, min `1`)
 - `WORK_RUN_GLOBAL_CAP` — max concurrent `work-run` mutations across all projects (default `2`, min `1`)
 
-`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`. `logs/mutations.jsonl` is a rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`.
+`LOGS_DIR` is hardcoded to `<project-root>/logs/` (gitignored). `logs/last-workout.json` (the most recent generated workout, written by `/workout` and consumed by `/done-workout`) is exposed via `config.LAST_WORKOUT_FILE`. `logs/agent-runs.jsonl` is a rolling JSONL log of every `runAgent()` invocation (`{agent, startedAt, durationMs, status}`), consumed by `getStateSnapshot()` in `src/server/state-snapshot.ts`. `logs/mutations.jsonl` is a rolling JSONL log of every `MutationDescriptor` state transition, written by `src/jobs/mutations-log.ts`. `logs/registry.json` is the intent-layer product/project registry, exposed via `config.REGISTRY_FILE`; it is always rebuildable (not source of truth). `policies/model-policy.json` is the declarative model selection policy, exposed via `config.MODEL_POLICY_FILE`; it is committed config (not runtime state) and lives under `policies/` rather than `LOGS_DIR`.
 
 ## Agents
 
