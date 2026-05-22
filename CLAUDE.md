@@ -229,6 +229,7 @@ Mutable sources (world-view, playbook, active projects, journals, library/lenny)
 - KB agents **must not** write outside `knowledge/`
 - Wiki pages use YAML frontmatter for metadata (type, tags, related, created, last-verified, valid-until) — see `src/kb/schema.ts`
 - Autonomous codebase operations go through the mutation pipeline (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`, never spawn Claude CLI for project work directly. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` from `src/ai/claude.ts` keep binary resolution and shutdown tracking centralized for external spawners.
+- Project work is **test-first**: the `/work` skill writes failing tests before implementation in every task cycle (plan → write failing tests → implement → review → fix → simplify). Project task breakdowns match this — every phase of a `docs/projects/*/tasks.md` opens with a **Tests (write first)** block whose tests must go red before that phase's implementation begins. See `docs/projects/templates/` for the standard shape.
 
 ## Running
 

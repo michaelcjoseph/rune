@@ -19,7 +19,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 - [x] Make `/work` test-first: update `.claude/skills/work/SKILL.md` so the cycle writes failing tests before implementation (plan → write failing tests → implement → review → fix → simplify; the existing test rounds stay as regression checks). Hard stops and `--auto` semantics are preserved.
 - [x] Update `docs/projects/templates/tasks.md` to carry a per-phase **Tests (write first)** block as the standard shape, and adjust `docs/projects/templates/spec.md` / `templates/test-plan.md` cross-reference wording to match.
-- [ ] Update `CLAUDE.md` (Jarvis) to document test-first as the default execution discipline for `/work` and for project task breakdowns.
+- [x] Update `CLAUDE.md` (Jarvis) to document test-first as the default execution discipline for `/work` and for project task breakdowns.
 
 ### Tests (write first)
 
