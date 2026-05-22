@@ -4,9 +4,8 @@ import { describe, it, expect } from 'vitest';
  * Test suite for test-plan.md §13 — multi-model dispatch, Layer 5 (08-intent-layer,
  * Phase 4).
  *
- * Written test-first. `compileToCodex` (in `agent-def.ts`) is implemented, so its 3 tests
- * are green; the dispatch core (`buildHandoff`, `recordDispatch`) is still a contract stub,
- * so the other 6 tests stay RED until the next Phase 4 task lands.
+ * Written test-first. `compileToCodex` (in `agent-def.ts`) and the dispatch core
+ * (`buildHandoff`, `recordDispatch`) are now implemented, so the suite is green.
  *
  * Scope note: actually spawning a Claude or Codex executor, and the "worktree intact for
  * retry" property of a failed dispatch, are integration concerns. This suite pins the
@@ -62,6 +61,14 @@ describe('multi-model dispatch — structured handoff (test-plan §13)', () => {
 
   it('rejects a handoff with no objective', () => {
     expect(() => buildHandoff(handoff({ objective: '' }))).toThrow(/objective/i);
+  });
+
+  it('rejects a whitespace-only objective', () => {
+    expect(() => buildHandoff(handoff({ objective: '   ' }))).toThrow(/objective/i);
+  });
+
+  it('rejects a whitespace-only context', () => {
+    expect(() => buildHandoff(handoff({ context: '   ' }))).toThrow(/context/i);
   });
 
   it('builds a handoff for either target', () => {

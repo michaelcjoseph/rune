@@ -10,10 +10,9 @@
  * Codex agent-definition compiler target (`compileToCodex` in `agent-def.ts`), are the
  * orchestration and compiler work this builds on.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `dispatch.test.ts` (test-plan.md §13). The function bodies are
- * intentionally unimplemented — a Phase 4 multi-model-dispatch task fills them in. Until
- * then the suite is RED by design.
+ * STATUS: implemented. The decision core — `buildHandoff` and `recordDispatch` — is live;
+ * the contract is pinned by the test suite in `dispatch.test.ts` (test-plan.md §13).
+ * Actually spawning a Claude or Codex executor is the orchestration that builds on this.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 5"), test-plan.md (§13)}.
  */
@@ -40,7 +39,10 @@ export interface DispatchHandoff {
   project: string;
   /** What the dispatched run must achieve. */
   objective: string;
-  /** The explicit context the executor needs — carried in full, never reconstructed. */
+  /** The explicit context the executor needs — carried in full, never reconstructed.
+   *  Trust-boundary invariant: when `target === 'codex'`, `context` must not carry
+   *  vault-sourced personal content — it crosses into the OpenAI trust domain. The
+   *  orchestrator that spawns a Codex executor is responsible for enforcing this. */
   context: string;
 }
 
@@ -66,16 +68,23 @@ export type DispatchLogEntry =
       failureReason: string;
     };
 
-const NOT_IMPLEMENTED =
-  'dispatch: not implemented — a Phase 4 multi-model-dispatch task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Validate and finalize a dispatch handoff. Throws if `objective` or `context` is empty: a
  * dispatch must carry explicit context, never relying on the executor to reconstruct intent
  * by compacting a prior conversation.
  */
-export function buildHandoff(_handoff: DispatchHandoff): DispatchHandoff {
-  throw new Error(NOT_IMPLEMENTED);
+export function buildHandoff(handoff: DispatchHandoff): DispatchHandoff {
+  if (handoff.objective.trim() === '') {
+    throw new Error(
+      'buildHandoff: a dispatch must carry an explicit objective — the executor never reconstructs intent',
+    );
+  }
+  if (handoff.context.trim() === '') {
+    throw new Error(
+      'buildHandoff: a dispatch must carry explicit context — no relying on in-place compaction',
+    );
+  }
+  return handoff;
 }
 
 /**
@@ -84,8 +93,11 @@ export function buildHandoff(_handoff: DispatchHandoff): DispatchHandoff {
  * clear reason on failure, so a provider-unavailable dispatch is a recorded clean failure).
  */
 export function recordDispatch(
-  _handoff: DispatchHandoff,
-  _result: DispatchResult,
+  handoff: DispatchHandoff,
+  result: DispatchResult,
 ): DispatchLogEntry {
-  throw new Error(NOT_IMPLEMENTED);
+  const base = { target: handoff.target, model: result.model, provider: result.provider };
+  return result.status === 'completed'
+    ? { ...base, status: 'completed' }
+    : { ...base, status: 'failed', failureReason: result.failureReason };
 }

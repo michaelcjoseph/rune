@@ -145,7 +145,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 ### Layer 5 — Multi-model dispatch
 
 - [x] Wire Codex as a dispatchable executor; extend the agent-definition compiler to the Codex target.
-- [ ] Implement explicit, structured handoff messages for a dispatch (no in-place context compaction).
+- [x] Implement explicit, structured handoff messages for a dispatch (no in-place context compaction).
 
 ### Layer 2 — cross-model upgrade
 
