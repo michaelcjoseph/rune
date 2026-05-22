@@ -7,10 +7,9 @@
  * It is an overlay, not a re-org: the vault never moves. A manifest only points into the
  * existing type-organized structure — every pointer is a vault-relative path.
  *
- * STATUS: partially implemented. `buildOverlayManifest` and `findStalePointers` — the
- * manifest and its health-check — are implemented. `scopedRetrieval` remains a contract
- * stub, filled in by the next Phase 1 overlay-index task (product-scoped retrieval for
- * sub-agents); its tests in `overlay.test.ts` (test-plan.md §3) stay RED until then.
+ * The Phase 1 overlay-index tasks are complete: `buildOverlayManifest` builds a product's
+ * manifest, `scopedRetrieval` serves it to a sub-agent, and `findStalePointers` health-
+ * checks it. The contract is pinned by the test suite in `overlay.test.ts` (test-plan.md §3).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Product-overlay index"), test-plan.md (§3)}.
  */
@@ -62,10 +61,12 @@ export function buildOverlayManifest(product: string, candidates: OverlayCandida
  * manifest and nothing else. A product with no manifest returns an empty list, not an
  * error.
  */
-export function scopedRetrieval(_manifests: OverlayManifest[], _product: string): OverlayPointer[] {
-  throw new Error(
-    'overlay: scopedRetrieval not implemented — Phase 1 overlay-index task fills this in',
-  );
+export function scopedRetrieval(manifests: OverlayManifest[], product: string): OverlayPointer[] {
+  // Scope retrieval to one product: serve only that product's manifest pointers, so an
+  // Aura planning agent never pulls in Relay context. A product with no manifest yields an
+  // empty list — graceful, not an error.
+  const manifest = manifests.find((m) => m.product === product);
+  return manifest ? manifest.pointers : [];
 }
 
 /**
