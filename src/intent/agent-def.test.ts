@@ -4,16 +4,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /*
- * Test-first suite for test-plan.md §4 — model-agnostic agent definitions (08-intent-layer,
+ * Test suite for test-plan.md §4 — model-agnostic agent definitions (08-intent-layer,
  * Phase 1).
  *
- * Written BEFORE the implementation. In `src/intent/agent-def.ts`, `parseClaudeAgent` and
- * `compileToClaude` are contract stubs that throw 'not implemented'; `compileToCodex` and
- * `compileToGemini` already throw their real "deferred to Phase 4" error. So this suite is
- * RED except the deferred-targets test, which is green because deferral genuinely is in
- * place. That is the intended state: this is a "Tests (write first)" task — the remaining
- * tests go green when Phase 1's agent-definition implementation tasks land. Do not
- * implement parse/compile to make these pass; that is a separate task.
+ * Written test-first; `src/intent/agent-def.ts` now implements `parseClaudeAgent` and
+ * `compileToClaude`, so the suite is green. `compileToCodex` / `compileToGemini` throw
+ * their "deferred to Phase 4" error until the Codex/Gemini targets are built in Phase 4 —
+ * asserted by the deferred-targets test.
  */
 
 import {

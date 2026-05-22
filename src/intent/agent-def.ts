@@ -9,15 +9,16 @@
  * selection policy's decision (test-plan §5), never an agent property. An agent declares
  * the *capabilities* its role needs; the policy binds those to a model.
  *
- * STATUS: contract stub. `parseClaudeAgent` and `compileToClaude` are stubs that throw
- * 'not implemented' — Phase 1's agent-definition tasks fill them in. `compileToCodex` and
- * `compileToGemini` are *not* stubs: they throw a "deferred to Phase 4" error, which is
- * their correct, intended behavior until the Codex/Gemini targets are built in Phase 4.
- * The test-first suite in `agent-def.test.ts` (test-plan.md §4) is RED by design except
- * for the deferred-targets test, which is green because deferral is genuinely in place.
+ * STATUS: the Claude path is implemented. `parseClaudeAgent` reads a `.claude/agents/*.md`
+ * into the neutral format and `compileToClaude` emits it back; the contract is pinned by
+ * `agent-def.test.ts` (test-plan.md §4). `compileToCodex` and `compileToGemini` throw a
+ * "deferred to Phase 4" error — their correct behavior until the Codex/Gemini targets are
+ * built in Phase 4 (multi-model dispatch).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Model-agnostic agent definitions"), test-plan.md (§4)}.
  */
+
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 /**
  * The neutral, model-agnostic agent definition. Captures role, tools, constraints, and
@@ -45,8 +46,26 @@ export interface NeutralAgentDef {
   extraFrontmatter?: Record<string, unknown>;
 }
 
-const NOT_IMPLEMENTED =
-  'agent-def: not implemented — Phase 1 agent-definition tasks (docs/projects/08-intent-layer) fill this in';
+/**
+ * Frontmatter keys the neutral format owns. Every other key is carried opaquely in
+ * `extraFrontmatter`. `model` is owned-but-dropped — a neutral definition names no model.
+ */
+const NEUTRAL_FRONTMATTER_KEYS = new Set([
+  'name',
+  'description',
+  'model',
+  'tools',
+  'capabilities',
+  'constraints',
+]);
+
+/** Leading `---` YAML frontmatter block, then the markdown body. */
+const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+
+/** Coerce a YAML value to a string array — a missing or non-array value yields `[]`. */
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
 
 /**
  * Parse a Claude agent file (`.claude/agents/*.md`: YAML frontmatter + markdown body) into
@@ -54,8 +73,41 @@ const NOT_IMPLEMENTED =
  * definition names no model. Frontmatter keys outside the neutral format are carried in
  * `extraFrontmatter` so a later compile round-trips them losslessly.
  */
-export function parseClaudeAgent(_markdown: string): NeutralAgentDef {
-  throw new Error(NOT_IMPLEMENTED);
+export function parseClaudeAgent(markdown: string): NeutralAgentDef {
+  const match = markdown.match(FRONTMATTER_RE);
+  if (!match) {
+    throw new Error('parseClaudeAgent: missing YAML frontmatter — expected a leading `---` block');
+  }
+  const [, rawFrontmatter, body] = match;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(rawFrontmatter ?? '') ?? {};
+  } catch (err) {
+    throw new Error(`parseClaudeAgent: malformed YAML frontmatter — ${(err as Error).message}`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('parseClaudeAgent: frontmatter is not a YAML mapping');
+  }
+  const frontmatter = parsed as Record<string, unknown>;
+
+  // Every non-neutral key is carried opaquely so a later compile round-trips it.
+  const extraFrontmatter: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (!NEUTRAL_FRONTMATTER_KEYS.has(key)) extraFrontmatter[key] = value;
+  }
+
+  const def: NeutralAgentDef = {
+    name: typeof frontmatter['name'] === 'string' ? frontmatter['name'] : '',
+    role: typeof frontmatter['description'] === 'string' ? frontmatter['description'] : '',
+    capabilities: toStringArray(frontmatter['capabilities']),
+    tools: toStringArray(frontmatter['tools']),
+    constraints: toStringArray(frontmatter['constraints']),
+    instructions: (body ?? '').trim(),
+  };
+  // Only attach extraFrontmatter when there is something to carry, so an agent with no
+  // extra keys round-trips to an identical definition.
+  if (Object.keys(extraFrontmatter).length > 0) def.extraFrontmatter = extraFrontmatter;
+  return def;
 }
 
 /**
@@ -64,8 +116,28 @@ export function parseClaudeAgent(_markdown: string): NeutralAgentDef {
  * re-emits every `extraFrontmatter` key. Throws a clear error naming the field when a
  * required field is missing.
  */
-export function compileToClaude(_def: NeutralAgentDef): string {
-  throw new Error(NOT_IMPLEMENTED);
+export function compileToClaude(def: NeutralAgentDef): string {
+  // name / role / instructions are the required non-empty fields; tools, capabilities, and
+  // constraints may legitimately be empty (many agents declare no tools or constraints).
+  for (const field of ['name', 'role', 'instructions'] as const) {
+    if (typeof def[field] !== 'string' || def[field].trim() === '') {
+      throw new Error(`compileToClaude: required field '${field}' is missing or empty`);
+    }
+  }
+
+  // Neutral keys first, then the opaque extras. `model` is never emitted.
+  const frontmatter: Record<string, unknown> = { name: def.name, description: def.role };
+  if (def.tools.length > 0) frontmatter['tools'] = def.tools;
+  if (def.capabilities.length > 0) frontmatter['capabilities'] = def.capabilities;
+  if (def.constraints.length > 0) frontmatter['constraints'] = def.constraints;
+  for (const [key, value] of Object.entries(def.extraFrontmatter ?? {})) {
+    frontmatter[key] = value;
+  }
+
+  // lineWidth: 0 disables line folding, so a long description stays on one line and the
+  // parse → compile → parse round-trip is exact.
+  const yaml = stringifyYaml(frontmatter, { lineWidth: 0 });
+  return `---\n${yaml}---\n\n${def.instructions.trim()}\n`;
 }
 
 /**
