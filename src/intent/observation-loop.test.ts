@@ -1,13 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §16 — observation loop (08-intent-layer, Phase 5).
+ * Test suite for test-plan.md §16 — observation loop (08-intent-layer, Phase 5).
  *
- * Written BEFORE the implementation. `src/intent/observation-loop.ts` ships as a contract
- * stub whose functions throw 'not implemented', so every test here is RED. That is the
- * intended, correct state: this is a "Tests (write first)" task — the suite goes green
- * when the Phase 5 observation-loop implementation task lands. Do not implement it to make
- * these pass.
+ * Written test-first; `src/intent/observation-loop.ts` now implements `isDuplicate` and
+ * `runObservationLoop`, so the suite is green.
  *
  * Scope note: §16's "extends Ask-Twice telemetry rather than duplicating it", "every
  * Jarvis interaction is logged", "synthesis diarizes before the loop reasons", "runs

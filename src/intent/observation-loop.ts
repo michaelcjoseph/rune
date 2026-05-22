@@ -12,10 +12,11 @@
  * the synthesis stage (LLM-driven) are upstream and produce the diarized `SensorSignal[]`
  * this loop consumes; the project-execution dispatch is downstream orchestration.
  *
- * STATUS: contract stub. The type surface and signatures below are the contract pinned by
- * the test-first suite in `observation-loop.test.ts` (test-plan.md §16). The function
- * bodies are intentionally unimplemented — a Phase 5 observation-loop task fills them in.
- * Until then the suite is RED by design.
+ * STATUS: implemented. `isDuplicate` and `runObservationLoop` are live; the contract is
+ * pinned by the test suite in `observation-loop.test.ts` (test-plan.md §16). The LLM
+ * triage decision is injected as a callback; the actual dispatch of filed projects to the
+ * execution engine is downstream orchestration (`observation-dispatch.ts`,
+ * `observation-nightly.ts`).
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Phase 5"), test-plan.md (§16)}.
  */
@@ -57,15 +58,12 @@ export type LoopOutcome =
   | { kind: 'duplicate'; existingId: string }
   | { kind: 'quiet' };
 
-const NOT_IMPLEMENTED =
-  'observation-loop: not implemented — a Phase 5 observation-loop task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Whether `idea` matches an already-filed idea by id — the loop's de-dupe primitive. Same
  * friction always yields the same `ProjectIdea.id`, so an exact id match is the dedupe check.
  */
-export function isDuplicate(_idea: ProjectIdea, _existingIdeas: ProjectIdea[]): boolean {
-  throw new Error(NOT_IMPLEMENTED);
+export function isDuplicate(idea: ProjectIdea, existingIdeas: ProjectIdea[]): boolean {
+  return existingIdeas.some((e) => e.id === idea.id);
 }
 
 /**
@@ -78,9 +76,25 @@ export function isDuplicate(_idea: ProjectIdea, _existingIdeas: ProjectIdea[]): 
  * engine is downstream orchestration; this returns the decisions.
  */
 export function runObservationLoop(
-  _signals: SensorSignal[],
-  _existingIdeas: ProjectIdea[],
-  _triage: (signal: SensorSignal) => TriageVerdict,
+  signals: SensorSignal[],
+  existingIdeas: ProjectIdea[],
+  triage: (signal: SensorSignal) => TriageVerdict,
 ): LoopOutcome[] {
-  throw new Error(NOT_IMPLEMENTED);
+  if (signals.length === 0) return [{ kind: 'quiet' }];
+  const outcomes: LoopOutcome[] = [];
+  const filedThisBatch: ProjectIdea[] = [];
+  for (const signal of signals) {
+    const verdict = triage(signal);
+    if (!verdict.file) {
+      outcomes.push({ kind: 'discarded', reason: verdict.reason });
+      continue;
+    }
+    if (isDuplicate(verdict.idea, existingIdeas) || isDuplicate(verdict.idea, filedThisBatch)) {
+      outcomes.push({ kind: 'duplicate', existingId: verdict.idea.id });
+      continue;
+    }
+    outcomes.push({ kind: 'filed', idea: verdict.idea });
+    filedThisBatch.push(verdict.idea);
+  }
+  return outcomes;
 }

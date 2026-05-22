@@ -181,7 +181,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Extend the existing Ask-Twice intent telemetry to also detect fixed bugs, recurring friction, and failed or mis-routed interactions, with de-duplication.
 - [x] Triage detected items: file the worthwhile ones as projects into `docs/projects/ideas.md`, discard the rest.
 - [x] Dispatch the existing project-execution engine at the Jarvis product to run filed projects, within the concurrency and escalation rules — no new execution subsystem. The escalation policy governs spec approval for self-generated projects.
-- [ ] Run the loop nightly, extending the existing nightly vault review.
+- [x] Run the loop nightly, extending the existing nightly vault review.
 
 ### Documentation
 
