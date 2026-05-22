@@ -10,10 +10,10 @@
  * queued. It generalizes the work-runner's `WORK_RUN_GLOBAL_CAP` and tightens its
  * per-project cap into a per-product cap of one — it is not a parallel concurrency model.
  *
- * STATUS: contract stub. The type surface and signature below are the contract pinned by
- * the test-first suite in `scheduler.test.ts` (test-plan.md §15). The function body is
- * intentionally unimplemented — a Phase 4 concurrency task fills it in. Until then the
- * suite is RED by design.
+ * STATUS: implemented. `schedule` is live; the contract is pinned by the test suite in
+ * `scheduler.test.ts` (test-plan.md §15). The actual wiring of scheduler decisions to the
+ * mutation pipeline (consuming the queue on slot-free events) is orchestration that builds
+ * on this core.
  *
  * See docs/projects/08-intent-layer/{spec.md (§"Concurrency"), test-plan.md (§15)}.
  */
@@ -36,9 +36,6 @@ export interface ScheduleResult {
   queued: ScheduledProject[];
 }
 
-const NOT_IMPLEMENTED =
-  'scheduler: not implemented — a Phase 4 concurrency task (docs/projects/08-intent-layer) fills this in';
-
 /**
  * Run one scheduling pass. A queued project starts only when both caps allow it: the global
  * running count is below `globalCap`, and no project for the same product is already
@@ -47,9 +44,27 @@ const NOT_IMPLEMENTED =
  * `queued` — an (N+1)th project waits, it is never dropped. `globalCap` must be `>= 1`.
  */
 export function schedule(
-  _running: ScheduledProject[],
-  _queue: ScheduledProject[],
-  _globalCap: number,
+  running: ScheduledProject[],
+  queue: ScheduledProject[],
+  globalCap: number,
 ): ScheduleResult {
-  throw new Error(NOT_IMPLEMENTED);
+  if (globalCap < 1) {
+    throw new RangeError(
+      `schedule: globalCap must be a positive integer — got ${globalCap}`,
+    );
+  }
+  let slots = globalCap - running.length;
+  const busyProducts = new Set(running.map((r) => r.product));
+  const started: ScheduledProject[] = [];
+  const queued: ScheduledProject[] = [];
+  for (const p of queue) {
+    if (slots > 0 && !busyProducts.has(p.product)) {
+      started.push(p);
+      busyProducts.add(p.product);
+      slots -= 1;
+    } else {
+      queued.push(p);
+    }
+  }
+  return { started, running: [...running, ...started], queued };
 }

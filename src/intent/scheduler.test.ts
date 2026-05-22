@@ -1,12 +1,10 @@
 import { describe, it, expect } from 'vitest';
 
 /*
- * Test-first suite for test-plan.md §15 — concurrency scheduler (08-intent-layer, Phase 4).
+ * Test suite for test-plan.md §15 — concurrency scheduler (08-intent-layer, Phase 4).
  *
- * Written BEFORE the implementation. `src/intent/scheduler.ts` ships as a contract stub
- * whose `schedule` throws 'not implemented', so every test here is RED. That is the
- * intended, correct state: this is a "Tests (write first)" task — the suite goes green when
- * the Phase 4 concurrency implementation task lands. Do not implement it to make these pass.
+ * Written test-first; `src/intent/scheduler.ts` now implements `schedule`, so the suite is
+ * green.
  *
  * Scope note: §15's "two projects on different products auto-merging at the same time each
  * land cleanly" is a property of separate repos having no shared main line — integration,
