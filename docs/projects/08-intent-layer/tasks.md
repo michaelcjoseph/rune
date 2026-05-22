@@ -23,7 +23,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for the **product/project registry** — test-plan.md §1.
+- [x] Write the test suite for the **product/project registry** — test-plan.md §1.
 - [ ] Write the test suite for **product registration** — test-plan.md §2.
 - [ ] Write the test suite for the **product-overlay index** — test-plan.md §3.
 - [ ] Write the test suite for **model-agnostic agent definitions** — test-plan.md §4.

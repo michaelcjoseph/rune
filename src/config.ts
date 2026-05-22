@@ -102,6 +102,10 @@ const config = {
     return join(this.LOGS_DIR, 'claude-stream.jsonl');
   },
 
+  get REGISTRY_FILE() {
+    return join(this.LOGS_DIR, 'registry.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
