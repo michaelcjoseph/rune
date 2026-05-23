@@ -6,6 +6,7 @@ import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus
 import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
+import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
@@ -40,6 +41,22 @@ initKB();
 
 // Flip any stale 'running' mutations from a prior interrupted run to 'failed'
 reconcileOrphans();
+
+// Sweep orphan project worktrees from a prior interrupted run. Best-effort —
+// a missing products.json (fresh clone, no Regime B products registered yet)
+// or a missing worktree root returns []; a per-product failure is logged and
+// skipped inside cleanupOrphanWorktrees. Wrap in try/catch so an unexpected
+// fs error can't block startup either.
+void cleanupOrphanWorktrees({
+  worktreeRoot: config.WORKTREE_ROOT,
+  productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+}).then((removed) => {
+  if (removed.length > 0) {
+    log.info('Cleaned up orphan worktrees', { count: removed.length, paths: removed });
+  }
+}).catch((err) => {
+  log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
+});
 
 // Rotate the Claude stream log if it has grown past the size cap. Idempotent
 // and best-effort — never blocks startup.

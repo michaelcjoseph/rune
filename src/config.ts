@@ -112,6 +112,20 @@ const config = {
     return join(PROJECT_ROOT, 'policies', 'model-policy.json');
   },
 
+  /** Per-product config (repo path, base branch, credentials file, egress
+   *  allowlist) consulted by `src/jobs/sandbox-runtime.ts`. Committed repo file,
+   *  same shelf as `model-policy.json`. */
+  get PRODUCTS_CONFIG_FILE() {
+    return join(PROJECT_ROOT, 'policies', 'products.json');
+  },
+
+  /** Root directory under which Regime B project worktrees live, one subtree
+   *  per product (`<WORKTREE_ROOT>/<product>/<project>`). Defaults to
+   *  `<PROJECT_ROOT>/.worktrees` (gitignored); override with the `WORKTREE_ROOT`
+   *  env var to point at a host-level location (useful when running multiple
+   *  jarvis instances or when keeping worktrees off the indexed repo tree). */
+  WORKTREE_ROOT: optional('WORKTREE_ROOT') ?? join(PROJECT_ROOT, '.worktrees'),
+
   /** Journal-to-intent proposal queue (project 08) — runtime state, gitignored. */
   get INTENT_PROPOSAL_QUEUE_FILE() {
     return join(this.LOGS_DIR, 'intent-proposal-queue.json');

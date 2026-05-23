@@ -38,9 +38,10 @@ export interface SandboxSpec {
  * A valid product/project slug — non-empty, lowercase alphanumeric-or-hyphen with an
  * alphanumeric first character (the same rule the registry enforces). Such a slug carries
  * no path separator and no `.`, so it is always a single safe path segment, and the
- * mapping slug → segment is injective (no collisions).
+ * mapping slug → segment is injective (no collisions). Exported so sibling modules that
+ * validate slugs from external config (`src/jobs/sandbox-runtime.ts`) share one rule.
  */
-const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+export const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
  * The deterministic worktree path for a (product, project) under `worktreeRoot`. Distinct
@@ -70,19 +71,31 @@ export function worktreePathFor(
 }
 
 /**
- * Whether `targetPath` may be written by the run — true only when it resolves to a location
- * inside `sandbox.worktree`. Both paths are resolved to absolute, normalized form first, so
- * `..` traversal that escapes the worktree collapses away and is denied. The containment
- * check requires either an exact match or a `worktree + separator` prefix, so a sibling
- * that merely shares the worktree name (`…/02-growth-evil`) does not pass. A vault path,
- * another run's worktree, or any path outside the worktree is denied — Regime B writes only
- * within its own worktree, never the vault.
+ * Whether `target` is the same path as `root` or a descendant of it. Both paths are
+ * resolved to absolute, normalized form first, so a `..` traversal that escapes `root`
+ * collapses away and is denied. The check requires either an exact match or a
+ * `root + separator` prefix, so a sibling that merely shares the root's name as a prefix
+ * (`/x/02-growth-evil` against `/x/02-growth`) does not pass.
  *
- * This is a **lexical** containment check: it collapses `..` but does not dereference
- * symlinks. The system-level enforcement layer must pass a real (symlink-resolved) path, or
- * keep the worktree free of symlinks, so a symlink inside the worktree cannot redirect a
- * write out of it. `sandbox.worktree` must be an absolute path — `isWriteAllowed` throws
- * otherwise rather than silently anchoring a relative worktree to the process cwd.
+ * Lexical only — does not dereference symlinks. Callers that take a path from an
+ * untrusted source must resolve symlinks (`fs.realpathSync`) before consulting this, or
+ * keep the root free of symlinks. Exported so sibling modules (the runtime sandbox in
+ * `src/jobs/sandbox-runtime.ts`) share one containment rule with `isWriteAllowed`.
+ */
+export function isContainedIn(root: string, target: string): boolean {
+  const r = resolve(root);
+  const t = resolve(target);
+  return t === r || t.startsWith(r + sep);
+}
+
+/**
+ * Whether `targetPath` may be written by the run — true only when it resolves to a location
+ * inside `sandbox.worktree`. A vault path, another run's worktree, or any path outside the
+ * worktree is denied — Regime B writes only within its own worktree, never the vault.
+ *
+ * `sandbox.worktree` must be an absolute path — this function throws otherwise rather than
+ * silently anchoring a relative worktree to the process cwd. The containment check itself
+ * is delegated to `isContainedIn`; see that for the lexical-vs-symlink note.
  */
 export function isWriteAllowed(targetPath: string, sandbox: SandboxSpec): boolean {
   if (!isAbsolute(sandbox.worktree)) {
@@ -90,9 +103,7 @@ export function isWriteAllowed(targetPath: string, sandbox: SandboxSpec): boolea
       `isWriteAllowed: sandbox.worktree must be an absolute path — got '${sandbox.worktree}'`,
     );
   }
-  const root = resolve(sandbox.worktree);
-  const target = resolve(targetPath);
-  return target === root || target.startsWith(root + sep);
+  return isContainedIn(sandbox.worktree, targetPath);
 }
 
 /**
