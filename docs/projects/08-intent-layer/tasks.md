@@ -195,3 +195,129 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Merge-contract safety: no change reaches a product repo's main line without passing the merge contract (cross-model review and the test suite) and clearing the escalation policy — there is no ungated autonomous merge.
 - [x] The existing skills `/work`, `/work --auto`, and `/review` stay directly invokable by Michael through all phases.
 - [x] Resilience: a failed run is discardable, a restart loses no foundational state, corrupt state files fail fast.
+
+## Phase 6 — Live integration
+
+> Depends on: Phases 1–5 (the deterministic foundation in `src/intent/` — shipped and
+> tested, 2265 passing). This phase takes the engine and the observation loop from
+> "implemented and tested" to "running cleanly" — the spec's Definition-of-done condition.
+> Once both tracks land and live verification passes, the 08-intent-layer row in
+> `docs/projects/index.md` moves to **Done**.
+>
+> Each task is tagged **(user)** for work only Michael can do, **(agent)** for work
+> `/work --auto` (or any AI agent) can sweep, or **(agent + user)** for code an agent
+> writes that requires a manual run, approval, or coordinated cutover before it counts.
+
+### User-side prerequisites
+
+- [ ] **(user)** Run `! codex login` once on this machine so the Codex executor can spawn — gates Track A step 5.
+- [ ] **(user)** For each repo-backed product (Aura, Assay): record the absolute repo path, the base branch, and per-product credential storage so Jarvis can find them — gates Track A step 1.
+- [ ] **(user)** Decide the egress allowlist per product — which hosts a sandboxed run may legitimately reach (`npm install`, `go get`, etc.) — gates Track A step 1's egress enforcement.
+- [ ] **(user)** Approve cost-attribution for OpenAI/Codex spend — Codex CLI runs on the logged-in account, so `! codex login` carries this implicitly; flag it as a deliberate moment.
+
+### Track A — autonomous engine (sequential)
+
+> Order: 1 → 2 → 3 → 4, then 5 → 6 → 7 → 8. Sandbox and supervision are infrastructure
+> under the loop runner; the planner can land at any point after the loop runner exists.
+
+#### A1. Sandbox enforcement (Layer 4)
+
+- [ ] **(agent)** Build `src/jobs/sandbox-runtime.ts` — `createWorktree` / `destroyWorktree` shelling out to `git worktree add/remove`, plus a startup cleanup pass for orphan worktrees.
+- [ ] **(agent)** Per-product scoped credentials — a `.env.<product>` file pattern plus the spawn-time `env` injection that respects `canReachCredential`.
+- [ ] **(agent + user)** Egress enforcement — implement the per-run proxy that consults `isEgressAllowed`, or — if deferred — document the gap and require the user to run the engine in a network-isolated container. The user picks the policy.
+- [ ] **(agent)** Wrap fs writes with `isWriteAllowed` (or `cwd: sandbox.worktree` plus the path guard for absolute paths). Per the security note: resolve symlinks via `fs.realpathSync` before the containment check, or forbid symlinks in worktree init.
+
+#### A2. Supervision wiring (Layer 3)
+
+- [ ] **(agent)** Persistent supervised-run store in `src/jobs/supervision-store.ts` — read/write `logs/supervised-runs.json`.
+- [ ] **(agent)** Hook the mutation event pipeline — `createMutation` → `upsertRun`, each `output` event → `recordHeartbeat`, `completed` / `failed` → status transition, `failed` → `markCrashed`.
+- [ ] **(agent)** Startup recovery in `src/index.ts` — walk the persisted runs, call `recoverRun` on each, persist back.
+- [ ] **(agent)** Periodic stall check (~30s interval) — `getVisibility` → emit a Telegram nudge for newly-stalled runs.
+- [ ] **(agent)** Replace `handleApiCockpit`'s inline `activeRuns` derivation with `getVisibility` over the supervised-run store, mapped to `RunStatusByProject`.
+
+#### A3. Single-model Generator-Evaluator runner (Layer 2)
+
+- [ ] **(agent)** New `genEvalLoopApplier` in `src/jobs/gen-eval-loop-runner.ts`, registered in `src/transport/mutations.ts`.
+- [ ] **(agent)** Per round: spawn `/work --auto`, parse exit, spawn `/review`, get verdict; build a `LoopRound` via `recordRound`; call `evaluateLoop`; act on the outcome (`on-branch` → emit `completed`; `escalated` → emit `failed` + supervision flag).
+- [ ] **(agent)** Read `maxEvaluatorRounds` from `policies/escalation-policy.json`'s `evaluator-round-cap` rule so the loop and the policy share one cap.
+- [ ] **(agent)** Stream per-round progress via Mutation events (output + periodic `failedEvaluatorRounds`).
+
+#### A4. Planner conversational orchestration (Layer 1)
+
+- [ ] **(agent)** `src/reviews/planning.ts` — planning-session state alongside the existing review sessions; JSON persistence under `logs/planning-sessions.json`.
+- [ ] **(agent)** Multi-turn Socratic handler — asks scoping questions, surfaces assumptions, proposes a `SpecArtifact` when the LLM judges scoping done.
+- [ ] **(agent)** `/plan` Telegram command + the cockpit's existing `enter-planning-mode` action.
+- [ ] **(agent)** On user approval, call `runAgent('project-setup-writer', buildSetupWriterBrief(session))` — scaffolds `docs/projects/<NN-slug>/{spec.md, tasks.md, test-plan.md}`.
+- [ ] **(agent)** `abandonPlan` on `/clear` or session expiry — scoping wrote no files, so cleanup is a state-machine transition.
+
+#### A5. Codex executor integration (Layer 5)
+
+- [ ] **(agent)** `src/ai/codex.ts` mirroring `src/ai/claude.ts` — `CODEX_BIN` resolution, `runCodex(prompt, opts)` spawning `codex exec`, register/unregister-active-process hooks for graceful shutdown.
+- [ ] **(agent)** `dispatchToExecutor(handoff)` in `src/intent/dispatch-runtime.ts` — compile the agent per target, spawn the executor, call `recordDispatch`, append to `logs/dispatch-log.jsonl`.
+- [ ] **(agent)** Provider-availability check — a `which codex` + login-status probe; on absence return a `{status:'failed', failureReason:'codex executor unavailable'}` `DispatchResult` so the merge contract's null-adjudication path applies cleanly.
+- [ ] **(user)** Confirm `! codex login` is in place before the first cross-model run (linked from the User-side prerequisites above).
+
+#### A6. Model policy — register Codex + enable the cross-model constraint
+
+- [ ] **(agent)** Add a `codex` alias to `policies/model-policy.json` (provider `openai`, capability `coding`, status `preferred`).
+- [ ] **(agent)** Set `roleDefaults.evaluator = "codex"` so an autonomous Evaluator picks a cross-provider model by default.
+- [ ] **(agent + user)** Flip `evaluatorDistinctFromGenerator` to `true` — coordinated with the Codex executor going live (do this WITH step A5, not before, or the constraint blocks every existing autonomous review path). The user approves the cutover.
+
+#### A7. Cross-model adjudication wiring (Layer 2 upgrade)
+
+- [ ] **(agent)** Extend the gen-eval-loop runner — when `resolveReviewMode({autonomous: true, …}) === 'cross-model'`, Generator and Evaluator dispatches resolve to distinct providers via `resolveModel({evaluatorDistinctFromGenerator: true, generatorProvider})`.
+- [ ] **(agent)** Build an `Adjudication` from the resolved (model, provider) pair and the verdict; call `evaluateMergeContract`.
+- [ ] **(agent)** On `merge: true` — `git -C <productRepo> merge --no-ff <branch>` and push (or open and auto-merge a PR per the product's flow).
+- [ ] **(agent)** On `merge: false` — surface via supervision as `blocked-on-human` with the contract's reason; never degrade to single-model + merge unreviewed.
+
+#### A8. `/review --cross-model` second-pass dispatch
+
+- [ ] **(agent)** Update `.claude/skills/review/SKILL.md` step 1 to parse `--cross-model`; call `resolveReviewMode({autonomous: false, crossModelFlag})`.
+- [ ] **(agent)** When mode is `cross-model` — in parallel with the Claude reviewer panel, build a `DispatchHandoff` for each reviewer (target `'codex'`) and dispatch via `dispatchToExecutor`.
+- [ ] **(agent)** Reconcile the two verdicts into the consolidated answer; show where Claude and Codex disagreed.
+- [ ] **(agent)** Drop the "pending Codex executor" paragraph from the SKILL.md Modes section.
+
+### Track B — observation loop (parallel-safe with Track A)
+
+> Order: B1, B2, B3, B4 can land in any order; B5 closes them. The whole track is independent
+> of Track A except that B2's telemetry reader naturally improves once Track A is generating
+> real autonomous-run data to learn from.
+
+#### B1. Per-call-site interaction logging
+
+- [ ] **(agent)** Writer `src/utils/observation-log.ts:appendInteraction(record)` — JSONL append to `logs/observation-interactions.jsonl`, mirroring `src/utils/intent-log.ts:appendIntent`.
+- [ ] **(agent)** Wire into `src/bot/handlers/text.ts` — one record per inbound TG message; `detail` is `route=<skill> conf=<n>`, never the message body.
+- [ ] **(agent)** Wire into every `src/bot/commands/*.ts` — `kind: 'command'`, `detail` is the command name + structured result class.
+- [ ] **(agent)** Wire into `src/ai/claude.ts:runAgent` — `kind: 'agent-call'`, `detail` is `agent=<name> dur=<ms>`.
+- [ ] **(agent)** Wire into the webview action handlers in `src/server/webview.ts`.
+- [ ] **(agent)** Strict-discipline review pass — confirm no call site puts raw user text or vault content into `detail` (the JSDoc invariant on `InteractionLogRecord.detail`).
+
+#### B2. Source readers — vault + telemetry
+
+- [ ] **(agent)** `src/intent/observation-sensor-readers.ts:readVaultSignals()` — scan recent journals (last 7 days) for `#friction` / `#bug` / `#stuck` tags and recent `world-view/*.md` changelog tension; return a capped `SensorSignal[]`.
+- [ ] **(agent)** `readTelemetrySignals()` — read `logs/agent-runs.jsonl` for failure-heavy windows and `logs/mutations.jsonl` for repeated `failed` work-runs on the same project slug. Per-product (Aura/Assay) telemetry is deferred — note in the module doc.
+- [ ] **(agent)** `readInteractionSignals()` (consumes the JSONL written in B1) — group the last N hours, return capped `SensorSignal[]`.
+
+#### B3. LLM callbacks — diarizer and triage agents
+
+- [ ] **(agent)** New agent `.claude/agents/observation-diarizer.md` — accepts raw `SensorSignal[]` JSON, returns a compact diarized `SensorSignal[]` JSON. Structured output; voice not opted in.
+- [ ] **(agent)** New agent `.claude/agents/observation-triage.md` — accepts one `SensorSignal`, returns a `TriageVerdict` JSON. The `idea.id` rule is a deterministic slug of the friction so dedupe is sound across passes.
+- [ ] **(agent)** Adapters in `src/intent/observation-callbacks.ts` — `diarize` and `triage` callables that wrap `runAgent` + JSON parse.
+
+#### B4. `ideas.md` baseline + reader
+
+- [ ] **(agent)** Create `docs/projects/ideas.md` with a header and a placeholder for the loop's appended bullets.
+- [ ] **(agent)** `src/intent/observation-ideas-io.ts:readFiledIdeas(): ProjectIdea[]` — regex-parse each bullet (matching `formatIdeasMarkdown`'s shape), derive `id` the same way the triage agent does so dedupe matches.
+- [ ] **(agent)** `appendFiledIdeas(markdown)` — append `formatIdeasMarkdown`'s output to the file.
+
+#### B5. Nightly observation step
+
+- [ ] **(agent)** Add `observationStep()` to `src/jobs/nightly.ts`, slotted after KB queue and before lint. Build the `NightlyObservationDeps` from the readers (B2), the callbacks (B3), `decideFailClosed({}, {specOrigin: 'self-generated', …})`, and `readFiledIdeas()` (B4).
+- [ ] **(agent)** Handle the result — `appendFiledIdeas(result.ideasMarkdown)`; for each `dispatch` plan call `createMutation(...)` against the gen-eval-loop kind from A3; for each `await-approval` plan, send a Telegram approval prompt naming the idea and the escalation reason.
+- [ ] **(agent)** Log the pass summary (counts of filed / discarded / duplicate / quiet) — meta telemetry the next pass can observe.
+
+### Live verification → Done
+
+- [ ] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Jarvis spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)
+- [ ] **(user)** Let Jarvis run a week. Confirm `logs/observation-interactions.jsonl` is growing, `docs/projects/ideas.md` is gaining entries from real friction, and a low-risk filed project gets dispatched and merges itself.
+- [ ] **(user)** Flip the 08-intent-layer row in `docs/projects/index.md` from "In Progress" to "Done".
