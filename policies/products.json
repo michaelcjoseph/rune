@@ -1,0 +1,38 @@
+{
+  "aura": {
+    "repoPath": "~/workspace/aura",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/jarvis/credentials/aura/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ]
+  },
+  "assay": {
+    "repoPath": "~/workspace/assay",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/jarvis/credentials/assay/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ]
+  },
+  "jarvis": {
+    "repoPath": "~/workspace/jarvis",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/jarvis/credentials/jarvis/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ]
+  }
+}

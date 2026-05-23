@@ -210,10 +210,10 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### User-side prerequisites
 
-- [ ] **(user)** Run `! codex login` once on this machine so the Codex executor can spawn — gates Track A step 5.
-- [ ] **(user)** For each repo-backed product (Aura, Assay): record the absolute repo path, the base branch, and per-product credential storage so Jarvis can find them — gates Track A step 1.
-- [ ] **(user)** Decide the egress allowlist per product — which hosts a sandboxed run may legitimately reach (`npm install`, `go get`, etc.) — gates Track A step 1's egress enforcement.
-- [ ] **(user)** Approve cost-attribution for OpenAI/Codex spend — Codex CLI runs on the logged-in account, so `! codex login` carries this implicitly; flag it as a deliberate moment.
+- [x] **(user)** Run `! codex login` once on this machine so the Codex executor can spawn — gates Track A step 5. *Done; account is on the highest subscription tier.*
+- [x] **(agent)** Capture per-product repo paths, base branches, and credential locations in `policies/products.json`. *Done; the repos are already at `~/workspace/<product>` and `policies/products.json` records that convention. The agent extends it as Aura/Assay-specific needs surface.*
+- [x] **(agent)** Establish a narrow starter egress allowlist per product in `policies/products.json`. *Done; starter allows GitHub + the npm registry. Stack-specific hosts (Go's `proxy.golang.org` / `sum.golang.org`, Python's `pypi.org` / `files.pythonhosted.org`, Rust's `crates.io` / `static.crates.io`) get added per product if a run fails with a clear deny — the runtime surfaces the missing host, the agent appends it.*
+- [ ] **(agent + user)** Cost-attribution for OpenAI/Codex spend — deferred. The agent prompts the user before the first cross-model autonomous run and before any per-run/per-day spend cap is wired in; the OpenAI dashboard's monthly cap is the safety net until then.
 
 ### Track A — autonomous engine (sequential)
 
@@ -224,7 +224,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [ ] **(agent)** Build `src/jobs/sandbox-runtime.ts` — `createWorktree` / `destroyWorktree` shelling out to `git worktree add/remove`, plus a startup cleanup pass for orphan worktrees.
 - [ ] **(agent)** Per-product scoped credentials — a `.env.<product>` file pattern plus the spawn-time `env` injection that respects `canReachCredential`.
-- [ ] **(agent + user)** Egress enforcement — implement the per-run proxy that consults `isEgressAllowed`, or — if deferred — document the gap and require the user to run the engine in a network-isolated container. The user picks the policy.
+- [ ] **(agent)** Egress enforcement — implement the per-run proxy that consults `isEgressAllowed` against each product's allowlist in `policies/products.json`, or — if deferred — document the gap explicitly. Policy is decided (narrow starter, expanded per stack as runs surface deny errors); only the enforcement mechanism choice remains.
 - [ ] **(agent)** Wrap fs writes with `isWriteAllowed` (or `cwd: sandbox.worktree` plus the path guard for absolute paths). Per the security note: resolve symlinks via `fs.realpathSync` before the containment check, or forbid symlinks in worktree init.
 
 #### A2. Supervision wiring (Layer 3)
