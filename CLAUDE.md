@@ -83,10 +83,11 @@ src/
 ├── server/
 │   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
 │   ├── auth.ts              # verifyAuth(req), isAllowedHost(req), safeCompare(a, b) — cookie + host-guard auth helpers
-│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, GET /api/cockpit, POST /api/mutations, POST /api/mutations/:id/cancel, POST /api/ops/:id/cancel, WS /api/ws
+│   ├── webview.ts           # mountWebviewRoutes(server, deps): GET /, GET /static/*, POST /api/auth-bootstrap, POST /api/chat, GET /api/state, GET /api/cockpit, POST /api/mutations, POST /api/mutations/:id/cancel, POST /api/ops/:id/cancel, WS /api/ws; handleApiCockpit reads run-status via readCockpitRunStatus(config.SUPERVISED_RUNS_FILE) — not from in-memory activeRuns
 │   ├── webview-bootstrap.ts # handleWebviewMessage(sender, userId, text) — thin adapter over dispatchText for webview
 │   ├── projects-snapshot.ts # getProjectSummaries(): reads docs/projects/index.md + tasks.md per project; returns ProjectSummary[] with slug, status, task progress (done/total/perPhase), specPath, lastModified
 │   ├── state-snapshot.ts    # StateSnapshot type + getStateSnapshot(): reads logs/agent-runs.jsonl, scheduler-state.json, active session/review, ingestion queue, playbook/proposal/intent counts (pendingApprovals.intent), project summaries, active+recent mutations, in-flight Claude ops; used by GET /api/state
+│   ├── cockpit-run-status.ts # mapVisibilityToRunStatus(visibility): pure projection from supervision VisibilitySurface → RunStatusByProject; readCockpitRunStatus(filePath, now?) wraps readAllRuns + getVisibility + mapper; blocked-on-human wins over running for the same project
 │   └── static/              # Webview frontend: index.html, app.js, app.css (vanilla HTML/JS/CSS); includes cockpit sidebar panel that polls GET /api/cockpit and renders products/projects with lifecycle status, run-status, and per-project action buttons
 ├── kb/
 │   ├── engine.ts            # Orchestrates ingest/query/lint, processes ingestion queue

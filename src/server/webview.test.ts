@@ -26,6 +26,13 @@ vi.mock('../jobs/mutations-log.js', () => ({
   readRecentMutations: mockReadRecentMutations,
 }));
 
+// Cockpit run-status: webview reads via this helper. Tests inject a fixture
+// per-case via the `mockReadCockpitRunStatus.mockReturnValue(...)` knob.
+const mockReadCockpitRunStatus = vi.fn(() => ({}));
+vi.mock('./cockpit-run-status.js', () => ({
+  readCockpitRunStatus: mockReadCockpitRunStatus,
+}));
+
 const mockConfig = {
   HTTP_PORT: 0,
   HTTP_HOST: '127.0.0.1',
@@ -416,14 +423,26 @@ describe('server/webview', () => {
     });
 
     it('feeds live run-status — a project with an active work-run shows as running', async () => {
-      mockActiveRunsMap.set('m1', {
-        descriptor: { kind: 'work-run', status: 'running', payload: { projectSlug: '01-mvp' } },
-      });
+      // The webview reads run-status via readCockpitRunStatus, which projects
+      // the supervised-runs store through getVisibility + the mapper.
+      mockReadCockpitRunStatus.mockReturnValueOnce({ '01-mvp': 'running' });
       const res = await makeRequest(port, '/api/cockpit', {
         headers: { authorization: 'Bearer test-secret' },
       });
       expect(res.status).toBe(200);
       expect(res.body.products[0].projects[0]).toMatchObject({ slug: '01-mvp', runStatus: 'running' });
+    });
+
+    it('surfaces a project blocked-on-human via the readCockpitRunStatus helper', async () => {
+      mockReadCockpitRunStatus.mockReturnValueOnce({ '01-mvp': 'blocked-on-human' });
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.products[0].projects[0]).toMatchObject({
+        slug: '01-mvp',
+        runStatus: 'blocked-on-human',
+      });
     });
   });
 

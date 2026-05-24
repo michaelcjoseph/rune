@@ -9,14 +9,15 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
-import { buildCockpitView, type RunStatusByProject } from '../intent/cockpit.js';
+import { buildCockpitView } from '../intent/cockpit.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
-import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
+import { createMutation, cancelMutation } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
+import { readCockpitRunStatus } from './cockpit-run-status.js';
 
 const log = createLogger('webview');
 
@@ -154,17 +155,13 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch {
     registry = null;
   }
-  // Feed live run-status from the supervision surface: a project with an active work-run
-  // shows as `running`. blocked-on-human arrives once the escalation policy is wired into
-  // the loop; a project with no active run defaults to `idle` in buildCockpitView.
-  const runStatus: RunStatusByProject = {};
-  for (const handle of activeRuns.values()) {
-    const d = handle.descriptor;
-    if (d.kind === 'work-run' && d.status === 'running') {
-      const slug = d.payload['projectSlug'];
-      if (typeof slug === 'string') runStatus[slug] = 'running';
-    }
-  }
+  // Feed live run-status from the supervision surface — the persisted store
+  // (logs/supervised-runs.json) is the source of truth, populated by the
+  // mutation pipeline's hooks (A2.2). Reading here keeps the cockpit
+  // consistent with what stall-check sees and survives the in-memory
+  // `activeRuns` map being cleared on shutdown. A project with no active
+  // run defaults to `idle` in buildCockpitView.
+  const runStatus = readCockpitRunStatus(config.SUPERVISED_RUNS_FILE);
   const view = buildCockpitView(registry, runStatus);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
