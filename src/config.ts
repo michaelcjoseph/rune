@@ -140,6 +140,14 @@ const config = {
     return join(this.LOGS_DIR, 'egress-denials.jsonl');
   },
 
+  /** Persistent store of the current SupervisedRun[] state
+   *  (project 08 Phase 6 A2.1). Written by `src/jobs/supervision-store.ts`
+   *  on every run state transition; read by the visibility surface and the
+   *  startup recovery pass. Holds current state per run, not events. */
+  get SUPERVISED_RUNS_FILE() {
+    return join(this.LOGS_DIR, 'supervised-runs.json');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
