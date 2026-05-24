@@ -13,6 +13,7 @@ import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } fr
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
+import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { getSkillRegistry } from './bot/skill-registry.js';
 import { loadModelPolicy } from './intent/model-policy.js';
@@ -97,6 +98,7 @@ wireHandlers(bot, tg);
 let ready = false;
 const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
+startStallCheck(bus);
 startWatcher(bus);
 
 // Warm the skill-registry cache. startScheduler() above calls
@@ -115,6 +117,7 @@ log.info('Jarvis started', {
 async function shutdown() {
   log.info('Shutting down...');
   stopScheduler();
+  stopStallCheck();
   stopWatcher();
   destroy();
   stopInFlightTicker();

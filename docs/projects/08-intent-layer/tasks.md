@@ -232,7 +232,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] **(agent)** Persistent supervised-run store in `src/jobs/supervision-store.ts` — read/write `logs/supervised-runs.json`.
 - [x] **(agent)** Hook the mutation event pipeline — `createMutation` → `upsertRun`, each `output` event → `recordHeartbeat`, `completed` / `failed` → status transition, `failed` → `markCrashed`.
 - [x] **(agent)** Startup recovery in `src/index.ts` — walk the persisted runs, call `recoverRun` on each, persist back.
-- [ ] **(agent)** Periodic stall check (~30s interval) — `getVisibility` → emit a Telegram nudge for newly-stalled runs.
+- [x] **(agent)** Periodic stall check (~30s interval) — `getVisibility` → emit a Telegram nudge for newly-stalled runs.
 - [ ] **(agent)** Replace `handleApiCockpit`'s inline `activeRuns` derivation with `getVisibility` over the supervised-run store, mapped to `RunStatusByProject`.
 
 #### A3. Single-model Generator-Evaluator runner (Layer 2)

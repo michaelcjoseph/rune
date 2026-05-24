@@ -21,7 +21,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 
 ```
 src/
-├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler; startup sequence: reconcileOrphans() → recoverSupervisedRuns() (flips stale supervised-run 'running' → 'unknown', fail-safe) → cleanupOrphanWorktrees() (fire-and-forget, best-effort)
+├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler; startup sequence: reconcileOrphans() → recoverSupervisedRuns() (flips stale supervised-run 'running' → 'unknown', fail-safe) → cleanupOrphanWorktrees() (fire-and-forget, best-effort); calls startStallCheck(bus) after startScheduler() and stopStallCheck() in the shutdown sequence
 ├── config.ts                # Typed env vars and constants
 ├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner); runAgent() resolves each agent's model through the model selection policy (src/intent/model-policy.ts) — pin → role-default → global-fallback — rather than the old hardcoded def.model ?? config.AGENT_MODEL
 ├── bot/
@@ -119,6 +119,8 @@ src/
 │   ├── lenny-sync.ts        # Exports runLibrarySync() + LibrarySyncResult; pulls new Lenny posts/podcasts via lenny-sync agent, updates logs/lenny-sync-state.json
 │   ├── supervision-store.ts # Persistent JSON store for SupervisedRun[] state (from src/intent/supervision.ts): readAllRuns, writeAllRuns, upsertRun, removeRun; atomic temp-then-rename writes; corrupt/invalid entries dropped at read time with warn log; backed by logs/supervised-runs.json (config.SUPERVISED_RUNS_FILE)
 │   ├── supervision-recovery.ts # Startup recovery for supervised runs: recoverSupervisedRuns(filePath) reads all SupervisedRuns, applies recoverRun (flips stale 'running' → 'unknown'), writes back only if anything changed; returns { transitioned, total }; called from index.ts after reconcileOrphans(), wrapped in try/catch so disk failures cannot crash boot
+│   ├── stall-check.ts       # Pure stall-check core: checkStalledRuns(deps) returns newly-nudged-id set; formatStallNudge(run, now) builds the Telegram nudge string; exports TICK_INTERVAL_MS (30s) and STALL_THRESHOLD_MS (5min)
+│   ├── stall-check-runner.ts # setInterval glue: startStallCheck(bus) and stopStallCheck(); calls checkStalledRuns every 30s with readAllRuns(config.SUPERVISED_RUNS_FILE), publishes a Telegram nudge per newly-stalled run; tick exceptions are caught so a failure can't crash the server
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── intent/
 │   ├── registry.ts          # Product/project registry: buildRegistry, readRegistry/writeRegistry, getAllProjects; aggregating index (product → projects → lifecycle-status); buildRegistry takes pre-scanned RegistrySources (the caller scans repos + vault product files); persists to logs/registry.json (config.REGISTRY_FILE)
