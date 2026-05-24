@@ -94,6 +94,13 @@ const config = {
     return join(this.LOGS_DIR, 'review-sessions.json');
   },
 
+  /** Per-user planning conversation state (project 08 Phase 6 A4.1) —
+   *  the Planner's multi-turn session store, analogous to review sessions
+   *  but for the idea-to-spec conversation. */
+  get PLANNING_SESSIONS_FILE() {
+    return join(this.LOGS_DIR, 'planning-sessions.json');
+  },
+
   get LAST_WORKOUT_FILE() {
     return join(this.LOGS_DIR, 'last-workout.json');
   },

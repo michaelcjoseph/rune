@@ -244,7 +244,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### A4. Planner conversational orchestration (Layer 1)
 
-- [ ] **(agent)** `src/reviews/planning.ts` — planning-session state alongside the existing review sessions; JSON persistence under `logs/planning-sessions.json`.
+- [x] **(agent)** `src/reviews/planning.ts` — planning-session state alongside the existing review sessions; JSON persistence under `logs/planning-sessions.json`.
 - [ ] **(agent)** Multi-turn Socratic handler — asks scoping questions, surfaces assumptions, proposes a `SpecArtifact` when the LLM judges scoping done.
 - [ ] **(agent)** `/plan` Telegram command + the cockpit's existing `enter-planning-mode` action.
 - [ ] **(agent)** On user approval, call `runAgent('project-setup-writer', buildSetupWriterBrief(session))` — scaffolds `docs/projects/<NN-slug>/{spec.md, tasks.md, test-plan.md}`.
