@@ -21,7 +21,15 @@ vi.mock('../config.js', () => ({
   default: {
     TELEGRAM_USER_ID: 42,
     LOGS_DIR: '/test/logs',
+    SUPERVISED_RUNS_FILE: '/test/logs/supervised-runs.json',
   },
+}));
+
+// Mock supervision-store so the hook tests can assert call shape without
+// touching the filesystem.
+const mockUpsertRun = vi.fn();
+vi.mock('../jobs/supervision-store.js', () => ({
+  upsertRun: mockUpsertRun,
 }));
 
 // --- Dynamic imports after mocks ---
@@ -232,6 +240,150 @@ describe('mutations', () => {
 
       // Clean up
       activeRuns.delete('active-id');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Supervision-store hooks (project 08 Phase 6 A2.2)
+  // -------------------------------------------------------------------------
+
+  describe('supervision-store hooks', () => {
+    /** Wait until upsertRun has been called at least `n` times, then return
+     *  the recorded arguments. Asserts the count was actually reached so a
+     *  hook regression (fewer upserts than expected) fails the test instead
+     *  of silently passing on a partial array. Bounded timeout protects
+     *  against a regression that produces zero upserts. */
+    async function waitForUpserts(n: number, timeoutMs = 500): Promise<unknown[][]> {
+      const deadline = Date.now() + timeoutMs;
+      while (mockUpsertRun.mock.calls.length < n && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(mockUpsertRun.mock.calls.length).toBeGreaterThanOrEqual(n);
+      return mockUpsertRun.mock.calls;
+    }
+
+    it('createMutation seeds a non-autoApprove mutation as "blocked-on-human"', async () => {
+      // A non-autoApprove mutation is awaiting human approval — the cockpit
+      // surfaces it via getVisibility's `blocked` bucket, not as actively
+      // running. Seeding as 'running' would mis-classify it.
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: false,
+        validateResult: { ok: true },
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      expect(result.ok).toBe(true);
+
+      const calls = await waitForUpserts(1);
+      const [firstArg] = calls[0]!;
+      const run = firstArg as { id: string; status: string; project: string };
+      expect(run.status).toBe('blocked-on-human');
+      expect(run.project).toBe('demo');
+      expect(typeof run.id).toBe('string');
+    });
+
+    it('createMutation seeds an autoApprove mutation as "running"', async () => {
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: completedGen('x'),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      const calls = await waitForUpserts(1);
+      const [firstArg] = calls[0]!;
+      const run = firstArg as { status: string };
+      expect(run.status).toBe('running');
+    });
+
+    it('output events do NOT spam upsertRun — heartbeat is throttled at 30s', async () => {
+      // A run that streams many output lines must not block the event loop
+      // with per-line read-modify-write. The throttle skips heartbeat
+      // upserts until at least HEARTBEAT_THROTTLE_MS (30s) has passed.
+      // Within a fast test (sub-second) no heartbeat upsert fires.
+      async function* outputGen(): AsyncIterable<any> {
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'p1' } };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'p2' } };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'p3' } };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'completed', data: {} };
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: outputGen(),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // Expected: create-seed + startApply-running + completed = 3.
+      // No heartbeat upserts because the 30s window did not elapse.
+      const calls = await waitForUpserts(3);
+      const statuses = calls.map((c) => (c[0] as { status: string }).status);
+      expect(statuses).toEqual(['running', 'running', 'completed']);
+    });
+
+    it('a completed event flips the SupervisedRun status to "completed"', async () => {
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: completedGen('placeholder'),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // create-seed + startApply-running + completed = 3 upserts.
+      const calls = await waitForUpserts(3);
+      const final = calls[calls.length - 1]![0] as { status: string };
+      expect(final.status).toBe('completed');
+    });
+
+    it('a failed event flips the SupervisedRun status to "failed"', async () => {
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: failedGen('placeholder'),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // create-seed + startApply-running + failed = 3 upserts.
+      const calls = await waitForUpserts(3);
+      const final = calls[calls.length - 1]![0] as { status: string };
+      expect(final.status).toBe('failed');
+    });
+
+    it('an applier crash (thrown error) flips the SupervisedRun to "failed"', async () => {
+      async function* throwingGen(): AsyncIterable<any> {
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'starting' } };
+        throw new Error('boom — applier crashed');
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: throwingGen(),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // create-seed + startApply-running + catch(failed) = 3. The output
+      // event's heartbeat is throttled within the fast-test window, so
+      // there's no 4th upsert for it.
+      const calls = await waitForUpserts(3);
+      const final = calls[calls.length - 1]![0] as { status: string };
+      expect(final.status).toBe('failed');
     });
   });
 });

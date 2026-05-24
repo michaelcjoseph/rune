@@ -1,10 +1,61 @@
 import { randomUUID } from 'node:crypto';
 import { appendMutationLine } from '../jobs/mutations-log.js';
+import { upsertRun } from '../jobs/supervision-store.js';
+import { type SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
 import config from '../config.js';
 import { NotificationBus } from './notification-bus.js';
 
 const log = createLogger('mutations');
+
+/**
+ * Build a SupervisedRun for a mutation descriptor. The supervision visibility
+ * surface keys runs by id (using the mutation id keeps the two stores aligned).
+ * `product` comes from the payload if present (gen-eval-loop-runner sets it
+ * explicitly); otherwise defaults to 'jarvis' since today's only auto-approve
+ * applier is the work-runner operating on the Jarvis repo itself. `project`
+ * comes from `payload.projectSlug` / `payload.ref` / `target.ref` in order.
+ *
+ * `startedAt` is always `descriptor.createdAt` — the user's intent for the run
+ * is created at createMutation time, and a delayed startApply (approval gate)
+ * shouldn't move the "when did this start" timestamp the cockpit shows. The
+ * caller passes a status because the same descriptor can be a `blocked-on-human`
+ * seed (non-autoApprove pending approval) or a `running` flip (after approval).
+ */
+function buildSupervisedRun(
+  d: MutationDescriptor,
+  status: SupervisedRun['status'],
+  nowIso: string,
+): SupervisedRun {
+  const p = d.payload as Record<string, unknown>;
+  const product = typeof p['product'] === 'string' ? p['product'] : 'jarvis';
+  const project =
+    typeof p['projectSlug'] === 'string' ? p['projectSlug']
+    : typeof p['ref'] === 'string' ? p['ref']
+    : d.target.ref || d.id;
+  return {
+    id: d.id,
+    product,
+    project,
+    status,
+    startedAt: d.createdAt,
+    lastHeartbeatAt: nowIso,
+  };
+}
+
+/** Best-effort wrapper around upsertRun — persistence failure logs but
+ *  never crashes the mutation flow (the mutation log via appendMutationLine
+ *  remains the source of truth for audit). */
+function safeUpsertRun(run: SupervisedRun): void {
+  try {
+    upsertRun(run, config.SUPERVISED_RUNS_FILE);
+  } catch (err) {
+    log.warn('supervision-store upsertRun failed', {
+      id: run.id,
+      error: (err as Error).message,
+    });
+  }
+}
 
 export type MutationKind = 'work-run' | 'project-edit' | 'proposal-action' | 'agent-edit' | 'cron-toggle';
 export type MutationStatus = 'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'rejected';
@@ -98,6 +149,15 @@ export async function createMutation(
 
   appendMutationLine(descriptor);
 
+  // Seed the supervision visibility surface with the new run. An autoApprove
+  // mutation starts running immediately, so seed as 'running'; a non-
+  // autoApprove mutation is awaiting human approval, so seed as
+  // 'blocked-on-human' — the accurate state, distinguishable on the cockpit
+  // via getVisibility's `blocked` bucket. (Validation-rejected mutations
+  // never reach this line, so no stray supervision entries get written.)
+  const seedStatus: SupervisedRun['status'] = applier.autoApprove ? 'running' : 'blocked-on-human';
+  safeUpsertRun(buildSupervisedRun(descriptor, seedStatus, descriptor.createdAt));
+
   if (applier.autoApprove) {
     void startApply(applier, descriptor);
   }
@@ -129,6 +189,18 @@ async function startApply(
 
   descriptor.status = 'running';
   appendMutationLine(descriptor);
+  // Flip supervision to 'running' — for an autoApprove mutation this confirms
+  // the seed; for a manual-approval mutation it transitions out of the
+  // 'blocked-on-human' seed once the human approved and dispatch started.
+  safeUpsertRun(buildSupervisedRun(descriptor, 'running', new Date().toISOString()));
+
+  // Heartbeat upserts are throttled — a busy run that streams thousands of
+  // output lines must not block the event loop with a read-modify-write per
+  // line. The supervision stale threshold is in minutes; a 30s minimum gap
+  // between persisted heartbeats is well under that. Terminal and crash
+  // writes are NOT throttled — those are one-shot.
+  let lastHeartbeatUpsertAt = Date.now();
+  const HEARTBEAT_THROTTLE_MS = 30_000;
 
   // Use the real bus if available, else a no-op so appliers always receive a valid object
   const ctx: ApplyContext = {
@@ -147,23 +219,41 @@ async function startApply(
         userId: config.TELEGRAM_USER_ID,
       });
 
+      // Heartbeat: each output line refreshes lastHeartbeatAt so a long-quiet
+      // run gets flagged stalled while a chatty run does not. Throttled —
+      // per HEARTBEAT_THROTTLE_MS above — so a per-line stdout stream
+      // doesn't blow up the event loop with per-line read-modify-write.
+      if (event.kind === 'output') {
+        const now = Date.now();
+        if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
+          safeUpsertRun(buildSupervisedRun(descriptor, 'running', new Date(now).toISOString()));
+          lastHeartbeatUpsertAt = now;
+        }
+      }
+
       if (event.kind === 'completed' || event.kind === 'failed') {
         descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
         if (event.kind === 'failed' && event.data) {
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
         }
         appendMutationLine(descriptor);
+        safeUpsertRun(buildSupervisedRun(descriptor, descriptor.status, new Date().toISOString()));
         return;
       }
     }
     // Applier exhausted without terminal event — treat as completed
     descriptor.status = 'completed';
     appendMutationLine(descriptor);
+    safeUpsertRun(buildSupervisedRun(descriptor, 'completed', new Date().toISOString()));
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
     descriptor.status = 'failed';
     descriptor.error = (err as Error).message;
     appendMutationLine(descriptor);
+    // Persist directly as 'failed' — the terminal-event branch above exits
+    // via `return`, so this catch is only reachable when the run is still
+    // 'running' and a markCrashed() wrap would be a no-op composition.
+    safeUpsertRun(buildSupervisedRun(descriptor, 'failed', new Date().toISOString()));
   } finally {
     activeRuns.delete(descriptor.id);
   }
