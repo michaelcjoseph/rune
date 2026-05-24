@@ -381,6 +381,14 @@ export async function* runGenEvalLoop(
       yield baseEvent('output', {
         line: `round ${roundNum}: outcome=${outcome.status} failedEvaluatorRounds=${outcome.failedEvaluatorRounds}`,
       });
+      // Structured per-round signal for the cockpit / supervision surface —
+      // the data is the same `failedEvaluatorRounds` the output line carries
+      // but in a parse-free shape callers can render directly.
+      yield baseEvent('progress', {
+        round: roundNum,
+        failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+        status: outcome.status,
+      });
 
       if (outcome.status === 'on-branch') {
         yield baseEvent('completed', {

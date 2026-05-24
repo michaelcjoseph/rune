@@ -255,6 +255,34 @@ describe('runGenEvalLoop — orchestration', () => {
     return events;
   }
 
+  it('emits a structured progress event per round with {round, failedEvaluatorRounds, status}', async () => {
+    // Two rounds: round 1 evaluator fails, round 2 evaluator passes.
+    // Expect two progress events with the running failedEvaluatorRounds count.
+    const spawners = fakeSpawners({
+      workExits: [0, 0],
+      reviewVerdicts: ['fail', 'pass'],
+    });
+    const events = await runLoop(spawners, { maxEvaluatorRounds: 3 });
+    const progress = events.filter((e) => e.kind === 'progress');
+    expect(progress).toHaveLength(2);
+    expect(progress[0]!.data).toMatchObject({ round: 1, failedEvaluatorRounds: 1, status: 'in-progress' });
+    expect(progress[1]!.data).toMatchObject({ round: 2, failedEvaluatorRounds: 1, status: 'on-branch' });
+  });
+
+  it('a tests-failed round still emits a progress event with failedEvaluatorRounds unchanged', async () => {
+    const spawners = fakeSpawners({
+      workExits: [1, 0],
+      reviewVerdicts: ['pass'],
+    });
+    const events = await runLoop(spawners);
+    const progress = events.filter((e) => e.kind === 'progress');
+    expect(progress).toHaveLength(2);
+    // Round 1: tests failed, evaluator never ran, count stays at 0.
+    expect(progress[0]!.data).toMatchObject({ round: 1, failedEvaluatorRounds: 0, status: 'in-progress' });
+    // Round 2: tests passed, evaluator passed.
+    expect(progress[1]!.data).toMatchObject({ round: 2, failedEvaluatorRounds: 0, status: 'on-branch' });
+  });
+
   it('one round, tests pass + evaluator pass → completed event', async () => {
     const spawners = fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] });
     const events = await runLoop(spawners);
