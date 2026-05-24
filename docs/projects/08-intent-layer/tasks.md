@@ -223,7 +223,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 #### A1. Sandbox enforcement (Layer 4)
 
 - [x] **(agent)** Build `src/jobs/sandbox-runtime.ts` — `createWorktree` / `destroyWorktree` shelling out to `git worktree add/remove`, plus a startup cleanup pass for orphan worktrees.
-- [ ] **(agent)** Per-product scoped credentials — a `.env.<product>` file pattern plus the spawn-time `env` injection that respects `canReachCredential`.
+- [x] **(agent)** Per-product scoped credentials — a `.env.<product>` file pattern plus the spawn-time `env` injection that respects `canReachCredential`.
 - [ ] **(agent)** Egress enforcement — implement the per-run proxy that consults `isEgressAllowed` against each product's allowlist in `policies/products.json`, or — if deferred — document the gap explicitly. Policy is decided (narrow starter, expanded per stack as runs surface deny errors); only the enforcement mechanism choice remains.
 - [ ] **(agent)** Wrap fs writes with `isWriteAllowed` (or `cwd: sandbox.worktree` plus the path guard for absolute paths). Per the security note: resolve symlinks via `fs.realpathSync` before the containment check, or forbid symlinks in worktree init.
 

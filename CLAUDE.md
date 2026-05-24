@@ -113,6 +113,7 @@ src/
 │   ├── mutations-log.ts     # Append-only JSONL log for mutations (logs/mutations.jsonl): appendMutationLine, readRecentMutations, reconcileOrphans (flips stale 'running' entries to 'failed' at startup)
 │   ├── work-runner.ts       # workRunApplier: MutationApplier for 'work-run' kind; spawns Claude CLI with spec.md+tasks.md+/work --auto in project dir; streams stdout/stderr as MutationEvents; enforces per-project and global concurrency caps
 │   ├── sandbox-runtime.ts   # Runtime complement to src/intent/sandbox.ts: git worktree lifecycle (createWorktree/destroyWorktree/cleanupOrphanWorktrees); reads policies/products.json via readProductsConfig/getProductConfig; all git calls go through injectable GitRunner seam (default: execFile('git',…)); types ProductConfig and GitRunner
+│   ├── credential-injector.ts # Spawn-time env map builder for sandboxed Regime B runs: readCredentials(path) (dotenv-style parser, missing file → {}), getBaseEnv(allowlist) (process.env filter), buildSandboxEnv(sandbox, opts) (merges base env + product credentials, asserts VALID_SLUG at boundary); DEFAULT_BASE_ENV_KEYS constant; enforces two invariants: only the run's own product credentials reach the child, and Jarvis's own secrets (TELEGRAM_BOT_TOKEN, etc.) never reach the child
 │   ├── lenny-sync.ts        # Exports runLibrarySync() + LibrarySyncResult; pulls new Lenny posts/podcasts via lenny-sync agent, updates logs/lenny-sync-state.json
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── intent/
