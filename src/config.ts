@@ -119,6 +119,14 @@ const config = {
     return join(PROJECT_ROOT, 'policies', 'products.json');
   },
 
+  /** Declarative escalation policy (project 08). Same shelf as
+   *  `model-policy.json` and `products.json` — committed repo config, not
+   *  runtime state. Consumed by `src/intent/escalation.ts` (decision module)
+   *  and `src/jobs/gen-eval-loop-runner.ts` (cap source). */
+  get ESCALATION_POLICY_FILE() {
+    return join(PROJECT_ROOT, 'policies', 'escalation-policy.json');
+  },
+
   /** Root directory under which Regime B project worktrees live, one subtree
    *  per product (`<WORKTREE_ROOT>/<product>/<project>`). Defaults to
    *  `<PROJECT_ROOT>/.worktrees` (gitignored); override with the `WORKTREE_ROOT`

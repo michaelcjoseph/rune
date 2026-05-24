@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import config from '../config.js';
 import {
   CLAUDE_BIN,
@@ -25,6 +26,7 @@ import {
   registerActiveProcess,
   unregisterActiveProcess,
 } from '../ai/claude.js';
+import { parseEscalationPolicy } from '../intent/escalation.js';
 import { evaluateLoop, recordRound, type LoopRound } from '../intent/gen-eval-loop.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -44,9 +46,56 @@ import {
 
 const log = createLogger('gen-eval-loop-runner');
 
-/** A3.3 will read this from `policies/escalation-policy.json`'s
- *  evaluator-round-cap rule. For now, hardcoded to the policy default. */
-const DEFAULT_MAX_EVALUATOR_ROUNDS = 3;
+/** Fallback when the escalation policy can't supply a cap. Matches the
+ *  shipped `policies/escalation-policy.json` default so an unreachable
+ *  policy file produces the same bound the policy itself enumerates. */
+const FALLBACK_MAX_EVALUATOR_ROUNDS = 3;
+
+/**
+ * Read `maxEvaluatorRounds` from the escalation policy's
+ * `run-exceeded-bounds` rule (the rule the spec earmarks for this cap; the
+ * shipped rule id is `evaluator-round-cap` but we match by condition so a
+ * future renamed/duplicated rule still works).
+ *
+ * Falls back to {@link FALLBACK_MAX_EVALUATOR_ROUNDS} on any of: missing
+ * file, malformed JSON, validator throw, or no matching rule. The fallback
+ * is intentional — a missing default cap shouldn't stop the loop from
+ * running (escalation decisions still fail closed via
+ * `escalation.decideFailClosed`; this is just the round-count bound).
+ */
+export function readEvaluatorRoundCapFromPolicy(policyPath: string): number {
+  let raw: string;
+  try {
+    raw = readFileSync(policyPath, 'utf8');
+  } catch {
+    log.warn('readEvaluatorRoundCapFromPolicy: policy file missing; using fallback', {
+      path: policyPath,
+      fallback: FALLBACK_MAX_EVALUATOR_ROUNDS,
+    });
+    return FALLBACK_MAX_EVALUATOR_ROUNDS;
+  }
+
+  try {
+    const policy = parseEscalationPolicy(raw);
+    for (const rule of policy.rules) {
+      if (rule.condition === 'run-exceeded-bounds' && typeof rule.maxEvaluatorRounds === 'number') {
+        return rule.maxEvaluatorRounds;
+      }
+    }
+    log.warn('readEvaluatorRoundCapFromPolicy: no run-exceeded-bounds rule; using fallback', {
+      path: policyPath,
+      fallback: FALLBACK_MAX_EVALUATOR_ROUNDS,
+    });
+    return FALLBACK_MAX_EVALUATOR_ROUNDS;
+  } catch (err) {
+    log.warn('readEvaluatorRoundCapFromPolicy: policy malformed; using fallback', {
+      path: policyPath,
+      fallback: FALLBACK_MAX_EVALUATOR_ROUNDS,
+      error: (err as Error).message,
+    });
+    return FALLBACK_MAX_EVALUATOR_ROUNDS;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Payload + validate
@@ -238,6 +287,9 @@ export interface RunGenEvalLoopOpts {
   payload: GenEvalLoopPayload;
   worktreeRoot: string;
   productsConfigPath: string;
+  /** Path to `policies/escalation-policy.json`; the cap is read from its
+   *  `run-exceeded-bounds` rule when the payload doesn't override. */
+  escalationPolicyPath: string;
   /** Injectable spawn primitives; defaults to the production set. */
   spawners?: LoopSpawners;
   /** Returns true when the run should be cancelled (checked between rounds). */
@@ -257,7 +309,10 @@ export async function* runGenEvalLoop(
   opts: RunGenEvalLoopOpts,
 ): AsyncIterable<MutationEvent> {
   const spawners = opts.spawners ?? defaultSpawners;
-  const cap = opts.payload.maxEvaluatorRounds ?? DEFAULT_MAX_EVALUATOR_ROUNDS;
+  // Payload override wins; otherwise the cap comes from the escalation
+  // policy so the loop and the policy never disagree on the bound.
+  const cap = opts.payload.maxEvaluatorRounds
+    ?? readEvaluatorRoundCapFromPolicy(opts.escalationPolicyPath);
   const baseEvent = (kind: MutationEvent['kind'], data?: Record<string, unknown>): MutationEvent => ({
     mutationId: opts.mutationId,
     ts: new Date().toISOString(),
@@ -381,6 +436,7 @@ export const genEvalLoopApplier: MutationApplier<GenEvalLoopPayload> = {
       payload: descriptor.payload,
       worktreeRoot: config.WORKTREE_ROOT,
       productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+      escalationPolicyPath: config.ESCALATION_POLICY_FILE,
       cancel: ctx.cancel,
     });
   },

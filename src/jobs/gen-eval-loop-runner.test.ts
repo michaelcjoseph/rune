@@ -243,6 +243,9 @@ describe('runGenEvalLoop — orchestration', () => {
       payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
       worktreeRoot: '/tmp/jarvis-worktrees',
       productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
+      // Orchestration tests inject maxEvaluatorRounds directly; the cap
+      // read from the policy is exercised in its own describe block.
+      escalationPolicyPath: '/test/no-such-policy.json',
       spawners: spawners as never,
       cancel,
       onRound: () => { roundCount++; },
@@ -341,5 +344,71 @@ describe('runGenEvalLoop — orchestration', () => {
     const events = await runLoop(spawners);
     // The completed event still surfaces — destroy failure is logged but not fatal.
     expect(events[events.length - 1]!.kind).toBe('completed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readEvaluatorRoundCapFromPolicy (Phase 6 A3.3) — the cap source for the
+// loop, defaulting to the policy file's `evaluator-round-cap` rule with a
+// fallback when the file is missing or malformed.
+// ---------------------------------------------------------------------------
+
+describe('readEvaluatorRoundCapFromPolicy', () => {
+  async function readCap(policyPath: string): Promise<number> {
+    const { readEvaluatorRoundCapFromPolicy } = await import('./gen-eval-loop-runner.js');
+    return readEvaluatorRoundCapFromPolicy(policyPath);
+  }
+
+  it('returns maxEvaluatorRounds from the evaluator-round-cap rule', async () => {
+    const path = join(tmpDir, 'policy.json');
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: 'evaluator-round-cap',
+          condition: 'run-exceeded-bounds',
+          maxEvaluatorRounds: 7,
+        },
+      ],
+    }));
+    expect(await readCap(path)).toBe(7);
+  });
+
+  it('returns maxEvaluatorRounds from any run-exceeded-bounds rule when id differs', async () => {
+    // The id is informational; the condition is what marks the rule as the cap source.
+    const path = join(tmpDir, 'policy.json');
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      rules: [
+        { id: 'some-other-id', condition: 'run-exceeded-bounds', maxEvaluatorRounds: 5 },
+      ],
+    }));
+    expect(await readCap(path)).toBe(5);
+  });
+
+  it('falls back to 3 when the policy file is missing (logged, not thrown)', async () => {
+    const missing = join(tmpDir, 'no-such-policy.json');
+    expect(await readCap(missing)).toBe(3);
+  });
+
+  it('falls back to 3 when the policy file is malformed JSON', async () => {
+    const path = join(tmpDir, 'policy.json');
+    writeFileSync(path, '{ not valid json');
+    expect(await readCap(path)).toBe(3);
+  });
+
+  it('falls back to 3 when no run-exceeded-bounds rule is present', async () => {
+    const path = join(tmpDir, 'policy.json');
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      rules: [
+        {
+          id: 'high-risk',
+          condition: 'high-risk-change-class',
+          pathPatterns: ['**/auth/**'],
+        },
+      ],
+    }));
+    expect(await readCap(path)).toBe(3);
   });
 });
