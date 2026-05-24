@@ -316,6 +316,128 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [ ] **(agent)** Handle the result — `appendFiledIdeas(result.ideasMarkdown)`; for each `dispatch` plan call `createMutation(...)` against the gen-eval-loop kind from A3; for each `await-approval` plan, send a Telegram approval prompt naming the idea and the escalation reason.
 - [ ] **(agent)** Log the pass summary (counts of filed / discarded / duplicate / quiet) — meta telemetry the next pass can observe.
 
+### Track C — user surfaces (parallel-safe with Tracks A and B)
+
+> The work that makes Tracks A and B **user-reachable**, per the
+> user-reachability definition-of-done from
+> [`agent-lessons.md`](agent-lessons.md). Each surface is specified in
+> spec.md §"Cockpit UX in Detail" and §"Telegram UX in Detail".
+>
+> Order: C1–C8 can land in any order; C1, C3, C5 unblock the Track A
+> live-verification step at the bottom of this file.
+
+#### Tests (write first)
+
+- [ ] Write the test suite for the **cockpit UX** — test-plan.md §19
+  (planning panel state transitions, approval inbox behavior, in-flight
+  run progress accuracy).
+- [ ] Write the test suite for the **Telegram UX** — test-plan.md §20
+  (`/plan` command flow, engine notification format per terminal class,
+  inline-button approval round-trip).
+- [ ] Write the test suite for **journal-to-intent end-to-end** —
+  test-plan.md §21 (tagged journal note → proposal → approval →
+  synthesis into vault product file + roadmap into product repo).
+- [ ] Confirm red before implementation.
+
+#### C1. Cockpit planning panel
+
+- [ ] **(agent)** Add the planning panel to `src/server/static/` —
+  HTML structure, JS state machine for `scoping` / `spec-proposed` /
+  `approved` / `abandoned`, reply textarea, **Approve** / **Refine** /
+  **Abandon** actions. Match the ASCII mockup in spec.md §"Cockpit UX
+  in Detail".
+- [ ] **(agent)** Add `POST /api/planning/turn` to `src/server/webview.ts`
+  that calls `handlePlanningTurn` from A4.2; add `POST /api/planning/start`
+  that calls `createPlanningSession`; add `POST /api/planning/approve` /
+  `/abandon` that mutate the session and (on approve) call the
+  scaffolding hook from A4.4.
+- [ ] **(agent)** Wire the cockpit project card's existing **Plan**
+  button to open the panel (replaces the current placeholder that
+  stuffs text into the chat input).
+
+#### C2. Cockpit approval inbox
+
+- [ ] **(agent)** New sidebar panel in `src/server/static/` listing
+  pending approvals from `intent-proposal-queue`, `playbook-queue`,
+  `proposal-queue`, and the supervision-store's `blocked-on-human`
+  runs. Each row renders product/project, type, summary, age, and
+  **Approve** / **Reject** / **Open** buttons per the ASCII mockup.
+- [ ] **(agent)** REST endpoints in `src/server/webview.ts`:
+  `GET /api/approvals` (list across all sources),
+  `POST /api/approvals/:id/approve`, `POST /api/approvals/:id/reject`.
+  Approve routes to the actioning path appropriate to the proposal
+  type (see C8 for journal-intent).
+
+#### C3. Cockpit in-flight run progress
+
+- [ ] **(agent)** Extend `CockpitProject` (in `src/intent/cockpit.ts`)
+  with optional `progress: { round, failedEvaluatorRounds, modelGen,
+  modelEval, lastHeartbeatAt }` fields populated from the supervised-run
+  store + the `progress` MutationEvents A3.4 emits.
+- [ ] **(agent)** Update the project card render in
+  `src/server/static/app.js` to display the round / failed-rounds /
+  model / heartbeat-age line + a **Cancel** button when `progress` is
+  present, per the ASCII mockup.
+
+#### C4. Telegram `/plan` command
+
+- [ ] **(agent)** New `src/bot/commands/plan.ts` exporting
+  `handlePlan(sender, userId, args)`. With a product slug, calls
+  `createPlanningSession(userId, idea, 'chat', product)` from A4.1;
+  without one, lists registered products and asks which.
+- [ ] **(agent)** Update `src/bot/handlers/text.ts` so an active
+  planning session (from `getActivePlanningSession`) takes routing
+  priority over the default conversation thread — analogous to how
+  active review sessions are routed today.
+- [ ] **(agent)** Register `/plan` in `src/bot/skill-registry.ts`'s
+  `SLASH_COMMAND_METADATA` so the resolver can route it.
+
+#### C5. Telegram engine notifications
+
+- [ ] **(agent)** Extend `TelegramSender.onMutationEvent()` to detect
+  terminal events for `gen-eval-loop` mutations and emit user-friendly
+  notification messages per the formats in spec.md §"Telegram UX in
+  Detail" (✅ merged / ⏸ blocked on you / 💥 failed). The existing
+  generic tracker message stays; this adds the structured terminal one.
+- [ ] **(agent + user)** Live verification — run a gen-eval-loop
+  end-to-end and confirm the notification format reads cleanly on the
+  user's Telegram client; refine wording in this commit.
+
+#### C6. Telegram approval inline-buttons
+
+- [ ] **(agent)** When the engine surfaces a propose-and-approve
+  artifact for Telegram, call `sender.send(userId, prompt, { approval:
+  { prompt, options: [...] } })` — the `SendOpts.approval` field
+  already exists in `src/transport/sender.ts`.
+- [ ] **(agent)** Wire the bot's callback-query handler to route the
+  inline-button payloads through the same actioning path the cockpit
+  approval inbox uses (C2), so a proposal acted on in either surface
+  is reflected in both.
+
+#### C7. Journal-to-intent producer
+
+- [ ] **(agent + user)** New nightly job step in `src/jobs/nightly.ts`
+  that scans the day's journals for product-tagged notes (the convention
+  already exists for `#playbook`, `#crm`, `#meeting`; extend with
+  product slugs) and writes proposals to
+  `logs/intent-proposal-queue.json` via the existing queue API. Live
+  verification refines the scan heuristics.
+- [ ] **(agent)** Pass each detected note through `planJournalIntent`
+  (from `src/intent/journal-intent.ts`) to produce the structured
+  `IntentProposal` before queueing.
+
+#### C8. Journal-to-intent consumer
+
+- [ ] **(agent + user)** Post-approval actioning: on approve (from
+  cockpit C2 or Telegram C6), for an `IntentProposal` of kind
+  `vault-intake`, synthesize the note into `projects/<product>.md`
+  (propose-and-approve — uses an updater agent for the actual edit);
+  for `roadmap`, append a roadmap item to the product repo's roadmap
+  file; for `register-product`, run the registration flow from
+  Phase 1.
+- [ ] **(agent)** Update CLAUDE.md to drop the "The post-approval
+  actioning path … is a later task" note (it lands here).
+
 ### Live verification → Done
 
 - [ ] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Jarvis spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)

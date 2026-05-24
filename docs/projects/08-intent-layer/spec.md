@@ -275,6 +275,215 @@ When the intent layer needs to ask questions to scope or plan, it asks on Telegr
 | Cockpit | Status view + start/continue/plan | Spans both | Per-action |
 | Chat | Dialogue (scoping, planning, approvals) | Spans both | Conversational |
 
+### Cockpit UX in Detail
+
+The cockpit surface extends the existing webview from
+[06-webview](../06-webview/spec.md). The product/project sidebar panel already
+shipped; the three panels below are what the engine needs the cockpit to
+add so every Layer is **user-reachable** from the web surface.
+
+#### Planning panel
+
+Opens when the user clicks a project's **Plan** button on the cockpit
+project card, or when the engine routes a `/plan` Telegram conversation
+into the webview's planning thread. A slide-in panel (right side of the
+existing webview, above the chat composer) showing:
+
+- the planning session's product / project title,
+- the conversation transcript (LLM ↔ user, most recent at bottom),
+- the active scoping question pulled from the latest assistant turn,
+- a reply textarea (Enter to submit, Shift+Enter for newline — matches
+  the existing chat composer),
+- a status pill (`scoping` / `spec-proposed` / `approved` / `abandoned`).
+
+When status transitions to `spec-proposed`, the panel renders the proposed
+`SpecArtifact` (title + spec + tasks + test-plan, scrollable) with three
+explicit action buttons: **Approve**, **Refine**, **Abandon**.
+
+```
+┌─ Planning: aura · 02-growth ──────────────────────┐
+│ status: spec-proposed                              │
+│                                                    │
+│ … (earlier transcript, scrollable) …               │
+│                                                    │
+│ Jarvis: Here is the proposed spec — please review. │
+│                                                    │
+│ ┌─ Proposed Spec ────────────────────────────────┐ │
+│ │ title: Growth funnel onboarding redesign        │ │
+│ │ spec:  (scrollable)                             │ │
+│ │ tasks: (scrollable, per-phase Tests blocks)     │ │
+│ │ test-plan: (scrollable)                         │ │
+│ └─────────────────────────────────────────────────┘ │
+│                                                    │
+│ [ Approve ]  [ Refine ]  [ Abandon ]               │
+└────────────────────────────────────────────────────┘
+```
+
+In the `scoping` state, the action row is replaced by the reply textarea
+(no Approve/Refine/Abandon yet — the conversation is the action).
+
+**Approve** wires into the post-approval scaffolding (Phase 6 A4.4) —
+`project-setup-writer` writes `spec.md` / `tasks.md` / `test-plan.md`
+into the product repo and the panel closes with a confirmation toast.
+**Refine** sends the user back to the scoping textarea with the artifact
+visible above so they can ask Claude to revise specific parts. **Abandon**
+calls `abandonPlan()` and closes the panel.
+
+#### Approval inbox
+
+A sidebar panel listing every propose-and-approve artifact the user owes
+a decision on. Sources:
+
+- Journal-to-intent proposals (`logs/intent-proposal-queue.json`).
+- Playbook drafts (`logs/playbook-queue.json` — already surfaced as a
+  count today).
+- Ask-Twice skill proposals (`logs/proposal-queue.json`).
+- Escalation-on-merge requests from the gen-eval-loop (when a run hits
+  the escalation policy and surfaces for human review).
+
+Each row shows product/project, proposal type, one-line summary, age
+since proposed, and **Approve** / **Reject** / **Open** buttons. **Open**
+expands the row inline to show the full proposal body (the actioning
+preview — what would happen on approve).
+
+```
+┌─ Pending approvals (4) ────────────────────────────┐
+│ ▸ aura · journal-intent · "carry roadmap…" · 2h    │
+│   [ Approve ]  [ Reject ]  [ Open ]                 │
+│                                                     │
+│ ▸ jarvis · playbook · "weekly review timing" · 5h   │
+│   [ Approve ]  [ Reject ]  [ Open ]                 │
+│                                                     │
+│ ▸ aura · merge-escalation · "auth/** changed" · 1d  │
+│   [ Approve ]  [ Reject ]  [ Open ]                 │
+│                                                     │
+│ ▸ jarvis · ask-twice · "/foo skill proposal" · 2d   │
+│   [ Approve ]  [ Reject ]  [ Open ]                 │
+└─────────────────────────────────────────────────────┘
+```
+
+**Approve** triggers the actioning path appropriate to the proposal type
+(journal-intent consumer, playbook-updater, proposal-updater, merge).
+**Reject** removes the proposal from the queue (logged for telemetry).
+Empty state: "No approvals pending."
+
+#### In-flight run progress
+
+Extends the existing project card on the cockpit sidebar. When a project
+has an active `gen-eval-loop` mutation, the card grows to show:
+
+- current round number and the cap (e.g. `round 2 / 3`),
+- failed evaluator rounds (`failedEvaluatorRounds: 1`) — the running count
+  the escalation policy is measured against,
+- model in use for this round (`Claude` / `Codex` — populated once Phase
+  6 A7 lands; until then shows only the Generator model),
+- time since last heartbeat (auto-updating; turns amber after the stall
+  threshold from `src/jobs/stall-check.ts`),
+- a **Cancel** button that routes to `cancelMutation(id)`.
+
+```
+┌─ aura ─────────────────────────────────────────────┐
+│ ▸ 02-growth · running                              │
+│   round 2 / 3 · failed evaluator: 1 · 14s ago      │
+│   gen: Claude · eval: Codex                        │
+│   [ Cancel ]                                       │
+│                                                    │
+│ ▸ 03-pricing · idle                                │
+│   [ Start ]  [ Continue ]  [ Plan ]                │
+└────────────────────────────────────────────────────┘
+```
+
+Data source: the `progress` MutationEvents A3.4 emits per round, fed
+into `CockpitProject` via the existing `readCockpitRunStatus` shape
+(extended to carry round + heartbeat + model fields).
+
+### Telegram UX in Detail
+
+Chat is the dialogue surface; it's also the engine's outbound notification
+channel. Three categories of message:
+
+#### `/plan <product>` command
+
+Telegram command that creates a planning session for the named product
+and routes the user's next messages through `handlePlanningTurn()` (from
+Phase 6 A4.2). On run:
+
+- if the user supplies a product slug (`/plan aura`), the session starts
+  immediately scoped to that product;
+- if the user omits the product, Jarvis replies with a list of registered
+  products and asks which one;
+- on every subsequent message until the session terminates, the resolver
+  routes the message into the planning handler instead of the default
+  conversation thread (the active planning session is the priority router
+  signal, analogous to active review sessions today);
+- when the spec is proposed, Jarvis sends the structured-approval message
+  (see Approval inline-buttons below);
+- `/clear` or `/fresh` abandons the planning session.
+
+```
+You: /plan aura
+
+Jarvis: Planning a project for aura. What user problem does this solve?
+        — planning · /clear to abandon
+
+You: onboarding completion is at 38%, want to lift it to 60%
+
+Jarvis: Got it. Is this a new flow end-to-end, or are we changing the
+        existing one? What's the highest-friction step today?
+        — planning · /clear to abandon
+
+…
+
+Jarvis: Here is the proposed spec — approve to scaffold the project.
+
+        [Approve]  [Refine]  [Abandon]
+```
+
+#### Engine notifications
+
+Proactive messages the engine sends when a run reaches a terminal state
+or transitions to blocked-on-human. Format is short, structured, and
+always carries the run id so the user can correlate with the cockpit
+or with `/cancel`.
+
+```
+✅ aura/02-growth merged to main · 3 rounds · cross-model PASS · id=a4f2
+
+⏸ aura/02-growth blocked on you · 3/3 failed evaluator rounds · id=a4f2
+   The gen-eval-loop cap was hit. Open the cockpit to review and resume
+   or abandon: http://127.0.0.1:3847/
+
+💥 aura/02-growth failed · sandbox setup error: worktree create failed · id=a4f2
+
+⚠️ aura/02-growth stalled · no heartbeat for 12 min · id=a4f2
+   (this is the existing A2.4 stall-check nudge, listed here for completeness)
+```
+
+#### Approval inline-buttons
+
+For any propose-and-approve artifact that the engine wants the user to
+act on without opening the cockpit, the engine sends an inline-keyboard
+message using the existing `SendOpts.approval` infrastructure
+(`{ prompt, options: [{ value, label }] }` from `src/transport/sender.ts`).
+The Telegram side renders the options as inline buttons; the webview
+ignores `opts.approval` per the existing contract and the cockpit
+approval inbox handles the same artifact.
+
+```
+Jarvis: Approve this journal-intent proposal for aura?
+
+        ┌────────────────────────────────────────┐
+        │ "Carry over: investigate caching layer  │
+        │  for the API gateway" → aura/03-perf    │
+        └────────────────────────────────────────┘
+
+        [Approve]  [Reject]  [Open in cockpit]
+```
+
+The button payloads are routed through the bot's callback-query handler
+to the same actioning path the cockpit approval inbox uses, so a
+proposal acted on in either surface is reflected in both.
+
 ---
 
 ## Operational Self-Improvement
@@ -336,15 +545,26 @@ Settled: **keep Jarvis's own Node/TS spine.** Borrow patterns from OpenClaw, Her
 
 ### Definition of done (v1 wedge)
 
-The wedge is done when, for a repo-backed product, all of the following hold:
+The wedge is done when, for a repo-backed product, all of the following hold.
+Each line is annotated with the **user surface** that makes the behavior
+observable — per the user-reachability rule in
+[`planning-checklist.md`](../templates/planning-checklist.md), a line is not
+satisfied until a user can trigger or observe it from that surface.
 
 - A coding idea, raised in chat or surfaced from the journal, becomes an **approved spec** through conversation. Michael's only required inputs are answering scoping questions and approving the spec.
+  *Reachable from: Telegram (`/plan <product>` command) and cockpit (project card → **Plan** button → planning panel).*
 - The approved spec is **dispatched into a sandboxed run** (git worktree, scoped credentials), a **different model cross-reviews** the output, and when cross-review and the test suite pass, Jarvis **merges the result itself** onto the product repo's main line.
+  *Reachable from: cockpit (planning panel → **Approve** triggers the dispatch; in-flight run progress shows the round-by-round status).*
 - The cockpit shows, without Michael asking, **which projects are running and which are blocked on him.**
+  *Reachable from: cockpit (in-flight run progress on the project card + approval inbox for the blocked-on-human escalations).*
 - **Merging is autonomous.** When the automated gates pass, Jarvis lands the change; Michael is involved only when the escalation policy flags a change as too high-risk to merge unattended.
+  *Reachable from: Telegram (engine notification on terminal merge — `✅ aura/02-growth merged to main…`).*
 - Two projects running concurrently across two products do not corrupt either repo's working tree.
+  *Reachable from: cockpit (two project cards both showing `running` status concurrently); confirmable by inspecting the worktrees on disk after the run.*
 
-This is observable behavior, not a metric. [test-plan.md](test-plan.md) turns each line into a concrete check.
+This is observable behavior, not a metric. [test-plan.md](test-plan.md) turns
+each line into a concrete check, including the **Integration verification**
+sub-bullets that pin the user-action exercising each line end-to-end.
 
 ---
 

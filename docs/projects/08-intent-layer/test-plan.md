@@ -22,6 +22,14 @@ Each numbered section is tagged with the phase that builds it. This project is *
 | Phase 4 — Multi-model dispatch and cross-review | 13, 14, 15 |
 | Phase 5 — Operational self-improvement | 16 |
 | Cross-cutting | 17, 18 |
+| Phase 6 Track C — user surfaces | 19, 20, 21 |
+
+Every section below carries an **Integration verification** sub-bullet at the
+end — per the user-reachability rule in
+[`../templates/planning-checklist.md`](../templates/planning-checklist.md),
+each section names the user-action that exercises the deterministic core
+end-to-end. A section is not complete until both the unit-level bullets and
+the integration scenario pass.
 
 ---
 
@@ -42,6 +50,11 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 Two projects changing status at once do not produce a partial file — last-write-wins or a documented merge, never a torn write.
 - [ ] 🟡 A malformed registry file fails fast on read with a clear error; it is not silently treated as an empty model.
 
+**Integration verification:** opening the cockpit shows every product and
+project from the registry; deleting `logs/registry.json` and refreshing the
+cockpit rebuilds the view identically — confirming the registry is reachable
+from the cockpit surface and is rebuildable in practice.
+
 ## 2. Product registration (Phase 1)
 
 ### Registering a product
@@ -61,6 +74,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The reconciliation pass is idempotent — a second run with nothing changed proposes nothing.
 - [ ] 🟡 A repo present on disk but clearly not a product (e.g. `agent-coding-setup`) is not proposed as a product, or is proposed with a clear "confirm this is a product" prompt.
 
+**Integration verification:** naming a new product in chat ("let's track a new
+product called X") triggers the registration proposal flow on a surface the
+user sees (cockpit approval inbox or Telegram inline-button message);
+approving it creates the vault product file, registry entry, and overlay
+manifest — all three visible on disk and in the next cockpit refresh.
+
 ## 3. Product-overlay index (Phase 1)
 
 - [ ] 🔴 A product's manifest points at the journal entries, pages, world-view sections, and wiki concepts relevant to that product.
@@ -68,6 +87,11 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The vault is not moved or reorganized — the manifest only points into the existing type-organized structure.
 - [ ] 🟡 A manifest entry pointing at a file that was deleted or renamed is detected (stale-pointer handling, not a crash).
 - [ ] 🟢 A product with very little vault content yields a small but valid manifest, not an error.
+
+**Integration verification:** when the Planner (§9) runs for an Aura project,
+its retrieved context contains only Aura-tagged sources — inspectable via the
+spawn's input log or the agent's reported sources, confirming product-scoped
+retrieval is reachable from the actual planning conversation surface.
 
 ## 4. Model-agnostic agent definitions (Phase 1)
 
@@ -77,6 +101,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 No model name is present in any agent definition — model choice is left to the policy (§5).
 - [ ] 🟡 An agent definition missing a required field fails compilation with a clear error naming the field.
 - [ ] 🟢 The Codex and Gemini compiler targets are stubbed/deferred to Phase 4 without breaking the Claude path.
+
+**Integration verification:** every existing user-facing entry point that
+spawns an agent (`/morning`, `/review`, `/workout`, `/syllabus`, the
+content-triager, wiki-compiler nightly, etc.) keeps working unchanged after
+the neutral-format compiler ships — verifiable by running each agent and
+confirming output equivalence.
 
 ## 5. Model selection policy (Phase 1)
 
@@ -106,6 +136,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🔴 `runAgent` resolves its model through the policy; agents unchanged by this project keep their current effective model.
 - [ ] 🟡 An agent's frontmatter `model:` override still wins, mapped onto the policy's explicit-pin precedence.
 
+**Integration verification:** running any agent through a normal user flow
+logs the chosen model + rule that fired in `logs/agent-runs.jsonl`; flipping
+a model to `deprecated` in `policies/model-policy.json` and re-running an
+agent that previously used it picks the next-best model on the next user
+interaction (no restart needed if the policy cache invalidates).
+
 ## 6. Escalation policy (Phase 1)
 
 - [ ] 🔴 The escalation policy is a declarative file, data not code — adding or changing a rule needs no code change or deploy.
@@ -117,6 +153,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 A change matching no escalation condition resolves to "proceed" without consulting Michael.
 - [ ] 🟢 An escalation surfaces in the supervision visibility surface (§10) and the cockpit as blocked-on-Michael.
 
+**Integration verification:** a `gen-eval-loop` mutation that hits 3 failed
+evaluator rounds surfaces in the cockpit approval inbox (§19) as
+`blocked-on-human` with the escalation reason; deleting
+`policies/escalation-policy.json` makes the next escalation decision
+fail-closed (visible in `logs/jarvis.log` as an `error`-level entry).
+
 ## 7. Product/project cockpit (Phase 2)
 
 - [ ] 🔴 The cockpit shows every product, its projects, and each project's lifecycle status, read from the registry.
@@ -126,6 +168,11 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 06-webview's existing surface (localhost chat, Telegram session sharing, sidebar) keeps working unchanged.
 - [ ] 🟡 The registry being briefly unavailable shows a clear "registry unavailable" state, not a blank or broken page.
 - [ ] 🟢 A product with zero projects renders cleanly.
+
+**Integration verification:** opening `http://127.0.0.1:3847/` in a browser
+shows every product and project with current lifecycle and run-status; the
+sidebar Start / Continue / Plan buttons gate per-click (a single click
+surfaces a confirmation modal, no double-fire).
 
 ## 8. Journal-to-intent flow (Phase 2)
 
@@ -137,6 +184,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 Intake proposals and carried-over roadmap items both surface for approval on Telegram and in the cockpit.
 - [ ] 🟢 A journal day with no product-relevant notes produces no proposals and no noise.
 
+**Integration verification:** see §21's end-to-end scenario — a product-tagged
+journal note becomes a proposal visible in the cockpit approval inbox (§19),
+approving it synthesizes the note into `projects/<product>.md` and carries
+the roadmap item into the product repo. The integration here is exercised
+by the same scenario.
+
 ## 9. Planner — Layer 1 (Phase 3)
 
 - [ ] 🔴 The Planner turns a fuzzy idea into an approved spec through conversation — it asks questions and surfaces assumptions rather than accepting a one-line task.
@@ -145,6 +198,11 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The Planner conversation works identically on chat and in the cockpit's planning mode.
 - [ ] 🟡 An idea abandoned mid-scoping leaves no half-written project files.
 - [ ] 🟢 Planner retrieval is product-scoped via the overlay index (§3).
+
+**Integration verification:** the cockpit planning panel (§19) and Telegram
+`/plan` command (§20) both drive a real scoping conversation through
+`handlePlanningTurn`; approval scaffolds the project's `spec.md` /
+`tasks.md` / `test-plan.md` into the product repo (verifiable on disk).
 
 ## 10. Supervision — Layer 3 (Phase 3)
 
@@ -155,6 +213,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 A crashed or killed run transitions to a terminal state in the visibility surface, never stuck "running" forever.
 - [ ] 🟡 The visibility surface survives a Jarvis restart — in-flight runs are recovered or marked unknown, not lost.
 - [ ] 🟢 Heartbeat checks are cheap and do not spam logs.
+
+**Integration verification:** triggering a `gen-eval-loop` mutation produces
+a `running` status on the cockpit's in-flight progress card (§19); killing
+the Jarvis process mid-run and restarting flips the entry to `unknown` in
+the same card on the next page load; a stall produces a Telegram nudge
+within ~30s.
 
 ## 11. Sandboxing and security — Layer 4 (Phase 3)
 
@@ -167,6 +231,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 A worktree is cleaned up after its project finishes or is abandoned; worktrees do not accumulate.
 - [ ] 🟢 A worktree-creation failure aborts the run cleanly with a clear error.
 
+**Integration verification:** triggering a `gen-eval-loop` mutation creates
+a worktree at `<WORKTREE_ROOT>/<product>/<project>` (verifiable on disk via
+`git -C <repo> worktree list`); the run terminates and the worktree is
+removed; a denied egress attempt during the run appears in
+`logs/egress-denials.jsonl`.
+
 ## 12. Generator-Evaluator loop, single-model — Layer 2 (Phase 3)
 
 - [ ] 🔴 The full loop runs end to end on one model against one repo-backed product: approved spec → `/work` Generator → `/review` Evaluator → result on a branch.
@@ -177,6 +247,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The Evaluator runs as a step of every loop pass, establishing the loop shape that Phase 4's cross-model upgrade slots into.
 - [ ] 🟡 A run that fails its own tests never reaches the Evaluator as "ready."
 
+**Integration verification:** a user-triggered `gen-eval-loop` runs `/work
+--auto` then `/review` per round; per-round `progress` events appear on the
+cockpit project card (§19); a pass terminates on a branch (visible as a new
+branch in the product repo, no merge); three failed evaluator rounds
+escalate visibly in the cockpit approval inbox.
+
 ## 13. Multi-model dispatch — Layer 5 (Phase 4)
 
 - [ ] 🔴 Codex is wired as a dispatchable executor; an agent definition compiles to the Codex target and runs.
@@ -184,6 +260,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🔴 The same neutral agent definition produces an equivalent agent on both the Claude and Codex targets.
 - [ ] 🟡 A model/provider being unavailable mid-dispatch fails the run cleanly with a clear error, leaving the worktree intact for retry.
 - [ ] 🟢 Dispatch logs record which model and provider executed each run (for cost attribution).
+
+**Integration verification:** a `gen-eval-loop` mutation in autonomous mode
+dispatches the Generator to one provider and the Evaluator to a different
+provider; both dispatches appear in `logs/dispatch-log.jsonl`; the cockpit
+project card shows `gen: Claude · eval: Codex` (or the live values) on the
+in-flight progress display.
 
 ## 14. Cross-model adjudication — Layer 2 upgrade (Phase 4)
 
@@ -194,6 +276,13 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🔴 If the second provider is unavailable, the run cannot satisfy the merge contract — it escalates to blocked-on-Michael, it does not degrade to single-model and merge unreviewed.
 - [ ] 🟢 The adjudication result records both models and the verdict.
 
+**Integration verification:** an autonomous `gen-eval-loop` run that
+produces a cross-model PASS auto-merges to the product repo's main line
+(visible in the product repo's `main` branch and in the user's Telegram
+notification `✅ <product>/<project> merged to main`); a FAIL escalates
+to `blocked-on-human` (visible in the cockpit approval inbox + a Telegram
+`⏸ blocked on you` message).
+
 ## 15. Concurrency scheduler (Phase 4)
 
 - [ ] 🔴 The scheduler enforces a global cap of N concurrent projects across all products.
@@ -202,6 +291,12 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The scheduler generalizes `WORK_RUN_GLOBAL_CAP` and tightens the per-project cap into a per-product cap of one, rather than introducing a parallel concurrency model.
 - [ ] 🟡 Two projects on different products auto-merging at the same time each land cleanly on their own repo — there is no shared main line to contend for.
 - [ ] 🟢 The cockpit reflects queued-vs-running accurately.
+
+**Integration verification:** triggering two `gen-eval-loop` mutations
+concurrently for two different products shows both as `running` on their
+respective cockpit project cards; triggering a third for an
+already-running product surfaces a `queued` state on its card and starts
+when a slot frees.
 
 ## 16. Operational self-improvement — observation loop (Phase 5)
 
@@ -216,6 +311,13 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 The loop de-dupes — the same friction observed repeatedly does not file a new project each time.
 - [ ] 🟡 The loop runs nightly, extending the existing nightly vault review rather than as a separate job.
 - [ ] 🟢 A quiet period with no friction files and runs nothing.
+
+**Integration verification:** a week of normal Jarvis use grows
+`logs/observation-interactions.jsonl` to a visible size; `docs/projects/ideas.md`
+gains entries from real friction (inspectable via git diff); a low-risk
+filed project is dispatched autonomously and the user receives its terminal
+Telegram notification — confirming the loop is reachable end-to-end as a
+running background process, not just as tested cores.
 
 ## 17. Two-regime safety and integration (cross-cutting)
 
@@ -237,3 +339,154 @@ Each numbered section is tagged with the phase that builds it. This project is *
 - [ ] 🟡 A change that merged but proves wrong can be reverted cleanly — autonomous merge does not preclude rollback.
 - [ ] 🟡 An approval that is never answered leaves the proposal pending — it never auto-applies or auto-discards.
 - [ ] 🟢 Disk-write failure on any state file surfaces the error and keeps in-memory state for manual recovery.
+
+## 19. Cockpit UX (Phase 6 Track C)
+
+### Planning panel
+
+- [ ] 🔴 Clicking **Plan** on a project card opens the planning panel with the
+  project's product/title in the header and a clean scoping state (empty
+  transcript + reply textarea).
+- [ ] 🔴 Sending a reply via the panel calls `POST /api/planning/turn` and
+  appends both the user message and the assistant question to the transcript.
+- [ ] 🔴 When the planning handler returns `spec-proposed`, the panel
+  re-renders to show the proposed `SpecArtifact` (title, spec, tasks,
+  test-plan) with **Approve** / **Refine** / **Abandon** buttons visible.
+- [ ] 🔴 Clicking **Approve** calls the scaffold hook (A4.4) and the panel
+  closes with a confirmation toast; the named files appear in the product
+  repo.
+- [ ] 🟡 Clicking **Refine** keeps the artifact visible above the reply
+  textarea, lets the user request revisions, and re-enters scoping mode.
+- [ ] 🟡 Clicking **Abandon** (or `/clear` from chat) transitions the
+  session to `abandoned` and closes the panel; a future `/plan` for the
+  same project starts a fresh session.
+- [ ] 🟡 The status pill in the panel header (`scoping` / `spec-proposed` /
+  `approved` / `abandoned`) always reflects the current
+  `StoredPlanningSession.planning.status`.
+
+### Approval inbox
+
+- [ ] 🔴 The inbox lists every pending approval from `intent-proposal-queue`,
+  `playbook-queue`, `proposal-queue`, and supervision's `blocked-on-human`
+  runs, with product/project, type, summary, and age per row.
+- [ ] 🔴 Clicking **Approve** on a row routes to the actioning path for the
+  proposal's type and removes the row from the inbox on success.
+- [ ] 🟡 Clicking **Reject** removes the row from the inbox (logged for
+  telemetry); the proposal does not auto-action later.
+- [ ] 🟡 The inbox count badge in the sidebar matches the row count and
+  updates without a page refresh after any Approve/Reject.
+- [ ] 🟢 An empty inbox renders "No approvals pending."
+
+### In-flight run progress
+
+- [ ] 🔴 A project with an active `gen-eval-loop` mutation displays
+  `round N / cap`, `failedEvaluatorRounds: N`, model in use, and
+  time-since-last-heartbeat on its project card.
+- [ ] 🔴 Per-round progress updates without a page refresh as the
+  gen-eval-loop emits A3.4's `progress` events.
+- [ ] 🟡 The heartbeat-age field turns amber once it exceeds
+  `STALL_THRESHOLD_MS` from `src/jobs/stall-check.ts`.
+- [ ] 🟡 A **Cancel** button is present on running cards and calls
+  `cancelMutation(id)` when clicked.
+- [ ] 🟢 An `idle` project shows the existing Start / Continue / Plan
+  actions, not the progress fields.
+
+### Integration verification
+
+A user clicks **Plan** on the Aura `02-growth` project card, has a
+three-turn scoping conversation, the panel surfaces a proposed spec,
+the user clicks **Approve**, the project files appear in the Aura repo,
+and within seconds the same project card shows `round 1 / 3` with a
+fresh heartbeat — confirming the planning panel, scaffold hook,
+gen-eval-loop dispatch, and in-flight run progress are all reachable
+end-to-end from the cockpit.
+
+## 20. Telegram UX (Phase 6 Track C)
+
+### `/plan <product>` command
+
+- [ ] 🔴 `/plan aura` creates a planning session for the `aura` product
+  scoped to the calling user and replies with the first scoping question.
+- [ ] 🔴 Subsequent messages from the same user route through
+  `handlePlanningTurn` instead of the default conversation thread, until
+  the session terminates.
+- [ ] 🔴 When the handler returns `spec-proposed`, Jarvis sends an
+  inline-keyboard approval message (see §"Approval inline-buttons" below).
+- [ ] 🟡 `/plan` with no product lists registered products and waits for
+  the user's choice before starting the session.
+- [ ] 🟡 `/clear` or `/fresh` during a planning session abandons it; the
+  user's next non-slash message routes to the default conversation thread.
+- [ ] 🟢 A planning session active for one user does not affect routing
+  for other users.
+
+### Engine notifications
+
+- [ ] 🔴 A gen-eval-loop completion sends a `✅ <product>/<project>
+  merged to main · N rounds · cross-model PASS · id=<short>` message to
+  the user once the mutation terminates as `completed`.
+- [ ] 🔴 A gen-eval-loop escalation sends a `⏸ <product>/<project>
+  blocked on you · N/M failed evaluator rounds · id=<short>` message
+  with a one-line reason and a cockpit URL.
+- [ ] 🔴 A gen-eval-loop hard failure (worktree create failure, applier
+  crash) sends a `💥 <product>/<project> failed · <reason> · id=<short>`
+  message.
+- [ ] 🟡 Notifications do not duplicate — one terminal event sends one
+  message (the existing tracker message is replaced on terminal, not
+  added to).
+- [ ] 🟢 The existing A2.4 stall nudge (`⚠️ Run stalled …`) is still
+  sent independently of these terminal-event notifications.
+
+### Approval inline-buttons
+
+- [ ] 🔴 A `sender.send(userId, prompt, { approval: { prompt, options }})`
+  call from any actioning path renders as a Telegram inline-keyboard
+  message with one button per option.
+- [ ] 🔴 Clicking an inline button routes the callback to the same
+  actioning path the cockpit approval inbox uses, so the artifact's
+  state is reflected in both surfaces.
+- [ ] 🟡 The webview ignores `opts.approval` per the existing
+  `MessageSender` contract — the same artifact does not double-action.
+
+### Integration verification
+
+A user runs `/plan aura` on Telegram, answers four scoping questions,
+receives the spec-proposed message with **Approve / Refine / Abandon**
+inline buttons, taps **Approve**, the project files appear in the Aura
+repo, the gen-eval-loop starts and (after some minutes of real run) the
+user receives a `✅ aura/03-onboarding merged to main` notification —
+confirming the `/plan` command, the planning handler, the inline-button
+approval round-trip, and the engine notification format are all
+reachable end-to-end from Telegram.
+
+## 21. Journal-to-intent end-to-end (Phase 6 Track C)
+
+- [ ] 🔴 A product-tagged note in today's journal (e.g.
+  `#aura investigate caching layer`) is detected by the nightly
+  producer (C7) and written as a `vault-intake` or `roadmap`
+  `IntentProposal` to `logs/intent-proposal-queue.json`.
+- [ ] 🔴 The proposal surfaces in the cockpit approval inbox (§19) and
+  optionally as a Telegram inline-button message (§20).
+- [ ] 🔴 An approved `vault-intake` proposal synthesizes the note into
+  `projects/<product>.md` via an updater agent; the file diff is
+  visible in the vault git log.
+- [ ] 🔴 An approved `roadmap` proposal appends a roadmap item to the
+  product repo's roadmap file; the file diff is visible in the product
+  repo's git log.
+- [ ] 🟡 A rejected proposal is removed from the queue and not re-proposed
+  on subsequent nightly runs for the same source note (dedupe by source
+  note id).
+- [ ] 🟡 The nightly producer is idempotent — running it twice on the
+  same journal does not enqueue duplicate proposals.
+- [ ] 🟢 A registered product the note targets but that doesn't exist
+  yet generates a `register-product` `IntentProposal` instead of
+  silently dropping the note.
+
+### Integration verification
+
+The user writes `#aura "morning thought: should we add a caching layer
+to the API gateway?"` in today's journal. The nightly job runs.
+Tomorrow morning the cockpit approval inbox shows the synthesized
+proposal; the user clicks **Approve**; the note appears in
+`projects/aura.md` and a roadmap item appears in the Aura repo — all
+without any further user action — confirming the journal → producer →
+queue → cockpit → consumer → vault/repo path is reachable end-to-end.

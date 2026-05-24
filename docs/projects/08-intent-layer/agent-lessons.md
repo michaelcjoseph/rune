@@ -1,0 +1,213 @@
+# Planning Retrospective — 08-intent-layer
+
+**Owner:** the project, written for the agent (or human) who plans the next one.
+**Date:** 2026-05-24, after the Phase 6 sweep through A4.2.
+
+## Context
+
+This file exists because a planning audit during the Phase 6 sweep surfaced a
+systematic gap. Phases 1–5 had shipped their deterministic cores under green
+tests, but **none of them was reachable from a real user surface**. A 58-task
+Phase 6 ("Live integration") had to be added retroactively on 2026-05-22
+(commit `5779260`) to wire those cores into the runtime. Even Phase 6 turned
+out to be UI-incomplete — its tasks cover engine wiring but not the cockpit
+and Telegram surfaces that the spec promised but never designed.
+
+The lessons below are the answer to "what would I do differently planning the
+next project?" They have been distilled into
+[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+and the user-reachability paragraph added to `CLAUDE.md` so future planning
+sessions inherit them automatically.
+
+---
+
+## What was planned vs what shipped
+
+| Original task wording (one bullet each) | Implementation reality |
+|---|---|
+| Phase 3 → "Git worktree per project; separate worktrees…" | A1.1 `sandbox-runtime.ts` + A1.4 `sandbox-fs.ts`, ~600 LOC, 60+ tests, two modules |
+| Phase 3 → "Per-repo scoped credentials and egress allowlists" | A1.2 `credential-injector.ts` + A1.3 `egress-policy.ts` + a deferral ADR, ~400 LOC, 53 tests, two modules |
+| Phase 3 → "Build the idea-to-spec conversation" | A4.1 `src/reviews/planning.ts` + A4.2 `src/reviews/planning-handler.ts` (+ A4.3–A4.5 still pending — `/plan` command, cockpit panel, scaffolding hook, abandon-on-clear), ~400 LOC so far |
+| Phase 5 → "Run the loop nightly, extending the existing nightly vault review" | Pure cores shipped (`observation-loop.ts`, `observation-nightly.ts`, et al.). B1–B5 runtime wiring entirely unbuilt. |
+
+Each original bullet describes a **capability**. Each implementation reality
+is a **(pure core + runtime adapter + user surface)** triple — at minimum
+two modules per capability, often more. The bullet-to-module ratio of ~1:3
+is the gap.
+
+---
+
+## Spec gaps surfaced
+
+Beyond the task-list breakdown, the spec itself is **engine-complete but
+UX-incomplete**. Concrete missing pieces:
+
+- **Planning mode in the cockpit is named but undefined.** §"Three Surfaces"
+  and §"Phase 2" mention "cockpit's planning mode" but never describe what
+  it looks like. The cockpit's Plan button currently stuffs text into the
+  chat input as a placeholder.
+- **Approval UI is named but undefined.** §"Three Surfaces" promises
+  "Approvals for journal-intake proposals and for carried-over roadmap items"
+  but gives no surface design. Today the webview shows a *count* of pending
+  approvals with no per-proposal approve/reject UI.
+- **In-flight Layer 2 visibility is unspecified.** §"v1 Wedge" says the
+  cockpit shows "which projects are running and which are blocked on him"
+  but says nothing about per-round progress, the `failedEvaluatorRounds`
+  counter, the active model (Claude vs Codex), or per-project cost.
+- **12 open questions in §"Open Questions and Risks" are deferred without
+  triggers.** Several (planner-may-pin-a-model? capability tag vocabulary?
+  cost visibility?) gate full usability and were never re-tasked.
+
+The 2026-05-24 spec update (this same patch series) fills these gaps —
+see new `### Cockpit UX in Detail` and `### Telegram UX in Detail`
+sub-sections under §"Three Surfaces", and the user-reachability annotations
+on §"Definition of done (v1 wedge)".
+
+---
+
+## Causes
+
+### 1. Tasks written at the spec's capability abstraction, not at implementation reality
+
+The original task list reads like rephrased spec bullets: "build the worktree
+isolation," "build the idea-to-spec conversation," "build the supervision
+visibility surface." Each is a *capability* — a single sentence that describes
+what should be true when done. None is a *module list*.
+
+The implementation phase then satisfied each capability by writing its **pure
+deterministic core** (one module under `src/intent/`) and checking the box.
+The runtime adapters needed to make those cores actually do anything — modules
+under `src/jobs/`, the bot, the webview — were never tasked because the
+original capability bullet didn't decompose into them.
+
+This is the dominant cause of the Phase 6 retrofit. Every Phase 6 sub-task is
+a runtime adapter that the original capability bullet glossed over.
+
+### 2. Test plan tested the deterministic cores, not the integration points
+
+The original §10 "Sandboxing and security" test plan had 7 high-level bullets
+("Each project runs in its own git worktree…"). Those bullets were satisfied
+by `src/intent/sandbox.test.ts`'s tests on `worktreePathFor` — pure functions
+returning distinct paths. The actual integration property — *that running a
+gen-eval-loop mutation creates a real worktree on disk via `git worktree add`*
+— was not testable from the original test plan because the runtime modules
+didn't exist yet.
+
+**Tests that pass before the integration exists give false comfort.** The
+green suite produced a "Phase 3 complete" signal that wasn't true at the
+user-reachability level.
+
+### 3. "Deterministic core first" was the right strategy and the wrong scope signal
+
+The `src/intent/` (pure) vs `src/jobs/` (I/O) split is genuinely good — it's
+why this sweep landed 15 modules cleanly with no regressions. But the task
+list inherited a side effect: when the pure modules are done and the suite
+is green, **it feels like the layer is done**. Phase 3 was checked off
+completely before anyone noticed that the runtime (sandbox-runtime,
+credential-injector, supervision-store, supervision-recovery, stall-check,
+gen-eval-loop-runner) did not exist.
+
+This is a strategy/signal mismatch, not a strategy error. Build the
+deterministic core first; just don't let its completion fire the
+phase-complete signal.
+
+### 4. UX surfaces were deferred implicitly; the deferrals were never re-tasked
+
+The spec's §"Three Surfaces" table is a one-page summary, not a design. The
+original task list inherited this — Phase 2 tasked the cockpit *registry view*
+but not the *planning panel* or *approval panel*. The deferral was implicit:
+"we'll figure out the UI later." Then "later" never came. The cockpit's Plan
+button still stuffs placeholder text into the chat input because no task
+ever required it to do otherwise.
+
+Every Phase 6 Track C task (C1–C8) is a UX surface that should have been
+tasked in Phase 2 or Phase 3, with an explicit deferral if it was being
+moved out.
+
+---
+
+## Lessons
+
+Each lesson is now applied somewhere. The cross-reference points at where
+to look to confirm the lesson has stuck.
+
+### Lesson 1 — Decompose every capability into (pure core, runtime adapter, user surface)
+
+A project task list needs a **decomposition pass** before any work starts.
+For every capability in the spec, name the triple — pure core, runtime
+adapter, user surface — and task all three. If one of the three is "nothing
+needed," say so explicitly with one sentence on why ("this is a config-only
+change, no UI needed").
+
+**Applied at:**
+[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+§"The decomposition pass".
+
+### Lesson 2 — Test-plan sections need both pure-core verification and integration verification
+
+Every test-plan section should have two halves. Unit tests against the pure
+core (what `src/intent/` provides), and an integration verification scenario
+that names the user-action that exercises the core end-to-end. The
+integration scenario can land last in execution order — what matters is that
+it exists in the plan, because writing it forces you to name the runtime
+modules and user surfaces the test will go through, which forces you to
+task them.
+
+**Applied at:**
+[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+§"Test-plan sections need integration verification", and at this project's
+own `test-plan.md` where every §1–§16 section now carries an
+**Integration verification** sub-bullet.
+
+### Lesson 3 — Definition of done is user-reachability, not test-passing
+
+A phase is not complete when its tests pass against pure modules. It is
+complete when a user can trigger the capability from a real surface
+(cockpit, Telegram, cron) and observe the outcome. Phase boundaries in
+`docs/projects/*/tasks.md` should only be checked off after that bar
+is met.
+
+**Applied at:** `CLAUDE.md` (new paragraph under "Project work is
+test-first") and
+[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+§"Definition of done = user-reachability".
+
+### Lesson 4 — Deferrals get ADRs and triggers
+
+When scope is cut from a project, the cut becomes invisible unless it is
+recorded. Every deferral needs a short doc at
+`docs/projects/<project>/<topic>-deferral.md` (template:
+[`egress-deferral.md`](egress-deferral.md)) naming what was deferred,
+why, and the trigger that would put it back in scope. An implicit
+"we'll figure out the UI later" without a follow-up task is the failure
+mode that produced Phase 6's UX-incomplete Track C.
+
+**Applied at:**
+[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+§"Deferrals get ADRs and triggers".
+
+---
+
+## What we did about it
+
+Concrete artifacts shipped in the same patch as this file:
+
+- **`CLAUDE.md`** — added one paragraph under "Project work is test-first"
+  defining user-reachability as the definition-of-done criterion.
+- **[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)**
+  (new) — pre-implementation checklist codifying the four lessons.
+- **This project's `spec.md`** — added `### Cockpit UX in Detail` and
+  `### Telegram UX in Detail` sub-sections under §"Three Surfaces", with
+  prose + ASCII mockups. Added user-reachability annotations to
+  §"Definition of done (v1 wedge)".
+- **This project's `tasks.md`** — added Track C (user surfaces, C1–C8) under
+  Phase 6, parallel to Track A and Track B. Track C is what makes A and B
+  user-reachable.
+- **This project's `test-plan.md`** — added §19 (Cockpit UX), §20 (Telegram
+  UX), §21 (Journal-to-intent end-to-end), and **Integration verification**
+  sub-bullets to existing §1–§16.
+
+The same patch does **not** modify the project doc templates themselves
+(`docs/projects/templates/{spec,tasks,test-plan}.md`) — the lessons live
+in `CLAUDE.md` and `planning-checklist.md` so future projects pick them
+up via process, not via mandatory template fields.
