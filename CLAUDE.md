@@ -21,7 +21,7 @@ The server reads/writes to an Obsidian vault synced via iCloud. The vault has fo
 
 ```
 src/
-├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler; calls cleanupOrphanWorktrees() at startup (fire-and-forget, best-effort) after reconcileOrphans()
+├── index.ts                 # Entry point: boots HTTP server, Telegram bot, scheduler; startup sequence: reconcileOrphans() → recoverSupervisedRuns() (flips stale supervised-run 'running' → 'unknown', fail-safe) → cleanupOrphanWorktrees() (fire-and-forget, best-effort)
 ├── config.ts                # Typed env vars and constants
 ├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner); runAgent() resolves each agent's model through the model selection policy (src/intent/model-policy.ts) — pin → role-default → global-fallback — rather than the old hardcoded def.model ?? config.AGENT_MODEL
 ├── bot/
@@ -118,6 +118,7 @@ src/
 │   ├── sandbox-fs.ts        # In-process fs-write wrappers that enforce sandbox write boundaries: assertWritable(sandbox, targetPath) two-stage guard (lexical containment via isWriteAllowed, then symlink resolution via realpathSync on closest existing ancestor for macOS /var/folders→/private/var/folders parity); writeFileInSandbox, appendFileInSandbox, mkdirInSandbox, rmInSandbox delegate to matching fs.*Sync after the guard; child-process writes are A3's contract — this module only covers Jarvis's own writes on behalf of a sandboxed run
 │   ├── lenny-sync.ts        # Exports runLibrarySync() + LibrarySyncResult; pulls new Lenny posts/podcasts via lenny-sync agent, updates logs/lenny-sync-state.json
 │   ├── supervision-store.ts # Persistent JSON store for SupervisedRun[] state (from src/intent/supervision.ts): readAllRuns, writeAllRuns, upsertRun, removeRun; atomic temp-then-rename writes; corrupt/invalid entries dropped at read time with warn log; backed by logs/supervised-runs.json (config.SUPERVISED_RUNS_FILE)
+│   ├── supervision-recovery.ts # Startup recovery for supervised runs: recoverSupervisedRuns(filePath) reads all SupervisedRuns, applies recoverRun (flips stale 'running' → 'unknown'), writes back only if anything changed; returns { transitioned, total }; called from index.ts after reconcileOrphans(), wrapped in try/catch so disk failures cannot crash boot
 │   └── nudges.ts            # Weekly and review nudge stubs
 ├── intent/
 │   ├── registry.ts          # Product/project registry: buildRegistry, readRegistry/writeRegistry, getAllProjects; aggregating index (product → projects → lifecycle-status); buildRegistry takes pre-scanned RegistrySources (the caller scans repos + vault product files); persists to logs/registry.json (config.REGISTRY_FILE)

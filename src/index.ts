@@ -7,6 +7,7 @@ import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
 import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
+import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
@@ -41,6 +42,18 @@ initKB();
 
 // Flip any stale 'running' mutations from a prior interrupted run to 'failed'
 reconcileOrphans();
+
+// Recover the supervision visibility surface — flip stale 'running' entries
+// in `logs/supervised-runs.json` to 'unknown' since a run that was in-flight
+// at the time of the prior shutdown can no longer be observed. Best-effort;
+// a malformed or missing file is tolerated. The function logs its own
+// success and failure; the catch here only guards against the write
+// throwing so a disk-full condition can't crash startup.
+try {
+  recoverSupervisedRuns(config.SUPERVISED_RUNS_FILE);
+} catch (err) {
+  log.error('Supervision startup recovery threw', { error: (err as Error).message });
+}
 
 // Sweep orphan project worktrees from a prior interrupted run. Best-effort —
 // a missing products.json (fresh clone, no Regime B products registered yet)
