@@ -57,7 +57,13 @@ function safeUpsertRun(run: SupervisedRun): void {
   }
 }
 
-export type MutationKind = 'work-run' | 'project-edit' | 'proposal-action' | 'agent-edit' | 'cron-toggle';
+export type MutationKind =
+  | 'work-run'
+  | 'gen-eval-loop'
+  | 'project-edit'
+  | 'proposal-action'
+  | 'agent-edit'
+  | 'cron-toggle';
 export type MutationStatus = 'pending' | 'approved' | 'running' | 'completed' | 'failed' | 'rejected';
 
 export interface MutationDescriptor<P = Record<string, unknown>> {

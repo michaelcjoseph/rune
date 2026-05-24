@@ -237,7 +237,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### A3. Single-model Generator-Evaluator runner (Layer 2)
 
-- [ ] **(agent)** New `genEvalLoopApplier` in `src/jobs/gen-eval-loop-runner.ts`, registered in `src/transport/mutations.ts`.
+- [x] **(agent)** New `genEvalLoopApplier` in `src/jobs/gen-eval-loop-runner.ts`, registered in `src/transport/mutations.ts`. *Scaffold only; A3.2 lands the per-round loop body — placeholder `apply()` emits a structured 'not implemented' failure to surface the gap clearly.*
 - [ ] **(agent)** Per round: spawn `/work --auto`, parse exit, spawn `/review`, get verdict; build a `LoopRound` via `recordRound`; call `evaluateLoop`; act on the outcome (`on-branch` → emit `completed`; `escalated` → emit `failed` + supervision flag).
 - [ ] **(agent)** Read `maxEvaluatorRounds` from `policies/escalation-policy.json`'s `evaluator-round-cap` rule so the loop and the policy share one cap.
 - [ ] **(agent)** Stream per-round progress via Mutation events (output + periodic `failedEvaluatorRounds`).
