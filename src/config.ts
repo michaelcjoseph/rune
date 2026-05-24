@@ -131,6 +131,15 @@ const config = {
     return join(this.LOGS_DIR, 'intent-proposal-queue.json');
   },
 
+  /** Audit log for denied egress attempts from sandboxed Regime B runs
+   *  (project 08 Phase 6 A1.3). Written by `src/jobs/egress-policy.ts`
+   *  on every `checkEgress` deny. While the enforcement mode is
+   *  `documented-gap`, this is also the telemetry signal that decides
+   *  when to promote to `proxy-enforced`. */
+  get EGRESS_DENIAL_LOG() {
+    return join(this.LOGS_DIR, 'egress-denials.jsonl');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
