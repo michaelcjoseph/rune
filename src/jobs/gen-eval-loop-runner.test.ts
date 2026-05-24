@@ -44,6 +44,23 @@ vi.mock('../config.js', () => ({
   default: mockConfig,
 }));
 
+// claude.js transitively imports config — and uses PROJECT_ROOT etc. that
+// the mockConfig doesn't carry. The orchestration tests only exercise the
+// loop through injected spawners (defaultSpawners are never reached), so we
+// can mock the entire claude.js surface with stubs.
+vi.mock('../ai/claude.js', () => ({
+  CLAUDE_BIN: '/usr/local/bin/claude',
+  registerActiveProcess: vi.fn(),
+  unregisterActiveProcess: vi.fn(),
+}));
+
+// credential-injector also transitively reads config via products.json
+// (which the orchestration tests don't need either — buildSandboxEnv is
+// only invoked from the production spawners).
+vi.mock('./credential-injector.js', () => ({
+  buildSandboxEnv: vi.fn(() => ({})),
+}));
+
 // --- Imports under test (after mocks) ---
 
 import { genEvalLoopApplier } from './gen-eval-loop-runner.js';
@@ -174,28 +191,155 @@ describe('genEvalLoopApplier — validate', () => {
   });
 });
 
-describe('genEvalLoopApplier — placeholder apply (A3.2 not yet built)', () => {
-  it('yields a single failed event mentioning the unimplemented loop body', async () => {
-    const events: Array<{ kind: string; data?: unknown }> = [];
-    const descriptor = {
-      id: 'desc-1',
-      kind: 'gen-eval-loop' as const,
-      source: 'webview' as const,
-      target: { type: 'gen-eval-loop', ref: 'aura/01-growth' },
-      preview: { summary: 'gen-eval-loop on aura/01-growth' },
-      payload: { product: 'aura', project: '01-growth' },
-      createdAt: new Date().toISOString(),
-      status: 'running' as const,
-    };
-    const ctx = { bus: { publish: vi.fn(), on: vi.fn(), off: vi.fn() } as any, cancel: () => false };
+describe('runGenEvalLoop — orchestration', () => {
+  // The orchestration core is exported from gen-eval-loop-runner.ts. The
+  // applier wraps it with production spawners + worktree lifecycle; tests
+  // inject mock spawners and a mock worktree lifecycle so the loop logic
+  // can be exercised deterministically.
 
-    for await (const ev of genEvalLoopApplier.apply(descriptor as any, ctx)) {
+  type LoopSpawners = {
+    runWorkAuto: ReturnType<typeof vi.fn>;
+    runReview: ReturnType<typeof vi.fn>;
+    createWorktree: ReturnType<typeof vi.fn>;
+    destroyWorktree: ReturnType<typeof vi.fn>;
+  };
+
+  function fakeSpawners(overrides: Partial<{
+    workExits: number[];
+    reviewVerdicts: Array<'pass' | 'fail'>;
+    createThrows?: Error;
+    destroyThrows?: Error;
+  }> = {}): LoopSpawners {
+    const workExits = overrides.workExits ?? [0];
+    const verdicts = overrides.reviewVerdicts ?? ['pass'];
+    let workIdx = 0;
+    let verdictIdx = 0;
+    return {
+      createWorktree: vi.fn(async () => {
+        if (overrides.createThrows) throw overrides.createThrows;
+        return {
+          product: 'aura',
+          project: '01-growth',
+          worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+          egressAllowlist: [],
+        };
+      }),
+      destroyWorktree: vi.fn(async () => {
+        if (overrides.destroyThrows) throw overrides.destroyThrows;
+      }),
+      runWorkAuto: vi.fn(async () => workExits[workIdx++ % workExits.length]!),
+      runReview: vi.fn(async () => verdicts[verdictIdx++ % verdicts.length]!),
+    };
+  }
+
+  // Import the loop entrypoint lazily so the file can declare the type above.
+  async function runLoop(spawners: LoopSpawners, opts: { maxEvaluatorRounds?: number; cancelAfterRound?: number } = {}) {
+    const { runGenEvalLoop } = await import('./gen-eval-loop-runner.js');
+    const events: Array<{ kind: string; data?: unknown }> = [];
+    let roundCount = 0;
+    const cancel = () => opts.cancelAfterRound !== undefined && roundCount >= opts.cancelAfterRound;
+    for await (const ev of runGenEvalLoop({
+      mutationId: 'mut-1',
+      payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
+      worktreeRoot: '/tmp/jarvis-worktrees',
+      productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
+      spawners: spawners as never,
+      cancel,
+      onRound: () => { roundCount++; },
+    })) {
       events.push({ kind: ev.kind, data: ev.data });
     }
+    return events;
+  }
 
-    expect(events).toHaveLength(1);
-    expect(events[0]!.kind).toBe('failed');
-    const data = events[0]!.data as Record<string, unknown>;
-    expect(String(data['reason'])).toMatch(/not.*implemented|A3\.2/i);
+  it('one round, tests pass + evaluator pass → completed event', async () => {
+    const spawners = fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] });
+    const events = await runLoop(spawners);
+    expect(events[events.length - 1]!.kind).toBe('completed');
+    expect(spawners.runWorkAuto).toHaveBeenCalledOnce();
+    expect(spawners.runReview).toHaveBeenCalledOnce();
+    expect(spawners.destroyWorktree).toHaveBeenCalledOnce();
+  });
+
+  it('tests fail → evaluator is NOT consulted that round', async () => {
+    // /work --auto exited non-zero — tests failed. The round records testsPass: false,
+    // evaluator verdict 'not-run'. evaluateLoop says in-progress; next round.
+    const spawners = fakeSpawners({
+      workExits: [1, 0],
+      reviewVerdicts: ['pass'], // only consulted in round 2
+    });
+    const events = await runLoop(spawners);
+    expect(events[events.length - 1]!.kind).toBe('completed');
+    expect(spawners.runWorkAuto).toHaveBeenCalledTimes(2);
+    // Only round 2's tests passed — review was consulted only once.
+    expect(spawners.runReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('evaluator fails N rounds in a row → escalated → failed event', async () => {
+    // cap = 3 → after 3 failed evaluator verdicts, escalate.
+    const spawners = fakeSpawners({
+      workExits: [0, 0, 0],
+      reviewVerdicts: ['fail', 'fail', 'fail'],
+    });
+    const events = await runLoop(spawners, { maxEvaluatorRounds: 3 });
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    const data = terminal.data as Record<string, unknown>;
+    expect(String(data['reason'])).toMatch(/escalat|evaluator/i);
+    expect(spawners.runReview).toHaveBeenCalledTimes(3);
+  });
+
+  it('worktree is destroyed even when the loop escalates', async () => {
+    const spawners = fakeSpawners({
+      workExits: [0, 0, 0],
+      reviewVerdicts: ['fail', 'fail', 'fail'],
+    });
+    await runLoop(spawners, { maxEvaluatorRounds: 3 });
+    expect(spawners.destroyWorktree).toHaveBeenCalledOnce();
+  });
+
+  it('worktree is destroyed even when the loop body throws', async () => {
+    const spawners = fakeSpawners();
+    spawners.runWorkAuto = vi.fn(async () => {
+      throw new Error('spawn failure');
+    });
+    const events = await runLoop(spawners);
+    expect(events[events.length - 1]!.kind).toBe('failed');
+    expect(spawners.destroyWorktree).toHaveBeenCalledOnce();
+  });
+
+  it('cancel between rounds short-circuits with a failed (cancelled) event', async () => {
+    // Each round passes tests but evaluator fails — so loop wants more rounds.
+    // Cancel after the first round → terminate.
+    const spawners = fakeSpawners({
+      workExits: [0, 0, 0],
+      reviewVerdicts: ['fail', 'fail', 'fail'],
+    });
+    const events = await runLoop(spawners, { maxEvaluatorRounds: 5, cancelAfterRound: 1 });
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    const data = terminal.data as Record<string, unknown>;
+    expect(String(data['reason'])).toMatch(/cancel/i);
+    expect(spawners.runWorkAuto).toHaveBeenCalledOnce();
+  });
+
+  it('createWorktree failure surfaces as a failed event (no rounds attempted)', async () => {
+    const spawners = fakeSpawners({ createThrows: new Error('worktree blew up') });
+    const events = await runLoop(spawners);
+    expect(events[events.length - 1]!.kind).toBe('failed');
+    expect(spawners.runWorkAuto).not.toHaveBeenCalled();
+    // destroy is not called when createWorktree failed — there is no worktree to destroy
+    expect(spawners.destroyWorktree).not.toHaveBeenCalled();
+  });
+
+  it('destroyWorktree failure does not mask a successful run', async () => {
+    const spawners = fakeSpawners({
+      workExits: [0],
+      reviewVerdicts: ['pass'],
+      destroyThrows: new Error('rm failed'),
+    });
+    const events = await runLoop(spawners);
+    // The completed event still surfaces — destroy failure is logged but not fatal.
+    expect(events[events.length - 1]!.kind).toBe('completed');
   });
 });
