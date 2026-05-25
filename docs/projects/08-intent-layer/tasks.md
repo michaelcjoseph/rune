@@ -398,16 +398,28 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C4. Telegram `/plan` command
 
-- [ ] **(agent)** New `src/bot/commands/plan.ts` exporting
+- [x] **(agent)** New `src/bot/commands/plan.ts` exporting
   `handlePlan(sender, userId, args)`. With a product slug, calls
   `createPlanningSession(userId, idea, 'chat', product)` from A4.1;
-  without one, lists registered products and asks which.
-- [ ] **(agent)** Update `src/bot/handlers/text.ts` so an active
+  without one, lists registered products and asks which. *Shipped
+  during A4.3 as part of the multi-turn Socratic planning handler;
+  file exists at `src/bot/commands/plan.ts` and dispatches through
+  `createPlanningSession` with surface `'chat'`.*
+- [x] **(agent)** Update `src/bot/handlers/text.ts` so an active
   planning session (from `getActivePlanningSession`) takes routing
   priority over the default conversation thread — analogous to how
-  active review sessions are routed today.
-- [ ] **(agent)** Register `/plan` in `src/bot/skill-registry.ts`'s
-  `SLASH_COMMAND_METADATA` so the resolver can route it.
+  active review sessions are routed today. *Shipped during A4.3 —
+  `text.ts:189-192` checks `getActivePlanningSession(userId)` before
+  the default conversation route; `/plan`, `/clear`, `/fresh` and
+  other slash commands short-circuit above this point so they reach
+  their own handlers instead of being captured by the planning thread.*
+- [x] **(agent)** Register `/plan` in `src/bot/skill-registry.ts`'s
+  `SLASH_COMMAND_METADATA` so the resolver can route it. *Entry at
+  `skill-registry.ts:168` with description and trigger phrases. The
+  6 `.todo` rows in `src/transport/telegram-ux.test.ts` are
+  documentation stand-ins — the routing path is exercised by the
+  existing `handleTextMessage` tests, and the C4 sub-tasks above
+  describe the contract.*
 
 #### C5. Telegram engine notifications
 
