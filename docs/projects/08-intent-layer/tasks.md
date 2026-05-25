@@ -285,7 +285,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### B1. Per-call-site interaction logging
 
-- [ ] **(agent)** Writer `src/utils/observation-log.ts:appendInteraction(record)` — JSONL append to `logs/observation-interactions.jsonl`, mirroring `src/utils/intent-log.ts:appendIntent`.
+- [x] **(agent)** Writer `src/utils/observation-log.ts:appendInteraction(record)` — JSONL append to `logs/observation-interactions.jsonl`, mirroring `src/utils/intent-log.ts:appendIntent`. *Mirrors intent-log.ts exactly: `OBSERVATION_LOG_FILENAME` constant, `observationLogPath()`, `appendInteraction(record)` with the same mkdirSync + appendFileSync shape and the same single-process event-loop safety model. Re-exports `InteractionLogRecord` from `src/intent/observation-sensor.ts` so call sites import the writer + type from one place. The JSDoc invariant (detail carries only structured metadata, never raw user content) is enforced at the call sites (B1.2–B1.5), not in the writer.*
 - [ ] **(agent)** Wire into `src/bot/handlers/text.ts` — one record per inbound TG message; `detail` is `route=<skill> conf=<n>`, never the message body.
 - [ ] **(agent)** Wire into every `src/bot/commands/*.ts` — `kind: 'command'`, `detail` is the command name + structured result class.
 - [ ] **(agent)** Wire into `src/ai/claude.ts:runAgent` — `kind: 'agent-call'`, `detail` is `agent=<name> dur=<ms>`.
