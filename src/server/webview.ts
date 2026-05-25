@@ -29,6 +29,17 @@ import {
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
 import { buildSetupWriterBrief } from '../intent/planner.js';
 import { runAgent } from '../ai/claude.js';
+import {
+  readIntentProposalQueue,
+  writeIntentProposalQueue,
+} from '../intent/intent-proposal-queue.js';
+import { readProposalQueue, writeProposalQueue } from '../jobs/proposal-queue.js';
+import { readAllRuns } from '../jobs/supervision-store.js';
+import { getVisibility } from '../intent/supervision.js';
+import {
+  readPlaybookQueue,
+  writePlaybookQueue,
+} from '../jobs/playbook-extract.js';
 
 const log = createLogger('webview');
 
@@ -432,6 +443,220 @@ function handleApiPlanningAbandon(_req: IncomingMessage, res: ServerResponse): v
   res.end(JSON.stringify({ ok: true }));
 }
 
+// ---------------------------------------------------------------------------
+// Approval inbox REST endpoints (Phase 6 C2.2)
+// ---------------------------------------------------------------------------
+//
+// Cross-source pending-approvals inbox. The cockpit reads `GET
+// /api/approvals` to render rows; clicking Approve/Reject hits
+// `POST /api/approvals/:id/{approve,reject}` which routes to the
+// per-source actioning path (a status flip in the queue file; the
+// existing nightly/post-review actioning consumes the approved
+// entries).
+//
+// Source ids encode `<source>:<index-or-id>` so the POST endpoint can
+// dispatch to the right queue without an extra lookup map.
+
+interface ApprovalRow {
+  /** Composite id: `<source>:<index-or-id>` — POST endpoints decode this. */
+  id: string;
+  /** Source queue: 'intent-proposal' | 'playbook' | 'ask-twice' | 'blocked-on-human'. */
+  type: 'intent-proposal' | 'playbook' | 'ask-twice' | 'blocked-on-human';
+  /** Short `product/project` (or just product, or product/—). */
+  productProject: string;
+  /** One-line human summary. */
+  summary: string;
+  /** Age in seconds since the entry was queued / run blocked. */
+  age: number;
+  /** Same as `type` — the cockpit uses this for filtering / iconography. */
+  source: 'intent-proposal' | 'playbook' | 'ask-twice' | 'blocked-on-human';
+}
+
+function ageSeconds(iso: string | undefined, now: number): number {
+  if (typeof iso !== 'string') return 0;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? Math.max(0, Math.round((now - t) / 1000)) : 0;
+}
+
+function collectApprovals(): ApprovalRow[] {
+  const now = Date.now();
+  const rows: ApprovalRow[] = [];
+
+  // intent-proposal-queue
+  const intent = readIntentProposalQueue();
+  intent.forEach((entry, i) => {
+    if (entry.status !== 'pending') return;
+    const p = entry.proposal;
+    let productProject = '—';
+    let summary = '';
+    if (p.kind === 'vault-intake' || p.kind === 'roadmap' || p.kind === 'register-product') {
+      productProject = p.product;
+      summary = p.kind === 'vault-intake' ? p.note
+        : p.kind === 'roadmap' ? p.item
+        : `register product ${p.product}`;
+    } else if (p.kind === 'disambiguation') {
+      productProject = p.candidates.join(' / ');
+      summary = p.note;
+    }
+    rows.push({
+      id: `intent-proposal:${i}`,
+      type: 'intent-proposal',
+      source: 'intent-proposal',
+      productProject,
+      summary: summary.slice(0, 200),
+      age: ageSeconds(entry.queuedAt, now),
+    });
+  });
+
+  // playbook-queue
+  const playbook = readPlaybookQueue();
+  playbook.forEach((draft, i) => {
+    if (draft.status !== 'pending') return;
+    rows.push({
+      id: `playbook:${i}`,
+      type: 'playbook',
+      source: 'playbook',
+      productProject: `${draft.domain}/${draft.slug}`,
+      summary: draft.entryMarkdown.split('\n')[0]?.slice(0, 200) ?? '',
+      age: ageSeconds(draft.draftedAt, now),
+    });
+  });
+
+  // proposal-queue (Ask-Twice)
+  const askTwice = readProposalQueue();
+  askTwice.forEach((proposal, i) => {
+    if (proposal.status !== 'pending') return;
+    rows.push({
+      id: `ask-twice:${i}`,
+      type: 'ask-twice',
+      source: 'ask-twice',
+      productProject: 'jarvis',
+      summary: `${proposal.title} — ${proposal.rationale}`.slice(0, 200),
+      age: ageSeconds(proposal.draftedAt, now),
+    });
+  });
+
+  // supervision blocked-on-human runs
+  try {
+    const runs = readAllRuns(config.SUPERVISED_RUNS_FILE);
+    const visibility = getVisibility(runs, /* heartbeatIntervalMs */ 5 * 60_000, now);
+    visibility.blocked.forEach((run) => {
+      rows.push({
+        id: `blocked-on-human:${run.id}`,
+        type: 'blocked-on-human',
+        source: 'blocked-on-human',
+        productProject: `${run.product}/${run.project}`,
+        summary: `run ${run.id.slice(0, 8)} blocked-on-human`,
+        age: ageSeconds(run.startedAt, now),
+      });
+    });
+  } catch (err) {
+    log.warn('collectApprovals: supervision read failed', { error: (err as Error).message });
+  }
+
+  return rows;
+}
+
+function handleApiApprovalsList(_req: IncomingMessage, res: ServerResponse): void {
+  let rows: ApprovalRow[] = [];
+  try {
+    rows = collectApprovals();
+  } catch (err) {
+    log.error('handleApiApprovalsList failed', { error: (err as Error).message });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'approvals list failed' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(rows));
+}
+
+/** Parse a composite approval id into (source, payload). Returns null on
+ *  unknown source or malformed id. */
+function parseApprovalId(id: string): { source: string; payload: string } | null {
+  const colonIdx = id.indexOf(':');
+  if (colonIdx === -1) return null;
+  const source = id.slice(0, colonIdx);
+  const payload = id.slice(colonIdx + 1);
+  if (!payload) return null;
+  return { source, payload };
+}
+
+function setIntentProposalStatus(idx: number, status: 'approved' | 'rejected'): boolean {
+  const queue = readIntentProposalQueue();
+  const entry = queue[idx];
+  if (!entry || entry.status !== 'pending') return false;
+  entry.status = status;
+  writeIntentProposalQueue(queue);
+  return true;
+}
+
+function setPlaybookStatus(idx: number, status: 'approved' | 'rejected'): boolean {
+  const queue = readPlaybookQueue();
+  const entry = queue[idx];
+  if (!entry || entry.status !== 'pending') return false;
+  entry.status = status;
+  writePlaybookQueue(queue);
+  return true;
+}
+
+function setAskTwiceStatus(idx: number, status: 'approved' | 'rejected'): boolean {
+  const queue = readProposalQueue();
+  const entry = queue[idx];
+  if (!entry || entry.status !== 'pending') return false;
+  entry.status = status;
+  writeProposalQueue(queue);
+  return true;
+}
+
+function dispatchApprovalStatus(id: string, status: 'approved' | 'rejected'): 'ok' | 'not-found' {
+  const parsed = parseApprovalId(id);
+  if (!parsed) return 'not-found';
+  const idx = Number(parsed.payload);
+  switch (parsed.source) {
+    case 'intent-proposal':
+      if (!Number.isInteger(idx)) return 'not-found';
+      return setIntentProposalStatus(idx, status) ? 'ok' : 'not-found';
+    case 'playbook':
+      if (!Number.isInteger(idx)) return 'not-found';
+      return setPlaybookStatus(idx, status) ? 'ok' : 'not-found';
+    case 'ask-twice':
+      if (!Number.isInteger(idx)) return 'not-found';
+      return setAskTwiceStatus(idx, status) ? 'ok' : 'not-found';
+    case 'blocked-on-human':
+      // Blocked-on-human runs aren't queue entries the cockpit can flip;
+      // the user must take the underlying action (a cancel, a re-dispatch,
+      // a /work --auto retry). C2.2 surfaces them in the inbox so the user
+      // sees them, but approve/reject from here is a no-op — return
+      // not-found so the row stays put until the underlying run terminates.
+      return 'not-found';
+    default:
+      return 'not-found';
+  }
+}
+
+function handleApiApprovalApprove(res: ServerResponse, id: string): void {
+  const result = dispatchApprovalStatus(id, 'approved');
+  if (result === 'not-found') {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'approval not found' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
+function handleApiApprovalReject(res: ServerResponse, id: string): void {
+  const result = dispatchApprovalStatus(id, 'rejected');
+  if (result === 'not-found') {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'approval not found' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export interface WebviewDeps {
   webview: WebviewSender;
   isReady: () => boolean;
@@ -619,6 +844,22 @@ export function mountWebviewRoutes(
       }
       if (req.method === 'POST' && pathname === '/api/planning/abandon') {
         handleApiPlanningAbandon(req, res);
+        return true;
+      }
+
+      // Approval inbox endpoints (Phase 6 C2.2)
+      if (req.method === 'GET' && pathname === '/api/approvals') {
+        handleApiApprovalsList(req, res);
+        return true;
+      }
+      const approveMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/approve$/);
+      if (req.method === 'POST' && approveMatch) {
+        handleApiApprovalApprove(res, decodeURIComponent(approveMatch[1]!));
+        return true;
+      }
+      const rejectMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/reject$/);
+      if (req.method === 'POST' && rejectMatch) {
+        handleApiApprovalReject(res, decodeURIComponent(rejectMatch[1]!));
         return true;
       }
 

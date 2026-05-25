@@ -362,11 +362,11 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
   `proposal-queue`, and the supervision-store's `blocked-on-human`
   runs. Each row renders product/project, type, summary, age, and
   **Approve** / **Reject** / **Open** buttons per the ASCII mockup.
-- [ ] **(agent)** REST endpoints in `src/server/webview.ts`:
+- [x] **(agent)** REST endpoints in `src/server/webview.ts`:
   `GET /api/approvals` (list across all sources),
   `POST /api/approvals/:id/approve`, `POST /api/approvals/:id/reject`.
   Approve routes to the actioning path appropriate to the proposal
-  type (see C8 for journal-intent).
+  type (see C8 for journal-intent). *Unified ApprovalRow shape across four sources (intent-proposal-queue, playbook-queue, ask-twice proposal-queue, supervision blocked-on-human). Composite id `<source>:<index|run-id>` so POST endpoints dispatch without an extra lookup. Approve/reject flips the queue entry's `status` field (the existing post-review/nightly actioning paths consume approved entries — that's C8 for journal-intent; playbook-updater + proposal-updater already handle the others). blocked-on-human rows surface in the list but return 404 on approve/reject (the user must take the underlying action via cancel or re-dispatch, not a queue-status flip). Both C2 cockpit-ux tests green.*
 
 #### C3. Cockpit in-flight run progress
 

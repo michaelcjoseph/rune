@@ -23,6 +23,13 @@ export interface PlaybookExtractResult {
   detail: string;
 }
 
+// Exported for the cockpit approval inbox (C2.2) — read/write the queue
+// to flip a draft's status when the user approves or rejects from the UI.
+// The nightly playbook-updater post-review path still consumes these queue
+// entries; the inbox is a parallel surface that produces the same status
+// transition.
+export { readQueue as readPlaybookQueue, writeQueue as writePlaybookQueue };
+
 function readQueue(): PlaybookDraft[] {
   try {
     const data = readFileSync(config.PLAYBOOK_QUEUE_FILE, 'utf8');
