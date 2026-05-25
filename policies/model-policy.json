@@ -36,6 +36,9 @@
     }
   ],
   "globalFallback": "opus",
-  "roleDefaults": {},
+  "_roleDefaults_comment": "Per-role default model alias. `evaluator: codex` (project 08, A6.2) makes the autonomous Evaluator pick a cross-provider model by default so cross-model adjudication is the policy-driven shape — this default sits dormant until A7 wires gen-eval-loop to dispatch with role='evaluator' and A6.3 flips `evaluatorDistinctFromGenerator` on.",
+  "roleDefaults": {
+    "evaluator": "codex"
+  },
   "evaluatorDistinctFromGenerator": false
 }

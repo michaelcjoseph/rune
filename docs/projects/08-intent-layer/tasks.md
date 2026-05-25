@@ -260,7 +260,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 #### A6. Model policy — register Codex + enable the cross-model constraint
 
 - [x] **(agent)** Add a `codex` alias to `policies/model-policy.json` (provider `openai`, capability `coding`, status `preferred`).
-- [ ] **(agent)** Set `roleDefaults.evaluator = "codex"` so an autonomous Evaluator picks a cross-provider model by default.
+- [x] **(agent)** Set `roleDefaults.evaluator = "codex"` so an autonomous Evaluator picks a cross-provider model by default.
 - [ ] **(agent + user)** Flip `evaluatorDistinctFromGenerator` to `true` — coordinated with the Codex executor going live (do this WITH step A5, not before, or the constraint blocks every existing autonomous review path). The user approves the cutover.
 
 #### A7. Cross-model adjudication wiring (Layer 2 upgrade)
