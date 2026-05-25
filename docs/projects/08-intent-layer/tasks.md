@@ -351,9 +351,9 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
   that calls `createPlanningSession`; add `POST /api/planning/approve` /
   `/abandon` that mutate the session and (on approve) call the
   scaffolding hook from A4.4. *Four handlers added to webview.ts wired into mountWebviewRoutes after the ops-cancel branches. Auth-gated via the shared verifyAuth path. start: 400 missing product, 200 with session id. turn: 400 missing text, 404 no-active-session, 200 with {reply, status}. approve: routes via approveActivePlanningSession → on `ok:true` calls runAgent('project-setup-writer', buildSetupWriterBrief) then deletePlanningSession; on `no-session` → 404, on `wrong-status` → 409, on agent failure → 500 (session stays approved for retry). abandon: idempotent 200. All 9 C1-targeted cockpit-ux tests now green.*
-- [ ] **(agent)** Wire the cockpit project card's existing **Plan**
+- [x] **(agent)** Wire the cockpit project card's existing **Plan**
   button to open the panel (replaces the current placeholder that
-  stuffs text into the chat input).
+  stuffs text into the chat input). *`cockpitAction(slug, action, product)` for `enter-planning-mode` now calls `window.openPlanningPanel(product)` (exposed by C1.1 from the IIFE). Defensive fallback to the prior `sendMessage('/plan ${product}')` chat-dispatch path if the panel JS didn't load (partial reload, etc.) so the user can still start a planning session.*
 
 #### C2. Cockpit approval inbox
 

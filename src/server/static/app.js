@@ -730,12 +730,19 @@
   // planning panel (Track C1) lands.
   function cockpitAction(slug, action, product) {
     if (action === 'enter-planning-mode') {
-      // The Plan button is itself the per-action gate (an explicit click), so dispatching
-      // `/plan <product>` straight through the chat plumbing matches the start/continue
-      // model — no extra confirmation. The chat handler creates the planning session and
-      // routes subsequent messages through the planning handler.
+      // C1.3: open the dedicated planning panel rather than dispatching
+      // `/plan <product>` through the chat plumbing. The panel is the user
+      // surface for the planning conversation; the previous chat-dispatch
+      // fallback (A4.3) is replaced now that C1.1's panel exists.
       if (!product) return;
-      sendMessage(`/plan ${product}`);
+      if (typeof window.openPlanningPanel === 'function') {
+        window.openPlanningPanel(product);
+      } else {
+        // Defensive: if the panel JS didn't load (e.g., during a partial
+        // reload), fall back to the chat dispatch so the user can still
+        // start a planning session.
+        sendMessage(`/plan ${product}`);
+      }
       return;
     }
     if (action === 'start' || action === 'continue') {
