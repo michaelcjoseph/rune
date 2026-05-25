@@ -272,7 +272,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### A8. `/review --cross-model` second-pass dispatch
 
-- [ ] **(agent)** Update `.claude/skills/review/SKILL.md` step 1 to parse `--cross-model`; call `resolveReviewMode({autonomous: false, crossModelFlag})`.
+- [x] **(agent)** Update `.claude/skills/review/SKILL.md` step 1 to parse `--cross-model`; call `resolveReviewMode({autonomous: false, crossModelFlag})`. *SKILL.md gains a new step 1 "Parse args and resolve the review mode" that explicitly parses the flag and applies the same rule as `resolveReviewMode` (autonomous: false; mode = crossModelFlag ? cross-model : single-model). Subsequent steps renumbered 2/3/4; cross-references updated.*
 - [ ] **(agent)** When mode is `cross-model` — in parallel with the Claude reviewer panel, build a `DispatchHandoff` for each reviewer (target `'codex'`) and dispatch via `dispatchToExecutor`.
 - [ ] **(agent)** Reconcile the two verdicts into the consolidated answer; show where Claude and Codex disagreed.
 - [ ] **(agent)** Drop the "pending Codex executor" paragraph from the SKILL.md Modes section.

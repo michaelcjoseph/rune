@@ -40,7 +40,21 @@ If both lists are empty, exit immediately with "Nothing to review — working tr
 
 ## Instructions
 
-### 1. Collect the change set and capture the diff
+### 1. Parse args and resolve the review mode
+
+Before doing any other work, scan the invocation args for `--cross-model`:
+
+- If the args contain `--cross-model`, set `crossModelFlag = true`.
+- Otherwise, set `crossModelFlag = false`.
+
+Then resolve the review mode by applying the same rule as `resolveReviewMode` in `src/intent/adjudication.ts`:
+
+- This is a manual `/review` (the autonomous gen-eval-loop never calls this skill), so `autonomous = false`.
+- `mode = crossModelFlag ? 'cross-model' : 'single-model'` — manual `/review` is single-model by default and opts in via the flag.
+
+Log the chosen mode at the top of the run summary (`Mode: <mode>`). The mode affects how the rest of the instructions execute: in `single-model` (the default today) the rest of the skill runs as written. In `cross-model` the reviewer panel is dispatched twice — once on Claude (the existing path) and once on Codex (via `dispatchToExecutor` from `src/jobs/dispatch-runtime.ts`); the two verdicts are reconciled into the consolidated answer. See the Modes section above for the current implementation status.
+
+### 2. Collect the change set and capture the diff
 
 Run these in parallel:
 
@@ -68,11 +82,11 @@ Untracked files never appear in `diff_text` regardless of mode; agents are told 
 
 Print a one-line scope summary, e.g. `Reviewing 7 files (5 tracked, 2 untracked) — diff embedded…` (or `…— agents will fetch diff…` in fetch mode), then proceed.
 
-### 2. Launch all five agents in parallel
+### 3. Launch all five agents in parallel
 
 **All five `Agent` tool calls MUST be issued in a single assistant turn** so the harness runs them concurrently. Do not invoke them sequentially across turns — that defeats the point of the skill.
 
-Each prompt carries the file lists and tells the agent to read `CLAUDE.md` for project rules. Each agent uses its **native verdict and severity vocabulary** — the skill normalizes these in step 3.
+Each prompt carries the file lists and tells the agent to read `CLAUDE.md` for project rules. Each agent uses its **native verdict and severity vocabulary** — the skill normalizes these in step 4.
 
 In every prompt below, the block
 
@@ -228,7 +242,7 @@ Run `git diff HEAD` yourself to see the full diff for tracked changes.
   (PASS / PASS_WITH_WARNINGS / BLOCK).
   ```
 
-### 3. Normalize, dedupe, synthesize
+### 4. Normalize, dedupe, synthesize
 
 After all five agents return, normalize their **findings** into a unified `BLOCK / WARN / INFO` taxonomy using this map:
 
@@ -290,7 +304,7 @@ Print the report in this format:
 
 ## Per-agent results
 
-> Each agent's native verdict line is shown here for reference only — it does not influence the overall verdict (which is computed from normalized findings in step 3). If an agent is UNAVAILABLE, replace its body with `UNAVAILABLE — <one-line reason>`.
+> Each agent's native verdict line is shown here for reference only — it does not influence the overall verdict (which is computed from normalized findings in step 4). If an agent is UNAVAILABLE, replace its body with `UNAVAILABLE — <one-line reason>`.
 
 ### test-specialist — <PASS / FAIL>
 - Suite: <N passing / M failing>
