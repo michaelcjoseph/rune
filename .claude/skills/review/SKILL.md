@@ -86,6 +86,16 @@ Print a one-line scope summary, e.g. `Reviewing 7 files (5 tracked, 2 untracked)
 
 **All five `Agent` tool calls MUST be issued in a single assistant turn** so the harness runs them concurrently. Do not invoke them sequentially across turns — that defeats the point of the skill.
 
+In `cross-model` mode (set in step 1), the **same prompt body** that each Claude reviewer receives is ALSO dispatched to a Codex (OpenAI) executor for that reviewer. Build the Claude `Agent` calls as written below, and in the same turn — in parallel with those — for each reviewer write the prompt to a temp file (e.g. `/tmp/review-<agent>-<ts>.txt`) and run a Bash invocation:
+
+```bash
+npm run dispatch-review -- <agent-name> /tmp/review-<agent>-<ts>.txt
+```
+
+The script wraps `dispatchToExecutor` (target `'codex'`) — it loads the agent's NeutralAgentDef from `.claude/agents/<agent-name>.md`, compiles it for Codex, dispatches, prints the Codex executor's output to stdout, and exits 0 on success. On dispatcher failure (probe says Codex is absent or unauthenticated, spawn error, etc.) the script prints a `DISPATCH-FAILED: <reason>` line to stderr and exits 1 — treat this exit as the Codex pass being `UNAVAILABLE` for that reviewer and proceed with only the Claude verdict for it.
+
+The Bash invocations run in parallel with the `Agent` tool calls in the same turn (one Bash call per reviewer, plus the five `Agent` calls — 10 tool calls in one turn). On Telegram/cockpit users this can look chatty; that's expected and the consolidated answer (step 4) is what the user reads.
+
 Each prompt carries the file lists and tells the agent to read `CLAUDE.md` for project rules. Each agent uses its **native verdict and severity vocabulary** — the skill normalizes these in step 4.
 
 In every prompt below, the block

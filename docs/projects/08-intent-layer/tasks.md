@@ -273,7 +273,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 #### A8. `/review --cross-model` second-pass dispatch
 
 - [x] **(agent)** Update `.claude/skills/review/SKILL.md` step 1 to parse `--cross-model`; call `resolveReviewMode({autonomous: false, crossModelFlag})`. *SKILL.md gains a new step 1 "Parse args and resolve the review mode" that explicitly parses the flag and applies the same rule as `resolveReviewMode` (autonomous: false; mode = crossModelFlag ? cross-model : single-model). Subsequent steps renumbered 2/3/4; cross-references updated.*
-- [ ] **(agent)** When mode is `cross-model` — in parallel with the Claude reviewer panel, build a `DispatchHandoff` for each reviewer (target `'codex'`) and dispatch via `dispatchToExecutor`.
+- [x] **(agent)** When mode is `cross-model` — in parallel with the Claude reviewer panel, build a `DispatchHandoff` for each reviewer (target `'codex'`) and dispatch via `dispatchToExecutor`. *Implementation: new `scripts/dispatch-review.ts` (npm script `npm run dispatch-review`) wraps `dispatchToExecutor` with target `'codex'` so the markdown SKILL.md can spawn Codex via Bash. The SKILL.md's step 3 now tells Claude to write each reviewer's prompt to a tempfile and run `npm run dispatch-review -- <agent> <tempfile>` in parallel with the existing five Agent tool calls — 10 tool calls in one turn. Codex dispatcher failures (probe unavailable, spawn error) surface as exit-1 with a `DISPATCH-FAILED:` stderr line so the reviewer is marked `UNAVAILABLE` and the panel continues.*
 - [ ] **(agent)** Reconcile the two verdicts into the consolidated answer; show where Claude and Codex disagreed.
 - [ ] **(agent)** Drop the "pending Codex executor" paragraph from the SKILL.md Modes section.
 
