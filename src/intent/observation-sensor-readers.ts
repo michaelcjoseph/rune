@@ -351,3 +351,90 @@ export function readTelemetrySignals(opts: ReadTelemetrySignalsOpts = {}): Senso
 
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// readInteractionSignals (Phase 6 B2.3)
+// ---------------------------------------------------------------------------
+//
+// Source: logs/observation-interactions.jsonl (the B1 writer's output —
+// every TG message, slash command, agent invocation, webview action).
+// Output: one SensorSignal per (kind, outcome=failure) bucket whose count
+// meets the failure threshold within the lookback hours. Bucket grain is
+// kind+outcome only — `detail` is structured but heterogeneous across
+// kinds, so the reader counts patterns rather than exact detail strings.
+
+/** Default lookback for the interaction reader — 24 hours. Shorter than
+ *  the vault/telemetry 7-day window because interaction friction is
+ *  rapidly-iterating; a day's worth of failed clicks is plenty of signal. */
+const DEFAULT_INTERACTION_LOOKBACK_HOURS = 24;
+
+/** Default failure-count threshold per (kind, outcome=failure) bucket. */
+const DEFAULT_INTERACTION_FAILURE_THRESHOLD = 3;
+
+export interface ReadInteractionSignalsOpts {
+  now?: Date;
+  /** Lookback in hours (default 24). */
+  lookbackHours?: number;
+  /** Failure-count threshold per kind. Default 3. */
+  failureThreshold?: number;
+  /** Cap on returned signals. Default {@link DEFAULT_CAP}. */
+  cap?: number;
+  /** Read the observation-interactions JSONL. Returns content or null on
+   *  missing file. Production wires
+   *  `readFileSync(logs/observation-interactions.jsonl)`. */
+  readInteractionsLog?: () => string | null;
+}
+
+function defaultReadInteractionsLog(): string | null {
+  try {
+    return readFileSync(join(config.LOGS_DIR, 'observation-interactions.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Scan recent interaction-log entries for failure bursts, returning a
+ * capped `SensorSignal[]`. Grouping is by `kind` only (failures only);
+ * one signal per kind whose failure count meets the threshold.
+ *
+ * The reader does NOT inspect `detail` beyond echoing it via counts —
+ * `detail` may carry structured per-call-site metadata (route names,
+ * agent names, command names) that varies across entries; counting
+ * exact-match details would fragment the bucket. Patterns (kind +
+ * outcome) are what the observation loop's diarizer is asked to
+ * interpret, not specific lines.
+ */
+export function readInteractionSignals(opts: ReadInteractionSignalsOpts = {}): SensorSignal[] {
+  const now = opts.now ?? new Date();
+  const lookbackHours = opts.lookbackHours ?? DEFAULT_INTERACTION_LOOKBACK_HOURS;
+  const failureThreshold = opts.failureThreshold ?? DEFAULT_INTERACTION_FAILURE_THRESHOLD;
+  const cap = opts.cap ?? DEFAULT_CAP;
+  const readLog = opts.readInteractionsLog ?? defaultReadInteractionsLog;
+
+  const cutoffMs = now.getTime() - lookbackHours * 60 * 60 * 1000;
+  const entries = parseJsonl(readLog());
+
+  // Group failures by kind within window.
+  const failuresByKind = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry['outcome'] !== 'failure') continue;
+    const ts = typeof entry['ts'] === 'string' ? Date.parse(entry['ts']) : NaN;
+    if (!Number.isFinite(ts) || ts < cutoffMs) continue;
+    const kind = typeof entry['kind'] === 'string' ? entry['kind'] : null;
+    if (!kind) continue;
+    failuresByKind.set(kind, (failuresByKind.get(kind) ?? 0) + 1);
+  }
+
+  const out: SensorSignal[] = [];
+  for (const [kind, count] of failuresByKind) {
+    if (out.length >= cap) break;
+    if (count < failureThreshold) continue;
+    out.push({
+      source: 'interaction',
+      content: `kind=${kind} ${count} failures in last ${lookbackHours}h`,
+      ts: now.toISOString(),
+    });
+  }
+  return out;
+}

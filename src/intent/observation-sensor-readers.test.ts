@@ -21,7 +21,7 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
-const { readVaultSignals, readTelemetrySignals } = await import('./observation-sensor-readers.js');
+const { readVaultSignals, readTelemetrySignals, readInteractionSignals } = await import('./observation-sensor-readers.js');
 
 import type { SensorSignal } from './observation-loop.js';
 
@@ -352,5 +352,185 @@ describe('readTelemetrySignals', () => {
       readMutationsLog: () => null,
     });
     expect(signals).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readInteractionSignals (Phase 6 B2.3)
+// ---------------------------------------------------------------------------
+//
+// Source: logs/observation-interactions.jsonl (the B1 writer's output).
+// Output: one SensorSignal per (kind, outcome) bucket whose count meets
+// the failure threshold within the lookback hours. Bucket grain uses
+// kind+outcome only — `detail` is structured but heterogeneous across
+// kinds (e.g., `route=/fresh`, `agent=wiki-compiler dur=200`), so the
+// reader counts patterns, not exact detail strings.
+
+/** "Now" for the interaction tests — same fixed clock as telemetry. */
+const INTERACTION_NOW = new Date('2026-05-25T12:00:00.000Z');
+/** Inside the 24-hour default window. */
+const RECENT_INTERACTION_ISO = '2026-05-25T08:00:00.000Z';
+/** Outside the 24-hour default window. */
+const OLD_INTERACTION_ISO = '2026-05-22T08:00:00.000Z';
+
+describe('readInteractionSignals', () => {
+  it('returns [] when the reader returns null (no file)', () => {
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => null,
+    });
+    expect(signals).toEqual([]);
+  });
+
+  it('returns [] when no bucket meets the failure threshold', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'success', detail: 'agent=wiki-compiler dur=100' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=wiki-compiler dur=100' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'tg-message', outcome: 'success', detail: 'route=/fresh' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    // Default threshold is 3 failures within window — only 1 failure here.
+    expect(signals).toEqual([]);
+  });
+
+  it('emits a signal when failure bucket meets the default threshold (3)', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=wiki-compiler dur=100' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=wiki-compiler dur=100' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=other dur=100' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    expect(signals.length).toBeGreaterThanOrEqual(1);
+    expect(signals[0]!.source).toBe('interaction');
+    expect(signals[0]!.content).toMatch(/agent-call/);
+    expect(signals[0]!.content).toMatch(/3.*fail/i);
+  });
+
+  it('drops interactions outside the lookback hours (24 default)', () => {
+    const interactions = jsonl([
+      { ts: OLD_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'a' },
+      { ts: OLD_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'b' },
+      { ts: OLD_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'c' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    expect(signals).toEqual([]);
+  });
+
+  it('honors custom lookbackHours', () => {
+    // 30 hours ago — inside a custom 48h window, outside the default 24h.
+    const ts30hAgo = new Date(INTERACTION_NOW.getTime() - 30 * 60 * 60 * 1000).toISOString();
+    const interactions = jsonl([
+      { ts: ts30hAgo, kind: 'command', outcome: 'failure', detail: 'cmd=workout' },
+      { ts: ts30hAgo, kind: 'command', outcome: 'failure', detail: 'cmd=workout' },
+      { ts: ts30hAgo, kind: 'command', outcome: 'failure', detail: 'cmd=workout' },
+    ]);
+    const defaultWindow = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    expect(defaultWindow).toEqual([]);
+    const wideWindow = readInteractionSignals({
+      now: INTERACTION_NOW,
+      lookbackHours: 48,
+      readInteractionsLog: () => interactions,
+    });
+    expect(wideWindow.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('honors custom failure threshold', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'webview', outcome: 'failure', detail: 'action=mutation-create' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'webview', outcome: 'failure', detail: 'action=mutation-create' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      failureThreshold: 2,
+      readInteractionsLog: () => interactions,
+    });
+    expect(signals.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('groups by kind only (not by detail) — different details, same kind/outcome cluster as one signal', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=a dur=100' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=b dur=200' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'agent=c dur=300' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    // One signal covering all three failures of kind agent-call.
+    const agentCallSignals = signals.filter((s) => s.content.includes('agent-call'));
+    expect(agentCallSignals).toHaveLength(1);
+  });
+
+  it('only counts failure outcomes, not success or cancelled', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'success', detail: 'a' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'success', detail: 'b' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'success', detail: 'c' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'cancelled', detail: 'd' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    expect(signals).toEqual([]);
+  });
+
+  it('every signal has source="interaction" and parseable ts', () => {
+    const interactions = jsonl([
+      { ts: RECENT_INTERACTION_ISO, kind: 'command', outcome: 'failure', detail: 'cmd=x' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'command', outcome: 'failure', detail: 'cmd=y' },
+      { ts: RECENT_INTERACTION_ISO, kind: 'command', outcome: 'failure', detail: 'cmd=z' },
+    ]);
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    for (const s of signals) {
+      expect(s.source).toBe('interaction');
+      expect(Number.isFinite(Date.parse(s.ts))).toBe(true);
+    }
+  });
+
+  it('honors a custom cap', () => {
+    // 5 distinct kinds each with 3+ failures → 5 signals; cap at 2.
+    const entries: Array<Record<string, unknown>> = [];
+    for (const k of ['agent-call', 'command', 'tg-message', 'webview', 'other']) {
+      for (let i = 0; i < 3; i++) {
+        entries.push({ ts: RECENT_INTERACTION_ISO, kind: k, outcome: 'failure', detail: 'x' });
+      }
+    }
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      cap: 2,
+      readInteractionsLog: () => jsonl(entries),
+    });
+    expect(signals).toHaveLength(2);
+  });
+
+  it('skips malformed JSONL lines', () => {
+    const interactions = [
+      JSON.stringify({ ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'a' }),
+      'oops { not json',
+      JSON.stringify({ ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'b' }),
+      JSON.stringify({ ts: RECENT_INTERACTION_ISO, kind: 'agent-call', outcome: 'failure', detail: 'c' }),
+    ].join('\n');
+    const signals = readInteractionSignals({
+      now: INTERACTION_NOW,
+      readInteractionsLog: () => interactions,
+    });
+    expect(signals.length).toBeGreaterThanOrEqual(1);
   });
 });
