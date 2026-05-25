@@ -84,18 +84,28 @@ export async function handleTextMessage(sender: MessageSender, msg: TelegramBot.
   }
 }
 
+/** Maximum length of a slash-route token in the observation log — caps
+ *  the worst-case detail-field size at a known bound regardless of input.
+ *  Real slash commands top out around 15 chars; 32 gives generous headroom
+ *  for new commands without admitting pathological inputs. */
+const MAX_ROUTE_TOKEN_LEN = 32;
+
 /** Classify an inbound message into a structured route token for the
- *  observation log. Returns `/<command>` for slash commands and
- *  `conversation` for free-form text. The return value is structured
- *  metadata — never the message body — so it can safely land in
- *  `InteractionLogRecord.detail`. Mirrors the prefix chain in
- *  `dispatchText` but only extracts the route name; the actual handler
- *  is invoked by `dispatchText` itself. */
+ *  observation log. Returns `/<command>` for slash commands (truncated to
+ *  `MAX_ROUTE_TOKEN_LEN` to bound the detail field) and `conversation`
+ *  for free-form text. The return value is structured metadata — never
+ *  the message body — so it can safely land in `InteractionLogRecord.detail`.
+ *  Mirrors the prefix chain in `dispatchText` but only extracts the route
+ *  name; the actual handler is invoked by `dispatchText` itself. */
 function routeOf(text: string): string {
   if (!text.startsWith('/')) return 'conversation';
-  // Take the first whitespace-delimited token and strip args.
+  // Take the first whitespace-delimited token and strip args. Cap the
+  // length so a pathological input (e.g., a slash followed by a 10KB
+  // run of non-whitespace) can't blow up the observation log entry.
   const head = text.split(/\s+/)[0]!;
-  return head;
+  return head.length > MAX_ROUTE_TOKEN_LEN
+    ? `${head.slice(0, MAX_ROUTE_TOKEN_LEN)}…`
+    : head;
 }
 
 /** Phase 6 B1.3: wrap a slash-command handler invocation with an

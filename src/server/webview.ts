@@ -216,6 +216,27 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
   }));
 }
 
+/** The known mutation kinds the webview action endpoint accepts. Phase 6
+ *  B1.6 strict-discipline pass: validating `body.kind` against this set
+ *  before it lands in the observation log's `detail` field upholds the
+ *  invariant that `detail` carries only structured data — even though
+ *  the endpoint is auth-gated, an unvalidated cast would let arbitrary
+ *  client strings leak into the loop's sensor signal. */
+const KNOWN_MUTATION_KINDS: ReadonlySet<MutationKind> = new Set([
+  'work-run',
+  'gen-eval-loop',
+  'project-edit',
+  'proposal-action',
+  'agent-edit',
+  'cron-toggle',
+]);
+
+function safeMutationKind(raw: unknown): MutationKind | 'unknown' {
+  return typeof raw === 'string' && (KNOWN_MUTATION_KINDS as ReadonlySet<string>).has(raw)
+    ? (raw as MutationKind)
+    : 'unknown';
+}
+
 /** Phase 6 B1.5 — log a webview action with outcome derived from whether
  *  the handler resolved without an error path. `detail` carries only the
  *  action name + structured kind/id — never request body content. */
@@ -248,16 +269,17 @@ async function handleApiMutationsCreate(req: IncomingMessage, res: ServerRespons
     logWebviewAction('mutation-create', 'failure', 'reason=missing-kind');
     return;
   }
+  const safeKind = safeMutationKind(body.kind);
   const result = await createMutation(body.kind as MutationKind, body.payload ?? {}, 'webview');
   if (!result.ok) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: result.reason }));
-    logWebviewAction('mutation-create', 'failure', `kind=${body.kind}`);
+    logWebviewAction('mutation-create', 'failure', `kind=${safeKind}`);
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(result.descriptor));
-  logWebviewAction('mutation-create', 'success', `kind=${body.kind}`);
+  logWebviewAction('mutation-create', 'success', `kind=${safeKind}`);
 }
 
 function handleApiMutationsCancel(res: ServerResponse, id: string): void {
