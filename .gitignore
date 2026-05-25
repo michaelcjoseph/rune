@@ -3,6 +3,7 @@ dist/
 logs/
 coverage/
 .worktrees/
+.claude/scheduled_tasks.lock
 
 .env
 .env.local
