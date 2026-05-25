@@ -142,6 +142,31 @@ export function deletePlanningSession(chatId: number): void {
   persistPlanningSessions();
 }
 
+/**
+ * Abandon any active planning session for `chatId` — removes the stored
+ * session and cleans up the Claude session id. A no-op when the chat has no
+ * active planning session, or when the session is already in a terminal
+ * state (`getActivePlanningSession` filters those out).
+ *
+ * Used by `/clear`, `/fresh`, and `/plan` (when starting a new session) so
+ * the escape hatches the spec promises are honored consistently. Returns
+ * `true` when something was abandoned, `false` otherwise — callers use the
+ * boolean to tailor their reply ("planning session abandoned" vs. nothing
+ * to clear).
+ *
+ * The pure `abandonPlan` lifecycle transition is intentionally skipped here:
+ * the abandoned state never reaches an observer (a synchronous delete follows
+ * immediately, and no recovery path reads abandoned sessions). Driving the
+ * transition would write the abandoned state to disk for zero microseconds
+ * before the delete overwrites it.
+ */
+export function abandonActivePlanningSession(chatId: number): boolean {
+  const session = getActivePlanningSession(chatId);
+  if (!session) return false;
+  deletePlanningSession(chatId);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------

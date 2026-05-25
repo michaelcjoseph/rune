@@ -16,11 +16,23 @@ vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
 
+vi.mock('../../reviews/planning.js', () => ({
+  getActivePlanningSession: vi.fn(() => null),
+  abandonActivePlanningSession: vi.fn(),
+}));
+
+vi.mock('../../reviews/orchestrator.js', () => ({
+  hasActiveReview: vi.fn(() => false),
+}));
+
 const { getSession, deleteSession } = await import('../../vault/sessions.js');
+const { getActivePlanningSession, abandonActivePlanningSession } = await import('../../reviews/planning.js');
 const { handleClear } = await import('./clear.js');
 
 const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
 const deleteSessionMock = deleteSession as unknown as ReturnType<typeof vi.fn>;
+const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+const abandonActivePlanningSessionMock = abandonActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
 
 function makeSender(): MessageSender {
   return {
@@ -32,7 +44,14 @@ function makeSender(): MessageSender {
 }
 
 describe('handleClear', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // clearAllMocks resets call state but preserves mockReturnValue, so
+    // re-prime the active-state probes back to "nothing active" defaults.
+    const { hasActiveReview } = await import('../../reviews/orchestrator.js');
+    (hasActiveReview as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    getActivePlanningSessionMock.mockReturnValue(null);
+  });
 
   it('sends "No active session to clear." when no session exists', async () => {
     getSessionMock.mockReturnValue(null);
@@ -77,5 +96,70 @@ describe('handleClear', () => {
     expect(getSessionMock).toHaveBeenCalledWith(chatId, 'telegram');
     expect(deleteSessionMock).toHaveBeenCalledWith(chatId, 'telegram');
     expect(sender.send).toHaveBeenCalledWith(chatId, 'Session cleared.');
+  });
+
+  it('abandons planning and surfaces the active-review note when both are live', async () => {
+    // Planning + review both active — abandon planning but warn that the review
+    // still needs /fresh, so the user is not left guessing about review state.
+    const { hasActiveReview } = await import('../../reviews/orchestrator.js');
+    (hasActiveReview as unknown as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    getSessionMock.mockReturnValue(null);
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-xyz',
+      chatId: 789,
+      claudeSessionId: 'claude-xyz',
+      planning: {
+        status: 'scoping',
+        product: 'jarvis',
+        idea: '',
+        surface: 'chat',
+        history: [],
+        createdAt: new Date().toISOString(),
+      },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+    const sender = makeSender();
+
+    await handleClear(sender, 789, 'telegram');
+
+    expect(abandonActivePlanningSessionMock).toHaveBeenCalledWith(789);
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    expect(reply).toMatch(/planning/i);
+    expect(reply).toMatch(/review/i);
+    expect(reply).toMatch(/fresh/i);
+    (hasActiveReview as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
+
+  it('abandons an active planning session and reports it', async () => {
+    // No chat session — the only active state is a planning session.
+    getSessionMock.mockReturnValue(null);
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-abc',
+      chatId: 456,
+      claudeSessionId: 'claude-abc',
+      planning: {
+        status: 'scoping',
+        product: 'aura',
+        idea: '',
+        surface: 'chat',
+        history: [],
+        createdAt: new Date().toISOString(),
+      },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+    const sender = makeSender();
+
+    await handleClear(sender, 456, 'telegram');
+
+    expect(abandonActivePlanningSessionMock).toHaveBeenCalledWith(456);
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    // Reply must mention the planning session was abandoned.
+    expect(reply).toMatch(/planning/i);
+    expect(reply).toMatch(/abandon/i);
+    // deleteSession should NOT have been called (no chat session existed)
+    expect(deleteSessionMock).not.toHaveBeenCalled();
   });
 });

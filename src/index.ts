@@ -11,6 +11,7 @@ import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
+import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSessions } from './reviews/planning.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
@@ -86,6 +87,17 @@ restoreReviewSessions();
 for (const [, session] of getAllReviewSessions()) {
   markSessionCreated(session.claudeSessionId);
 }
+// Wrap restorePlanningSessions in try/catch matching the recoverSupervisedRuns
+// precedent — a non-ENOENT disk error must not crash boot. Internal try/catch
+// already handles missing/malformed file paths.
+try {
+  restorePlanningSessions();
+} catch (err) {
+  log.error('Planning-session startup restore threw', { error: (err as Error).message });
+}
+for (const [, session] of getAllPlanningSessions()) {
+  markSessionCreated(session.claudeSessionId);
+}
 
 // Start services
 const bot = createBot();
@@ -127,6 +139,7 @@ async function shutdown() {
   await waitForActiveProcesses();
   persistSessions();
   persistReviewSessions();
+  persistPlanningSessions();
   bot.stopPolling();
   server.close();
   await flushLogger();
@@ -140,6 +153,7 @@ process.on('uncaughtException', (err) => {
   log.error('Uncaught exception', { error: err.message, stack: err.stack });
   persistSessions();
   persistReviewSessions();
+  persistPlanningSessions();
   void flushLogger().finally(() => process.exit(1));
 });
 

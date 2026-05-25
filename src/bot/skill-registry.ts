@@ -165,6 +165,17 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
     ],
   },
   {
+    name: 'plan',
+    description: 'Start a Planner conversation scoped to a product — turns a fuzzy idea into an approved spec through Socratic scoping. Pass a product slug to scope immediately.',
+    triggers: [
+      'let\'s plan a project',
+      'plan something for one of my products',
+      'plan a feature',
+      'kick off planning',
+      'I want to scope a new project',
+    ],
+  },
+  {
     name: 'fresh',
     description: 'Save the conversation to the journal and reset the session.',
     triggers: ['start fresh', 'reset the session', 'clear the context'],

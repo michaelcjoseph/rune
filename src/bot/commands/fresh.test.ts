@@ -23,12 +23,18 @@ vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
 
+vi.mock('../../reviews/planning.js', () => ({
+  getActivePlanningSession: vi.fn(() => null),
+  abandonActivePlanningSession: vi.fn(),
+}));
+
 const { getSession, deleteSession } = await import('../../vault/sessions.js');
 const { summarizeSession } = await import('../../ai/claude.js');
 const { appendToJournal } = await import('../../vault/journal.js');
 const { gitCommitAndPush } = await import('../../vault/git.js');
 const { writeVaultFile } = await import('../../vault/files.js');
 const { enqueue } = await import('../../kb/queue.js');
+const { getActivePlanningSession, abandonActivePlanningSession } = await import('../../reviews/planning.js');
 const { parseKBWorthy, saveConversationSource, handleFresh, closeConversation } = await import('./fresh.js');
 
 const writeVaultMock = writeVaultFile as unknown as ReturnType<typeof vi.fn>;
@@ -39,6 +45,8 @@ const deleteSessionMock = deleteSession as unknown as ReturnType<typeof vi.fn>;
 const summarizeMock = summarizeSession as unknown as ReturnType<typeof vi.fn>;
 const appendMock = appendToJournal as unknown as ReturnType<typeof vi.fn>;
 const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
+const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+const abandonActivePlanningSessionMock = abandonActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
 
 describe('bot/commands/fresh', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -328,6 +336,40 @@ describe('bot/commands/fresh', () => {
 
       expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('CLI timeout'));
+    });
+
+    it('abandons an active planning session and exits with confirmation when no chat session exists', async () => {
+      // No chat session — the only active state is a planning session.
+      getSessionMock.mockReturnValue(null);
+      getActivePlanningSessionMock.mockReturnValue({
+        id: 'plan-sess-fresh',
+        chatId: 123,
+        claudeSessionId: 'claude-fresh',
+        planning: {
+          status: 'scoping',
+          product: 'aura',
+          idea: '',
+          surface: 'chat',
+          history: [],
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+        lastActivity: new Date().toISOString(),
+      });
+      const sender = makeSender();
+
+      await handleFresh(sender, 123, 'telegram');
+
+      // Must abandon the planning session
+      expect(abandonActivePlanningSessionMock).toHaveBeenCalledWith(123);
+      // Must send a confirmation mentioning the planning session
+      expect(sender.send).toHaveBeenCalledTimes(1);
+      const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
+      expect(reply).toMatch(/planning/i);
+      // Must NOT try to summarize (no chat session)
+      expect(summarizeMock).not.toHaveBeenCalled();
+      // Must NOT call deleteSession (no chat session to delete)
+      expect(deleteSessionMock).not.toHaveBeenCalled();
     });
   });
 });

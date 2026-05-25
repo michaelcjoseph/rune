@@ -28,12 +28,15 @@ import { handleYearly } from '../commands/yearly.js';
 import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
 import { handleNewProject } from '../commands/new-project.js';
+import { handlePlan } from '../commands/plan.js';
 import { handleLibrarySync } from '../commands/library-sync.js';
 import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
 import { handleLearnList } from '../commands/learn-list.js';
 import { handleCancel } from '../commands/cancel.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
+import { getActivePlanningSession } from '../../reviews/planning.js';
+import { handlePlanningTurn, defaultScopingTurn } from '../../reviews/planning-handler.js';
 import { hasActiveSRSession, handleSRMessage } from '../../study/sr-session.js';
 import { containsURL, handleURLMessage } from './url.js';
 import { isConfigured, getAuthorizationURL, getAccessToken, describeTokenError } from '../../integrations/whoop/client.js';
@@ -88,6 +91,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
   if (text.startsWith('/blog')) return handleBlog(sender, userId, text.slice('/blog'.length).trim());
   if (text.startsWith('/new-project')) return handleNewProject(sender, userId, text.slice('/new-project'.length).trim());
+  if (text === '/plan' || text.startsWith('/plan ')) return handlePlan(sender, userId, text.slice('/plan'.length).trim());
   if (text.startsWith('/library-sync')) return handleLibrarySync(sender, userId);
   // /learn-list must come before /learn so the longer prefix wins.
   if (text.startsWith('/learn-list')) return handleLearnList(sender, userId);
@@ -101,6 +105,14 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/status')) return handleStatus(sender, userId, transport);
   if (text.startsWith('/whoop')) return handleWhoop(sender, userId);
   if (text.startsWith('/start')) return handleStart(sender, userId);
+
+  // Active planning session takes routing priority over the default
+  // conversation thread (analogous to active reviews below). Slash commands
+  // already short-circuited above, so `/plan`, `/clear`, and `/fresh` reach
+  // their handlers; only free-form text falls through here. The planning
+  // handler's reply is surfaced raw — the LLM's question is self-contained
+  // and the spec-proposed transition will be wrapped by A4.4/C6.
+  if (getActivePlanningSession(userId)) return routeToPlanning(sender, userId, text);
 
   // Active review session takes priority over default conversation
   if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
@@ -266,8 +278,33 @@ async function invokeSkill(
     case 'learn-list': return handleLearnList(sender, userId);
     case 'fresh': return handleFresh(sender, userId, transport);
     case 'fresh-full': return handleFreshFull(sender, userId, transport);
+    case 'plan': return handlePlan(sender, userId, args);
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
+  }
+}
+
+/** Drive one turn of an active planning conversation. Surfaces the LLM's
+ *  scoping question (or the spec-proposed reply) verbatim. Failures fall
+ *  back to a clear error message rather than crashing the polling handler. */
+async function routeToPlanning(
+  sender: MessageSender,
+  userId: number,
+  text: string,
+): Promise<void> {
+  sender.startTyping(userId, 'Planning');
+  try {
+    const result = await handlePlanningTurn(
+      { scopingTurn: defaultScopingTurn },
+      userId,
+      text,
+    );
+    await sender.send(userId, result.reply);
+  } catch (err) {
+    log.error('Planning turn exception', { error: (err as Error).message });
+    await sender.send(userId, `Planning error: ${(err as Error).message}`);
+  } finally {
+    sender.stopTyping(userId);
   }
 }
 

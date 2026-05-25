@@ -5,6 +5,7 @@ import { getTimestamp, getTodayDate } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
 import { writeVaultFile } from '../../vault/files.js';
 import { enqueue } from '../../kb/queue.js';
+import { abandonActivePlanningSession, getActivePlanningSession } from '../../reviews/planning.js';
 import { createLogger } from '../../utils/logger.js';
 import type { MessageSender } from '../../transport/sender.js';
 
@@ -85,7 +86,23 @@ export async function handleFresh(
   userId: number,
   transport: Transport,
 ): Promise<void> {
+  // Active planning session is an escape hatch the spec promises (`/clear` or
+  // `/fresh` abandons it). If there's a planning session and no chat session
+  // to summarize, abandon and exit cleanly — don't try to summarize an empty
+  // conversation. If both exist, the planning session is abandoned first and
+  // the normal chat-summary flow continues.
+  const planning = getActivePlanningSession(userId);
   const session = getSession(userId, transport);
+  if (planning && !session) {
+    abandonActivePlanningSession(userId);
+    log.info('Planning session abandoned via /fresh', { userId, transport });
+    await sender.send(userId, 'Planning session abandoned.');
+    return;
+  }
+  if (planning) {
+    abandonActivePlanningSession(userId);
+    log.info('Planning session abandoned via /fresh (chat session also closing)', { userId, transport });
+  }
   if (!session) {
     await sender.send(userId, 'No active conversation to summarize.');
     return;

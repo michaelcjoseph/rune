@@ -696,6 +696,7 @@
             // #cockpit-content dispatches the click.
             const actions = (proj.actions || []).map(action =>
               `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
+                `data-product="${escHtml(product.name)}" ` +
                 `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
             ).join('');
             return `<div class="cockpit-project">` +
@@ -724,15 +725,17 @@
   }
 
   // Cockpit per-project actions. start/continue dispatch /work --auto (gated by the
-  // confirmation modal); enter-planning-mode routes to the chat surface — planning mode is
-  // a conversation there (the Planner, Layer 1, lands in Phase 3).
-  function cockpitAction(slug, action) {
+  // confirmation modal); enter-planning-mode dispatches `/plan <product>` through the chat
+  // surface — the Planner conversation (Layer 1) runs in the chat panel until the dedicated
+  // planning panel (Track C1) lands.
+  function cockpitAction(slug, action, product) {
     if (action === 'enter-planning-mode') {
-      const ta = document.getElementById('message-input');
-      if (ta) {
-        ta.value = `Let's plan the next work on ${slug}.`;
-        ta.focus();
-      }
+      // The Plan button is itself the per-action gate (an explicit click), so dispatching
+      // `/plan <product>` straight through the chat plumbing matches the start/continue
+      // model — no extra confirmation. The chat handler creates the planning session and
+      // routes subsequent messages through the planning handler.
+      if (!product) return;
+      sendMessage(`/plan ${product}`);
       return;
     }
     if (action === 'start' || action === 'continue') {
@@ -748,7 +751,7 @@
   function handleCockpitClick(e) {
     const btn = e.target.closest('.cockpit-action-btn');
     if (!btn) return;
-    cockpitAction(btn.dataset.slug, btn.dataset.action);
+    cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);
   }
 
   // Delegated click handler for the projects-panel run buttons — attached once to the

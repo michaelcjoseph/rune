@@ -65,6 +65,15 @@ vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
 vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
 vi.mock('../commands/new-project.js', () => ({ handleNewProject: vi.fn() }));
 vi.mock('../../reviews/new-project.js', () => ({}));
+vi.mock('../commands/plan.js', () => ({ handlePlan: vi.fn() }));
+vi.mock('../../reviews/planning.js', () => ({
+  getActivePlanningSession: vi.fn(() => null),
+  deletePlanningSession: vi.fn(),
+}));
+vi.mock('../../reviews/planning-handler.js', () => ({
+  handlePlanningTurn: vi.fn(),
+  defaultScopingTurn: vi.fn(),
+}));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
   hasActiveReview: vi.fn(() => false),
@@ -96,6 +105,9 @@ const { handleLearn } = await import('../commands/learn.js');
 const { handleLearnList } = await import('../commands/learn-list.js');
 const { handleCancel } = await import('../commands/cancel.js');
 const { handleNewProject } = await import('../commands/new-project.js');
+const { handlePlan } = await import('../commands/plan.js');
+const { getActivePlanningSession } = await import('../../reviews/planning.js');
+const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
 const { handleStudy } = await import('../commands/study.js');
 const { getSession, createSession } = await import('../../vault/sessions.js');
@@ -119,7 +131,16 @@ function msg(text: string, userId = 42): any {
 }
 
 describe('text handler routing', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks resets call state but preserves mockReturnValue/mockImplementation;
+    // re-prime the active-session probes to their "nothing active" defaults so
+    // tests that override them don't leak into siblings.
+    (getActivePlanningSession as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (handlePlanningTurn as unknown as ReturnType<typeof vi.fn>).mockReset();
+    (hasActiveReview as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (hasActiveSRSession as unknown as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
 
   it('ignores messages from unauthorized users', async () => {
     const sender = mockSender();
@@ -240,6 +261,148 @@ describe('text handler routing', () => {
   it('routes /new-project with topic args', async () => {
     await handleTextMessage(mockSender(), msg('/new-project email digest feature'));
     expect(handleNewProject).toHaveBeenCalledWith(expect.anything(), 100, 'email digest feature');
+  });
+
+  it('routes /plan to handlePlan with empty args', async () => {
+    await handleTextMessage(mockSender(), msg('/plan'));
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, '');
+  });
+
+  it('routes /plan with product arg to handlePlan', async () => {
+    await handleTextMessage(mockSender(), msg('/plan aura'));
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'aura');
+  });
+
+  it('routes /plan with multi-word arg to handlePlan', async () => {
+    await handleTextMessage(mockSender(), msg('/plan jarvis 08-intent-layer'));
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'jarvis 08-intent-layer');
+  });
+
+  it('active planning session takes routing priority over default conversation', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-001',
+      chatId: 100,
+      claudeSessionId: 'claude-001',
+      planning: { status: 'scoping', product: 'aura', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+    handlePlanningTurnMock.mockResolvedValue({ reply: 'What is the core problem you want to solve?', status: 'scoping' });
+    getSessionMock.mockReturnValue(null);
+
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('I want to build a new feature'));
+
+    expect(handlePlanningTurnMock).toHaveBeenCalled();
+    // Default conversation path must NOT have been taken
+    expect(askMock).not.toHaveBeenCalled();
+    // The planning turn reply should have been sent to the user
+    expect(sender.send).toHaveBeenCalledWith(100, 'What is the core problem you want to solve?');
+  });
+
+  it('active planning session does not affect routing for other users', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+
+    // Planning session exists for chatId 100 only — return null for chatId 999
+    getActivePlanningSessionMock.mockImplementation((chatId: number) => {
+      if (chatId === 100) {
+        return {
+          id: 'plan-sess-001',
+          chatId: 100,
+          claudeSessionId: 'claude-001',
+          planning: { status: 'scoping', product: 'aura', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+          createdAt: new Date().toISOString(),
+          lastActivity: new Date().toISOString(),
+        };
+      }
+      return null;
+    });
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'conv-sess-999',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello from other user',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'reply to other user', error: null });
+
+    // Message from chatId 999 (a different user) — override chat.id
+    const msgFrom999 = { chat: { id: 999 }, from: { id: 42 }, text: 'hello from other user' };
+    await handleTextMessage(mockSender(), msgFrom999);
+
+    // Planning turn must NOT have been invoked for the other user's message
+    expect(handlePlanningTurnMock).not.toHaveBeenCalled();
+    // Normal conversation flow ran for chatId 999
+    expect(askMock).toHaveBeenCalled();
+  });
+
+  it('slash commands short-circuit before active-planning-session check', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+
+    // Even with an active planning session, /fresh routes to handleFresh
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-002',
+      chatId: 100,
+      claudeSessionId: 'claude-002',
+      planning: { status: 'scoping', product: 'jarvis', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+
+    await handleTextMessage(mockSender(), msg('/fresh'));
+
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
+    expect(handlePlanningTurnMock).not.toHaveBeenCalled();
+  });
+
+  it('/clear short-circuits before active-planning-session check', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-003',
+      chatId: 100,
+      claudeSessionId: 'claude-003',
+      planning: { status: 'scoping', product: 'jarvis', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+
+    await handleTextMessage(mockSender(), msg('/clear'));
+
+    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100, 'telegram');
+    expect(handlePlanningTurnMock).not.toHaveBeenCalled();
+  });
+
+  it('active planning session does not block /plan itself — /plan jarvis routes to handlePlan', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+
+    // An existing active session does not stop /plan from re-routing to handlePlan
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-004',
+      chatId: 100,
+      claudeSessionId: 'claude-004',
+      planning: { status: 'scoping', product: 'aura', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+
+    await handleTextMessage(mockSender(), msg('/plan jarvis'));
+
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'jarvis');
+    expect(handlePlanningTurnMock).not.toHaveBeenCalled();
   });
 
   it('routes /syllabus to handleSyllabus', async () => {

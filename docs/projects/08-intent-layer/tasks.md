@@ -246,7 +246,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] **(agent)** `src/reviews/planning.ts` — planning-session state alongside the existing review sessions; JSON persistence under `logs/planning-sessions.json`.
 - [x] **(agent)** Multi-turn Socratic handler — asks scoping questions, surfaces assumptions, proposes a `SpecArtifact` when the LLM judges scoping done. *Orchestration tested against mock scopingTurn; production `defaultScopingTurn` wraps askClaudeWithContext with a system prompt that asks for a question or a fenced spec-artifact JSON. Live verification refines the prompt + marker.*
-- [ ] **(agent)** `/plan` Telegram command + the cockpit's existing `enter-planning-mode` action.
+- [x] **(agent)** `/plan` Telegram command + the cockpit's existing `enter-planning-mode` action.
 - [ ] **(agent)** On user approval, call `runAgent('project-setup-writer', buildSetupWriterBrief(session))` — scaffolds `docs/projects/<NN-slug>/{spec.md, tasks.md, test-plan.md}`.
 - [ ] **(agent)** `abandonPlan` on `/clear` or session expiry — scoping wrote no files, so cleanup is a state-machine transition.
 
