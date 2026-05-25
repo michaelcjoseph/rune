@@ -307,8 +307,8 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 #### B4. `ideas.md` baseline + reader
 
 - [x] **(agent)** Create `docs/projects/ideas.md` with a header and a placeholder for the loop's appended bullets. *File already existed with user-authored entries; added `# Project Ideas` header, organized existing entries under `## User-authored`, added `## Loop-filed` section with an HTML-comment marker the B4.2 reader will use to scope parsing — keeps user-authored ideas and loop-filed ideas in distinct sections so dedupe never confuses them.*
-- [ ] **(agent)** `src/intent/observation-ideas-io.ts:readFiledIdeas(): ProjectIdea[]` — regex-parse each bullet (matching `formatIdeasMarkdown`'s shape), derive `id` the same way the triage agent does so dedupe matches.
-- [ ] **(agent)** `appendFiledIdeas(markdown)` — append `formatIdeasMarkdown`'s output to the file.
+- [x] **(agent)** `src/intent/observation-ideas-io.ts:readFiledIdeas(): ProjectIdea[]` — regex-parse each bullet (matching `formatIdeasMarkdown`'s shape), derive `id` the same way the triage agent does so dedupe matches. *Scopes parse to lines BETWEEN `## Loop-filed` and the next H2, so user-authored bullets above the section are never read. Bullet regex pins the em-dash specifically (matches formatIdeasMarkdown's output, rejects hyphen-minus typos). `deriveIdeaId` is exported and applies the same construction rule as the triage agent prompt verbatim — lowercase, non-alphanumeric runs → single hyphen, trim, truncate to 60. Tests pin the rule with the same examples the agent prompt uses.*
+- [x] **(agent)** `appendFiledIdeas(markdown)` — append `formatIdeasMarkdown`'s output to the file. *Append goes at the END of the `## Loop-filed` section (after any prior loop entries and the HTML-comment marker), so the section grows append-only. Empty markdown is a no-op (quiet-pass safety). Missing Loop-filed section throws — surfaces a misconfigured file rather than silently writing to an unstructured one.*
 
 #### B5. Nightly observation step
 
