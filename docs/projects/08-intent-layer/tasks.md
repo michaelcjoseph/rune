@@ -331,9 +331,9 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Write the test suite for the **cockpit UX** — test-plan.md §19
   (planning panel state transitions, approval inbox behavior, in-flight
   run progress accuracy). *Test-suite-as-deliverable (deviation #1): `src/server/cockpit-ux.test.ts` written test-first ahead of C1/C2/C3 impls. Three describe blocks pin the C1 POST /api/planning/{start,turn,approve,abandon} endpoints, the C2 GET /api/approvals + POST /api/approvals/:id/{approve,reject} endpoints, and the C3 `CockpitProject.progress` shape. 11 tests fail cleanly (404 fallthrough for missing endpoints, undefined progress field) — red is the success condition until C1-C3 ship. The DOM-side rendering tests are out of scope for this unit suite; the integration-verification check at the bottom of test-plan §19 covers them.*
-- [ ] Write the test suite for the **Telegram UX** — test-plan.md §20
+- [x] Write the test suite for the **Telegram UX** — test-plan.md §20
   (`/plan` command flow, engine notification format per terminal class,
-  inline-button approval round-trip).
+  inline-button approval round-trip). *Test-suite-as-deliverable: `src/transport/telegram-ux.test.ts` written test-first ahead of C5/C6. Three describe blocks: /plan command (C4 — already shipped via A4.3, 6 rows marked as `.todo` documentation), engine notifications (C5 — gen-eval-loop terminal events emit structured ✅ merged / ⏸ blocked / 💥 failed messages with rounds + cross-model verdict + short id, distinct from the generic work-run summary), approval inline-buttons (C6 — `sender.send(userId, prompt, {approval: {...}})` renders as inline-keyboard via bot.sendMessage with reply_markup, each button's callback_data carries its option value). 5 red (C5 format + C6 keyboard render) until C5/C6 impls land.*
 - [ ] Write the test suite for **journal-to-intent end-to-end** —
   test-plan.md §21 (tagged journal note → proposal → approval →
   synthesis into vault product file + roadmap into product repo).
