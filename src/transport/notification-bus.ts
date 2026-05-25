@@ -33,6 +33,16 @@ export type BusAgentEvent = BusAgentEventStart | BusAgentEventEnd;
 export interface BusMutationEvent {
   kind: 'mutation-event';
   mutationId: string;
+  /** The descriptor's kind (e.g. `'work-run'`, `'gen-eval-loop'`). Surfaced
+   *  on the event so subscribers like TelegramSender can specialize their
+   *  rendering per mutation kind without re-reading the registry — Phase 6
+   *  C5 uses this to emit ✅/⏸/💥 structured notifications for
+   *  gen-eval-loop terminal events while keeping the generic
+   *  `/work --auto on <slug>` summary for everything else. Imported as
+   *  `string` (not `MutationKind`) to keep `notification-bus.ts` free of
+   *  the mutations-pipeline circular dependency; the publisher in
+   *  `src/transport/mutations.ts` is the one that sets it correctly. */
+  mutationKind: string;
   subKind: 'log' | 'progress' | 'output' | 'completed' | 'failed';
   ts: string;
   data?: unknown;

@@ -14,6 +14,61 @@ interface TrackerEntry {
 
 const TRACKER_EDIT_THROTTLE_MS = 10_000;
 
+/** Short mutation-id suffix surfaced in C5 messages so the user can correlate
+ *  a Telegram notification with the cockpit/log entry. The full id is a
+ *  randomUUID; the first 8 chars carry plenty of entropy for a coarse
+ *  cross-reference. */
+function shortMutationId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** Phase 6 C5: structured terminal message for a gen-eval-loop mutation.
+ *  Three branches by `(subKind, data)`:
+ *    - completed                              → `✅ … merged to main` + rounds + cross-model verdict
+ *    - failed AND failedEvaluatorRounds set   → `⏸ … blocked on you` (escalated by the loop)
+ *    - failed AND failedEvaluatorRounds unset → `💥 … failed` (hard failure — applier crash etc.) */
+function formatGenEvalLoopTerminal(event: BusMutationEvent): string {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const product = String(data['product'] ?? '');
+  const project = String(data['project'] ?? '');
+  const id = shortMutationId(event.mutationId);
+  // Use shortMutationId for the target fallback too — keeps both id-derived
+  // strings consistent if the formatter ever changes how it shortens.
+  const target = product && project ? `${product}/${project}` : (product || project || id);
+  if (event.subKind === 'completed') {
+    const rounds = typeof data['rounds'] === 'number' ? (data['rounds'] as number) : 1;
+    const adj = (data['adjudication'] ?? {}) as Record<string, unknown>;
+    const verdict = String(adj['verdict'] ?? 'pass').toUpperCase();
+    const genProvider = adj['generatorProvider'];
+    const evalProvider = adj['evaluatorProvider'];
+    // Cross-model when both providers exist and differ; same-model otherwise.
+    const crossModel = !!genProvider && !!evalProvider && genProvider !== evalProvider;
+    const verdictLine = crossModel ? `cross-model ${verdict}` : `single-model ${verdict}`;
+    return `✅ ${target} merged to main · ${rounds} rounds · ${verdictLine} · id=${id}`;
+  }
+  // subKind === 'failed'
+  const failed = data['failedEvaluatorRounds'];
+  const cap = data['cap'];
+  const reason = String(data['reason'] ?? 'unknown');
+  if (typeof failed === 'number' && typeof cap === 'number') {
+    // Escalated by the evaluator-round cap — user picks up.
+    return `⏸ ${target} blocked on you · ${failed}/${cap} failed evaluator rounds · ${reason} · id=${id}`;
+  }
+  // Hard failure — worktree create, applier crash, etc.
+  return `💥 ${target} failed · ${reason} · id=${id}`;
+}
+
+/** Legacy generic format for non-gen-eval-loop mutations — unchanged behavior. */
+function formatGenericTerminal(event: BusMutationEvent): string {
+  const data = event.data as Record<string, unknown> | undefined;
+  const slug = String(data?.['slug'] ?? data?.['projectSlug'] ?? event.mutationId.slice(0, 8));
+  const durationSec = typeof data?.['durationMs'] === 'number' ? data['durationMs'] / 1000 : null;
+  const durStr = durationSec !== null ? ` in ${durationSec.toFixed(1)}s` : '';
+  return event.subKind === 'completed'
+    ? `✅ /work --auto on ${slug} finished${durStr}`
+    : `❌ /work --auto on ${slug} failed: ${String(data?.['reason'] ?? 'unknown')}`;
+}
+
 /** TelegramSender implements MessageSender by delegating to the existing telegram
  *  client helpers. Maintains per-user typing timers so callers just call
  *  startTyping/stopTyping with a userId rather than managing interval handles. */
@@ -45,16 +100,16 @@ export class TelegramSender implements MessageSender {
     this.typingTimers.delete(userId);
   }
 
-  /** Send a short summary to Telegram on mutation completed/failed. Ignores output/log/progress. */
+  /** Send a short summary to Telegram on mutation completed/failed. Ignores output/log/progress.
+   *  Phase 6 C5 specializes `gen-eval-loop` terminal events into three
+   *  structured formats (✅ merged / ⏸ blocked on you / 💥 failed) carrying
+   *  rounds, cross-model verdict, and a short id. Non-gen-eval-loop
+   *  mutations keep the existing generic `/work --auto` format. */
   onMutationEvent(event: BusMutationEvent): void {
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
-    const data = event.data as Record<string, unknown> | undefined;
-    const slug = String(data?.['slug'] ?? data?.['projectSlug'] ?? event.mutationId.slice(0, 8));
-    const durationMs = typeof data?.['durationMs'] === 'number' ? data['durationMs'] as number : null;
-    const durStr = durationMs !== null ? ` in ${(durationMs / 1000).toFixed(1)}s` : '';
-    const text = event.subKind === 'completed'
-      ? `✅ /work --auto on ${slug} finished${durStr}`
-      : `❌ /work --auto on ${slug} failed: ${String(data?.['reason'] ?? 'unknown')}`;
+    const text = event.mutationKind === 'gen-eval-loop'
+      ? formatGenEvalLoopTerminal(event)
+      : formatGenericTerminal(event);
     void this.send(event.userId, text).catch((err: unknown) => {
       log.error('TelegramSender.onMutationEvent send failed', { error: err instanceof Error ? err.message : String(err) });
     });

@@ -219,6 +219,10 @@ async function startApply(
       (_bus ?? noopBus).publish({
         kind: 'mutation-event',
         mutationId: event.mutationId,
+        // Phase 6 C5: surface the descriptor kind on every event so
+        // subscribers (TelegramSender) can specialize rendering per
+        // mutation kind without a registry round-trip.
+        mutationKind: descriptor.kind,
         subKind: event.kind,
         ts: event.ts,
         data: event.data,

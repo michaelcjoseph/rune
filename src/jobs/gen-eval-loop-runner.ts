@@ -520,6 +520,12 @@ export async function* runGenEvalLoop(
     ...(data !== undefined ? { data } : {}),
   });
 
+  // Phase 6 C5: every terminal event (completed / failed) carries the
+  // product+project identity so the Telegram formatter can render
+  // `<product>/<project>` instead of degrading to a UUID fragment. Spread
+  // this into the data object of every terminal yield below.
+  const identity = { product: opts.payload.product, project: opts.payload.project };
+
   // Phase 6 A7.1: resolve Generator and Evaluator (model, provider) at loop
   // start and emit a 'resolution' progress event. The cockpit reads it to
   // render the per-round model line; A7.2 builds the Adjudication from the
@@ -544,7 +550,7 @@ export async function* runGenEvalLoop(
         productsConfigPath: opts.productsConfigPath,
       });
     } catch (err) {
-      yield baseEvent('failed', { reason: `worktree create failed: ${(err as Error).message}` });
+      yield baseEvent('failed', { ...identity, reason: `worktree create failed: ${(err as Error).message}` });
       return;
     }
     // TODO(v2): cancel-check between createWorktree and first round — today
@@ -556,7 +562,7 @@ export async function* runGenEvalLoop(
     let roundNum = 0;
     while (true) {
       if (opts.cancel()) {
-        yield baseEvent('failed', { reason: 'cancelled before next round', rounds: rounds.length });
+        yield baseEvent('failed', { ...identity, reason: 'cancelled before next round', rounds: rounds.length });
         return;
       }
       roundNum++;
@@ -567,6 +573,7 @@ export async function* runGenEvalLoop(
         exitCode = await spawners.runWorkAuto(sandbox, { productsConfigPath: opts.productsConfigPath });
       } catch (err) {
         yield baseEvent('failed', {
+          ...identity,
           reason: `/work --auto threw on round ${roundNum}: ${(err as Error).message}`,
         });
         return;
@@ -580,6 +587,7 @@ export async function* runGenEvalLoop(
           verdict = await spawners.runReview(sandbox, { productsConfigPath: opts.productsConfigPath });
         } catch (err) {
           yield baseEvent('failed', {
+            ...identity,
             reason: `/review threw on round ${roundNum}: ${(err as Error).message}`,
           });
           return;
@@ -614,6 +622,10 @@ export async function* runGenEvalLoop(
         // event with the contract's reason — the run holds rather than
         // degrading to an autonomous merge that skipped a contract gate.
         const adjudication = buildAdjudicationFromResolution(resolution, verdict);
+        // Captured once so the five yield sites below stop repeating the
+        // conditional spread — `adjObj` is `{}` when adjudication is null
+        // and `{adjudication}` otherwise.
+        const adjObj = adjudication !== null ? { adjudication } : {};
         const merge = evaluateMergeContract({
           adjudication,
           testsPass: true,
@@ -626,8 +638,9 @@ export async function* runGenEvalLoop(
         });
         if (!merge.merge) {
           yield baseEvent('failed', {
+            ...identity,
             reason: `merge contract held: ${merge.reason}`,
-            ...(adjudication !== null ? { adjudication } : {}),
+            ...adjObj,
             rounds: rounds.length,
             failedEvaluatorRounds: outcome.failedEvaluatorRounds,
           });
@@ -640,7 +653,7 @@ export async function* runGenEvalLoop(
         // happened but push failed" or vice versa.
         yield baseEvent('progress', {
           kind: 'merge-ready',
-          ...(adjudication !== null ? { adjudication } : {}),
+          ...adjObj,
         });
         // Wrap in try/catch so a synchronous throw from getProductConfig
         // (e.g., products.json edited between mutation creation and merge)
@@ -654,8 +667,9 @@ export async function* runGenEvalLoop(
           });
         } catch (err) {
           yield baseEvent('failed', {
+            ...identity,
             reason: `mergeBranch threw: ${(err as Error).message}`,
-            ...(adjudication !== null ? { adjudication } : {}),
+            ...adjObj,
             rounds: rounds.length,
             failedEvaluatorRounds: outcome.failedEvaluatorRounds,
             branch,
@@ -664,28 +678,41 @@ export async function* runGenEvalLoop(
         }
         if (!mergeResult.ok) {
           yield baseEvent('failed', {
+            ...identity,
             reason: `merge failed: ${mergeResult.error}`,
-            ...(adjudication !== null ? { adjudication } : {}),
+            ...adjObj,
             rounds: rounds.length,
             failedEvaluatorRounds: outcome.failedEvaluatorRounds,
             branch,
           });
           return;
         }
+        // Phase 6 C5: include `adjudication` on the `completed` event so the
+        // Telegram formatter can render the cross-model verdict line. Without
+        // this the message would degrade to `single-model PASS` even when the
+        // run was cross-model.
         yield baseEvent('completed', {
+          ...identity,
           rounds: rounds.length,
           failedEvaluatorRounds: outcome.failedEvaluatorRounds,
           branch,
+          ...adjObj,
         });
         return;
       }
       if (outcome.status === 'escalated') {
+        // Phase 6 C5: include `cap` as a discrete field so the Telegram
+        // formatter can render the `N/cap` blocked-on-you line. Cap is also
+        // embedded in `reason` for human readability — the discrete field
+        // is for the formatter's branch guard.
         yield baseEvent('failed', {
+          ...identity,
           reason:
             `escalated after ${outcome.failedEvaluatorRounds} failed evaluator rounds ` +
             `(cap=${cap})`,
           rounds: rounds.length,
           failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+          cap,
         });
         return;
       }

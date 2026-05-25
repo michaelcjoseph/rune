@@ -423,11 +423,25 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C5. Telegram engine notifications
 
-- [ ] **(agent)** Extend `TelegramSender.onMutationEvent()` to detect
+- [x] **(agent)** Extend `TelegramSender.onMutationEvent()` to detect
   terminal events for `gen-eval-loop` mutations and emit user-friendly
   notification messages per the formats in spec.md §"Telegram UX in
   Detail" (✅ merged / ⏸ blocked on you / 💥 failed). The existing
   generic tracker message stays; this adds the structured terminal one.
+  *Branches on `event.mutationKind === 'gen-eval-loop'` (new required
+  field on `BusMutationEvent`, populated by `mutations.ts` from
+  `descriptor.kind`). Three structured formats: completed → `✅
+  <product>/<project> merged to main · N rounds · cross-model PASS ·
+  id=<8>`; escalated failed (failedEvaluatorRounds + cap both set) →
+  `⏸ blocked on you · N/cap failed evaluator rounds · <reason> ·
+  id=<8>`; hard failed → `💥 failed · <reason> · id=<8>`. The
+  gen-eval-loop runner now emits `product`, `project`, `cap`, and
+  `adjudication` on its terminal events so the formatter renders the
+  full structured message at runtime — the test fixtures already
+  supplied these fields, but the runner wasn't, so without this fix
+  the messages would have degraded to UUID-fragment-with-no-context
+  in production. Non-gen-eval-loop mutations keep the legacy
+  `/work --auto on <slug>` format (regression test green).*
 - [ ] **(agent + user)** Live verification — run a gen-eval-loop
   end-to-end and confirm the notification format reads cleanly on the
   user's Telegram client; refine wording in this commit.
