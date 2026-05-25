@@ -261,7 +261,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] **(agent)** Add a `codex` alias to `policies/model-policy.json` (provider `openai`, capability `coding`, status `preferred`).
 - [x] **(agent)** Set `roleDefaults.evaluator = "codex"` so an autonomous Evaluator picks a cross-provider model by default.
-- [ ] **(agent + user)** Flip `evaluatorDistinctFromGenerator` to `true` — coordinated with the Codex executor going live (do this WITH step A5, not before, or the constraint blocks every existing autonomous review path). The user approves the cutover.
+- [x] **(agent + user)** Flip `evaluatorDistinctFromGenerator` to `true` — coordinated with the Codex executor going live (do this WITH step A5, not before, or the constraint blocks every existing autonomous review path). The user approves the cutover. *User approved the cutover; one-line change in `policies/model-policy.json:43`. The runtime impact is contained: `resolveLoopModels` (the only autonomous caller of `resolveModel({role: 'evaluator', ...})`) already passes `distinctFromProvider: generator.provider`, so existing call paths are intact. Failure mode shifts from "silently degrades to same-provider evaluator" to "evaluator resolves to null, merge contract holds the run, user sees ⏸ blocked-on-you in Telegram" — the intended fail-closed behavior. Full vitest suite (2721 tests) stays green; test fixtures construct synthetic policies that don't read the live file.*
 
 #### A7. Cross-model adjudication wiring (Layer 2 upgrade)
 

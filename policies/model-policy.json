@@ -40,5 +40,5 @@
   "roleDefaults": {
     "evaluator": "codex"
   },
-  "evaluatorDistinctFromGenerator": false
+  "evaluatorDistinctFromGenerator": true
 }
