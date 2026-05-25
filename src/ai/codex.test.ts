@@ -1,0 +1,300 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFileSync: vi.fn(), spawn: vi.fn() };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn() };
+});
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
+vi.mock('../config.js', () => ({
+  default: { CLAUDE_TIMEOUT_MS: 600_000 },
+  PROJECT_ROOT: '/test/project',
+}));
+
+vi.mock('./claude.js', () => ({
+  registerActiveProcess: vi.fn(),
+  unregisterActiveProcess: vi.fn(),
+}));
+
+// Imports are hoisted after mocks resolve — use dynamic import to pick up mocked modules.
+const { execFileSync, spawn } = await import('node:child_process');
+const { existsSync } = await import('node:fs');
+const { registerActiveProcess, unregisterActiveProcess } = await import('./claude.js');
+
+const execFileSyncMock = execFileSync as unknown as ReturnType<typeof vi.fn>;
+const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+const existsSyncMock = existsSync as unknown as ReturnType<typeof vi.fn>;
+const registerMock = registerActiveProcess as unknown as ReturnType<typeof vi.fn>;
+const unregisterMock = unregisterActiveProcess as unknown as ReturnType<typeof vi.fn>;
+
+/** Build a fake child process that emits stdout/stderr/close/error events. */
+function createChild(opts: {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+  signal?: string | null;
+  /** If true, never emits close (simulates a hung process). */
+  neverClose?: boolean;
+} = {}) {
+  const child = new EventEmitter() as any;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  if (!opts.neverClose) {
+    const { stdout, stderr, code = 0, signal = null } = opts;
+    process.nextTick(() => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+      child.emit('close', code, signal);
+    });
+  }
+  return child;
+}
+
+// ─── resolveCodexPath tests ──────────────────────────────────────────────────
+// These tests import `resolveCodexPath` directly. Because CODEX_BIN is resolved
+// at module load time, we test the function in isolation via a fresh import reset
+// or by inspecting the exported function directly if the implementation allows
+// calling it again.  For the tests that need different execFileSync/existsSync
+// behavior we re-mock before importing.
+
+describe('ai/codex', () => {
+  beforeEach(() => {
+    execFileSyncMock.mockReset();
+    spawnMock.mockReset();
+    existsSyncMock.mockReset();
+    registerMock.mockReset();
+    unregisterMock.mockReset();
+  });
+
+  // ── resolveCodexPath ───────────────────────────────────────────────────────
+
+  describe('resolveCodexPath', () => {
+    it('returns trimmed path when which codex succeeds', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { resolveCodexPath } = await import('./codex.js');
+      const result = resolveCodexPath();
+      expect(result).toBe('/opt/homebrew/bin/codex');
+    });
+
+    it('getCodexBin() lazily resolves and returns the trimmed which output', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { getCodexBin } = await import('./codex.js');
+      expect(getCodexBin()).toBe('/opt/homebrew/bin/codex');
+    });
+
+    it('isCodexAvailable() returns true when resolution succeeds', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const { isCodexAvailable } = await import('./codex.js');
+      expect(isCodexAvailable()).toBe(true);
+    });
+
+    it('isCodexAvailable() returns false when neither which nor fallback finds codex', async () => {
+      // Force a fresh evaluation by resetting module cache, since the lazy
+      // CODEX_BIN cache persists across imports otherwise.
+      vi.resetModules();
+      execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
+      existsSyncMock.mockReturnValue(false);
+      const { isCodexAvailable } = await import('./codex.js');
+      expect(isCodexAvailable()).toBe(false);
+    });
+
+    it('falls back to /opt/homebrew/bin/codex when which throws and fallback exists', async () => {
+      execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
+      existsSyncMock.mockImplementation((p: string) => p === '/opt/homebrew/bin/codex');
+      const { resolveCodexPath } = await import('./codex.js');
+      const result = resolveCodexPath();
+      expect(result).toBe('/opt/homebrew/bin/codex');
+    });
+
+    it('throws a "Codex CLI not found" error when which throws and fallback is absent', async () => {
+      execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
+      existsSyncMock.mockReturnValue(false);
+      const { resolveCodexPath } = await import('./codex.js');
+      expect(() => resolveCodexPath()).toThrow(/codex.*not found/i);
+    });
+  });
+
+  // ── runCodex ──────────────────────────────────────────────────────────────
+
+  describe('runCodex', () => {
+    it('happy path: collects stdout and returns exitCode 0', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'collected stdout', code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result).toEqual({ text: 'collected stdout', error: null, exitCode: 0 });
+    });
+
+    it('non-zero exit: returns partial stdout and error from stderr', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'partial', stderr: 'error from codex', code: 1 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result.text).toBe('partial');
+      expect(result.error).toBeTruthy();
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('non-zero exit with no stderr: error contains exit code', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ code: 2 }));
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result.error).toMatch(/2/);
+      expect(result.exitCode).toBe(2);
+    });
+
+    it('spawn error event: returns error message and undefined exitCode', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      // Emit error synchronously inside spawnMock so it fires after runCodex
+      // attaches its listener (avoids an unhandled EventEmitter error).
+      spawnMock.mockImplementation(() => {
+        process.nextTick(() => child.emit('error', new Error('ENOENT: codex not found')));
+        return child;
+      });
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt');
+
+      expect(result.text).toBeNull();
+      expect(result.error).toMatch(/ENOENT/i);
+      expect(result.exitCode).toBeUndefined();
+    });
+
+    it('timeout/SIGTERM: kills the child and returns a timeout error', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn((_signal: string) => {
+        // Simulate child reacting to SIGTERM by closing
+        process.nextTick(() => child.emit('close', null, 'SIGTERM'));
+      });
+      spawnMock.mockReturnValue(child);
+
+      const { runCodex } = await import('./codex.js');
+      const result = await runCodex('my prompt', { timeoutMs: 100 });
+
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(result.error).toMatch(/timeout|timed out/i);
+    });
+
+    it('registers the child via registerActiveProcess and unregisters on close', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = createChild({ stdout: 'ok', code: 0 });
+      spawnMock.mockReturnValue(child);
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt');
+
+      expect(registerMock).toHaveBeenCalledWith(child);
+      expect(unregisterMock).toHaveBeenCalledWith(child);
+    });
+
+    it('always includes --ephemeral and --skip-git-repo-check in spawn args', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--ephemeral');
+      expect(args).toContain('--skip-git-repo-check');
+    });
+
+    it('passes -m flag when model option is provided', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { model: 'o4-mini' });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('-m');
+      expect(args[args.indexOf('-m') + 1]).toBe('o4-mini');
+    });
+
+    it('passes -s flag when sandboxMode option is provided', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { sandboxMode: 'read-only' });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('-s');
+      expect(args[args.indexOf('-s') + 1]).toBe('read-only');
+    });
+
+    it('passes all three optional flags together', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', {
+        cwd: '/custom/dir',
+        model: 'o4-mini',
+        sandboxMode: 'workspace-write',
+      });
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('-m');
+      expect(args[args.indexOf('-m') + 1]).toBe('o4-mini');
+      expect(args).toContain('-s');
+      expect(args[args.indexOf('-s') + 1]).toBe('workspace-write');
+      // --cd flag OR cwd option: check at least one conveys the custom dir
+      const hasCdFlag = args.includes('--cd') && args[args.indexOf('--cd') + 1] === '/custom/dir';
+      const spawnOpts = spawnMock.mock.calls[0]![2] as { cwd?: string };
+      const hasCwdOpt = spawnOpts?.cwd === '/custom/dir';
+      expect(hasCdFlag || hasCwdOpt).toBe(true);
+    });
+
+    it('prompt is the final positional arg to codex exec', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      const prompt = 'write me a hello world program';
+      await runCodex(prompt);
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args[args.length - 1]).toBe(prompt);
+    });
+
+    it('defaults cwd to PROJECT_ROOT when opts.cwd is omitted', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const spawnOpts = spawnMock.mock.calls[0]![2] as { cwd?: string };
+      // Implementation may use --cd flag or spawn cwd option; both are valid
+      const hasCdFlag = args.includes('--cd') && args[args.indexOf('--cd') + 1] === '/test/project';
+      const hasCwdOpt = spawnOpts?.cwd === '/test/project';
+      expect(hasCdFlag || hasCwdOpt).toBe(true);
+    });
+  });
+});

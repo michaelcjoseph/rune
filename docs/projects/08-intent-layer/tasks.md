@@ -252,7 +252,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### A5. Codex executor integration (Layer 5)
 
-- [ ] **(agent)** `src/ai/codex.ts` mirroring `src/ai/claude.ts` — `CODEX_BIN` resolution, `runCodex(prompt, opts)` spawning `codex exec`, register/unregister-active-process hooks for graceful shutdown.
+- [x] **(agent)** `src/ai/codex.ts` mirroring `src/ai/claude.ts` — `CODEX_BIN` resolution, `runCodex(prompt, opts)` spawning `codex exec`, register/unregister-active-process hooks for graceful shutdown.
 - [ ] **(agent)** `dispatchToExecutor(handoff)` in `src/intent/dispatch-runtime.ts` — compile the agent per target, spawn the executor, call `recordDispatch`, append to `logs/dispatch-log.jsonl`.
 - [ ] **(agent)** Provider-availability check — a `which codex` + login-status probe; on absence return a `{status:'failed', failureReason:'codex executor unavailable'}` `DispatchResult` so the merge contract's null-adjudication path applies cleanly.
 - [ ] **(user)** Confirm `! codex login` is in place before the first cross-model run (linked from the User-side prerequisites above).
