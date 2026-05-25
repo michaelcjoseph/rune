@@ -29,6 +29,7 @@ const AGENT_LABELS: Record<string, string> = {
   'sr-question-generator': 'Generating review question',
   'sr-grader':             'Grading review answer',
   'observation-diarizer':  'Diarizing observation signals',
+  'observation-triage':    'Triaging observation signal',
   // Vault-resident agents (loaded from $VAULT_DIR/.claude/agents/)
   'journal-scanner':       'Scanning journals',
   'project-scanner':       'Scanning projects',
