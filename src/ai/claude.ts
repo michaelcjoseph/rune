@@ -13,6 +13,7 @@ import { getDateContext } from '../utils/time.js';
 // context/ layer to break the cycle.
 import { buildLearningsPrompt } from '../vault/learnings.js';
 import { buildVoicePromptSection } from '../vault/voice.js';
+import { appendInteraction } from '../utils/observation-log.js';
 // ai/ → intent/: runAgent resolves its model through the model selection policy.
 // model-policy.ts is a leaf (node:fs + logger only) — no import cycle.
 import { resolveModel, loadModelPolicy } from '../intent/model-policy.js';
@@ -665,6 +666,21 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     appendFileSync(join(config.LOGS_DIR, 'agent-runs.jsonl'), entry + '\n');
   } catch {
     // Non-fatal — snapshot will just show empty recent runs
+  }
+  // Phase 6 B1.4 — also emit an InteractionLogRecord for the observation
+  // loop's interaction sensor. Distinct from agent-runs.jsonl (which is the
+  // snapshot/visualization source); the observation log is the loop's
+  // sensor signal. Detail carries only structured metadata — agent name +
+  // duration — never the prompt body.
+  try {
+    appendInteraction({
+      ts: startedAt,
+      kind: 'agent-call',
+      outcome: status === 'success' ? 'success' : 'failure',
+      detail: `agent=${agentName} dur=${durationMs}`,
+    });
+  } catch {
+    // Non-fatal — observation logging is best-effort, same as agent-runs.jsonl
   }
   return result;
 }

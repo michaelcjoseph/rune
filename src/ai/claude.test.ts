@@ -20,6 +20,10 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(() => '/usr/local/bin/claude\n'),
 }));
 
+vi.mock('../utils/observation-log.js', () => ({
+  appendInteraction: vi.fn(),
+}));
+
 const MOCK_AGENT_FILE = `---
 name: wiki-compiler
 model: sonnet
@@ -699,6 +703,55 @@ Body.`);
       const userIdx = prompt.indexOf('ingest this paper');
       expect(userIdx).toBeGreaterThan(dateIdx);
     });
+  });
+
+  // Phase 6 B1.4 — observation-log wiring on runAgent
+  describe('runAgent — observation-log interaction wiring (B1.4)', () => {
+    it('appends a kind:"agent-call" record after a successful run', async () => {
+      const { appendInteraction } = await import('../utils/observation-log.js');
+      const mockAppend = appendInteraction as unknown as ReturnType<typeof vi.fn>;
+      mockAppend.mockClear();
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('agent result') }));
+
+      await runAgent('wiki-compiler', 'do stuff');
+
+      expect(mockAppend).toHaveBeenCalledTimes(1);
+      const record = mockAppend.mock.calls[0]![0] as { kind: string; outcome: string; detail: string };
+      expect(record.kind).toBe('agent-call');
+      expect(record.outcome).toBe('success');
+      expect(record.detail).toMatch(/agent=wiki-compiler/);
+      expect(record.detail).toMatch(/dur=\d+/);
+    });
+
+    it('outcome is "failure" when the agent run errors (non-zero exit)', async () => {
+      const { appendInteraction } = await import('../utils/observation-log.js');
+      const mockAppend = appendInteraction as unknown as ReturnType<typeof vi.fn>;
+      mockAppend.mockClear();
+      // Non-zero exit with no stream result → execClaude returns { error }.
+      spawnMock.mockReturnValue(createChild({ code: 1, stderr: 'boom' }));
+
+      await runAgent('wiki-compiler', 'do stuff');
+
+      expect(mockAppend).toHaveBeenCalledTimes(1);
+      const record = mockAppend.mock.calls[0]![0] as { outcome: string };
+      expect(record.outcome).toBe('failure');
+    });
+
+    it('detail NEVER contains the prompt body (strict-discipline invariant)', async () => {
+      const { appendInteraction } = await import('../utils/observation-log.js');
+      const mockAppend = appendInteraction as unknown as ReturnType<typeof vi.fn>;
+      mockAppend.mockClear();
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
+
+      const sensitivePrompt = 'investigate vault path /Users/me/secrets "quoted content"';
+      await runAgent('wiki-compiler', sensitivePrompt);
+
+      const record = mockAppend.mock.calls[0]![0] as { detail: string };
+      expect(record.detail).not.toContain('vault');
+      expect(record.detail).not.toContain('/Users/me/secrets');
+      expect(record.detail).not.toContain(sensitivePrompt);
+    });
+
   });
 
   describe('cwd routing', () => {
