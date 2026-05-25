@@ -18,6 +18,7 @@ import { createMutation, cancelMutation } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
+import { appendInteraction } from '../utils/observation-log.js';
 
 const log = createLogger('webview');
 
@@ -215,6 +216,22 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
   }));
 }
 
+/** Phase 6 B1.5 — log a webview action with outcome derived from whether
+ *  the handler resolved without an error path. `detail` carries only the
+ *  action name + structured kind/id — never request body content. */
+function logWebviewAction(action: string, outcome: 'success' | 'failure', extra?: string): void {
+  try {
+    appendInteraction({
+      ts: new Date().toISOString(),
+      kind: 'webview',
+      outcome,
+      detail: extra ? `action=${action} ${extra}` : `action=${action}`,
+    });
+  } catch (err) {
+    log.warn('appendInteraction failed for webview action', { action, error: (err as Error).message });
+  }
+}
+
 async function handleApiMutationsCreate(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: { kind?: string; payload?: Record<string, unknown> } = {};
   try {
@@ -222,21 +239,25 @@ async function handleApiMutationsCreate(req: IncomingMessage, res: ServerRespons
   } catch {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'invalid JSON body' }));
+    logWebviewAction('mutation-create', 'failure', 'reason=invalid-json');
     return;
   }
   if (!body.kind) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'kind is required' }));
+    logWebviewAction('mutation-create', 'failure', 'reason=missing-kind');
     return;
   }
   const result = await createMutation(body.kind as MutationKind, body.payload ?? {}, 'webview');
   if (!result.ok) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: result.reason }));
+    logWebviewAction('mutation-create', 'failure', `kind=${body.kind}`);
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(result.descriptor));
+  logWebviewAction('mutation-create', 'success', `kind=${body.kind}`);
 }
 
 function handleApiMutationsCancel(res: ServerResponse, id: string): void {
@@ -244,10 +265,12 @@ function handleApiMutationsCancel(res: ServerResponse, id: string): void {
   if (!result.ok) {
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: result.reason }));
+    logWebviewAction('mutation-cancel', 'failure');
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
+  logWebviewAction('mutation-cancel', 'success');
 }
 
 function handleApiOpsCancel(res: ServerResponse, id: string): void {
@@ -255,10 +278,12 @@ function handleApiOpsCancel(res: ServerResponse, id: string): void {
   if (!ok) {
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'op not found or already terminal' }));
+    logWebviewAction('op-cancel', 'failure');
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
+  logWebviewAction('op-cancel', 'success');
 }
 
 export interface WebviewDeps {
