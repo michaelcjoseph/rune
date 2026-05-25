@@ -294,7 +294,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### B2. Source readers — vault + telemetry
 
-- [ ] **(agent)** `src/intent/observation-sensor-readers.ts:readVaultSignals()` — scan recent journals (last 7 days) for `#friction` / `#bug` / `#stuck` tags and recent `world-view/*.md` changelog tension; return a capped `SensorSignal[]`.
+- [x] **(agent)** `src/intent/observation-sensor-readers.ts:readVaultSignals()` — scan recent journals (last 7 days) for `#friction` / `#bug` / `#stuck` tags and recent `world-view/*.md` changelog tension; return a capped `SensorSignal[]`. *New module shared with B2.2/B2.3. `readVaultSignals(opts)` walks lookback-day journals via an injected `readJournalFile` reader, regex-matches the three friction tags (anchored to whitespace/parens to avoid partial-word matches), and walks `world-view/*.md` for `### [[YYYY_MM_DD]]` changelog headings within the window. Returns a SensorSignal[] capped at 20 (FIFO, journal hits first then worldview) with `source:'vault'`. Injected readers keep the function unit-testable without disk; defaults wire `readVaultFile`/`listVaultFiles` and absorb errors so a missing file is a clean empty rather than a throw.*
 - [ ] **(agent)** `readTelemetrySignals()` — read `logs/agent-runs.jsonl` for failure-heavy windows and `logs/mutations.jsonl` for repeated `failed` work-runs on the same project slug. Per-product (Aura/Assay) telemetry is deferred — note in the module doc.
 - [ ] **(agent)** `readInteractionSignals()` (consumes the JSONL written in B1) — group the last N hours, return capped `SensorSignal[]`.
 
