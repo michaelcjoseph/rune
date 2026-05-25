@@ -248,6 +248,7 @@ describe('runGenEvalLoop — orchestration', () => {
     runReview: ReturnType<typeof vi.fn>;
     createWorktree: ReturnType<typeof vi.fn>;
     destroyWorktree: ReturnType<typeof vi.fn>;
+    mergeBranch: ReturnType<typeof vi.fn>;
   };
 
   function fakeSpawners(overrides: Partial<{
@@ -275,6 +276,9 @@ describe('runGenEvalLoop — orchestration', () => {
       }),
       runWorkAuto: vi.fn(async () => workExits[workIdx++ % workExits.length]!),
       runReview: vi.fn(async () => verdicts[verdictIdx++ % verdicts.length]!),
+      // Default: merge succeeds so existing orchestration tests still pass once
+      // the runner is wired to call mergeBranch on the merge-ready path.
+      mergeBranch: vi.fn(async () => ({ ok: true as const })),
     };
   }
 
@@ -521,6 +525,7 @@ describe('runGenEvalLoop — cross-model resolution', () => {
     runReview: ReturnType<typeof vi.fn>;
     createWorktree: ReturnType<typeof vi.fn>;
     destroyWorktree: ReturnType<typeof vi.fn>;
+    mergeBranch: ReturnType<typeof vi.fn>;
   };
 
   function fakeSpawners(): LoopSpawners {
@@ -534,6 +539,7 @@ describe('runGenEvalLoop — cross-model resolution', () => {
       destroyWorktree: vi.fn(async () => {}),
       runWorkAuto: vi.fn(async () => 0),
       runReview: vi.fn(async () => 'pass' as const),
+      mergeBranch: vi.fn(async () => ({ ok: true as const })),
     };
   }
 
@@ -655,6 +661,7 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
     runReview: ReturnType<typeof vi.fn>;
     createWorktree: ReturnType<typeof vi.fn>;
     destroyWorktree: ReturnType<typeof vi.fn>;
+    mergeBranch: ReturnType<typeof vi.fn>;
   };
 
   function fakeSpawners(overrides: Partial<{
@@ -675,6 +682,9 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
       destroyWorktree: vi.fn(async () => {}),
       runWorkAuto: vi.fn(async () => workExits[workIdx++ % workExits.length]!),
       runReview: vi.fn(async () => verdicts[verdictIdx++ % verdicts.length]!),
+      // Default: merge succeeds so A7.2 tests that expect `completed` are
+      // unaffected once A7.3 wires the runner to call mergeBranch.
+      mergeBranch: vi.fn(async () => ({ ok: true as const })),
     };
   }
 
@@ -798,6 +808,208 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
     const keys = Object.keys(adjudication).sort();
     expect(keys).toEqual(
       ['generatorModel', 'generatorProvider', 'evaluatorModel', 'evaluatorProvider', 'verdict'].sort(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runGenEvalLoop — merge step (A7.3)
+//
+// After the A7.2 merge-ready gate clears, the runner must:
+//   1. Call `spawners.createWorktree` with a deterministic feature-branch arg
+//      derived from the mutationId (`'jarvis-gen-eval/' + mutationId.slice(0,8)`).
+//   2. On the merge-ready path, call `spawners.mergeBranch(sandbox, branch, opts)`.
+//   3. `mergeBranch` ok:true  → emit `completed`.
+//   4. `mergeBranch` ok:false → emit `failed` (reason carries 'merge failed: ...');
+//      no `completed` event.
+//   5. `mergeBranch` is NOT called on the `escalated` path.
+//   6. `mergeBranch` is NOT called when the merge contract holds (null evaluator).
+// ---------------------------------------------------------------------------
+
+describe('runGenEvalLoop — merge step (A7.3)', () => {
+  type LoopSpawners = {
+    runWorkAuto: ReturnType<typeof vi.fn>;
+    runReview: ReturnType<typeof vi.fn>;
+    createWorktree: ReturnType<typeof vi.fn>;
+    destroyWorktree: ReturnType<typeof vi.fn>;
+    mergeBranch: ReturnType<typeof vi.fn>;
+  };
+
+  function fakeSpawners(overrides: Partial<{
+    workExits: number[];
+    reviewVerdicts: Array<'pass' | 'fail'>;
+    mergeBranchResult?: { ok: true } | { ok: false; error: string };
+  }> = {}): LoopSpawners {
+    const workExits = overrides.workExits ?? [0];
+    const verdicts = overrides.reviewVerdicts ?? ['pass'];
+    let workIdx = 0;
+    let verdictIdx = 0;
+    const mergeBranchResult = overrides.mergeBranchResult ?? { ok: true as const };
+    return {
+      createWorktree: vi.fn(async () => ({
+        product: 'aura',
+        project: '01-growth',
+        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        egressAllowlist: [],
+      })),
+      destroyWorktree: vi.fn(async () => {}),
+      runWorkAuto: vi.fn(async () => workExits[workIdx++ % workExits.length]!),
+      runReview: vi.fn(async () => verdicts[verdictIdx++ % verdicts.length]!),
+      mergeBranch: vi.fn(async () => mergeBranchResult),
+    };
+  }
+
+  async function runLoop(
+    spawners: LoopSpawners,
+    opts: { maxEvaluatorRounds?: number } = {},
+  ) {
+    const { runGenEvalLoop } = await import('./gen-eval-loop-runner.js');
+    const events: Array<{ kind: string; data?: unknown }> = [];
+    for await (const ev of runGenEvalLoop({
+      mutationId: 'mut-1',
+      payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
+      worktreeRoot: '/tmp/jarvis-worktrees',
+      productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
+      escalationPolicyPath: '/test/no-such-policy.json',
+      modelPolicyPath: '/test/no-such-policy.json',
+      spawners: spawners as never,
+      cancel: () => false,
+    })) {
+      events.push({ kind: ev.kind, data: ev.data });
+    }
+    return events;
+  }
+
+  it('createWorktree is called with a deterministic feature branch arg', async () => {
+    // The runner must call createWorktree with a `branch` field derived from
+    // the mutationId: 'jarvis-gen-eval/' + mutationId.slice(0, 8).
+    // mutationId is 'mut-1' here, so the branch is 'jarvis-gen-eval/mut-1'.
+    const spawners = fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] });
+    await runLoop(spawners);
+
+    expect(spawners.createWorktree).toHaveBeenCalledOnce();
+    const firstCall = spawners.createWorktree.mock.calls[0]![0] as Record<string, unknown>;
+    expect(firstCall).toMatchObject({
+      branch: expect.stringMatching(/^jarvis-gen-eval\//),
+    });
+    // The suffix is derived from mutationId 'mut-1'.slice(0, 8) = 'mut-1'.
+    expect(firstCall['branch']).toBe('jarvis-gen-eval/mut-1');
+  });
+
+  it('merge-ready + mergeBranch success → emits completed', async () => {
+    // Happy path: tests pass, evaluator passes, merge contract clears, and
+    // mergeBranch resolves ok:true — the run is now actually merged.
+    const spawners = fakeSpawners({
+      workExits: [0],
+      reviewVerdicts: ['pass'],
+      mergeBranchResult: { ok: true },
+    });
+    const events = await runLoop(spawners);
+
+    // merge-ready progress event must fire
+    const mergeReadyEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyEvent).toBeDefined();
+
+    // mergeBranch must have been called with the sandbox + branch
+    expect(spawners.mergeBranch).toHaveBeenCalledOnce();
+    const [callSandbox, callBranch] = spawners.mergeBranch.mock.calls[0] as [unknown, string, unknown];
+    expect(callSandbox).toBeDefined();
+    expect(typeof callBranch).toBe('string');
+    expect(callBranch).toMatch(/^jarvis-gen-eval\//);
+
+    // completed event must fire — the run is merged
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('completed');
+  });
+
+  it('merge-ready + mergeBranch failure → emits failed with merge error', async () => {
+    // mergeBranch fails — the terminal event must be `failed` (not `completed`),
+    // and the reason must mention the merge failure.
+    const spawners = fakeSpawners({
+      workExits: [0],
+      reviewVerdicts: ['pass'],
+      mergeBranchResult: { ok: false, error: 'fatal: refusing to merge unrelated histories' },
+    });
+    const events = await runLoop(spawners);
+
+    // merge-ready progress event must still fire (it precedes the mergeBranch call)
+    const mergeReadyEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyEvent).toBeDefined();
+
+    // mergeBranch must have been called
+    expect(spawners.mergeBranch).toHaveBeenCalledOnce();
+
+    // Terminal event is `failed` — no `completed` event
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+
+    const data = terminal.data as Record<string, unknown>;
+    expect(String(data['reason'])).toMatch(/merge failed.*refusing to merge/i);
+    // adjudication must be present on the failed event
+    expect(data['adjudication']).toBeDefined();
+
+    const completedEvent = events.find((e) => e.kind === 'completed');
+    expect(completedEvent).toBeUndefined();
+  });
+
+  it('mergeBranch is NOT called when merge contract holds (evaluator null)', async () => {
+    // loadModelPolicy returns null → evaluator is null → adjudication is null →
+    // evaluateMergeContract returns merge:false (cross-model review unavailable).
+    // The merge contract gate is not cleared, so mergeBranch must never be called.
+    loadModelPolicyMock.mockReturnValue(null);
+
+    const spawners = fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] });
+    const events = await runLoop(spawners);
+
+    expect(spawners.mergeBranch).not.toHaveBeenCalled();
+
+    // Terminal is failed with the merge-contract reason
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    expect(String((terminal.data as Record<string, unknown>)['reason'])).toMatch(
+      /merge contract|cross-model review unavailable/i,
+    );
+  });
+
+  it('mergeBranch is NOT called when escalated', async () => {
+    // N=3 failed evaluator rounds → evaluateLoop returns 'escalated'.
+    // The escalated path exits before reaching the merge-ready gate,
+    // so mergeBranch must never be invoked.
+    const spawners = fakeSpawners({
+      workExits: [0, 0, 0],
+      reviewVerdicts: ['fail', 'fail', 'fail'],
+    });
+    const events = await runLoop(spawners, { maxEvaluatorRounds: 3 });
+
+    expect(spawners.mergeBranch).not.toHaveBeenCalled();
+
+    // Terminal is failed with escalation reason
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    expect(String((terminal.data as Record<string, unknown>)['reason'])).toMatch(/escalat/i);
+  });
+
+  it('mergeBranch throwing synchronously is caught and surfaces as a failed event', async () => {
+    // A real-world case: getProductConfig throws when products.json was
+    // edited between mutation creation and the merge step, or git binary
+    // is missing. The throw must not escape the generator.
+    const spawners = {
+      ...fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] }),
+      mergeBranch: vi.fn(async () => {
+        throw new Error('product config missing');
+      }),
+    };
+    const events = await runLoop(spawners as never);
+
+    expect(spawners.mergeBranch).toHaveBeenCalledOnce();
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    expect(String((terminal.data as Record<string, unknown>)['reason'])).toMatch(
+      /mergeBranch threw.*product config missing/i,
     );
   });
 });

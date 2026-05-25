@@ -48,6 +48,7 @@ import { buildSandboxEnv } from './credential-injector.js';
 import {
   createWorktree as defaultCreateWorktree,
   destroyWorktree as defaultDestroyWorktree,
+  getProductConfig,
   readProductsConfig,
 } from './sandbox-runtime.js';
 
@@ -193,6 +194,17 @@ export interface LoopSpawners {
    *  caller that can't determine a verdict returns 'fail' (conservative —
    *  an unresolvable review escalates rather than degrading to no-review). */
   runReview: (sandbox: SandboxSpec, opts: { productsConfigPath: string }) => Promise<'pass' | 'fail'>;
+  /** Merge the gen-eval feature branch into the product's base branch and
+   *  push (Phase 6 A7.3). Production shells out to git in the product's
+   *  main repo; tests inject a mock. Returns `{ok: true}` on a clean merge
+   *  + push, `{ok: false, error}` on any git failure — the runner surfaces
+   *  the error as a `failed` mutation event so the run holds for human
+   *  review rather than silently degrading. */
+  mergeBranch: (
+    sandbox: SandboxSpec,
+    branch: string,
+    opts: { productsConfigPath: string },
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
 const defaultSpawners: LoopSpawners = {
@@ -200,6 +212,7 @@ const defaultSpawners: LoopSpawners = {
   destroyWorktree: defaultDestroyWorktree,
   runWorkAuto: realRunWorkAuto,
   runReview: realRunReview,
+  mergeBranch: realMergeBranch,
 };
 
 /** Spawn Claude CLI with `/work --auto` against the sandbox worktree. */
@@ -233,6 +246,97 @@ async function realRunReview(
     tail: output.slice(-200),
   });
   return 'fail';
+}
+
+/** Merge the feature branch into the product's `baseBranch` in the main
+ *  product repo, then push (Phase 6 A7.3). The invariant for autonomous
+ *  runs: the product repo's HEAD is on `baseBranch` when the engine
+ *  fires — `git -C <repo> merge --no-ff <branch>` mutates the working
+ *  tree's branch and would fail loudly on a divergent HEAD. Failure modes
+ *  surface as `{ok:false, error}` so the loop runner emits a `failed`
+ *  event and the run holds for human review.
+ *
+ *  After a clean push the feature branch is deleted from the main repo
+ *  (`git branch -d <branch>`) so a future run with the same mutation-id
+ *  prefix can't collide with a stale branch from a prior run; a delete
+ *  failure logs a warning but does not fail the merge (the merge itself
+ *  succeeded; the branch is now redundant tracking ref). */
+async function realMergeBranch(
+  sandbox: SandboxSpec,
+  branch: string,
+  opts: { productsConfigPath: string },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const product = getProductConfig(sandbox.product, opts.productsConfigPath);
+  const message = `jarvis(${sandbox.product}): merge gen-eval-loop branch ${branch}`;
+  const merge = await runGitCmd(
+    ['merge', '--no-ff', branch, '-m', message],
+    product.repoPath,
+  );
+  if (!merge.ok) return { ok: false, error: `git merge failed: ${merge.error}` };
+  const push = await runGitCmd(['push'], product.repoPath);
+  if (!push.ok) {
+    // Half-merged state: local baseBranch has the merge but remote is
+    // behind. Surface the product + repoPath so the operator knows which
+    // repo needs a manual `git push` to recover.
+    log.warn('realMergeBranch: git push failed after successful local merge — product repo is half-merged', {
+      product: sandbox.product,
+      repoPath: product.repoPath,
+      branch,
+      pushError: push.error,
+    });
+    return { ok: false, error: `git push failed: ${push.error}` };
+  }
+  // Best-effort branch cleanup — a delete failure (e.g., baseBranch is not
+  // the merge target, branch already deleted) is non-fatal.
+  const del = await runGitCmd(['branch', '-d', branch], product.repoPath);
+  if (!del.ok) {
+    log.warn('realMergeBranch: git branch -d failed (non-fatal)', {
+      branch,
+      error: del.error,
+    });
+  }
+  return { ok: true };
+}
+
+/** Spawn a single `git` subcommand in `cwd`; collect stderr for the error
+ *  channel. Resolves with `{ok}` rather than throwing so the merge
+ *  step's branch logic stays linear. */
+function runGitCmd(args: string[], cwd: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    registerActiveProcess(child);
+    let stderr = '';
+    child.stdout!.resume();
+    child.stderr!.on('data', (b: Buffer) => {
+      stderr += b.toString('utf8');
+    });
+    let spawnError: string | null = null;
+    child.on('error', (err) => { spawnError = err.message; });
+    child.on('close', (code) => {
+      unregisterActiveProcess(child);
+      if (spawnError !== null) {
+        resolve({ ok: false, error: spawnError });
+        return;
+      }
+      if (code === 0) {
+        resolve({ ok: true });
+        return;
+      }
+      // Sanitize before surfacing: git stderr from `git push` can include
+      // remote URLs with embedded credentials (`https://<token>@host/...`)
+      // when the product repo's remote is configured that way. Redact the
+      // userinfo and cap length so a verbose stderr can't unbound the
+      // mutation log entry either.
+      const trimmed = stderr.trim();
+      const safe = trimmed
+        .replace(/https?:\/\/[^@\s]+@/g, 'https://<redacted>@')
+        .slice(0, 500);
+      resolve({
+        ok: false,
+        error: safe || `git ${args[0] ?? 'cmd'} exited with code ${code}`,
+      });
+    });
+  });
 }
 
 /** Spawn Claude CLI with a single prompt, in the sandbox worktree, with
@@ -423,12 +527,19 @@ export async function* runGenEvalLoop(
   const resolution = resolveLoopModels(opts.modelPolicyPath);
   yield baseEvent('progress', resolution);
 
+  // Phase 6 A7.3: deterministic feature-branch name derived from the
+  // mutation id so every gen-eval run has its own branch. Commits from
+  // `/work --auto` land on this branch; the A7.3 merge step merges it
+  // into the product's `baseBranch` in the main repo on merge-ready.
+  const branch = `jarvis-gen-eval/${opts.mutationId.slice(0, 8)}`;
+
   let sandbox: SandboxSpec | null = null;
   try {
     try {
       sandbox = await spawners.createWorktree({
         product: opts.payload.product,
         project: opts.payload.project,
+        branch,
         worktreeRoot: opts.worktreeRoot,
         productsConfigPath: opts.productsConfigPath,
       });
@@ -522,14 +633,49 @@ export async function* runGenEvalLoop(
           });
           return;
         }
-        // Merge gate cleared — record the cleared contract and emit completed.
+        // Merge gate cleared — record the cleared contract, then run the
+        // actual `git merge --no-ff <branch>` + push against the product
+        // repo's main checkout (Phase 6 A7.3). On merge/push failure the
+        // run holds for human review rather than degrading to "merge
+        // happened but push failed" or vice versa.
         yield baseEvent('progress', {
           kind: 'merge-ready',
           ...(adjudication !== null ? { adjudication } : {}),
         });
+        // Wrap in try/catch so a synchronous throw from getProductConfig
+        // (e.g., products.json edited between mutation creation and merge)
+        // or from spawn itself (git binary missing) surfaces as a failed
+        // event rather than escaping the generator. Mirrors the try/catch
+        // around runWorkAuto / runReview earlier in the loop.
+        let mergeResult: { ok: true } | { ok: false; error: string };
+        try {
+          mergeResult = await spawners.mergeBranch(sandbox, branch, {
+            productsConfigPath: opts.productsConfigPath,
+          });
+        } catch (err) {
+          yield baseEvent('failed', {
+            reason: `mergeBranch threw: ${(err as Error).message}`,
+            ...(adjudication !== null ? { adjudication } : {}),
+            rounds: rounds.length,
+            failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+            branch,
+          });
+          return;
+        }
+        if (!mergeResult.ok) {
+          yield baseEvent('failed', {
+            reason: `merge failed: ${mergeResult.error}`,
+            ...(adjudication !== null ? { adjudication } : {}),
+            rounds: rounds.length,
+            failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+            branch,
+          });
+          return;
+        }
         yield baseEvent('completed', {
           rounds: rounds.length,
           failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+          branch,
         });
         return;
       }
