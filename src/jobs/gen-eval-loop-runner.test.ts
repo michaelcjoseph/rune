@@ -61,9 +61,22 @@ vi.mock('./credential-injector.js', () => ({
   buildSandboxEnv: vi.fn(() => ({})),
 }));
 
+// model-policy: mocked so tests never hit the real policy file on disk.
+// loadModelPolicy returns a synthetic policy; resolveModel returns controlled
+// resolutions so the cross-model resolution tests can assert exact values.
+vi.mock('../intent/model-policy.js', () => ({
+  loadModelPolicy: vi.fn(),
+  resolveModel: vi.fn(),
+}));
+
 // --- Imports under test (after mocks) ---
 
 import { genEvalLoopApplier } from './gen-eval-loop-runner.js';
+
+// Import mock handles for model-policy (lazy import so vi.mock hoisting runs first).
+const { loadModelPolicy, resolveModel } = await import('../intent/model-policy.js');
+const loadModelPolicyMock = loadModelPolicy as unknown as ReturnType<typeof vi.fn>;
+const resolveModelMock = resolveModel as unknown as ReturnType<typeof vi.fn>;
 
 let tmpDir: string;
 
@@ -86,6 +99,39 @@ beforeEach(() => {
   }));
   mockConfig.PRODUCTS_CONFIG_FILE = productsPath;
   mockActiveRuns.clear();
+
+  // Prime model-policy mocks with a sensible two-model default.
+  // The generator (claude/anthropic) is returned for any non-evaluator role;
+  // the evaluator (codex/openai) is returned when distinctFromProvider='anthropic'.
+  loadModelPolicyMock.mockReturnValue({
+    models: [
+      {
+        alias: 'sonnet',
+        provider: 'anthropic',
+        format: 'claude',
+        capabilities: ['coding'],
+        costTier: 'medium',
+        status: 'active',
+      },
+      {
+        alias: 'codex',
+        provider: 'openai',
+        format: 'codex',
+        capabilities: ['coding'],
+        costTier: 'medium',
+        status: 'preferred',
+      },
+    ],
+    globalFallback: 'opus',
+    roleDefaults: { evaluator: 'codex' },
+    evaluatorDistinctFromGenerator: false,
+  });
+  resolveModelMock.mockImplementation((req: { role: string; distinctFromProvider?: string }) => {
+    if (req.role === 'evaluator' && req.distinctFromProvider === 'anthropic') {
+      return { model: 'codex', provider: 'openai', rule: 'role-default' };
+    }
+    return { model: 'sonnet', provider: 'anthropic', rule: 'role-default' };
+  });
 });
 
 afterEach(() => {
@@ -233,7 +279,11 @@ describe('runGenEvalLoop — orchestration', () => {
   }
 
   // Import the loop entrypoint lazily so the file can declare the type above.
-  async function runLoop(spawners: LoopSpawners, opts: { maxEvaluatorRounds?: number; cancelAfterRound?: number } = {}) {
+  async function runLoop(spawners: LoopSpawners, opts: {
+    maxEvaluatorRounds?: number;
+    cancelAfterRound?: number;
+    modelPolicyPath?: string;
+  } = {}) {
     const { runGenEvalLoop } = await import('./gen-eval-loop-runner.js');
     const events: Array<{ kind: string; data?: unknown }> = [];
     let roundCount = 0;
@@ -246,6 +296,9 @@ describe('runGenEvalLoop — orchestration', () => {
       // Orchestration tests inject maxEvaluatorRounds directly; the cap
       // read from the policy is exercised in its own describe block.
       escalationPolicyPath: '/test/no-such-policy.json',
+      // loadModelPolicy is mocked so the actual path doesn't matter;
+      // default to a placeholder that signals "test-injected".
+      modelPolicyPath: opts.modelPolicyPath ?? '/test/no-such-policy.json',
       spawners: spawners as never,
       cancel,
       onRound: () => { roundCount++; },
@@ -263,7 +316,12 @@ describe('runGenEvalLoop — orchestration', () => {
       reviewVerdicts: ['fail', 'pass'],
     });
     const events = await runLoop(spawners, { maxEvaluatorRounds: 3 });
-    const progress = events.filter((e) => e.kind === 'progress');
+    // Filter to per-round progress events — the A7.1 'resolution' event at
+    // loop start is also a progress event but carries `kind: 'resolution'`
+    // instead of `round: N`.
+    const progress = events.filter(
+      (e) => e.kind === 'progress' && typeof (e.data as Record<string, unknown>)?.['round'] === 'number',
+    );
     expect(progress).toHaveLength(2);
     expect(progress[0]!.data).toMatchObject({ round: 1, failedEvaluatorRounds: 1, status: 'in-progress' });
     expect(progress[1]!.data).toMatchObject({ round: 2, failedEvaluatorRounds: 1, status: 'on-branch' });
@@ -275,7 +333,9 @@ describe('runGenEvalLoop — orchestration', () => {
       reviewVerdicts: ['pass'],
     });
     const events = await runLoop(spawners);
-    const progress = events.filter((e) => e.kind === 'progress');
+    const progress = events.filter(
+      (e) => e.kind === 'progress' && typeof (e.data as Record<string, unknown>)?.['round'] === 'number',
+    );
     expect(progress).toHaveLength(2);
     // Round 1: tests failed, evaluator never ran, count stays at 0.
     expect(progress[0]!.data).toMatchObject({ round: 1, failedEvaluatorRounds: 0, status: 'in-progress' });
@@ -438,5 +498,135 @@ describe('readEvaluatorRoundCapFromPolicy', () => {
       ],
     }));
     expect(await readCap(path)).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runGenEvalLoop — cross-model resolution (Phase 7 A7.1)
+//
+// The runner must resolve the review mode (always 'cross-model' for autonomous
+// runs) plus a Generator and an Evaluator via the model-selection policy, then
+// emit that resolved pair as a 'progress' event with kind='resolution' BEFORE
+// the first round starts.  These tests lock in that contract; the runner
+// implementation for A7.1 makes them green.
+// ---------------------------------------------------------------------------
+
+describe('runGenEvalLoop — cross-model resolution', () => {
+  // Reuse the same fakeSpawners + runLoop helpers defined in the orchestration
+  // describe block above.  Because those are closed over in the outer scope we
+  // duplicate a minimal version here to keep the helper self-contained.
+
+  type LoopSpawners = {
+    runWorkAuto: ReturnType<typeof vi.fn>;
+    runReview: ReturnType<typeof vi.fn>;
+    createWorktree: ReturnType<typeof vi.fn>;
+    destroyWorktree: ReturnType<typeof vi.fn>;
+  };
+
+  function fakeSpawners(): LoopSpawners {
+    return {
+      createWorktree: vi.fn(async () => ({
+        product: 'aura',
+        project: '01-growth',
+        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        egressAllowlist: [],
+      })),
+      destroyWorktree: vi.fn(async () => {}),
+      runWorkAuto: vi.fn(async () => 0),
+      runReview: vi.fn(async () => 'pass' as const),
+    };
+  }
+
+  async function runLoop(
+    spawners: LoopSpawners,
+    opts: { modelPolicyPath?: string } = {},
+  ) {
+    const { runGenEvalLoop } = await import('./gen-eval-loop-runner.js');
+    const events: Array<{ kind: string; data?: unknown }> = [];
+    for await (const ev of runGenEvalLoop({
+      mutationId: 'mut-res-1',
+      payload: { product: 'aura', project: '01-growth' },
+      worktreeRoot: '/tmp/jarvis-worktrees',
+      productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
+      escalationPolicyPath: '/test/no-such-policy.json',
+      modelPolicyPath: opts.modelPolicyPath ?? '/test/no-such-policy.json',
+      spawners: spawners as never,
+      cancel: () => false,
+    })) {
+      events.push({ kind: ev.kind, data: ev.data });
+    }
+    return events;
+  }
+
+  it('emits a resolution progress event at the start of the loop', async () => {
+    // The first 'progress' event must carry kind='resolution' with the
+    // resolved generator and evaluator pair.
+    const events = await runLoop(fakeSpawners());
+    const resolutionEvents = events.filter(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'resolution',
+    );
+    expect(resolutionEvents).toHaveLength(1);
+    expect(resolutionEvents[0]!.data).toMatchObject({
+      kind: 'resolution',
+      mode: 'cross-model',
+      generator: { model: 'sonnet', provider: 'anthropic' },
+      evaluator: { model: 'codex', provider: 'openai' },
+    });
+  });
+
+  it('calls resolveModel for the evaluator with distinctFromProvider="anthropic"', async () => {
+    resolveModelMock.mockClear();
+    await runLoop(fakeSpawners());
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'evaluator', distinctFromProvider: 'anthropic' }),
+      expect.anything(), // policy object — exact value is the mock's concern
+    );
+  });
+
+  it('autonomous mode is always cross-model (mode field is "cross-model")', async () => {
+    // resolveReviewMode(autonomous:true) → 'cross-model' regardless of flags.
+    // The runner must pass autonomous:true — it never uses a --cross-model flag.
+    const events = await runLoop(fakeSpawners());
+    const resolutionEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'resolution',
+    );
+    expect(resolutionEvent).toBeDefined();
+    expect((resolutionEvent!.data as Record<string, unknown>)['mode']).toBe('cross-model');
+  });
+
+  it('resolution event comes before the first round output event', async () => {
+    // Order matters: cockpit reads the resolution event to display the resolved
+    // model line BEFORE the run starts printing work-auto output.
+    const events = await runLoop(fakeSpawners());
+    const resolutionIdx = events.findIndex(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'resolution',
+    );
+    const firstRoundOutputIdx = events.findIndex(
+      (e) => e.kind === 'output' && String((e.data as Record<string, unknown>)?.['line'] ?? '').includes('/work --auto'),
+    );
+    expect(resolutionIdx).toBeGreaterThanOrEqual(0);
+    expect(firstRoundOutputIdx).toBeGreaterThanOrEqual(0);
+    expect(resolutionIdx).toBeLessThan(firstRoundOutputIdx);
+  });
+
+  it('when loadModelPolicy returns null, the loop still runs and emits a resolution event with evaluator null', async () => {
+    // The policy file is missing (or loadModelPolicy returns null). The runner
+    // must not crash — it falls back to a default generator (claude/sonnet or
+    // similar) and emits the resolution event with evaluator: null, signalling
+    // that cross-model adjudication will be blocked at merge time per
+    // evaluateMergeContract (null adjudication → merge: false).
+    loadModelPolicyMock.mockReturnValue(null);
+
+    const events = await runLoop(fakeSpawners());
+
+    // The loop must complete (no crash).
+    expect(events[events.length - 1]!.kind).toBe('completed');
+
+    const resolutionEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'resolution',
+    );
+    expect(resolutionEvent).toBeDefined();
+    // evaluator must be null when the policy couldn't produce a distinct-provider model.
+    expect((resolutionEvent!.data as Record<string, unknown>)['evaluator']).toBeNull();
   });
 });

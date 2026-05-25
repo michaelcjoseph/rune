@@ -26,8 +26,10 @@ import {
   registerActiveProcess,
   unregisterActiveProcess,
 } from '../ai/claude.js';
+import { resolveReviewMode } from '../intent/adjudication.js';
 import { parseEscalationPolicy } from '../intent/escalation.js';
 import { evaluateLoop, recordRound, type LoopRound } from '../intent/gen-eval-loop.js';
+import { loadModelPolicy, resolveModel } from '../intent/model-policy.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import { activeRuns } from '../transport/mutations.js';
@@ -290,6 +292,13 @@ export interface RunGenEvalLoopOpts {
   /** Path to `policies/escalation-policy.json`; the cap is read from its
    *  `run-exceeded-bounds` rule when the payload doesn't override. */
   escalationPolicyPath: string;
+  /** Path to `policies/model-policy.json` — the runner resolves the
+   *  Generator and Evaluator (model, provider) pair via the policy at
+   *  loop start (Phase 6 A7.1). A null policy file falls back to a
+   *  Claude generator with no Evaluator, surfacing as a resolution
+   *  event with `evaluator: null` — A7.2/A7.3's merge contract will
+   *  hold the run when the second provider can't be resolved. */
+  modelPolicyPath: string;
   /** Injectable spawn primitives; defaults to the production set. */
   spawners?: LoopSpawners;
   /** Returns true when the run should be cancelled (checked between rounds). */
@@ -297,6 +306,69 @@ export interface RunGenEvalLoopOpts {
   /** Optional callback invoked after each round completes. Mostly a test
    *  hook for the cancel-after-N case. */
   onRound?: () => void;
+}
+
+/** Resolved (model, provider) pair for a side of the dispatch loop. */
+interface ResolvedSide {
+  model: string;
+  provider: string;
+}
+
+/** Resolution event payload emitted at loop start. The cockpit reads this
+ *  to populate the per-round model line; A7.2's Adjudication is built from
+ *  the same pair when the verdict comes back. */
+interface ResolutionEventData {
+  kind: 'resolution';
+  mode: 'cross-model' | 'single-model';
+  generator: ResolvedSide;
+  evaluator: ResolvedSide | null;
+}
+
+/** Resolve the Generator and Evaluator (model, provider) pair from the
+ *  model-selection policy at loop start. Autonomous runs are always
+ *  cross-model — Evaluator resolves with `distinctFromProvider` set to the
+ *  Generator's provider so the policy returns a different family. A null
+ *  policy file (fresh install, no model policy) yields a placeholder
+ *  Generator pair and a null Evaluator; A7.2's merge contract holds the
+ *  run when Evaluator is null. */
+function resolveLoopModels(modelPolicyPath: string): ResolutionEventData {
+  // Autonomous engine runs are always cross-model — `resolveReviewMode`'s
+  // `crossModelFlag` is irrelevant here.
+  const mode = resolveReviewMode({ autonomous: true, crossModelFlag: false });
+
+  // The Generator is Claude `/work --auto` today; A7+ may swap this to a
+  // resolveModel call once `/work --auto` is portable.
+  const generator: ResolvedSide = { model: 'sonnet', provider: 'anthropic' };
+
+  const policy = loadModelPolicy(modelPolicyPath);
+  if (policy === null) {
+    log.warn('resolveLoopModels: model policy unavailable; evaluator unresolved', {
+      modelPolicyPath,
+    });
+    return { kind: 'resolution', mode, generator, evaluator: null };
+  }
+
+  let evaluator: ResolvedSide | null = null;
+  try {
+    const resolution = resolveModel(
+      {
+        role: 'evaluator',
+        capabilities: ['coding'],
+        distinctFromProvider: generator.provider,
+      },
+      policy,
+    );
+    evaluator = { model: resolution.model, provider: resolution.provider };
+  } catch (err) {
+    // A constraint violation (no cross-provider model registered yet, or the
+    // policy's `evaluatorDistinctFromGenerator` flag is set without a fit)
+    // surfaces as a null Evaluator — the run holds at merge time rather than
+    // degrading to a single-model autonomous merge.
+    log.warn('resolveLoopModels: evaluator resolution failed; treating as null', {
+      error: (err as Error).message,
+    });
+  }
+  return { kind: 'resolution', mode, generator, evaluator };
 }
 
 /**
@@ -319,6 +391,13 @@ export async function* runGenEvalLoop(
     kind,
     ...(data !== undefined ? { data } : {}),
   });
+
+  // Phase 6 A7.1: resolve Generator and Evaluator (model, provider) at loop
+  // start and emit a 'resolution' progress event. The cockpit reads it to
+  // render the per-round model line; A7.2 builds the Adjudication from the
+  // same pair when the verdict arrives.
+  const resolution = resolveLoopModels(opts.modelPolicyPath);
+  yield baseEvent('progress', resolution);
 
   let sandbox: SandboxSpec | null = null;
   try {
@@ -445,6 +524,7 @@ export const genEvalLoopApplier: MutationApplier<GenEvalLoopPayload> = {
       worktreeRoot: config.WORKTREE_ROOT,
       productsConfigPath: config.PRODUCTS_CONFIG_FILE,
       escalationPolicyPath: config.ESCALATION_POLICY_FILE,
+      modelPolicyPath: config.MODEL_POLICY_FILE,
       cancel: ctx.cancel,
     });
   },
