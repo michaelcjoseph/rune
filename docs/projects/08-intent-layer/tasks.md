@@ -300,7 +300,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### B3. LLM callbacks — diarizer and triage agents
 
-- [ ] **(agent)** New agent `.claude/agents/observation-diarizer.md` — accepts raw `SensorSignal[]` JSON, returns a compact diarized `SensorSignal[]` JSON. Structured output; voice not opted in.
+- [x] **(agent)** New agent `.claude/agents/observation-diarizer.md` — accepts raw `SensorSignal[]` JSON, returns a compact diarized `SensorSignal[]` JSON. Structured output; voice not opted in. *Tools allowlist empty (no fs/web access). Prompt enumerates: input JSON shape, output JSON shape (no markdown fences, no prose), compaction rules (group recurring friction, drop one-off noise, keep cross-product separate, never invent friction, cap 12 entries), empty/single-signal edge case, worked example. AGENT_LABELS entry added so the in-flight tracker UI renders "Diarizing observation signals" rather than the titlecased default.*
 - [ ] **(agent)** New agent `.claude/agents/observation-triage.md` — accepts one `SensorSignal`, returns a `TriageVerdict` JSON. The `idea.id` rule is a deterministic slug of the friction so dedupe is sound across passes.
 - [ ] **(agent)** Adapters in `src/intent/observation-callbacks.ts` — `diarize` and `triage` callables that wrap `runAgent` + JSON parse.
 
