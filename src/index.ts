@@ -16,6 +16,7 @@ import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
+import { startPlanningExpiry, stopPlanningExpiry } from './jobs/planning-expiry-runner.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { getSkillRegistry } from './bot/skill-registry.js';
 import { loadModelPolicy } from './intent/model-policy.js';
@@ -113,6 +114,7 @@ let ready = false;
 const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
 startStallCheck(bus);
+startPlanningExpiry();
 startWatcher(bus);
 
 // Warm the skill-registry cache. startScheduler() above calls
@@ -132,6 +134,7 @@ async function shutdown() {
   log.info('Shutting down...');
   stopScheduler();
   stopStallCheck();
+  stopPlanningExpiry();
   stopWatcher();
   destroy();
   stopInFlightTicker();
