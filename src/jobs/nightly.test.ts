@@ -6,7 +6,39 @@ vi.mock('../config.js', () => ({
     TIMEZONE: 'America/Chicago',
     TELEGRAM_USER_ID: 12345,
     IMPLICIT_CRM_NAMES: ['alice', 'bob'],
+    ESCALATION_POLICY_FILE: '/test/escalation-policy.json',
+    LOGS_DIR: '/test/logs',
   },
+  PROJECT_ROOT: '/test/project',
+}));
+
+// Phase 6 B5 — observation step pulls in these modules; mock at the surface
+// so the test doesn't need real disk/LLM. The step's pure behavior is
+// covered by observation-nightly.test.ts / observation-sensor-readers.test.ts
+// / observation-callbacks.test.ts / observation-ideas-io.test.ts.
+vi.mock('../intent/observation-nightly.js', () => ({
+  runNightlyObservation: vi.fn(async () => ({
+    outcomes: [], dispatchPlans: [], ideasMarkdown: '',
+  })),
+}));
+vi.mock('../intent/observation-sensor-readers.js', () => ({
+  readVaultSignals: vi.fn(() => []),
+  readTelemetrySignals: vi.fn(() => []),
+  readInteractionSignals: vi.fn(() => []),
+}));
+vi.mock('../intent/observation-callbacks.js', () => ({
+  diarize: vi.fn(async (s: unknown[]) => s),
+  triage: vi.fn(async () => ({ file: false, reason: 'mocked' })),
+}));
+vi.mock('../intent/observation-ideas-io.js', () => ({
+  readFiledIdeas: vi.fn(() => []),
+  appendFiledIdeas: vi.fn(),
+}));
+vi.mock('../intent/escalation.js', () => ({
+  decideFailClosed: vi.fn(() => ({ verdict: 'proceed', reason: '', failClosed: false })),
+}));
+vi.mock('../transport/mutations.js', () => ({
+  createMutation: vi.fn(async () => ({ ok: true, descriptor: { id: 'm1' } })),
 }));
 
 vi.mock('./capture.js', () => ({ captureSessions: vi.fn() }));
@@ -78,9 +110,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 11 steps and returns results', async () => {
+    it('runs all 12 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -91,6 +123,7 @@ describe('jobs/nightly', () => {
         'Library sync',
         'KB queue',
         'Whoop activity',
+        'Observation loop',
         'KB lint',
         'Mark processed',
       ]);
@@ -870,7 +903,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -899,7 +932,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -930,7 +963,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -941,7 +974,7 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       // Library sync is at index 6, KB queue at 7 (after Session capture, Daily tags, Birthday alerts, Playbook extract, Journal ingest, Meeting extract)
       expect(result.steps[7]!.step).toBe('KB queue');
       expect(result.steps[7]!.status).toBe('error');
@@ -953,7 +986,7 @@ describe('jobs/nightly', () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(11);
+      expect(result.steps).toHaveLength(12);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -964,8 +997,8 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is now last (index 10)
-      expect(result.steps[10]!.step).toBe('Mark processed');
+      // Mark processed is now last (index 11 — Observation loop added between KB queue and KB lint shifts it down by 1).
+      expect(result.steps[11]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {

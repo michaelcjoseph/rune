@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { platform } from 'node:os';
+import { join } from 'node:path';
 import type { NotificationBus } from '../transport/notification-bus.js';
 import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
@@ -13,7 +15,17 @@ import { readVaultFile, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { getTodayDate, getTodayFilename, getDayOfWeek } from '../utils/time.js';
 import { createLogger } from '../utils/logger.js';
-import config from '../config.js';
+import config, { PROJECT_ROOT } from '../config.js';
+import { decideFailClosed } from '../intent/escalation.js';
+import { runNightlyObservation } from '../intent/observation-nightly.js';
+import {
+  readVaultSignals,
+  readTelemetrySignals,
+  readInteractionSignals,
+} from '../intent/observation-sensor-readers.js';
+import { diarize, triage } from '../intent/observation-callbacks.js';
+import { readFiledIdeas, appendFiledIdeas } from '../intent/observation-ideas-io.js';
+import { createMutation } from '../transport/mutations.js';
 
 const log = createLogger('nightly');
 
@@ -353,6 +365,112 @@ function stepMarkProcessed(filename: string, content: string | null, date: strin
   return { step: 'Mark processed', status: 'success', detail: marker };
 }
 
+/** Phase 6 B5 — observation loop step. Composes the B2 source readers,
+ *  B3 LLM callbacks, B4 ideas-io, and the escalation policy into one
+ *  nightly pass. Filed ideas are appended to `docs/projects/ideas.md`;
+ *  `dispatch` plans fire a `gen-eval-loop` mutation; `await-approval`
+ *  plans surface a Telegram approval prompt (when a bus is available)
+ *  and are also recorded in the step detail. */
+async function stepObservation(bus?: NotificationBus): Promise<NightlyStepResult> {
+  const ideasPath = join(PROJECT_ROOT, 'docs', 'projects', 'ideas.md');
+
+  // Read the escalation policy once per pass; pass the raw text into
+  // `decideFailClosed` per filed idea so a missing/malformed policy fails
+  // closed (escalates rather than auto-proceeding).
+  let rawEscalationPolicy: string | null = null;
+  try {
+    rawEscalationPolicy = readFileSync(config.ESCALATION_POLICY_FILE, 'utf8');
+  } catch {
+    // Missing file → null → decideFailClosed escalates with a clear reason.
+  }
+
+  const result = await runNightlyObservation({
+    readers: {
+      vault: () => readVaultSignals({}),
+      telemetry: () => readTelemetrySignals({}),
+      interaction: () => readInteractionSignals({}),
+    },
+    diarize,
+    triage,
+    decideEscalation: (idea) =>
+      decideFailClosed({ specOrigin: 'self-generated' }, rawEscalationPolicy).verdict === 'escalate'
+        ? 'escalate'
+        : 'proceed',
+    existingIdeas: readFiledIdeas(ideasPath),
+  });
+
+  // Append filed ideas (no-op when the markdown is empty).
+  try {
+    appendFiledIdeas(ideasPath, result.ideasMarkdown);
+  } catch (err) {
+    log.warn('stepObservation: appendFiledIdeas failed', { error: (err as Error).message });
+  }
+
+  // Fire dispatch plans and accumulate await-approval messages.
+  const dispatchedSlugs: string[] = [];
+  const dispatchFailures: string[] = [];
+  const awaitingApproval: Array<{ idea: string; reason: string }> = [];
+  for (let i = 0; i < result.dispatchPlans.length; i++) {
+    const plan = result.dispatchPlans[i]!;
+    const outcome = result.outcomes.filter((o) => o.kind === 'filed')[i];
+    const ideaTitle = outcome && outcome.kind === 'filed' ? outcome.idea.title : 'unknown';
+    if (plan.action === 'dispatch') {
+      const create = await createMutation(
+        'gen-eval-loop',
+        { product: 'jarvis', project: plan.projectSlug },
+        'cron',
+      );
+      if (create.ok) {
+        dispatchedSlugs.push(plan.projectSlug);
+      } else {
+        dispatchFailures.push(`${plan.projectSlug}: ${create.reason}`);
+        log.warn('stepObservation: createMutation rejected', {
+          slug: plan.projectSlug,
+          reason: create.reason,
+        });
+      }
+    } else {
+      awaitingApproval.push({ idea: ideaTitle, reason: plan.reason });
+      if (bus) {
+        bus.publish({
+          kind: 'message',
+          userId: config.TELEGRAM_USER_ID,
+          text: `Observation loop filed a new idea pending approval:\n• ${ideaTitle}\n• reason: ${plan.reason}`,
+        });
+      }
+    }
+  }
+
+  // Pass-summary counts (B5.3) — meta telemetry the next pass can observe.
+  const counts = {
+    filed: result.outcomes.filter((o) => o.kind === 'filed').length,
+    discarded: result.outcomes.filter((o) => o.kind === 'discarded').length,
+    duplicate: result.outcomes.filter((o) => o.kind === 'duplicate').length,
+    quiet: result.outcomes.filter((o) => o.kind === 'quiet').length,
+    dispatched: dispatchedSlugs.length,
+    awaitingApproval: awaitingApproval.length,
+    dispatchFailures: dispatchFailures.length,
+  };
+  log.info('stepObservation pass summary', counts);
+
+  // Build a short detail string for the nightly step summary.
+  const parts: string[] = [
+    `filed=${counts.filed}`,
+    `discarded=${counts.discarded}`,
+    `duplicate=${counts.duplicate}`,
+  ];
+  if (counts.quiet > 0) parts.push('quiet');
+  if (counts.dispatched > 0) parts.push(`dispatched=${counts.dispatched}`);
+  if (counts.awaitingApproval > 0) parts.push(`awaiting-approval=${counts.awaitingApproval}`);
+  if (counts.dispatchFailures > 0) parts.push(`dispatch-failures=${counts.dispatchFailures}`);
+
+  return {
+    step: 'Observation loop',
+    status: counts.dispatchFailures > 0 ? 'error' : 'success',
+    detail: parts.join(', '),
+  };
+}
+
 async function stepLint(): Promise<NightlyStepResult> {
   if (getDayOfWeek() !== 'Sunday') {
     return { step: 'KB lint', status: 'skipped', detail: 'Not Sunday' };
@@ -397,7 +515,7 @@ async function safeFinalCommit(message: string, steps: NightlyStepResult[]): Pro
  *  `{force: true}` to bypass the gate (CLI: `--date X --force`). */
 export async function executeNightly(
   targetDate?: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; bus?: NotificationBus },
 ): Promise<NightlyResult> {
   log.info('Nightly processing started', { targetDate: targetDate ?? '(today)', force: options?.force ?? false });
   const steps: NightlyStepResult[] = [];
@@ -461,6 +579,7 @@ export async function executeNightly(
   await run('Library sync', stepLibrarySync);
   await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
+  await run('Observation loop', () => stepObservation(options?.bus));
   await run('KB lint', stepLint);
   await run('Mark processed', () => stepMarkProcessed(todayFilename, todayJournal, todayDate));
 
@@ -499,7 +618,7 @@ async function withNoSleep<T>(fn: () => Promise<T>): Promise<T> {
 export async function runNightly(bus: NotificationBus): Promise<void> {
   await withNoSleep(async () => {
     try {
-      const result = await executeNightly();
+      const result = await executeNightly(undefined, { bus });
       const summary = formatSummary(result);
       bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: summary });
     } catch (err) {

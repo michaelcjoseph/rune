@@ -312,9 +312,9 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### B5. Nightly observation step
 
-- [ ] **(agent)** Add `observationStep()` to `src/jobs/nightly.ts`, slotted after KB queue and before lint. Build the `NightlyObservationDeps` from the readers (B2), the callbacks (B3), `decideFailClosed({}, {specOrigin: 'self-generated', …})`, and `readFiledIdeas()` (B4).
-- [ ] **(agent)** Handle the result — `appendFiledIdeas(result.ideasMarkdown)`; for each `dispatch` plan call `createMutation(...)` against the gen-eval-loop kind from A3; for each `await-approval` plan, send a Telegram approval prompt naming the idea and the escalation reason.
-- [ ] **(agent)** Log the pass summary (counts of filed / discarded / duplicate / quiet) — meta telemetry the next pass can observe.
+- [x] **(agent)** Add `observationStep()` to `src/jobs/nightly.ts`, slotted after KB queue and before lint. Build the `NightlyObservationDeps` from the readers (B2), the callbacks (B3), `decideFailClosed({}, {specOrigin: 'self-generated', …})`, and `readFiledIdeas()` (B4). *Step lives between "KB queue" and "KB lint" as `'Observation loop'`. Reads `policies/escalation-policy.json` once per pass; `decideEscalation(idea)` calls `decideFailClosed({specOrigin: 'self-generated'}, rawPolicy).verdict` so a missing/malformed policy escalates rather than auto-proceeding.*
+- [x] **(agent)** Handle the result — `appendFiledIdeas(result.ideasMarkdown)`; for each `dispatch` plan call `createMutation(...)` against the gen-eval-loop kind from A3; for each `await-approval` plan, send a Telegram approval prompt naming the idea and the escalation reason. *appendFiledIdeas is wrapped in try/catch (logged warn on failure). Dispatch plans create `gen-eval-loop` mutations with `{product:'jarvis', project:<slug>}` source `'cron'`; createMutation rejections accumulate in `dispatchFailures` and flip the step status to `error`. await-approval plans publish a Telegram message via the bus when present (the bus is now an optional `executeNightly` option threaded from `runNightly`).*
+- [x] **(agent)** Log the pass summary (counts of filed / discarded / duplicate / quiet) — meta telemetry the next pass can observe. *`stepObservation pass summary` log entry includes filed/discarded/duplicate/quiet counts plus dispatched/awaitingApproval/dispatchFailures. The step's `detail` string surfaces the same counts in the Telegram nightly summary so the user sees them too.*
 
 ### Track C — user surfaces (parallel-safe with Tracks A and B)
 
