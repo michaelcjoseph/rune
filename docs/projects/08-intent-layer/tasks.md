@@ -514,15 +514,32 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C8. Journal-to-intent consumer
 
-- [ ] **(agent + user)** Post-approval actioning: on approve (from
+- [x] **(agent + user)** Post-approval actioning: on approve (from
   cockpit C2 or Telegram C6), for an `IntentProposal` of kind
   `vault-intake`, synthesize the note into `projects/<product>.md`
   (propose-and-approve — uses an updater agent for the actual edit);
   for `roadmap`, append a roadmap item to the product repo's roadmap
   file; for `register-product`, run the registration flow from
-  Phase 1.
-- [ ] **(agent)** Update CLAUDE.md to drop the "The post-approval
-  actioning path … is a later task" note (it lands here).
+  Phase 1. *Dispatch core lives in
+  `src/intent/journal-intent-consumer.ts` — `actionApprovedIntentProposal`
+  switches on `proposal.kind` (with compile-time exhaustiveness guard)
+  and routes to injected `ConsumerDeps`. Wire-up lives in
+  `src/intent/journal-intent-actions.ts` (`realConsumerDeps`). Wired
+  through `dispatchApprovalStatus` (now async): on a successful approve
+  the consumer runs first; on success the queue entry flips to
+  approved + `clearApprovedIntentProposals` prunes it; on failure the
+  entry stays pending and the caller sees an `'error'` result (HTTP
+  500 / TG "write error" reply). vault-intake is fully implemented;
+  appendRoadmap and registerProduct throw a clear "wire-up deferred"
+  error so live verification can refine those paths without dropping
+  the user's approval. The live-verification refinement (`agent + user`)
+  carries through the deferred deps when the user runs through a real
+  proposal end-to-end.*
+- [x] **(agent)** Update CLAUDE.md to drop the "The post-approval
+  actioning path … is a later task" note (it lands here). *Updated in
+  the same commit — the LOGS_DIR paragraph now describes the C8
+  actioning path (vault-intake fully wired; roadmap and
+  register-product surfaced as deferred-with-clear-error).*
 
 ### Live verification → Done
 

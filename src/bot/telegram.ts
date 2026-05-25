@@ -72,26 +72,28 @@ export function wireHandlers(bot: TelegramBot, sender: MessageSender): void {
       // dispatchApprovalStatus is synchronous and writes JSON files via
       // writeFileSync — wrap in try/catch so a disk-write failure can't
       // bubble out of this EventEmitter listener and crash the process.
-      // dispatchApprovalStatus now returns a three-valued result; the
-      // outer try/catch stays as defense-in-depth in case a future
-      // implementation reintroduces a throw path (today safeWrite traps
-      // all disk-write failures into a 'error' return).
-      let result: ReturnType<typeof dispatchApprovalStatus>;
-      try {
-        result = dispatchApprovalStatus(idCandidate, status);
-      } catch (err: unknown) {
-        log.error('dispatchApprovalStatus threw', { error: (err as Error).message });
-        void sender.send(userId, `Failed to action ${idCandidate} — internal error.`).catch(() => { /* swallow */ });
-        return;
-      }
-      const reply = result === 'ok'
-        ? `${status === 'approved' ? '✅' : '✖️'} ${idCandidate} ${status}`
-        : result === 'error'
-          ? `Failed to action ${idCandidate} — write error (check server logs).`
-          : `Could not action ${idCandidate} — already actioned or unknown.`;
-      void sender.send(userId, reply).catch((err: unknown) => {
-        log.warn('callback_query reply send failed', { error: (err as Error).message });
-      });
+      // dispatchApprovalStatus is async in C8 — it awaits the consumer
+      // side-effect before flipping queue status. Wrap in an IIFE so the
+      // outer EventEmitter listener stays sync; the promise rejection is
+      // caught and converted to a user-facing message.
+      void (async () => {
+        let result: Awaited<ReturnType<typeof dispatchApprovalStatus>>;
+        try {
+          result = await dispatchApprovalStatus(idCandidate, status);
+        } catch (err: unknown) {
+          log.error('dispatchApprovalStatus threw', { error: (err as Error).message });
+          void sender.send(userId, `Failed to action ${idCandidate} — internal error.`).catch(() => { /* swallow */ });
+          return;
+        }
+        const reply = result === 'ok'
+          ? `${status === 'approved' ? '✅' : '✖️'} ${idCandidate} ${status}`
+          : result === 'error'
+            ? `Failed to action ${idCandidate} — write error (check server logs).`
+            : `Could not action ${idCandidate} — already actioned or unknown.`;
+        void sender.send(userId, reply).catch((err: unknown) => {
+          log.warn('callback_query reply send failed', { error: (err as Error).message });
+        });
+      })();
       return;
     }
 

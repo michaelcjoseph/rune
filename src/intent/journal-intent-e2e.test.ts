@@ -193,13 +193,16 @@ describe('runJournalIntentProducer (C7 — idempotency + dedupe)', () => {
 // agent's own contract).
 
 describe('actionApprovedIntentProposal (C8)', () => {
-  interface ConsumerDeps {
+  // Mirror the real ConsumerDeps signature but with vi.fn typings so the
+  // test can assert call shape. Casting at the call boundary (where the
+  // consumer receives a ConsumerDeps) preserves the structural contract.
+  interface MockDeps {
     invokeVaultUpdater: ReturnType<typeof vi.fn>;
     appendRoadmap: ReturnType<typeof vi.fn>;
     registerProduct: ReturnType<typeof vi.fn>;
   }
 
-  function deps(): ConsumerDeps {
+  function deps(): MockDeps {
     return {
       invokeVaultUpdater: vi.fn(async () => ({ ok: true })),
       appendRoadmap: vi.fn(async () => ({ ok: true })),
@@ -207,7 +210,7 @@ describe('actionApprovedIntentProposal (C8)', () => {
     };
   }
 
-  async function load(): Promise<undefined | ((proposal: IntentProposal, d: ConsumerDeps) => Promise<unknown>)> {
+  async function load(): Promise<undefined | ((proposal: IntentProposal, d: MockDeps) => Promise<unknown>)> {
     try {
       return (await import('./journal-intent-consumer.js')).actionApprovedIntentProposal;
     } catch {

@@ -571,8 +571,10 @@ function handleApiApprovalsList(_req: IncomingMessage, res: ServerResponse): voi
 // (Phase 6 C6.2) can share the actioning path without importing the full
 // HTTP server module.
 
-function handleApiApprovalAction(res: ServerResponse, id: string, status: 'approved' | 'rejected'): void {
-  const result = dispatchApprovalStatus(id, status);
+async function handleApiApprovalAction(res: ServerResponse, id: string, status: 'approved' | 'rejected'): Promise<void> {
+  // dispatchApprovalStatus became async in C8 so it can run the intent-
+  // proposal consumer side-effect before flipping the queue entry.
+  const result = await dispatchApprovalStatus(id, status);
   if (result === 'not-found') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'approval not found' }));
@@ -582,8 +584,11 @@ function handleApiApprovalAction(res: ServerResponse, id: string, status: 'appro
     // C6 review fix: a disk-write failure inside dispatchApprovalStatus
     // now surfaces as 500 rather than masquerading as a 404 — the caller
     // can distinguish "entry not found" from "server failed to persist."
+    // C8 extends this to also cover a consumer side-effect failure: when
+    // the entry was approved but the consumer threw, status stays
+    // pending and the caller sees 500.
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'approval write failed' }));
+    res.end(JSON.stringify({ error: 'approval action failed' }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -792,12 +797,17 @@ export function mountWebviewRoutes(
       }
       const approveMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/approve$/);
       if (req.method === 'POST' && approveMatch) {
-        handleApiApprovalAction(res, decodeURIComponent(approveMatch[1]!), 'approved');
+        // handleApiApprovalAction is async (C8) — fire-and-forget here,
+        // it writes its own response. Wrap in .catch so an unhandled
+        // promise rejection from the consumer can't escape the listener.
+        void handleApiApprovalAction(res, decodeURIComponent(approveMatch[1]!), 'approved')
+          .catch((err: unknown) => log.error('handleApiApprovalAction approve threw', { error: (err as Error).message }));
         return true;
       }
       const rejectMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/reject$/);
       if (req.method === 'POST' && rejectMatch) {
-        handleApiApprovalAction(res, decodeURIComponent(rejectMatch[1]!), 'rejected');
+        void handleApiApprovalAction(res, decodeURIComponent(rejectMatch[1]!), 'rejected')
+          .catch((err: unknown) => log.error('handleApiApprovalAction reject threw', { error: (err as Error).message }));
         return true;
       }
 

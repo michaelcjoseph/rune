@@ -17,9 +17,12 @@
 import {
   readIntentProposalQueue,
   writeIntentProposalQueue,
+  clearApprovedIntentProposals,
 } from '../intent/intent-proposal-queue.js';
 import { readProposalQueue, writeProposalQueue } from '../jobs/proposal-queue.js';
 import { readPlaybookQueue, writePlaybookQueue } from '../jobs/playbook-extract.js';
+import { actionApprovedIntentProposal } from '../intent/journal-intent-consumer.js';
+import { realConsumerDeps } from '../intent/journal-intent-actions.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('approval-actions');
@@ -67,12 +70,45 @@ export function parseApprovalId(id: string): { source: string; payload: string }
  *  `'error'` on a disk-write failure. `dispatchApprovalStatus` plumbs the
  *  result through to the HTTP/Telegram caller so a write failure surfaces
  *  as a distinct response (500) rather than masquerading as a 404. */
-function setIntentProposalStatus(idx: number, status: ApprovalStatus): ApprovalDispatchResult {
+/** Async — fire the consumer on approval, then flip + clear. Sequence:
+ *  1) Look up the entry (still pending). 2) On 'rejected' just flip and
+ *  write. 3) On 'approved' run the consumer first so a failed write side-
+ *  effect leaves the entry pending for retry; if the consumer throws, the
+ *  status stays pending and an `'error'` result surfaces to the caller.
+ *  Successful consumer call → flip status to 'approved' + write +
+ *  clearApprovedIntentProposals so the entry doesn't accumulate. */
+async function setIntentProposalStatus(idx: number, status: ApprovalStatus): Promise<ApprovalDispatchResult> {
   const queue = readIntentProposalQueue();
   const entry = queue[idx];
   if (!entry || entry.status !== 'pending') return 'not-found';
-  entry.status = status;
-  return safeWrite('intent-proposal-queue', () => writeIntentProposalQueue(queue));
+  if (status === 'rejected') {
+    entry.status = 'rejected';
+    return safeWrite('intent-proposal-queue', () => writeIntentProposalQueue(queue));
+  }
+  // status === 'approved': run the consumer first; only flip+clear on success.
+  try {
+    await actionApprovedIntentProposal(entry.proposal, realConsumerDeps);
+  } catch (err: unknown) {
+    log.error('actionApprovedIntentProposal failed; leaving entry pending', {
+      kind: entry.proposal.kind,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 'error';
+  }
+  entry.status = 'approved';
+  const writeResult = safeWrite('intent-proposal-queue', () => writeIntentProposalQueue(queue));
+  if (writeResult !== 'ok') return writeResult;
+  // Prune approved entries so the queue stays focused on pending +
+  // rejected. clearApprovedIntentProposals is best-effort — a failure
+  // doesn't undo the consumer's already-applied side-effect.
+  try {
+    clearApprovedIntentProposals();
+  } catch (err: unknown) {
+    log.warn('clearApprovedIntentProposals failed (consumer already ran)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return 'ok';
 }
 
 function setPlaybookStatus(idx: number, status: ApprovalStatus): ApprovalDispatchResult {
@@ -99,7 +135,7 @@ function setAskTwiceStatus(idx: number, status: ApprovalStatus): ApprovalDispatc
  * (those rows are not queue entries the cockpit can flip — the user must
  * take the underlying action).
  */
-export function dispatchApprovalStatus(id: string, status: ApprovalStatus): ApprovalDispatchResult {
+export async function dispatchApprovalStatus(id: string, status: ApprovalStatus): Promise<ApprovalDispatchResult> {
   const parsed = parseApprovalId(id);
   if (!parsed) return 'not-found';
   const idx = Number(parsed.payload);
