@@ -26,7 +26,12 @@ import {
   registerActiveProcess,
   unregisterActiveProcess,
 } from '../ai/claude.js';
-import { resolveReviewMode } from '../intent/adjudication.js';
+import {
+  evaluateMergeContract,
+  resolveReviewMode,
+  type Adjudication,
+} from '../intent/adjudication.js';
+import type { DispatchProvider } from '../intent/dispatch.js';
 import { parseEscalationPolicy } from '../intent/escalation.js';
 import { evaluateLoop, recordRound, type LoopRound } from '../intent/gen-eval-loop.js';
 import { loadModelPolicy, resolveModel } from '../intent/model-policy.js';
@@ -324,6 +329,25 @@ interface ResolutionEventData {
   evaluator: ResolvedSide | null;
 }
 
+/** Build an `Adjudication` from the resolved generator/evaluator pair (the
+ *  A7.1 startup resolution event's data) and the round's verdict. Returns
+ *  `null` when the Evaluator is unresolved — `evaluateMergeContract` treats
+ *  a null adjudication as "cross-model review unavailable" and holds the
+ *  merge, never degrading to a single-model autonomous merge. */
+function buildAdjudicationFromResolution(
+  resolution: ResolutionEventData,
+  verdict: 'pass' | 'fail',
+): Adjudication | null {
+  if (resolution.evaluator === null) return null;
+  return {
+    generatorModel: resolution.generator.model,
+    generatorProvider: resolution.generator.provider as DispatchProvider,
+    evaluatorModel: resolution.evaluator.model,
+    evaluatorProvider: resolution.evaluator.provider as DispatchProvider,
+    verdict,
+  };
+}
+
 /** Resolve the Generator and Evaluator (model, provider) pair from the
  *  model-selection policy at loop start. Autonomous runs are always
  *  cross-model — Evaluator resolves with `distinctFromProvider` set to the
@@ -470,6 +494,39 @@ export async function* runGenEvalLoop(
       });
 
       if (outcome.status === 'on-branch') {
+        // Phase 6 A7.2: build an Adjudication from the resolved Generator/
+        // Evaluator pair (A7.1) and the round's verdict, then evaluate the
+        // merge contract. On `merge: true` the gate clears and the loop
+        // emits a `merge-ready` progress event before the existing
+        // `completed` event (A7.3 swaps the placeholder `completed` for the
+        // actual git merge). On `merge: false` the loop emits a `failed`
+        // event with the contract's reason — the run holds rather than
+        // degrading to an autonomous merge that skipped a contract gate.
+        const adjudication = buildAdjudicationFromResolution(resolution, verdict);
+        const merge = evaluateMergeContract({
+          adjudication,
+          testsPass: true,
+          // TODO(A7+): wire to the escalation policy via decide() once the
+          // change-class shape the loop reports is settled. For now the
+          // escalate-after-N-failed-rounds path is the only escalation
+          // signal the runner emits, and that's handled in the
+          // 'escalated' branch above.
+          escalationFlags: false,
+        });
+        if (!merge.merge) {
+          yield baseEvent('failed', {
+            reason: `merge contract held: ${merge.reason}`,
+            ...(adjudication !== null ? { adjudication } : {}),
+            rounds: rounds.length,
+            failedEvaluatorRounds: outcome.failedEvaluatorRounds,
+          });
+          return;
+        }
+        // Merge gate cleared — record the cleared contract and emit completed.
+        yield baseEvent('progress', {
+          kind: 'merge-ready',
+          ...(adjudication !== null ? { adjudication } : {}),
+        });
         yield baseEvent('completed', {
           rounds: rounds.length,
           failedEvaluatorRounds: outcome.failedEvaluatorRounds,

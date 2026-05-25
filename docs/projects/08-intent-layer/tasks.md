@@ -266,7 +266,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 #### A7. Cross-model adjudication wiring (Layer 2 upgrade)
 
 - [x] **(agent)** Extend the gen-eval-loop runner — when `resolveReviewMode({autonomous: true, …}) === 'cross-model'`, Generator and Evaluator dispatches resolve to distinct providers via `resolveModel({evaluatorDistinctFromGenerator: true, generatorProvider})`. *Scope is the resolution path: the loop now emits a `progress` event of `{kind: 'resolution', mode, generator, evaluator}` at startup. A7.2 builds the Adjudication from the resolved pair + verdict; A7.3 wires the actual Codex Evaluator dispatch (the current `/review` still runs on Claude until A7.3 swaps the Evaluator's spawn path).*
-- [ ] **(agent)** Build an `Adjudication` from the resolved (model, provider) pair and the verdict; call `evaluateMergeContract`.
+- [x] **(agent)** Build an `Adjudication` from the resolved (model, provider) pair and the verdict; call `evaluateMergeContract`. *On `merge: true` the loop emits a `progress` event of `{kind: 'merge-ready', adjudication}` followed by `completed`. On `merge: false` it emits `failed` with `reason: 'merge contract held: <contract reason>'`. A7.3 swaps the placeholder `completed` for the actual `git merge --no-ff` against the product repo's main branch.*
 - [ ] **(agent)** On `merge: true` — `git -C <productRepo> merge --no-ff <branch>` and push (or open and auto-merge a PR per the product's flow).
 - [ ] **(agent)** On `merge: false` — surface via supervision as `blocked-on-human` with the contract's reason; never degrade to single-model + merge unreviewed.
 

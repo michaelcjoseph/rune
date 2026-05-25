@@ -609,24 +609,195 @@ describe('runGenEvalLoop — cross-model resolution', () => {
     expect(resolutionIdx).toBeLessThan(firstRoundOutputIdx);
   });
 
-  it('when loadModelPolicy returns null, the loop still runs and emits a resolution event with evaluator null', async () => {
-    // The policy file is missing (or loadModelPolicy returns null). The runner
-    // must not crash — it falls back to a default generator (claude/sonnet or
-    // similar) and emits the resolution event with evaluator: null, signalling
-    // that cross-model adjudication will be blocked at merge time per
-    // evaluateMergeContract (null adjudication → merge: false).
+  it('when loadModelPolicy returns null, the runner emits resolution with evaluator null and holds the merge', async () => {
+    // The policy file is missing (or loadModelPolicy returns null). The
+    // runner must not crash — it falls back to a default generator
+    // (claude/sonnet) and emits the resolution event with `evaluator: null`.
+    // Per A7.2's merge contract a null Adjudication holds the merge, so the
+    // terminal event is `failed` with the contract reason (NOT `completed`).
     loadModelPolicyMock.mockReturnValue(null);
 
     const events = await runLoop(fakeSpawners());
-
-    // The loop must complete (no crash).
-    expect(events[events.length - 1]!.kind).toBe('completed');
 
     const resolutionEvent = events.find(
       (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'resolution',
     );
     expect(resolutionEvent).toBeDefined();
-    // evaluator must be null when the policy couldn't produce a distinct-provider model.
     expect((resolutionEvent!.data as Record<string, unknown>)['evaluator']).toBeNull();
+
+    // Terminal event is failed (merge contract held), not completed.
+    const terminal = events[events.length - 1]!;
+    expect(terminal.kind).toBe('failed');
+    expect(String((terminal.data as Record<string, unknown>)?.['reason'] ?? '')).toMatch(
+      /merge contract|cross-model review unavailable/i,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runGenEvalLoop — merge contract (Phase 7 A7.2)
+//
+// When `evaluateLoop` returns `'on-branch'`, the runner must build an
+// `Adjudication` from the resolved (generator, evaluator) pair (from A7.1)
+// plus the round's verdict, and feed it into `evaluateMergeContract`.
+//
+// - merge: true  → emit progress {kind:'merge-ready', adjudication} THEN
+//                  emit completed (actual git merge is A7.3).
+// - merge: false → emit failed {reason: 'merge contract held: ...', adjudication}.
+//                  No completed event.
+// - evaluator null → adjudication null → merge contract returns false with
+//                  'cross-model review unavailable — second provider was down'.
+// ---------------------------------------------------------------------------
+
+describe('runGenEvalLoop — merge contract (A7.2)', () => {
+  type LoopSpawners = {
+    runWorkAuto: ReturnType<typeof vi.fn>;
+    runReview: ReturnType<typeof vi.fn>;
+    createWorktree: ReturnType<typeof vi.fn>;
+    destroyWorktree: ReturnType<typeof vi.fn>;
+  };
+
+  function fakeSpawners(overrides: Partial<{
+    workExits: number[];
+    reviewVerdicts: Array<'pass' | 'fail'>;
+  }> = {}): LoopSpawners {
+    const workExits = overrides.workExits ?? [0];
+    const verdicts = overrides.reviewVerdicts ?? ['pass'];
+    let workIdx = 0;
+    let verdictIdx = 0;
+    return {
+      createWorktree: vi.fn(async () => ({
+        product: 'aura',
+        project: '01-growth',
+        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        egressAllowlist: [],
+      })),
+      destroyWorktree: vi.fn(async () => {}),
+      runWorkAuto: vi.fn(async () => workExits[workIdx++ % workExits.length]!),
+      runReview: vi.fn(async () => verdicts[verdictIdx++ % verdicts.length]!),
+    };
+  }
+
+  async function runLoop(
+    spawners: LoopSpawners,
+    opts: { maxEvaluatorRounds?: number } = {},
+  ) {
+    const { runGenEvalLoop } = await import('./gen-eval-loop-runner.js');
+    const events: Array<{ kind: string; data?: unknown }> = [];
+    for await (const ev of runGenEvalLoop({
+      mutationId: 'mut-merge-1',
+      payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
+      worktreeRoot: '/tmp/jarvis-worktrees',
+      productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
+      escalationPolicyPath: '/test/no-such-policy.json',
+      modelPolicyPath: '/test/no-such-policy.json',
+      spawners: spawners as never,
+      cancel: () => false,
+    })) {
+      events.push({ kind: ev.kind, data: ev.data });
+    }
+    return events;
+  }
+
+  it('on-branch + evaluator resolved → emits a merge-ready progress event before completed', async () => {
+    // Single round: tests pass + evaluator pass. Expect a progress event with
+    // kind='merge-ready' and a full Adjudication before the completed event.
+    const events = await runLoop(fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] }));
+
+    const mergeReadyIdx = events.findIndex(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyIdx).toBeGreaterThanOrEqual(0);
+
+    const mergeReadyEvent = events[mergeReadyIdx]!;
+    const data = mergeReadyEvent.data as Record<string, unknown>;
+    expect(data['kind']).toBe('merge-ready');
+
+    const adjudication = data['adjudication'] as Record<string, unknown>;
+    expect(adjudication).toMatchObject({
+      generatorProvider: 'anthropic',
+      generatorModel: 'sonnet',
+      evaluatorProvider: 'openai',
+      evaluatorModel: 'codex',
+      verdict: 'pass',
+    });
+
+    // completed must fire after merge-ready
+    const completedIdx = events.findIndex((e) => e.kind === 'completed');
+    expect(completedIdx).toBeGreaterThan(mergeReadyIdx);
+  });
+
+  it('on-branch + evaluator NOT resolved → emits failed with merge contract reason', async () => {
+    // loadModelPolicy returns null → resolution.evaluator is null →
+    // adjudication is null → evaluateMergeContract returns merge:false with
+    // 'cross-model review unavailable — second provider was down'.
+    loadModelPolicyMock.mockReturnValue(null);
+
+    const events = await runLoop(fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] }));
+
+    const terminalEvent = events[events.length - 1]!;
+    expect(terminalEvent.kind).toBe('failed');
+
+    const reason = String((terminalEvent.data as Record<string, unknown>)['reason']);
+    expect(reason).toMatch(/cross-model review unavailable|second provider/i);
+
+    // No completed event must appear
+    const completedEvent = events.find((e) => e.kind === 'completed');
+    expect(completedEvent).toBeUndefined();
+  });
+
+  it('escalated path is unaffected by the merge contract', async () => {
+    // N=3 failed evaluator rounds → evaluateLoop returns 'escalated'.
+    // The failed event must carry the existing escalation reason, NOT the
+    // merge-contract reason (the escalated path never reaches evaluateMergeContract).
+    const events = await runLoop(
+      fakeSpawners({ workExits: [0, 0, 0], reviewVerdicts: ['fail', 'fail', 'fail'] }),
+      { maxEvaluatorRounds: 3 },
+    );
+
+    const terminalEvent = events[events.length - 1]!;
+    expect(terminalEvent.kind).toBe('failed');
+
+    const reason = String((terminalEvent.data as Record<string, unknown>)['reason']);
+    expect(reason).toMatch(/escalat/i);
+    expect(reason).not.toMatch(/merge contract/i);
+    expect(reason).not.toMatch(/cross-model review unavailable/i);
+
+    // No merge-ready event should appear on the escalated path
+    const mergeReadyEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyEvent).toBeUndefined();
+  });
+
+  it('adjudication carries the round verdict "pass"', async () => {
+    // Happy path: single round, tests pass + evaluator pass.
+    // Assert the adjudication object's verdict field specifically.
+    const events = await runLoop(fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] }));
+
+    const mergeReadyEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyEvent).toBeDefined();
+
+    const adjudication = (mergeReadyEvent!.data as Record<string, unknown>)['adjudication'] as Record<string, unknown>;
+    expect(adjudication['verdict']).toBe('pass');
+  });
+
+  it('merge-ready event includes the full Adjudication shape — no extra fields', async () => {
+    // Assert that the adjudication object has exactly the 5 fields defined in
+    // the Adjudication interface and nothing else.
+    const events = await runLoop(fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] }));
+
+    const mergeReadyEvent = events.find(
+      (e) => e.kind === 'progress' && (e.data as Record<string, unknown>)?.['kind'] === 'merge-ready',
+    );
+    expect(mergeReadyEvent).toBeDefined();
+
+    const adjudication = (mergeReadyEvent!.data as Record<string, unknown>)['adjudication'] as Record<string, unknown>;
+    const keys = Object.keys(adjudication).sort();
+    expect(keys).toEqual(
+      ['generatorModel', 'generatorProvider', 'evaluatorModel', 'evaluatorProvider', 'verdict'].sort(),
+    );
   });
 });
