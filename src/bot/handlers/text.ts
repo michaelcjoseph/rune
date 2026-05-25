@@ -98,6 +98,33 @@ function routeOf(text: string): string {
   return head;
 }
 
+/** Phase 6 B1.3: wrap a slash-command handler invocation with an
+ *  observation-log emission. Each slash dispatch in `dispatchText` goes
+ *  through this so the observation loop sees one `kind:'command'` record
+ *  per command invocation, with outcome derived from whether the handler
+ *  threw. `detail` carries only the structured command name (`cmd=<name>`)
+ *  — never the args, which can contain raw user content. */
+async function withCommandLog<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  let outcome: 'success' | 'failure' = 'success';
+  try {
+    return await fn();
+  } catch (err) {
+    outcome = 'failure';
+    throw err;
+  } finally {
+    try {
+      appendInteraction({
+        ts: new Date().toISOString(),
+        kind: 'command',
+        outcome,
+        detail: `cmd=${name}`,
+      });
+    } catch (logErr) {
+      log.warn('appendInteraction failed for command', { name, error: (logErr as Error).message });
+    }
+  }
+}
+
 /** Core routing chain shared by TG and webview transports. Auth/userId extraction
  *  happens upstream; callers must pass the verified userId. Transport is taken
  *  from `sender.name` (its discriminant union matches `Transport`) so session
@@ -106,45 +133,48 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (!text) return;
   const transport: Transport = sender.name;
 
-  if (text.startsWith('/fresh-full')) return handleFreshFull(sender, userId, transport);
-  if (text.startsWith('/fresh')) return handleFresh(sender, userId, transport);
-  if (text === '/clear' || text.startsWith('/clear ')) return handleClear(sender, userId, transport);
-  if (text === '/cancel' || text.startsWith('/cancel ')) return handleCancel(sender, userId, text.slice('/cancel'.length).trim());
-  if (text.startsWith('/journal ')) return handleJournal(sender, userId, transport, text.slice('/journal '.length).trim());
-  if (text.startsWith('/ask ')) return handleAsk(sender, userId, text.slice('/ask '.length).trim());
-  if (text.startsWith('/kb ')) return handleKB(sender, userId, text.slice('/kb '.length).trim());
-  if (text.startsWith('/ingest')) return handleIngest(sender, userId, text.slice('/ingest'.length).trim());
-  if (text.startsWith('/daily')) return handleDaily(sender, userId, text.slice('/daily'.length).trim());
-  if (text.startsWith('/weekly')) return handleWeekly(sender, userId, text.slice('/weekly'.length).trim());
-  if (text.startsWith('/monthly')) return handleMonthly(sender, userId, text.slice('/monthly'.length).trim());
-  if (text.startsWith('/quarterly')) return handleQuarterly(sender, userId, text.slice('/quarterly'.length).trim());
-  if (text.startsWith('/yearly')) return handleYearly(sender, userId, text.slice('/yearly'.length).trim());
-  if (text.startsWith('/priorities')) return handlePriorities(sender, userId, text.slice('/priorities'.length).trim());
+  // Each slash branch wraps its handler in `withCommandLog` so every
+  // command invocation produces one `kind:'command'` observation record
+  // (Phase 6 B1.3). The `cmd=<name>` detail is structured — never the args.
+  if (text.startsWith('/fresh-full')) return withCommandLog('fresh-full', () => handleFreshFull(sender, userId, transport));
+  if (text.startsWith('/fresh')) return withCommandLog('fresh', () => handleFresh(sender, userId, transport));
+  if (text === '/clear' || text.startsWith('/clear ')) return withCommandLog('clear', () => handleClear(sender, userId, transport));
+  if (text === '/cancel' || text.startsWith('/cancel ')) return withCommandLog('cancel', () => handleCancel(sender, userId, text.slice('/cancel'.length).trim()));
+  if (text.startsWith('/journal ')) return withCommandLog('journal', () => handleJournal(sender, userId, transport, text.slice('/journal '.length).trim()));
+  if (text.startsWith('/ask ')) return withCommandLog('ask', () => handleAsk(sender, userId, text.slice('/ask '.length).trim()));
+  if (text.startsWith('/kb ')) return withCommandLog('kb', () => handleKB(sender, userId, text.slice('/kb '.length).trim()));
+  if (text.startsWith('/ingest')) return withCommandLog('ingest', () => handleIngest(sender, userId, text.slice('/ingest'.length).trim()));
+  if (text.startsWith('/daily')) return withCommandLog('daily', () => handleDaily(sender, userId, text.slice('/daily'.length).trim()));
+  if (text.startsWith('/weekly')) return withCommandLog('weekly', () => handleWeekly(sender, userId, text.slice('/weekly'.length).trim()));
+  if (text.startsWith('/monthly')) return withCommandLog('monthly', () => handleMonthly(sender, userId, text.slice('/monthly'.length).trim()));
+  if (text.startsWith('/quarterly')) return withCommandLog('quarterly', () => handleQuarterly(sender, userId, text.slice('/quarterly'.length).trim()));
+  if (text.startsWith('/yearly')) return withCommandLog('yearly', () => handleYearly(sender, userId, text.slice('/yearly'.length).trim()));
+  if (text.startsWith('/priorities')) return withCommandLog('priorities', () => handlePriorities(sender, userId, text.slice('/priorities'.length).trim()));
   // /done-workout must come before /workout so the longer prefix wins.
-  if (text.startsWith('/done-workout')) return handleDoneWorkout(sender, userId);
-  if (text.startsWith('/workout')) return handleWorkout(sender, userId, text.slice('/workout'.length).trim());
-  if (text.startsWith('/syllabus')) return handleSyllabus(sender, userId);
-  if (text.startsWith('/study')) return handleStudy(sender, userId, text.slice('/study'.length).trim());
-  if (text.startsWith('/family')) return handleFamily(sender, userId);
-  if (text.startsWith('/career')) return handleCareer(sender, userId);
-  if (text.startsWith('/health')) return handleHealth(sender, userId, text.slice('/health'.length).trim());
-  if (text.startsWith('/blog')) return handleBlog(sender, userId, text.slice('/blog'.length).trim());
-  if (text.startsWith('/new-project')) return handleNewProject(sender, userId, text.slice('/new-project'.length).trim());
-  if (text === '/plan' || text.startsWith('/plan ')) return handlePlan(sender, userId, text.slice('/plan'.length).trim());
-  if (text === '/approve' || text.startsWith('/approve ')) return handleApprove(sender, userId);
-  if (text.startsWith('/library-sync')) return handleLibrarySync(sender, userId);
+  if (text.startsWith('/done-workout')) return withCommandLog('done-workout', () => handleDoneWorkout(sender, userId));
+  if (text.startsWith('/workout')) return withCommandLog('workout', () => handleWorkout(sender, userId, text.slice('/workout'.length).trim()));
+  if (text.startsWith('/syllabus')) return withCommandLog('syllabus', () => handleSyllabus(sender, userId));
+  if (text.startsWith('/study')) return withCommandLog('study', () => handleStudy(sender, userId, text.slice('/study'.length).trim()));
+  if (text.startsWith('/family')) return withCommandLog('family', () => handleFamily(sender, userId));
+  if (text.startsWith('/career')) return withCommandLog('career', () => handleCareer(sender, userId));
+  if (text.startsWith('/health')) return withCommandLog('health', () => handleHealth(sender, userId, text.slice('/health'.length).trim()));
+  if (text.startsWith('/blog')) return withCommandLog('blog', () => handleBlog(sender, userId, text.slice('/blog'.length).trim()));
+  if (text.startsWith('/new-project')) return withCommandLog('new-project', () => handleNewProject(sender, userId, text.slice('/new-project'.length).trim()));
+  if (text === '/plan' || text.startsWith('/plan ')) return withCommandLog('plan', () => handlePlan(sender, userId, text.slice('/plan'.length).trim()));
+  if (text === '/approve' || text.startsWith('/approve ')) return withCommandLog('approve', () => handleApprove(sender, userId));
+  if (text.startsWith('/library-sync')) return withCommandLog('library-sync', () => handleLibrarySync(sender, userId));
   // /learn-list must come before /learn so the longer prefix wins.
-  if (text.startsWith('/learn-list')) return handleLearnList(sender, userId);
-  if (text === '/learn' || text.startsWith('/learn ')) return handleLearn(sender, userId, text.slice('/learn'.length).trim());
-  if (text.startsWith('/prep')) return handlePrep(sender, userId);
-  if (text.startsWith('/seed')) return handleSeed(sender, userId, text.slice('/seed'.length).trim());
-  if (text.startsWith('/lint')) return handleLint(sender, userId);
-  if (text.startsWith('/opus')) return handleModelSwitch(sender, userId, transport, 'opus');
-  if (text.startsWith('/sonnet')) return handleModelSwitch(sender, userId, transport, 'sonnet');
-  if (text.startsWith('/haiku')) return handleModelSwitch(sender, userId, transport, 'haiku');
-  if (text.startsWith('/status')) return handleStatus(sender, userId, transport);
-  if (text.startsWith('/whoop')) return handleWhoop(sender, userId);
-  if (text.startsWith('/start')) return handleStart(sender, userId);
+  if (text.startsWith('/learn-list')) return withCommandLog('learn-list', () => handleLearnList(sender, userId));
+  if (text === '/learn' || text.startsWith('/learn ')) return withCommandLog('learn', () => handleLearn(sender, userId, text.slice('/learn'.length).trim()));
+  if (text.startsWith('/prep')) return withCommandLog('prep', () => handlePrep(sender, userId));
+  if (text.startsWith('/seed')) return withCommandLog('seed', () => handleSeed(sender, userId, text.slice('/seed'.length).trim()));
+  if (text.startsWith('/lint')) return withCommandLog('lint', () => handleLint(sender, userId));
+  if (text.startsWith('/opus')) return withCommandLog('opus', () => handleModelSwitch(sender, userId, transport, 'opus'));
+  if (text.startsWith('/sonnet')) return withCommandLog('sonnet', () => handleModelSwitch(sender, userId, transport, 'sonnet'));
+  if (text.startsWith('/haiku')) return withCommandLog('haiku', () => handleModelSwitch(sender, userId, transport, 'haiku'));
+  if (text.startsWith('/status')) return withCommandLog('status', () => handleStatus(sender, userId, transport));
+  if (text.startsWith('/whoop')) return withCommandLog('whoop', () => handleWhoop(sender, userId));
+  if (text.startsWith('/start')) return withCommandLog('start', () => handleStart(sender, userId));
 
   // Active planning session takes routing priority over the default
   // conversation thread (analogous to active reviews below). Slash commands

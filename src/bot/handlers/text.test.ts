@@ -1225,9 +1225,14 @@ describe('handleTextMessage — observation-log interaction wiring (B1.2)', () =
 
   const appendInteractionMock = appendInteraction as unknown as ReturnType<typeof vi.fn>;
 
-  it('emits one InteractionLogRecord per authorized inbound TG message', async () => {
+  it('emits a tg-message InteractionLogRecord per authorized inbound TG message', async () => {
+    // B1.3 layers an additional 'command' record on slash dispatches, so we
+    // filter to the tg-message record specifically (B1.2's contract).
     await handleTextMessage(mockSender(), msg('/fresh'));
-    expect(appendInteractionMock).toHaveBeenCalledTimes(1);
+    const tgRecords = appendInteractionMock.mock.calls
+      .map((c: unknown[]) => c[0] as { kind?: string })
+      .filter((r) => r.kind === 'tg-message');
+    expect(tgRecords).toHaveLength(1);
   });
 
   it('emits NO record when the sender is unauthorized (security gate fires first)', async () => {
@@ -1240,16 +1245,23 @@ describe('handleTextMessage — observation-log interaction wiring (B1.2)', () =
     expect(appendInteractionMock).not.toHaveBeenCalled();
   });
 
+  function tgRecord(): { kind: string; outcome: string; detail: string; ts: string } {
+    const recs = appendInteractionMock.mock.calls
+      .map((c: unknown[]) => c[0] as { kind: string; outcome: string; detail: string; ts: string })
+      .filter((r) => r.kind === 'tg-message');
+    return recs[0]!;
+  }
+
   it('record has kind="tg-message" and outcome="success" on a normal slash command', async () => {
     await handleTextMessage(mockSender(), msg('/fresh'));
-    const record = appendInteractionMock.mock.calls[0]![0];
+    const record = tgRecord();
     expect(record.kind).toBe('tg-message');
     expect(record.outcome).toBe('success');
   });
 
   it('detail captures the slash command name as route=/<command>', async () => {
     await handleTextMessage(mockSender(), msg('/journal had a great meeting'));
-    const record = appendInteractionMock.mock.calls[0]![0];
+    const record = tgRecord();
     expect(record.detail).toMatch(/route=\/journal/);
   });
 
@@ -1267,7 +1279,7 @@ describe('handleTextMessage — observation-log interaction wiring (B1.2)', () =
     askMock.mockResolvedValue({ text: 'hello back', error: null });
 
     await handleTextMessage(mockSender(), msg('three word msg'));
-    const record = appendInteractionMock.mock.calls[0]![0];
+    const record = tgRecord();
     expect(record.detail).toMatch(/route=conversation/);
   });
 
@@ -1284,7 +1296,7 @@ describe('handleTextMessage — observation-log interaction wiring (B1.2)', () =
     askMock.mockResolvedValue({ text: 'ok', error: null });
 
     await handleTextMessage(mockSender(), msg(tricky));
-    const record = appendInteractionMock.mock.calls[0]![0];
+    const record = tgRecord();
     expect(record.detail).not.toContain('sensitive');
     expect(record.detail).not.toContain('/Users/me/secrets');
     expect(record.detail).not.toContain(tricky);
@@ -1292,8 +1304,74 @@ describe('handleTextMessage — observation-log interaction wiring (B1.2)', () =
 
   it('ts field is set to a parseable ISO-8601 string', async () => {
     await handleTextMessage(mockSender(), msg('/fresh'));
-    const record = appendInteractionMock.mock.calls[0]![0];
+    const record = tgRecord();
     expect(typeof record.ts).toBe('string');
     expect(Number.isFinite(Date.parse(record.ts))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Observation-log command wiring (Phase 6 B1.3)
+// ---------------------------------------------------------------------------
+
+describe('dispatchText — observation-log command wiring (B1.3)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const appendInteractionMock = appendInteraction as unknown as ReturnType<typeof vi.fn>;
+
+  function commandRecords(): unknown[] {
+    return appendInteractionMock.mock.calls
+      .map((c: unknown[]) => c[0] as { kind?: string })
+      .filter((r) => r.kind === 'command');
+  }
+
+  it('emits a kind:"command" record per slash invocation', async () => {
+    await dispatchText(mockSender(), 100, '/fresh');
+    expect(commandRecords()).toHaveLength(1);
+  });
+
+  it('detail captures the command name as cmd=<name>', async () => {
+    await dispatchText(mockSender(), 100, '/journal had a meeting');
+    const rec = commandRecords()[0] as { detail: string };
+    expect(rec.detail).toMatch(/cmd=journal/);
+  });
+
+  it('outcome is "success" when the handler returns cleanly', async () => {
+    await dispatchText(mockSender(), 100, '/fresh');
+    const rec = commandRecords()[0] as { outcome: string };
+    expect(rec.outcome).toBe('success');
+  });
+
+  it('outcome is "failure" when the handler throws (and the error still propagates)', async () => {
+    const handleFreshMock = handleFresh as unknown as ReturnType<typeof vi.fn>;
+    handleFreshMock.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(dispatchText(mockSender(), 100, '/fresh')).rejects.toThrow('boom');
+    const rec = commandRecords()[0] as { outcome: string };
+    expect(rec.outcome).toBe('failure');
+  });
+
+  it('does NOT emit a command record for non-slash dispatch (conversation)', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'sess-c', lastActivity: new Date().toISOString(),
+      messageCount: 1, firstMessage: 'hi', model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'reply', error: null });
+
+    await dispatchText(mockSender(), 100, 'three word free');
+    expect(commandRecords()).toHaveLength(0);
+  });
+
+  it('detail NEVER contains the args following the slash command', async () => {
+    const sensitiveArgs = 'sensitive vault path /Users/me/secrets and quotes "x"';
+    await dispatchText(mockSender(), 100, `/journal ${sensitiveArgs}`);
+    const rec = commandRecords()[0] as { detail: string };
+    expect(rec.detail).not.toContain('sensitive');
+    expect(rec.detail).not.toContain('/Users/me/secrets');
+    expect(rec.detail).not.toContain(sensitiveArgs);
   });
 });
