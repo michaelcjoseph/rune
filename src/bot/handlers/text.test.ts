@@ -66,6 +66,7 @@ vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
 vi.mock('../commands/new-project.js', () => ({ handleNewProject: vi.fn() }));
 vi.mock('../../reviews/new-project.js', () => ({}));
 vi.mock('../commands/plan.js', () => ({ handlePlan: vi.fn() }));
+vi.mock('../commands/approve.js', () => ({ handleApprove: vi.fn() }));
 vi.mock('../../reviews/planning.js', () => ({
   getActivePlanningSession: vi.fn(() => null),
   deletePlanningSession: vi.fn(),
@@ -106,6 +107,7 @@ const { handleLearnList } = await import('../commands/learn-list.js');
 const { handleCancel } = await import('../commands/cancel.js');
 const { handleNewProject } = await import('../commands/new-project.js');
 const { handlePlan } = await import('../commands/plan.js');
+const { handleApprove } = await import('../commands/approve.js');
 const { getActivePlanningSession } = await import('../../reviews/planning.js');
 const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
@@ -402,6 +404,38 @@ describe('text handler routing', () => {
     await handleTextMessage(mockSender(), msg('/plan jarvis'));
 
     expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'jarvis');
+    expect(handlePlanningTurnMock).not.toHaveBeenCalled();
+  });
+
+  it('routes /approve to handleApprove', async () => {
+    await handleTextMessage(mockSender(), msg('/approve'));
+    expect(handleApprove).toHaveBeenCalledWith(expect.anything(), 100);
+  });
+
+  it('/approve takes priority over active planning routing', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+
+    // Even with an active planning session in spec-proposed state, /approve routes to handleApprove
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-sess-approve',
+      chatId: 100,
+      claudeSessionId: 'claude-approve',
+      planning: {
+        status: 'spec-proposed',
+        product: 'jarvis',
+        idea: 'build something',
+        surface: 'chat',
+        history: [],
+        createdAt: new Date().toISOString(),
+      },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+
+    await handleTextMessage(mockSender(), msg('/approve'));
+
+    expect(handleApprove).toHaveBeenCalledWith(expect.anything(), 100);
     expect(handlePlanningTurnMock).not.toHaveBeenCalled();
   });
 

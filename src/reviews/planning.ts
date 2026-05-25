@@ -25,8 +25,10 @@ import { dirname } from 'node:path';
 import { cleanupSession } from '../ai/claude.js';
 import config from '../config.js';
 import {
+  approvePlan,
   startPlanning,
   type PlanningSession,
+  type PlanningStatus,
   type PlanningSurface,
 } from '../intent/planner.js';
 import { createLogger } from '../utils/logger.js';
@@ -140,6 +142,45 @@ export function deletePlanningSession(chatId: number): void {
   cleanupSession(session.claudeSessionId);
   sessions.delete(chatId);
   persistPlanningSessions();
+}
+
+/** Result of attempting to approve an active planning session. The
+ *  discriminated union lets callers tailor the user-facing reply per path:
+ *  no session, wrong status, or the approved session ready to scaffold. */
+export type ApproveResult =
+  | { ok: true; session: StoredPlanningSession }
+  | { ok: false; reason: 'no-session' }
+  | { ok: false; reason: 'wrong-status'; status: PlanningStatus };
+
+/**
+ * Approve an active planning session in `spec-proposed` — transitions the
+ * lifecycle via the pure state machine (`approvePlan`), persists the new
+ * status, and returns the approved session for the caller to feed into
+ * scaffolding (project-setup-writer). The session is **not** deleted here —
+ * callers delete on scaffold success, or leave the session alive in
+ * `approved` state so the user can retry on agent failure (see the
+ * `getPlanningSession`-based retry path in `handleApprove`).
+ *
+ * Returns a discriminated union so callers handle the three states without
+ * a thrown exception: no session, wrong status, or success.
+ */
+export function approveActivePlanningSession(chatId: number): ApproveResult {
+  const session = getActivePlanningSession(chatId);
+  if (!session) return { ok: false, reason: 'no-session' };
+  if (session.planning.status !== 'spec-proposed') {
+    return { ok: false, reason: 'wrong-status', status: session.planning.status };
+  }
+  // approvePlan validates the spec-proposed precondition again and throws
+  // on a state-machine violation. Catching here would swallow a logic bug —
+  // we let it propagate so the caller surfaces a clear error.
+  const approved: StoredPlanningSession = {
+    ...session,
+    planning: approvePlan(session.planning),
+    lastActivity: new Date().toISOString(),
+  };
+  sessions.set(chatId, approved);
+  persistPlanningSessions();
+  return { ok: true, session: approved };
 }
 
 /**

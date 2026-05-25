@@ -29,6 +29,7 @@ import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
 import { handleNewProject } from '../commands/new-project.js';
 import { handlePlan } from '../commands/plan.js';
+import { handleApprove } from '../commands/approve.js';
 import { handleLibrarySync } from '../commands/library-sync.js';
 import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
@@ -92,6 +93,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/blog')) return handleBlog(sender, userId, text.slice('/blog'.length).trim());
   if (text.startsWith('/new-project')) return handleNewProject(sender, userId, text.slice('/new-project'.length).trim());
   if (text === '/plan' || text.startsWith('/plan ')) return handlePlan(sender, userId, text.slice('/plan'.length).trim());
+  if (text === '/approve' || text.startsWith('/approve ')) return handleApprove(sender, userId);
   if (text.startsWith('/library-sync')) return handleLibrarySync(sender, userId);
   // /learn-list must come before /learn so the longer prefix wins.
   if (text.startsWith('/learn-list')) return handleLearnList(sender, userId);
@@ -279,14 +281,17 @@ async function invokeSkill(
     case 'fresh': return handleFresh(sender, userId, transport);
     case 'fresh-full': return handleFreshFull(sender, userId, transport);
     case 'plan': return handlePlan(sender, userId, args);
+    // No 'approve' case — /approve is an explicit gate, not resolver-inferred.
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
   }
 }
 
 /** Drive one turn of an active planning conversation. Surfaces the LLM's
- *  scoping question (or the spec-proposed reply) verbatim. Failures fall
- *  back to a clear error message rather than crashing the polling handler. */
+ *  scoping question verbatim; for the spec-proposed transition, appends a
+ *  one-line footer telling the user how to /approve or /clear (until the
+ *  inline-button approval round-trip lands in C6). Failures fall back to a
+ *  clear error message rather than crashing the polling handler. */
 async function routeToPlanning(
   sender: MessageSender,
   userId: number,
@@ -299,7 +304,10 @@ async function routeToPlanning(
       userId,
       text,
     );
-    await sender.send(userId, result.reply);
+    const reply = result.status === 'spec-proposed'
+      ? `${result.reply}\n\n— spec proposed · /approve to scaffold · /clear to abandon`
+      : result.reply;
+    await sender.send(userId, reply);
   } catch (err) {
     log.error('Planning turn exception', { error: (err as Error).message });
     await sender.send(userId, `Planning error: ${(err as Error).message}`);

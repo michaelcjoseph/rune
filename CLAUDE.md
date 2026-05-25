@@ -26,7 +26,7 @@ src/
 ├── ai/claude.ts             # All Claude CLI spawning: askClaude, runAgent, summarizeSession; exports setBus(bus) — called from index.ts so runAgent() can emit BusAgentEvent frames (type-only NotificationBus import avoids circular dep); runAgent() appends {agent, startedAt, durationMs, status} to logs/agent-runs.jsonl after each invocation; exports CLAUDE_BIN (resolved binary path), registerActiveProcess/unregisterActiveProcess (for external spawners like work-runner); runAgent() resolves each agent's model through the model selection policy (src/intent/model-policy.ts) — pin → role-default → global-fallback — rather than the old hardcoded def.model ?? config.AGENT_MODEL
 ├── bot/
 │   ├── telegram.ts          # Bot init: createBot() factory + wireHandlers(bot, sender) wires message events after senders are ready
-│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview; active-planning-session check takes routing priority over the default conversation handler — free-form text routes through routeToPlanning → handlePlanningTurn when a planning session is active
+│   ├── handlers/text.ts     # Command routing + multi-turn conversation handler; handleTextMessage(sender, msg) — no direct bot dependency; exports dispatchText(sender, userId, text) shared with webview; active-planning-session check takes routing priority over the default conversation handler — free-form text routes through routeToPlanning → handlePlanningTurn when a planning session is active; routeToPlanning appends "— spec proposed · /approve to scaffold · /clear to abandon" footer when the planning handler returns spec-proposed status; /approve is wired in dispatchText but intentionally excluded from SLASH_COMMAND_METADATA (approval is an explicit gate, not resolver-inferred)
 │   ├── handlers/url.ts      # URL detection, fetch, content-triager agent, routing
 │   ├── handlers/photo.ts    # Photo download, photo-classifier agent, routing
 │   ├── skill-registry.ts    # Resolver skill registry: SkillEntry, SLASH_COMMAND_METADATA, buildSkillRegistry, getSkillRegistry (cached), reloadSkillRegistry
@@ -59,6 +59,7 @@ src/
 │       ├── learn-list.ts    # /learn-list — echo the current prepended learnings
 │       ├── cancel.ts        # /cancel [opId-prefix] — SIGTERM an in-flight Claude op (most recent for user, or by id prefix)
 │       ├── plan.ts          # /plan [product] — start a Planner (Layer 1) conversation scoped to a product; with a known slug creates a planning session and replies with the kickoff prompt; without args or with unknown slug lists registered products
+│       ├── approve.ts       # /approve — approve a spec-proposed planning session and scaffold docs/projects/<NN-slug>/{spec.md,tasks.md,test-plan.md} via project-setup-writer; handles retry path for sessions already in `approved` state from a prior agent failure; not in SLASH_COMMAND_METADATA
 │       ├── library-sync.ts  # /library-sync — trigger on-demand Lenny posts/podcasts sync via lenny-sync agent
 │       └── seed.ts          # /seed — bulk-seed KB from vault files via seedAndProcess()
 ├── transport/
@@ -81,7 +82,7 @@ src/
 │   ├── yearly.ts            # Yearly review handler
 │   ├── health.ts            # Health review handler
 │   ├── blog.ts              # Blog drafting handler
-│   ├── planning.ts          # Planning session store: createPlanningSession, getPlanningSession, getActivePlanningSession, updatePlanningSession, deletePlanningSession, abandonActivePlanningSession (called by /clear and /fresh), persistPlanningSessions, restorePlanningSessions; sessions keyed by chatId, persisted to logs/planning-sessions.json
+│   ├── planning.ts          # Planning session store: createPlanningSession, getPlanningSession, getActivePlanningSession, updatePlanningSession, deletePlanningSession, abandonActivePlanningSession (called by /clear and /fresh), persistPlanningSessions, restorePlanningSessions; sessions keyed by chatId, persisted to logs/planning-sessions.json; exports approveActivePlanningSession(chatId) → ApproveResult discriminated union (ok/no-session/wrong-status) for the spec-proposed → approved lifecycle transition
 │   └── planning-handler.ts  # Multi-turn Socratic planning handler: handlePlanningTurn (drives one scoping turn through the defaultScopingTurn LLM call), ScopingResult/ScopingTurn/PlanningHandlerDeps types; injected ScopingTurn seam enables test doubles
 ├── server/
 │   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth callback; mounts webview routes when WebviewDeps provided
