@@ -448,14 +448,39 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C6. Telegram approval inline-buttons
 
-- [ ] **(agent)** When the engine surfaces a propose-and-approve
+- [x] **(agent)** When the engine surfaces a propose-and-approve
   artifact for Telegram, call `sender.send(userId, prompt, { approval:
   { prompt, options: [...] } })` — the `SendOpts.approval` field
-  already exists in `src/transport/sender.ts`.
-- [ ] **(agent)** Wire the bot's callback-query handler to route the
+  already exists in `src/transport/sender.ts`. *`TelegramSender.send()`
+  now detects `opts.approval` and renders one inline button per option
+  via `bot.sendMessage(userId, text, { reply_markup: { inline_keyboard:
+  [[buttons]] } })`; each button carries its option value as
+  `callback_data`. Plain sends still go through `sendLongMessage`
+  unchanged.*
+- [x] **(agent)** Wire the bot's callback-query handler to route the
   inline-button payloads through the same actioning path the cockpit
   approval inbox uses (C2), so a proposal acted on in either surface
-  is reflected in both.
+  is reflected in both. *Extracted `dispatchApprovalStatus`,
+  `parseApprovalId`, and the per-source set-status helpers into a new
+  `src/transport/approval-actions.ts` module so both the HTTP cockpit
+  routes and the Telegram handler share one actioning path; module
+  lives under `transport/` (not `server/`) because it's
+  transport-agnostic. The new `callback_query` handler in
+  `src/bot/telegram.ts` auth-gates by `TELEGRAM_USER_ID`, acks the
+  query, then routes payloads:
+    - `approve:<id>` / `reject:<id>` (or `approved:`/`rejected:`) —
+      explicit status prefix, plus a bare composite-id that defaults
+      to `approved`, all routed through `dispatchApprovalStatus`.
+    - conversational values (`yes`, `cancel`, `approve`, `refine`,
+      `abandon`) — fed via `dispatchText` so an active review/planning
+      session sees them as the user's reply. Slash-prefixed values are
+      rejected (a callback button should never trigger a destructive
+      command).
+  Hardening: `dispatchApprovalStatus` is wrapped in try/catch because
+  it's called from an EventEmitter listener (a sync throw would crash
+  the process); the underlying `safeWrite` traps disk-write failures
+  into a three-valued result (`'ok'|'not-found'|'error'`) so the HTTP
+  path can surface a 500 on disk error rather than a misleading 404.*
 
 #### C7. Journal-to-intent producer
 

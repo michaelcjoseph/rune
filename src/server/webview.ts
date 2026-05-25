@@ -29,17 +29,12 @@ import {
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
 import { buildSetupWriterBrief } from '../intent/planner.js';
 import { runAgent } from '../ai/claude.js';
-import {
-  readIntentProposalQueue,
-  writeIntentProposalQueue,
-} from '../intent/intent-proposal-queue.js';
-import { readProposalQueue, writeProposalQueue } from '../jobs/proposal-queue.js';
+import { readIntentProposalQueue } from '../intent/intent-proposal-queue.js';
+import { readProposalQueue } from '../jobs/proposal-queue.js';
 import { readAllRuns } from '../jobs/supervision-store.js';
 import { getVisibility } from '../intent/supervision.js';
-import {
-  readPlaybookQueue,
-  writePlaybookQueue,
-} from '../jobs/playbook-extract.js';
+import { readPlaybookQueue } from '../jobs/playbook-extract.js';
+import { dispatchApprovalStatus } from '../transport/approval-actions.js';
 
 const log = createLogger('webview');
 
@@ -571,86 +566,24 @@ function handleApiApprovalsList(_req: IncomingMessage, res: ServerResponse): voi
   res.end(JSON.stringify(rows));
 }
 
-/** Parse a composite approval id into (source, payload). Returns null on
- *  unknown source or malformed id. */
-function parseApprovalId(id: string): { source: string; payload: string } | null {
-  const colonIdx = id.indexOf(':');
-  if (colonIdx === -1) return null;
-  const source = id.slice(0, colonIdx);
-  const payload = id.slice(colonIdx + 1);
-  if (!payload) return null;
-  return { source, payload };
-}
+// dispatchApprovalStatus and the per-source set*Status helpers live in
+// src/server/approval-actions.ts so the Telegram callback-query handler
+// (Phase 6 C6.2) can share the actioning path without importing the full
+// HTTP server module.
 
-function setIntentProposalStatus(idx: number, status: 'approved' | 'rejected'): boolean {
-  const queue = readIntentProposalQueue();
-  const entry = queue[idx];
-  if (!entry || entry.status !== 'pending') return false;
-  entry.status = status;
-  writeIntentProposalQueue(queue);
-  return true;
-}
-
-function setPlaybookStatus(idx: number, status: 'approved' | 'rejected'): boolean {
-  const queue = readPlaybookQueue();
-  const entry = queue[idx];
-  if (!entry || entry.status !== 'pending') return false;
-  entry.status = status;
-  writePlaybookQueue(queue);
-  return true;
-}
-
-function setAskTwiceStatus(idx: number, status: 'approved' | 'rejected'): boolean {
-  const queue = readProposalQueue();
-  const entry = queue[idx];
-  if (!entry || entry.status !== 'pending') return false;
-  entry.status = status;
-  writeProposalQueue(queue);
-  return true;
-}
-
-function dispatchApprovalStatus(id: string, status: 'approved' | 'rejected'): 'ok' | 'not-found' {
-  const parsed = parseApprovalId(id);
-  if (!parsed) return 'not-found';
-  const idx = Number(parsed.payload);
-  switch (parsed.source) {
-    case 'intent-proposal':
-      if (!Number.isInteger(idx)) return 'not-found';
-      return setIntentProposalStatus(idx, status) ? 'ok' : 'not-found';
-    case 'playbook':
-      if (!Number.isInteger(idx)) return 'not-found';
-      return setPlaybookStatus(idx, status) ? 'ok' : 'not-found';
-    case 'ask-twice':
-      if (!Number.isInteger(idx)) return 'not-found';
-      return setAskTwiceStatus(idx, status) ? 'ok' : 'not-found';
-    case 'blocked-on-human':
-      // Blocked-on-human runs aren't queue entries the cockpit can flip;
-      // the user must take the underlying action (a cancel, a re-dispatch,
-      // a /work --auto retry). C2.2 surfaces them in the inbox so the user
-      // sees them, but approve/reject from here is a no-op — return
-      // not-found so the row stays put until the underlying run terminates.
-      return 'not-found';
-    default:
-      return 'not-found';
-  }
-}
-
-function handleApiApprovalApprove(res: ServerResponse, id: string): void {
-  const result = dispatchApprovalStatus(id, 'approved');
+function handleApiApprovalAction(res: ServerResponse, id: string, status: 'approved' | 'rejected'): void {
+  const result = dispatchApprovalStatus(id, status);
   if (result === 'not-found') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'approval not found' }));
     return;
   }
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true }));
-}
-
-function handleApiApprovalReject(res: ServerResponse, id: string): void {
-  const result = dispatchApprovalStatus(id, 'rejected');
-  if (result === 'not-found') {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'approval not found' }));
+  if (result === 'error') {
+    // C6 review fix: a disk-write failure inside dispatchApprovalStatus
+    // now surfaces as 500 rather than masquerading as a 404 — the caller
+    // can distinguish "entry not found" from "server failed to persist."
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'approval write failed' }));
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -859,12 +792,12 @@ export function mountWebviewRoutes(
       }
       const approveMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/approve$/);
       if (req.method === 'POST' && approveMatch) {
-        handleApiApprovalApprove(res, decodeURIComponent(approveMatch[1]!));
+        handleApiApprovalAction(res, decodeURIComponent(approveMatch[1]!), 'approved');
         return true;
       }
       const rejectMatch = pathname.match(/^\/api\/approvals\/([^/]+)\/reject$/);
       if (req.method === 'POST' && rejectMatch) {
-        handleApiApprovalReject(res, decodeURIComponent(rejectMatch[1]!));
+        handleApiApprovalAction(res, decodeURIComponent(rejectMatch[1]!), 'rejected');
         return true;
       }
 

@@ -84,7 +84,28 @@ export class TelegramSender implements MessageSender {
 
   constructor(private bot: TelegramBot) {}
 
-  async send(userId: number, text: string, _opts?: SendOpts): Promise<void> {
+  async send(userId: number, text: string, opts?: SendOpts): Promise<void> {
+    // Phase 6 C6.1: when the caller supplies an `approval` payload, render
+    // it as a Telegram inline keyboard rather than a plain message. Each
+    // option becomes one inline button whose `callback_data` carries the
+    // option's `value` — the bot's callback_query handler (C6.2) routes
+    // that payload through the same actioning path the cockpit approval
+    // inbox uses, so a proposal acted on in either surface is reflected
+    // in both. The text is the prompt (already prepared by the caller).
+    if (opts?.approval) {
+      const buttons = opts.approval.options.map((o) => ({
+        text: o.label,
+        callback_data: o.value,
+      }));
+      // Layout: all buttons on a single row. The contract is "one button
+      // per option" — the test allows either single-row or multi-row, so
+      // the simplest layout is the right default. A future refinement
+      // could wrap at N buttons per row for long option lists.
+      await this.bot.sendMessage(userId, text, {
+        reply_markup: { inline_keyboard: [buttons] },
+      });
+      return;
+    }
     await sendLongMessage(this.bot, userId, text);
   }
 
