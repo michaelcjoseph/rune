@@ -96,6 +96,57 @@
     <pre id="drawer-output" class="drawer-output"></pre>
   </div>
 
+  <!-- Planning panel (project 08 Phase 6 C1.1).
+       Opens when the cockpit's Plan button is clicked (C1.3) or the engine
+       routes a /plan Telegram conversation in. Three view-states driven by
+       the planning session's status:
+         - 'scoping'       → transcript + reply textarea
+         - 'spec-proposed' → transcript + proposed-spec block + Approve/Refine/Abandon
+         - 'approved' / 'abandoned' → panel auto-closes with a toast
+       API surface: POST /api/planning/{start,turn,approve,abandon} (C1.2). -->
+  <div id="planning-panel" class="planning-panel hidden" aria-hidden="true">
+    <div class="planning-panel-header">
+      <div class="planning-panel-title">
+        <span class="planning-panel-label">Planning:</span>
+        <span id="planning-panel-product"></span>
+      </div>
+      <span id="planning-panel-status" class="planning-status-pill"></span>
+      <button id="planning-panel-close" type="button" aria-label="Close planning panel">✕</button>
+    </div>
+
+    <div id="planning-panel-transcript" class="planning-panel-transcript"></div>
+
+    <!-- Scoping state: reply textarea + send button -->
+    <div id="planning-panel-scoping" class="planning-panel-scoping">
+      <textarea
+        id="planning-panel-reply"
+        class="planning-panel-reply"
+        placeholder="Reply… (Cmd+Enter to send, Enter for newline)"
+        rows="3"
+      ></textarea>
+      <button id="planning-panel-send" type="button" class="planning-panel-send-btn">Send</button>
+    </div>
+
+    <!-- Spec-proposed state: artifact preview + action row -->
+    <div id="planning-panel-spec" class="planning-panel-spec hidden">
+      <div class="planning-panel-spec-header">Proposed Spec</div>
+      <div class="planning-panel-spec-body">
+        <div class="spec-field"><span class="spec-field-label">title</span><span id="planning-panel-spec-title"></span></div>
+        <div class="spec-field"><span class="spec-field-label">spec</span><pre id="planning-panel-spec-spec" class="spec-field-body"></pre></div>
+        <div class="spec-field"><span class="spec-field-label">tasks</span><pre id="planning-panel-spec-tasks" class="spec-field-body"></pre></div>
+        <div class="spec-field"><span class="spec-field-label">test-plan</span><pre id="planning-panel-spec-testplan" class="spec-field-body"></pre></div>
+      </div>
+      <div class="planning-panel-actions">
+        <button id="planning-panel-approve" type="button" class="planning-panel-approve-btn">Approve</button>
+        <button id="planning-panel-refine" type="button" class="planning-panel-refine-btn">Refine</button>
+        <button id="planning-panel-abandon" type="button" class="planning-panel-abandon-btn">Abandon</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Planning toast — fires after a panel state transition closes the panel. -->
+  <div id="planning-toast" class="planning-toast hidden"></div>
+
   <script src="/static/markdown-it.min.js"></script>
   <script src="/static/highlight.min.js"></script>
   <script src="/static/app.js"></script>

@@ -341,11 +341,11 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C1. Cockpit planning panel
 
-- [ ] **(agent)** Add the planning panel to `src/server/static/` —
+- [x] **(agent)** Add the planning panel to `src/server/static/` —
   HTML structure, JS state machine for `scoping` / `spec-proposed` /
   `approved` / `abandoned`, reply textarea, **Approve** / **Refine** /
   **Abandon** actions. Match the ASCII mockup in spec.md §"Cockpit UX
-  in Detail".
+  in Detail". *Slide-in panel (right-side overlay, 480px wide) with header (title + status pill + close), scrollable transcript, scoping section (reply textarea + Cmd+Enter shortcut), and spec-proposed section (artifact preview with title/spec/tasks/test-plan in scrollable monospace blocks + Approve/Refine/Abandon row). Status pill color-coded per state (blue scoping / amber spec-proposed / green approved / red abandoned). State machine in app.js wires the four POST endpoints from C1.2; tries to parse the fenced ```spec-artifact JSON block from the assistant's reply so the artifact renders client-side without a separate fetch. `openPlanningPanel(product)` exposed on `window` for C1.3's Plan-button wiring. Toast on approve/abandon close.*
 - [x] **(agent)** Add `POST /api/planning/turn` to `src/server/webview.ts`
   that calls `handlePlanningTurn` from A4.2; add `POST /api/planning/start`
   that calls `createPlanningSession`; add `POST /api/planning/approve` /

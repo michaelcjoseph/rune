@@ -384,3 +384,193 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   word-break: break-word;
   color: var(--text);
 }
+
+/* ---------------------------------------------------------------------------
+   Planning panel (project 08 Phase 6 C1.1)
+   Slide-in overlay on the right, anchored above the chat composer.
+   Three view-states driven by JS toggling .hidden on the inner sections.
+--------------------------------------------------------------------------- */
+
+.planning-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  max-width: 90vw;
+  background: var(--bg2);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(0);
+  transition: transform 200ms ease-out;
+  z-index: 50;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+}
+.planning-panel.hidden { transform: translateX(100%); }
+
+.planning-panel-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.planning-panel-title { flex: 1; display: flex; gap: .35rem; align-items: baseline; }
+.planning-panel-label { color: var(--text2); font-weight: 400; font-size: .85rem; }
+#planning-panel-product { color: var(--text); }
+
+.planning-status-pill {
+  font-size: .7rem;
+  font-weight: 500;
+  padding: .15rem .55rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.planning-status-pill.status-scoping { background: #1a2a3a; color: #79b8ff; border-color: #2d4a6a; }
+.planning-status-pill.status-spec-proposed { background: #2a2418; color: #e0a040; border-color: #5a4828; }
+.planning-status-pill.status-approved { background: #1a3a1a; color: #79d979; border-color: #2d6a2d; }
+.planning-status-pill.status-abandoned { background: #2a1a1a; color: #d97979; border-color: #6a2d2d; }
+
+#planning-panel-close { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 1rem; padding: 0 .35rem; }
+#planning-panel-close:hover { color: var(--text); }
+
+.planning-panel-transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: .75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  font-size: .9rem;
+}
+.planning-turn {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+.planning-turn-role {
+  font-size: .7rem;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.planning-turn-body {
+  padding: .5rem .75rem;
+  border-radius: 6px;
+  background: var(--bg3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.planning-turn.user .planning-turn-body { background: var(--user-bg); }
+
+.planning-panel-scoping {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  padding: .75rem 1rem;
+  border-top: 1px solid var(--border);
+}
+.planning-panel-scoping.hidden { display: none; }
+.planning-panel-reply {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .5rem .75rem;
+  font-family: inherit;
+  font-size: .9rem;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 70px;
+}
+.planning-panel-reply:focus { outline: none; border-color: var(--accent); }
+.planning-panel-send-btn {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: .4rem 1rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.planning-panel-send-btn:hover { filter: brightness(1.1); }
+.planning-panel-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.planning-panel-spec {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  padding: .75rem 1rem;
+  border-top: 1px solid var(--border);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.planning-panel-spec.hidden { display: none; }
+.planning-panel-spec-header { font-weight: 600; font-size: .9rem; color: var(--text); }
+.planning-panel-spec-body { display: flex; flex-direction: column; gap: .35rem; }
+.spec-field { display: flex; flex-direction: column; gap: .15rem; }
+.spec-field-label {
+  font-size: .7rem;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.spec-field-body {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: .75rem;
+  line-height: 1.45;
+  padding: .4rem .6rem;
+  background: var(--bg3);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+#planning-panel-spec-title { font-weight: 500; color: var(--text); }
+
+.planning-panel-actions {
+  display: flex;
+  gap: .5rem;
+  padding-top: .25rem;
+}
+.planning-panel-actions button {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .5rem .75rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--bg3);
+  color: var(--text);
+}
+.planning-panel-approve-btn { background: #1a3a1a; color: #79d979; border-color: #2d6a2d; }
+.planning-panel-approve-btn:hover { filter: brightness(1.15); }
+.planning-panel-refine-btn:hover { filter: brightness(1.15); }
+.planning-panel-abandon-btn { background: #2a1a1a; color: #d97979; border-color: #6a2d2d; }
+.planning-panel-abandon-btn:hover { filter: brightness(1.15); }
+
+/* Toast — fires after panel auto-close (approved/abandoned) */
+.planning-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .75rem 1rem;
+  font-size: .9rem;
+  z-index: 60;
+  max-width: 360px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  opacity: 1;
+  transition: opacity 300ms ease-out;
+}
+.planning-toast.hidden { display: none; }
+.planning-toast.fading { opacity: 0; }

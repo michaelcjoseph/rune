@@ -979,4 +979,283 @@
   document.getElementById('cockpit-content')?.addEventListener('click', handleCockpitClick);
   // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.
   setTimeout(() => { pollCockpit(); setInterval(pollCockpit, 5000); }, 2500);
+
+  // -----------------------------------------------------------------------
+  // Planning panel (project 08 Phase 6 C1.1)
+  //
+  // State machine driving the slide-in panel. The panel goes through:
+  //   - hidden (no active session)
+  //   - scoping       (textarea visible, transcript grows per turn)
+  //   - spec-proposed (artifact visible, Approve/Refine/Abandon row)
+  //   - approved      (auto-close + toast — handled inline after API success)
+  //   - abandoned     (auto-close + toast)
+  //
+  // API surface (POST):
+  //   /api/planning/start    → {id, status}
+  //   /api/planning/turn     → {reply, status}
+  //   /api/planning/approve  → 200 ok / 404 / 409 / 500
+  //   /api/planning/abandon  → 200 ok (idempotent)
+  //
+  // Exposed via window.openPlanningPanel(product) so C1.3 can wire the
+  // cockpit Plan button to it. No other globals leak from this IIFE.
+  // -----------------------------------------------------------------------
+
+  /** Per-panel local state. `transcript` is the only client-side memory of
+   *  the conversation; the server keeps the authoritative session via
+   *  getActivePlanningSession (chatId-keyed). One panel at a time. */
+  const planningState = {
+    open: false,
+    product: '',
+    status: 'scoping', // 'scoping' | 'spec-proposed' | 'approved' | 'abandoned'
+    transcript: [], // [{role: 'user'|'assistant', text: string}]
+    artifact: null, // {product, title, spec, tasks, testPlan} | null
+  };
+
+  function planningEl(id) { return document.getElementById(id); }
+
+  function setPlanningStatus(status) {
+    planningState.status = status;
+    const pill = planningEl('planning-panel-status');
+    if (!pill) return;
+    pill.textContent = status;
+    pill.className = 'planning-status-pill status-' + status;
+  }
+
+  function renderPlanningTranscript() {
+    const el = planningEl('planning-panel-transcript');
+    if (!el) return;
+    const html = planningState.transcript.map(turn =>
+      '<div class="planning-turn ' + escHtml(turn.role) + '">' +
+        '<span class="planning-turn-role">' + escHtml(turn.role) + '</span>' +
+        '<div class="planning-turn-body">' + escHtml(turn.text) + '</div>' +
+      '</div>'
+    ).join('');
+    setHTML(el, html);
+    // Auto-scroll to the bottom so the latest turn is visible.
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderPlanningView() {
+    const scopingEl = planningEl('planning-panel-scoping');
+    const specEl = planningEl('planning-panel-spec');
+    if (!scopingEl || !specEl) return;
+    if (planningState.status === 'spec-proposed' && planningState.artifact) {
+      scopingEl.classList.add('hidden');
+      specEl.classList.remove('hidden');
+      const a = planningState.artifact;
+      planningEl('planning-panel-spec-title').textContent = a.title || '';
+      planningEl('planning-panel-spec-spec').textContent = a.spec || '';
+      planningEl('planning-panel-spec-tasks').textContent = a.tasks || '';
+      planningEl('planning-panel-spec-testplan').textContent = a.testPlan || '';
+    } else {
+      scopingEl.classList.remove('hidden');
+      specEl.classList.add('hidden');
+    }
+  }
+
+  function showPlanningToast(text) {
+    const toast = planningEl('planning-toast');
+    if (!toast) return;
+    toast.textContent = text;
+    toast.classList.remove('hidden', 'fading');
+    // Auto-dismiss after 3.5s with a fade.
+    setTimeout(() => { toast.classList.add('fading'); }, 3000);
+    setTimeout(() => { toast.classList.add('hidden'); toast.classList.remove('fading'); }, 3500);
+  }
+
+  function closePlanningPanel() {
+    const panel = planningEl('planning-panel');
+    if (!panel) return;
+    panel.classList.add('hidden');
+    panel.setAttribute('aria-hidden', 'true');
+    planningState.open = false;
+    planningState.product = '';
+    planningState.status = 'scoping';
+    planningState.transcript = [];
+    planningState.artifact = null;
+    renderPlanningTranscript();
+    renderPlanningView();
+    setPlanningStatus('scoping');
+  }
+
+  /** Open the panel scoped to a product slug. POSTs /api/planning/start to
+   *  create the session, then renders the empty-scoping state. Exposed via
+   *  window.openPlanningPanel so the cockpit Plan button (C1.3) can call it. */
+  async function openPlanningPanel(product) {
+    if (!product) return;
+    const panel = planningEl('planning-panel');
+    if (!panel) return;
+    planningState.open = true;
+    planningState.product = product;
+    planningState.transcript = [];
+    planningState.artifact = null;
+    planningEl('planning-panel-product').textContent = product;
+    setPlanningStatus('scoping');
+    renderPlanningTranscript();
+    renderPlanningView();
+    panel.classList.remove('hidden');
+    panel.setAttribute('aria-hidden', 'false');
+    // Best-effort start — if it fails (e.g., 401 in dev), the panel stays
+    // open with a friendly transcript message so the user knows something
+    // went wrong rather than seeing a silent blank.
+    try {
+      const r = await fetch('/api/planning/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        planningState.transcript.push({
+          role: 'assistant',
+          text: 'Could not start planning session: ' + (body.error || ('HTTP ' + r.status)),
+        });
+        renderPlanningTranscript();
+      }
+    } catch (err) {
+      planningState.transcript.push({
+        role: 'assistant',
+        text: 'Could not start planning session: ' + (err && err.message ? err.message : String(err)),
+      });
+      renderPlanningTranscript();
+    }
+  }
+
+  async function submitPlanningReply() {
+    const ta = planningEl('planning-panel-reply');
+    const btn = planningEl('planning-panel-send');
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = '';
+    if (btn) btn.disabled = true;
+    planningState.transcript.push({ role: 'user', text });
+    renderPlanningTranscript();
+    try {
+      const r = await fetch('/api/planning/turn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        planningState.transcript.push({
+          role: 'assistant',
+          text: 'Error: ' + (body.error || ('HTTP ' + r.status)),
+        });
+        renderPlanningTranscript();
+        return;
+      }
+      planningState.transcript.push({ role: 'assistant', text: body.reply || '' });
+      renderPlanningTranscript();
+      // If the handler returned a spec-proposed status, the server has the
+      // artifact in the session. The reply text typically includes a
+      // summary line; the artifact itself we can't introspect from the
+      // turn response, so we ask the server for the latest state via
+      // status — for now, mark spec-proposed and parse a fenced JSON
+      // artifact from the reply if present.
+      if (body.status === 'spec-proposed') {
+        const artifact = tryParseSpecArtifactFromReply(body.reply || '');
+        if (artifact) planningState.artifact = artifact;
+        setPlanningStatus('spec-proposed');
+        renderPlanningView();
+      } else {
+        setPlanningStatus(body.status || 'scoping');
+      }
+    } catch (err) {
+      planningState.transcript.push({
+        role: 'assistant',
+        text: 'Error: ' + (err && err.message ? err.message : String(err)),
+      });
+      renderPlanningTranscript();
+    } finally {
+      if (btn) btn.disabled = false;
+      ta.focus();
+    }
+  }
+
+  /** Best-effort: try to extract a spec-artifact JSON block from the
+   *  assistant's reply text. The defaultScopingTurn prompt emits a fenced
+   *  ```spec-artifact JSON``` block; parse it client-side so the panel can
+   *  render the artifact without a separate fetch. Returns null if the
+   *  reply has no fenced block or the JSON is malformed. */
+  function tryParseSpecArtifactFromReply(reply) {
+    const m = /```spec-artifact\s*\n([\s\S]*?)\n```/.exec(reply);
+    if (!m) return null;
+    try {
+      const parsed = JSON.parse(m[1]);
+      if (parsed && typeof parsed === 'object' &&
+          typeof parsed.title === 'string' &&
+          typeof parsed.spec === 'string' &&
+          typeof parsed.tasks === 'string' &&
+          typeof parsed.testPlan === 'string') {
+        return parsed;
+      }
+    } catch (e) { /* malformed — fall through */ }
+    return null;
+  }
+
+  async function approvePlanning() {
+    try {
+      const r = await fetch('/api/planning/approve', { method: 'POST' });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) {
+        showPlanningToast('Spec approved — scaffolding project files.');
+        closePlanningPanel();
+      } else {
+        planningState.transcript.push({
+          role: 'assistant',
+          text: 'Approve failed: ' + (body.error || ('HTTP ' + r.status)),
+        });
+        renderPlanningTranscript();
+      }
+    } catch (err) {
+      planningState.transcript.push({
+        role: 'assistant',
+        text: 'Approve error: ' + (err && err.message ? err.message : String(err)),
+      });
+      renderPlanningTranscript();
+    }
+  }
+
+  function refinePlanning() {
+    // Keep the artifact visible but re-enter scoping so the user can ask
+    // Claude to revise specific parts. No API call — the server-side
+    // session stays in spec-proposed; the next /turn call will drive
+    // another scoping turn (handlePlanningTurn already supports this).
+    setPlanningStatus('scoping');
+    renderPlanningView();
+    const ta = planningEl('planning-panel-reply');
+    if (ta) ta.focus();
+  }
+
+  async function abandonPlanning() {
+    try {
+      await fetch('/api/planning/abandon', { method: 'POST' });
+    } catch (err) {
+      // Idempotent on the server; client toast either way.
+    }
+    showPlanningToast('Planning session abandoned.');
+    closePlanningPanel();
+  }
+
+  // Wire up panel button + textarea handlers (once per page load).
+  planningEl('planning-panel-close')?.addEventListener('click', () => {
+    // X button is a soft close (does NOT abandon the session — the user
+    // can re-open via the cockpit Plan button to resume).
+    closePlanningPanel();
+  });
+  planningEl('planning-panel-send')?.addEventListener('click', () => { void submitPlanningReply(); });
+  planningEl('planning-panel-reply')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void submitPlanningReply();
+    }
+  });
+  planningEl('planning-panel-approve')?.addEventListener('click', () => { void approvePlanning(); });
+  planningEl('planning-panel-refine')?.addEventListener('click', () => { refinePlanning(); });
+  planningEl('planning-panel-abandon')?.addEventListener('click', () => { void abandonPlanning(); });
+
+  // Expose openPlanningPanel for C1.3's cockpit Plan-button wiring.
+  window.openPlanningPanel = openPlanningPanel;
 })();
