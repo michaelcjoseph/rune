@@ -46,7 +46,7 @@ import { planJournalIntent, type JournalNote, type IntentProposal } from './jour
 describe('scanJournalForIntent (C7)', () => {
   it('detects #<product> tags and attributes the surrounding note to that product', async () => {
     // Dynamic import so the test file loads even before the module exists.
-    let scan: undefined | ((content: string, registered: string[]) => JournalNote[]);
+    let scan: undefined | ((content: string) => JournalNote[]);
     try {
       const mod = await import('./journal-intent-producer.js');
       scan = mod.scanJournalForIntent;
@@ -56,7 +56,6 @@ describe('scanJournalForIntent (C7)', () => {
     expect(scan).toBeDefined();
     const notes = scan!(
       '## Notes\n- 10am #aura investigate caching layer for API gateway\n- 11am morning notes\n',
-      ['aura', 'jarvis', 'assay'],
     );
     expect(notes.length).toBeGreaterThanOrEqual(1);
     expect(notes[0]!.products).toContain('aura');
@@ -64,23 +63,22 @@ describe('scanJournalForIntent (C7)', () => {
   });
 
   it('returns an empty array when no product-tagged notes exist', async () => {
-    let scan: undefined | ((content: string, registered: string[]) => JournalNote[]);
+    let scan: undefined | ((content: string) => JournalNote[]);
     try {
       scan = (await import('./journal-intent-producer.js')).scanJournalForIntent;
     } catch {}
     expect(scan).toBeDefined();
-    expect(scan!('## Notes\n- 10am morning thoughts\n- 11am coffee\n', ['aura'])).toEqual([]);
+    expect(scan!('## Notes\n- 10am morning thoughts\n- 11am coffee\n')).toEqual([]);
   });
 
   it('routes a note with multiple #product tags to multiple products → planner emits a disambiguation', async () => {
-    let scan: undefined | ((content: string, registered: string[]) => JournalNote[]);
+    let scan: undefined | ((content: string) => JournalNote[]);
     try {
       scan = (await import('./journal-intent-producer.js')).scanJournalForIntent;
     } catch {}
     expect(scan).toBeDefined();
     const notes = scan!(
       '- 10am #aura #jarvis cross-cutting friction with the resolver',
-      ['aura', 'jarvis'],
     );
     expect(notes.length).toBeGreaterThanOrEqual(1);
     const first = notes[0]!;
@@ -93,12 +91,12 @@ describe('scanJournalForIntent (C7)', () => {
   });
 
   it('a note tagged with an UNregistered product yields a JournalNote so the planner emits a register-product proposal', async () => {
-    let scan: undefined | ((content: string, registered: string[]) => JournalNote[]);
+    let scan: undefined | ((content: string) => JournalNote[]);
     try {
       scan = (await import('./journal-intent-producer.js')).scanJournalForIntent;
     } catch {}
     expect(scan).toBeDefined();
-    const notes = scan!('- 10am #newproduct first thought about a new product', ['aura']);
+    const notes = scan!('- 10am #newproduct first thought about a new product');
     expect(notes[0]!.products).toContain('newproduct');
     const plan = planJournalIntent({
       notes, roadmapCandidates: [], registeredProducts: ['aura'],

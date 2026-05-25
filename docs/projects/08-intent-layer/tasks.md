@@ -484,15 +484,33 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C7. Journal-to-intent producer
 
-- [ ] **(agent + user)** New nightly job step in `src/jobs/nightly.ts`
+- [x] **(agent + user)** New nightly job step in `src/jobs/nightly.ts`
   that scans the day's journals for product-tagged notes (the convention
   already exists for `#playbook`, `#crm`, `#meeting`; extend with
   product slugs) and writes proposals to
   `logs/intent-proposal-queue.json` via the existing queue API. Live
-  verification refines the scan heuristics.
-- [ ] **(agent)** Pass each detected note through `planJournalIntent`
+  verification refines the scan heuristics. *Step
+  `stepJournalIntentProducer(content)` inserted between Playbook extract
+  and Journal ingest in `runNightly`. Reads the registry to fetch
+  registered products (missing/malformed registry → empty list +
+  warn-log, so every mention surfaces as a `register-product` proposal
+  rather than silently dropping). Dedupes against the existing queue by
+  `sourceNoteId`. `appendIntentProposals` is wrapped in try/catch so a
+  disk-write failure surfaces as an error step with context, not a raw
+  exception. Live verification (the heuristics-refinement subtask) is
+  user-driven and stays open for a real-world journal pass.*
+- [x] **(agent)** Pass each detected note through `planJournalIntent`
   (from `src/intent/journal-intent.ts`) to produce the structured
-  `IntentProposal` before queueing.
+  `IntentProposal` before queueing. *`runJournalIntentProducer` is the
+  unified entry point: it calls `scanJournalForIntent` to turn journal
+  markdown into `JournalNote[]`, hands those to `planJournalIntent`,
+  derives a stable SHA-256-prefix `sourceNoteId` per emitted proposal,
+  drops anything already in `existingQueueEntries`, and returns the
+  fresh entries for the caller to enqueue. The scanner skips a curated
+  list of non-product tags (`#playbook`, `#crm`, `#meeting`, `#diet`,
+  `#books`, `#study`, `#place`, `#priorities`, `#workouts`,
+  `#applications`, `#investments`, etc.) so no journal-routing tag
+  produces a spurious `register-product` proposal.*
 
 #### C8. Journal-to-intent consumer
 

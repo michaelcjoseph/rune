@@ -21,6 +21,12 @@ export interface QueuedIntentProposal {
   /** The proposal — vault-intake, roadmap, register-product, or disambiguation. */
   proposal: IntentProposal;
   status: 'pending' | 'approved' | 'rejected';
+  /** Stable hash of the proposal's identifying fields — the dedupe key used
+   *  by the C7 producer to skip re-enqueuing the same proposal on a
+   *  subsequent nightly run, regardless of status. Optional for entries
+   *  predating Phase 6 C7 (those won't dedupe and may re-enqueue once;
+   *  new entries always include this field). */
+  sourceNoteId?: string;
 }
 
 /** Read the queue; a missing or malformed file yields an empty queue. */

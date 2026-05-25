@@ -9,6 +9,16 @@ import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
+import {
+  runJournalIntentProducer,
+  type JournalIntentQueueEntry,
+} from '../intent/journal-intent-producer.js';
+import {
+  readIntentProposalQueue,
+  appendIntentProposals,
+  type QueuedIntentProposal,
+} from '../intent/intent-proposal-queue.js';
+import { readRegistry } from '../intent/registry.js';
 import { extractMeetings, appendProjectDecisions } from './meeting-extract.js';
 import { askClaudeOneShot, runAgent, registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
@@ -248,6 +258,79 @@ function stepBirthdayAlerts(date: string): NightlyStepResult {
 async function stepPlaybookExtract(): Promise<NightlyStepResult> {
   const result = await extractPlaybookDrafts();
   return { step: 'Playbook extract', status: result.status, detail: result.detail };
+}
+
+/**
+ * Phase 6 C7: scan the day's journal for product-tagged notes, run the
+ * journal-intent planner, and append new proposals to
+ * `logs/intent-proposal-queue.json`. Dedupes against existing entries by
+ * `sourceNoteId` so re-running on the same journal is a no-op. A missing
+ * registry (the file hasn't been built yet) is treated as "no registered
+ * products" — every product mention becomes a `register-product` proposal,
+ * which is the correct surfacing rather than dropping the note.
+ */
+function stepJournalIntentProducer(content: string | null): NightlyStepResult {
+  if (!content || content.trim().length === 0) {
+    return { step: 'Journal-intent producer', status: 'skipped', detail: 'No journal content today' };
+  }
+  let registeredProducts: string[] = [];
+  try {
+    const registry = readRegistry();
+    registeredProducts = registry.products.map((p) => p.name);
+  } catch (err) {
+    // Missing/malformed registry — fall back to empty list. The planner
+    // will surface every product mention as a `register-product` proposal,
+    // which is the right outcome (it tells the user to register first).
+    log.warn('stepJournalIntentProducer: registry unavailable, treating as empty', {
+      error: (err as Error).message,
+    });
+  }
+  const existing = readIntentProposalQueue();
+  // The producer's dedupe key is sourceNoteId. Map the queue's
+  // QueuedIntentProposal[] to the producer's JournalIntentQueueEntry[]
+  // shape; entries predating C7 won't have a sourceNoteId — skip those,
+  // they can't dedupe and will re-surface once (acceptable one-time cost).
+  const existingQueueEntries: JournalIntentQueueEntry[] = existing
+    .filter((e): e is QueuedIntentProposal & { sourceNoteId: string } =>
+      typeof e.sourceNoteId === 'string')
+    .map((e) => ({ sourceNoteId: e.sourceNoteId, proposal: e.proposal }));
+  const result = runJournalIntentProducer({
+    journalContent: content,
+    registeredProducts,
+    existingQueueEntries,
+  });
+  if (result.toEnqueue.length === 0) {
+    return { step: 'Journal-intent producer', status: 'skipped', detail: 'No new proposals' };
+  }
+  const queuedAt = new Date().toISOString();
+  const toAppend: QueuedIntentProposal[] = result.toEnqueue.map((e) => ({
+    queuedAt,
+    proposal: e.proposal,
+    status: 'pending',
+    sourceNoteId: e.sourceNoteId,
+  }));
+  try {
+    appendIntentProposals(toAppend);
+  } catch (err) {
+    // The `run()` harness would catch this too, but a contextualized
+    // detail message is more useful in the nightly summary than a raw
+    // ENOSPC/EPERM exception string. Match the pattern used by
+    // stepObservation's appendFiledIdeas guard.
+    log.warn('stepJournalIntentProducer: appendIntentProposals failed', {
+      error: (err as Error).message,
+      pending: toAppend.length,
+    });
+    return {
+      step: 'Journal-intent producer',
+      status: 'error',
+      detail: `Failed to queue ${toAppend.length} proposal(s): ${(err as Error).message}`,
+    };
+  }
+  return {
+    step: 'Journal-intent producer',
+    status: 'success',
+    detail: `${toAppend.length} new proposal(s) queued`,
+  };
 }
 
 function stepJournalIngest(filename: string, content: string | null): NightlyStepResult {
@@ -574,6 +657,7 @@ export async function executeNightly(
 
   await run('Birthday alerts', () => stepBirthdayAlerts(todayDate));
   await run('Playbook extract', stepPlaybookExtract);
+  await run('Journal-intent producer', () => stepJournalIntentProducer(todayJournal));
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('Library sync', stepLibrarySync);
