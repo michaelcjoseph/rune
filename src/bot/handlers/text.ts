@@ -46,18 +46,56 @@ import { getStoredTokens } from '../../integrations/whoop/keychain.js';
 import { classifyIntent, type ClassifyResult } from '../resolver.js';
 import { getSkillRegistry, type SkillEntry } from '../skill-registry.js';
 import { appendIntent, type IntentOutcome } from '../../utils/intent-log.js';
+import { appendInteraction } from '../../utils/observation-log.js';
 
 const log = createLogger('text-handler');
 
 export async function handleTextMessage(sender: MessageSender, msg: TelegramBot.Message): Promise<void> {
-  // Security gate
+  // Security gate — unauthorized senders produce no observation log entry
+  // either (no record of a rejected attempt; the bot is private).
   if (msg.from?.id !== config.TELEGRAM_USER_ID) return;
 
   const userId = msg.chat.id;
   const text = (msg.text || '').trim();
   if (!text) return;
 
-  return dispatchText(sender, userId, text);
+  // Phase 6 B1.2: one InteractionLogRecord per inbound TG message. `detail`
+  // captures the route derived from slash-prefix matching — never the
+  // message body. Outcome reflects whether dispatchText returned cleanly.
+  const route = routeOf(text);
+  let outcome: 'success' | 'failure' = 'success';
+  try {
+    await dispatchText(sender, userId, text);
+  } catch (err) {
+    outcome = 'failure';
+    throw err;
+  } finally {
+    try {
+      appendInteraction({
+        ts: new Date().toISOString(),
+        kind: 'tg-message',
+        outcome,
+        detail: `route=${route}`,
+      });
+    } catch (logErr) {
+      // Logging is best-effort — a disk failure must not crash the handler.
+      log.warn('appendInteraction failed', { error: (logErr as Error).message });
+    }
+  }
+}
+
+/** Classify an inbound message into a structured route token for the
+ *  observation log. Returns `/<command>` for slash commands and
+ *  `conversation` for free-form text. The return value is structured
+ *  metadata — never the message body — so it can safely land in
+ *  `InteractionLogRecord.detail`. Mirrors the prefix chain in
+ *  `dispatchText` but only extracts the route name; the actual handler
+ *  is invoked by `dispatchText` itself. */
+function routeOf(text: string): string {
+  if (!text.startsWith('/')) return 'conversation';
+  // Take the first whitespace-delimited token and strip args.
+  const head = text.split(/\s+/)[0]!;
+  return head;
 }
 
 /** Core routing chain shared by TG and webview transports. Auth/userId extraction

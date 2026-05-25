@@ -36,6 +36,7 @@ vi.mock('../skill-registry.js', () => ({
   ]),
 }));
 vi.mock('../../utils/intent-log.js', () => ({ appendIntent: vi.fn() }));
+vi.mock('../../utils/observation-log.js', () => ({ appendInteraction: vi.fn() }));
 vi.mock('../commands/fresh.js', () => ({ handleFresh: vi.fn() }));
 vi.mock('../commands/fresh-full.js', () => ({ handleFreshFull: vi.fn() }));
 vi.mock('../commands/clear.js', () => ({ handleClear: vi.fn() }));
@@ -117,6 +118,7 @@ const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { hasActiveSRSession, handleSRMessage } = await import('../../study/sr-session.js');
 const { handleURLMessage } = await import('./url.js');
+const { appendInteraction } = await import('../../utils/observation-log.js');
 const { handleTextMessage, dispatchText } = await import('./text.js');
 
 function mockSender(): MessageSender {
@@ -1211,5 +1213,87 @@ describe('dispatchText — URL routing position (new behavior)', () => {
 
     expect(handleURLMessage).toHaveBeenCalledTimes(1);
     expect(handleURLMessage).toHaveBeenCalledWith(sender, 100, 'https://example.com/article');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Observation-log interaction wiring (Phase 6 B1.2)
+// ---------------------------------------------------------------------------
+
+describe('handleTextMessage — observation-log interaction wiring (B1.2)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const appendInteractionMock = appendInteraction as unknown as ReturnType<typeof vi.fn>;
+
+  it('emits one InteractionLogRecord per authorized inbound TG message', async () => {
+    await handleTextMessage(mockSender(), msg('/fresh'));
+    expect(appendInteractionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits NO record when the sender is unauthorized (security gate fires first)', async () => {
+    await handleTextMessage(mockSender(), msg('hello', 999));
+    expect(appendInteractionMock).not.toHaveBeenCalled();
+  });
+
+  it('emits NO record when text is empty (zero-content noise filter)', async () => {
+    await handleTextMessage(mockSender(), msg(''));
+    expect(appendInteractionMock).not.toHaveBeenCalled();
+  });
+
+  it('record has kind="tg-message" and outcome="success" on a normal slash command', async () => {
+    await handleTextMessage(mockSender(), msg('/fresh'));
+    const record = appendInteractionMock.mock.calls[0]![0];
+    expect(record.kind).toBe('tg-message');
+    expect(record.outcome).toBe('success');
+  });
+
+  it('detail captures the slash command name as route=/<command>', async () => {
+    await handleTextMessage(mockSender(), msg('/journal had a great meeting'));
+    const record = appendInteractionMock.mock.calls[0]![0];
+    expect(record.detail).toMatch(/route=\/journal/);
+  });
+
+  it('detail uses route=conversation for free-form text (no slash prefix)', async () => {
+    // Set up the conversation path: no active review, no SR, no session yet — the
+    // resolver word-count guard kicks in (3 < 5) so this falls straight to conversation.
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'sess-conv', lastActivity: new Date().toISOString(),
+      messageCount: 1, firstMessage: 'hi there', model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'hello back', error: null });
+
+    await handleTextMessage(mockSender(), msg('three word msg'));
+    const record = appendInteractionMock.mock.calls[0]![0];
+    expect(record.detail).toMatch(/route=conversation/);
+  });
+
+  it('detail NEVER contains the raw message body — strict-discipline invariant', async () => {
+    const tricky = 'sensitive content with quotes "x" and a path /Users/me/secrets';
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'sess-t', lastActivity: new Date().toISOString(),
+      messageCount: 1, firstMessage: tricky, model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await handleTextMessage(mockSender(), msg(tricky));
+    const record = appendInteractionMock.mock.calls[0]![0];
+    expect(record.detail).not.toContain('sensitive');
+    expect(record.detail).not.toContain('/Users/me/secrets');
+    expect(record.detail).not.toContain(tricky);
+  });
+
+  it('ts field is set to a parseable ISO-8601 string', async () => {
+    await handleTextMessage(mockSender(), msg('/fresh'));
+    const record = appendInteractionMock.mock.calls[0]![0];
+    expect(typeof record.ts).toBe('string');
+    expect(Number.isFinite(Date.parse(record.ts))).toBe(true);
   });
 });
