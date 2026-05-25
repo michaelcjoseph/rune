@@ -35,7 +35,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { runAgent } from '../ai/claude.js';
-import { runCodex, type CodexSandboxMode } from '../ai/codex.js';
+import { probeCodexProvider, runCodex, type CodexSandboxMode } from '../ai/codex.js';
 import { compileToCodex, parseClaudeAgent, type NeutralAgentDef } from '../intent/agent-def.js';
 import {
   recordDispatch,
@@ -217,23 +217,33 @@ export async function dispatchToExecutor(
     text = agentText;
     error = agentError;
   } else {
-    // Codex target — inline the compiled neutral agent doc since Codex
-    // doesn't know Jarvis's agents dir. `runCodex` reads each option with
-    // `?? default`, so plain undefined fields are equivalent to absent
-    // ones (no need for conditional spreads).
-    const loader = opts.loadNeutralAgent ?? defaultLoadNeutralAgent;
-    const neutralDef = loader(handoff.agent);
-    const compiledAgent = compileToCodex(neutralDef);
-    const prompt = `${compiledAgent}\n---\n\n${formatPrompt(handoff)}`;
-    const codexResult = await runCodex(prompt, {
-      cwd: opts.cwd,
-      env: opts.env,
-      sandboxMode: opts.sandboxMode,
-      timeoutMs: opts.timeoutMs,
-      model: opts.model,
-    });
-    text = codexResult.text;
-    error = codexResult.error;
+    // Provider-availability gate (A5.3) — short-circuit before agent load or
+    // spawn when Codex is absent or unauthenticated. Returns a failed
+    // DispatchResult so the merge contract's null-adjudication path applies
+    // cleanly (cross-model review never sees a Codex run that never happened).
+    const probe = await probeCodexProvider();
+    if (!probe.available) {
+      error = `codex executor unavailable: ${probe.reason}`;
+      log.warn('Codex dispatch skipped — provider unavailable', { reason: probe.reason });
+    } else {
+      // Codex target — inline the compiled neutral agent doc since Codex
+      // doesn't know Jarvis's agents dir. `runCodex` reads each option with
+      // `?? default`, so plain undefined fields are equivalent to absent
+      // ones (no need for conditional spreads).
+      const loader = opts.loadNeutralAgent ?? defaultLoadNeutralAgent;
+      const neutralDef = loader(handoff.agent);
+      const compiledAgent = compileToCodex(neutralDef);
+      const prompt = `${compiledAgent}\n---\n\n${formatPrompt(handoff)}`;
+      const codexResult = await runCodex(prompt, {
+        cwd: opts.cwd,
+        env: opts.env,
+        sandboxMode: opts.sandboxMode,
+        timeoutMs: opts.timeoutMs,
+        model: opts.model,
+      });
+      text = codexResult.text;
+      error = codexResult.error;
+    }
   }
 
   let result: DispatchResult;

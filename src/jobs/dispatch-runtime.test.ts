@@ -26,7 +26,10 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn() }));
-vi.mock('../ai/codex.js', () => ({ runCodex: vi.fn() }));
+vi.mock('../ai/codex.js', () => ({
+  runCodex: vi.fn(),
+  probeCodexProvider: vi.fn(async () => ({ available: true })),
+}));
 vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
@@ -36,26 +39,14 @@ vi.mock('../utils/logger.js', () => ({
 // ---------------------------------------------------------------------------
 
 const { runAgent } = await import('../ai/claude.js');
-const { runCodex } = await import('../ai/codex.js');
+const { runCodex, probeCodexProvider } = await import('../ai/codex.js');
 
 const runAgentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const runCodexMock = runCodex as unknown as ReturnType<typeof vi.fn>;
+const probeCodexProviderMock = probeCodexProvider as unknown as ReturnType<typeof vi.fn>;
 
-// Module under test — imported dynamically so test-file parse succeeds even
-// before the implementation exists. The import below will surface as the first
-// failing assertion in every test (the right kind of red).
-let dispatchToExecutor: (...args: unknown[]) => Promise<unknown>;
-try {
-  const mod = await import('./dispatch-runtime.js');
-  dispatchToExecutor = mod.dispatchToExecutor;
-} catch {
-  // Module not yet implemented — each test will fail on the undefined call.
-  dispatchToExecutor = async () => {
-    throw new Error(
-      'dispatch-runtime.ts not yet implemented — create src/intent/dispatch-runtime.ts',
-    );
-  };
-}
+// Module under test.
+const { dispatchToExecutor } = await import('./dispatch-runtime.js');
 
 // Types imported from existing stable modules (these already exist).
 import type { DispatchHandoff } from './dispatch.js';
@@ -97,6 +88,8 @@ let tmpDir: string;
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'dispatch-runtime-test-'));
   vi.clearAllMocks();
+  // Re-prime after clearAllMocks so existing codex tests keep working.
+  probeCodexProviderMock.mockResolvedValue({ available: true });
 });
 
 afterEach(() => {
@@ -477,5 +470,108 @@ describe('dispatchToExecutor — DispatchLogEntry timestamp', () => {
     const parsed = JSON.parse(raw);
     expect(parsed.ts).toEqual(expect.any(String));
     expect(Number.isFinite(Date.parse(parsed.ts))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A5.3: probeCodexProvider guard in dispatchToExecutor
+// ---------------------------------------------------------------------------
+
+describe('dispatchToExecutor — codex probe unavailable: returns failed DispatchResult', () => {
+  it('returns a failed result with failureReason containing "codex executor unavailable" and the probe reason; does NOT call runCodex', async () => {
+    probeCodexProviderMock.mockResolvedValue({
+      available: false,
+      reason: 'codex binary not found in PATH',
+    });
+
+    const outcome = await dispatchToExecutor(
+      makeHandoff({ target: 'codex' }),
+      {
+        logFile: join(tmpDir, 'dispatch.jsonl'),
+        loadNeutralAgent: () => FIXTURE_AGENT,
+      },
+    );
+
+    expect(outcome.result.status).toBe('failed');
+    if (outcome.result.status === 'failed') {
+      expect(outcome.result.failureReason).toMatch(/codex executor unavailable/i);
+      expect(outcome.result.failureReason).toContain('codex binary not found in PATH');
+    }
+    expect(runCodexMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchToExecutor — codex probe unavailable: appends failed log entry', () => {
+  it('appends a failed JSONL entry even when the probe short-circuits the dispatch', async () => {
+    probeCodexProviderMock.mockResolvedValue({
+      available: false,
+      reason: 'codex binary not found in PATH',
+    });
+    const logFile = join(tmpDir, 'dispatch.jsonl');
+
+    const outcome = await dispatchToExecutor(
+      makeHandoff({ target: 'codex' }),
+      {
+        logFile,
+        loadNeutralAgent: () => FIXTURE_AGENT,
+      },
+    );
+
+    const raw = readFileSync(logFile, 'utf8').trim();
+    expect(raw).not.toBe('');
+    const parsed = JSON.parse(raw);
+    expect(parsed).toMatchObject({ status: 'failed' });
+    expect(parsed).toMatchObject(outcome.logEntry);
+  });
+});
+
+describe('dispatchToExecutor — codex probe unavailable: loadNeutralAgent NOT called', () => {
+  it('does not invoke loadNeutralAgent when the probe returns unavailable', async () => {
+    probeCodexProviderMock.mockResolvedValue({
+      available: false,
+      reason: 'codex binary not found in PATH',
+    });
+    const loader = vi.fn(() => FIXTURE_AGENT);
+
+    await dispatchToExecutor(
+      makeHandoff({ target: 'codex' }),
+      {
+        logFile: join(tmpDir, 'dispatch.jsonl'),
+        loadNeutralAgent: loader,
+      },
+    );
+
+    expect(loader).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatchToExecutor — codex probe available: runCodex IS called (regression)', () => {
+  it('still calls runCodex when the probe returns available:true', async () => {
+    // probeCodexProviderMock already primed to { available: true } in beforeEach.
+    runCodexMock.mockResolvedValue({ text: 'codex output', error: null, exitCode: 0 });
+
+    const outcome = await dispatchToExecutor(
+      makeHandoff({ target: 'codex' }),
+      {
+        logFile: join(tmpDir, 'dispatch.jsonl'),
+        loadNeutralAgent: () => FIXTURE_AGENT,
+      },
+    );
+
+    expect(runCodexMock).toHaveBeenCalledOnce();
+    expect(outcome.result.status).toBe('completed');
+  });
+});
+
+describe('dispatchToExecutor — claude target: probeCodexProvider NOT called', () => {
+  it('does not invoke probeCodexProvider for target "claude"', async () => {
+    runAgentMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await dispatchToExecutor(
+      makeHandoff({ target: 'claude' }),
+      { logFile: join(tmpDir, 'dispatch.jsonl') },
+    );
+
+    expect(probeCodexProviderMock).not.toHaveBeenCalled();
   });
 });

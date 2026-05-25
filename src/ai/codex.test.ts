@@ -297,4 +297,109 @@ describe('ai/codex', () => {
       expect(hasCdFlag || hasCwdOpt).toBe(true);
     });
   });
+
+  // ── isCodexLoggedIn ───────────────────────────────────────────────────────
+
+  describe('isCodexLoggedIn', () => {
+    it('returns true when spawn exits 0 and stdout contains "Logged in"', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(
+        createChild({ stdout: 'Logged in using ChatGPT', code: 0 }),
+      );
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(true);
+    });
+
+    it('returns false when stdout does not contain "Logged in" (exit 0)', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(
+        createChild({ stdout: 'Not logged in', code: 0 }),
+      );
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(false);
+    });
+
+    it('returns false when exit code is non-zero', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: 'Logged in', code: 1 }));
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(false);
+    });
+
+    it('returns false (does not throw) when spawn emits an error event', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = new EventEmitter() as any;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      spawnMock.mockImplementation(() => {
+        process.nextTick(() => child.emit('error', new Error('ENOENT: spawn failed')));
+        return child;
+      });
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(false);
+    });
+  });
+
+  // ── probeCodexProvider ────────────────────────────────────────────────────
+
+  describe('probeCodexProvider', () => {
+    it('returns { available: true } when binary is found AND login status passes', async () => {
+      // binary found via which
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      // login status spawn returns "Logged in" with exit 0
+      spawnMock.mockReturnValue(
+        createChild({ stdout: 'Logged in using ChatGPT', code: 0 }),
+      );
+
+      const { probeCodexProvider } = await import('./codex.js');
+      const result = await probeCodexProvider();
+
+      expect(result).toEqual({ available: true });
+    });
+
+    it('returns { available: false, reason: /binary|not found|path/i } when binary is missing and does NOT attempt login probe', async () => {
+      vi.resetModules();
+      execFileSyncMock.mockImplementation(() => { throw new Error('not found'); });
+      existsSyncMock.mockReturnValue(false);
+
+      const { probeCodexProvider } = await import('./codex.js');
+      const result = await probeCodexProvider();
+
+      expect(result.available).toBe(false);
+      if (!result.available) {
+        expect(result.reason).toMatch(/binary|not found|path/i);
+      }
+      // spawn must not have been called — the probe should short-circuit
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it('returns { available: false, reason: /logged in|login|authenticate/i } when binary is present but not logged in', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      // login status spawn: binary runs but user is not logged in
+      spawnMock.mockReturnValue(
+        createChild({ stdout: 'Not logged in', code: 0 }),
+      );
+
+      const { probeCodexProvider } = await import('./codex.js');
+      const result = await probeCodexProvider();
+
+      expect(result.available).toBe(false);
+      if (!result.available) {
+        expect(result.reason).toMatch(/logged in|login|authenticate/i);
+      }
+    });
+  });
 });

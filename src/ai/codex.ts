@@ -65,8 +65,8 @@ export function getCodexBin(): string {
 }
 
 /** Returns `true` when the Codex CLI is resolvable. Non-throwing — used by
- *  the future A5.3 provider-availability probe and by callers that need to
- *  feature-gate Codex paths without trapping a thrown error. */
+ *  the provider-availability probe (`probeCodexProvider`) and by callers
+ *  that need to feature-gate Codex paths without trapping a thrown error. */
 export function isCodexAvailable(): boolean {
   try {
     getCodexBin();
@@ -74,6 +74,83 @@ export function isCodexAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Hard timeout for the login-status probe — long enough for cold CLI
+ *  startup, short enough that a hung probe doesn't pin the dispatcher. */
+const LOGIN_PROBE_TIMEOUT_MS = 10_000;
+
+/** Spawns `codex login status` and returns true iff the CLI reports the
+ *  session is authenticated. Non-throwing — any spawn error, non-zero exit,
+ *  missing "Logged in" marker, or probe timeout resolves to `false`. Cheap
+ *  to call (the CLI exits in milliseconds) but a 10s hard cap protects the
+ *  caller from a hung probe blocking the dispatcher indefinitely. */
+export async function isCodexLoggedIn(): Promise<boolean> {
+  let bin: string;
+  try {
+    bin = getCodexBin();
+  } catch {
+    return false;
+  }
+  return new Promise((resolve) => {
+    let stdout = '';
+    let resolved = false;
+    const finish = (value: boolean): void => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+    try {
+      // stderr: 'ignore' rather than 'pipe' — the probe doesn't read stderr,
+      // and an open-but-unread stderr pipe can deadlock the child if it
+      // writes enough diagnostic output to fill the OS pipe buffer.
+      const child = spawn(bin, ['login', 'status'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(false);
+      }, LOGIN_PROBE_TIMEOUT_MS);
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data;
+      });
+      child.on('error', () => {
+        clearTimeout(timer);
+        finish(false);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        // Start-anchored so "Not logged in" (the logged-out case) doesn't
+        // false-positive against "Logged in" (the substring it contains).
+        finish(code === 0 && /^Logged in/i.test(stdout.trim()));
+      });
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/** Discriminated availability result returned by `probeCodexProvider`. */
+export type ProviderAvailability =
+  | { available: true }
+  | { available: false; reason: string };
+
+/** Non-throwing combined probe — binary present AND session authenticated.
+ *  The probe is the gatekeeper `dispatchToExecutor` consults before spawning
+ *  a Codex run; an unavailable probe short-circuits with a failed
+ *  `DispatchResult` so the merge contract's null-adjudication path applies
+ *  cleanly. */
+export async function probeCodexProvider(): Promise<ProviderAvailability> {
+  if (!isCodexAvailable()) {
+    return { available: false, reason: 'codex binary not found in PATH' };
+  }
+  if (!(await isCodexLoggedIn())) {
+    return {
+      available: false,
+      reason: 'codex is installed but not logged in — run `codex login` to authenticate',
+    };
+  }
+  return { available: true };
 }
 
 /** Codex sandbox policy — passed via `-s` to `codex exec`. The Codex CLI
