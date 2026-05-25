@@ -56,10 +56,21 @@ export type DispatchResult =
  * attribution) and whether it completed or failed. A discriminated union on `status`: a
  * `failed` entry always carries a `failureReason`, and a `completed` entry can never have
  * one — the incoherent combination is unrepresentable.
+ *
+ * `ts` is the ISO-8601 timestamp the dispatch terminated — the field that lets the
+ * dispatch log correlate with `mutations.jsonl`, `agent-runs.jsonl`, and the
+ * supervision store by time.
  */
 export type DispatchLogEntry =
-  | { target: DispatchTarget; model: string; provider: DispatchProvider; status: 'completed' }
   | {
+      ts: string;
+      target: DispatchTarget;
+      model: string;
+      provider: DispatchProvider;
+      status: 'completed';
+    }
+  | {
+      ts: string;
       target: DispatchTarget;
       model: string;
       provider: DispatchProvider;
@@ -89,14 +100,19 @@ export function buildHandoff(handoff: DispatchHandoff): DispatchHandoff {
 
 /**
  * Build the log record for a finished dispatch from its handoff and result — capturing the
- * target, the model and provider that executed it, and the completed/failed status (with a
- * clear reason on failure, so a provider-unavailable dispatch is a recorded clean failure).
+ * target, the model and provider that executed it, the completed/failed status (with a
+ * clear reason on failure, so a provider-unavailable dispatch is a recorded clean failure),
+ * and an ISO-8601 timestamp for cross-log correlation.
+ *
+ * `ts` is the optional injection point for deterministic tests — production callers omit it
+ * and accept `new Date().toISOString()` at call time.
  */
 export function recordDispatch(
   handoff: DispatchHandoff,
   result: DispatchResult,
+  ts: string = new Date().toISOString(),
 ): DispatchLogEntry {
-  const base = { target: handoff.target, model: result.model, provider: result.provider };
+  const base = { ts, target: handoff.target, model: result.model, provider: result.provider };
   return result.status === 'completed'
     ? { ...base, status: 'completed' }
     : { ...base, status: 'failed', failureReason: result.failureReason };

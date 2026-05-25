@@ -163,6 +163,16 @@ const config = {
     return join(this.LOGS_DIR, 'supervised-runs.json');
   },
 
+  /** Append-only JSONL log of every Layer 5 dispatch
+   *  (project 08 Phase 6 A5.2). Written by
+   *  `src/intent/dispatch-runtime.ts`'s `dispatchToExecutor` on every
+   *  spawn — one line per dispatch with the target, model, provider, and
+   *  completed/failed status. Used for cost attribution and the
+   *  cross-model adjudication audit trail. */
+  get DISPATCH_LOG_FILE() {
+    return join(this.LOGS_DIR, 'dispatch-log.jsonl');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 
