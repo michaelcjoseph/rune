@@ -16,6 +16,8 @@
  * See spec.md §"Phase 5" and test-plan.md §16.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import config from '../config.js';
 import { readVaultFile, listVaultFiles } from '../vault/files.js';
 import { createLogger } from '../utils/logger.js';
@@ -178,6 +180,172 @@ export function readVaultSignals(opts: ReadVaultSignalsOpts = {}): SensorSignal[
           ts: headingDate.toISOString(),
         });
       }
+    }
+  }
+
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// readTelemetrySignals (Phase 6 B2.2)
+// ---------------------------------------------------------------------------
+//
+// Source: `logs/agent-runs.jsonl` and `logs/mutations.jsonl` — Jarvis's
+// own operational logs. The reader detects failure-heavy windows on the
+// agent side and repeated work-run failures on the mutation side.
+//
+// Per-product (Aura/Assay) telemetry is deferred: a product's own CI
+// signal, deploy failures, error-budget burn, etc. would require either
+// a webhook/poll integration with each product or a shared telemetry
+// sink we don't have yet. The wedge here is Jarvis's own observability;
+// per-product wiring is a follow-up task.
+
+/** Default failure-count threshold per agent within the window. Three
+ *  failures from the same agent inside the lookback is enough signal
+ *  that something durable is breaking, not just a transient. */
+const DEFAULT_AGENT_FAILURE_THRESHOLD = 3;
+
+/** Default failure-count threshold per project slug across `work-run`
+ *  mutations within the window. Two failures on the same project means
+ *  a real pattern, not a single bad cycle. */
+const DEFAULT_WORK_RUN_FAILURE_THRESHOLD = 2;
+
+export interface ReadTelemetrySignalsOpts {
+  /** "Now" for the lookback-window calculation. Defaults to `new Date()`. */
+  now?: Date;
+  /** Lookback window in days. Defaults to {@link DEFAULT_LOOKBACK_DAYS}. */
+  lookbackDays?: number;
+  /** Cap on returned signals. Defaults to {@link DEFAULT_CAP}. */
+  cap?: number;
+  /** Per-agent failure-count threshold. Defaults to
+   *  {@link DEFAULT_AGENT_FAILURE_THRESHOLD}. */
+  agentFailureThreshold?: number;
+  /** Per-project-slug work-run failure threshold. Defaults to
+   *  {@link DEFAULT_WORK_RUN_FAILURE_THRESHOLD}. */
+  workRunFailureThreshold?: number;
+  /** Read the agent-runs JSONL file. Returns the full content or `null`
+   *  when the file is missing. Production wires
+   *  `readFileSync(logs/agent-runs.jsonl)`. */
+  readAgentRunsLog?: () => string | null;
+  /** Read the mutations JSONL file. Returns the full content or `null`
+   *  when the file is missing. Production wires
+   *  `readFileSync(logs/mutations.jsonl)`. */
+  readMutationsLog?: () => string | null;
+}
+
+function defaultReadAgentRunsLog(): string | null {
+  try {
+    return readFileSync(join(config.LOGS_DIR, 'agent-runs.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function defaultReadMutationsLog(): string | null {
+  try {
+    return readFileSync(join(config.LOGS_DIR, 'mutations.jsonl'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** Parse a JSONL string into an array of objects, skipping malformed
+ *  lines with a warning. The reader is fault-tolerant by design — a
+ *  single bad line shouldn't drop a window's worth of signal. */
+function parseJsonl(raw: string | null): Array<Record<string, unknown>> {
+  if (raw === null) return [];
+  const out: Array<Record<string, unknown>> = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim() === '') continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        out.push(parsed as Record<string, unknown>);
+      }
+    } catch {
+      log.warn('parseJsonl: skipped malformed line');
+    }
+  }
+  return out;
+}
+
+/**
+ * Scan recent `agent-runs.jsonl` and `mutations.jsonl` entries for
+ * failure-heavy patterns, returning a capped `SensorSignal[]`.
+ *
+ * Two emission paths:
+ * 1. **Agent failure-heavy.** Group entries by `agent`; emit one signal
+ *    per agent whose error-status count within the window meets the
+ *    `agentFailureThreshold`.
+ * 2. **Work-run repeat-failure.** Filter mutations to `kind: 'work-run'`
+ *    with `status: 'failed'` inside the window; group by project slug
+ *    (`payload.projectSlug` falling back to `target.ref`); emit one
+ *    signal per slug whose count meets `workRunFailureThreshold`.
+ *
+ * Cap enforcement is FIFO across the two paths (agent first, then
+ * work-run). Both source readers absorb missing-file errors as a clean
+ * empty rather than a throw.
+ */
+export function readTelemetrySignals(opts: ReadTelemetrySignalsOpts = {}): SensorSignal[] {
+  const now = opts.now ?? new Date();
+  const lookbackDays = opts.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
+  const cap = opts.cap ?? DEFAULT_CAP;
+  const agentThreshold = opts.agentFailureThreshold ?? DEFAULT_AGENT_FAILURE_THRESHOLD;
+  const workRunThreshold = opts.workRunFailureThreshold ?? DEFAULT_WORK_RUN_FAILURE_THRESHOLD;
+  const readAgentRuns = opts.readAgentRunsLog ?? defaultReadAgentRunsLog;
+  const readMutations = opts.readMutationsLog ?? defaultReadMutationsLog;
+
+  const cutoff = cutoffForWindow(now, lookbackDays);
+  const out: SensorSignal[] = [];
+
+  // ----- Agent failure-heavy scan -----
+  const agentRuns = parseJsonl(readAgentRuns());
+  const agentFailures = new Map<string, number>();
+  for (const entry of agentRuns) {
+    if (entry['status'] !== 'error') continue;
+    const ts = typeof entry['startedAt'] === 'string' ? Date.parse(entry['startedAt']) : NaN;
+    if (!Number.isFinite(ts) || ts < cutoff.getTime()) continue;
+    const agent = typeof entry['agent'] === 'string' ? entry['agent'] : null;
+    if (!agent) continue;
+    agentFailures.set(agent, (agentFailures.get(agent) ?? 0) + 1);
+  }
+  // Stable ordering — iterate Map insertion order, which is JSONL order.
+  for (const [agent, count] of agentFailures) {
+    if (out.length >= cap) break;
+    if (count < agentThreshold) continue;
+    out.push({
+      source: 'telemetry',
+      content: `agent=${agent} ${count} failures in last ${lookbackDays}d`,
+      ts: now.toISOString(),
+    });
+  }
+
+  // ----- Work-run repeat-failure scan -----
+  if (out.length < cap) {
+    const mutations = parseJsonl(readMutations());
+    const slugFailures = new Map<string, number>();
+    for (const entry of mutations) {
+      if (entry['kind'] !== 'work-run') continue;
+      if (entry['status'] !== 'failed') continue;
+      const ts = typeof entry['createdAt'] === 'string' ? Date.parse(entry['createdAt']) : NaN;
+      if (!Number.isFinite(ts) || ts < cutoff.getTime()) continue;
+      const payload = (entry['payload'] ?? {}) as Record<string, unknown>;
+      const target = (entry['target'] ?? {}) as Record<string, unknown>;
+      const slug =
+        (typeof payload['projectSlug'] === 'string' && payload['projectSlug']) ||
+        (typeof target['ref'] === 'string' && target['ref']) ||
+        null;
+      if (!slug) continue;
+      slugFailures.set(slug, (slugFailures.get(slug) ?? 0) + 1);
+    }
+    for (const [slug, count] of slugFailures) {
+      if (out.length >= cap) break;
+      if (count < workRunThreshold) continue;
+      out.push({
+        source: 'telemetry',
+        content: `work-run slug=${slug} ${count} failures in last ${lookbackDays}d`,
+        ts: now.toISOString(),
+      });
     }
   }
 
