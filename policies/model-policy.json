@@ -24,6 +24,15 @@
       "capabilities": ["classify"],
       "costTier": "low",
       "status": "active"
+    },
+    {
+      "_comment": "Codex executor for Layer 5 cross-model dispatch (project 08, A6.1). Provider openai; capability 'coding' to satisfy the Evaluator-role binding once roleDefaults.evaluator is set (A6.2) and the evaluatorDistinctFromGenerator constraint is flipped on (A6.3). Status 'preferred' marks Codex as the intended Evaluator on autonomous engine runs.",
+      "alias": "codex",
+      "provider": "openai",
+      "format": "codex",
+      "capabilities": ["coding"],
+      "costTier": "medium",
+      "status": "preferred"
     }
   ],
   "globalFallback": "opus",
