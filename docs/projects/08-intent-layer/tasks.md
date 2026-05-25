@@ -255,7 +255,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] **(agent)** `src/ai/codex.ts` mirroring `src/ai/claude.ts` — `CODEX_BIN` resolution, `runCodex(prompt, opts)` spawning `codex exec`, register/unregister-active-process hooks for graceful shutdown.
 - [x] **(agent)** `dispatchToExecutor(handoff)` in `src/jobs/dispatch-runtime.ts` — compile the agent per target, spawn the executor, call `recordDispatch`, append to `logs/dispatch-log.jsonl`. *Lands in `src/jobs/` rather than `src/intent/`: per the established convention, runtime adapters that do I/O (spawn children, write logs) live in `src/jobs/`; `src/intent/` stays for pure decision modules.*
 - [x] **(agent)** Provider-availability check — a `which codex` + login-status probe; on absence return a `{status:'failed', failureReason:'codex executor unavailable'}` `DispatchResult` so the merge contract's null-adjudication path applies cleanly.
-- [ ] **(user)** Confirm `! codex login` is in place before the first cross-model run (linked from the User-side prerequisites above).
+- [x] **(user)** Confirm `! codex login` is in place before the first cross-model run (linked from the User-side prerequisites above).
 
 #### A6. Model policy — register Codex + enable the cross-model constraint
 
@@ -357,11 +357,26 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C2. Cockpit approval inbox
 
-- [ ] **(agent)** New sidebar panel in `src/server/static/` listing
+- [x] **(agent)** New sidebar panel in `src/server/static/` listing
   pending approvals from `intent-proposal-queue`, `playbook-queue`,
   `proposal-queue`, and the supervision-store's `blocked-on-human`
   runs. Each row renders product/project, type, summary, age, and
   **Approve** / **Reject** / **Open** buttons per the ASCII mockup.
+  *Renderer polls `GET /api/approvals` every 5s (phase-shifted from
+  the cockpit poller), maps each `ApprovalRow` to a `.approval-row`
+  with header (product/project + type uppercase), summary line, age
+  (via the existing `fmtAge` helper), and an action row of three
+  delegated-click buttons keyed by `data-approval-id` + `data-action`.
+  Approve/Reject POST to `/api/approvals/<id>/<action>` (both segments
+  `encodeURIComponent`'d); on success the poll cache is busted so the
+  next tick re-renders without the actioned row; on transport error
+  the button re-enables for retry. Open is a placeholder no-op pending
+  per-source wire-up (the ASCII mockup includes it, but each source
+  type wants different open behavior — surfaced as a follow-up).
+  `blocked-on-human` rows render Approve/Reject disabled because the
+  underlying dispatch returns `'not-found'` for that source. The old
+  count-only `state.pendingApprovals` branch in `renderState` is
+  removed — the new poller owns the panel exclusively.*
 - [x] **(agent)** REST endpoints in `src/server/webview.ts`:
   `GET /api/approvals` (list across all sources),
   `POST /api/approvals/:id/approve`, `POST /api/approvals/:id/reject`.

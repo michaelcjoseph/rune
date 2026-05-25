@@ -572,18 +572,11 @@
       setText(reviewEl, 'None', true);
     }
 
-    // Approvals panel
-    const approvalsEl = document.getElementById('approvals-content');
-    const pb = state.pendingApprovals?.playbook ?? 0;
-    const pr = state.pendingApprovals?.proposal ?? 0;
-    const it = state.pendingApprovals?.intent ?? 0;
-    const total = pb + pr + it;
-    const parts = [
-      pb && `${pb} playbook`,
-      pr && `${pr} proposal`,
-      it && `${it} intent`,
-    ].filter(Boolean);
-    setText(approvalsEl, total === 0 ? 'None' : parts.join(' · '), total === 0);
+    // Approvals panel: Phase 6 C2 — owned by fetchAndRenderApprovals()
+    // below, which polls GET /api/approvals for row-level data. The
+    // count-only summary from state.pendingApprovals is no longer rendered
+    // here — the dedicated poller replaces it with per-row Approve/Reject/
+    // Open buttons.
 
     // Recent agent runs panel
     const runsEl = document.getElementById('runs-content');
@@ -837,6 +830,110 @@
     cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);
   }
 
+  // ---- Pending Approvals panel (Phase 6 C2) ----
+  //
+  // Polls GET /api/approvals and renders one row per pending entry across
+  // intent-proposal-queue, playbook-queue, ask-twice proposal-queue, and
+  // supervision `blocked-on-human` runs. Each row carries data-approval-id +
+  // data-action and is dispatched by handleApprovalsClick. Mirrors the
+  // pollCockpit + handleCockpitClick pattern above so the panel survives
+  // setHTML re-renders without per-button listeners.
+  let lastApprovalsJson = '';
+  function pollApprovals() {
+    fetch('/api/approvals')
+      .then(r => {
+        // Treat a non-OK response (e.g., 500 with {"error": "approvals list failed"})
+        // as a poll failure rather than calling r.json() and silently rendering
+        // "None" — the catch leaves the previously-rendered rows in place.
+        if (!r.ok) throw new Error(`approvals fetch returned ${r.status}`);
+        return r.json();
+      })
+      .then(rows => {
+        const json = JSON.stringify(rows);
+        if (json === lastApprovalsJson) return;
+        lastApprovalsJson = json;
+        renderApprovals(rows);
+      })
+      .catch(() => { /* network blip or server error — next tick retries */ });
+  }
+  function renderApprovals(rows) {
+    const el = document.getElementById('approvals-content');
+    if (!el) return;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      setHTML(el, '<span class="muted">None</span>');
+      return;
+    }
+    const html = rows.map(renderApprovalRow).join('');
+    setHTML(el, html);
+  }
+  function renderApprovalRow(row) {
+    // Defensive coercion — every interpolated field goes through escHtml.
+    const id = String(row.id ?? '');
+    const type = String(row.type ?? '');
+    const pp = String(row.productProject ?? '—');
+    const summary = String(row.summary ?? '');
+    const age = Number.isFinite(row.age) ? fmtAge(row.age * 1000) : '';
+    // blocked-on-human rows are queue-uneditable (dispatchApprovalStatus
+    // returns 'not-found' for that source) — render the buttons as disabled
+    // so a user click can't appear to do nothing.
+    const isBlocked = type === 'blocked-on-human';
+    const disabledAttr = isBlocked ? ' disabled' : '';
+    const approveBtn = `<button class="approval-btn approval-btn-approve" ` +
+      `data-approval-id="${escHtml(id)}" data-action="approve"${disabledAttr}>Approve</button>`;
+    const rejectBtn = `<button class="approval-btn approval-btn-reject" ` +
+      `data-approval-id="${escHtml(id)}" data-action="reject"${disabledAttr}>Reject</button>`;
+    const openBtn = `<button class="approval-btn approval-btn-open" ` +
+      `data-approval-id="${escHtml(id)}" data-action="open">Open</button>`;
+    return `<div class="approval-row">` +
+      `<div class="approval-row-head">` +
+        `<span class="approval-row-product">${escHtml(pp)}</span>` +
+        `<span class="approval-row-type">${escHtml(type)}</span>` +
+      `</div>` +
+      `<div class="approval-row-summary">${escHtml(summary)}</div>` +
+      `<div class="approval-row-meta"><span class="approval-row-age">${escHtml(age)}</span></div>` +
+      `<div class="approval-row-actions">${approveBtn}${rejectBtn}${openBtn}</div>` +
+      `</div>`;
+  }
+  function handleApprovalsClick(e) {
+    // Disabled buttons don't fire click events in the browser, so the
+    // disabled state itself is the gate — no `btn.disabled` check needed
+    // (matches the handleCockpitClick pattern).
+    const btn = e.target.closest('.approval-btn');
+    if (!btn) return;
+    const id = btn.dataset.approvalId;
+    const action = btn.dataset.action;
+    if (!id || !action) return;
+    if (action === 'approve' || action === 'reject') {
+      btn.disabled = true;
+      // Both segments encoded defensively — `action` is one of two literals
+      // today (the strict equality above proves it), but encoding makes the
+      // safety explicit so a relaxed guard in the future can't introduce a
+      // malformed URL.
+      fetch(`/api/approvals/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, { method: 'POST' })
+        .then((r) => {
+          if (!r.ok) {
+            // Re-enable so the user can retry. The next poll will refresh
+            // the row if the server-side state actually changed.
+            btn.disabled = false;
+          } else {
+            // Bust the cache so the next poll re-renders without this row.
+            lastApprovalsJson = '';
+            pollApprovals();
+          }
+        })
+        .catch(() => { btn.disabled = false; });
+      return;
+    }
+    if (action === 'open') {
+      // 'open' is a no-op placeholder for now — the ASCII mockup includes
+      // it but each source type wants different behavior (scroll to a
+      // cockpit project, open an Obsidian file, etc.). Leaving the button
+      // present so the panel matches the mockup; wire-up arrives with the
+      // live-verification refinement task.
+      return;
+    }
+  }
+
   // Delegated click handler for the projects-panel run buttons — attached once to the
   // static #projects-content container. data-slug (not inline onclick) keeps slugs out of
   // a JS-in-HTML-attribute context. A disabled (running) button does not dispatch clicks.
@@ -1060,8 +1157,12 @@
   setInterval(pollState, 5000);
   document.getElementById('projects-content')?.addEventListener('click', handleProjectsClick);
   document.getElementById('cockpit-content')?.addEventListener('click', handleCockpitClick);
+  document.getElementById('approvals-content')?.addEventListener('click', handleApprovalsClick);
   // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.
   setTimeout(() => { pollCockpit(); setInterval(pollCockpit, 5000); }, 2500);
+  // Phase-shifted again from pollCockpit so the three I/O pollers stagger
+  // their queue/registry reads.
+  setTimeout(() => { pollApprovals(); setInterval(pollApprovals, 5000); }, 3700);
 
   // -----------------------------------------------------------------------
   // Planning panel (project 08 Phase 6 C1.1)
