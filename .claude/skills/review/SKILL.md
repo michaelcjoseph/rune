@@ -14,11 +14,9 @@ One optional flag, `--cross-model`. The skill always operates on the current wor
 
 ## Modes
 
-`/review` is **single-model by default** — every reviewer runs on the same Claude session. Pass `--cross-model` to opt into cross-model adjudication.
+`/review` is **single-model by default** — every reviewer runs on the same Claude session. Pass `--cross-model` to opt into cross-model adjudication: the panel runs on Claude AND on a different-provider Evaluator (Codex via OpenAI), and both verdicts are reconciled into one consolidated answer (step 3 wires the dispatch; step 4 reconciles).
 
-**Current state:** `--cross-model` is recognized and the chosen mode is logged, but the second-model pass is not yet executed — the skill returns the single-model verdict with a note that the cross-model pass is pending the Codex executor integration.
-
-**Once that integration lands:** the panel will additionally run on a different-provider Evaluator (Codex via OpenAI), and the two verdicts will be reconciled into one consolidated answer. The cross-model dispatch will be built via `src/intent/dispatch.ts`'s `buildHandoff` / `recordDispatch`.
+The cross-model dispatch goes through `scripts/dispatch-review.ts` (npm script `dispatch-review`), which wraps `dispatchToExecutor` (`src/jobs/dispatch-runtime.ts`) with target `'codex'`. The dispatch handoff is built per `src/intent/dispatch.ts`'s `buildHandoff` / `recordDispatch` so the dispatch log records the model + provider that ran each reviewer.
 
 The mode itself is resolved by `resolveReviewMode` in `src/intent/adjudication.ts` (with `autonomous: false` for any manual `/review`). An autonomous engine run forces cross-model regardless of this flag — per `docs/projects/08-intent-layer/test-plan.md` §14, autonomous merges always require cross-model review.
 
@@ -279,6 +277,14 @@ After all five agents return, normalize their **findings** into a unified `BLOCK
 
 **Dedupe**: if two or more agents report substantively the same concern at the same `file:line` (or `file` if no line is given), list it once and tag with all agent names: `[security-auditor + code-reviewer]`. Pick the most severe normalized severity across the duplicates. "Substantively the same" means same root cause: a null-deref and a shell-injection both at `foo.ts:42` are different concerns and stay as separate findings. When in doubt, keep them separate.
 
+**Cross-model reconciliation** (only when step 1 set `mode = 'cross-model'`): each reviewer now has *two* outputs — the Claude pass (from the `Agent` tool call) and the Codex pass (from `npm run dispatch-review`'s stdout). Normalize and dedupe both into the same finding stream:
+
+- Apply the severity-mapping table above to **each** output independently. Then dedupe across them with the same rule (`file:line` + same root cause) — a finding both models flagged is tagged with both providers: `[code-reviewer claude+codex]`. A finding only one model flagged is tagged with just that provider: `[code-reviewer codex]`.
+- The overall-verdict computation still runs on the unified finding stream — a BLOCK from either model is a BLOCK on the overall verdict. Cross-model adjudication for the *manual* `/review` is conservative-by-union: anything either model flagged shows up. (The autonomous engine's adjudication, in contrast, requires both models to align; that's a different gate, in `evaluateMergeContract`.)
+- When the two models **disagree** on a specific finding (one flagged, the other did not), list it with a single-provider tag — that *is* the disagreement signal. No extra prose needed unless the disagreement is structural (e.g., one model returned `UNAVAILABLE`).
+- Add a Cross-model section at the end of Per-agent results showing the disagreement count: `<N> findings flagged by Claude only, <M> by Codex only, <K> by both`. This is the user's at-a-glance "where did the two models see different things" view.
+- If the Codex dispatch wrapper returned `UNAVAILABLE` for a reviewer (the script exited 1), include that reviewer's Claude verdict as written and tag the Codex side `UNAVAILABLE` in the Cross-model section. The overall verdict is still computed from whatever findings the available passes produced.
+
 Compute the overall verdict from normalized findings only:
 
 - **BLOCK** — at least one normalized BLOCK finding.
@@ -328,6 +334,13 @@ Print the report in this format:
 
 ### code-reviewer — <PASS / PASS_WITH_WARNINGS / BLOCK>
 - <one-line summary>
+
+### Cross-model (only in `cross-model` mode)
+
+- Findings flagged by Claude only: N
+- Findings flagged by Codex only: M
+- Findings flagged by both: K
+- Codex UNAVAILABLE for: <comma-separated reviewer list, or "none">
 
 ### code-simplifier (advisory)
 - Quick Wins: N | Medium: N | Structural: N
