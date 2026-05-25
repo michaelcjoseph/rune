@@ -306,7 +306,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### B4. `ideas.md` baseline + reader
 
-- [ ] **(agent)** Create `docs/projects/ideas.md` with a header and a placeholder for the loop's appended bullets.
+- [x] **(agent)** Create `docs/projects/ideas.md` with a header and a placeholder for the loop's appended bullets. *File already existed with user-authored entries; added `# Project Ideas` header, organized existing entries under `## User-authored`, added `## Loop-filed` section with an HTML-comment marker the B4.2 reader will use to scope parsing — keeps user-authored ideas and loop-filed ideas in distinct sections so dedupe never confuses them.*
 - [ ] **(agent)** `src/intent/observation-ideas-io.ts:readFiledIdeas(): ProjectIdea[]` — regex-parse each bullet (matching `formatIdeasMarkdown`'s shape), derive `id` the same way the triage agent does so dedupe matches.
 - [ ] **(agent)** `appendFiledIdeas(markdown)` — append `formatIdeasMarkdown`'s output to the file.
 
