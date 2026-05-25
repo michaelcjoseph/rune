@@ -819,7 +819,12 @@ export function mountWebviewRoutes(
 
       const cancelMatch = pathname.match(/^\/api\/mutations\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && cancelMatch) {
-        handleApiMutationsCancel(res, cancelMatch[1]!);
+        // decodeURIComponent matches the client (`encodeURIComponent` in
+        // app.js) and the convention used by the approval endpoints below.
+        // Today's mutation ids are randomUUIDs (no percent-encoding needed),
+        // but consistent decoding keeps the contract resilient if the id
+        // format ever changes.
+        handleApiMutationsCancel(res, decodeURIComponent(cancelMatch[1]!));
         return true;
       }
 

@@ -370,14 +370,31 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 #### C3. Cockpit in-flight run progress
 
-- [ ] **(agent)** Extend `CockpitProject` (in `src/intent/cockpit.ts`)
+- [x] **(agent)** Extend `CockpitProject` (in `src/intent/cockpit.ts`)
   with optional `progress: { round, failedEvaluatorRounds, modelGen,
   modelEval, lastHeartbeatAt }` fields populated from the supervised-run
-  store + the `progress` MutationEvents A3.4 emits.
-- [ ] **(agent)** Update the project card render in
+  store + the `progress` MutationEvents A3.4 emits. *Also added optional
+  `mutationId` (so the Cancel button can route to
+  `POST /api/mutations/<id>/cancel`) and `cap` (max evaluator rounds —
+  enables the `round N / cap` display) — both optional and additive.
+  `RunStatusByProject` widened to a union of bare `CockpitRunStatus`
+  (legacy callers) or an entry object carrying `{status, progress?}`
+  (C3 callers); `buildCockpitView` normalizes both. The narrow scope
+  fix in `cockpit-run-status.ts` keeps the `'blocked-on-human' wins`
+  guard a simple `===` check. The wiring from the gen-eval-loop
+  runner's `progress` MutationEvents into the entry shape arrives in
+  a follow-up — until then the field is shape-correct and idle.*
+- [x] **(agent)** Update the project card render in
   `src/server/static/app.js` to display the round / failed-rounds /
   model / heartbeat-age line + a **Cancel** button when `progress` is
-  present, per the ASCII mockup.
+  present, per the ASCII mockup. *Two-line block: `round N [/cap] ·
+  failed evaluator: M · Xs ago` then `gen: <model> · eval: <model>`
+  when models are set, plus a Cancel button when `mutationId` is set.
+  Heartbeat is amber when `now − lastHeartbeatAt ≥ STALL_THRESHOLD_MS`
+  (mirroring `src/jobs/stall-check.ts`), or when the timestamp is
+  non-parseable. Cancel POSTs to `/api/mutations/<id>/cancel` (the
+  webview route now `decodeURIComponent`s its captured id for
+  consistency with the approval routes).*
 
 #### C4. Telegram `/plan` command
 

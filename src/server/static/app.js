@@ -699,12 +699,22 @@
                 `data-product="${escHtml(product.name)}" ` +
                 `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
             ).join('');
+            // C3.2: render the in-flight progress block when proj.progress is
+            // present. Two lines per the spec ASCII mockup:
+            //   round 2 / 3 · failed evaluator: 1 · 14s ago
+            //   gen: Claude · eval: Codex
+            // Plus a Cancel button that delegated-routes to
+            // POST /api/mutations/<mutationId>/cancel. A non-parseable
+            // lastHeartbeatAt is treated as stalled (amber), mirroring the
+            // supervision module's invariant.
+            const progressHtml = proj.progress ? renderCockpitProgress(proj.progress) : '';
             return `<div class="cockpit-project">` +
               `<div class="cockpit-project-header">` +
                 `<span class="project-slug">${escHtml(proj.slug)}</span>` +
                 `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
                 run +
               `</div>` +
+              progressHtml +
               `<div class="cockpit-actions">${actions}</div>` +
               `</div>`;
           }).join('');
@@ -715,6 +725,59 @@
         `</div>`;
     }).join('');
     setHTML(el, html);
+  }
+
+  // C3.2: render the in-flight progress block (round / failed / heartbeat /
+  // models + Cancel button) for a project with an active gen-eval-loop. The
+  // shape is `CockpitProgress` from src/intent/cockpit.ts. Pure HTML build —
+  // delegated click handler (`handleCockpitClick`) wires the Cancel button.
+  // Heartbeat staleness threshold matches src/jobs/stall-check.ts.
+  const STALL_THRESHOLD_MS = 5 * 60 * 1000;
+  function renderCockpitProgress(progress) {
+    const round = Number.isFinite(progress.round) ? progress.round : 1;
+    const cap = Number.isFinite(progress.cap) ? progress.cap : null;
+    const failed = Number.isFinite(progress.failedEvaluatorRounds) ? progress.failedEvaluatorRounds : 0;
+    const heartbeatMs = Date.parse(progress.lastHeartbeatAt ?? '');
+    const ageMs = Number.isFinite(heartbeatMs) ? (Date.now() - heartbeatMs) : NaN;
+    // Non-parseable heartbeat → treat as stalled (amber). Same invariant the
+    // supervision module enforces — never crash, always surface as stale.
+    const stale = !Number.isFinite(ageMs) || ageMs >= STALL_THRESHOLD_MS;
+    const ageLabel = Number.isFinite(ageMs) ? fmtAge(ageMs) : 'no heartbeat';
+    const roundLabel = cap !== null ? `round ${round} / ${cap}` : `round ${round}`;
+    // Models line — omit entirely when neither is set (A7 hasn't landed in
+    // the data feed yet).
+    const gen = progress.modelGen ? `gen: ${escHtml(progress.modelGen)}` : '';
+    const evalLabel = progress.modelEval ? `eval: ${escHtml(progress.modelEval)}` : '';
+    const modelsLine = (gen || evalLabel)
+      ? `<div class="cockpit-progress-models">${[gen, evalLabel].filter(Boolean).join(' · ')}</div>`
+      : '';
+    const cancelBtn = progress.mutationId
+      ? `<button class="cockpit-cancel-btn" data-mutation-id="${escHtml(progress.mutationId)}">Cancel</button>`
+      : '';
+    return `<div class="cockpit-progress">` +
+      `<div class="cockpit-progress-line">` +
+        `<span>${escHtml(roundLabel)}</span>` +
+        `<span class="dot">·</span>` +
+        // escHtml(String(failed)) for pattern consistency with the other
+        // user-derived spans on this row — the Number.isFinite guard above
+        // already proves `failed` is a number, but keeping every interpolated
+        // value behind escHtml removes the implicit type-safety dependency.
+        `<span>failed evaluator: ${escHtml(String(failed))}</span>` +
+        `<span class="dot">·</span>` +
+        `<span class="cockpit-heartbeat${stale ? ' cockpit-heartbeat-stale' : ''}">${escHtml(ageLabel)}</span>` +
+      `</div>` +
+      modelsLine +
+      (cancelBtn ? `<div class="cockpit-progress-actions">${cancelBtn}</div>` : '') +
+      `</div>`;
+  }
+  function fmtAge(ms) {
+    if (ms < 0) return 'just now';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    return `${h}h ago`;
   }
 
   function cockpitActionLabel(action) {
@@ -756,6 +819,19 @@
   // Delegated click handler — attached once to the static #cockpit-content container so it
   // survives setHTML re-renders. Reading data-* attributes avoids inline onclick entirely.
   function handleCockpitClick(e) {
+    // C3.2: Cancel button on the in-flight progress block routes to
+    // POST /api/mutations/<id>/cancel. Disable the button on click so a
+    // double-tap doesn't fire two cancels — re-enable on transport error so
+    // the user can retry.
+    const cancelBtn = e.target.closest('.cockpit-cancel-btn');
+    if (cancelBtn) {
+      const id = cancelBtn.dataset.mutationId;
+      if (!id) return;
+      cancelBtn.disabled = true;
+      fetch(`/api/mutations/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+        .catch(() => { cancelBtn.disabled = false; });
+      return;
+    }
     const btn = e.target.closest('.cockpit-action-btn');
     if (!btn) return;
     cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);

@@ -17,7 +17,7 @@
  */
 
 import { getVisibility, type VisibilitySurface } from '../intent/supervision.js';
-import type { RunStatusByProject } from '../intent/cockpit.js';
+import type { CockpitRunStatus, RunStatusByProject } from '../intent/cockpit.js';
 import { readAllRuns } from '../jobs/supervision-store.js';
 import { STALL_THRESHOLD_MS } from '../jobs/stall-check.js';
 
@@ -25,9 +25,17 @@ import { STALL_THRESHOLD_MS } from '../jobs/stall-check.js';
  * Pure projection. Walks `visibility.active` (running + blocked-on-human)
  * and builds a project-slug → run-status map. Blocked entries win over
  * running ones for the same slug.
+ *
+ * The local `out` is typed as `Record<string, CockpitRunStatus>` (bare
+ * status strings only) rather than the wider `RunStatusByProject` union
+ * the return widens into — Phase 6 C3 widened `RunStatusByProject` to also
+ * accept an object-shape entry carrying progress, but this projection only
+ * produces bare statuses, so keeping the local map narrow lets the
+ * `'blocked-on-human' wins` guard be a simple `=== 'blocked-on-human'`
+ * check without needing to handle both shapes.
  */
 export function mapVisibilityToRunStatus(visibility: VisibilitySurface): RunStatusByProject {
-  const out: RunStatusByProject = {};
+  const out: Record<string, CockpitRunStatus> = {};
   for (const run of visibility.active) {
     // 'running' → 'running'; 'blocked-on-human' → 'blocked-on-human'.
     // Terminal/unknown statuses are filtered upstream by getVisibility.active.

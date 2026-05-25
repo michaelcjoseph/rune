@@ -23,6 +23,42 @@ export type CockpitRunStatus = 'idle' | 'running' | 'blocked-on-human';
 /** A per-project control the cockpit offers; each is gated per-action (an explicit click). */
 export type CockpitAction = 'start' | 'continue' | 'enter-planning-mode';
 
+/** Live progress data for an in-flight gen-eval-loop run on a project. Phase 6
+ *  C3 extends `CockpitProject` to carry this so the project card can render
+ *  the round / failed-rounds / model / heartbeat-age line without a second
+ *  fetch. Populated from the gen-eval-loop runner's `progress` MutationEvents
+ *  plus the supervised-run store's heartbeat. */
+export interface CockpitProgress {
+  /** Optional mutation id — the Cancel button on the cockpit project card
+   *  routes to `cancelMutation(id)` via `POST /api/mutations/:id/cancel`.
+   *  Optional because the supervision surface for a `blocked-on-human` run
+   *  may surface progress without an in-flight cancellable mutation. */
+  mutationId?: string;
+  /** Optional cap (max evaluator rounds) — when present the renderer shows
+   *  `round N / cap`, otherwise it shows `round N`. Comes from the
+   *  escalation policy's `evaluator-round-cap` rule. */
+  cap?: number;
+  /** Current round number (1-indexed). */
+  round: number;
+  /** Running count of failed Evaluator rounds — the escalation policy gates
+   *  on this against the configured cap. */
+  failedEvaluatorRounds: number;
+  /** Generator model alias (e.g., `sonnet`). Optional — populated once the
+   *  resolution event fires from A7.1. */
+  modelGen?: string;
+  /** Evaluator model alias (e.g., `codex`). Optional and may be `null` when
+   *  the policy could not resolve a distinct-provider evaluator. */
+  modelEval?: string | null;
+  /** ISO-8601 timestamp of the run's most recent heartbeat. The app.js
+   *  amber-when-stale renderer compares this against `STALL_THRESHOLD_MS`.
+   *
+   *  @invariant Must be a string `Date.parse()` accepts. The runtime caller
+   *  that wires this from the gen-eval-loop runner's progress events is
+   *  responsible for validation — renderers must treat a non-parseable
+   *  value as stalled, mirroring the pattern in `src/intent/supervision.ts`. */
+  lastHeartbeatAt: string;
+}
+
 /** One project as the cockpit presents it — lifecycle status and run-status side by side. */
 export interface CockpitProject {
   /** Project slug, e.g. `08-intent-layer`. */
@@ -33,6 +69,10 @@ export interface CockpitProject {
   runStatus: CockpitRunStatus;
   /** The actions offered for this project — each rendered as its own gated control. */
   actions: CockpitAction[];
+  /** Live progress for an active gen-eval-loop run (Phase 6 C3). Absent for
+   *  idle projects and for active runs whose runner hasn't emitted progress
+   *  yet (the cockpit just renders the run-status pill in that case). */
+  progress?: CockpitProgress;
 }
 
 /** A product and the projects under it, as the cockpit presents them. */
@@ -52,8 +92,32 @@ export interface CockpitView {
   unavailableReason?: string;
 }
 
-/** Run-status keyed by project slug — the supervision surface's contribution to the view. */
-export type RunStatusByProject = Record<string, CockpitRunStatus>;
+/** A richer per-project entry the supervision surface can pass — carries
+ *  the bare run-status plus an optional progress object for the cockpit's
+ *  in-flight render (C3). The map values can be the bare status string
+ *  (the legacy shape) OR this entry; `buildCockpitView` normalizes both.
+ *  Internal — callers reference the `RunStatusByProject` union below;
+ *  exporting would only encourage drift between the test's `as any`
+ *  shape and this declaration. */
+interface CockpitRunStatusEntry {
+  status: CockpitRunStatus;
+  progress?: CockpitProgress;
+}
+
+/** Run-status keyed by project slug — the supervision surface's contribution to the view.
+ *  Union: legacy bare-status callers continue to work; C3 callers can pass
+ *  the richer `CockpitRunStatusEntry` carrying progress. */
+export type RunStatusByProject = Record<string, CockpitRunStatus | CockpitRunStatusEntry>;
+
+/** Normalize a runStatus map entry to `{status, progress}`. Accepts the
+ *  legacy bare-status string and the C3-extended object shape. */
+function normalizeRunStatusEntry(
+  entry: CockpitRunStatus | CockpitRunStatusEntry | undefined,
+): CockpitRunStatusEntry {
+  if (entry === undefined) return { status: 'idle' };
+  if (typeof entry === 'string') return { status: entry };
+  return entry;
+}
 
 /**
  * Build the cockpit view from the registry and the supervision surface's run-status. Pure:
@@ -80,14 +144,20 @@ export function buildCockpitView(
   const products: CockpitProduct[] = registry.products.map((product) => ({
     name: product.name,
     repoBacked: product.repoBacked,
-    projects: product.projects.map((project) => ({
-      slug: project.slug,
-      lifecycleStatus: project.status,
-      // Run-status comes from the supervision surface; `idle` when it reports nothing.
-      runStatus: runStatus[project.slug] ?? 'idle',
-      // Every project offers all three actions, each its own gated control.
-      actions: ['start', 'continue', 'enter-planning-mode'],
-    })),
+    projects: product.projects.map((project) => {
+      const entry = normalizeRunStatusEntry(runStatus[project.slug]);
+      const out: CockpitProject = {
+        slug: project.slug,
+        lifecycleStatus: project.status,
+        // Run-status comes from the supervision surface; `idle` when it reports nothing.
+        runStatus: entry.status,
+        // Every project offers all three actions, each its own gated control.
+        actions: ['start', 'continue', 'enter-planning-mode'],
+      };
+      // Phase 6 C3: surface live progress when the entry carries it.
+      if (entry.progress !== undefined) out.progress = entry.progress;
+      return out;
+    }),
   }));
   return { available: true, products };
 }

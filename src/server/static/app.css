@@ -253,6 +253,27 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .cockpit-tracked { font-size: .66rem; font-weight: 400; }
 .run-pill { font-size: .66rem; padding: .08rem .3rem; border-radius: 3px; font-weight: 600; background: #4a2a1a; color: #d98c4a; white-space: nowrap; }
 
+/* C3.2: in-flight gen-eval-loop progress block on a cockpit project card */
+.cockpit-progress { display: flex; flex-direction: column; gap: .15rem; font-size: .7rem; color: var(--text2); padding: .1rem 0 .15rem .2rem; }
+.cockpit-progress-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem; }
+.cockpit-progress-line .dot { color: var(--text3, var(--text2)); opacity: .6; }
+.cockpit-progress-models { font-size: .66rem; color: var(--text2); opacity: .85; }
+.cockpit-heartbeat { color: var(--text2); }
+.cockpit-heartbeat-stale { color: #d98c4a; font-weight: 600; }
+.cockpit-progress-actions { display: flex; gap: .25rem; margin-top: .1rem; }
+.cockpit-cancel-btn {
+  font-size: .66rem;
+  padding: .08rem .35rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text2);
+  cursor: pointer;
+  transition: background .15s;
+}
+.cockpit-cancel-btn:hover:not(:disabled) { background: #4a2a1a; color: #d98c4a; border-color: #d98c4a; }
+.cockpit-cancel-btn:disabled { opacity: .5; cursor: not-allowed; }
+
 /* Mutations panel */
 #mutations-active-content, #mutations-recent-content { display: flex; flex-direction: column; gap: .3rem; }
 #panel-mutations h4 { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text2); margin: .5rem 0 .2rem; }
