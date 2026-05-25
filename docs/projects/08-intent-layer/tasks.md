@@ -334,10 +334,10 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 - [x] Write the test suite for the **Telegram UX** — test-plan.md §20
   (`/plan` command flow, engine notification format per terminal class,
   inline-button approval round-trip). *Test-suite-as-deliverable: `src/transport/telegram-ux.test.ts` written test-first ahead of C5/C6. Three describe blocks: /plan command (C4 — already shipped via A4.3, 6 rows marked as `.todo` documentation), engine notifications (C5 — gen-eval-loop terminal events emit structured ✅ merged / ⏸ blocked / 💥 failed messages with rounds + cross-model verdict + short id, distinct from the generic work-run summary), approval inline-buttons (C6 — `sender.send(userId, prompt, {approval: {...}})` renders as inline-keyboard via bot.sendMessage with reply_markup, each button's callback_data carries its option value). 5 red (C5 format + C6 keyboard render) until C5/C6 impls land.*
-- [ ] Write the test suite for **journal-to-intent end-to-end** —
+- [x] Write the test suite for **journal-to-intent end-to-end** —
   test-plan.md §21 (tagged journal note → proposal → approval →
-  synthesis into vault product file + roadmap into product repo).
-- [ ] Confirm red before implementation.
+  synthesis into vault product file + roadmap into product repo). *Test-suite-as-deliverable: `src/intent/journal-intent-e2e.test.ts` pins the C7 producer (`scanJournalForIntent`, `runJournalIntentProducer` with idempotency/dedupe by sourceNoteId) and C8 consumer (`actionApprovedIntentProposal` dispatching to invokeVaultUpdater / appendRoadmap / registerProduct per proposal kind; disambiguation produces no write). 11 red until C7/C8 land; cross-surface plumbing covered by §19/§20 suites.*
+- [x] Confirm red before implementation. *All three Track C test suites confirmed red cleanly: cockpit-ux.test.ts (11 fail / 12 auth-pass / 0 syntax errors), telegram-ux.test.ts (5 fail / 3 pass / 6 todo / 0 syntax errors), journal-intent-e2e.test.ts (11 fail / 0 pass / 1 todo / 0 syntax errors). Total 27 expected-red tests vs 2694 passing baseline — failures are all missing-module or missing-endpoint, no infrastructure issues.*
 
 #### C1. Cockpit planning panel
 
