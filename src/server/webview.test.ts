@@ -46,6 +46,27 @@ const mockConfig = {
 
 vi.mock('../config.js', () => ({
   default: mockConfig,
+  PROJECT_ROOT: '/test/project',
+}));
+
+// runAgent is invoked by handleApiPlanningApprove (C1.2); mock here so the
+// webview module load doesn't pull in the real ai/claude.ts which requires
+// a resolvable claude binary.
+vi.mock('../ai/claude.js', () => ({
+  runAgent: vi.fn(async () => ({ text: 'ok', error: null })),
+}));
+
+// The planning store + handler imports are pulled in by handleApiPlanning*.
+vi.mock('../reviews/planning.js', () => ({
+  createPlanningSession: vi.fn(),
+  getActivePlanningSession: vi.fn(() => null),
+  deletePlanningSession: vi.fn(),
+  approveActivePlanningSession: vi.fn(),
+  abandonActivePlanningSession: vi.fn(),
+}));
+vi.mock('../reviews/planning-handler.js', () => ({
+  handlePlanningTurn: vi.fn(),
+  defaultScopingTurn: vi.fn(),
 }));
 
 vi.mock('../vault/sessions.js', () => ({

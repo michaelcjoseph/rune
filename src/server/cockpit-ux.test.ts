@@ -64,7 +64,15 @@ const mockConfig = {
   TELEGRAM_USER_ID: 42,
   JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
 };
-vi.mock('../config.js', () => ({ default: mockConfig }));
+vi.mock('../config.js', () => ({
+  default: mockConfig,
+  PROJECT_ROOT: '/test/project',
+}));
+
+// runAgent is invoked by handleApiPlanningApprove for scaffolding.
+vi.mock('../ai/claude.js', () => ({
+  runAgent: vi.fn(async () => ({ text: 'scaffolded', error: null })),
+}));
 
 vi.mock('../vault/sessions.js', () => ({ getSession: vi.fn(() => null) }));
 

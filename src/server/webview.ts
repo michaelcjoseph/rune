@@ -19,6 +19,16 @@ import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { appendInteraction } from '../utils/observation-log.js';
+import {
+  createPlanningSession,
+  getActivePlanningSession,
+  deletePlanningSession,
+  approveActivePlanningSession,
+  abandonActivePlanningSession,
+} from '../reviews/planning.js';
+import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
+import { buildSetupWriterBrief } from '../intent/planner.js';
+import { runAgent } from '../ai/claude.js';
 
 const log = createLogger('webview');
 
@@ -308,6 +318,120 @@ function handleApiOpsCancel(res: ServerResponse, id: string): void {
   logWebviewAction('op-cancel', 'success');
 }
 
+// ---------------------------------------------------------------------------
+// Planning REST endpoints (Phase 6 C1.2)
+// ---------------------------------------------------------------------------
+//
+// Four endpoints the cockpit planning panel calls: start a session, drive a
+// turn, approve (which scaffolds via project-setup-writer), abandon. All
+// auth-gated via the shared verifyAuth path in the route dispatcher; the
+// handlers themselves trust the userId. Each handler maps the planning-
+// session store's outcomes to HTTP status codes per the cockpit-ux.test.ts
+// contract.
+
+async function handleApiPlanningStart(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: { product?: string; idea?: string } = {};
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'invalid JSON body' }));
+    return;
+  }
+  if (!body.product || typeof body.product !== 'string') {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'product is required' }));
+    return;
+  }
+  const session = createPlanningSession(
+    config.TELEGRAM_USER_ID,
+    body.idea ?? '',
+    'cockpit',
+    body.product,
+  );
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ id: session.id, status: session.planning.status }));
+}
+
+async function handleApiPlanningTurn(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: { text?: string } = {};
+  try {
+    body = JSON.parse(await readBody(req));
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'invalid JSON body' }));
+    return;
+  }
+  const text = (body.text ?? '').trim();
+  if (!text) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'text is required' }));
+    return;
+  }
+  const userId = config.TELEGRAM_USER_ID;
+  if (!getActivePlanningSession(userId)) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no active planning session' }));
+    return;
+  }
+  try {
+    const result = await handlePlanningTurn(
+      { scopingTurn: defaultScopingTurn },
+      userId,
+      text,
+    );
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ reply: result.reply, status: result.status }));
+  } catch (err) {
+    log.error('handleApiPlanningTurn threw', { error: (err as Error).message });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `planning turn error: ${(err as Error).message}` }));
+  }
+}
+
+async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userId = config.TELEGRAM_USER_ID;
+  const result = approveActivePlanningSession(userId);
+  if (!result.ok) {
+    if (result.reason === 'no-session') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'no active planning session' }));
+      return;
+    }
+    // 'wrong-status' — session is in scoping or terminal.
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: `cannot approve from status '${result.status}'` }));
+    return;
+  }
+
+  // Approved — scaffold via project-setup-writer (A4.4 pattern). Tolerate
+  // agent failure by leaving the session in approved state (retry via the
+  // /approve slash path or a re-click here will pick it up).
+  const brief = buildSetupWriterBrief(result.session.planning);
+  const agentResult = await runAgent('project-setup-writer', brief);
+  if (agentResult.error || !agentResult.text) {
+    log.error('handleApiPlanningApprove: project-setup-writer failed', {
+      error: agentResult.error ?? 'empty output',
+    });
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: `scaffolding failed: ${agentResult.error ?? 'empty output'}`,
+    }));
+    return;
+  }
+  deletePlanningSession(userId);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, output: agentResult.text }));
+}
+
+function handleApiPlanningAbandon(_req: IncomingMessage, res: ServerResponse): void {
+  // Idempotent: returns 200 whether or not a session was actually
+  // abandoned. The cockpit's panel doesn't need to distinguish.
+  abandonActivePlanningSession(config.TELEGRAM_USER_ID);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+}
+
 export interface WebviewDeps {
   webview: WebviewSender;
   isReady: () => boolean;
@@ -477,6 +601,24 @@ export function mountWebviewRoutes(
       const opCancelMatch = pathname.match(/^\/api\/ops\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && opCancelMatch) {
         handleApiOpsCancel(res, opCancelMatch[1]!);
+        return true;
+      }
+
+      // Planning panel endpoints (Phase 6 C1.2)
+      if (req.method === 'POST' && pathname === '/api/planning/start') {
+        await handleApiPlanningStart(req, res);
+        return true;
+      }
+      if (req.method === 'POST' && pathname === '/api/planning/turn') {
+        await handleApiPlanningTurn(req, res);
+        return true;
+      }
+      if (req.method === 'POST' && pathname === '/api/planning/approve') {
+        await handleApiPlanningApprove(req, res);
+        return true;
+      }
+      if (req.method === 'POST' && pathname === '/api/planning/abandon') {
+        handleApiPlanningAbandon(req, res);
         return true;
       }
 

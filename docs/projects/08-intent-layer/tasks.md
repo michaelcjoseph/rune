@@ -346,11 +346,11 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
   `approved` / `abandoned`, reply textarea, **Approve** / **Refine** /
   **Abandon** actions. Match the ASCII mockup in spec.md §"Cockpit UX
   in Detail".
-- [ ] **(agent)** Add `POST /api/planning/turn` to `src/server/webview.ts`
+- [x] **(agent)** Add `POST /api/planning/turn` to `src/server/webview.ts`
   that calls `handlePlanningTurn` from A4.2; add `POST /api/planning/start`
   that calls `createPlanningSession`; add `POST /api/planning/approve` /
   `/abandon` that mutate the session and (on approve) call the
-  scaffolding hook from A4.4.
+  scaffolding hook from A4.4. *Four handlers added to webview.ts wired into mountWebviewRoutes after the ops-cancel branches. Auth-gated via the shared verifyAuth path. start: 400 missing product, 200 with session id. turn: 400 missing text, 404 no-active-session, 200 with {reply, status}. approve: routes via approveActivePlanningSession → on `ok:true` calls runAgent('project-setup-writer', buildSetupWriterBrief) then deletePlanningSession; on `no-session` → 404, on `wrong-status` → 409, on agent failure → 500 (session stays approved for retry). abandon: idempotent 200. All 9 C1-targeted cockpit-ux tests now green.*
 - [ ] **(agent)** Wire the cockpit project card's existing **Plan**
   button to open the panel (replaces the current placeholder that
   stuffs text into the chat input).
