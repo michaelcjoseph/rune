@@ -6,7 +6,7 @@ below it.
 
 ## User-authored
 
-- Expand cockpit 
+- Expand cockpit → 09-expand-cockpit
   - Make bugs and ideas for each product visible in the cockpit. 
   - Add a "plan" button next to each idea, which kicks off a planning session to create a project with spec, task list and test plan.
   - Add a "fix" button next to each bug, which does an interview as well for context generation, spings up the coding agent planning mode, and executes the fix.
