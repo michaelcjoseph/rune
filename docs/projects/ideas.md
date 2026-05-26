@@ -6,15 +6,15 @@ below it.
 
 ## User-authored
 
+- Include bugs and ideas for each product in the cockpit to kick off planning sessions for new projects
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily
 - Integrate Granola MCP for Jarvis to better manage meeting transcription notes
-- Multiple tabs for webview for different sessions
+- Multiple tabs for webview for different chat sessions
 - Set up email, X, blog, and website for Jarvis
   - Self learning loops to identify what content generates engagement and what doesn't
 - set up child developmental agent support to help with monitoring progress and planning weekly
-- Update pyschology agent to use Adler's approach vs Freud's approach
 
 ## Loop-filed
 
