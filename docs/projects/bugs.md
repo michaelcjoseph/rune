@@ -1,8 +1,9 @@
 - [ ] Cockpit is showing 08-intent-layer as `planned` when in the index it shows it as `in progress`
-- [ ] Cockpit is showing weekly Active Review is still happening when it was completed
+- [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
 - [ ] module.register() -> module.registerHooks()
 - [x] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
 - [x] The morning prep should include at the top this week’s goals
 - [x] Whoop numbers don’t match what’s in the app. I think there’s a date mismatch (pulling recovery and sleep for the day before, not this morning)
+- [x] Cockpit is showing weekly Active Review is still happening when it was completed

@@ -6,7 +6,12 @@ below it.
 
 ## User-authored
 
-- Include bugs and ideas for each product in the cockpit to kick off planning sessions for new projects
+- Expand cockpit 
+  - Make bugs and ideas for each product visible in the cockpit. 
+  - Add a "plan" button next to each idea, which kicks off a planning session to create a project with spec, task list and test plan.
+  - Add a "fix" button next to each bug, which does an interview as well for context generation, spings up the coding agent planning mode, and executes the fix.
+  - Each bug or idea gets turned into a project and follows the normal planning session.
+  - Add a "+" button next to "bugs" and "ideas" to easily add a new item.
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily
