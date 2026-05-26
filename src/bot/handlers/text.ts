@@ -35,6 +35,7 @@ import { handleSeed } from '../commands/seed.js';
 import { handleLearn } from '../commands/learn.js';
 import { handleLearnList } from '../commands/learn-list.js';
 import { handleCancel } from '../commands/cancel.js';
+import { handleCancelReview } from '../commands/cancel-review.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
 import { getActivePlanningSession } from '../../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../../reviews/planning-handler.js';
@@ -149,6 +150,7 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/fresh-full')) return withCommandLog('fresh-full', () => handleFreshFull(sender, userId, transport));
   if (text.startsWith('/fresh')) return withCommandLog('fresh', () => handleFresh(sender, userId, transport));
   if (text === '/clear' || text.startsWith('/clear ')) return withCommandLog('clear', () => handleClear(sender, userId, transport));
+  if (text === '/cancel-review') return withCommandLog('cancel-review', () => handleCancelReview(sender, userId));
   if (text === '/cancel' || text.startsWith('/cancel ')) return withCommandLog('cancel', () => handleCancel(sender, userId, text.slice('/cancel'.length).trim()));
   if (text.startsWith('/journal ')) return withCommandLog('journal', () => handleJournal(sender, userId, transport, text.slice('/journal '.length).trim()));
   if (text.startsWith('/ask ')) return withCommandLog('ask', () => handleAsk(sender, userId, text.slice('/ask '.length).trim()));
@@ -612,6 +614,7 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 - \`/monthly [month]\` — monthly review interview
 - \`/quarterly [Q1-Q4]\` — quarterly review interview
 - \`/yearly [year]\` — yearly review (7 Questions)
+- \`/cancel-review\` — clear a stuck review session (when an interview never reached writeup)
 
 **Coaching sessions**
 
