@@ -1,9 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { MessageSender } from '../../transport/sender.js';
+
+// The scaffold-verification path (project 09 expand-cockpit Fix 2) walks
+// the real `docs/projects/` directory under PROJECT_ROOT, so the tests
+// use a real temp dir per test rather than a static path. The mock is
+// re-assigned in beforeEach below.
+const projectRootHolder: { value: string } = { value: '/tmp/jarvis-approve-test-root' };
 
 vi.mock('../../config.js', () => ({
   default: { VAULT_DIR: '/test/vault', TIMEZONE: 'America/Chicago', TELEGRAM_USER_ID: 12345 },
-  PROJECT_ROOT: '/tmp/test-project',
+  get PROJECT_ROOT() {
+    return projectRootHolder.value;
+  },
 }));
 
 vi.mock('../../utils/logger.js', () => ({
@@ -68,6 +79,23 @@ const BASE_SESSION = {
   lastActivity: new Date().toISOString(),
 };
 
+let projectsDir: string;
+
+/** Build a runAgent mock that actually creates the expected
+ *  `NN-slug/{spec,tasks,test-plan}.md` files inside the test's
+ *  projectsDir before returning success — simulating a healthy
+ *  scaffold so the verification path passes. */
+function mockSuccessfulScaffold(slug: string, replyText?: string): void {
+  runAgentMock.mockImplementation(async () => {
+    const dir = join(projectsDir, slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'spec.md'), '# spec\n');
+    writeFileSync(join(dir, 'tasks.md'), '# tasks\n');
+    writeFileSync(join(dir, 'test-plan.md'), '# test plan\n');
+    return { text: replyText ?? `Created docs/projects/${slug}/spec.md`, error: null };
+  });
+}
+
 describe('handleApprove', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -75,6 +103,16 @@ describe('handleApprove', () => {
     // clearAllMocks resets call state but preserves mockReturnValue, so
     // re-prime the retry-path probe to "no approved session" by default.
     getPlanningSessionMock.mockReturnValue(null);
+    // Fresh PROJECT_ROOT with a baseline `01-mvp` directory so the
+    // "new project" diff has signal. The mocked PROJECT_ROOT uses a
+    // getter that reads this holder, so reassigning here flows through.
+    projectRootHolder.value = mkdtempSync(join(tmpdir(), 'jarvis-approve-test-root-'));
+    projectsDir = join(projectRootHolder.value, 'docs', 'projects');
+    mkdirSync(join(projectsDir, '01-mvp'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(projectRootHolder.value, { recursive: true, force: true });
   });
 
   it('sends "Nothing to approve." when approveActivePlanningSession returns no-session', async () => {
@@ -131,10 +169,7 @@ describe('handleApprove', () => {
       planning: { ...BASE_SESSION.planning, status: 'approved' as const },
     };
     approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
-    runAgentMock.mockResolvedValue({
-      text: 'Created docs/projects/09-test-project/spec.md',
-      error: null,
-    });
+    mockSuccessfulScaffold('09-test-project');
 
     const sender = makeSender();
     await handleApprove(sender, 100);
@@ -163,7 +198,7 @@ describe('handleApprove', () => {
     };
     approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
     buildSetupWriterBriefMock.mockReturnValue('# Project Brief: Special\nUnique brief content.');
-    runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+    mockSuccessfulScaffold('09-test-project', 'Done.');
 
     const sender = makeSender();
     await handleApprove(sender, 100);
@@ -233,10 +268,7 @@ describe('handleApprove', () => {
         planning: { ...BASE_SESSION.planning, status: 'approved' as const },
       };
       getPlanningSessionMock.mockReturnValue(approvedSession);
-      runAgentMock.mockResolvedValue({
-        text: 'Created docs/projects/10-retry/spec.md',
-        error: null,
-      });
+      mockSuccessfulScaffold('10-retry');
 
       const sender = makeSender();
       await handleApprove(sender, 100);
@@ -279,12 +311,106 @@ describe('handleApprove', () => {
         planning: { ...BASE_SESSION.planning, status: 'approved' as const },
       };
       getPlanningSessionMock.mockReturnValue(approvedSession);
-      runAgentMock.mockResolvedValue({ text: 'Created docs/projects/...', error: null });
+      mockSuccessfulScaffold('10-retry-priority');
 
       const sender = makeSender();
       await handleApprove(sender, 100);
 
       expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('scaffold verification (Fix 2 — guards against silent agent failure)', () => {
+    it('agent returns success text but writes no files → session NOT deleted', async () => {
+      // This is the exact failure mode that lost the 09-expand-cockpit spec
+      // on 2026-05-26: project-setup-writer returned a non-empty text reply
+      // ("I've read the brief, before I start, a few things to confirm...")
+      // but never called Write, so no project directory landed on disk.
+      // Pre-fix: cmd-approve treated non-empty text as success and deleted
+      // the planning session. Post-fix: verification catches the missing
+      // directory and leaves the session approved for retry.
+      const approvedSession = {
+        ...BASE_SESSION,
+        planning: { ...BASE_SESSION.planning, status: 'approved' as const },
+      };
+      approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
+      runAgentMock.mockResolvedValue({
+        text: 'I have a few clarifying questions before I start...',
+        error: null,
+      });
+
+      const sender = makeSender();
+      await handleApprove(sender, 100);
+
+      expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+      const sendCalls = vi.mocked(sender.send).mock.calls;
+      const verifyMsg = sendCalls.find(
+        ([, msg]) => typeof msg === 'string' && /scaffold verification failed/i.test(msg),
+      )?.[1] as string | undefined;
+      expect(verifyMsg).toBeDefined();
+      expect(verifyMsg).toMatch(/did not create/i);
+      // The user-facing reply still surfaces the agent's text so the user
+      // can see what the agent actually said.
+      expect(verifyMsg).toContain('I have a few clarifying questions');
+    });
+
+    it('agent creates a new dir but it is missing spec.md → session NOT deleted', async () => {
+      const approvedSession = {
+        ...BASE_SESSION,
+        planning: { ...BASE_SESSION.planning, status: 'approved' as const },
+      };
+      approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
+      runAgentMock.mockImplementation(async () => {
+        // Agent creates the directory and two of three required files
+        const dir = join(projectsDir, '09-partial');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'tasks.md'), '# tasks\n');
+        writeFileSync(join(dir, 'test-plan.md'), '# test plan\n');
+        return { text: 'Scaffolded 09-partial.', error: null };
+      });
+
+      const sender = makeSender();
+      await handleApprove(sender, 100);
+
+      expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+      const sendCalls = vi.mocked(sender.send).mock.calls;
+      const verifyMsg = sendCalls.find(
+        ([, msg]) => typeof msg === 'string' && /scaffold verification failed/i.test(msg),
+      )?.[1] as string | undefined;
+      expect(verifyMsg).toBeDefined();
+      expect(verifyMsg).toMatch(/missing required files/i);
+      expect(verifyMsg).toContain('spec.md');
+    });
+
+    it('agent creates a complete project dir → session IS deleted (happy path)', async () => {
+      const approvedSession = {
+        ...BASE_SESSION,
+        planning: { ...BASE_SESSION.planning, status: 'approved' as const },
+      };
+      approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
+      mockSuccessfulScaffold('09-expand-cockpit');
+
+      const sender = makeSender();
+      await handleApprove(sender, 100);
+
+      expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
+    });
+
+    it('a pre-existing directory matching NN-slug is not mistaken for a new project', async () => {
+      // 01-mvp already exists from beforeEach. If the agent writes nothing,
+      // verification must still report "no new dir" — it should not pick
+      // up the baseline as the new project.
+      const approvedSession = {
+        ...BASE_SESSION,
+        planning: { ...BASE_SESSION.planning, status: 'approved' as const },
+      };
+      approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
+      runAgentMock.mockResolvedValue({ text: 'Done.', error: null });
+
+      const sender = makeSender();
+      await handleApprove(sender, 100);
+
+      expect(deletePlanningSessionMock).not.toHaveBeenCalled();
     });
   });
 
@@ -297,9 +423,12 @@ describe('handleApprove', () => {
         planning: { ...BASE_SESSION.planning, status: 'approved' as const },
       };
       approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession });
+      // Use the actual PROJECT_ROOT (a fresh temp dir per test) in the
+      // error text so the sanitizer has something to strip.
+      const root = projectRootHolder.value;
       runAgentMock.mockResolvedValue({
         text: null,
-        error: 'Error reading /test/vault/foo.md and /tmp/test-project/bar.md',
+        error: `Error reading /test/vault/foo.md and ${root}/bar.md`,
       });
 
       const sender = makeSender();
@@ -312,7 +441,7 @@ describe('handleApprove', () => {
       expect(reply).toBeDefined();
       // Vault and project root paths must be replaced with placeholders
       expect(reply).not.toContain('/test/vault');
-      expect(reply).not.toContain('/tmp/test-project');
+      expect(reply).not.toContain(root);
       expect(reply).toContain('<vault>');
       expect(reply).toContain('<project>');
     });
