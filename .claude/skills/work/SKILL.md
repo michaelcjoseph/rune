@@ -31,6 +31,8 @@ Match the argument to a folder in `docs/projects/`:
 
 Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`).
 
+**"First" means the literal next `- [ ]` line in document order**, top-down. If the previous `/work` cycle completed a task in a section whose other sub-task lines remain unchecked, those earlier-line sub-tasks are the next tasks — not anything in a later section. A multi-sub-task section is not "done" after one of its lines ticks; it is done when zero `- [ ]` lines remain inside it.
+
 - If no unchecked tasks remain, tell the user all tasks are complete and stop.
 - Announce which task you're picking up.
 - **With `--auto`**: run `git status --porcelain` first. If the working tree is not clean, stop and report the dirty files to the user — do not proceed, because step 19 would otherwise sweep those unrelated changes into the task commit. Then proceed immediately.
@@ -341,7 +343,7 @@ Output a completion summary:
 - [next unchecked task from tasks.md, or "All tasks complete!"]
 ```
 
-After outputting the summary, check `tasks.md` for the next unchecked task (`- [ ]`):
+After outputting the summary, **re-read `tasks.md` from the top** and find the next unchecked task (`- [ ]`). The next task is whichever `- [ ]` line is **first in document order** — even if it is in a section you have just shipped a different sub-task in. The most common failure mode here is treating a section as "done" after one of its sub-task lines ticks; the contract is per-line, not per-section. If an earlier `- [ ]` line remains in the section you just worked, that line is the next task — not anything in a later section.
 
 - **If a next task exists**:
   - **Without `--auto`**: ask the user "Ready to start the next task: **[task name]**?" and if they confirm, loop back to **step 3** with that task.

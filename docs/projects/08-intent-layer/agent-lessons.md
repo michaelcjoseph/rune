@@ -124,6 +124,45 @@ Every Phase 6 Track C task (C1–C8) is a UX surface that should have been
 tasked in Phase 2 or Phase 3, with an explicit deferral if it was being
 moved out.
 
+### 5. The `--auto` agent skipped a sub-task without surfacing the skip
+
+During the Phase 6 Track C sweep, the `/work --auto` cycle for C2 ("Cockpit
+approval inbox") shipped only the second of two unchecked sub-task lines.
+Commit `053cf5b` (2026-05-25 08:22 UTC) ticked the REST endpoints sub-task
+(`GET /api/approvals` + `POST /api/approvals/:id/{approve,reject}`) and
+committed. The agent's transcript at that point reads *"Just completed C2.2
+(commit 053cf5b) … Just read C3 task definition"* — meaning it treated C2 as
+"done" and jumped to C3, even though the C2 panel UI sub-task at line 360 of
+`tasks.md` was still `- [ ]`.
+
+The gap persisted for ~8 hours through subsequent commits (C3, C5, C6, C7,
+C8) until the user manually flagged the missing panel. Commit `2940975`
+finally shipped it.
+
+The /work skill's step 2 says *"Find the first unchecked task (`- [ ]`)"* —
+a literal document-order rule. The agent's heuristic was *"this section just
+shipped, move on"* — a section-level shortcut that violates the per-line
+contract. Two compounding factors made the skip easier to miss:
+
+1. **Pre-existing scaffolding masked the gap.** The cockpit already had a
+   `#panel-approvals` placeholder section, a `state.pendingApprovals` count
+   tuple in `state-snapshot.ts`, and a count-only `renderState` writing
+   *"1 playbook · 2 proposal"* to the panel. The surface "appeared to
+   work" — the agent likely did not compare the visible behavior to the
+   task contract (per-row Approve/Reject/Open buttons per ASCII mockup)
+   sentence-by-sentence.
+2. **Internal Plan-phase sub-task ordering escaped the skill's rule.** The
+   agent's Plan phase had decomposed C2 into "endpoints first because UI
+   depends on them" — a rational dependency ordering. After endpoints
+   landed, step 20's loop-back should have re-found the panel sub-task as
+   the first unchecked line; the section-level heuristic let the agent
+   skip it.
+
+Cause #2 is independent and worth its own lesson; cause #1 is the dominant
+root cause. The gap was not a regression — the agent satisfied a literal
+`/work` cycle on the second sub-task — but it was a violation of the
+*spirit* of step 2 because a literal earlier line was left unchecked.
+
 ---
 
 ## Lessons
@@ -186,6 +225,56 @@ mode that produced Phase 6's UX-incomplete Track C.
 [`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
 §"Deferrals get ADRs and triggers".
 
+### Lesson 5 — Re-scan from the top after every commit; sections are not atomic units
+
+The `/work` step 2 contract — *"Find the first unchecked task (`- [ ]`)"*
+— means **the literal next `- [ ]` line in document order**, top-down,
+regardless of which section was last worked. A multi-sub-task section is
+not "done" after one of its sub-task lines ticks; it is done when zero
+`- [ ]` lines remain inside it.
+
+Before advancing past a section, re-read `tasks.md` from the top and
+confirm the next unchecked line is genuinely the first one in document
+order — not just the first one in the next untouched section. The
+section-as-unit heuristic is the failure mode that left the C2 panel
+sub-task unchecked for 8 hours after `053cf5b` shipped the C2 REST
+endpoints. The fix is structural: the re-scan rule is now an explicit
+step in the skill rather than something the agent has to remember.
+
+**Applied at:**
+- `.claude/skills/work/SKILL.md` step 2 (literal-document-order
+  clarification) and step 20 (explicit re-scan check before picking the
+  next task).
+- [`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+  §"Multi-sub-task sections are atomic" (new).
+
+### Lesson 6 — Existing scaffolding ≠ implemented contract
+
+A pre-existing placeholder UI — a panel section with stub content, a
+count-only summary, an empty `<div>` — can create false-completion bias
+under `--auto`. The agent sees *something* on the surface and infers the
+task is "already in some form done." It is not. Before deciding a UI or
+integration task is done, compare the visible behavior to the **task's
+contract sentences**: the ASCII mockup, the explicit button list, the
+response-shape spec. "There's something on the screen" is not "the
+contract is met."
+
+The C2 case: the placeholder showed *"1 playbook · 2 proposal"* (a
+3-counter summary). The task contract called for per-row Approve / Reject
+/ Open buttons per the mockup. The two are different in kind, not just
+in polish — the agent only had to read the next sentence of the task
+description to see the gap. The defense is upstream of vigilance: at
+plan time, name the *specific behavior gap* between placeholder and
+target, so the task can't read as "is the panel there at all" but
+rather "does it match this contract."
+
+**Applied at:**
+- [`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+  §"Spec audit before phase start" (placeholder-UI paragraph).
+- The same checklist's Quick checklist gains a bullet requiring that any
+  task touching a surface with existing scaffolding name the specific
+  behavior gap to close, not just "build X".
+
 ---
 
 ## What we did about it
@@ -211,3 +300,19 @@ The same patch does **not** modify the project doc templates themselves
 (`docs/projects/templates/{spec,tasks,test-plan}.md`) — the lessons live
 in `CLAUDE.md` and `planning-checklist.md` so future projects pick them
 up via process, not via mandatory template fields.
+
+A follow-up patch (post-Phase 6 Track C) extended the same set after the
+C2 panel skip surfaced Lessons 5 and 6:
+
+- **`.claude/skills/work/SKILL.md`** — step 2 gains a clarification
+  sentence that *"first unchecked task"* means the literal next `- [ ]`
+  line in document order (not the first line in the next untouched
+  section). Step 20 gains an explicit re-scan check before picking up
+  the next task, so the agent can't shortcut past an unfinished
+  earlier sub-task by treating its section as "done."
+- **[`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)**
+  — new §6 *"Multi-sub-task sections are atomic"* codifies the rule for
+  future projects, plus a paragraph in §5 about placeholder UIs (the
+  task that builds a surface with existing scaffolding must name the
+  specific behavior gap, not just "build the panel"). The Quick
+  checklist at the bottom gains two corresponding bullets.

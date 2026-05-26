@@ -164,6 +164,52 @@ approval inbox, in-flight run progress display, `/plan` command, or
 engine-notification format. Each was deferred implicitly; each
 re-surfaced as a Phase 6 Track C task months later.
 
+**Additional guidance — placeholder UIs.** If the spec describes a surface
+that the codebase already has a placeholder for (a panel with stub
+content, a count-only summary, an empty section, a button that stuffs
+text into the chat input), the task that builds it must **call out the
+specific behavior gap** between placeholder and target contract — not
+just say "build the panel." A bare "build the panel" lets the `--auto`
+agent see the placeholder and infer *"this already exists in some
+form."* A line like *"Replace the count-only `state.pendingApprovals`
+summary with per-row Approve / Reject / Open buttons per the ASCII
+mockup"* forces the contract comparison and prevents the
+false-completion trap that left 08-intent-layer's C2 panel unchecked
+for 8 hours after its sibling sub-task shipped.
+
+---
+
+## 6. Multi-sub-task sections are atomic
+
+When a task section in `tasks.md` has multiple `- [ ]` sub-task lines,
+those lines are a **unit**: all must clear before the section is done.
+The `/work` skill's step 2 ("find the first unchecked task") applies to
+the literal next `- [ ]` line in document order — not "first in the next
+untouched section." A section-as-unit completion shortcut is the failure
+mode this section prevents.
+
+At plan-time, either:
+
+- Annotate the section with a note like *"sub-tasks must ship together
+  in a single `/work` pass"* if they are coupled, **OR**
+- Split coupled sub-tasks into their own top-level section so the
+  `/work` first-unchecked-task rule sequences them correctly.
+
+For independent sub-tasks (either order is fine; both must land
+eventually), the default annotation works. For sequenced sub-tasks (one
+genuinely depends on the other), splitting into separate sections makes
+the dependency visible and aligns the task-list order with the execution
+order the agent's Plan phase will pick.
+
+**Failure mode this prevents:** the 08-intent-layer C2 sub-task split —
+REST endpoints landed in commit `053cf5b` (Phase 6 Track C sweep, 2026-05-25);
+the panel UI sub-task at the line above it remained `- [ ]` because the
+agent treated the section as "done" after ticking the second sub-task.
+The gap persisted 8 hours through subsequent commits (C3, C5, C6, C7, C8)
+until the user manually flagged it; the panel finally shipped in `2940975`.
+See [`docs/projects/08-intent-layer/agent-lessons.md`](../08-intent-layer/agent-lessons.md)
+Lesson 5 for the full forensics.
+
 ---
 
 ## Quick checklist (copy into the PR or planning notes)
@@ -180,3 +226,9 @@ re-surfaced as a Phase 6 Track C task months later.
 - [ ] Every user-facing surface (cockpit panel, chat command,
       notification, cron) named in the spec is **described** in the
       spec — not just named.
+- [ ] Every multi-sub-task section is annotated "sub-tasks must ship
+      together" OR each sub-task is split into its own section, so the
+      `/work` first-unchecked-task rule sequences them correctly.
+- [ ] Every task that touches a surface with existing scaffolding
+      (placeholder panel, count-only summary, stub button) names the
+      specific behavior gap to close — not just "build X".
