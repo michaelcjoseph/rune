@@ -163,6 +163,31 @@ root cause. The gap was not a regression — the agent satisfied a literal
 `/work` cycle on the second sub-task — but it was a violation of the
 *spirit* of step 2 because a literal earlier line was left unchecked.
 
+### 6. The C4 `/plan` command landed without updating `/start`
+
+Track C4 ("Telegram `/plan` command") shipped `handlePlan` in
+`src/bot/commands/plan.ts`, wired it into the `text.ts` dispatcher (the
+`if (text === '/plan' …)` branch around line 173), and registered it in
+`SLASH_COMMAND_METADATA` (`src/bot/skill-registry.ts:168`) so the
+free-text resolver could fuzzy-route to it. But the **canonical
+user-facing command catalog** — the `/start` help text in `handleStart`
+(`src/bot/handlers/text.ts:571–628`) — was never touched. C4's task
+description named the command file, the dispatcher wiring, and the
+resolver metadata, but did not list the help-text update as a sub-task,
+so the omission survived all four C4 sub-task ticks and shipped invisibly.
+
+The user discovered the gap the obvious way: they asked Jarvis how to
+start a planning conversation and the answer was not in `/start`.
+Same class of failure as Cause #5 (multi-sub-task atomicity) but a
+different surface: the command works, the user just cannot find it.
+It's a discoverability failure rather than a UX-completion failure.
+The fix shipped in a later commit that both added the three missing
+lines (`/plan`, `/approve`, `/cancel`) to `/start` and reorganized the
+help into smaller scan-friendly sections.
+
+`/approve` and `/cancel` had the same gap — they had been live in the
+dispatcher for weeks without ever being listed in `/start`.
+
 ---
 
 ## Lessons
@@ -274,6 +299,42 @@ rather "does it match this contract."
 - The same checklist's Quick checklist gains a bullet requiring that any
   task touching a surface with existing scaffolding name the specific
   behavior gap to close, not just "build X".
+
+### Lesson 7 — Every new user-facing command needs a discovery-surface task
+
+When a project adds a new slash command (or a new chat-message intent,
+or a new cockpit action, or a new cron-triggered notification), the
+task list must explicitly include "update the canonical discovery
+surface(s)" as a sub-task — not assume the developer will remember.
+A command that works but is not documented is a half-shipped command:
+the user can't reach what they don't know exists.
+
+The canonical surfaces per channel:
+
+- **Telegram slash commands** → the `/start` help text in
+  `src/bot/handlers/text.ts handleStart` (the in-app command catalog).
+- **Free-text intents that should resolver-route** →
+  `SLASH_COMMAND_METADATA` in `src/bot/skill-registry.ts` (the
+  fuzzy-match registry).
+- **Cockpit actions / panels** → the appropriate panel header / hover
+  help / placeholder copy in `src/server/static/{index.html, app.js}`.
+- **Crons / scheduled notifications** → the relevant section of
+  `CLAUDE.md` so future agents know it exists.
+
+The C4 `/plan` rollout (see Cause #6) wired the dispatcher and the
+resolver registry but missed the `/start` catalog. The fix needs to be
+upstream: at plan time, the "user surface" leg of the (pure core,
+runtime adapter, user surface) triple should include an explicit
+sub-task naming each discovery surface the new capability needs to
+appear on. Not just the surface that runs the command — the surface
+that *advertises* it.
+
+**Applied at:**
+- [`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
+  §"The decomposition pass" — the "user surface" leg should be read as
+  *both* the trigger surface and the discovery surface. *This commit
+  does not modify the checklist; a follow-up should enrich §1 to make
+  the discovery-surface obligation explicit.*
 
 ---
 

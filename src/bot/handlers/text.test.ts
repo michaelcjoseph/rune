@@ -473,13 +473,28 @@ describe('text handler routing', () => {
     expect(handleSyllabus).not.toHaveBeenCalled();
   });
 
-  it('routes /start and sends help listing both /syllabus and /study', async () => {
+  it('routes /start and sends help listing the canonical command catalog', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/start'));
     const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
-    expect(helpText).toContain('**Commands**');
-    expect(helpText).toContain('/syllabus');
-    expect(helpText).toContain('/study');
+    // The /start help reorganized into ~13 scan-friendly section headers
+    // (Conversation, Planning, Study, etc.). The test pins a representative
+    // subset of headers + the commands that were previously easy to confuse
+    // (/syllabus vs /study) + the commands that were missing pre-reorg
+    // (/plan, /approve, /cancel) so a future regression that drops one is
+    // caught.
+    expect(helpText).toContain('**Conversation**');
+    expect(helpText).toContain('**Planning**');
+    expect(helpText).toContain('**Study**');
+    // Assert on the bracketed/arg form (or the leading backtick) so the
+    // check fails if a command is dropped from its catalog entry but
+    // happens to be mentioned in prose elsewhere — a plain `toContain('/plan')`
+    // would pass on incidental mentions, defeating the regression guard.
+    expect(helpText).toContain('`/syllabus`');
+    expect(helpText).toContain('`/study [N|status]`');
+    expect(helpText).toContain('`/plan [product]`');
+    expect(helpText).toContain('`/approve`');
+    expect(helpText).toContain('`/cancel [opId-prefix]`');
   });
 
   it('routes /lint', async () => {

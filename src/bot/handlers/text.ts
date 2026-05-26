@@ -573,38 +573,37 @@ async function handleStart(sender: MessageSender, userId: number): Promise<void>
 
 Send any message to start a multi-turn chat with your vault. Jarvis leans Socratic — expect questions before answers on strategy/reflection. \`/fresh\` ends the thread; logging to journal also ends it.
 
-**Commands**
+**Conversation**
 
-- \`/priorities\` — yesterday's priorities
-- \`/workout [home|gym] [mobility|endurance|strength|speed|power]\` — generate a tailored workout from goals, equipment, recent training, and Whoop recovery
-- \`/done-workout\` — log the last generated workout to today's journal
-- \`/syllabus\` — current study progress and assignments
-- \`/study [N|status]\` — spaced-repetition quiz over due wiki concepts
-- \`/family\` — 14-day family mention scan
-- \`/career\` — active job applications
 - \`/fresh\` — log conversation to journal, reset session
 - \`/fresh-full\` — log full verbatim transcript to journal with speaker labels, reset session
 - \`/clear\` — discard active session without journaling
 - \`/journal <text>\` — append entry to today's journal
+- \`/cancel [opId-prefix]\` — kill an in-flight Claude operation (most recent for you, or by id prefix)
+
+**Ask & search**
+
 - \`/ask <question>\` — one-shot vault query
 - \`/kb <question>\` — query the knowledge base
+
+**Knowledge base**
+
 - \`/ingest [path]\` — ingest source into knowledge base
 - \`/seed [--dry-run]\` — bulk-seed KB from vault content
 - \`/lint\` — run wiki health check
+- \`/library-sync\` — pull new Lenny posts and podcasts into the vault
+
+**Daily flow**
+
+- \`/priorities\` — yesterday's priorities
 - \`/prep\` — run morning prep now
 - \`/status\` — show uptime and session info
-- \`/learn <text>\` — append a runtime learning (auto-prepended to future agents)
-- \`/learn-list\` — show current prepended learnings
 
-**Sessions**
+**Planning**
 
+- \`/plan [product]\` — Socratic planning conversation scoped to a product; produces a spec for approval
+- \`/approve\` — approve the proposed spec and scaffold \`docs/projects/<NN-slug>/{spec,tasks,test-plan}.md\`
 - \`/new-project [topic]\` — product interview → spec/tasks/test-plan for a new Jarvis project
-- \`/health [focus]\` — health coaching session
-- \`/blog <topic>\` — blog writing session
-
-**Library**
-
-- \`/library-sync\` — pull new Lenny posts and podcasts into the vault
 
 **Reviews**
 
@@ -614,7 +613,32 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 - \`/quarterly [Q1-Q4]\` — quarterly review interview
 - \`/yearly [year]\` — yearly review (7 Questions)
 
-**Health**
+**Coaching sessions**
+
+- \`/health [focus]\` — health coaching session
+- \`/blog <topic>\` — blog writing session
+
+**Fitness**
+
+- \`/workout [home|gym] [mobility|endurance|strength|speed|power]\` — generate a tailored workout from goals, equipment, recent training, and Whoop recovery
+- \`/done-workout\` — log the last generated workout to today's journal
+
+**Study**
+
+- \`/syllabus\` — current study progress and assignments
+- \`/study [N|status]\` — spaced-repetition quiz over due wiki concepts
+
+**People**
+
+- \`/family\` — 14-day family mention scan
+- \`/career\` — active job applications
+
+**Learning notes**
+
+- \`/learn <text>\` — append a runtime learning (auto-prepended to future agents)
+- \`/learn-list\` — show current prepended learnings
+
+**Integrations**
 
 - \`/whoop\` — Whoop connection status or auth link
 

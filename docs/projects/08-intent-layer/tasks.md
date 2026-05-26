@@ -436,6 +436,17 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
   existing `handleTextMessage` tests, and the C4 sub-tasks above
   describe the contract.*
 
+> **Retro (post-ship gap)** — C4 missed the canonical user-facing command
+> catalog: the `/start` help text in `src/bot/handlers/text.ts handleStart`
+> was never updated to mention `/plan`, `/approve`, or `/cancel`. The
+> user discovered the gap by asking how to start a planning conversation
+> and finding the answer wasn't in `/start`. Shipped in a follow-up
+> commit that added the three missing lines and reorganized the help
+> into smaller scan-friendly sections. See
+> [`agent-lessons.md`](agent-lessons.md) Cause #6 + Lesson 7 for the
+> "every new user-facing command needs a discovery-surface task" rule
+> that should have caught this at plan time.
+
 #### C5. Telegram engine notifications
 
 - [x] **(agent)** Extend `TelegramSender.onMutationEvent()` to detect
