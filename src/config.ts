@@ -101,6 +101,16 @@ const config = {
     return join(this.LOGS_DIR, 'planning-sessions.json');
   },
 
+  /** Durable snapshots of every distinct SpecArtifact a planning session
+   *  produces — one file per revision. The planner store (above) gets
+   *  wiped on `deletePlanningSession`; this directory keeps the full
+   *  evolution trail so a spec can be recovered if the scaffold step
+   *  fails silently. See docs/projects/08-intent-layer/agent-lessons.md
+   *  for the incident this addresses. */
+  get PLANNING_ARTIFACTS_DIR() {
+    return join(this.LOGS_DIR, 'planning-artifacts');
+  },
+
   get LAST_WORKOUT_FILE() {
     return join(this.LOGS_DIR, 'last-workout.json');
   },

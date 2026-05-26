@@ -23,7 +23,10 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 const { mockConfig, mockCleanupSession } = vi.hoisted(() => ({
-  mockConfig: { PLANNING_SESSIONS_FILE: '/test/planning-sessions.json' },
+  mockConfig: {
+    PLANNING_SESSIONS_FILE: '/test/planning-sessions.json',
+    PLANNING_ARTIFACTS_DIR: '/test/planning-artifacts',
+  },
   mockCleanupSession: vi.fn(),
 }));
 vi.mock('../config.js', () => ({ default: mockConfig }));
@@ -47,6 +50,7 @@ let tmpDir: string;
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-planning-handler-test-'));
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
+  mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
   restorePlanningSessions();
 });
 
