@@ -39,10 +39,21 @@ into §1 below — the same commit demonstrates the loop closing.
 - **At project closeout**, write `docs/projects/<project>/agent-lessons.md`
   capturing what your task list missed and how. Every lesson must
   include an `**Applied at:**` pointer to a system-wide surface
-  (`CLAUDE.md`, `.claude/skills/work/SKILL.md`, this checklist, or a
-  template) — and **update that surface in the same commit**, or queue
-  it in the `TODO(propagation)` block. A lesson with no propagation is
-  a lesson nobody else will learn.
+  (`~/.claude/CLAUDE.md`, this repo's `CLAUDE.md`,
+  `.claude/skills/work/SKILL.md`, this checklist, or a template) — and
+  **update that surface in the same commit**, or queue it in the
+  `TODO(propagation)` block. A lesson with no propagation is a lesson
+  nobody else will learn.
+
+  **On choosing the right `Applied at:` surface in this multi-agent
+  system**: `~/.claude/CLAUDE.md` is the broadest — it loads in every
+  Claude Code session regardless of `cwd` (terminal sessions,
+  Jarvis-spawned sub-agents, `/work` spawns into any product repo).
+  Repo-local `CLAUDE.md` only reaches sessions running in that repo.
+  `.claude/skills/work/SKILL.md` only reaches `/work` invocations.
+  Pick the broadest surface the lesson genuinely needs; duplicate to
+  narrower surfaces only as belt-and-suspenders for lessons whose
+  failure mode is acute in a specific execution path.
 - **Optionally at the start of a new phase** within a project, if the
   spec was updated and the next phase's task list hasn't been written
   yet.

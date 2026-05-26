@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,7 +19,10 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 const { mockConfig, mockCleanupSession } = vi.hoisted(() => ({
-  mockConfig: { PLANNING_SESSIONS_FILE: '/test/planning-sessions.json' },
+  mockConfig: {
+    PLANNING_SESSIONS_FILE: '/test/planning-sessions.json',
+    PLANNING_ARTIFACTS_DIR: '/test/planning-artifacts',
+  },
   mockCleanupSession: vi.fn(),
 }));
 vi.mock('../config.js', () => ({ default: mockConfig }));
@@ -45,6 +48,7 @@ let tmpDir: string;
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-planning-store-test-'));
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
+  mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
   mockCleanupSession.mockReset();
   // Ensure no leftover sessions from previous test runs (in-memory state
   // is module-scoped; the persist file is per-test so a fresh restore
@@ -186,5 +190,122 @@ describe('getAllPlanningSessions', () => {
     const chatIds = all.map(([chatId]) => chatId);
     expect(chatIds).toContain(1);
     expect(chatIds).toContain(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SpecArtifact snapshots — the off-process recovery trail. Every distinct
+// artifact revision lands as its own JSON file under PLANNING_ARTIFACTS_DIR
+// so a spec is recoverable even if /approve later deletes the session
+// before the scaffolder writes the project files. See
+// docs/projects/08-intent-layer/agent-lessons.md for the motivating incident.
+// ---------------------------------------------------------------------------
+
+function listArtifactFiles(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+  } catch {
+    return [];
+  }
+}
+
+describe('spec-artifact snapshots', () => {
+  const artifact1 = {
+    product: 'aura',
+    title: 'first revision',
+    spec: 's1',
+    tasks: 't1',
+    testPlan: 'tp1',
+  };
+  const artifact2 = {
+    product: 'aura',
+    title: 'second revision',
+    spec: 's2',
+    tasks: 't2',
+    testPlan: 'tp2',
+  };
+
+  it('writes a snapshot when an artifact first appears (undefined → defined)', () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    expect(listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR).length).toBe(1);
+  });
+
+  it('writes a new snapshot when the artifact content changes', async () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    // Bump clock so ISO timestamp in filename differs.
+    await new Promise((r) => setTimeout(r, 5));
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, artifact: artifact2 },
+    }));
+    expect(listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR).length).toBe(2);
+  });
+
+  it('does not snapshot when the artifact is unchanged', () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    // Same content, fresh object — content-equality not reference-equality.
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, artifact: { ...artifact1 } },
+    }));
+    expect(listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR).length).toBe(1);
+  });
+
+  it('does not snapshot for scoping-only updates (no artifact)', () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => sess);
+    expect(listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR).length).toBe(0);
+  });
+
+  it('snapshot file content carries sessionId, chatId, status, artifact, timestamp', () => {
+    const created = createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    const files = listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR);
+    expect(files.length).toBe(1);
+    const parsed = JSON.parse(
+      readFileSync(join(mockConfig.PLANNING_ARTIFACTS_DIR, files[0]!), 'utf8'),
+    );
+    expect(parsed.sessionId).toBe(created.id);
+    expect(parsed.chatId).toBe(11);
+    expect(parsed.status).toBe('spec-proposed');
+    expect(parsed.artifact).toEqual(artifact1);
+    expect(typeof parsed.timestamp).toBe('string');
+  });
+
+  it('snapshot survives deletePlanningSession (independent recovery trail)', () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    deletePlanningSession(11);
+    expect(getPlanningSession(11)).toBeNull();
+    expect(listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR).length).toBe(1);
+  });
+
+  it('filename is prefixed with the session id and ends in .json', () => {
+    const created = createPlanningSession(11, 'idea', 'chat', 'aura');
+    updatePlanningSession(11, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'spec-proposed', artifact: artifact1 },
+    }));
+    const f = listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR)[0]!;
+    expect(f.startsWith(created.id)).toBe(true);
+    expect(f.endsWith('.json')).toBe(true);
   });
 });

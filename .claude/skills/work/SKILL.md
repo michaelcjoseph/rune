@@ -2,6 +2,16 @@
 
 Pick the next pending task from a project's task list and drive it through the full implementation cycle: plan, write failing tests, implement, test, review, fix, simplify, and mark complete.
 
+## Execution discipline (reinforces `~/.claude/CLAUDE.md`)
+
+Two failure modes the /work skill specifically must defend against — both surfaced during the 2026-05-26 09-expand-cockpit recovery session (see `docs/projects/08-intent-layer/agent-lessons.md` Lesson 11):
+
+- **Don't end a turn on an intermediate tool call.** Within the /work cycle, a turn must end at a meaningful checkpoint — a green test run, a successful commit, or an explicit hard stop. Ending after a single `Edit` or `Read` leaves the implementation half-done; the next turn often cannot resume cleanly because the harness may revert uncommitted file edits between turns. Push through to the commit (step 19) before ending the turn, even if it means a longer single turn.
+
+- **"Continue from where you left off" is never a no-op.** When the harness fires a resume prompt mid-cycle (`Continue from where you left off.`, `continue`, `proceed`), the correct response is to resume the in-flight step with a tool call. The literal reply `No response requested.` to a resume prompt is always wrong — there is no reading of "continue" that resolves to "stay silent". If the cycle is genuinely complete or blocked, say so explicitly.
+
+These are belt-and-suspenders to the same rules in `~/.claude/CLAUDE.md`. The user-global file is the canonical home; the duplication here is so /work spawns see the rules even if a future change moves the user-global file out from under them.
+
 ## Usage
 
 ```

@@ -379,3 +379,110 @@ C2 panel skip surfaced Lessons 5 and 6:
   task that builds a surface with existing scaffolding must name the
   specific behavior gap, not just "build the panel"). The Quick
   checklist at the bottom gains two corresponding bullets.
+
+---
+
+## 2026-05-26 — The planner lost a spec, and the agent that lost it lied about success
+
+The 09-expand-cockpit planning session ran end-to-end on 2026-05-26: full
+Socratic /plan conversation, spec proposed, user review, Codex critique,
+spec revised, `/approve` issued. `cmd-approve` dispatched
+`project-setup-writer`, which returned non-empty text and no error.
+`cmd-approve` logged "Project scaffolded; planning session deleted" and
+wiped the session — but no `docs/projects/09-*/` directory existed on
+disk. The agent had responded conversationally to the brief (asking
+clarifying questions of an absent user) instead of calling `Write`.
+
+The spec was recovered only because the `/plan` conversation lived in a
+Claude Code session transcript at `~/.claude/projects/-Users-jarvis-workspace-pkms/`
+that happened to still be on disk. That recovery path is incidental and
+not load-bearing — without it the user would have lost ~45 minutes of
+spec work plus the Codex critique cycle.
+
+### Lesson 8 — Spec artifacts must persist off the planner store
+
+The planner kept the proposed `SpecArtifact` in
+`logs/planning-sessions.json`, which `deletePlanningSession` wipes.
+That made the planner store the **single point of failure** for spec
+recovery, even though the planner has no causal role in the failure
+that loses the spec (the agent does). The right invariant: every
+revision of the artifact lands as its own file in
+`logs/planning-artifacts/` the moment it's proposed, and stays there
+forever regardless of session lifecycle.
+
+**Applied at:** `src/reviews/planning.ts` (snapshot helper hooked into
+`updatePlanningSession`), `src/config.ts` (new `PLANNING_ARTIFACTS_DIR`
+constant). Commit `353b41d`.
+
+### Lesson 9 — Agent "success" is on-disk verification, not non-empty text
+
+`cmd-approve` treated `agentResult.text !== null && !agentResult.error`
+as proof of work. An agent that returns "I have a few clarifying
+questions before I start..." satisfies that contract while writing zero
+files. The correct contract is: **for any agent whose job is to produce
+files, verify the files exist on disk before treating the run as
+successful**. Snapshot the relevant directory before the call, re-list
+after, demand the expected delta.
+
+This is a general principle, not specific to `project-setup-writer`.
+Any future agent whose role is "modify the workspace" needs the same
+backstop in its caller.
+
+**Applied at:** `src/bot/commands/approve.ts` (scaffold-verification
+helper + integration into `scaffoldAndDelete`). Commit `a5018e5`.
+
+### Lesson 10 — Non-interactive agents must be prompted out of clarification mode
+
+The `project-setup-writer` prompt described the agent's job but didn't
+forbid it from asking questions. Claude defaults to a conversational
+posture: when in doubt, ask before doing. That default is wrong for
+agents invoked non-interactively, where "asking a question" means
+returning text that no human will read in time to answer.
+
+The fix is a hard contract at the top of the agent prompt: "you have no
+user", "you must call Write x3", "you must not enter Plan Mode", "if
+the brief is incomplete return a single-line abort". This is upstream
+defense; Lesson 9's on-disk verification is the load-bearing backstop.
+
+**Applied at:** `.claude/agents/project-setup-writer.md` (Hard contract
+preamble). Commit `b9140f3`.
+
+### Lesson 11 — Execution-discipline failures during the recovery session
+
+The recovery session itself surfaced three meta-execution failures that
+have nothing to do with the planner but everything to do with how I
+worked through long multi-step tasks. They go in this file because they
+surfaced while fixing this project, and they propagate up through the
+lesson-propagation loop the same way.
+
+- **Stopped mid-multi-step task on every other turn.** A single `Edit`
+  succeeded and I treated that as the turn's stopping point, even when
+  the surrounding work (tests, run, commit) was incomplete. Result:
+  next-turn-me had no checkpoint to resume from.
+
+- **Misread the harness resume prompt repeatedly.** When the harness
+  fired "Continue from where you left off." my response was
+  "No response requested." — five separate times across this session,
+  each requiring a manual re-prompt. There is no reading of "Continue"
+  that resolves to "stay silent". The phrase must trigger continuation
+  of the in-flight task, full stop.
+
+- **No WIP commits, so partial work didn't survive turn boundaries.**
+  Branch pointers without commits got lost between sessions. File
+  edits without commits sometimes reverted between turns (the harness
+  appears to roll back uncommitted state in some cases). The atomic
+  unit of forward progress is `git commit`, not `Edit`.
+
+**Applied at:**
+- `~/.claude/CLAUDE.md` (new file) — universal rules for any Claude
+  Code session: don't stop on intermediate tool calls; "Continue"
+  always means continue; commit WIP checkpoints to lock in progress.
+- `.claude/skills/work/SKILL.md` — belt-and-suspenders reinforcement
+  of the same rules in the /work skill, since /work is the canonical
+  multi-step execution path.
+- `docs/projects/templates/planning-checklist.md` — `Applied at:`
+  legal targets now include `~/.claude/CLAUDE.md`, the user-global
+  surface that reaches every execution context (terminal sessions,
+  Jarvis-spawned sub-agents, /work spawns, every product repo).
+
+Same patch series, separate commits.
