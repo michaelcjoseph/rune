@@ -6,18 +6,46 @@ through it after the spec is drafted but **before** `tasks.md` and
 
 This document exists because the 08-intent-layer project shipped Phases 1–5
 on green tests, then discovered none of it was user-reachable and had to
-add a 58-task Phase 6 retrofit. The four lessons below distill what would
+add a 58-task Phase 6 retrofit. The lessons below distill what would
 have prevented that. See
 [`docs/projects/08-intent-layer/agent-lessons.md`](../08-intent-layer/agent-lessons.md)
 for the full forensics.
 
 ---
 
+## `TODO(propagation)` — lessons not yet folded into this checklist
+
+This queue holds lessons captured in any project's `agent-lessons.md`
+whose `**Applied at:**` pointer names *this checklist* but where the
+checklist hasn't been updated yet. When you land a lesson with a
+deferred propagation, add it here so it can't rot silently. When you
+fold a queued lesson into the checklist, remove it here in the same
+commit.
+
+*Currently empty.* Lesson 7 from
+[`08-intent-layer/agent-lessons.md`](../08-intent-layer/agent-lessons.md)
+("Every new user-facing command needs a discovery-surface task") landed
+here as the convention's first entry and was simultaneously propagated
+into §1 below — the same commit demonstrates the loop closing.
+
+---
+
 ## When to use this
 
-- **Always** at the start of a new project, after `spec.md` exists.
-- Optionally at the start of a new phase within a project, if the spec was
-  updated and the next phase's task list hasn't been written yet.
+- **At project kickoff**, after `spec.md` exists and before `tasks.md` is
+  drafted. Also skim `docs/projects/*/agent-lessons.md` (recent first)
+  for any lessons not yet folded into this checklist — either fold them
+  in now or add them to the `TODO(propagation)` block above.
+- **At project closeout**, write `docs/projects/<project>/agent-lessons.md`
+  capturing what your task list missed and how. Every lesson must
+  include an `**Applied at:**` pointer to a system-wide surface
+  (`CLAUDE.md`, `.claude/skills/work/SKILL.md`, this checklist, or a
+  template) — and **update that surface in the same commit**, or queue
+  it in the `TODO(propagation)` block. A lesson with no propagation is
+  a lesson nobody else will learn.
+- **Optionally at the start of a new phase** within a project, if the
+  spec was updated and the next phase's task list hasn't been written
+  yet.
 
 The output is concrete edits to `tasks.md` and `test-plan.md` — not just
 mental notes. If the checklist surfaces a gap, the gap becomes a task.
@@ -37,10 +65,22 @@ For every capability in the spec, name the triple:
   or a similar runtime directory.
 - **User surface** — the thing a real person triggers or observes. A
   cockpit panel, a Telegram command, a notification, a cron schedule,
-  an API endpoint.
+  an API endpoint. **The user surface has two halves**: the *trigger
+  surface* (where the capability runs from) and the *discovery surface*
+  (where the user finds out it exists). Both must be tasked. Discovery
+  surfaces per channel:
+  - Telegram slash commands → the `/start` help text in
+    `src/bot/handlers/text.ts handleStart` (the in-app catalog).
+  - Free-text intents that should resolver-route → `SLASH_COMMAND_METADATA`
+    in `src/bot/skill-registry.ts` (the fuzzy-match registry).
+  - Cockpit actions / panels → the appropriate panel header, hover help,
+    or placeholder copy in `src/server/static/{index.html, app.js}`.
+  - Crons / scheduled notifications → the relevant `CLAUDE.md` section
+    so future agents know it exists.
 
-**Task all three.** If a capability genuinely needs only two (or one) of
-the triple, say so **explicitly with one sentence on why**:
+**Task all three** (and for user surface, both halves). If a capability
+genuinely needs only two (or one) of the triple, say so **explicitly
+with one sentence on why**:
 
 > "Pure-core only. This module is a deterministic policy consumed by
 > existing call sites; no new runtime adapter or user surface is needed
@@ -49,15 +89,24 @@ the triple, say so **explicitly with one sentence on why**:
 That single sentence is the gate that prevents an implicit deferral
 becoming an invisible one.
 
-**Failure mode this prevents:** the 08-intent-layer Phase 6 retrofit.
-Phase 3 had three Layer-4 task bullets ("Git worktree per project; …",
-"Per-repo scoped credentials …", "Untrusted inbound …"); each was
-satisfied by writing the pure core in `src/intent/sandbox.ts` and
-checking the box. The runtime adapters that actually create worktrees,
-inject credentials, and guard fs writes (`sandbox-runtime.ts`,
-`credential-injector.ts`, `egress-policy.ts`, `sandbox-fs.ts`) were
-not tasked until Phase 6 — because the original bullets didn't decompose
-into them.
+**Failure modes this prevents:**
+
+1. **Pure-core-only completion (the Phase 6 retrofit).** Phase 3 of
+   08-intent-layer had three Layer-4 task bullets ("Git worktree per
+   project; …", "Per-repo scoped credentials …", "Untrusted inbound …");
+   each was satisfied by writing the pure core in `src/intent/sandbox.ts`
+   and checking the box. The runtime adapters that actually create
+   worktrees, inject credentials, and guard fs writes
+   (`sandbox-runtime.ts`, `credential-injector.ts`, `egress-policy.ts`,
+   `sandbox-fs.ts`) were not tasked until Phase 6 — because the original
+   bullets didn't decompose into them.
+2. **Trigger-without-discovery (the C4 `/start` gap).** Phase 6 Track C4
+   shipped the `/plan` command, wired the dispatcher, and registered the
+   fuzzy-match metadata, but never updated the `/start` help text. The
+   command worked; the user couldn't find it. The discovery half of the
+   user surface had no task. See
+   [`08-intent-layer/agent-lessons.md`](../08-intent-layer/agent-lessons.md)
+   Cause #6 / Lesson 7.
 
 ---
 

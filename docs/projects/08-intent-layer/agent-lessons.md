@@ -331,10 +331,12 @@ that *advertises* it.
 
 **Applied at:**
 - [`docs/projects/templates/planning-checklist.md`](../templates/planning-checklist.md)
-  §"The decomposition pass" — the "user surface" leg should be read as
-  *both* the trigger surface and the discovery surface. *This commit
-  does not modify the checklist; a follow-up should enrich §1 to make
-  the discovery-surface obligation explicit.*
+  §"The decomposition pass" — the "user surface" leg now explicitly
+  covers both the *trigger surface* (where the capability runs) and the
+  *discovery surface* (where the user finds out it exists), with a
+  per-channel list of canonical discovery surfaces. The checklist's
+  "Failure modes this prevents" section was extended with the C4
+  `/start` gap as the second worked example.
 
 ---
 
