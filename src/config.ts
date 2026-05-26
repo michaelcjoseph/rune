@@ -214,6 +214,13 @@ const config = {
 
   WORK_RUN_PER_PROJECT_CAP: parseNumericEnv('WORK_RUN_PER_PROJECT_CAP', 1, { min: 1, integer: true }),
   WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 2, { min: 1, integer: true }),
+
+  /** True when started with `NODE_ENV=production` — read by surfaces that
+   *  want to cache static assets (the webview's index.html template) in
+   *  prod and re-read on every request in dev so source edits show up
+   *  without a server restart. `npm run start` sets NODE_ENV=production
+   *  for the user; `npm run dev` deliberately leaves it unset. */
+  IS_PRODUCTION: process.env['NODE_ENV'] === 'production',
 } as const;
 
 export default config;

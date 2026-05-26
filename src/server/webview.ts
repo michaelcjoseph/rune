@@ -80,11 +80,26 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-/** Load and template-substitute index.html once at mount time. */
+/** Load and template-substitute index.html. Called at mount time (prod
+ *  pre-load) and on every `GET /` request in dev mode. */
 async function loadIndexHtml(): Promise<string> {
   const raw = await readFile(join(STATIC_DIR, 'index.html'), 'utf8');
   const safeName = escapeHtmlAttr(config.OBSIDIAN_VAULT_NAME);
   return raw.replace('__OBSIDIAN_VAULT_NAME__', safeName);
+}
+
+/** Read index.html fresh from disk and write it to `res`. On read failure,
+ *  respond 404. Used by the dev path and by the prod fallback when the
+ *  mount-time pre-load did not populate the cache. */
+async function serveIndexHtml(res: ServerResponse): Promise<void> {
+  try {
+    const html = await loadIndexHtml();
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html);
+  } catch {
+    res.writeHead(404);
+    res.end('Not found');
+  }
 }
 
 async function handleStaticFile(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
@@ -626,11 +641,16 @@ export function mountWebviewRoutes(
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const wss = new WebSocketServer({ noServer: true });
 
-  // Cache index.html at mount time (vault name is constant at startup)
+  // Cache index.html at mount time (vault name is constant at startup) —
+  // only in production, where the GET / handler actually reads the cached
+  // value. In dev the handler always re-reads, so the pre-load would be
+  // a wasted disk read on every server start.
   let cachedIndexHtml: string | null = null;
-  void loadIndexHtml().then(html => { cachedIndexHtml = html; }).catch(err => {
-    log.warn('Could not pre-load index.html', { error: (err as Error).message });
-  });
+  if (config.IS_PRODUCTION) {
+    void loadIndexHtml().then(html => { cachedIndexHtml = html; }).catch(err => {
+      log.warn('Could not pre-load index.html', { error: (err as Error).message });
+    });
+  }
 
   // Per-userId inbound dispatch queue — serialises concurrent WS messages to
   // prevent concurrent handleConversation/createSession calls for the same user.
@@ -715,19 +735,18 @@ export function mountWebviewRoutes(
     }
 
     if (req.method === 'GET' && pathname === '/') {
-      if (cachedIndexHtml !== null) {
+      // In dev (config.IS_PRODUCTION === false) re-read index.html on every
+      // request so static-markup edits show up on a plain browser refresh —
+      // tsx watch only restarts on .ts changes, not on .html, so without
+      // this dev-mode bypass an edit to index.html requires restarting
+      // `npm run dev` to take effect. Prod serves the mount-time cache;
+      // a failed pre-load falls back to a fresh read via serveIndexHtml
+      // so a broken deploy returns 404 instead of crashing.
+      if (config.IS_PRODUCTION && cachedIndexHtml !== null) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(cachedIndexHtml);
       } else {
-        // Pre-load not yet complete — read synchronously as fallback
-        try {
-          const html = await loadIndexHtml();
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(html);
-        } catch {
-          res.writeHead(404);
-          res.end('Not found');
-        }
+        await serveIndexHtml(res);
       }
       return true;
     }

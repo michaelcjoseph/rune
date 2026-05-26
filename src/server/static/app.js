@@ -641,58 +641,55 @@
       setHTML(el, '<span class="muted">No products registered</span>');
       return;
     }
-    // Filter lifecycle-`done` projects per product, then drop products that
-    // become empty after the filter. Rationale: the cockpit's purpose is
-    // "what's in flight or actionable" — done projects don't belong here.
-    // Buildup is stable: filter inside the map, post-filter check on the
-    // product list, fall back to a specific empty-state message if every
-    // product is fully done.
-    const visibleProducts = products
-      .map(product => ({
-        ...product,
-        projects: (product.projects || []).filter(p => p.lifecycleStatus !== 'done'),
-      }))
-      .filter(product => product.projects.length > 0);
-    if (visibleProducts.length === 0) {
-      setHTML(el, '<span class="muted">All projects done — nothing in flight</span>');
-      return;
-    }
+    // Filter lifecycle-`done` projects per product, but KEEP every product
+    // header visible so the user always sees the full product lineup. A
+    // product whose project list is empty after filtering renders an
+    // inline "all done" placeholder inside its card. The global "No
+    // products registered" fallback above only fires when the registry
+    // itself has zero products — not when products exist but their
+    // projects are all done.
+    const visibleProducts = products.map(product => ({
+      ...product,
+      projects: (product.projects || []).filter(p => p.lifecycleStatus !== 'done'),
+    }));
     const html = visibleProducts.map(product => {
       const projects = product.projects;
-      const rows = projects.map(proj => {
-        const run = proj.runStatus && proj.runStatus !== 'idle'
-          ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
-          : '';
-        // Each action is its own explicit-click control — gated per-action. Slug and
-        // action ride in data-* attributes (not inline onclick) so a registry-derived
-        // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
-        // #cockpit-content dispatches the click.
-        const actions = (proj.actions || []).map(action =>
-          `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
-            `data-product="${escHtml(product.name)}" ` +
-            `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
-        ).join('');
-        // C3.2: render the in-flight gen-eval-loop progress block when
-        // proj.progress is present (round / failed evaluator / heartbeat /
-        // models + Cancel). A non-parseable lastHeartbeatAt is treated as
-        // stalled (amber), mirroring src/intent/supervision.ts.
-        const liveProgressHtml = proj.progress ? renderCockpitProgress(proj.progress) : '';
-        // Static task progress bar (done / total) — sourced from tasks.md
-        // via getProjectSummaries() and passed through buildCockpitView's
-        // third arg. Reuses the same .progress-bar-wrap / .progress-text
-        // CSS classes the removed Projects panel used.
-        const taskProgressHtml = proj.taskProgress ? renderTaskProgress(proj.taskProgress) : '';
-        return `<div class="cockpit-project">` +
-          `<div class="cockpit-project-header">` +
-            `<span class="project-slug">${escHtml(proj.slug)}</span>` +
-            `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
-            run +
-          `</div>` +
-          taskProgressHtml +
-          liveProgressHtml +
-          `<div class="cockpit-actions">${actions}</div>` +
-          `</div>`;
-      }).join('');
+      const rows = projects.length === 0
+        ? '<div class="cockpit-empty muted">all done</div>'
+        : projects.map(proj => {
+            const run = proj.runStatus && proj.runStatus !== 'idle'
+              ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
+              : '';
+            // Each action is its own explicit-click control — gated per-action. Slug and
+            // action ride in data-* attributes (not inline onclick) so a registry-derived
+            // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
+            // #cockpit-content dispatches the click.
+            const actions = (proj.actions || []).map(action =>
+              `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
+                `data-product="${escHtml(product.name)}" ` +
+                `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
+            ).join('');
+            // C3.2: render the in-flight gen-eval-loop progress block when
+            // proj.progress is present (round / failed evaluator / heartbeat /
+            // models + Cancel). A non-parseable lastHeartbeatAt is treated as
+            // stalled (amber), mirroring src/intent/supervision.ts.
+            const liveProgressHtml = proj.progress ? renderCockpitProgress(proj.progress) : '';
+            // Static task progress bar (done / total) — sourced from tasks.md
+            // via getProjectSummaries() and passed through buildCockpitView's
+            // third arg. Reuses the same .progress-bar-wrap / .progress-text
+            // CSS classes the removed Projects panel used.
+            const taskProgressHtml = proj.taskProgress ? renderTaskProgress(proj.taskProgress) : '';
+            return `<div class="cockpit-project">` +
+              `<div class="cockpit-project-header">` +
+                `<span class="project-slug">${escHtml(proj.slug)}</span>` +
+                `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
+                run +
+              `</div>` +
+              taskProgressHtml +
+              liveProgressHtml +
+              `<div class="cockpit-actions">${actions}</div>` +
+              `</div>`;
+          }).join('');
       const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
       return `<div class="cockpit-product">` +
         `<div class="cockpit-product-name">${escHtml(product.name)}${trackedLabel}</div>` +
