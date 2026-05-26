@@ -18,6 +18,7 @@ import { createMutation, cancelMutation } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
+import { getProjectSummaries } from './projects-snapshot.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
@@ -179,7 +180,20 @@ function handleApiCockpit(res: ServerResponse): void {
   // `activeRuns` map being cleared on shutdown. A project with no active
   // run defaults to `idle` in buildCockpitView.
   const runStatus = readCockpitRunStatus(config.SUPERVISED_RUNS_FILE);
-  const view = buildCockpitView(registry, runStatus);
+  // Enrich with static task progress (done / total) from tasks.md per project,
+  // so the cockpit card renders the same progress bar the (now-removed)
+  // Projects sidebar used. A failed read (corrupt tasks.md, missing dir)
+  // falls back to no progress data — the cockpit must render even without it.
+  let taskProgress: Record<string, { done: number; total: number }> = {};
+  try {
+    const summaries = getProjectSummaries();
+    taskProgress = Object.fromEntries(
+      summaries.map((s) => [s.slug, { done: s.progress.done, total: s.progress.total }]),
+    );
+  } catch (err) {
+    log.warn('handleApiCockpit: getProjectSummaries failed', { error: (err as Error).message });
+  }
+  const view = buildCockpitView(registry, runStatus, taskProgress);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }

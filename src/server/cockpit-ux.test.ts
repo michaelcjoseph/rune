@@ -516,3 +516,30 @@ describe('CockpitProject.progress shape (C3)', () => {
     expect(Number.isFinite(Date.parse(heartbeat ?? ''))).toBe(true);
   });
 });
+
+describe('CockpitProject.taskProgress shape (cockpit design tweaks)', () => {
+  // The cockpit now subsumes the (removed) Projects sidebar panel's
+  // done/total task counts. buildCockpitView accepts an optional third
+  // argument — a slug-keyed map of {done, total} — sourced from
+  // getProjectSummaries(). Slugs present in the map appear with
+  // `taskProgress` on the project; absent slugs omit the field.
+
+  it('emits taskProgress when a slug-keyed map is supplied', () => {
+    const view = buildCockpitView(mockRegistry, {}, { '02-growth': { done: 5, total: 12 } });
+    const project = view.products[0]!.projects[0]!;
+    expect(project.taskProgress).toBeDefined();
+    expect(project.taskProgress).toEqual({ done: 5, total: 12 });
+  });
+
+  it('omits taskProgress when no map is supplied (back-compat)', () => {
+    const view = buildCockpitView(mockRegistry, {});
+    const project = view.products[0]!.projects[0]!;
+    expect(project.taskProgress ?? null).toBeNull();
+  });
+
+  it('omits taskProgress for slugs absent from the supplied map', () => {
+    const view = buildCockpitView(mockRegistry, {}, { 'some-other-slug': { done: 1, total: 1 } });
+    const project = view.products[0]!.projects[0]!;
+    expect(project.taskProgress ?? null).toBeNull();
+  });
+});

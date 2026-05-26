@@ -591,8 +591,10 @@
       setHTML(runsEl, html);
     }
 
-    // Projects panel
-    renderProjects(state.projects ?? []);
+    // Projects panel removed — the Cockpit panel below subsumes it
+    // (per-project task progress + lifecycle status + actions, all via
+    // GET /api/cockpit). state.projects is still computed server-side but
+    // no longer rendered by any sidebar surface.
 
     // Mutations panel
     renderMutations(state.mutations ?? { active: [], recent: [] });
@@ -612,42 +614,6 @@
       activityPanel.hydrate(op.label, op.detail);
     }
     chatStatus.setMoreCount(Math.max(0, inFlight.length - (chatStatus.hasOp() ? 1 : 0)));
-  }
-
-  // ---- Projects panel ----
-
-  // Track active work-run slugs to disable their buttons
-  const runningProjectSlugs = new Set();
-
-  function renderProjects(projects) {
-    const el = document.getElementById('projects-content');
-    if (!el) return;
-    if (projects.length === 0) {
-      setHTML(el, '<span class="muted">No projects found</span>');
-      return;
-    }
-    // Update running slugs from state
-    runningProjectSlugs.clear();
-
-    const html = projects.map(p => {
-      const done = p.progress?.done ?? 0;
-      const total = p.progress?.total ?? 0;
-      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-      const statusCls = statusPillClass(p.status);
-      const slug = p.slug;
-      return `<div class="project-row">` +
-        `<div class="project-header">` +
-        `<span class="project-slug">${escHtml(slug)}</span>` +
-        `<span class="status-pill ${statusCls}">${escHtml(p.status)}</span>` +
-        `</div>` +
-        `<div class="project-footer">` +
-        `<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>` +
-        `<span class="progress-text">${done}/${total}</span>` +
-        `<button class="run-btn" data-slug="${escHtml(slug)}">Run /work --auto</button>` +
-        `</div>` +
-        `</div>`;
-    }).join('');
-    setHTML(el, html);
   }
 
   // Returns only fixed CSS-class constants — safe to interpolate into a class attribute.
@@ -675,42 +641,58 @@
       setHTML(el, '<span class="muted">No products registered</span>');
       return;
     }
-    const html = products.map(product => {
-      const projects = product.projects || [];
-      const rows = projects.length === 0
-        ? '<div class="cockpit-empty muted">no projects</div>'
-        : projects.map(proj => {
-            const run = proj.runStatus && proj.runStatus !== 'idle'
-              ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
-              : '';
-            // Each action is its own explicit-click control — gated per-action. Slug and
-            // action ride in data-* attributes (not inline onclick) so a registry-derived
-            // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
-            // #cockpit-content dispatches the click.
-            const actions = (proj.actions || []).map(action =>
-              `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
-                `data-product="${escHtml(product.name)}" ` +
-                `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
-            ).join('');
-            // C3.2: render the in-flight progress block when proj.progress is
-            // present. Two lines per the spec ASCII mockup:
-            //   round 2 / 3 · failed evaluator: 1 · 14s ago
-            //   gen: Claude · eval: Codex
-            // Plus a Cancel button that delegated-routes to
-            // POST /api/mutations/<mutationId>/cancel. A non-parseable
-            // lastHeartbeatAt is treated as stalled (amber), mirroring the
-            // supervision module's invariant.
-            const progressHtml = proj.progress ? renderCockpitProgress(proj.progress) : '';
-            return `<div class="cockpit-project">` +
-              `<div class="cockpit-project-header">` +
-                `<span class="project-slug">${escHtml(proj.slug)}</span>` +
-                `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
-                run +
-              `</div>` +
-              progressHtml +
-              `<div class="cockpit-actions">${actions}</div>` +
-              `</div>`;
-          }).join('');
+    // Filter lifecycle-`done` projects per product, then drop products that
+    // become empty after the filter. Rationale: the cockpit's purpose is
+    // "what's in flight or actionable" — done projects don't belong here.
+    // Buildup is stable: filter inside the map, post-filter check on the
+    // product list, fall back to a specific empty-state message if every
+    // product is fully done.
+    const visibleProducts = products
+      .map(product => ({
+        ...product,
+        projects: (product.projects || []).filter(p => p.lifecycleStatus !== 'done'),
+      }))
+      .filter(product => product.projects.length > 0);
+    if (visibleProducts.length === 0) {
+      setHTML(el, '<span class="muted">All projects done — nothing in flight</span>');
+      return;
+    }
+    const html = visibleProducts.map(product => {
+      const projects = product.projects;
+      const rows = projects.map(proj => {
+        const run = proj.runStatus && proj.runStatus !== 'idle'
+          ? ` <span class="run-pill">${escHtml(proj.runStatus)}</span>`
+          : '';
+        // Each action is its own explicit-click control — gated per-action. Slug and
+        // action ride in data-* attributes (not inline onclick) so a registry-derived
+        // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
+        // #cockpit-content dispatches the click.
+        const actions = (proj.actions || []).map(action =>
+          `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
+            `data-product="${escHtml(product.name)}" ` +
+            `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
+        ).join('');
+        // C3.2: render the in-flight gen-eval-loop progress block when
+        // proj.progress is present (round / failed evaluator / heartbeat /
+        // models + Cancel). A non-parseable lastHeartbeatAt is treated as
+        // stalled (amber), mirroring src/intent/supervision.ts.
+        const liveProgressHtml = proj.progress ? renderCockpitProgress(proj.progress) : '';
+        // Static task progress bar (done / total) — sourced from tasks.md
+        // via getProjectSummaries() and passed through buildCockpitView's
+        // third arg. Reuses the same .progress-bar-wrap / .progress-text
+        // CSS classes the removed Projects panel used.
+        const taskProgressHtml = proj.taskProgress ? renderTaskProgress(proj.taskProgress) : '';
+        return `<div class="cockpit-project">` +
+          `<div class="cockpit-project-header">` +
+            `<span class="project-slug">${escHtml(proj.slug)}</span>` +
+            `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
+            run +
+          `</div>` +
+          taskProgressHtml +
+          liveProgressHtml +
+          `<div class="cockpit-actions">${actions}</div>` +
+          `</div>`;
+      }).join('');
       const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
       return `<div class="cockpit-product">` +
         `<div class="cockpit-product-name">${escHtml(product.name)}${trackedLabel}</div>` +
@@ -718,6 +700,24 @@
         `</div>`;
     }).join('');
     setHTML(el, html);
+  }
+
+  // Render the static task-progress bar for a cockpit project card. Same
+  // markup the (removed) Projects sidebar panel used — keeps the CSS
+  // classes (.progress-bar-wrap, .progress-bar-fill, .progress-text)
+  // single-sourced. NaN-guards on both values so a malformed tasks.md
+  // can't produce NaN% in the inline style.
+  function renderTaskProgress(tp) {
+    const done = Number.isFinite(tp.done) ? tp.done : 0;
+    const total = Number.isFinite(tp.total) ? tp.total : 0;
+    // Clamp to [0, 100] in case a malformed tasks.md reports done > total
+    // — the bar would otherwise overflow semantically (CSS overflow:hidden
+    // hides the visual but the inline style would still be > 100%).
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    return `<div class="cockpit-task-progress">` +
+      `<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${pct}%"></div></div>` +
+      `<span class="progress-text">${escHtml(String(done))}/${escHtml(String(total))}</span>` +
+      `</div>`;
   }
 
   // C3.2: render the in-flight progress block (round / failed / heartbeat /
@@ -934,15 +934,6 @@
     }
   }
 
-  // Delegated click handler for the projects-panel run buttons — attached once to the
-  // static #projects-content container. data-slug (not inline onclick) keeps slugs out of
-  // a JS-in-HTML-attribute context. A disabled (running) button does not dispatch clicks.
-  function handleProjectsClick(e) {
-    const btn = e.target.closest('.run-btn');
-    if (!btn) return;
-    showConfirmModal(btn.dataset.slug);
-  }
-
   // ---- Confirmation modal ----
 
   let modalSlug = null;
@@ -998,27 +989,11 @@
   function renderMutations(mutations) {
     renderActiveMutations(mutations.active ?? []);
     renderRecentMutations(mutations.recent ?? []);
-
-    // Update running project slugs for button state
-    for (const m of mutations.active ?? []) {
-      if (m.kind === 'work-run' && m.payload?.projectSlug) {
-        runningProjectSlugs.add(m.payload.projectSlug);
-      }
-    }
-    updateRunButtons();
-  }
-
-  function updateRunButtons() {
-    document.querySelectorAll('.run-btn').forEach(btn => {
-      const slug = btn.dataset.slug;
-      if (runningProjectSlugs.has(slug)) {
-        btn.textContent = 'Running…';
-        btn.disabled = true;
-      } else {
-        btn.textContent = 'Run /work --auto';
-        btn.disabled = false;
-      }
-    });
+    // The `.run-btn` Running… disable/re-enable loop that lived here is
+    // gone — those buttons existed only in the removed Projects sidebar
+    // panel. The cockpit's `.cockpit-action-btn` buttons don't need this
+    // hook (action gating happens server-side; in-flight rendering
+    // happens via the cockpit progress block + run pill).
   }
 
   function renderActiveMutations(active) {
@@ -1155,7 +1130,6 @@
   connect();
   pollState();
   setInterval(pollState, 5000);
-  document.getElementById('projects-content')?.addEventListener('click', handleProjectsClick);
   document.getElementById('cockpit-content')?.addEventListener('click', handleCockpitClick);
   document.getElementById('approvals-content')?.addEventListener('click', handleApprovalsClick);
   // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.

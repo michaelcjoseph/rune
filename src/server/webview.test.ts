@@ -104,6 +104,13 @@ const { mockRegistry } = vi.hoisted(() => ({
 }));
 vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry) }));
 
+// getProjectSummaries is called by handleApiCockpit to enrich the view with
+// task progress (done/total). Mock to an empty list so the cockpit endpoint
+// works without staging real tasks.md files. Per-test overrides go via
+// vi.mocked(...).mockReturnValue([...]) in the enrichment test below.
+const mockGetProjectSummaries = vi.fn(() => [] as any[]);
+vi.mock('./projects-snapshot.js', () => ({ getProjectSummaries: mockGetProjectSummaries }));
+
 // Import after mocks are wired up
 const { mountWebviewRoutes } = await import('./webview.js');
 const { handleWebviewMessage } = await import('./webview-bootstrap.js');
@@ -211,6 +218,12 @@ describe('server/webview', () => {
       warnings: [],
     });
     (readRegistry as ReturnType<typeof vi.fn>).mockReturnValue(mockRegistry);
+    // Re-establish the default getProjectSummaries return alongside the
+    // other restored mocks for consistency — vi.clearAllMocks clears call
+    // history but not implementations today, so the default persists; this
+    // line keeps the suite resilient if the config ever flips to
+    // vi.resetAllMocks (which would clear implementations too).
+    mockGetProjectSummaries.mockReturnValue([]);
   });
 
   // ---- GET / ----
@@ -464,6 +477,36 @@ describe('server/webview', () => {
         slug: '01-mvp',
         runStatus: 'blocked-on-human',
       });
+    });
+
+    it('enriches each project with taskProgress when getProjectSummaries returns counts', async () => {
+      // Cockpit design tweak: handleApiCockpit calls getProjectSummaries() and
+      // passes a {slug → {done, total}} map to buildCockpitView so the cockpit
+      // card can render the same progress bar the (now-removed) Projects panel
+      // used. A successful read yields taskProgress on the matching project.
+      mockGetProjectSummaries.mockReturnValueOnce([
+        { slug: '01-mvp', progress: { done: 7, total: 12, perPhase: [] }, status: 'In Progress', specPath: '', lastModified: null } as any,
+      ]);
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.products[0].projects[0]).toMatchObject({
+        slug: '01-mvp',
+        taskProgress: { done: 7, total: 12 },
+      });
+    });
+
+    it('survives a getProjectSummaries throw — cockpit still renders without taskProgress', async () => {
+      mockGetProjectSummaries.mockImplementationOnce(() => {
+        throw new Error('tasks.md unreadable');
+      });
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(true);
+      expect(res.body.products[0].projects[0].taskProgress).toBeUndefined();
     });
   });
 

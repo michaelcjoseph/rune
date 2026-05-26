@@ -202,29 +202,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .run-live .run-agent { color: var(--accent); }
 .run-live .run-meta { color: var(--accent); }
 
-/* Projects panel */
-#projects-content { display: flex; flex-direction: column; gap: .5rem; }
-.project-row { display: flex; flex-direction: column; gap: .25rem; font-size: .78rem; padding: .35rem 0; border-bottom: 1px solid var(--border); }
-.project-row:last-child { border-bottom: none; }
-.project-header { display: flex; justify-content: space-between; align-items: center; gap: .4rem; }
+/* Progress-bar primitives — reused by .cockpit-task-progress (formerly
+ * Projects panel). `.project-slug` is also reused by renderCockpit. The
+ * Projects-panel-specific selectors (#projects-content, .project-row,
+ * .project-header, .project-footer, .run-btn) were dropped with the
+ * panel itself; cockpit renderers don't emit those classes. */
 .project-slug { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.project-footer { display: flex; align-items: center; gap: .4rem; }
 .progress-bar-wrap { flex: 1; height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s; }
 .progress-text { font-size: .72rem; color: var(--text2); white-space: nowrap; }
-.run-btn {
-  font-size: .7rem;
-  padding: .15rem .45rem;
-  border-radius: 3px;
-  border: 1px solid var(--border);
-  background: var(--bg3);
-  color: var(--text2);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s;
-}
-.run-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
-.run-btn:disabled { opacity: .5; cursor: not-allowed; }
 
 /* Status pills */
 .status-pill { font-size: .68rem; padding: .1rem .35rem; border-radius: 3px; font-weight: 600; white-space: nowrap; }
@@ -255,6 +241,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .cockpit-empty { font-size: .72rem; padding: .1rem 0 .1rem .6rem; }
 .cockpit-tracked { font-size: .66rem; font-weight: 400; }
 .run-pill { font-size: .66rem; padding: .08rem .3rem; border-radius: 3px; font-weight: 600; background: #4a2a1a; color: #d98c4a; white-space: nowrap; }
+
+/* Static task progress bar in the cockpit project card. Reuses the
+ * .progress-bar-wrap / .progress-bar-fill / .progress-text rules from
+ * the (removed) Projects panel — the wrapper sets the layout. */
+.cockpit-task-progress { display: flex; align-items: center; gap: .35rem; padding: .05rem 0 .15rem .2rem; }
+.cockpit-task-progress .progress-text { font-size: .68rem; }
 
 /* C3.2: in-flight gen-eval-loop progress block on a cockpit project card */
 .cockpit-progress { display: flex; flex-direction: column; gap: .15rem; font-size: .7rem; color: var(--text2); padding: .1rem 0 .15rem .2rem; }

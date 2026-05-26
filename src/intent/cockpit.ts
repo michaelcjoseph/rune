@@ -73,6 +73,14 @@ export interface CockpitProject {
    *  idle projects and for active runs whose runner hasn't emitted progress
    *  yet (the cockpit just renders the run-status pill in that case). */
   progress?: CockpitProgress;
+  /** Static task progress (done / total) sourced from `tasks.md` via
+   *  `getProjectSummaries()`. Used by the cockpit's per-project card to
+   *  render the same progress bar the (now-removed) Projects sidebar
+   *  panel had. Optional because the source can fail to read for a
+   *  project — the cockpit must render even without it. Distinct from
+   *  the `progress` field above, which carries gen-eval-loop run state
+   *  (rounds + models + heartbeat). */
+  taskProgress?: { done: number; total: number };
 }
 
 /** A product and the projects under it, as the cockpit presents them. */
@@ -129,10 +137,16 @@ function normalizeRunStatusEntry(
  * carries its registry `lifecycleStatus` and, separately, its `runStatus` from the
  * `runStatus` argument (defaulting to `idle` when supervision reports nothing for that slug). A
  * product with zero projects yields a product with an empty `projects` list, not an error.
+ *
+ * The optional `taskProgress` argument is a slug-keyed map of `{done, total}` task counts
+ * (sourced from `getProjectSummaries()`); when supplied, each project's `taskProgress`
+ * field is populated from it. Slugs absent from the map yield projects without `taskProgress`
+ * — the renderer must handle that case (don't render a progress bar for unknown counts).
  */
 export function buildCockpitView(
   registry: Registry | null,
   runStatus: RunStatusByProject,
+  taskProgress?: Record<string, { done: number; total: number }>,
 ): CockpitView {
   if (registry === null) {
     return {
@@ -154,8 +168,11 @@ export function buildCockpitView(
         // Every project offers all three actions, each its own gated control.
         actions: ['start', 'continue', 'enter-planning-mode'],
       };
-      // Phase 6 C3: surface live progress when the entry carries it.
+      // Phase 6 C3: surface live gen-eval-loop progress when the entry carries it.
       if (entry.progress !== undefined) out.progress = entry.progress;
+      // Static task progress from tasks.md when the caller supplied a slug-keyed map.
+      const tp = taskProgress?.[project.slug];
+      if (tp !== undefined) out.taskProgress = tp;
       return out;
     }),
   }));
