@@ -15,6 +15,7 @@ its `spec.md`.
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
+| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Move Jarvis identity out of pkms; compile CLAUDE.md/AGENTS.md from a canonical instruction source per repo across jarvis, pkms, aura, assay. |
 
 ---
 
@@ -133,3 +134,15 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Plan + promotion job:** durable JSONL job log (`state/promotions.jsonl`) drives the `planning-started → scaffolded → marked-source` chain across Jarvis restarts. Scaffold contract adds a structured `scaffold-result` JSON block from the agent, cross-checked against the existing repo-diff verification from `approve.ts`.
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
+
+## 10-jarvis-identity-refactor — Not Started
+
+[Spec](10-jarvis-identity-refactor/spec.md)
+
+Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler that generates model-specific instruction files (CLAUDE.md, AGENTS.md) from a single canonical instruction source per repo. Applies to jarvis, pkms, aura, assay.
+
+- **Source format:** fragments + manifest.yaml per repo. Single-file tag-based approach rejected (parser edge cases, worse diffs, harder to share fragments).
+- **Compiler location:** `jarvis/bin/compile-instructions` with explicit IR + pure-function renderers. Consumer repos invoke via a `scripts/compile-instructions` wrapper that resolves `$JARVIS_HOME`.
+- **Drift detection:** CI authoritative where present (`--check` mode); pre-commit optional. Repos without CI are explicitly best-effort.
+- **Migration:** each repo's pre-migration instruction files snapshotted into `snapshots/` permanently as an audit artifact. `ownership.md` doubles as a behavior inventory; per-row fragment-existence assertions plus reviewer sign-off on semantic preservation.
+- **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md). Test-first per phase.
