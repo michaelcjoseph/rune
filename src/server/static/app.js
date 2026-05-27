@@ -800,7 +800,9 @@
     }
     if (action === 'start' || action === 'continue') {
       // start / continue both dispatch /work --auto — explicit per-action confirmation first.
-      showConfirmModal(slug);
+      // Carry the product through to the modal so the POST can name it
+      // (work-runner uses it to create the worktree against the right repo).
+      showConfirmModal(slug, product);
       return;
     }
     // Unknown future action — do nothing rather than mis-dispatching a work run.
@@ -934,9 +936,11 @@
   // ---- Confirmation modal ----
 
   let modalSlug = null;
+  let modalProduct = null;
 
-  function showConfirmModal(slug) {
+  function showConfirmModal(slug, product) {
     modalSlug = slug;
+    modalProduct = product || null;
     const modal = document.getElementById('confirm-modal');
     const slugEl = document.getElementById('modal-slug');
     if (modal && slugEl) {
@@ -947,6 +951,7 @@
 
   function hideConfirmModal() {
     modalSlug = null;
+    modalProduct = null;
     const modal = document.getElementById('confirm-modal');
     if (modal) modal.classList.add('hidden');
   }
@@ -955,12 +960,18 @@
 
   document.getElementById('modal-run')?.addEventListener('click', () => {
     const slug = modalSlug;
+    const product = modalProduct;
     hideConfirmModal();
     if (!slug) return;
+    // Include `product` so work-runner creates the worktree against the
+    // right repo. Optional in the API (defaults to 'jarvis' server-side
+    // for back-compat with callers that haven't been wired through), but
+    // the cockpit always knows which product owns the project.
+    const payload = product ? { projectSlug: slug, product } : { projectSlug: slug };
     fetch('/api/mutations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: slug } }),
+      body: JSON.stringify({ kind: 'work-run', payload }),
     }).then(r => r.json()).then(data => {
       if (data.error) {
         appendMessage('assistant', `<p>Error: ${escHtml(data.error)}</p>`);

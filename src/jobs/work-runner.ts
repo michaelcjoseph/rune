@@ -4,35 +4,51 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
+import { createWorktree, destroyWorktree } from './sandbox-runtime.js';
+import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
 const log = createLogger('work-runner');
 
-const PROJECTS_DIR = join(PROJECT_ROOT, 'docs', 'projects');
+const PROJECTS_SUBDIR = join('docs', 'projects');
 
-/** Find the absolute path for a project slug by scanning docs/projects/. */
-function findProjectDir(slug: string): string | null {
+/** Find the absolute path for a project slug by scanning `<base>/docs/projects`.
+ *  Used both during validate (against the live tree at PROJECT_ROOT) and during
+ *  apply (against the run's worktree). Slug match is exact, or
+ *  `<numeric-prefix>-<slug>` so "06-webview" can be referenced as "webview". */
+function findProjectDir(slug: string, base: string): string | null {
+  const projectsDir = join(base, PROJECTS_SUBDIR);
   let names: string[];
   try {
-    names = readdirSync(PROJECTS_DIR) as string[];
+    names = readdirSync(projectsDir) as string[];
   } catch {
     return null;
   }
   for (const name of names) {
     try {
-      if (!statSync(join(PROJECTS_DIR, name)).isDirectory()) continue;
+      if (!statSync(join(projectsDir, name)).isDirectory()) continue;
     } catch {
       continue;
     }
     if (name === slug || name.endsWith(`-${slug}`)) {
-      return join(PROJECTS_DIR, name);
+      return join(projectsDir, name);
     }
   }
   return null;
 }
 
-type WorkRunPayload = { projectSlug: string };
+type WorkRunPayload = {
+  projectSlug: string;
+  /**
+   * Product key (matches an entry in `policies/products.json`). Defaults to
+   * `'jarvis'` for back-compat with existing cockpit start paths that didn't
+   * yet wire the product through. Cockpit's `handleApiMutations` should pass
+   * the registry's product for the project so a future aura/assay work-run
+   * targets the right repo.
+   */
+  product?: string;
+};
 
 export const workRunApplier: MutationApplier<WorkRunPayload> = {
   kind: 'work-run',
@@ -48,7 +64,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       return { ok: false, reason: `invalid projectSlug: ${projectSlug}` };
     }
 
-    const dir = findProjectDir(projectSlug);
+    // Pre-flight against the live tree. The actual run reads from the
+    // worktree, but the worktree is created off the repo's HEAD which (for
+    // jarvis-on-jarvis) is the same commit the live tree is on.
+    const dir = findProjectDir(projectSlug, PROJECT_ROOT);
     if (!dir) {
       return { ok: false, reason: `project not found: ${projectSlug}` };
     }
@@ -56,7 +75,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       return { ok: false, reason: `spec.md missing for project: ${projectSlug}` };
     }
 
-    // Per-project concurrency cap
+    // Per-project concurrency cap. The deterministic worktree path
+    // (`<WORKTREE_ROOT>/<product>/<projectSlug>`) is single-occupant, so
+    // cap=1 also keeps two runs from colliding on the same on-disk path.
     const runningForSlug = [...activeRuns.values()].filter(
       h =>
         h.descriptor.kind === 'work-run' &&
@@ -78,56 +99,107 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
 
   async *apply(descriptor: MutationDescriptor<WorkRunPayload>, ctx: ApplyContext): AsyncIterable<MutationEvent> {
     const { projectSlug } = descriptor.payload;
-    const dir = findProjectDir(projectSlug);
-    if (!dir) {
-      yield term(descriptor.id, 'failed', { reason: `project not found: ${projectSlug}` });
-      return;
-    }
+    const product = descriptor.payload.product ?? 'jarvis';
+    // Deterministic per-mutation branch name, mirroring gen-eval-loop's
+    // `jarvis-gen-eval/<short-id>` so the two run kinds are visually
+    // distinguishable in `git branch` output.
+    const branch = `jarvis-work/${descriptor.id.slice(0, 8)}`;
 
-    const specPath = join(dir, 'spec.md');
-    const tasksPath = join(dir, 'tasks.md');
-    const dirName = dir.split('/').pop() ?? projectSlug;
-
-    let specContent: string;
+    let sandbox: SandboxSpec | null = null;
     try {
-      specContent = readFileSync(specPath, 'utf8');
-    } catch {
-      yield term(descriptor.id, 'failed', { reason: `could not read spec.md for ${projectSlug}` });
-      return;
-    }
+      try {
+        sandbox = await createWorktree({
+          product,
+          project: projectSlug,
+          branch,
+          worktreeRoot: config.WORKTREE_ROOT,
+          productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+        });
+      } catch (err) {
+        // No worktree was created, so the outer finally's destroy is a
+        // no-op (sandbox stays null). Surface the failure as a terminal
+        // event so the mutation reaches a clean failed state.
+        yield term(descriptor.id, 'failed', {
+          reason: `worktree create failed: ${(err as Error).message}`,
+        });
+        return;
+      }
 
-    let tasksContent = '';
-    try {
-      if (existsSync(tasksPath)) tasksContent = readFileSync(tasksPath, 'utf8');
-    } catch {
-      // tasks.md is optional
-    }
+      const dir = findProjectDir(projectSlug, sandbox.worktree);
+      if (!dir) {
+        yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}` });
+        return;
+      }
 
-    const prompt = `${specContent}${tasksContent ? `\n\n${tasksContent}` : ''}\n\n/work --auto`;
-    const t0 = Date.now();
+      const specPath = join(dir, 'spec.md');
+      const tasksPath = join(dir, 'tasks.md');
 
-    const child = spawn(CLAUDE_BIN, [
-      // Match execClaude's MCP isolation — keep user-global MCP servers
-      // (claude.ai KB, Linear, Gmail, …) out of /work runs too.
-      ...getProjectMcpArgs(),
-      '--add-dir', join('docs', 'projects', dirName),
-      '-p', prompt,
-    ], {
-      cwd: PROJECT_ROOT,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        JARVIS_PROJECT_ROOT: PROJECT_ROOT,
-        ...(config.WORKSPACE_DIR ? { JARVIS_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
-      },
-    });
+      let specContent: string;
+      try {
+        specContent = readFileSync(specPath, 'utf8');
+      } catch {
+        yield term(descriptor.id, 'failed', { reason: `could not read spec.md for ${projectSlug}` });
+        return;
+      }
 
-    registerActiveProcess(child);
-    try {
-      yield* streamProcess(child, descriptor.id, ctx, t0);
+      let tasksContent = '';
+      try {
+        if (existsSync(tasksPath)) tasksContent = readFileSync(tasksPath, 'utf8');
+      } catch {
+        // tasks.md is optional
+      }
+
+      const prompt = `${specContent}${tasksContent ? `\n\n${tasksContent}` : ''}\n\n/work --auto`;
+      const t0 = Date.now();
+
+      // cwd = sandbox.worktree (NOT PROJECT_ROOT) — the whole point of
+      // Fix 1. Spawning into the live tree triggers tsx watch to SIGTERM
+      // the parent when the agent edits Jarvis's own source files. The
+      // worktree lives under `<WORKTREE_ROOT>/<product>/<project>`, outside
+      // PROJECT_ROOT/src, so tsx watch ignores it.
+      //
+      // The pre-worktree version passed `--add-dir docs/projects/<dirName>`
+      // as a relative path; that worked because cwd was PROJECT_ROOT. The
+      // worktree's HEAD already contains the project dir, so the flag is
+      // redundant — dropped here.
+      const child = spawn(CLAUDE_BIN, [
+        ...getProjectMcpArgs(),
+        '-p', prompt,
+      ], {
+        cwd: sandbox.worktree,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          JARVIS_PROJECT_ROOT: PROJECT_ROOT,
+          ...(config.WORKSPACE_DIR ? { JARVIS_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+        },
+      });
+
+      registerActiveProcess(child);
+      try {
+        yield* streamProcess(child, descriptor.id, ctx, t0);
+      } finally {
+        unregisterActiveProcess(child);
+        log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
+      }
     } finally {
-      unregisterActiveProcess(child);
-      log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
+      // Always tear down the worktree if we created one — success, failure,
+      // cancel, generator-consumer-abort all flow through here. Mirrors
+      // gen-eval-loop-runner's finally cleanup at the same spot in the
+      // generator body.
+      if (sandbox) {
+        try {
+          await destroyWorktree(sandbox, {
+            productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+            worktreeRoot: config.WORKTREE_ROOT,
+          });
+        } catch (err) {
+          log.warn('work-runner: destroyWorktree failed', {
+            sandbox: sandbox.worktree,
+            error: (err as Error).message,
+          });
+        }
+      }
     }
   },
 };
