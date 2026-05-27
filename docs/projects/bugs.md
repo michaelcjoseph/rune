@@ -1,4 +1,15 @@
 - [ ] Cockpit is showing 08-intent-layer as `planned` when in the index it shows it as `in progress`
+- [ ] Registry doesn't auto-rebuild. Cockpit shows a stale project list until `logs/registry.json` is manually regenerated.
+  - **Issue**
+    - `buildRegistry` and `writeRegistry` exist in `src/intent/registry.ts:127-162` but no code path calls them.
+    - `logs/registry.json` was last written by hand on 2026-05-22.
+    - `handleApiCockpit` in `src/server/webview.ts:180-214` reads the stale file on every cockpit request.
+    - Symptom: new projects don't appear and status changes don't propagate. Projects 09 and 10 were missing until manually rebuilt on 2026-05-27.
+  - **Fix options** (minimum viable is A + B)
+    - A. Call `buildRegistry` + `writeRegistry` on Jarvis startup.
+    - B. Add the rebuild to the nightly job for safety.
+    - C. File-watcher on each product's `docs/projects/index.md` for instant rebuild.
+    - D. Cockpit endpoint or CLI command to trigger a manual rebuild.
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
