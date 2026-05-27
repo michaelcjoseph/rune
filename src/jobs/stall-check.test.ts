@@ -189,6 +189,32 @@ describe('checkStalledRuns', () => {
     expect(text).toContain('?');
   });
 
+  it('does NOT nudge when lastHeartbeatAt is stale but lastChildAliveAt is fresh', () => {
+    // The whole point of the new field: a long quiet LLM call (no output
+    // events for >5min) should NOT trip the stall nudge as long as the
+    // child process is still alive (the in-runner ticker keeps
+    // lastChildAliveAt fresh). isStalled prefers lastChildAliveAt.
+    const readRuns = () => [
+      makeRun('run-quiet-llm', {
+        lastHeartbeatAt: heartbeatAge(10 * 60_000), // 10min — LLM quiet
+        lastChildAliveAt: heartbeatAge(30_000), // 30s — process alive
+      }),
+    ];
+    const sendNudge = vi.fn();
+    const alreadyNudged = new Set<string>();
+
+    const next = checkStalledRuns({
+      readRuns,
+      now: NOW,
+      stallThresholdMs: STALL_THRESHOLD_MS,
+      alreadyNudged,
+      sendNudge,
+    });
+
+    expect(sendNudge).not.toHaveBeenCalled();
+    expect(next.has('run-quiet-llm')).toBe(false);
+  });
+
   it('does not throw when sendNudge throws — continues to the next run and still records the id', () => {
     const readRuns = () => [
       makeRun('run-a', { lastHeartbeatAt: heartbeatAge(10 * 60_000) }),

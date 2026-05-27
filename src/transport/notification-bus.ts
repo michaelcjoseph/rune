@@ -43,7 +43,7 @@ export interface BusMutationEvent {
    *  the mutations-pipeline circular dependency; the publisher in
    *  `src/transport/mutations.ts` is the one that sets it correctly. */
   mutationKind: string;
-  subKind: 'log' | 'progress' | 'output' | 'completed' | 'failed';
+  subKind: 'log' | 'progress' | 'output' | 'keep-alive' | 'completed' | 'failed';
   ts: string;
   data?: unknown;
   userId: number;

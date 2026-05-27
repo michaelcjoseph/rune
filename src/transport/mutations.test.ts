@@ -363,6 +363,123 @@ describe('mutations', () => {
       expect(final.status).toBe('failed');
     });
 
+    it('seed/running/terminal upserts do NOT write lastChildAliveAt — that field is keep-alive-only', async () => {
+      // The three lifecycle upserts (create-seed → startApply-running →
+      // completed) advance lastHeartbeatAt only. lastChildAliveAt is a
+      // distinct signal owned by the keep-alive ticker; it must not be
+      // synthesized by lifecycle writes (otherwise legacy on-disk entries
+      // and fresh seeds would carry a fake liveness timestamp and the
+      // distinction collapses).
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: completedGen('x'),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      const calls = await waitForUpserts(3);
+      for (const call of calls) {
+        const run = call[0] as { lastChildAliveAt?: string };
+        expect(run.lastChildAliveAt).toBeUndefined();
+      }
+    });
+
+    it('keep-alive events within the 30s throttle window do NOT spam upsertRun', async () => {
+      // Mirror of the existing "output events do NOT spam" test, but for
+      // the new keep-alive event kind. Within a fast (<30s) test, three
+      // keep-alive events produce zero extra upserts beyond the standard
+      // seed/running/terminal trio.
+      async function* keepAliveGen(): AsyncIterable<any> {
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'keep-alive', data: {} };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'keep-alive', data: {} };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'keep-alive', data: {} };
+        yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'completed', data: {} };
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: keepAliveGen(),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // Expected: seed + running + completed = 3. The three keep-alive
+      // events are all within the 30s throttle window, so none of them
+      // produce an extra upsert.
+      const calls = await waitForUpserts(3);
+      expect(calls.length).toBe(3);
+      const statuses = calls.map((c) => (c[0] as { status: string }).status);
+      expect(statuses).toEqual(['running', 'running', 'completed']);
+    });
+
+    it('a keep-alive event past the throttle window updates lastChildAliveAt without changing lastHeartbeatAt', async () => {
+      // The whole point of the new event: when the throttle window has
+      // elapsed, a keep-alive bumps lastChildAliveAt to "now" but leaves
+      // lastHeartbeatAt at its prior value (it represents LLM activity,
+      // not process aliveness). Fake timers let us cross the 30s window
+      // without sleeping.
+      vi.useFakeTimers();
+      try {
+        const t0 = new Date('2026-01-01T00:00:00.000Z');
+        vi.setSystemTime(t0);
+
+        let release: () => void = () => {};
+        const gate = new Promise<void>((r) => { release = r; });
+
+        async function* gen(): AsyncIterable<any> {
+          await gate;
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'keep-alive', data: {} };
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }
+
+        const applier = makeApplier({
+          kind: 'work-run',
+          autoApprove: true,
+          validateResult: { ok: true },
+          applyGen: gen(),
+        });
+        registerApplier(applier);
+
+        await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+        // Let createMutation's seed + startApply's running upsert settle
+        // (both happen synchronously at t=0).
+        await vi.advanceTimersByTimeAsync(1);
+
+        // Advance past the 30s throttle window.
+        vi.setSystemTime(new Date('2026-01-01T00:00:31.000Z'));
+        release();
+
+        // Drain the generator + the loop's downstream handling.
+        await vi.advanceTimersByTimeAsync(10);
+
+        const calls = mockUpsertRun.mock.calls;
+        // seed + running + keep-alive + completed = 4
+        expect(calls.length).toBeGreaterThanOrEqual(4);
+
+        const keepAliveCall = calls.find((c) => {
+          const run = c[0] as { lastChildAliveAt?: string };
+          return run.lastChildAliveAt === '2026-01-01T00:00:31.000Z';
+        });
+        expect(keepAliveCall, 'expected a keep-alive upsert at t=31s').toBeDefined();
+        const keepAliveRun = keepAliveCall![0] as {
+          lastHeartbeatAt: string;
+          lastChildAliveAt?: string;
+          status: string;
+        };
+        expect(keepAliveRun.lastChildAliveAt).toBe('2026-01-01T00:00:31.000Z');
+        expect(keepAliveRun.lastHeartbeatAt).toBe('2026-01-01T00:00:00.000Z');
+        expect(keepAliveRun.status).toBe('running');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('an applier crash (thrown error) flips the SupervisedRun to "failed"', async () => {
       async function* throwingGen(): AsyncIterable<any> {
         yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'starting' } };

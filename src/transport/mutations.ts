@@ -21,11 +21,18 @@ const log = createLogger('mutations');
  * shouldn't move the "when did this start" timestamp the cockpit shows. The
  * caller passes a status because the same descriptor can be a `blocked-on-human`
  * seed (non-autoApprove pending approval) or a `running` flip (after approval).
+ *
+ * `lastChildAliveAt` is optional and threaded through verbatim — lifecycle
+ * writes (seed/running/terminal) leave it undefined; keep-alive upserts set
+ * it. This keeps the two signals (LLM output vs child-process liveness)
+ * cleanly separated rather than synthesizing a fake liveness timestamp on
+ * every lifecycle write.
  */
 function buildSupervisedRun(
   d: MutationDescriptor,
   status: SupervisedRun['status'],
   nowIso: string,
+  lastChildAliveAt?: string,
 ): SupervisedRun {
   const p = d.payload as Record<string, unknown>;
   const product = typeof p['product'] === 'string' ? p['product'] : 'jarvis';
@@ -33,7 +40,7 @@ function buildSupervisedRun(
     typeof p['projectSlug'] === 'string' ? p['projectSlug']
     : typeof p['ref'] === 'string' ? p['ref']
     : d.target.ref || d.id;
-  return {
+  const run: SupervisedRun = {
     id: d.id,
     product,
     project,
@@ -41,6 +48,10 @@ function buildSupervisedRun(
     startedAt: d.createdAt,
     lastHeartbeatAt: nowIso,
   };
+  if (lastChildAliveAt !== undefined) {
+    run.lastChildAliveAt = lastChildAliveAt;
+  }
+  return run;
 }
 
 /** Best-effort wrapper around upsertRun — persistence failure logs but
@@ -81,7 +92,15 @@ export interface MutationDescriptor<P = Record<string, unknown>> {
 export interface MutationEvent {
   mutationId: string;
   ts: string;
-  kind: 'log' | 'progress' | 'output' | 'completed' | 'failed';
+  /**
+   * `keep-alive` is a process-liveness signal emitted by the applier on a
+   * periodic ticker while the child is alive — distinct from `output`
+   * (which reflects LLM activity). The two signals back two SupervisedRun
+   * timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
+   * `lastChildAliveAt`. Stall-check prefers `lastChildAliveAt` so a long
+   * quiet LLM call no longer trips a false stall nudge.
+   */
+  kind: 'log' | 'progress' | 'output' | 'keep-alive' | 'completed' | 'failed';
   data?: unknown;
 }
 
@@ -205,7 +224,17 @@ async function startApply(
   // line. The supervision stale threshold is in minutes; a 30s minimum gap
   // between persisted heartbeats is well under that. Terminal and crash
   // writes are NOT throttled — those are one-shot.
+  //
+  // `output` and `keep-alive` events are throttled INDEPENDENTLY because
+  // they signal different things — LLM activity vs child-process liveness.
+  // Sharing one throttle would let a chatty output stream block the
+  // keep-alive ticker (or vice versa) from updating its distinct field.
   let lastHeartbeatUpsertAt = Date.now();
+  let lastKeepAliveUpsertAt = Date.now();
+  /** Latest child-liveness timestamp persisted to disk, so subsequent
+   *  lifecycle writes (terminal, post-keep-alive completed) preserve it
+   *  instead of overwriting it with `undefined`. */
+  let currentChildAliveAt: string | undefined;
   const HEARTBEAT_THROTTLE_MS = 30_000;
 
   // Use the real bus if available, else a no-op so appliers always receive a valid object
@@ -236,8 +265,33 @@ async function startApply(
       if (event.kind === 'output') {
         const now = Date.now();
         if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
-          safeUpsertRun(buildSupervisedRun(descriptor, 'running', new Date(now).toISOString()));
+          safeUpsertRun(
+            buildSupervisedRun(descriptor, 'running', new Date(now).toISOString(), currentChildAliveAt),
+          );
           lastHeartbeatUpsertAt = now;
+        }
+      }
+
+      // Keep-alive: the applier's process-liveness ticker. Advances
+      // lastChildAliveAt without bumping lastHeartbeatAt — the two signals
+      // mean different things. Throttled on its own counter so it isn't
+      // gated by a chatty output stream (and vice versa). The upsert
+      // preserves the prior lastHeartbeatAt by passing it back through
+      // buildSupervisedRun.
+      if (event.kind === 'keep-alive') {
+        const now = Date.now();
+        if (now - lastKeepAliveUpsertAt >= HEARTBEAT_THROTTLE_MS) {
+          const nowIso = new Date(now).toISOString();
+          currentChildAliveAt = nowIso;
+          safeUpsertRun(
+            buildSupervisedRun(
+              descriptor,
+              'running',
+              new Date(lastHeartbeatUpsertAt).toISOString(),
+              nowIso,
+            ),
+          );
+          lastKeepAliveUpsertAt = now;
         }
       }
 
@@ -247,14 +301,23 @@ async function startApply(
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
         }
         appendMutationLine(descriptor);
-        safeUpsertRun(buildSupervisedRun(descriptor, descriptor.status, new Date().toISOString()));
+        safeUpsertRun(
+          buildSupervisedRun(
+            descriptor,
+            descriptor.status,
+            new Date().toISOString(),
+            currentChildAliveAt,
+          ),
+        );
         return;
       }
     }
     // Applier exhausted without terminal event — treat as completed
     descriptor.status = 'completed';
     appendMutationLine(descriptor);
-    safeUpsertRun(buildSupervisedRun(descriptor, 'completed', new Date().toISOString()));
+    safeUpsertRun(
+      buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt),
+    );
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
     descriptor.status = 'failed';
@@ -263,7 +326,9 @@ async function startApply(
     // Persist directly as 'failed' — the terminal-event branch above exits
     // via `return`, so this catch is only reachable when the run is still
     // 'running' and a markCrashed() wrap would be a no-op composition.
-    safeUpsertRun(buildSupervisedRun(descriptor, 'failed', new Date().toISOString()));
+    safeUpsertRun(
+      buildSupervisedRun(descriptor, 'failed', new Date().toISOString(), currentChildAliveAt),
+    );
   } finally {
     activeRuns.delete(descriptor.id);
   }

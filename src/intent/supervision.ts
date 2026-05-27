@@ -42,8 +42,21 @@ export interface SupervisedRun {
   status: SupervisedRunStatus;
   /** ISO-8601 timestamp the run started. */
   startedAt: string;
-  /** ISO-8601 timestamp of the run's most recent heartbeat (progress signal). */
+  /**
+   * ISO-8601 timestamp of the most recent observed Claude `output` event —
+   * an LLM-activity signal. Goes stale during multi-minute LLM calls that
+   * produce no stdout, even when the underlying child is healthy. Use
+   * {@link lastChildAliveAt} as the truer liveness signal when present.
+   */
   lastHeartbeatAt: string;
+  /**
+   * ISO-8601 timestamp of the most recent in-runner liveness tick —
+   * advances on a 30s setInterval owned by the applier while the child
+   * process is alive, independent of LLM output. Optional for back-compat
+   * with on-disk entries written before this field existed; `isStalled`
+   * falls back to `lastHeartbeatAt` when absent.
+   */
+  lastChildAliveAt?: string;
 }
 
 /** The visibility surface — the picture the cockpit and Telegram report from. */
@@ -67,11 +80,18 @@ export function isStalled(
   now: number,
 ): boolean {
   if (run.status !== 'running') return false;
-  const lastHeartbeat = Date.parse(run.lastHeartbeatAt);
-  // A corrupt or unparseable heartbeat is treated as stalled — supervision fails toward
+  // Prefer the in-runner liveness signal when it's been populated. The LLM
+  // output heartbeat goes stale during long quiet calls even when the child
+  // is alive; `lastChildAliveAt` is the truer liveness signal. Fall back to
+  // `lastHeartbeatAt` for back-compat with on-disk entries written before
+  // `lastChildAliveAt` existed (otherwise every legacy entry would read
+  // stalled with no recourse).
+  const liveness = run.lastChildAliveAt ?? run.lastHeartbeatAt;
+  const parsed = Date.parse(liveness);
+  // A corrupt or unparseable timestamp is treated as stalled — supervision fails toward
   // visibility, never silently hiding a run that may be stuck.
-  if (Number.isNaN(lastHeartbeat)) return true;
-  return now - lastHeartbeat > heartbeatIntervalMs;
+  if (Number.isNaN(parsed)) return true;
+  return now - parsed > heartbeatIntervalMs;
 }
 
 /**

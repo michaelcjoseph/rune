@@ -228,6 +228,59 @@ describe('upsertRun', () => {
 // removeRun
 // ---------------------------------------------------------------------------
 
+describe('readAllRuns / writeAllRuns — lastChildAliveAt back-compat', () => {
+  // Why: lastChildAliveAt is a new optional field on SupervisedRun (separate
+  // process-liveness signal). On-disk entries from before this field existed
+  // must still read back as valid SupervisedRuns — otherwise every legacy
+  // entry gets dropped at startup and the visibility surface goes blank.
+
+  it('round-trips a run that has lastChildAliveAt set', () => {
+    const run: SupervisedRun = {
+      ...makeRun('run-with-alive'),
+      lastChildAliveAt: '2026-02-01T00:00:30.000Z',
+    };
+    writeAllRuns([run], filePath);
+    expect(readAllRuns(filePath)).toEqual([run]);
+  });
+
+  it('reads a legacy on-disk entry (no lastChildAliveAt) as a valid SupervisedRun', () => {
+    // Simulate a file written by the pre-fix code — only the original five
+    // fields, no lastChildAliveAt. The type guard must accept it (the field
+    // is optional, not required) and the round-trip must not synthesize a
+    // bogus value.
+    const legacyOnDisk = {
+      id: 'run-legacy',
+      product: 'jarvis',
+      project: '10-jarvis-identity-refactor',
+      status: 'failed',
+      startedAt: '2026-05-27T20:12:05.818Z',
+      lastHeartbeatAt: '2026-05-27T20:17:48.203Z',
+    };
+    writeFileSync(filePath, JSON.stringify([legacyOnDisk]), 'utf8');
+    const result = readAllRuns(filePath);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.id).toBe('run-legacy');
+    expect(result[0]!.lastChildAliveAt).toBeUndefined();
+  });
+
+  it('upsertRun preserves lastChildAliveAt when present', () => {
+    const original: SupervisedRun = {
+      ...makeRun('run-1'),
+      lastChildAliveAt: '2026-02-01T00:00:30.000Z',
+    };
+    writeAllRuns([original], filePath);
+    const updated: SupervisedRun = {
+      ...original,
+      status: 'completed',
+      lastChildAliveAt: '2026-02-01T00:01:00.000Z',
+    };
+    upsertRun(updated, filePath);
+    const result = readAllRuns(filePath);
+    expect(result).toEqual([updated]);
+    expect(result[0]!.lastChildAliveAt).toBe('2026-02-01T00:01:00.000Z');
+  });
+});
+
 describe('removeRun', () => {
   it('removes the run with the given id', () => {
     const runA = makeRun('run-a');
