@@ -4,7 +4,7 @@
 
 Jarvis's identity is documented in three places — `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md` — with duplication between the Claude and Codex variants. After project 08, Jarvis is the orchestrator and the vault is one tool among many, but the docs still frame Jarvis as a vault layer. Top-level instructions are locked to model-specific filename conventions even though Jarvis already uses Claude and Codex with more agents likely.
 
-This project moves Jarvis's identity out of pkms and builds a compiler that generates `CLAUDE.md` and `AGENTS.md` (and future model-specific variants) from a single canonical instruction source per repo. Applies to four repos: jarvis, pkms, aura, assay.
+This project moves Jarvis's identity out of pkms and builds a compiler that generates `CLAUDE.md` and `AGENTS.md` (and future model-specific variants) from a single canonical instruction source per repo. Applies to five repos: jarvis, pkms, aura, assay, relay.
 
 ### Core Value Proposition
 
@@ -13,7 +13,7 @@ One canonical source per repo, model-specific instruction files generated reprod
 ### Goals
 
 1. **Primary:** Move Jarvis identity, capabilities, execution surfaces, and routing defaults out of `pkms/CLAUDE.md` into `jarvis/`.
-2. **Secondary:** Build a reproducible canonical-source → model-specific-file compiler in `jarvis/bin/compile-instructions`. Apply to all four repos.
+2. **Secondary:** Build a reproducible canonical-source → model-specific-file compiler in `jarvis/bin/compile-instructions`. Apply to all five repos.
 3. **Tertiary:** CI drift check per PR in repos with CI configured.
 
 ### Non-Goals
@@ -47,7 +47,7 @@ Edit fragment in instructions/ → run compile-instructions → commit source + 
 
 ### Entry Points
 
-- Local: `scripts/compile-instructions` (with optional `--check`) invoked from any of the four repos.
+- Local: `scripts/compile-instructions` (with optional `--check`) invoked from any of the five repos.
 - CI: drift check step on every PR.
 - Pre-commit (optional): hook that runs `--check` before commits.
 
@@ -186,20 +186,20 @@ Post-migration assertion: machine-checkable part asserts each declared fragment 
 - [ ] Author canonical source for pkms (vault-only fragments).
 - [ ] Generate `CLAUDE.md` / `AGENTS.md` via `--bootstrap`; commit canonical + generated together.
 
-### Phase 4: Migrate aura + assay
+### Phase 4: Migrate aura + assay + relay
 
 > Depends on: Phase 3.
 
-- [ ] Install wrappers in aura and assay.
-- [ ] Author canonical source for each.
+- [ ] Install wrappers in aura, assay, and relay.
+- [ ] Author canonical source for each. Aura and assay port from existing instruction files (with snapshot diff); relay scaffolds from scratch (no pre-migration content exists).
 - [ ] Generate and commit outputs.
-- [ ] Reviewer sign-off on `ownership.md`-based behavior preservation.
+- [ ] Reviewer sign-off on `ownership.md`-based behavior preservation for aura and assay. N/A for relay — fresh scaffold has nothing to preserve.
 
 ### Phase 5: Drift check (CI primary, pre-commit optional)
 
 > Depends on: Phase 2 (compiler must exist). Can land in parallel with Phases 3/4 for repos already migrated.
 
-- [ ] Identify which of the four repos have CI; add the drift check step per repo with CI.
+- [ ] Identify which of the five repos have CI; add the drift check step per repo with CI.
 - [ ] For repos without CI, document the manual workflow in contributor docs.
 - [ ] Ship optional pre-commit hook via `scripts/install-hooks.sh` one-liner.
 
@@ -219,7 +219,7 @@ Post-migration assertion: machine-checkable part asserts each declared fragment 
 
 | Metric | Target | How Measured |
 | ------ | ------ | ------------ |
-| `compile-instructions --check` exit 0 | 4/4 repos | CLI invocation post-migration |
+| `compile-instructions --check` exit 0 | 5/5 repos | CLI invocation post-migration |
 | Generated `pkms/CLAUDE.md` zero hits for moved headings | 0 occurrences of `## Jarvis`, `### How Reviews Work` | grep on generated file |
 | Behavior inventory rows preserved | 100% of `ownership.md` rows assert green | Phase 3/4 fragment-existence + substring assertions |
 | CI catches drift | 3/3 fixture cases pass | Local fixture tests in Phase 5 |
@@ -258,6 +258,7 @@ Post-migration assertion: machine-checkable part asserts each declared fragment 
 ### Migration
 
 - Aura or assay has no existing instruction files → snapshot inventory marks them as "did not exist"; migration creates `instructions/` and generated files from scratch.
+- Relay has no existing instruction files at project start → no snapshot, no behavior-preservation review. Phase 4 authors a starter `instructions/` and manifest from scratch.
 - Mid-migration commit accidentally leaves generated file out of sync with source → caught by `--check` locally (if developer ran it) or on PR (via CI).
 
 ---

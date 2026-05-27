@@ -15,7 +15,7 @@ its `spec.md`.
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
-| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Move Jarvis identity out of pkms; compile CLAUDE.md/AGENTS.md from a canonical instruction source per repo across jarvis, pkms, aura, assay. |
+| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Move Jarvis identity out of pkms; compile CLAUDE.md/AGENTS.md from a canonical instruction source per repo across jarvis, pkms, aura, assay, relay. |
 
 ---
 
@@ -139,7 +139,7 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 
 [Spec](10-jarvis-identity-refactor/spec.md)
 
-Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler that generates model-specific instruction files (CLAUDE.md, AGENTS.md) from a single canonical instruction source per repo. Applies to jarvis, pkms, aura, assay.
+Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler that generates model-specific instruction files (CLAUDE.md, AGENTS.md) from a single canonical instruction source per repo. Applies to jarvis, pkms, aura, assay, relay. Relay is a fresh-scaffold case (no pre-migration instruction files exist).
 
 - **Source format:** fragments + manifest.yaml per repo. Single-file tag-based approach rejected (parser edge cases, worse diffs, harder to share fragments).
 - **Compiler location:** `jarvis/bin/compile-instructions` with explicit IR + pure-function renderers. Consumer repos invoke via a `scripts/compile-instructions` wrapper that resolves `$JARVIS_HOME`.

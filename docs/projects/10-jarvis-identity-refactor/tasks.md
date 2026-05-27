@@ -17,7 +17,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Snapshot all existing instruction files
 
-- [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `aura/AGENTS.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`.
+- [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `aura/AGENTS.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`. Relay has no pre-migration instruction files; no snapshot taken.
 
 ### Build inventory tooling
 
@@ -97,18 +97,18 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 - [ ] Post-phase: opening Claude Code in pkms loads the new generated `CLAUDE.md` with no Jarvis-specific content. Opening Codex in jarvis loads the new generated `AGENTS.md`.
 
-## Phase 4 — Migrate aura + assay
+## Phase 4 — Migrate aura + assay + relay
 
 > Depends on: Phase 3.
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **aura + assay migration** — test-plan.md §4.
+- [ ] Write the test suite for **aura + assay + relay migration** — test-plan.md §4.
 - [ ] Confirm red before implementation.
 
 ### Install wrappers
 
-- [ ] Commit `scripts/compile-instructions` to aura and assay.
+- [ ] Commit `scripts/compile-instructions` to aura, assay, and relay.
 
 ### Author canonical source for aura
 
@@ -120,13 +120,20 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [ ] Create `assay/instructions/` and manifest from existing `assay/CLAUDE.md` (or scratch).
 - [ ] Generate `CLAUDE.md` via `--bootstrap`; commit source + generated together.
 
+### Author canonical source for relay (fresh scaffold)
+
+- [ ] Create `relay/instructions/` with a starter set of fragments. No existing CLAUDE.md / AGENTS.md to port; this is a fresh authoring task.
+- [ ] Author `relay/instructions/manifest.yaml`.
+- [ ] Generate `CLAUDE.md` (and `AGENTS.md` if manifest produces it) via `--bootstrap`; commit source + generated together.
+
 ### Reviewer sign-off
 
-- [ ] Diff generated `CLAUDE.md` against pre-migration snapshot for each repo; reviewer signs off on semantic preservation. Allowed deltas: structural reorganization, duplication removal. Disallowed: silent loss of any named behavior, agent, command, route, or rule.
+- [ ] Diff generated `CLAUDE.md` against pre-migration snapshot for aura and assay; reviewer signs off on semantic preservation. Allowed deltas: structural reorganization, duplication removal. Disallowed: silent loss of any named behavior, agent, command, route, or rule.
+- [ ] Relay sign-off scope is narrower: confirm the starter instructions cover the basics (repo overview, conventions, key commands) without claiming to preserve content that never existed.
 
 ### User-reachability check
 
-- [ ] Post-phase: a `/work` session targeting aura or assay loads the regenerated `CLAUDE.md`.
+- [ ] Post-phase: a `/work` session targeting aura, assay, or relay loads the regenerated `CLAUDE.md`.
 
 ## Phase 5 — Drift check (CI primary, pre-commit optional)
 
@@ -139,13 +146,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### CI integration per repo
 
-- [ ] Inventory which of the four repos have CI configured.
+- [ ] Inventory which of the five repos have CI configured.
 - [ ] For each repo with CI: add the drift check step (jarvis sibling checkout + `--check` invocation) to the workflow.
 - [ ] For each repo without CI: document the manual regenerate-and-commit workflow in that repo's contributor docs.
 
 ### Optional pre-commit hook
 
-- [ ] Ship `scripts/install-hooks.sh` one-liner in each of the four repos.
+- [ ] Ship `scripts/install-hooks.sh` one-liner in each of the five repos.
 - [ ] Hook reproduces the three drift cases locally (hand-edit, stale-gen, in-sync).
 
 ### User-reachability check
