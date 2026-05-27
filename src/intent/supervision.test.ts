@@ -144,3 +144,52 @@ describe('supervision — restart recovery (test-plan §10)', () => {
     }
   });
 });
+
+describe('supervision — child-process liveness (separate from LLM-output heartbeat)', () => {
+  // Why two signals: lastHeartbeatAt advances on observed Claude `output`
+  // events (LLM activity). When the child is mid-LLM-call with no stdout for
+  // >5min, lastHeartbeatAt goes stale even though the process is healthy.
+  // lastChildAliveAt is the distinct "child process is still alive" signal
+  // (advanced by an in-runner ticker, independent of LLM output). isStalled
+  // prefers lastChildAliveAt when present, falling back to lastHeartbeatAt
+  // for back-compat with existing on-disk entries.
+
+  it('prefers lastChildAliveAt over lastHeartbeatAt when deciding stalled', () => {
+    // Heartbeat stale (10min ago, well past the 60s interval) but the child
+    // ticker fired 30s ago — the process is alive, so the run is NOT stalled.
+    const r = run({
+      lastHeartbeatAt: '2026-01-15T00:00:00.000Z',
+      lastChildAliveAt: '2026-01-15T00:09:30.000Z',
+    });
+    expect(isStalled(r, HEARTBEAT_MS, NOW)).toBe(false);
+  });
+
+  it('falls back to lastHeartbeatAt when lastChildAliveAt is undefined (back-compat)', () => {
+    // An on-disk entry written by the pre-fix code has no lastChildAliveAt
+    // field. The new isStalled must treat it as if only lastHeartbeatAt
+    // existed — otherwise every legacy entry would read as stalled.
+    const legacy = run({ lastHeartbeatAt: '2026-01-15T00:00:00.000Z' });
+    expect(legacy.lastChildAliveAt).toBeUndefined();
+    expect(isStalled(legacy, HEARTBEAT_MS, NOW)).toBe(true); // 10min old → stalled
+    const fresh = run({ lastHeartbeatAt: '2026-01-15T00:09:30.000Z' });
+    expect(isStalled(fresh, HEARTBEAT_MS, NOW)).toBe(false); // 30s old → not stalled
+  });
+
+  it('flags stalled when BOTH lastChildAliveAt and lastHeartbeatAt are stale', () => {
+    const r = run({
+      lastHeartbeatAt: '2026-01-15T00:00:00.000Z',
+      lastChildAliveAt: '2026-01-15T00:00:00.000Z',
+    });
+    expect(isStalled(r, HEARTBEAT_MS, NOW)).toBe(true);
+  });
+
+  it('treats a corrupt lastChildAliveAt as stalled — fails toward visibility', () => {
+    // Same fail-closed posture as the existing corrupt-lastHeartbeatAt test:
+    // an unparseable timestamp must not silently hide a stuck run.
+    const r = run({
+      lastHeartbeatAt: '2026-01-15T00:09:30.000Z', // fresh — would otherwise be NOT stalled
+      lastChildAliveAt: 'not-a-timestamp',
+    });
+    expect(isStalled(r, HEARTBEAT_MS, NOW)).toBe(true);
+  });
+});

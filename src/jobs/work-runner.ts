@@ -161,6 +161,18 @@ async function* streamProcess(
     return new Promise(r => { resolveWaiter = r; });
   }
 
+  // Child-process liveness ticker. Emits a `keep-alive` MutationEvent every
+  // 30s so the supervision store's `lastChildAliveAt` stays fresh even when
+  // Claude is mid-LLM-call with no stdout for minutes. See
+  // src/transport/mutations.ts for the matching throttle gate; see
+  // src/intent/supervision.ts (isStalled) for why this distinct signal
+  // exists. `.unref()` so the timer can't hold the process open past
+  // shutdown if the close handler somehow doesn't fire.
+  const keepAliveTicker = setInterval(() => {
+    enqueue(evt('keep-alive', {}));
+  }, 30_000);
+  keepAliveTicker.unref();
+
   let stdoutBuf = '';
   let stderrBuf = '';
 
@@ -179,6 +191,7 @@ async function* streamProcess(
   });
 
   child.on('close', (code, signal) => {
+    clearInterval(keepAliveTicker);
     if (stdoutBuf) enqueue(evt('output', { line: stdoutBuf }));
     if (stderrBuf) enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
     exitCode = code;
@@ -189,32 +202,40 @@ async function* streamProcess(
   });
 
   child.on('error', (err) => {
+    clearInterval(keepAliveTicker);
     enqueue(evt('log', { line: err.message, stream: 'stderr' }));
     done = true;
     resolveWaiter?.();
     resolveWaiter = null;
   });
 
-  while (!done || queue.length > 0) {
-    if (ctx.cancel() && !cancelSent) {
-      cancelSent = true;
-      child.kill('SIGTERM');
+  try {
+    while (!done || queue.length > 0) {
+      if (ctx.cancel() && !cancelSent) {
+        cancelSent = true;
+        child.kill('SIGTERM');
+      }
+      await waitForNext();
+      while (queue.length > 0) yield queue.shift()!;
     }
-    await waitForNext();
-    while (queue.length > 0) yield queue.shift()!;
-  }
 
-  const durationMs = Date.now() - t0;
-  const isSignalKill = exitSignal === 'SIGTERM' || exitCode === 143;
+    const durationMs = Date.now() - t0;
+    const isSignalKill = exitSignal === 'SIGTERM' || exitCode === 143;
 
-  if (exitCode === 0) {
-    yield term(mutationId, 'completed', { exitCode: 0, durationMs });
-  } else if (isSignalKill && cancelSent) {
-    yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'cancelled' });
-  } else if (isSignalKill) {
-    yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'killed' });
-  } else {
-    yield term(mutationId, 'failed', { exitCode, durationMs, reason: `exited with code ${String(exitCode)}` });
+    if (exitCode === 0) {
+      yield term(mutationId, 'completed', { exitCode: 0, durationMs });
+    } else if (isSignalKill && cancelSent) {
+      yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'cancelled' });
+    } else if (isSignalKill) {
+      yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'killed' });
+    } else {
+      yield term(mutationId, 'failed', { exitCode, durationMs, reason: `exited with code ${String(exitCode)}` });
+    }
+  } finally {
+    // Belt-and-suspenders: the close/error handlers above also clear the
+    // timer, but a consumer that aborts the iteration before the child
+    // exits would otherwise leak it.
+    clearInterval(keepAliveTicker);
   }
 }
 

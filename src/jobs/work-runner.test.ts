@@ -334,6 +334,71 @@ describe('workRunApplier', () => {
       expect(lines).toContain('line two');
     });
 
+    it('emits keep-alive events on a 30s ticker while the child is alive and stops on close', async () => {
+      // The applier's process-liveness ticker. Distinct from output
+      // events — fires regardless of stdout activity so the supervision
+      // store's lastChildAliveAt stays fresh during long quiet LLM calls.
+      // See src/transport/mutations.ts for the upsert throttle that
+      // matches this cadence; see supervision.isStalled for why this
+      // distinct signal exists.
+      vi.useFakeTimers();
+      try {
+        setupValidProject('06-webview');
+
+        // Construct a fake child that does NOT auto-close — we control
+        // when it ends so the ticker has time to fire repeatedly.
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        const child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        mockSpawn.mockReturnValue(child);
+
+        const descriptor = {
+          id: 'mut-keepalive',
+          kind: 'work-run',
+          payload: { projectSlug: '06-webview' },
+          status: 'running',
+        } as any;
+        const ctx = { bus: null as any, cancel: () => false };
+
+        const events: any[] = [];
+        const consume = (async () => {
+          for await (const event of workRunApplier.apply(descriptor, ctx)) {
+            events.push(event);
+          }
+        })();
+
+        // Let the synchronous spawn + handler registration + setInterval
+        // install settle in microtasks.
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Three ticks worth of fake time → three keep-alive events.
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        const tickEventsBeforeClose = events.filter((e) => e.kind === 'keep-alive');
+        expect(tickEventsBeforeClose.length).toBe(3);
+
+        // Close the child and let the loop finish.
+        child.emit('close', 0, null);
+        await vi.advanceTimersByTimeAsync(0);
+        await consume;
+
+        // After close, advancing time must not produce more keep-alive
+        // events — the ticker must be cleared on close (otherwise the
+        // timer leaks past every run).
+        const countAfterClose = events.filter((e) => e.kind === 'keep-alive').length;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(events.filter((e) => e.kind === 'keep-alive').length).toBe(countAfterClose);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('registers and unregisters the child process', async () => {
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });
