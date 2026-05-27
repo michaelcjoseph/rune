@@ -1,4 +1,3 @@
-- [ ] Cockpit is showing 08-intent-layer as `planned` when in the index it shows it as `in progress`
 - [ ] Registry doesn't auto-rebuild. Cockpit shows a stale project list until `logs/registry.json` is manually regenerated.
   - **Issue**
     - `buildRegistry` and `writeRegistry` exist in `src/intent/registry.ts:127-162` but no code path calls them.
