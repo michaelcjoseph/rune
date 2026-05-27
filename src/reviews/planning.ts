@@ -135,6 +135,18 @@ export function updatePlanningSession(
     lastActivity: new Date().toISOString(),
   };
   sessions.set(chatId, next);
+  // Snapshot the artifact whenever its content changes. Fires on the
+  // initial proposeSpec transition (undefined → defined) and on every
+  // subsequent revision the planner produces during the conversation.
+  // The full evolution trail is the only off-process recovery path if
+  // /approve later deletes the session before the scaffolder lands the
+  // files on disk — see `docs/projects/08-intent-layer/agent-lessons.md`
+  // for the incident that motivated this.
+  const prevArtifact = current.planning.artifact;
+  const nextArtifact = next.planning.artifact;
+  if (nextArtifact && !artifactsEqual(prevArtifact, nextArtifact)) {
+    snapshotArtifact(next, nextArtifact);
+  }
   persistPlanningSessions();
   // Durable snapshot of every distinct SpecArtifact revision. The planner
   // store gets wiped on deletePlanningSession; this trail is the only
@@ -170,6 +182,47 @@ function snapshotArtifact(
     sessionId: session.id,
     chatId: session.chatId,
     timestamp: ts,
+    status: session.planning.status,
+    artifact,
+  };
+  try {
+    mkdirSync(dir, { recursive: true });
+    const tmp = `${filePath}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+    renameSync(tmp, filePath);
+  } catch (err) {
+    log.error('snapshotArtifact failed', {
+      path: filePath,
+      sessionId: session.id,
+      error: (err as Error).message,
+    });
+  }
+}
+
+function artifactsEqual(
+  a: SpecArtifact | undefined,
+  b: SpecArtifact | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Write a single artifact revision to its own JSON file under
+ *  `PLANNING_ARTIFACTS_DIR`. Filename: `<sessionId>-<sanitized-iso-ts>.json`.
+ *  Atomic temp-then-rename. Errors logged, never thrown — a snapshot
+ *  failure must not break the planning conversation. */
+function snapshotArtifact(
+  session: StoredPlanningSession,
+  artifact: SpecArtifact,
+): void {
+  const dir = config.PLANNING_ARTIFACTS_DIR;
+  const iso = new Date().toISOString().replace(/[:.]/g, '-');
+  const filePath = join(dir, `${session.id}-${iso}.json`);
+  const payload = {
+    sessionId: session.id,
+    chatId: session.chatId,
+    timestamp: new Date().toISOString(),
     status: session.planning.status,
     artifact,
   };
