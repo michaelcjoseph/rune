@@ -34,5 +34,17 @@
       "objects.githubusercontent.com",
       "registry.npmjs.org"
     ]
+  },
+  "relay": {
+    "repoPath": "~/workspace/relay",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/jarvis/credentials/relay/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ]
   }
 }
