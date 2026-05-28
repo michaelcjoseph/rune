@@ -12,6 +12,12 @@ below it.
   - Add a "fix" button next to each bug, which does an interview as well for context generation, spings up the coding agent planning mode, and executes the fix.
   - Each bug or idea gets turned into a project and follows the normal planning session.
   - Add a "+" button next to "bugs" and "ideas" to easily add a new item.
+- Work-run visibility in cockpit
+  - Stream the last N lines of agent output for active `/work` runs in the project card.
+  - Surface the current step or phase the agent is on.
+  - Show elapsed time alongside the run-status pill.
+  - Surface failure reason in the card when a run breaks (exit code + error message). Currently buried in `logs/mutations.jsonl`; cockpit just shows a stale `running` pill until stall-check times out.
+  - Optional Telegram alert on run failure.
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily
