@@ -123,6 +123,33 @@ function readStdin() {
   }
 }
 
+/** Synchronous sleep — the Stop hook is synchronous, so we block the thread
+ *  rather than await. Atomics.wait on a throwaway SharedArrayBuffer is the
+ *  cleanest sync sleep with no child process. */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Read the final assistant text, retrying briefly on an empty result.
+ *  The Stop hook fires the instant a turn ends — sometimes BEFORE Claude Code
+ *  has flushed the final text block to the transcript JSONL. A naive read then
+ *  sees empty and false-blocks a turn that actually produced prose (observed
+ *  live: a 1589-char summary read as empty). Retrying disambiguates the two
+ *  cases: a flush race resolves within a few hundred ms (→ text appears, allow);
+ *  a genuinely silent turn stays empty across all retries (→ block, the real
+ *  failure we want). null (unreadable) returns immediately — that's fail-open.
+ *  Total worst-case added latency on a real silent turn: ~600ms. */
+function resolveAssistantText(transcriptPath) {
+  const DELAYS_MS = [100, 150, 350]; // ~600ms total across 4 attempts
+  let text = lastAssistantText(transcriptPath);
+  for (let i = 0; i < DELAYS_MS.length; i++) {
+    if (text === null || text !== '') return text; // unreadable or found prose
+    sleepSync(DELAYS_MS[i]);
+    text = lastAssistantText(transcriptPath);
+  }
+  return text;
+}
+
 function main() {
   let input = {};
   try {
@@ -133,7 +160,7 @@ function main() {
   }
 
   const ts = new Date().toISOString();
-  const text = input.transcript_path ? lastAssistantText(input.transcript_path) : null;
+  const text = input.transcript_path ? resolveAssistantText(input.transcript_path) : null;
 
   // Could not read the transcript — fail open. Blocking on an unreadable
   // transcript would risk wedging every turn; better to under-enforce.
