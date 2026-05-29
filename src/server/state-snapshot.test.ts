@@ -18,6 +18,10 @@ const mockGetActiveReviewSession = vi.fn<() => any>(() => null);
 vi.mock('../reviews/session.js', () => ({ getActiveReviewSession: mockGetActiveReviewSession }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetActivePlanningSession = vi.fn<() => any>(() => null);
+vi.mock('../reviews/planning.js', () => ({ getActivePlanningSession: mockGetActivePlanningSession }));
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockGetQueue = vi.fn<() => any>(() => []);
 vi.mock('../kb/queue.js', () => ({ getQueue: mockGetQueue }));
 
@@ -166,6 +170,22 @@ describe('state-snapshot / getStateSnapshot', () => {
       type: 'weekly',
       phase: 'interview',
       targetDate: '2026-05-05',
+    });
+  });
+
+  it('returns null activePlanning when no planning session exists', () => {
+    expect(getStateSnapshot().activePlanning).toBeNull();
+  });
+
+  it('maps active planning to { product, status, surface }', () => {
+    mockGetActivePlanningSession.mockReturnValue({
+      planning: { product: 'jarvis', status: 'scoping', surface: 'cockpit' },
+    });
+    const snap = getStateSnapshot();
+    expect(snap.activePlanning).toEqual({
+      product: 'jarvis',
+      status: 'scoping',
+      surface: 'cockpit',
     });
   });
 

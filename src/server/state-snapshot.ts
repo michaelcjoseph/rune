@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { getSession } from '../vault/sessions.js';
 import { getActiveReviewSession } from '../reviews/session.js';
+import { getActivePlanningSession } from '../reviews/planning.js';
 import { getQueue } from '../kb/queue.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals } from '../jobs/proposal-queue.js';
@@ -27,6 +28,12 @@ export interface StateSnapshot {
   ready: boolean;
   activeSession: { sessionId: string; model: string; messageCount: number } | null;
   activeReview: { type: string; phase: string; targetDate: string } | null;
+  /** An in-flight planning conversation (scoping or spec-proposed). Free-form
+   *  webview messages route to a planning session ahead of the chat path in
+   *  dispatchText, so without surfacing it the cockpit reads "No active
+   *  session" mid-plan — the confusion behind the original bug report. Null
+   *  when no planning conversation is live. */
+  activePlanning: { product: string; status: string; surface: string } | null;
   ingestionQueueDepth: number;
   recentAgentRuns: AgentRunEntry[];
   pendingApprovals: { playbook: number; proposal: number; intent: number };
@@ -77,6 +84,7 @@ export function getStateSnapshot(): StateSnapshot {
   // conversation rather than show "no active session" misleadingly.
   const session = getSession(userId, 'webview') ?? getSession(userId, 'telegram');
   const review = getActiveReviewSession(userId);
+  const planning = getActivePlanningSession(userId);
   const schedulerState = readSchedulerState();
 
   const { runs: recentAgentRuns, warnings: runWarnings } = readRecentAgentRuns(10);
@@ -115,6 +123,13 @@ export function getStateSnapshot(): StateSnapshot {
       : null,
     activeReview: review
       ? { type: review.type, phase: review.phase, targetDate: review.targetDate }
+      : null,
+    activePlanning: planning
+      ? {
+          product: planning.planning.product,
+          status: planning.planning.status,
+          surface: planning.planning.surface,
+        }
       : null,
     ingestionQueueDepth: getQueue().length,
     recentAgentRuns,

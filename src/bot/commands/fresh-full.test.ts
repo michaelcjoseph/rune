@@ -20,8 +20,14 @@ vi.mock('../../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 vi.mock('../../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
 }));
+// active-context pulls in planning/orchestrator/sr-session (which transitively
+// load ai/claude.js and read config at module-load). Mock it directly so the
+// suite controls the non-chat-context branch without that import chain.
+vi.mock('./active-context.js', () => ({ describeActiveNonChatContext: vi.fn(() => null) }));
 
 const { getSession, getSessionMessages, deleteSession } = await import('../../vault/sessions.js');
+const { describeActiveNonChatContext } = await import('./active-context.js');
+const describeActiveNonChatContextMock = describeActiveNonChatContext as unknown as ReturnType<typeof vi.fn>;
 const { appendToJournal } = await import('../../vault/journal.js');
 const { gitCommitAndPush } = await import('../../vault/git.js');
 const { handleFreshFull } = await import('./fresh-full.js');
@@ -55,6 +61,23 @@ describe('bot/commands/fresh-full', () => {
       expect(appendMock).not.toHaveBeenCalled();
       expect(gitMock).not.toHaveBeenCalled();
       expect(deleteSessionMock).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the non-chat-context escape hatch when one is active', async () => {
+      getSessionMock.mockReturnValue(null);
+      describeActiveNonChatContextMock.mockReturnValue(
+        "You're in a planning session, not a chat — /approve to scaffold the spec, or /clear to abandon it.",
+      );
+      const sender = makeSender();
+
+      await handleFreshFull(sender, 123, 'telegram');
+
+      expect(sender.send).toHaveBeenCalledWith(
+        123,
+        "You're in a planning session, not a chat — /approve to scaffold the spec, or /clear to abandon it.",
+      );
+      expect(appendMock).not.toHaveBeenCalled();
+      expect(gitMock).not.toHaveBeenCalled();
     });
   });
 

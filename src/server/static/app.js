@@ -572,6 +572,19 @@
       setText(reviewEl, 'None', true);
     }
 
+    // Planning panel — an in-flight planning conversation shadows the chat
+    // path, so surfacing it here is what stops the cockpit from misleadingly
+    // reading "No active session" during a /plan conversation.
+    const planningEl = document.getElementById('planning-content');
+    if (planningEl) {
+      if (state.activePlanning) {
+        const p = state.activePlanning;
+        setText(planningEl, `${p.product} · ${p.status}`, false);
+      } else {
+        setText(planningEl, 'None', true);
+      }
+    }
+
     // Approvals panel: Phase 6 C2 — owned by fetchAndRenderApprovals()
     // below, which polls GET /api/approvals for row-level data. The
     // count-only summary from state.pendingApprovals is no longer rendered

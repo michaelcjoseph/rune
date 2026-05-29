@@ -1,4 +1,5 @@
 import { getSession, getSessionMessages, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
+import { describeActiveNonChatContext } from './active-context.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
@@ -23,7 +24,12 @@ export async function handleFreshFull(
 ): Promise<void> {
   const session = getSession(userId, transport);
   if (!session) {
-    await sender.send(userId, 'No active conversation to log.');
+    // No chat session — but the user may be in a planning/review/SR context
+    // that routes ahead of the chat path and never creates a chat Session.
+    // Point them at the right escape hatch instead of the misleading bare
+    // "No active conversation to log." that read as a bug.
+    const contextMsg = describeActiveNonChatContext(userId);
+    await sender.send(userId, contextMsg ?? 'No active conversation to log.');
     return;
   }
 
