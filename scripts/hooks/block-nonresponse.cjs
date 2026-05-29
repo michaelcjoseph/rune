@@ -13,10 +13,13 @@
  *   stdout : JSON { decision: "block", reason } to force a continuation,
  *            or nothing (exit 0) to allow the stop.
  *
- * Loop guard: when `stop_hook_active` is true we are ALREADY continuing because
- * of a prior block from this hook. We do not block a second time — that caps
- * retries at one and prevents an infinite stop/continue loop. We still log the
- * repeat so a persistent non-responder is visible.
+ * Loop guard: we count CONSECUTIVE non-responses per session in a small state
+ * file and block at most MAX_BLOCKS times before giving up. This bounds the
+ * stop/continue loop (no infinite retry) while still forcing a stubborn
+ * non-responder to continue more than once. `stop_hook_active` alone can't do
+ * this — it's a boolean (in a continuation or not), not a count. A real
+ * response clears the session's counter so the next streak starts fresh. We
+ * still log every give-up so a persistent non-responder is visible.
  *
  * This is a NECESSARY-not-SUFFICIENT check: it guarantees a real message is
  * emitted; it cannot verify the message is true. "Said done but wasn't" is a
@@ -28,6 +31,15 @@
 const fs = require('fs');
 
 const AUDIT_LOG = '/Users/jarvis/workspace/jarvis/logs/hook-nonresponse.jsonl';
+
+// Consecutive-non-response counts per session, persisted across hook firings so
+// the cap can span multiple turns. The Stop hook is a fresh process each time,
+// so an in-memory counter would always read 1.
+const STATE_FILE = '/Users/jarvis/workspace/jarvis/logs/hook-nonresponse-state.json';
+
+// Max forced continuations before we let a non-response through. Raising this
+// catches repeat-offender turns at the cost of a longer worst-case loop.
+const MAX_BLOCKS = 2;
 
 /** Normalize a message to its alphanumeric skeleton for exact denylist match.
  *  "No response requested." -> "noresponserequested". Exact-equality match (not
@@ -57,6 +69,24 @@ function audit(record) {
     fs.appendFileSync(AUDIT_LOG, JSON.stringify(record) + '\n');
   } catch {
     // Audit is best-effort — never let a logging failure break the hook.
+  }
+}
+
+/** Read the per-session consecutive-non-response counter map. Missing/corrupt
+ *  file → empty map (fail open: under-count rather than wedge). */
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeState(state) {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state));
+  } catch {
+    // Best-effort — a write failure just means the next firing under-counts.
   }
 }
 
@@ -170,27 +200,44 @@ function main() {
   }
 
   const isNonResponse = text === '' || DENYLIST.has(normalize(text));
+  const state = readState();
+  const key = input.session_id || 'default';
 
   if (!isNonResponse) {
+    // Real message: clear this session's streak so the next one starts fresh.
+    if (state[key]) {
+      delete state[key];
+      writeState(state);
+    }
     process.exit(0); // normal path: real message, allow the stop silently
   }
 
-  // One-retry cap: if we already forced a continuation and STILL got a
-  // non-response, let the turn end but log it loudly.
-  if (input.stop_hook_active) {
+  // Non-response. Count it against this session's consecutive streak.
+  const attempt = (state[key] || 0) + 1;
+
+  // Cap reached: we already forced MAX_BLOCKS continuations and STILL got a
+  // non-response. Let the turn end, reset the streak, and log it loudly.
+  if (attempt > MAX_BLOCKS) {
+    delete state[key];
+    writeState(state);
     audit({
       ts,
       action: 'allow-after-retry',
-      reason: 'non-response persisted after one block',
+      reason: `non-response persisted after ${MAX_BLOCKS} blocks`,
       sample: text.slice(0, 80),
       session: input.session_id,
     });
     process.exit(0);
   }
 
+  state[key] = attempt;
+  writeState(state);
+
   audit({
     ts,
     action: 'block',
+    attempt,
+    maxBlocks: MAX_BLOCKS,
     sample: text.slice(0, 80),
     session: input.session_id,
   });
