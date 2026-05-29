@@ -72,6 +72,16 @@ function lastAssistantText(transcriptPath) {
     return null; // can't read — fail open (see main)
   }
   const lines = raw.split('\n').filter(Boolean);
+  // A single assistant turn is written as MULTIPLE JSONL entries — a
+  // thinking-only entry, a text entry, a tool_use entry — each on its own
+  // line. Trusting only the last assistant entry false-positives when the turn
+  // ends on a thinking- or tool_use-only block (textlen 0) even though earlier
+  // entries in the SAME turn carried real prose. So accumulate text across all
+  // assistant entries in the current turn, scanning back only to the turn
+  // boundary: a genuine user prompt (string content), NOT a tool_result entry
+  // (user-role entries whose content is a tool_result array — those are
+  // intra-turn, not a new human message).
+  const parts = [];
   for (let i = lines.length - 1; i >= 0; i--) {
     let entry;
     try {
@@ -79,19 +89,30 @@ function lastAssistantText(transcriptPath) {
     } catch {
       continue;
     }
+    if (entry.type === 'user' && entry.message) {
+      const c = entry.message.content;
+      // A real human turn boundary: plain string, or an array with no
+      // tool_result block. Tool-result carrier entries are intra-turn — skip.
+      const isToolResult =
+        Array.isArray(c) && c.some((b) => b && b.type === 'tool_result');
+      if (!isToolResult) break;
+      continue;
+    }
     if (entry.type !== 'assistant' || !entry.message) continue;
     const content = entry.message.content;
-    if (typeof content === 'string') return content.trim();
-    if (Array.isArray(content)) {
-      return content
+    if (typeof content === 'string') {
+      if (content.trim()) parts.push(content.trim());
+    } else if (Array.isArray(content)) {
+      const text = content
         .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
         .map((b) => b.text)
         .join('')
         .trim();
+      if (text) parts.push(text);
     }
-    return '';
   }
-  return '';
+  // parts is newest-first; order doesn't matter for the empty/denylist check.
+  return parts.join('\n').trim();
 }
 
 function readStdin() {
