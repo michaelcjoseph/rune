@@ -6,12 +6,39 @@ below it.
 
 ## User-authored
 
-- Expand cockpit → 09-expand-cockpit
-  - Make bugs and ideas for each product visible in the cockpit. 
-  - Add a "plan" button next to each idea, which kicks off a planning session to create a project with spec, task list and test plan.
-  - Add a "fix" button next to each bug, which does an interview as well for context generation, spings up the coding agent planning mode, and executes the fix.
-  - Each bug or idea gets turned into a project and follows the normal planning session.
-  - Add a "+" button next to "bugs" and "ideas" to easily add a new item.
+- Better agentic systems
+  - agents
+    - product spec planning agent
+      - adversarial interviewer
+      - drafts product spec, self critiques using multiple models and fixes
+      - should be human readable
+    - tech spec planning agent
+      - converts product spec into tech spec
+      - named modules with file paths
+      - explicit non-goals
+      - dependency list
+      - drafts product spec, self critiques using multiple models and fixes
+    - tasks planning agent
+      - break down tech spec into a task list
+      - tasks should be as small as possible but still meaningful enough to be a commit
+    - test plan planning agent
+      - break down tech spec into a test plan
+    - project wrap up agent
+      - update projects index with final outcome of project
+      - update agent memory
+  - memory
+    - agent lessons
+      - track things the agent learned from mistakes / behaviors that had to be corrected so that they are not done again
+    - decision log
+      - One entry per non-obvious decision, with the context, the options considered, the choice, and crucially the reasoning and any expiration condition
+      - The agents reads this before proposing approaches. Wrap-up agent proposes new entries based on what was decided mid-project.
+    - patterns and anti-patterns library
+    - gotchas registry
+      - one liners are useful tidbits to keep in mind
+    - architecture docs
+    - glossary
+    - product spec template
+    - tech spec template
 - Work-run visibility in cockpit
   - Stream the last N lines of agent output for active `/work` runs in the project card.
   - Surface the current step or phase the agent is on.
