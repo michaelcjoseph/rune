@@ -12,8 +12,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the suite for the stream-json adapter, transcript persistence (backpressure + awaited `finish`), and redaction — test-plan.md §1.
-- [ ] Confirm red before implementation.
+- [x] Write the suite for the stream-json adapter, transcript persistence (backpressure + awaited `finish`), and redaction — test-plan.md §1.
+- [x] Confirm red before implementation.
 
 ### Stream spawn + convert
 
