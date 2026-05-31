@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendMutationLine } from '../jobs/mutations-log.js';
 import { upsertRun } from '../jobs/supervision-store.js';
+import { applyOutcomeToDescriptor, type WorkOutcome, type WorkProductFacts } from '../jobs/work-run-classify.js';
 import { type SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
 import config from '../config.js';
@@ -87,6 +88,15 @@ export interface MutationDescriptor<P = Record<string, unknown>> {
   createdAt: string;
   status: MutationStatus;
   error?: string;
+  /**
+   * Work-run terminal verdict (project 11), distinct from `status` (which stays
+   * within its fixed enum). Copied off the terminal MutationEvent by
+   * `applyOutcomeToDescriptor` in `startApply` before `appendMutationLine`, so
+   * the classification reaches mutations.jsonl / the cockpit / the index.
+   * Only work-run terminals populate these; other kinds leave them undefined.
+   */
+  outcome?: WorkOutcome;
+  workProduct?: WorkProductFacts;
 }
 
 export interface MutationEvent {
@@ -299,6 +309,15 @@ async function startApply(
         descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
         if (event.kind === 'failed' && event.data) {
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
+        }
+        // Copy the work-run verdict (outcome + workProduct) off the terminal
+        // event onto the descriptor BEFORE persisting — otherwise the
+        // classification is dropped here and never reaches mutations.jsonl, the
+        // cockpit, Telegram, the index, or GC. Gated on `kind` so the
+        // work-run-specific stamping is explicit at the call site (the helper is
+        // also a guarded no-op for terminals that carry no outcome).
+        if (descriptor.kind === 'work-run') {
+          applyOutcomeToDescriptor(descriptor, event);
         }
         appendMutationLine(descriptor);
         safeUpsertRun(

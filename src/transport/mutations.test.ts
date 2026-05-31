@@ -480,6 +480,99 @@ describe('mutations', () => {
       }
     });
 
+    it('copies outcome + workProduct from a work-run terminal event onto the descriptor before persist', async () => {
+      // Project 11 Phase 2: the work-product classification rides on the
+      // terminal event's `data.outcome` / `data.workProduct`. startApply must
+      // copy them onto the descriptor BEFORE appendMutationLine, or the verdict
+      // is dropped on persist and never reaches mutations.jsonl / the cockpit.
+      const workProduct = {
+        commitCount: 0,
+        commitShas: [],
+        filesChanged: [],
+        diffstat: '',
+        dirty: false,
+        untracked: false,
+        transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+      };
+      async function* outcomeGen(): AsyncIterable<any> {
+        yield {
+          mutationId: 'x',
+          ts: new Date().toISOString(),
+          kind: 'completed',
+          data: { outcome: 'noop', reason: 'no commits, clean tree', workProduct },
+        };
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: outcomeGen(),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+
+      await waitForUpserts(3);
+
+      // The descriptor carries the verdict…
+      expect(descriptor.outcome).toBe('noop');
+      expect(descriptor.workProduct).toEqual(workProduct);
+      // status stays within its enum (verdict rides on `outcome`, not status).
+      expect(descriptor.status).toBe('completed');
+
+      // …and the terminal appendMutationLine saw it (copied BEFORE persist).
+      const terminalCall = mockAppendMutationLine.mock.calls.find(
+        (c) => (c[0] as { status: string }).status === 'completed',
+      );
+      expect(terminalCall).toBeDefined();
+      expect((terminalCall![0] as { outcome?: string }).outcome).toBe('noop');
+    });
+
+    it('copies outcome:failed off a failed terminal event onto the descriptor', async () => {
+      async function* failedOutcomeGen(): AsyncIterable<any> {
+        yield {
+          mutationId: 'x',
+          ts: new Date().toISOString(),
+          kind: 'failed',
+          data: { outcome: 'failed', reason: 'exited with code 1' },
+        };
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: failedOutcomeGen(),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+
+      await waitForUpserts(3);
+      expect(descriptor.outcome).toBe('failed');
+      expect(descriptor.status).toBe('failed');
+    });
+
+    it('leaves descriptor.outcome undefined when the terminal event carries no outcome (non-work-run)', async () => {
+      // A terminal event with no outcome (e.g. a gen-eval-loop or a legacy
+      // applier) must not gain a spurious outcome field.
+      const applier = makeApplier({
+        kind: 'gen-eval-loop',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: completedGen('x'),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('gen-eval-loop', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+
+      await waitForUpserts(3);
+      expect(descriptor.outcome).toBeUndefined();
+      expect(descriptor.workProduct).toBeUndefined();
+    });
+
     it('an applier crash (thrown error) flips the SupervisedRun to "failed"', async () => {
       async function* throwingGen(): AsyncIterable<any> {
         yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'starting' } };

@@ -91,14 +91,6 @@ export interface ClassifyResult {
   reason: string;
 }
 
-/** Phase 2 adds these to `MutationDescriptor`; declared here as the contract
- *  the implementation task will graft on, so the copy helper can be typed and
- *  tested without editing `mutations.ts` in the test-first task. */
-export interface WorkRunOutcomeFields {
-  outcome?: WorkOutcome;
-  workProduct?: WorkProductFacts;
-}
-
 /**
  * Parse a tasks.md body into checkbox records. Non-checkbox lines are ignored.
  * `[x]` and `[X]` both parse as checked.
@@ -192,7 +184,13 @@ export async function computeWorkProduct(opts: ComputeWorkProductOpts): Promise<
   const commitCount = commitShas.length; // === `rev-list --count`, without the extra call
 
   const statOut = await runGit(['diff', '--stat', range], { cwd });
-  const diffstat = statOut.stdout.trim().slice(0, DIFFSTAT_MAX_CHARS);
+  // Scrub host-absolute paths before slicing: `diffstat` + `filesChanged` ride
+  // on `workProduct` into mutations.jsonl and onto the bus (Telegram/cockpit),
+  // so any absolute path git emits (submodule/config anomaly) must not leak the
+  // host username. Normal `--stat` output is repo-relative, so this is a no-op
+  // in the common case. Scrub before slice so a path at the cap boundary is
+  // fully scrubbed.
+  const diffstat = scrubPathsInText(statOut.stdout.trim()).slice(0, DIFFSTAT_MAX_CHARS);
   // Per-file lines in --stat look like `path | 12 ++--`; the summary line
   // (`N files changed`) has no `|`, so filter on it.
   const filesChanged = diffstat
@@ -321,7 +319,7 @@ export async function finalizeWorkRun(deps: FinalizeWorkRunDeps): Promise<Mutati
  * mutations.jsonl, the cockpit, Telegram, the index, or GC.
  */
 export function applyOutcomeToDescriptor(
-  descriptor: MutationDescriptor & WorkRunOutcomeFields,
+  descriptor: MutationDescriptor,
   event: MutationEvent,
 ): void {
   const data = (event.data ?? {}) as Record<string, unknown>;

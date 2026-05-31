@@ -46,7 +46,6 @@ import type {
   WorkProductFacts,
   ClassifyFacts,
   TaskTransitions,
-  WorkRunOutcomeFields,
 } from './work-run-classify.js';
 import type { MutationDescriptor, MutationEvent } from '../transport/mutations.js';
 
@@ -125,7 +124,7 @@ function makeRunGitStub(responses: Record<string, { stdout: string; stderr: stri
 }
 
 /** Minimal MutationDescriptor factory. */
-function makeDescriptor(overrides: Partial<MutationDescriptor & WorkRunOutcomeFields> = {}): MutationDescriptor & WorkRunOutcomeFields {
+function makeDescriptor(overrides: Partial<MutationDescriptor> = {}): MutationDescriptor {
   return {
     id: 'mut-test-001',
     kind: 'work-run',

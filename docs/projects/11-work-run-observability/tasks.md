@@ -49,7 +49,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Persist
 
 - [x] Flush transcript + atomically (temp-then-rename) write `summary.json` before the terminal event.
-- [ ] Add `outcome` + `workProduct` to `MutationDescriptor`; copy them in `startApply`'s terminal write before `appendMutationLine`.
+- [x] Add `outcome` + `workProduct` to `MutationDescriptor`; copy them in `startApply`'s terminal write before `appendMutationLine`.
 - [ ] Make `telegram-sender` / `app.js` / `mutations-log` outcome-aware; append a torn-line-tolerant row to `logs/work-runs/index.jsonl`.
 
 ## Phase 3 — Branch & forensic retention
