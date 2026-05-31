@@ -32,8 +32,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the pure `classifyOutcome(facts)` fixture suite (rules 3-7), the exit-fact handoff test, the `baseSha` diff-base test, the crash-mid-forensics test (one terminal event still fires), the outcome-survives-persistence test, and the atomic `summary.json` + torn-line `index.jsonl` tests — test-plan.md §2.
-- [ ] Confirm red before implementation.
+- [x] Write the pure `classifyOutcome(facts)` fixture suite (rules 3-7), the exit-fact handoff test, the `baseSha` diff-base test, the crash-mid-forensics test (one terminal event still fires), the outcome-survives-persistence test, and the atomic `summary.json` + torn-line `index.jsonl` tests — test-plan.md §2.
+- [x] Confirm red before implementation.
 
 ### Baseline + exit facts
 
