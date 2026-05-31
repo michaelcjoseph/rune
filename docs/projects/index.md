@@ -16,6 +16,7 @@ its `spec.md`.
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Move Jarvis identity out of pkms; compile CLAUDE.md/AGENTS.md from a canonical instruction source per repo across jarvis, pkms, aura, assay, relay. |
+| [12-work-run-observability](12-work-run-observability/spec.md) | Not Started | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 
 ---
 
@@ -146,3 +147,18 @@ Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler t
 - **Drift detection:** CI authoritative where present (`--check` mode); pre-commit optional. Repos without CI are explicitly best-effort.
 - **Migration:** each repo's pre-migration instruction files snapshotted into `snapshots/` permanently as an audit artifact. `ownership.md` doubles as a behavior inventory; per-row fragment-existence assertions plus reviewer sign-off on semantic preservation.
 - **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md). Test-first per phase.
+
+## 12-work-run-observability — Not Started
+
+[Spec](12-work-run-observability/spec.md)
+
+Make `/work --auto` runs observable, verifiable, and reconstructable end to end.
+
+Two runs on project 10 (2026-05-30) exited clean, did nothing, and were still reported `completed` — with no trail to diagnose why. This project classifies the terminal state on the actual work product, persists the full event stream durably, retains the run branch and uncommitted evidence, surfaces truthful outcomes on the cockpit card, and alerts on the moments that matter. It does not change how `/work` executes.
+
+- **Outcome over exit code:** classify on commits (`baseSha..branch`), `tasks.md` transitions, and working-tree state into `branch-complete | partial | noop | dirty-uncommitted | failed` — a distinct `outcome` field separate from the `MutationStatus` enum, so a no-op never reads as success.
+- **Durable transcript:** spawn with `--output-format stream-json --verbose`; persist every event to `logs/work-runs/<id>/transcript.jsonl` via a backpressure-aware stream, independent of any open drawer.
+- **Forensics + GC:** export a `git bundle` plus status/diff/untracked evidence before teardown; always destroy the single-occupant worktree; GC by count and bytes with an active-run protected set.
+- **Alerts + cockpit:** failure / noop / dirty / partial / branch-complete alerts with an outcome summary, commit-driven progress, and a distinct quiet-run nudge; cockpit card shows live output, elapsed, outcome, and a transcript link.
+- **Provenance:** three review rounds (Codex grounded ×2 + a Claude pass that empirically verified the git and `claude -p` stream-json behaviors). Pause detection, phase display, and a restart button were considered and cut.
+- **Task breakdown & test plan:** see [tasks.md](12-work-run-observability/tasks.md) and [test-plan.md](12-work-run-observability/test-plan.md). Test-first per phase.
