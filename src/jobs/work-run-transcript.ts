@@ -19,19 +19,21 @@
  *                               backpressure handling and an awaited `finish`,
  *                               independent of cockpit drawer state.
  *
- * SCAFFOLD: signatures and types are settled here so the Phase 1 test suite
- * (`work-run-transcript.test.ts`) can pin the contract test-first. The adapter
- * pair (`parseStreamJsonLine` / `streamJsonToDisplay`) is implemented by the
- * "Stream spawn + convert" task; `redactSecrets`, `createRingBuffer`, and
- * `createTranscriptSink` are filled in by the "Durable sink" task. Until each
- * lands, its tests are red by design.
+ * Phase 1 is complete: the adapter pair (`parseStreamJsonLine` /
+ * `streamJsonToDisplay`) and the durable sink trio (`redactSecrets`,
+ * `createRingBuffer`, `createTranscriptSink`) are all implemented. Phase 2
+ * wires the sink + ring buffer into `work-runner`'s stream loop and adds
+ * classification/forensics around it.
  */
 
 // NOTE: `tool-labels.ts` imports `../config.js`, which throws on missing env
 // at import time — so any unit test loading this module must mock `config.js`
 // (see work-run-transcript.test.ts). Kept here for the canonical activity-label
 // formatter (`formatToolUse`) and path scrubbing (`scrubPathsInText`).
+import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
+import { join } from 'node:path';
 import { formatToolUse, scrubPathsInText } from '../ai/tool-labels.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
 
 /** A parsed `--output-format stream-json` envelope. The CLI emits one JSON
  *  object per line; common `type`s are `system`, `assistant`, `user`, and
@@ -68,6 +70,10 @@ export interface TranscriptSink {
   /** End the stream and resolve only after its `finish` event — i.e. after all
    *  buffered writes have flushed to disk. */
   finish(): Promise<void>;
+  /** Force-close the underlying stream without waiting for a flush. Idempotent
+   *  and non-throwing — the crash path (run dies before `finish()`) calls this
+   *  in a `finally` so the fd never leaks. After destroy, `append()` rejects. */
+  destroy(): void;
 }
 
 export interface CreateTranscriptSinkOptions {
@@ -77,12 +83,10 @@ export interface CreateTranscriptSinkOptions {
    *  escape `baseDir`. */
   runId: string;
   /** Base directory under which the per-run dir is created (production:
-   *  `logs/work-runs`). Injected so tests can target a tmpdir. */
+   *  `logs/work-runs`). Injected so tests can target a tmpdir. MUST be a
+   *  trusted path (a config/constant), never derived from user input —
+   *  `runId` is slug-validated, but `baseDir` is joined verbatim. */
   baseDir: string;
-}
-
-function notImplemented(fn: string): never {
-  throw new Error(`work-run-transcript: ${fn} not implemented (project 11 Phase 1 pending)`);
 }
 
 /**
@@ -91,8 +95,30 @@ function notImplemented(fn: string): never {
  * bearer tokens, and common API-key prefixes. Best-effort, not a guarantee —
  * the primary protection is gitignore + the authenticated route.
  */
-export function redactSecrets(_text: string): string {
-  notImplemented('redactSecrets');
+const REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Credential-bearing URLs: https://user:pass@host -> https://<redacted>@host
+  [/(https?:\/\/)[^\s/@]+@/gi, '$1<redacted>@'],
+  // Authorization: Bearer <token> (hyphen first in the class to avoid an
+  // ambiguous range)
+  [/\bBearer\s+[-A-Za-z0-9._~+/=]+/gi, 'Bearer <redacted>'],
+  // Common API-key prefixes (sk-, sk-proj-, …)
+  [/\bsk-[A-Za-z0-9_-]{6,}/g, 'sk-<redacted>'],
+  // Telegram bot token (numeric_id:35-char secret) — Jarvis's highest-value
+  // secret; the backstop if a sandbox ever echoes its environment.
+  [/\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g, '<tg-token-redacted>'],
+  // GitHub tokens (PAT/OAuth/app) — most likely to appear via a git remote URL.
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b/g, '<gh-token-redacted>'],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, '<gh-token-redacted>'],
+  // AWS access key id.
+  [/\bAKIA[A-Z0-9]{16}\b/g, '<aws-key-redacted>'],
+  // JWT (incl. bare ones not prefixed with Bearer, e.g. LENNY_MCP_TOKEN).
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<jwt-redacted>'],
+];
+
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const [re, repl] of REDACTIONS) out = out.replace(re, repl);
+  return out;
 }
 
 /**
@@ -164,8 +190,22 @@ export function streamJsonToDisplay(envelope: StreamJsonEnvelope): string | null
  * Create a bounded ring buffer that keeps only the most recent `capacity`
  * items.
  */
-export function createRingBuffer<T>(_capacity: number): RingBuffer<T> {
-  notImplemented('createRingBuffer');
+export function createRingBuffer<T>(capacity: number): RingBuffer<T> {
+  if (!Number.isInteger(capacity) || capacity < 1) {
+    throw new Error(`createRingBuffer: capacity must be an integer ≥ 1, got ${String(capacity)}`);
+  }
+  const buf: T[] = [];
+  return {
+    capacity,
+    push(item: T): void {
+      buf.push(item);
+      if (buf.length > capacity) buf.shift();
+    },
+    // Fresh snapshot each call — callers may retain it across later pushes.
+    items(): T[] {
+      return buf.slice();
+    },
+  };
 }
 
 /**
@@ -173,6 +213,71 @@ export function createRingBuffer<T>(_capacity: number): RingBuffer<T> {
  * `<baseDir>/<runId>/transcript.jsonl`. The per-run directory is created if
  * absent.
  */
-export function createTranscriptSink(_opts: CreateTranscriptSinkOptions): TranscriptSink {
-  notImplemented('createTranscriptSink');
+export function createTranscriptSink(opts: CreateTranscriptSinkOptions): TranscriptSink {
+  const { runId, baseDir } = opts;
+  // Validate BEFORE any fs call: runId becomes a directory name, so a
+  // traversal id (`../escape`, `a/b`) must never let the transcript escape
+  // baseDir. VALID_SLUG is the project-wide boundary guard for this.
+  if (!VALID_SLUG.test(runId)) {
+    throw new Error(`createTranscriptSink: invalid runId (must be a slug): ${runId}`);
+  }
+
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'transcript.jsonl');
+  const stream: WriteStream = createWriteStream(path, { flags: 'a' });
+
+  // fs.WriteStream emits 'error' independently of the per-write callback (async
+  // open failure, disk full, EACCES). An unhandled 'error' event would crash
+  // the process, so capture it from the moment the stream exists; append() and
+  // finish() surface it instead of relying on a per-call listener.
+  let streamError: Error | null = null;
+  stream.on('error', (err: Error) => { streamError = err; });
+
+  let destroyed = false;
+
+  return {
+    path,
+    append(event: unknown): Promise<void> {
+      if (streamError) return Promise.reject(streamError);
+      if (destroyed) return Promise.reject(new Error('createTranscriptSink: append after destroy'));
+      // Redact secrets before persistence (best-effort), then write one JSONL
+      // line. Resolve from the write callback — it fires once the chunk has
+      // flushed (or errored), which subsumes backpressure (a caller awaiting
+      // append() never outruns the sink) without the double-settle hazard of a
+      // separate drain path, and rejects cleanly on a write error.
+      const line = redactSecrets(JSON.stringify(event)) + '\n';
+      return new Promise<void>((resolve, reject) => {
+        stream.write(line, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    },
+    finish(): Promise<void> {
+      // Resolve only after the stream's `finish` — all buffered writes have
+      // flushed to disk — so callers can safely write summary.json / emit the
+      // terminal event after this resolves. A pre-existing or end-time error
+      // rejects rather than hanging (end()'s callback never fires on error).
+      if (streamError) return Promise.reject(streamError);
+      if (destroyed) return Promise.reject(new Error('createTranscriptSink: finish after destroy'));
+      return new Promise<void>((resolve, reject) => {
+        const onErr = (err: Error) => reject(err);
+        // 'finish' is the canonical "all data flushed" signal; resolve on it
+        // rather than the end() callback to avoid any ordering ambiguity with
+        // the persistent error listener.
+        stream.once('finish', () => {
+          stream.removeListener('error', onErr);
+          resolve();
+        });
+        stream.once('error', onErr);
+        stream.end();
+      });
+    },
+    destroy(): void {
+      if (destroyed) return;
+      destroyed = true;
+      stream.destroy();
+    },
+  };
 }

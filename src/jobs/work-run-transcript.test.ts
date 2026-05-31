@@ -195,6 +195,18 @@ describe('TranscriptSink — persistence', () => {
       }
     },
   );
+
+  it('destroy() is idempotent and append after destroy rejects (crash-path cleanup)', async () => {
+    const sink: TranscriptSink = createTranscriptSink({ runId: 'run-destroy-01', baseDir: tmpDir });
+    expect(() => {
+      sink.destroy();
+      sink.destroy();
+    }).not.toThrow();
+    await expect(sink.append({ type: 'assistant', text: 'too late' })).rejects.toThrow();
+    // finish() after destroy must reject, not hang (end() never fires its
+    // callback on a destroyed stream).
+    await expect(sink.finish()).rejects.toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -244,6 +256,12 @@ describe('createRingBuffer', () => {
     expect(items).toHaveLength(3);
     expect(items).toEqual(['err-a', 'err-b', 'err-c']);
     expect(stderrTail.capacity).toBe(CAPACITY);
+  });
+
+  it('throws on a non-positive or non-integer capacity', () => {
+    expect(() => createRingBuffer<string>(0)).toThrow();
+    expect(() => createRingBuffer<string>(-1)).toThrow();
+    expect(() => createRingBuffer<string>(1.5)).toThrow();
   });
 
   it('capacity-1 ring retains only the most recent item (boundary)', () => {
@@ -394,6 +412,18 @@ describe('redactSecrets', () => {
       expect(result).not.toContain('sk-projXXXXXXXXXXXXXXXXXXXXXXXX');
     },
   );
+
+  it('redacts a Telegram bot token (numeric_id:35-char secret)', () => {
+    const token = `123456789:${'a'.repeat(35)}`;
+    const result = redactSecrets(`config: ${token}`);
+    expect(result).not.toContain(token);
+  });
+
+  it('redacts a GitHub personal-access token (ghp_…)', () => {
+    const token = `ghp_${'A'.repeat(36)}`;
+    const result = redactSecrets(`remote https://${token}@github.com/x.git`);
+    expect(result).not.toContain(token);
+  });
 
   it('leaves ordinary text unchanged', () => {
     const safe = 'Running tests in src/jobs/work-runner.ts — no secrets here.';

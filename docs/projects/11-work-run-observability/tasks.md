@@ -22,9 +22,9 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Durable sink
 
-- [ ] Per-run `WriteStream` to `logs/work-runs/<id>/transcript.jsonl` with backpressure handling, independent of drawer state; await `finish` on terminate.
-- [ ] Maintain a bounded last-N stdout ring buffer and stderr tail on the run record.
-- [ ] Best-effort secret/token redaction on persisted events.
+- [x] Per-run `WriteStream` to `logs/work-runs/<id>/transcript.jsonl` with backpressure handling, independent of drawer state; await `finish` on terminate.
+- [x] Maintain a bounded last-N stdout ring buffer and stderr tail on the run record.
+- [x] Best-effort secret/token redaction on persisted events.
 
 ## Phase 2 — Terminal classification + run store
 
