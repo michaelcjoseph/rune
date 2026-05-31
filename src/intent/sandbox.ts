@@ -32,6 +32,11 @@ export interface SandboxSpec {
   worktree: string;
   /** Hosts the run may make network egress to; anything else is denied. */
   egressAllowlist: string[];
+  /** The commit the run's branch was cut from — the stable diff base
+   *  (`baseSha..branch`) for work-product computation. Set by `createWorktree`
+   *  when a branch is created (captured atomically with the branch point so a
+   *  moving `HEAD` can't change it); absent for base-branch-tracking worktrees. */
+  baseSha?: string;
 }
 
 /**

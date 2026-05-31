@@ -109,6 +109,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     let sandbox: SandboxSpec | null = null;
     try {
       try {
+        // createWorktree resolves HEAD atomically and returns it on
+        // sandbox.baseSha — the stable diff base (baseSha..branch) the Phase 2
+        // classifier will compute work product against. Captured here; consumed
+        // once the work-product/classify step lands.
         sandbox = await createWorktree({
           product,
           project: projectSlug,

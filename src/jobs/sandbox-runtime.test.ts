@@ -277,7 +277,11 @@ describe('createWorktree', () => {
 
   it('with explicit branch: passes -b <branch> before the worktree path (canonical form)', async () => {
     const configPath = writeProductsJson(tmpDir);
-    const runGit = makeRunGit();
+    // A branch request resolves HEAD first; give rev-parse a sha so the
+    // capture succeeds (empty stdout now throws by design).
+    const runGit = vi.fn<GitRunner>(async (args: string[]) =>
+      args.includes('rev-parse') ? { stdout: 'headsha123\n', stderr: '' } : { stdout: '', stderr: '' },
+    );
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
 
     await createWorktree({
@@ -289,7 +293,10 @@ describe('createWorktree', () => {
       runGit,
     });
 
-    const [calledArgs] = runGit.mock.calls[0]!;
+    // A branch request now also resolves HEAD first (rev-parse), so locate the
+    // worktree-add call explicitly rather than assuming it is call 0.
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    const calledArgs = addCall[0];
     expect(calledArgs).toContain('-b');
     expect(calledArgs).toContain('feature/my-branch');
     // Canonical git syntax — `[-b <new-branch>] <path>` — requires the flag
@@ -297,6 +304,91 @@ describe('createWorktree', () => {
     const pathIdx = calledArgs.indexOf(expectedPath);
     const flagIdx = calledArgs.indexOf('-b');
     expect(flagIdx).toBeLessThan(pathIdx);
+  });
+
+  it('with branch and no startPoint: resolves HEAD and branches from it; returns baseSha', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const headSha = 'deadbeefcafe1234567890';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args.includes('rev-parse')) return { stdout: `${headSha}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: 'jarvis-work/abc',
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // HEAD was resolved in the product repo (atomic capture + branch-point).
+    const revParse = runGit.mock.calls.find(c => c[0].includes('rev-parse'));
+    expect(revParse).toBeDefined();
+    expect(revParse![0]).toEqual(['rev-parse', 'HEAD']);
+    expect(revParse![1]?.cwd).toBe(FIXTURE_PRODUCTS.aura.repoPath);
+
+    // The worktree-add branched from the captured sha (start-point last).
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0][addCall[0].length - 1]).toBe(headSha);
+    // …and the resolved base sha is returned on the spec.
+    expect(spec.baseSha).toBe(headSha);
+  });
+
+  it('with branch: throws (mentioning the product repo) when rev-parse HEAD fails', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args.includes('rev-parse')) throw Object.assign(new Error('not a git repo'), { stderr: '' });
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        branch: 'jarvis-work/fail',
+        worktreeRoot: WORKTREE_ROOT,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(FIXTURE_PRODUCTS.aura.repoPath);
+  });
+
+  it('with branch: throws when rev-parse HEAD returns empty (repo with no commits)', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const runGit = makeRunGit(); // empty stdout for all calls
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        branch: 'jarvis-work/empty',
+        worktreeRoot: WORKTREE_ROOT,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(/empty|no commits/i);
+  });
+
+  it('with explicit startPoint: branches from it without resolving HEAD; returns it as baseSha', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const runGit = makeRunGit();
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: 'jarvis-work/xyz',
+      startPoint: 'abc1234base',
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // Caller supplied the base — no rev-parse needed.
+    expect(runGit.mock.calls.some(c => c[0].includes('rev-parse'))).toBe(false);
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).toContain('abc1234base');
+    expect(spec.baseSha).toBe('abc1234base');
   });
 
   it('throws a clear error when the product is unknown', async () => {

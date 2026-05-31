@@ -182,6 +182,9 @@ export interface LoopSpawners {
     product: string;
     project: string;
     branch?: string;
+    /** Explicit base commit; omitted here — the runner always branches from
+     *  createWorktree's atomic HEAD capture (baseSha is returned on the spec). */
+    startPoint?: string;
     worktreeRoot: string;
     productsConfigPath: string;
   }) => Promise<SandboxSpec>;

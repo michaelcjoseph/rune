@@ -173,6 +173,11 @@ export interface CreateWorktreeOpts {
   /** Branch to check out in the new worktree. When omitted, the product's
    *  `baseBranch` from products.json is used (worktree tracks that branch). */
   branch?: string;
+  /** Explicit commit to branch from. When a `branch` is requested and this is
+   *  omitted, `createWorktree` resolves `git rev-parse HEAD` of the product
+   *  repo itself so capture and branch-point are one atomic operation. The
+   *  resolved (or supplied) sha is returned on `SandboxSpec.baseSha`. */
+  startPoint?: string;
   worktreeRoot: string;
   productsConfigPath: string;
   runGit?: GitRunner;
@@ -210,10 +215,41 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     );
   }
 
+  // When branching, capture the base sha BEFORE the add so the branch point
+  // and the diff base are one stable value — a `HEAD` that moves after this
+  // can't change `baseSha..branch`. An explicit `startPoint` skips the resolve.
+  let baseSha: string | undefined;
+  if (opts.branch) {
+    baseSha = opts.startPoint?.trim() || undefined;
+    if (!baseSha) {
+      try {
+        const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd: product.repoPath });
+        baseSha = stdout.trim() || undefined;
+      } catch (err) {
+        const stderr = (err as { stderr?: string })?.stderr ?? '';
+        throw new Error(
+          `createWorktree: git rev-parse HEAD failed for ${product.repoPath}: ` +
+            `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+        );
+      }
+      // A repo that can host a run always has a HEAD commit — empty stdout means
+      // a misconfigured/empty repo. Fail loudly rather than silently branching
+      // with no base (which would leave the diff base undefined downstream).
+      if (!baseSha) {
+        throw new Error(
+          `createWorktree: git rev-parse HEAD returned empty for ${product.repoPath} ` +
+            `(repo has no commits?) — cannot capture a stable base sha`,
+        );
+      }
+    }
+  }
+
   // `git worktree add [-b <new-branch>] <path> [<commit-ish>]` — flag before
-  // path is the canonical form and what older git versions require.
+  // path is the canonical form and what older git versions require. The
+  // start-point (baseSha) goes last when branching from a captured commit.
+  // When branching, baseSha is guaranteed non-empty above (else we threw).
   const args: string[] = opts.branch
-    ? ['worktree', 'add', '-b', opts.branch, worktree]
+    ? ['worktree', 'add', '-b', opts.branch, worktree, baseSha!]
     : ['worktree', 'add', worktree, product.baseBranch];
 
   try {
@@ -231,6 +267,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     project: opts.project,
     worktree,
     egressAllowlist: product.egressAllowlist,
+    baseSha,
   };
 }
 
