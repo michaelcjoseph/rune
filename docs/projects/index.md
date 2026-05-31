@@ -150,7 +150,7 @@ Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler t
 
 ## 12-work-run-observability — Not Started
 
-[Spec](12-work-run-observability/spec.md)
+[Spec](11-work-run-observability/spec.md)
 
 Make `/work --auto` runs observable, verifiable, and reconstructable end to end.
 

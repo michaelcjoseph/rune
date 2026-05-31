@@ -10,14 +10,14 @@ below it.
   - agents
     - product spec planning agent
       - adversarial interviewer
-      - drafts product spec, self critiques using multiple models and fixes
+      - drafts product spec, self critiques using multiple models and fixes (multiple rounds of critique)
       - should be human readable
     - tech spec planning agent
       - converts product spec into tech spec
       - named modules with file paths
       - explicit non-goals
       - dependency list
-      - drafts product spec, self critiques using multiple models and fixes
+      - drafts product spec, self critiques using multiple models and fixes (multiple rounds of critique)
     - tasks planning agent
       - break down tech spec into a task list
       - tasks should be as small as possible but still meaningful enough to be a commit
