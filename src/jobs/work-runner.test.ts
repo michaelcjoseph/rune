@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 
@@ -43,6 +43,10 @@ vi.mock('../config.js', () => ({
     WORK_RUN_GLOBAL_CAP: 2,
     WORKSPACE_DIR: undefined,
     TELEGRAM_USER_ID: 42,
+    // Used by productionRuntimeDeps() (the seam __resetWorkRunRuntimeForTest
+    // restores between tests) so the restored object has a defined dir even
+    // though every test re-injects its own via __setWorkRunRuntimeForTest.
+    WORK_RUNS_DIR: '/tmp/test-work-runs',
   },
 }));
 
@@ -66,12 +70,16 @@ vi.mock('../ai/claude.js', () => ({
 
 // Mock sandbox-runtime: createWorktree/destroyWorktree return controllable
 // stubs. Tests assert on call args; production wires the real git worktree
-// lifecycle (`src/jobs/sandbox-runtime.ts`).
+// lifecycle (`src/jobs/sandbox-runtime.ts`). `defaultRunGit` is exported by the
+// real module and reused by work-runner's production deps — the mock provides a
+// no-op stand-in so a missing export can't crash module-eval (tests inject
+// their own git runner via the runtime seam regardless).
 const mockCreateWorktree = vi.fn();
 const mockDestroyWorktree = vi.fn();
 vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
+  defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 
 const FAKE_WORKTREE = '/test/worktrees/jarvis/06-webview';
@@ -81,13 +89,50 @@ function fakeSandboxSpec(overrides: Record<string, unknown> = {}) {
     project: '06-webview',
     worktree: FAKE_WORKTREE,
     egressAllowlist: [],
+    baseSha: 'basesha0000000000000000000000000000000000',
     ...overrides,
   };
 }
 
 // --- Dynamic imports after mocks ---
 
-const { workRunApplier } = await import('./work-runner.js');
+const {
+  workRunApplier,
+  __setWorkRunRuntimeForTest,
+  __resetWorkRunRuntimeForTest,
+} = await import('./work-runner.js');
+
+// --- Runtime-deps test doubles (Phase 2: classification + persist seam) ---
+
+/** A controllable GitRunner stub. Default responses classify a clean exit-0
+ *  run as `noop` (zero commits, clean tree), matching the prior exit-code
+ *  behavior most existing tests assert. Individual tests override per key. */
+function makeGitStub(responses: Record<string, { stdout: string; stderr: string }> = {}) {
+  const calls: Array<{ args: string[]; cwd?: string }> = [];
+  const stub = vi.fn(async (args: string[], opts?: { cwd?: string }) => {
+    calls.push({ args: [...args], cwd: opts?.cwd });
+    for (const [key, resp] of Object.entries(responses)) {
+      if (args.some(a => a.includes(key))) return resp;
+    }
+    return { stdout: '', stderr: '' };
+  });
+  return { stub, calls };
+}
+
+/** A fake transcript sink recording appends + a finish() spy, so tests can
+ *  assert flush-before-terminal ordering without a real WriteStream. */
+function makeFakeSink(path = '/tmp/work-runs/run/transcript.jsonl') {
+  const appended: unknown[] = [];
+  const finish = vi.fn(async () => {});
+  const destroy = vi.fn(() => {});
+  const sink = {
+    path,
+    append: vi.fn(async (event: unknown) => { appended.push(event); }),
+    finish,
+    destroy,
+  };
+  return { sink, appended, finish, destroy };
+}
 
 // --- Helpers ---
 
@@ -170,6 +215,12 @@ function setupValidProject(slug: string = '06-webview') {
 // --- Tests ---
 
 describe('workRunApplier', () => {
+  // Per-test handles on the injected persist seam so assertions can inspect
+  // what apply() wrote. Re-created in each beforeEach.
+  let writeSummarySpy: ReturnType<typeof vi.fn>;
+  let currentSink: ReturnType<typeof makeFakeSink>;
+  let gitStub: ReturnType<typeof makeGitStub>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks resets call history but NOT implementations — reset
@@ -183,6 +234,26 @@ describe('workRunApplier', () => {
     // throw) before invoking apply.
     mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec());
     mockDestroyWorktree.mockImplementation(async () => {});
+
+    // Inject the Phase 2 classification + persist seam with test doubles:
+    //  - git stub returns empty for every command → a clean exit-0 run
+    //    classifies `noop` (preserving the prior completed-on-0 behavior most
+    //    existing tests assert),
+    //  - createSink hands out a fresh fake sink (recorded on `currentSink`),
+    //  - writeSummary is a spy so persistence can be asserted without real fs.
+    writeSummarySpy = vi.fn();
+    gitStub = makeGitStub();
+    currentSink = makeFakeSink();
+    __setWorkRunRuntimeForTest({
+      runGit: gitStub.stub as never,
+      workRunsDir: '/tmp/test-work-runs',
+      createSink: () => currentSink.sink as never,
+      writeSummary: writeSummarySpy as never,
+    });
+  });
+
+  afterEach(() => {
+    __resetWorkRunRuntimeForTest();
   });
 
   describe('validate', () => {
@@ -664,8 +735,9 @@ describe('workRunApplier', () => {
       const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
       expect(terminals).toHaveLength(1);
       expect(terminals[0].kind).toBe('completed');
-      // The single terminal carries durationMs from the exit facts.
-      expect(typeof terminals[0].data.durationMs).toBe('number');
+      // The single terminal carries the exit facts (incl. durationMs) — the
+      // classified terminal nests the full ExitFacts blob under data.exit.
+      expect(typeof terminals[0].data.exit.durationMs).toBe('number');
     });
 
     it('spawns claude with --output-format stream-json --verbose', async () => {
@@ -750,6 +822,150 @@ describe('workRunApplier', () => {
       // The malformed line must NOT surface as a readable output line.
       const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
       expect(lines.some(l => l.includes('this is not valid json'))).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 2 line 51: classification + flush transcript + write summary.json
+  // before the terminal event (test-plan §2; spec requirements 8, 13).
+  // -------------------------------------------------------------------------
+  describe('apply — classification + persistence (Phase 2)', () => {
+    function descriptorFor(id: string) {
+      return {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+    }
+
+    it('the single terminal event carries a typed outcome on data', async () => {
+      // The terminal is now produced by the work-product classifier, not the
+      // bare exit code — so it must carry `data.outcome` (here `noop`, since the
+      // git stub reports zero commits + a clean tree).
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-outcome'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].kind).toBe('completed');
+      expect(terminals[0].data.outcome).toBe('noop');
+    });
+
+    it('classifies dirty-uncommitted when the tree is dirty with zero commits', async () => {
+      // git status --porcelain reports a modified file → dirty tree, no commits
+      // → dirty-uncommitted (the outcome that flags work left behind on the
+      // worktree). Proves the classifier reads the injected git, not exit code.
+      setupValidProject('06-webview');
+      gitStub.stub.mockImplementation(async (args: string[]) => {
+        if (args.includes('status') && args.includes('--porcelain')) {
+          return { stdout: ' M src/foo.ts\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-dirty'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.data.outcome).toBe('dirty-uncommitted');
+    });
+
+    it('writes summary.json (atomic store) before emitting the terminal event', async () => {
+      // Requirement 8/13: the transcript is flushed and summary.json is written
+      // BEFORE the terminal event fires. startApply persists + tears down on the
+      // terminal, so the artifacts must exist first.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      let summaryWrittenAtTerminal: boolean | undefined;
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-summary'), { bus: null as any, cancel: () => false })) {
+        if (event.kind === 'completed' || event.kind === 'failed') {
+          // Capture whether writeSummary had already been called by the moment
+          // the consumer receives the terminal event.
+          summaryWrittenAtTerminal = writeSummarySpy.mock.calls.length > 0;
+        }
+        events.push(event);
+      }
+
+      expect(writeSummarySpy).toHaveBeenCalledOnce();
+      expect(summaryWrittenAtTerminal).toBe(true);
+
+      // The summary carries the run identity + classified outcome.
+      const [dirArg, summaryArg] = writeSummarySpy.mock.calls[0]!;
+      expect(String(dirArg)).toContain('mut-summary');
+      expect(summaryArg.id).toBe('mut-summary');
+      expect(summaryArg.outcome).toBe('noop');
+      expect(summaryArg.project).toBe('06-webview');
+      expect(summaryArg.exit).toBeDefined();
+      expect(summaryArg.workProduct).toBeDefined();
+    });
+
+    it('flushes (awaits finish on) the transcript sink before the terminal event', async () => {
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      let finishedAtTerminal: boolean | undefined;
+      for await (const event of workRunApplier.apply(descriptorFor('mut-flush'), { bus: null as any, cancel: () => false })) {
+        if (event.kind === 'completed' || event.kind === 'failed') {
+          finishedAtTerminal = currentSink.finish.mock.calls.length > 0;
+        }
+      }
+
+      expect(currentSink.finish).toHaveBeenCalledOnce();
+      expect(finishedAtTerminal).toBe(true);
+    });
+
+    it('tees parsed stream-json envelopes to the durable transcript sink', async () => {
+      // Requirement 11: every stream event is appended to the per-run transcript
+      // independent of drawer state. The raw parsed envelope is teed (not the
+      // human-readable display line).
+      setupValidProject('06-webview');
+      const envelope = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hello' }] } });
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: [envelope] });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-tee'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(currentSink.sink.append).toHaveBeenCalled();
+      // The teed value is the parsed envelope object (type assistant), not a
+      // display string.
+      const firstAppend = currentSink.appended[0] as any;
+      expect(firstAppend.type).toBe('assistant');
+    });
+
+    it('still emits ONE terminal event when summary.json write throws (persist is best-effort)', async () => {
+      // Edge case: a disk failure on writeSummary must not deny the terminal
+      // event — the classification is the source of truth and must always reach
+      // the consumer.
+      setupValidProject('06-webview');
+      writeSummarySpy.mockImplementation(() => { throw new Error('ENOSPC: disk full'); });
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-summary-throw'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].data.outcome).toBe('noop');
     });
   });
 });

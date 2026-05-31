@@ -67,8 +67,10 @@ export type GitRunner = (
 // ---------------------------------------------------------------------------
 
 /** Default `runGit` — shells out to the real `git` CLI. Tests must inject
- *  their own stub; never call this directly from a test. */
-const defaultRunGit: GitRunner = async (args, opts) => {
+ *  their own stub; never call this directly from a test. Exported so other
+ *  runtime callers (e.g. `work-runner`'s work-product computation) reuse the
+ *  one execFile-based git runner instead of duplicating the wrapper. */
+export const defaultRunGit: GitRunner = async (args, opts) => {
   const result = await execFile('git', args, {
     ...(opts?.cwd ? { cwd: opts.cwd } : {}),
     // Cap a single git invocation so a hung process can't block the runtime.

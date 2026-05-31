@@ -183,6 +183,20 @@ const config = {
     return join(this.LOGS_DIR, 'dispatch-log.jsonl');
   },
 
+  /** Root directory for per-work-run durable artifacts (project 11). Each run
+   *  gets a `<id>/` subdir holding `transcript.jsonl`, `summary.json`, and
+   *  (Phase 3) forensics. Gitignored runtime state. */
+  get WORK_RUNS_DIR() {
+    return join(this.LOGS_DIR, 'work-runs');
+  },
+
+  /** Rolling recent-work-runs index (project 11) — one JSON row per terminated
+   *  run, appended by `src/jobs/work-runner.ts`, read torn-line-tolerantly by
+   *  `src/jobs/work-run-store.ts`'s `readRecentIndex`. */
+  get WORK_RUNS_INDEX_FILE() {
+    return join(this.WORK_RUNS_DIR, 'index.jsonl');
+  },
+
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
 

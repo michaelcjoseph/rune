@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
-import { createWorktree, destroyWorktree } from './sandbox-runtime.js';
-import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer } from './work-run-transcript.js';
-import type { ExitFacts } from './work-run-classify.js';
+import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, type TranscriptSink } from './work-run-transcript.js';
+import { computeWorkProduct, finalizeWorkRun, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
+import { writeSummary, type WorkRunSummary } from './work-run-store.js';
+import { scrubPathsInText } from '../ai/tool-labels.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
@@ -14,6 +16,66 @@ import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext }
 const log = createLogger('work-runner');
 
 const PROJECTS_SUBDIR = join('docs', 'projects');
+
+// ---------------------------------------------------------------------------
+// Classification + persist runtime seam
+// ---------------------------------------------------------------------------
+
+/**
+ * The git runner, durable-transcript factory, and run-store writer that
+ * `apply()` uses to compute work product and persist a run's artifacts. Held in
+ * a module-level holder so the unit suite can inject test doubles (no real git,
+ * no real `WriteStream`, no real fs) without threading params through the
+ * fixed `MutationApplier.apply` signature — mirroring gen-eval-loop's injectable
+ * `LoopSpawners`, adapted to a generator applier.
+ */
+export interface WorkRunRuntimeDeps {
+  /** Work-product git (`rev-list`/`diff`/`status`) — the same seam
+   *  createWorktree/destroyWorktree take. */
+  runGit: GitRunner;
+  /** Base dir for per-run artifacts (`<workRunsDir>/<id>/{transcript,summary}`). */
+  workRunsDir: string;
+  /** Build the per-run durable transcript sink, or null to disable persistence
+   *  (e.g. if the run dir can't be created). */
+  createSink: (runId: string, baseDir: string) => TranscriptSink | null;
+  /** Atomically write the run's `summary.json` into its per-run dir. */
+  writeSummary: (dir: string, summary: WorkRunSummary) => void;
+}
+
+/** Production defaults — real git, real config dir, real sink + store. */
+function productionRuntimeDeps(): WorkRunRuntimeDeps {
+  return {
+    runGit: defaultRunGit,
+    workRunsDir: config.WORK_RUNS_DIR,
+    createSink: (runId, baseDir) => createTranscriptSink({ runId, baseDir }),
+    writeSummary,
+  };
+}
+
+let runtimeDeps: WorkRunRuntimeDeps = productionRuntimeDeps();
+
+/** Test-only: override part of the classification/persist seam. */
+export function __setWorkRunRuntimeForTest(partial: Partial<WorkRunRuntimeDeps>): void {
+  runtimeDeps = { ...runtimeDeps, ...partial };
+}
+
+/** Test-only: restore the production seam after a test. */
+export function __resetWorkRunRuntimeForTest(): void {
+  runtimeDeps = productionRuntimeDeps();
+}
+
+/** Zero work-product blob — the `summary.json` fallback when classification
+ *  failed before facts were computed (the classification-error path), so the
+ *  summary still carries a well-typed `workProduct`. */
+const EMPTY_WORK_PRODUCT: WorkProductFacts = {
+  commitCount: 0,
+  commitShas: [],
+  filesChanged: [],
+  diffstat: '',
+  dirty: false,
+  untracked: false,
+  transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+};
 
 /** Find the absolute path for a project slug by scanning `<base>/docs/projects`.
  *  Used both during validate (against the live tree at PROJECT_ROOT) and during
@@ -102,12 +164,21 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
   async *apply(descriptor: MutationDescriptor<WorkRunPayload>, ctx: ApplyContext): AsyncIterable<MutationEvent> {
     const { projectSlug } = descriptor.payload;
     const product = descriptor.payload.product ?? 'jarvis';
+    // Snapshot the classification/persist seam once per run so every artifact
+    // path + git call reads a single consistent deps object (rather than
+    // re-reading the module-level `runtimeDeps`, which a concurrent test reset
+    // could swap mid-run).
+    const deps = runtimeDeps;
     // Deterministic per-mutation branch name, mirroring gen-eval-loop's
     // `jarvis-gen-eval/<short-id>` so the two run kinds are visually
     // distinguishable in `git branch` output.
     const branch = `jarvis-work/${descriptor.id.slice(0, 8)}`;
 
     let sandbox: SandboxSpec | null = null;
+    // Per-run durable transcript sink — created once the worktree exists, teed
+    // during the stream, flushed before the terminal event, destroyed in the
+    // outer finally (idempotent) so the fd never leaks on an abort.
+    let sink: TranscriptSink | null = null;
     try {
       try {
         // createWorktree resolves HEAD atomically and returns it on
@@ -158,6 +229,21 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       const prompt = `${specContent}${tasksContent ? `\n\n${tasksContent}` : ''}\n\n/work --auto`;
       const t0 = Date.now();
 
+      // Open the durable transcript sink before spawning so every stream-json
+      // envelope is teed to `<workRunsDir>/<id>/transcript.jsonl` regardless of
+      // whether a cockpit drawer is open (requirement 11). A sink-creation
+      // failure (e.g. the dir can't be made) must not abort the run — degrade
+      // to no durable transcript and keep going.
+      try {
+        sink = deps.createSink(descriptor.id, deps.workRunsDir);
+      } catch (err) {
+        log.warn('work-runner: transcript sink creation failed; run continues without a durable transcript', {
+          id: descriptor.id,
+          error: (err as Error).message,
+        });
+        sink = null;
+      }
+
       // cwd = sandbox.worktree (NOT PROJECT_ROOT) — the whole point of
       // Fix 1. Spawning into the live tree triggers tsx watch to SIGTERM
       // the parent when the agent edits Jarvis's own source files. The
@@ -193,7 +279,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // (output/log/keep-alive) and hands back the facts; apply() owns the
         // single terminal event. `it.return()` in finally propagates an early
         // consumer-abort into streamProcess's cleanup, matching `yield*`.
-        const it = streamProcess(child, descriptor.id, ctx, t0);
+        const it = streamProcess(child, descriptor.id, ctx, t0, sink);
         let step = await it.next();
         try {
           while (!step.done) {
@@ -212,19 +298,100 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // the finally above); the guard also narrows step.value to StreamResult.
         if (!step.done) throw new Error('work-runner: stream ended without exit facts');
         const streamResult = step.value;
-        // Phase 2 (next tasks) classifies on work product HERE — and MUST await
-        // finalizeWorkRun BEFORE this yield: startApply persists on the terminal
-        // event and the outer finally destroys the worktree immediately after,
-        // so the git reads must finish first. The stderr tail
-        // (streamResult.stderrTail) must be run through redactSecrets at the
-        // forensics-persistence boundary. Until then the terminal mirrors the
-        // prior exit-code behavior.
-        yield terminalFromExit(descriptor.id, streamResult.exit);
+
+        // Classify on the WORK PRODUCT (commits + tasks.md delta + tree state),
+        // not the exit code, and persist the run's artifacts BEFORE emitting the
+        // terminal event: startApply publishes/persists and the outer finally
+        // destroys the worktree the moment a terminal event is seen
+        // (mutations.ts), so the git reads + transcript flush + summary.json
+        // write must all complete first (requirements 8 & 13).
+        //
+        // The final tasks.md is the post-run (mutated) file in the worktree —
+        // NOT the in-memory baseline (`tasksContent`) captured at spawn.
+        let finalTasks = '';
+        try {
+          if (existsSync(tasksPath)) finalTasks = readFileSync(tasksPath, 'utf8');
+        } catch {
+          // tasks.md unreadable post-run — treat as empty (transitions fall back
+          // to commit count + tree state, per the spec's absent-tasks.md rule).
+        }
+
+        // Bind the worktree facts to consts: `sandbox` is a reassignable `let`,
+        // so TS widens it back to nullable inside the async `computeFacts`
+        // closure — but it is guaranteed non-null here (the create-failure path
+        // returned early above).
+        const worktreeDir = sandbox.worktree;
+        const baseSha = sandbox.baseSha ?? '';
+
+        const terminalEvent = await finalizeWorkRun({
+          mutationId: descriptor.id,
+          computeFacts: async () => ({
+            exit: streamResult.exit,
+            product: await computeWorkProduct({
+              runGit: deps.runGit,
+              cwd: worktreeDir,
+              baseSha,
+              branch,
+              baselineTasks: tasksContent,
+              finalTasks,
+            }),
+          }),
+          // Forensics export lands in Phase 3; a no-op keeps finalizeWorkRun's
+          // single-terminal contract intact today.
+          exportForensics: async () => {},
+        });
+
+        // Flush + await the durable transcript's `finish` so every buffered
+        // event is on disk before summary.json / the terminal event. A flush
+        // failure is logged (and surfaced via the stderr tail upstream) but
+        // never denies the terminal event.
+        if (sink) {
+          try {
+            await sink.finish();
+          } catch (err) {
+            log.warn('work-runner: transcript flush failed', {
+              id: descriptor.id,
+              error: (err as Error).message,
+            });
+          }
+        }
+
+        // Persist summary.json atomically (best-effort): a disk failure must not
+        // deny the terminal event, which is the classification's source of truth.
+        try {
+          deps.writeSummary(
+            join(deps.workRunsDir, descriptor.id),
+            buildSummary({
+              id: descriptor.id,
+              project: projectSlug,
+              product,
+              branch,
+              baseSha,
+              t0,
+              exit: streamResult.exit,
+              terminalEvent,
+              sink,
+              workRunsDir: deps.workRunsDir,
+            }),
+          );
+        } catch (err) {
+          log.warn('work-runner: writeSummary failed', {
+            id: descriptor.id,
+            error: (err as Error).message,
+          });
+        }
+
+        yield terminalEvent;
       } finally {
         unregisterActiveProcess(child);
         log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
       }
     } finally {
+      // Close the transcript fd. Idempotent and non-throwing: on the normal
+      // path finish() already flushed + ended the stream, so this is a no-op;
+      // on an abort path (run died before finalize) it frees the fd that
+      // finish() never reached.
+      sink?.destroy();
       // Always tear down the worktree if we created one — success, failure,
       // cancel, generator-consumer-abort all flow through here. Mirrors
       // gen-eval-loop-runner's finally cleanup at the same spot in the
@@ -246,8 +413,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
   },
 };
 
-/** Exit facts plus the last-N stdout ring buffer and stderr tail, returned by
- *  streamProcess for the (Phase 2) classifier and forensics. */
+/** Exit facts (consumed by the Phase 2 classifier) plus the last-N stdout ring
+ *  buffer and stderr tail. The ring buffer + stderr tail ride along for the
+ *  Phase 3 forensics export (which will run `stderrTail` through
+ *  `redactSecrets` at the persistence boundary); apply() reads only `exit`
+ *  today. */
 interface StreamResult {
   exit: ExitFacts;
   ringBuffer: string[];
@@ -262,6 +432,7 @@ async function* streamProcess(
   mutationId: string,
   ctx: ApplyContext,
   t0: number,
+  sink: TranscriptSink | null,
 ): AsyncGenerator<MutationEvent, StreamResult> {
   const queue: MutationEvent[] = [];
   let done = false;
@@ -321,6 +492,15 @@ async function* streamProcess(
       enqueue(evt('log', { line, stream: 'stdout' }));
       return;
     }
+    // Tee the raw parsed envelope to the durable transcript (requirement 11),
+    // independent of what the drawer renders. Fire-and-forget: sink.finish()
+    // (called at finalize) flushes all buffered writes via stream.end(), so a
+    // synchronously-issued write is never lost. A write error is recorded on
+    // the stderr tail rather than crashing the run (spec: "transcript write
+    // fails -> record on the stderr tail, do not crash the run").
+    void sink?.append(envelope).catch((err: Error) => {
+      stderrTail.push(`[transcript] append failed: ${err.message}`);
+    });
     const display = streamJsonToDisplay(envelope);
     if (display === null) return;
     // A single envelope may render multiple lines (mixed text + tool_use
@@ -404,22 +584,53 @@ async function* streamProcess(
   }
 }
 
-/** Map exit facts to the single terminal MutationEvent. Mirrors the prior
- *  exit-code behavior; the Phase 2 classifier will supersede this with a
- *  work-product-based outcome. */
-function terminalFromExit(mutationId: string, exit: ExitFacts): MutationEvent {
-  const { exitCode, signal, cancelled, durationMs } = exit;
-  const isSignalKill = signal === 'SIGTERM' || exitCode === 143;
-  if (exitCode === 0) {
-    return term(mutationId, 'completed', { exitCode: 0, durationMs });
-  }
-  if (isSignalKill && cancelled) {
-    return term(mutationId, 'failed', { exitCode, durationMs, reason: 'cancelled' });
-  }
-  if (isSignalKill) {
-    return term(mutationId, 'failed', { exitCode, durationMs, reason: 'killed' });
-  }
-  return term(mutationId, 'failed', { exitCode, durationMs, reason: `exited with code ${String(exitCode)}` });
+/**
+ * Assemble the per-run `summary.json` payload from the classified terminal
+ * event plus the run's identity/timing facts. `outcome`/`reason`/`workProduct`
+ * ride on `terminalEvent.data` (populated by `finalizeWorkRun`); on the
+ * classification-error path `workProduct` is absent, so it falls back to the
+ * zero blob and `exit` comes straight from the captured `streamResult.exit`.
+ */
+interface BuildSummaryOpts {
+  id: string;
+  project: string;
+  product: string;
+  branch: string;
+  baseSha: string;
+  /** Run start time (`Date.now()` ms). */
+  t0: number;
+  exit: ExitFacts;
+  terminalEvent: MutationEvent;
+  sink: TranscriptSink | null;
+  workRunsDir: string;
+}
+
+function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
+  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir } = opts;
+  const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
+  const outcome = (typeof data['outcome'] === 'string' ? data['outcome'] : 'failed') as WorkOutcome;
+  const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
+  const workProduct = (data['workProduct'] as WorkProductFacts | undefined) ?? EMPTY_WORK_PRODUCT;
+  return {
+    id,
+    project,
+    product,
+    outcome,
+    reason,
+    exit,
+    workProduct,
+    baseSha,
+    branch,
+    startedAt: new Date(t0).toISOString(),
+    endedAt: new Date().toISOString(),
+    // Scrub the host PROJECT_ROOT prefix from the persisted paths so a future
+    // reader (Phase 3 forensics, a cockpit detail route) can't leak the host
+    // username — mirrors finalizeWorkRun's scrub of the classification-error
+    // reason. The files still live at the absolute path on disk; only the
+    // recorded strings are repo-relative.
+    transcriptPath: scrubPathsInText(sink?.path ?? ''),
+    forensicsPath: scrubPathsInText(join(workRunsDir, id)),
+  };
 }
 
 function term(
