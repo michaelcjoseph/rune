@@ -18,14 +18,19 @@
  *   - `applyOutcomeToDescriptor` — copies the verdict off the terminal event
  *     onto the descriptor before persist, so it reaches mutations.jsonl.
  *
- * SCAFFOLD: signatures/types are settled here so the Phase 2 test suite
- * (`work-run-classify.test.ts`) can pin the contract test-first. Bodies are
- * unimplemented; the Phase 2 implementation tasks fill them in and wire them
- * into `work-runner.apply()` / `startApply`.
+ * The pure cores are implemented; the remaining Phase 2 work is wiring them
+ * into `work-runner.apply()` (compute facts from the worktree + run
+ * finalizeWorkRun) and `startApply` (copy outcome onto the descriptor before
+ * persist via applyOutcomeToDescriptor).
  */
 
 import type { GitRunner } from './sandbox-runtime.js';
 import type { MutationDescriptor, MutationEvent } from '../transport/mutations.js';
+import { scrubPathsInText } from '../ai/tool-labels.js';
+
+/** Cap on the persisted/broadcast diffstat string so a pathological diff can't
+ *  balloon mutations.jsonl or a bus frame. */
+const DIFFSTAT_MAX_CHARS = 4000;
 
 /** Terminal verdict, distinct from mutation `status` (which stays within its
  *  fixed enum). `noop` is the state that would have caught the two silent
@@ -94,26 +99,67 @@ export interface WorkRunOutcomeFields {
   workProduct?: WorkProductFacts;
 }
 
-function notImplemented(fn: string): never {
-  throw new Error(`work-run-classify: ${fn} not implemented (project 11 Phase 2 pending)`);
-}
-
 /**
  * Parse a tasks.md body into checkbox records. Non-checkbox lines are ignored.
  * `[x]` and `[X]` both parse as checked.
  */
-export function parseTasks(_content: string): TaskRecord[] {
-  notImplemented('parseTasks');
+const TASK_LINE = /^(\s*)[-*]\s+\[([ xX])\]\s*(.*)$/;
+
+export function parseTasks(content: string): TaskRecord[] {
+  const records: TaskRecord[] = [];
+  for (const line of content.split('\n')) {
+    const m = TASK_LINE.exec(line);
+    if (!m) continue;
+    const checked = m[2]!.toLowerCase() === 'x';
+    records.push({
+      indent: m[1]!.length,
+      marker: checked ? 'x' : ' ',
+      // Normalize for stable cross-version comparison (case + whitespace).
+      normalizedText: m[3]!.trim().toLowerCase().replace(/\s+/g, ' '),
+      checked,
+    });
+  }
+  return records;
 }
 
 /**
  * Compute task transitions between the in-memory baseline (captured at spawn)
  * and the final tasks.md. Keyed on normalized text so a deleted or rewritten
  * task counts as removed/added, never as progress. An absent tasks.md (empty
- * string) yields all-zero transitions.
+ * string) yields all-zero transitions. `tasksRemaining` counts only tasks that
+ * started unchecked and are still unchecked (a regressed baseline-checked task
+ * is not "remaining original work").
+ *
+ * Limitation: keyed by normalized text, so duplicate identical task lines in a
+ * single file collapse (last-wins) and may be miscounted. Well-authored
+ * tasks.md files do not repeat task text; deduping is out of scope.
  */
-export function computeTaskTransitions(_baseline: string, _final: string): TaskTransitions {
-  notImplemented('computeTaskTransitions');
+export function computeTaskTransitions(baseline: string, final: string): TaskTransitions {
+  const base = parseTasks(baseline);
+  const fin = parseTasks(final);
+  const finByText = new Map(fin.map(t => [t.normalizedText, t]));
+  const baseTexts = new Set(base.map(t => t.normalizedText));
+
+  let tasksNewlyChecked = 0;
+  let tasksRemaining = 0;
+  let tasksRemoved = 0;
+  for (const b of base) {
+    const f = finByText.get(b.normalizedText);
+    if (!f) {
+      // Original task gone from the final file — removed/rewritten, not progress.
+      tasksRemoved++;
+      continue;
+    }
+    if (!b.checked && f.checked) tasksNewlyChecked++;
+    if (!b.checked && !f.checked) tasksRemaining++; // started unchecked, still unchecked
+  }
+
+  let tasksAdded = 0;
+  for (const f of fin) {
+    if (!baseTexts.has(f.normalizedText)) tasksAdded++;
+  }
+
+  return { tasksNewlyChecked, tasksRemaining, tasksAdded, tasksRemoved };
 }
 
 export interface ComputeWorkProductOpts {
@@ -137,8 +183,42 @@ export interface ComputeWorkProductOpts {
  * tasks.md transitions. The diff base is the captured `baseSha`, so a moving
  * `HEAD` cannot change it.
  */
-export function computeWorkProduct(_opts: ComputeWorkProductOpts): Promise<WorkProductFacts> {
-  notImplemented('computeWorkProduct');
+export async function computeWorkProduct(opts: ComputeWorkProductOpts): Promise<WorkProductFacts> {
+  const { runGit, cwd, baseSha, branch, baselineTasks, finalTasks } = opts;
+  const range = `${baseSha}..${branch}`;
+
+  const shaOut = await runGit(['rev-list', range], { cwd });
+  const commitShas = shaOut.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+  const commitCount = commitShas.length; // === `rev-list --count`, without the extra call
+
+  const statOut = await runGit(['diff', '--stat', range], { cwd });
+  const diffstat = statOut.stdout.trim().slice(0, DIFFSTAT_MAX_CHARS);
+  // Per-file lines in --stat look like `path | 12 ++--`; the summary line
+  // (`N files changed`) has no `|`, so filter on it.
+  const filesChanged = diffstat
+    .split('\n')
+    .filter(l => l.includes('|'))
+    .map(l => l.split('|')[0]!.trim())
+    .filter(Boolean);
+
+  const statusOut = await runGit(['status', '--porcelain'], { cwd });
+  let dirty = false;
+  let untracked = false;
+  for (const line of statusOut.stdout.split('\n')) {
+    if (line.length === 0) continue;
+    if (line.startsWith('??')) untracked = true;
+    else dirty = true; // any tracked-change status code (M/A/D/R/…)
+  }
+
+  return {
+    commitCount,
+    commitShas,
+    filesChanged,
+    diffstat,
+    dirty,
+    untracked,
+    transitions: computeTaskTransitions(baselineTasks, finalTasks),
+  };
 }
 
 /**
@@ -149,8 +229,31 @@ export function computeWorkProduct(_opts: ComputeWorkProductOpts): Promise<WorkP
  *  - exit 0 + zero commits + zero transitions + clean tree -> `noop`
  *  - exit 0 + zero commits + dirty/untracked tree -> `dirty-uncommitted`
  */
-export function classifyOutcome(_facts: ClassifyFacts): ClassifyResult {
-  notImplemented('classifyOutcome');
+export function classifyOutcome(facts: ClassifyFacts): ClassifyResult {
+  const { exit, product } = facts;
+
+  // Rule 7: non-zero / signal-killed → failed (cancelled wins over killed).
+  if (exit.cancelled) return { outcome: 'failed', reason: 'cancelled' };
+  if (exit.signal) return { outcome: 'failed', reason: `killed (signal ${exit.signal})` };
+  if (exit.exitCode === null) return { outcome: 'failed', reason: 'no exit code (process disappeared)' };
+  if (exit.exitCode !== 0) {
+    return { outcome: 'failed', reason: `exited with code ${String(exit.exitCode)}` };
+  }
+
+  // Exit 0 — classify on work product.
+  const { commitCount, dirty, untracked, transitions } = product;
+  if (commitCount > 0) {
+    // Rules 3-4: commits present → branch-complete iff no original task remains.
+    return transitions.tasksRemaining > 0
+      ? { outcome: 'partial', reason: `${commitCount} commit(s), ${transitions.tasksRemaining} task(s) still unchecked` }
+      : { outcome: 'branch-complete', reason: `${commitCount} commit(s), all original tasks checked` };
+  }
+  // Zero commits.
+  if (dirty || untracked) {
+    return { outcome: 'dirty-uncommitted', reason: 'no commits but the working tree is dirty/untracked' };
+  }
+  // Rule 5: zero commits, zero transitions, clean tree — did nothing.
+  return { outcome: 'noop', reason: 'no commits, no task transitions, clean tree' };
 }
 
 export interface FinalizeWorkRunDeps {
@@ -170,8 +273,45 @@ export interface FinalizeWorkRunDeps {
  * event with reason `classification-error` is returned — so the error never
  * escapes to leave the run without a terminal event.
  */
-export function finalizeWorkRun(_deps: FinalizeWorkRunDeps): Promise<MutationEvent> {
-  notImplemented('finalizeWorkRun');
+export async function finalizeWorkRun(deps: FinalizeWorkRunDeps): Promise<MutationEvent> {
+  const { mutationId, computeFacts, exportForensics } = deps;
+  try {
+    const facts = await computeFacts();
+    const { outcome, reason } = classifyOutcome(facts);
+    // Best-effort forensics — a failure here must not deny the terminal event.
+    try {
+      await exportForensics(facts);
+    } catch {
+      /* swallow — forensics are best-effort */
+    }
+    const kind: MutationEvent['kind'] = outcome === 'failed' ? 'failed' : 'completed';
+    return {
+      mutationId,
+      ts: new Date().toISOString(),
+      kind,
+      // `exit` rides along (req 9: exitCode/signal/durationMs reach the store).
+      data: { outcome, reason, workProduct: facts.product, exit: facts.exit },
+    };
+  } catch (err) {
+    // classify/forensics threw → export best-effort with null facts and emit a
+    // single terminal failed/classification-error event. Never re-throw: the
+    // caller must always get exactly one terminal event.
+    try {
+      await exportForensics(null);
+    } catch {
+      /* swallow — forensics are best-effort */
+    }
+    // Scrub absolute host paths from the raw error — this reason flows to
+    // Telegram and mutations.jsonl, and a git/worktree error can embed the
+    // worktree path (which encodes the host username).
+    const reason = scrubPathsInText(`classification-error: ${(err as Error).message}`);
+    return {
+      mutationId,
+      ts: new Date().toISOString(),
+      kind: 'failed',
+      data: { outcome: 'failed', reason },
+    };
+  }
 }
 
 /**
@@ -181,8 +321,16 @@ export function finalizeWorkRun(_deps: FinalizeWorkRunDeps): Promise<MutationEve
  * mutations.jsonl, the cockpit, Telegram, the index, or GC.
  */
 export function applyOutcomeToDescriptor(
-  _descriptor: MutationDescriptor & WorkRunOutcomeFields,
-  _event: MutationEvent,
+  descriptor: MutationDescriptor & WorkRunOutcomeFields,
+  event: MutationEvent,
 ): void {
-  notImplemented('applyOutcomeToDescriptor');
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (typeof data['outcome'] === 'string') {
+    descriptor.outcome = data['outcome'] as WorkOutcome;
+  }
+  if (data['workProduct'] !== undefined) {
+    descriptor.workProduct = data['workProduct'] as WorkProductFacts;
+  }
+  // descriptor.status is deliberately untouched — the verdict rides on
+  // `outcome`; status stays within its fixed enum (set by startApply).
 }

@@ -42,9 +42,9 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Work-product + classifier
 
-- [ ] Compute work product through an injected `GitRunner` (commits/diffstat/shas/files on `baseSha..branch`, tree state); parse `tasks.md` into records and compute transitions.
-- [ ] Implement the pure `classifyOutcome(facts)` returning `branch-complete | partial | noop | dirty-uncommitted | failed` + reason.
-- [ ] Wrap classify+forensics in a try/catch that always emits exactly one terminal outcome-bearing event (`classification-error` -> `failed`).
+- [x] Compute work product through an injected `GitRunner` (commits/diffstat/shas/files on `baseSha..branch`, tree state); parse `tasks.md` into records and compute transitions.
+- [x] Implement the pure `classifyOutcome(facts)` returning `branch-complete | partial | noop | dirty-uncommitted | failed` + reason.
+- [x] Wrap classify+forensics in a try/catch that always emits exactly one terminal outcome-bearing event (`classification-error` -> `failed`).
 
 ### Persist
 
