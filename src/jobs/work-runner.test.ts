@@ -361,9 +361,17 @@ describe('workRunApplier', () => {
       expect(terminal.kind).toBe('failed');
     });
 
-    it('buffers stdout lines into output events', async () => {
+    it('converts stream-json assistant envelopes into human-readable output events (not raw JSON)', async () => {
+      // Phase 1 "Stream spawn + convert": stdout is now newline-delimited
+      // stream-json, not raw text. Each assistant text envelope must surface
+      // its text as an `output` event line — the drawer renders readable
+      // lines, never the raw JSON envelope.
       setupValidProject('06-webview');
-      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: ['line one', 'line two'] });
+      const envelopes = [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'line one' }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'line two' }] } }),
+      ];
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: envelopes });
       mockSpawn.mockReturnValue(fakeChild);
 
       const descriptor = {
@@ -379,10 +387,11 @@ describe('workRunApplier', () => {
         events.push(event);
       }
 
-      const outputEvents = events.filter(e => e.kind === 'output');
-      const lines = outputEvents.map(e => e.data.line);
+      const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
       expect(lines).toContain('line one');
       expect(lines).toContain('line two');
+      // Never the raw JSON envelope
+      expect(lines.some(l => l.includes('"type":"assistant"'))).toBe(false);
     });
 
     it('emits keep-alive events on a 30s ticker while the child is alive and stops on close', async () => {
@@ -625,6 +634,92 @@ describe('workRunApplier', () => {
 
       expect(mockRegisterActiveProcess).toHaveBeenCalledWith(fakeChild);
       expect(mockUnregisterActiveProcess).toHaveBeenCalledWith(fakeChild);
+    });
+  });
+
+  describe('apply — stream-json consumption', () => {
+    it('spawns claude with --output-format stream-json --verbose', async () => {
+      // Requirement 10: pass stream-json so every assistant turn and tool call
+      // lands on stdout as a parseable envelope.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-sj-args',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      for await (const _ of workRunApplier.apply(descriptor, ctx)) {
+        // consume
+      }
+
+      const [, args] = mockSpawn.mock.calls[0]!;
+      expect(args).toContain('--output-format');
+      expect(args[(args as string[]).indexOf('--output-format') + 1]).toBe('stream-json');
+      expect(args).toContain('--verbose');
+    });
+
+    it('renders a tool_use envelope as a readable activity line (not raw JSON)', async () => {
+      setupValidProject('06-webview');
+      const envelope = JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'echo hi' } }] },
+      });
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: [envelope] });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-sj-tool',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
+      expect(lines.some(l => l.includes('Bash'))).toBe(true);
+      expect(lines.some(l => l.includes('"tool_use"'))).toBe(false);
+    });
+
+    it('does not crash on a malformed stream-json line; the run still terminates cleanly', async () => {
+      // Requirement: a malformed/partial JSON line must not crash the run — it
+      // is tolerated (routed off the readable-output path) and the run reaches
+      // its terminal event normally.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({
+        exitCode: 0,
+        stdoutLines: ['{ this is not valid json', JSON.stringify({ type: 'result', result: 'ok' })],
+      });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-sj-malformed',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      expect(terminal.kind).toBe('completed');
+      // The malformed line must NOT surface as a readable output line.
+      const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
+      expect(lines.some(l => l.includes('this is not valid json'))).toBe(false);
     });
   });
 });

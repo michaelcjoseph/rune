@@ -17,8 +17,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Stream spawn + convert
 
-- [ ] Spawn the child with `--output-format stream-json --verbose` and consume JSON envelopes.
-- [ ] Build a stream-json-to-display adapter that emits the existing human-readable `output` MutationEvents (drawer back-compat).
+- [x] Spawn the child with `--output-format stream-json --verbose` and consume JSON envelopes.
+- [x] Build a stream-json-to-display adapter that emits the existing human-readable `output` MutationEvents (drawer back-compat).
 
 ### Durable sink
 

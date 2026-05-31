@@ -26,8 +26,10 @@ function shortenPath(p: string): string {
 /** Strip vault / workspace / project-root prefixes from path-like tokens
  *  embedded in free-form text (e.g. a Bash command string). Does global
  *  replacement so a command like `rg foo /vault/notes /vault/journals` is
- *  rendered as `rg foo notes journals`. */
-function scrubPathsInText(s: string): string {
+ *  rendered as `rg foo notes journals`. Exported so other display paths
+ *  (e.g. the work-run stream-json adapter) can scrub assistant prose the same
+ *  way `formatToolUse` scrubs tool arguments. */
+export function scrubPathsInText(s: string): string {
   let out = s;
   if (config.VAULT_DIR)     out = out.split(config.VAULT_DIR + '/').join('');
   if (config.WORKSPACE_DIR) out = out.split(config.WORKSPACE_DIR + '/').join('');

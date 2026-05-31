@@ -5,6 +5,7 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree } from './sandbox-runtime.js';
+import { parseStreamJsonLine, streamJsonToDisplay } from './work-run-transcript.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
@@ -164,6 +165,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // redundant — dropped here.
       const child = spawn(CLAUDE_BIN, [
         ...getProjectMcpArgs(),
+        // stream-json so every assistant turn and tool call lands on stdout as
+        // a parseable envelope (requirement 10). The consumer below converts
+        // each envelope to a human-readable `output` event via the adapter.
+        '--output-format', 'stream-json', '--verbose',
         '-p', prompt,
       ], {
         cwd: sandbox.worktree,
@@ -248,11 +253,36 @@ async function* streamProcess(
   let stdoutBuf = '';
   let stderrBuf = '';
 
+  // Convert one newline-delimited stream-json line to events. A parseable
+  // envelope becomes a human-readable `output` event (drawer back-compat); a
+  // blank line is ignored; a malformed/partial line is routed to the `log`
+  // (stderr-tail) path so it never crashes the run and never reads as agent
+  // output. Phase 2 tees the raw envelope to the durable transcript here too.
+  function emitStdoutLine(line: string) {
+    if (!line.trim()) return; // blank separator line between envelopes — drop silently
+    const envelope = parseStreamJsonLine(line);
+    if (!envelope) {
+      // Malformed/partial JSON or a non-envelope banner — route to the log
+      // (stderr-tail) path tagged 'stdout' to preserve provenance, so it never
+      // crashes the run and never reads as agent output.
+      enqueue(evt('log', { line, stream: 'stdout' }));
+      return;
+    }
+    const display = streamJsonToDisplay(envelope);
+    if (display === null) return;
+    // A single envelope may render multiple lines (mixed text + tool_use
+    // blocks); emit one `output` event per line so downstream surfaces never
+    // receive an embedded newline in a single line field.
+    for (const displayLine of display.split('\n')) {
+      if (displayLine) enqueue(evt('output', { line: displayLine }));
+    }
+  }
+
   child.stdout!.on('data', (chunk: Buffer) => {
     stdoutBuf += chunk.toString('utf8');
     const lines = stdoutBuf.split('\n');
     stdoutBuf = lines.pop() ?? '';
-    for (const line of lines) enqueue(evt('output', { line }));
+    for (const line of lines) emitStdoutLine(line);
   });
 
   child.stderr!.on('data', (chunk: Buffer) => {
@@ -264,7 +294,7 @@ async function* streamProcess(
 
   child.on('close', (code, signal) => {
     clearInterval(keepAliveTicker);
-    if (stdoutBuf) enqueue(evt('output', { line: stdoutBuf }));
+    if (stdoutBuf) emitStdoutLine(stdoutBuf);
     if (stderrBuf) enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
     exitCode = code;
     exitSignal = signal;

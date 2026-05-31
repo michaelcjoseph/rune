@@ -13,10 +13,19 @@
  * See: docs/projects/11-work-run-observability/test-plan.md §1
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// `streamJsonToDisplay` reuses `formatToolUse` (src/ai/tool-labels.ts) to
+// render tool_use blocks, which transitively imports `../config.js` — and
+// config throws on missing env at import time. Mock it (mirrors
+// tool-labels.test.ts) so this pure suite loads without a real environment.
+vi.mock('../config.js', () => ({
+  default: { VAULT_DIR: '/test/vault', WORKSPACE_DIR: '/test/workspace' },
+  PROJECT_ROOT: '/test/project',
+}));
 
 import {
   redactSecrets,
