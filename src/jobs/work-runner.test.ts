@@ -638,6 +638,36 @@ describe('workRunApplier', () => {
   });
 
   describe('apply — stream-json consumption', () => {
+    it('emits exactly ONE terminal event (streamProcess returns exit facts; apply emits the terminal)', async () => {
+      // test-plan §2 handoff contract: after the streamProcess refactor (it
+      // RETURNS exit facts instead of yielding the terminal), apply() must emit
+      // exactly one terminal event — no double-terminal, no skipped terminal —
+      // across a run that also produces output + stderr.
+      setupValidProject('06-webview');
+      const envelope = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } });
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: [envelope], stderrLines: ['a warning'] });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-one-terminal',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].kind).toBe('completed');
+      // The single terminal carries durationMs from the exit facts.
+      expect(typeof terminals[0].data.durationMs).toBe('number');
+    });
+
     it('spawns claude with --output-format stream-json --verbose', async () => {
       // Requirement 10: pass stream-json so every assistant turn and tool call
       // lands on stdout as a parseable envelope.

@@ -38,7 +38,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Baseline + exit facts
 
 - [x] Thread `baseSha` into `createWorktree` (`git worktree add -b <branch> <path> <baseSha>`); capture the in-memory `tasks.md` baseline at spawn.
-- [ ] Refactor `streamProcess` to return exit facts (exitCode, signal, durationMs, ring buffer, stderr tail) instead of yielding the terminal event.
+- [x] Refactor `streamProcess` to return exit facts (exitCode, signal, durationMs, ring buffer, stderr tail) instead of yielding the terminal event.
 
 ### Work-product + classifier
 

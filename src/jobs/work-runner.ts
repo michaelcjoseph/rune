@@ -5,7 +5,8 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree } from './sandbox-runtime.js';
-import { parseStreamJsonLine, streamJsonToDisplay } from './work-run-transcript.js';
+import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer } from './work-run-transcript.js';
+import type { ExitFacts } from './work-run-classify.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
@@ -186,7 +187,39 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
 
       registerActiveProcess(child);
       try {
-        yield* streamProcess(child, descriptor.id, ctx, t0);
+        // Drive streamProcess manually so we capture its RETURN value (exit
+        // facts + ring buffer + stderr tail) — `for await` / `yield*` discard a
+        // generator's return. streamProcess now yields only non-terminal events
+        // (output/log/keep-alive) and hands back the facts; apply() owns the
+        // single terminal event. `it.return()` in finally propagates an early
+        // consumer-abort into streamProcess's cleanup, matching `yield*`.
+        const it = streamProcess(child, descriptor.id, ctx, t0);
+        let step = await it.next();
+        try {
+          while (!step.done) {
+            yield step.value;
+            step = await it.next();
+          }
+        } finally {
+          // `step.done` is true only on normal completion; if the loop exited
+          // via an early consumer-abort it is still false. Propagate that abort
+          // into streamProcess's cleanup (clearInterval keep-alive ticker),
+          // matching `yield*` — but not on normal completion, which would
+          // needlessly re-enter its finally and add a microtask tick.
+          if (!step.done) await it.return?.(undefined as never);
+        }
+        // Only reached on normal completion (an abort propagates out through
+        // the finally above); the guard also narrows step.value to StreamResult.
+        if (!step.done) throw new Error('work-runner: stream ended without exit facts');
+        const streamResult = step.value;
+        // Phase 2 (next tasks) classifies on work product HERE — and MUST await
+        // finalizeWorkRun BEFORE this yield: startApply persists on the terminal
+        // event and the outer finally destroys the worktree immediately after,
+        // so the git reads must finish first. The stderr tail
+        // (streamResult.stderrTail) must be run through redactSecrets at the
+        // forensics-persistence boundary. Until then the terminal mirrors the
+        // prior exit-code behavior.
+        yield terminalFromExit(descriptor.id, streamResult.exit);
       } finally {
         unregisterActiveProcess(child);
         log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
@@ -213,18 +246,34 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
   },
 };
 
+/** Exit facts plus the last-N stdout ring buffer and stderr tail, returned by
+ *  streamProcess for the (Phase 2) classifier and forensics. */
+interface StreamResult {
+  exit: ExitFacts;
+  ringBuffer: string[];
+  stderrTail: string[];
+}
+
+/** Bound on the retained last-N stdout display lines and stderr tail. */
+const RING_CAPACITY = 50;
+
 async function* streamProcess(
   child: ReturnType<typeof spawn>,
   mutationId: string,
   ctx: ApplyContext,
   t0: number,
-): AsyncIterable<MutationEvent> {
+): AsyncGenerator<MutationEvent, StreamResult> {
   const queue: MutationEvent[] = [];
   let done = false;
   let resolveWaiter: (() => void) | null = null;
   let cancelSent = false;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
+
+  // Last-N stdout display lines + stderr tail, retained for the terminal
+  // classification/forensics (independent of what the drawer consumed).
+  const stdoutRing = createRingBuffer<string>(RING_CAPACITY);
+  const stderrTail = createRingBuffer<string>(RING_CAPACITY);
 
   function enqueue(event: MutationEvent) {
     queue.push(event);
@@ -278,7 +327,10 @@ async function* streamProcess(
     // blocks); emit one `output` event per line so downstream surfaces never
     // receive an embedded newline in a single line field.
     for (const displayLine of display.split('\n')) {
-      if (displayLine) enqueue(evt('output', { line: displayLine }));
+      if (displayLine) {
+        stdoutRing.push(displayLine);
+        enqueue(evt('output', { line: displayLine }));
+      }
     }
   }
 
@@ -293,13 +345,19 @@ async function* streamProcess(
     stderrBuf += chunk.toString('utf8');
     const lines = stderrBuf.split('\n');
     stderrBuf = lines.pop() ?? '';
-    for (const line of lines) enqueue(evt('log', { line, stream: 'stderr' }));
+    for (const line of lines) {
+      stderrTail.push(line);
+      enqueue(evt('log', { line, stream: 'stderr' }));
+    }
   });
 
   child.on('close', (code, signal) => {
     clearInterval(keepAliveTicker);
     if (stdoutBuf) emitStdoutLine(stdoutBuf);
-    if (stderrBuf) enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
+    if (stderrBuf) {
+      stderrTail.push(stderrBuf);
+      enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
+    }
     exitCode = code;
     exitSignal = signal;
     done = true;
@@ -309,6 +367,7 @@ async function* streamProcess(
 
   child.on('error', (err) => {
     clearInterval(keepAliveTicker);
+    stderrTail.push(err.message);
     enqueue(evt('log', { line: err.message, stream: 'stderr' }));
     done = true;
     resolveWaiter?.();
@@ -325,24 +384,42 @@ async function* streamProcess(
       while (queue.length > 0) yield queue.shift()!;
     }
 
-    const durationMs = Date.now() - t0;
-    const isSignalKill = exitSignal === 'SIGTERM' || exitCode === 143;
-
-    if (exitCode === 0) {
-      yield term(mutationId, 'completed', { exitCode: 0, durationMs });
-    } else if (isSignalKill && cancelSent) {
-      yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'cancelled' });
-    } else if (isSignalKill) {
-      yield term(mutationId, 'failed', { exitCode, durationMs, reason: 'killed' });
-    } else {
-      yield term(mutationId, 'failed', { exitCode, durationMs, reason: `exited with code ${String(exitCode)}` });
-    }
+    // Return exit facts instead of yielding a terminal event — apply() owns
+    // the single terminal (and, in a later Phase 2 task, classification).
+    return {
+      exit: {
+        exitCode,
+        signal: exitSignal,
+        cancelled: cancelSent,
+        durationMs: Date.now() - t0,
+      },
+      ringBuffer: stdoutRing.items(),
+      stderrTail: stderrTail.items(),
+    };
   } finally {
     // Belt-and-suspenders: the close/error handlers above also clear the
     // timer, but a consumer that aborts the iteration before the child
     // exits would otherwise leak it.
     clearInterval(keepAliveTicker);
   }
+}
+
+/** Map exit facts to the single terminal MutationEvent. Mirrors the prior
+ *  exit-code behavior; the Phase 2 classifier will supersede this with a
+ *  work-product-based outcome. */
+function terminalFromExit(mutationId: string, exit: ExitFacts): MutationEvent {
+  const { exitCode, signal, cancelled, durationMs } = exit;
+  const isSignalKill = signal === 'SIGTERM' || exitCode === 143;
+  if (exitCode === 0) {
+    return term(mutationId, 'completed', { exitCode: 0, durationMs });
+  }
+  if (isSignalKill && cancelled) {
+    return term(mutationId, 'failed', { exitCode, durationMs, reason: 'cancelled' });
+  }
+  if (isSignalKill) {
+    return term(mutationId, 'failed', { exitCode, durationMs, reason: 'killed' });
+  }
+  return term(mutationId, 'failed', { exitCode, durationMs, reason: `exited with code ${String(exitCode)}` });
 }
 
 function term(
