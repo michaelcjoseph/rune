@@ -104,8 +104,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write an end-to-end assertion that a deliberately empty run classifies `noop` and emits the no-op alert — test-plan.md §6.
-- [ ] Confirm red before implementation.
+- [x] Write an end-to-end assertion that a deliberately empty run classifies `noop` and emits the no-op alert — test-plan.md §6.
+- [ ] Confirm red before implementation. _(N/A — validation phase: the asserted behavior shipped in Phases 2+4, so the §6 e2e is green-on-arrival rather than red-then-green; see the test file header.)_
 
 ### Watched run
 
