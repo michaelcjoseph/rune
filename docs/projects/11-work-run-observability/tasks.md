@@ -58,8 +58,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the suite for forensics export contents, unconditional worktree destroy, and GC (single-pass, protected set, branch-in-worktree skip, idempotency) — test-plan.md §3.
-- [ ] Confirm red before implementation.
+- [x] Write the suite for forensics export contents, unconditional worktree destroy, and GC (single-pass, protected set, branch-in-worktree skip, idempotency) — test-plan.md §3.
+- [x] Confirm red before implementation.
 
 ### Forensics + GC
 
