@@ -91,7 +91,10 @@ vi.mock('./webview-bootstrap.js', () => ({
 const { mockRegistry } = vi.hoisted(() => ({
   mockRegistry: {
     version: 1, builtAt: '2026-01-15T00:00:00.000Z',
-    products: [{ name: 'aura', repoBacked: true, projects: [{ slug: '02-growth', status: 'active' }] }],
+    // `as const` keeps `status` as the literal 'active' (a LifecycleStatus)
+    // rather than widening to `string`, so the fixture satisfies `Registry`
+    // at every buildCockpitView call site.
+    products: [{ name: 'aura', repoBacked: true, projects: [{ slug: '02-growth', status: 'active' as const }] }],
   },
 }));
 vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry) }));
