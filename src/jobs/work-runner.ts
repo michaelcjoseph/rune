@@ -280,6 +280,15 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // worktree's HEAD already contains the project dir, so the flag is
       // redundant — dropped here.
       const child = spawn(CLAUDE_BIN, [
+        // Headless `claude -p` has no one to answer permission prompts, so in
+        // default mode every mutating tool (Edit/Write, git, npm/npx/vitest)
+        // auto-denies — the run does its analysis, commits nothing, and
+        // classifies `noop` (the 2026-06-01 silent run; docs/projects/bugs.md).
+        // Mirror execClaude (claude.ts:227): the run is an isolated throwaway
+        // worktree on a GC'd branch that cannot reach main, so skip-permissions
+        // is scoped to a sandbox. It also lifts the working-dir containment so
+        // the node_modules symlink createWorktree drops in resolves.
+        '--dangerously-skip-permissions',
         ...getProjectMcpArgs(),
         // stream-json so every assistant turn and tool call lands on stdout as
         // a parseable envelope (requirement 10). The consumer below converts

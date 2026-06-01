@@ -5,6 +5,8 @@ import {
   writeFileSync,
   mkdirSync,
   existsSync,
+  lstatSync,
+  readlinkSync,
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +31,7 @@ import {
   readProductsConfig,
   getProductConfig,
   createWorktree,
+  linkWorktreeDeps,
   destroyWorktree,
   cleanupOrphanWorktrees,
   type ProductConfig,
@@ -460,6 +463,58 @@ describe('createWorktree', () => {
 
     // runGit must not have been called
     expect(runGit).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// linkWorktreeDeps
+// ---------------------------------------------------------------------------
+
+describe('linkWorktreeDeps', () => {
+  let repo: string;
+  let worktree: string;
+
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'jarvis-deps-repo-'));
+    worktree = mkdtempSync(join(tmpdir(), 'jarvis-deps-wt-'));
+  });
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  });
+
+  it('symlinks the repo node_modules into the worktree, resolving to the source', () => {
+    mkdirSync(join(repo, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(repo, 'node_modules', '.bin', 'vitest'), '#!/bin/sh\n');
+
+    linkWorktreeDeps(repo, worktree);
+
+    const dest = join(worktree, 'node_modules');
+    expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(dest)).toBe(join(repo, 'node_modules'));
+    // The runner is reachable through the link.
+    expect(existsSync(join(dest, '.bin', 'vitest'))).toBe(true);
+  });
+
+  it('no-ops when the repo has no node_modules (never installed)', () => {
+    linkWorktreeDeps(repo, worktree);
+    expect(existsSync(join(worktree, 'node_modules'))).toBe(false);
+  });
+
+  it('leaves an existing worktree node_modules untouched', () => {
+    mkdirSync(join(repo, 'node_modules'), { recursive: true });
+    mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+
+    linkWorktreeDeps(repo, worktree);
+
+    // Still a real dir, not replaced by a symlink.
+    expect(lstatSync(join(worktree, 'node_modules')).isSymbolicLink()).toBe(false);
+  });
+
+  it('never throws when the worktree path does not exist', () => {
+    mkdirSync(join(repo, 'node_modules'), { recursive: true });
+    expect(() => linkWorktreeDeps(repo, join(worktree, 'missing', 'nested'))).not.toThrow();
   });
 });
 

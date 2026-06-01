@@ -403,6 +403,9 @@ describe('workRunApplier', () => {
       // differently and the worktree already contains the project dir in
       // its HEAD tree, so the flag was redundant.
       expect(args).not.toContain('--add-dir');
+      // Headless `claude -p` must skip permission prompts or every mutating
+      // tool auto-denies (the 2026-06-01 noop). Mirrors execClaude.
+      expect(args).toContain('--dangerously-skip-permissions');
     });
 
     it('yields a completed terminal event on exit code 0', async () => {

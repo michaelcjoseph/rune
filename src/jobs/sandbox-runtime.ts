@@ -20,7 +20,7 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -205,6 +205,32 @@ export interface CreateWorktreeOpts {
  * path, so the failure is traceable to a specific sandbox without grepping the
  * stderr line.
  */
+/**
+ * Symlink the product repo's `node_modules` into a freshly-created worktree.
+ *
+ * Git worktrees don't copy the (gitignored) `node_modules`, so a new worktree
+ * has no installed dependencies — `npx`/`vitest`/`tsx` fail to resolve and a
+ * `/work` run can't run the project's tests. Symlinking the parent repo's
+ * already-installed modules is fast and avoids a per-run `npm ci`. The run is
+ * spawned with `--dangerously-skip-permissions` (work-runner.ts), which lifts
+ * the working-dir containment so a link whose target sits outside the worktree
+ * still resolves.
+ *
+ * Best-effort: no-ops when the source is absent (repo never installed) or a
+ * `node_modules` already exists in the worktree, and never throws — a run can
+ * still do non-test work without deps, so a link failure must not abort setup.
+ */
+export function linkWorktreeDeps(repoPath: string, worktree: string): void {
+  const src = join(repoPath, 'node_modules');
+  const dest = join(worktree, 'node_modules');
+  if (!existsSync(src) || existsSync(dest)) return;
+  try {
+    symlinkSync(src, dest, 'dir');
+  } catch {
+    // Non-fatal: the run proceeds, it just won't have a local test runner.
+  }
+}
+
 export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxSpec> {
   const runGit = opts.runGit ?? defaultRunGit;
   const product = getProductConfig(opts.product, opts.productsConfigPath);
@@ -263,6 +289,11 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
         `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
     );
   }
+
+  // A fresh worktree has no node_modules (git worktrees don't carry the
+  // gitignored dir), so `npx`/`vitest`/`tsx` can't resolve and a /work run
+  // can't run the project's tests — half of the 2026-06-01 noop (bugs.md).
+  linkWorktreeDeps(product.repoPath, worktree);
 
   return {
     product: opts.product,
