@@ -89,8 +89,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the suite for the cockpit projection fields, the authenticated transcript route (path containment, traversal rejection), and the card states — test-plan.md §5.
-- [ ] Confirm red before implementation.
+- [x] Write the suite for the cockpit projection fields, the authenticated transcript route (path containment, traversal rejection), and the card states — test-plan.md §5.
+- [x] Confirm red before implementation.
 
 ### Data path + card
 
