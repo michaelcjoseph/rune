@@ -299,6 +299,18 @@ describe('TelegramSender', () => {
       expect(text).toContain('exited with code 1');
     });
 
+    it('a send failure does not propagate out of onMutationEvent (alert failure never blocks teardown)', async () => {
+      // test-plan §4 🟢: a notification-bus / Telegram send failure must not
+      // block the run's teardown — onMutationEvent fires the send fire-and-forget
+      // and swallows a rejection, so the caller (the bus publish loop) is never
+      // interrupted and the run still persists its outcome downstream.
+      mockSendLongMessage.mockRejectedValueOnce(new Error('telegram 500'));
+      expect(() =>
+        sender.onMutationEvent(workRunEvent('completed', { outcome: 'noop', workProduct: noopWorkProduct })),
+      ).not.toThrow();
+      await flush(); // let the rejected send settle; must not surface as unhandled
+    });
+
     it('ignores non-terminal work-run events (output/progress)', async () => {
       sender.onMutationEvent(workRunEvent('completed', { outcome: 'noop', workProduct: noopWorkProduct }));
       // override subKind to a non-terminal value

@@ -303,3 +303,32 @@ describe('removeRun', () => {
     expect(() => removeRun('run-a', filePath)).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 4: lastOutputAt / quietNudgedAt round-trip (project 11, test-plan §4)
+// ---------------------------------------------------------------------------
+
+describe('quiet-run fields round-trip through the store', () => {
+  it('preserves lastOutputAt and quietNudgedAt across write + read (isSupervisedRun must not drop them)', () => {
+    const runs = [
+      makeRun('run-quiet', {
+        lastOutputAt: '2026-01-01T00:03:00.000Z',
+        quietNudgedAt: '2026-01-01T00:08:00.000Z',
+      }),
+    ];
+    writeAllRuns(runs, filePath);
+    const read = readAllRuns(filePath);
+    expect(read).toHaveLength(1);
+    expect(read[0]!.lastOutputAt).toBe('2026-01-01T00:03:00.000Z');
+    expect(read[0]!.quietNudgedAt).toBe('2026-01-01T00:08:00.000Z');
+  });
+
+  it('a run without the optional quiet fields still validates and round-trips', () => {
+    const runs = [makeRun('run-plain')];
+    writeAllRuns(runs, filePath);
+    const read = readAllRuns(filePath);
+    expect(read).toHaveLength(1);
+    expect(read[0]!.lastOutputAt).toBeUndefined();
+    expect(read[0]!.quietNudgedAt).toBeUndefined();
+  });
+});

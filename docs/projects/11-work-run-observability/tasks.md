@@ -73,8 +73,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the suite for each alert trigger and payload, the noop-never-reads-as-success rendering, the commit-poll progress throttle, and the quiet-run predicate (distinct from `isStalled`, fields round-trip through `isSupervisedRun`) — test-plan.md §4.
-- [ ] Confirm red before implementation.
+- [x] Write the suite for each alert trigger and payload, the noop-never-reads-as-success rendering, the commit-poll progress throttle, and the quiet-run predicate (distinct from `isStalled`, fields round-trip through `isSupervisedRun`) — test-plan.md §4.
+- [x] Confirm red before implementation.
 
 ### Triggers
 

@@ -57,6 +57,20 @@ export interface SupervisedRun {
    * falls back to `lastHeartbeatAt` when absent.
    */
   lastChildAliveAt?: string;
+  /**
+   * ISO-8601 timestamp of the most recent observed Claude `output` event,
+   * tracked DISTINCTLY from {@link lastHeartbeatAt} for the quiet-run nudge
+   * (project 11, Phase 4): a run can be child-alive (keep-alive ticking) yet
+   * produce no LLM output for minutes. {@link isQuietRun} measures quiet from
+   * this (falling back to {@link startedAt} before the first output). Optional
+   * for back-compat with entries written before the field existed.
+   */
+  lastOutputAt?: string;
+  /**
+   * ISO-8601 timestamp the quiet-run nudge was sent, or absent if never. Bounds
+   * the nudge to at most once per run (project 11, requirement 23).
+   */
+  quietNudgedAt?: string;
 }
 
 /** The visibility surface — the picture the cockpit and Telegram report from. */
@@ -92,6 +106,53 @@ export function isStalled(
   // visibility, never silently hiding a run that may be stuck.
   if (Number.isNaN(parsed)) return true;
   return now - parsed > heartbeatIntervalMs;
+}
+
+/**
+ * Whether a run is QUIET: `running`, has produced no `output` event for longer
+ * than `quietThresholdMs` (measured from {@link SupervisedRun.lastOutputAt}, or
+ * {@link SupervisedRun.startedAt} before the first output), and has not already
+ * been quiet-nudged ({@link SupervisedRun.quietNudgedAt} unset). Evaluated
+ * ALONGSIDE {@link isStalled}, NOT folded into it (project 11, requirement 23):
+ * `isStalled` keys on child liveness (`lastChildAliveAt`), so a child-alive run
+ * mid-long-LLM-call is never `stalled` — but it IS quiet. Pure, no I/O.
+ *
+ * Unlike `isStalled` (which fails toward visibility on a bad timestamp), a
+ * quiet nudge is a soft prod: an unparseable baseline returns `false` rather
+ * than firing a spurious nudge.
+ *
+ * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
+ */
+export function isQuietRun(
+  _run: SupervisedRun,
+  _quietThresholdMs: number,
+  _now: number,
+): boolean {
+  throw new Error('supervision: isQuietRun not implemented (project 11 Phase 4 pending)');
+}
+
+/** A quiet-nudge plan: the runs to nudge, plus those same runs with
+ *  `quietNudgedAt` stamped to `now` so the persistence layer can write the
+ *  once-only marker. */
+export interface QuietNudgePlan {
+  toNudge: SupervisedRun[];
+  /** Each `toNudge` run with `quietNudgedAt` set to `now`. */
+  updated: SupervisedRun[];
+}
+
+/**
+ * Plan the quiet-run nudges over a set of runs: the subset that {@link isQuietRun}
+ * flags, plus stamped copies (`quietNudgedAt = now`) for the persistence layer.
+ * Pure — the runner sends the nudges and persists `updated`.
+ *
+ * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
+ */
+export function planQuietNudges(
+  _runs: SupervisedRun[],
+  _quietThresholdMs: number,
+  _now: number,
+): QuietNudgePlan {
+  throw new Error('supervision: planQuietNudges not implemented (project 11 Phase 4 pending)');
 }
 
 /**

@@ -20,6 +20,10 @@ const log = createLogger('stall-check');
 
 export const TICK_INTERVAL_MS = 30 * 1000;
 export const STALL_THRESHOLD_MS = 5 * 60 * 1000; // 5min — well above the 30s heartbeat throttle
+/** Quiet-run threshold (project 11, requirement 23): a run producing no `output`
+ *  for this long gets a one-time quiet nudge. Same 5min as the stall threshold,
+ *  but measured on `lastOutputAt` (LLM activity), distinct from child liveness. */
+export const QUIET_THRESHOLD_MS = 5 * 60 * 1000;
 
 export interface CheckStalledRunsDeps {
   /** Read the current persisted SupervisedRun[]. Tests inject a fixture
@@ -106,4 +110,15 @@ export function formatStallNudge(run: SupervisedRun, now: number): string {
     `⚠️ Run stalled: ${run.product}/${run.project} ` +
     `(no heartbeat for ${ageLabel}). id=${run.id.slice(0, 8)}`
   );
+}
+
+/**
+ * Format a quiet-run nudge — a run that is alive but producing no LLM output.
+ * Distinct wording from {@link formatStallNudge} so the operator can tell a
+ * child-dead stall ("stalled") from a quiet-but-alive run ("quiet").
+ *
+ * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
+ */
+export function formatQuietNudge(_run: SupervisedRun, _now: number): string {
+  throw new Error('stall-check: formatQuietNudge not implemented (project 11 Phase 4 pending)');
 }
