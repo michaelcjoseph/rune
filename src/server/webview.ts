@@ -17,6 +17,7 @@ import { handleWebviewMessage } from './webview-bootstrap.js';
 import { createMutation, cancelMutation } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
+import { restartServer } from './restart.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
@@ -93,7 +94,9 @@ function readBody(req: IncomingMessage): Promise<string> {
 async function loadIndexHtml(): Promise<string> {
   const raw = await readFile(join(STATIC_DIR, 'index.html'), 'utf8');
   const safeName = escapeHtmlAttr(config.OBSIDIAN_VAULT_NAME);
-  return raw.replace('__OBSIDIAN_VAULT_NAME__', safeName);
+  return raw
+    .replace('__OBSIDIAN_VAULT_NAME__', safeName)
+    .replace('__IS_PRODUCTION__', config.IS_PRODUCTION ? 'true' : 'false');
 }
 
 /** Read index.html fresh from disk and write it to `res`. On read failure,
@@ -429,6 +432,23 @@ function handleApiOpsCancel(res: ServerResponse, id: string): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
   logWebviewAction('op-cancel', 'success');
+}
+
+/** POST /api/server/restart — kickstart a launchd relaunch of the daemon.
+ *  Production-only (the dev process has no launchd job). Responds 202 BEFORE
+ *  firing the kickstart so the response flushes before launchd SIGTERMs us;
+ *  the actual restart is deferred a tick via setTimeout. */
+function handleApiServerRestart(res: ServerResponse): void {
+  if (!config.IS_PRODUCTION) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'restart only available in production' }));
+    logWebviewAction('server-restart', 'failure', 'reason=not-production');
+    return;
+  }
+  res.writeHead(202, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+  logWebviewAction('server-restart', 'success');
+  setTimeout(() => { restartServer(); }, 150);
 }
 
 // ---------------------------------------------------------------------------
@@ -897,6 +917,11 @@ export function mountWebviewRoutes(
       const opCancelMatch = pathname.match(/^\/api\/ops\/([^/]+)\/cancel$/);
       if (req.method === 'POST' && opCancelMatch) {
         handleApiOpsCancel(res, opCancelMatch[1]!);
+        return true;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/server/restart') {
+        handleApiServerRestart(res);
         return true;
       }
 

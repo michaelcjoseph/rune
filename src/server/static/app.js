@@ -1218,6 +1218,33 @@
   setInterval(pollState, 5000);
   document.getElementById('cockpit-content')?.addEventListener('click', handleCockpitClick);
   document.getElementById('approvals-content')?.addEventListener('click', handleApprovalsClick);
+
+  // Restart-server button (top of sidebar). Production-only: the server injects
+  // is-production=true into the template only under `npm run start`, so a dev
+  // session can't bounce the prod daemon. The endpoint is the backstop (409).
+  const restartBtn = document.getElementById('restart-btn');
+  const isProd = document.querySelector('meta[name="is-production"]')?.content === 'true';
+  if (restartBtn && isProd) {
+    restartBtn.hidden = false;
+    restartBtn.addEventListener('click', () => {
+      if (!confirm('Restart server? This drops the connection and stops any in-flight work runs.')) return;
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting…';
+      fetch('/api/server/restart', { method: 'POST' })
+        .then((r) => {
+          if (!r.ok) {
+            restartBtn.disabled = false;
+            restartBtn.textContent = '↻ Restart server';
+          }
+          // On success the server is going down; the WS-reconnect / pollState
+          // loop recovers automatically once launchd brings it back.
+        })
+        .catch(() => {
+          // A dropped connection mid-request is expected on a successful
+          // restart — leave the "Restarting…" label; reconnect resumes on return.
+        });
+    });
+  }
   // Phase-shifted ~2.5s from pollState so the two pollers' file reads don't fire in lock-step.
   setTimeout(() => { pollCockpit(); setInterval(pollCockpit, 5000); }, 2500);
   // Phase-shifted again from pollCockpit so the three I/O pollers stagger

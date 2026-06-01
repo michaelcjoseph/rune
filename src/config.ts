@@ -253,6 +253,13 @@ const config = {
    *  without a server restart. `npm run start` sets NODE_ENV=production
    *  for the user; `npm run dev` deliberately leaves it unset. */
   IS_PRODUCTION: process.env['NODE_ENV'] === 'production',
+
+  /** launchd service label used by the cockpit "Restart server" button to
+   *  kickstart a relaunch (`launchctl kickstart -k gui/<uid>/<label>`). The
+   *  plist's KeepAlive only respawns on crash, so a clean exit won't restart —
+   *  kickstart is the explicit relaunch path. Override via the LAUNCHD_LABEL
+   *  env var if the daemon is loaded under a different label. */
+  LAUNCHD_LABEL: process.env['LAUNCHD_LABEL'] ?? 'com.jarvis.daemon',
 } as const;
 
 export default config;

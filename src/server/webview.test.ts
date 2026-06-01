@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 
@@ -42,7 +42,14 @@ const mockConfig = {
   OBSIDIAN_VAULT_NAME: 'TestVault',
   TELEGRAM_USER_ID: 42,
   JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  IS_PRODUCTION: false as boolean,
+  LAUNCHD_LABEL: 'com.jarvis.daemon',
 };
+
+// restartServer is spawned via setTimeout by the restart endpoint; mock it so
+// the prod-path test never actually shells out to launchctl.
+const mockRestartServer = vi.fn(() => ({ ok: true as const }));
+vi.mock('./restart.js', () => ({ restartServer: mockRestartServer }));
 
 vi.mock('../config.js', () => ({
   default: mockConfig,
@@ -738,6 +745,47 @@ describe('server/webview', () => {
       });
       // GET doesn't match the POST route — falls through to the unknown /api/* 404
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/server/restart', () => {
+    beforeEach(() => {
+      mockRestartServer.mockClear();
+      mockConfig.IS_PRODUCTION = false;
+    });
+    afterEach(() => {
+      mockConfig.IS_PRODUCTION = false;
+    });
+
+    it('returns 409 and does not restart outside production', async () => {
+      mockConfig.IS_PRODUCTION = false;
+      const res = await makeRequest(port, '/api/server/restart', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toContain('production');
+      // Give the (non-)scheduled timer a beat — it must never fire in dev.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(mockRestartServer).not.toHaveBeenCalled();
+    });
+
+    it('returns 202 and schedules the restart in production', async () => {
+      mockConfig.IS_PRODUCTION = true;
+      const res = await makeRequest(port, '/api/server/restart', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ ok: true });
+      await vi.waitFor(() => expect(mockRestartServer).toHaveBeenCalledTimes(1));
+    });
+
+    it('returns 401 without auth header', async () => {
+      mockConfig.IS_PRODUCTION = true;
+      const res = await makeRequest(port, '/api/server/restart', { method: 'POST' });
+      expect(res.status).toBe(401);
+      expect(mockRestartServer).not.toHaveBeenCalled();
     });
   });
 
