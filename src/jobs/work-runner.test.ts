@@ -68,6 +68,12 @@ vi.mock('../ai/claude.js', () => ({
   getProjectMcpArgs: () => ['--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json'],
 }));
 
+// Mock the GC runner — work-runner's completion finally fires it best-effort;
+// the GC pass itself is covered by work-run-gc.test.ts, so here it's a no-op.
+vi.mock('./work-run-gc-runner.js', () => ({
+  runWorkRunGc: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock sandbox-runtime: createWorktree/destroyWorktree return controllable
 // stubs. Tests assert on call args; production wires the real git worktree
 // lifecycle (`src/jobs/sandbox-runtime.ts`). `defaultRunGit` is exported by the

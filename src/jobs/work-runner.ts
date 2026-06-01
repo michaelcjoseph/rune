@@ -9,8 +9,9 @@ import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTrans
 import { computeWorkProduct, finalizeWorkRun, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
+import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import type { SandboxSpec } from '../intent/sandbox.js';
+import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
@@ -134,9 +135,16 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     if (!projectSlug || typeof projectSlug !== 'string') {
       return { ok: false, reason: 'projectSlug is required' };
     }
-    // Reject slugs that contain path separators — prevents directory traversal
-    if (projectSlug.includes('/') || projectSlug.includes('\\') || projectSlug.includes('..')) {
+    // Both slugs are validated against VALID_SLUG (lowercase alnum/hyphen) — it
+    // subsumes the path-separator/`..` traversal rejection and matches the
+    // boundary guard gen-eval-loop-runner uses. projectSlug feeds findProjectDir
+    // + the worktree path; product feeds getProductConfig + git ops via
+    // runWorkRunGc.
+    if (!VALID_SLUG.test(projectSlug)) {
       return { ok: false, reason: `invalid projectSlug: ${projectSlug}` };
+    }
+    if (payload.product !== undefined && !VALID_SLUG.test(payload.product)) {
+      return { ok: false, reason: `invalid product: ${payload.product}` };
     }
 
     // Pre-flight against the live tree. The actual run reads from the
@@ -464,6 +472,12 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           });
         }
       }
+      // Prune retained work-run artifacts over the retention caps now that this
+      // run is terminal. Fire-and-forget + best-effort (runWorkRunGc swallows
+      // its own errors). This run's own dir is still protected here — its
+      // mutation id is in activeRuns until startApply's finally — so a freshly
+      // completed run is never GC'd by its own completion pass.
+      void runWorkRunGc(product);
     }
   },
 };

@@ -65,7 +65,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 - [x] Export `bundle.git`, `diffstat.txt`, `status.txt`, `diff.patch`, staged diff, and (non-clean) `untracked.tar` to `logs/work-runs/<id>/` before the terminal event.
 - [x] Always destroy the deterministic worktree in `finally` after export.
-- [ ] GC as a single synchronous pass by count and bytes (transcripts, forensics, branch refs) with a protected set from `activeRuns` + run-store + `git worktree list` (reuse the `cleanupOrphanWorktrees` parse); never delete a checked-out branch; run on startup and completion.
+- [x] GC as a single synchronous pass by count and bytes (transcripts, forensics, branch refs) with a protected set from `activeRuns` + run-store + `git worktree list` (reuse the `cleanupOrphanWorktrees` parse); never delete a checked-out branch; run on startup and completion.
 
 ## Phase 4 — Alerts
 

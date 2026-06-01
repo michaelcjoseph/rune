@@ -239,6 +239,14 @@ const config = {
   WORK_RUN_PER_PROJECT_CAP: parseNumericEnv('WORK_RUN_PER_PROJECT_CAP', 1, { min: 1, integer: true }),
   WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 2, { min: 1, integer: true }),
 
+  /** Retention caps for per-run work-run artifacts (transcripts + forensics +
+   *  branch refs), enforced by `gcWorkRuns` (project 11 Phase 3). The prunable
+   *  (terminal, unprotected) set is GC'd oldest-first to stay within BOTH a run
+   *  count and a total byte ceiling. Spec open question: start at 3 runs and
+   *  tune after use. Bytes default to 200 MB. */
+  WORK_RUN_RETENTION_MAX_RUNS: parseNumericEnv('WORK_RUN_RETENTION_MAX_RUNS', 3, { min: 1, integer: true }),
+  WORK_RUN_RETENTION_MAX_BYTES: parseNumericEnv('WORK_RUN_RETENTION_MAX_BYTES', 200 * 1024 * 1024, { min: 1, integer: true }),
+
   /** True when started with `NODE_ENV=production` — read by surfaces that
    *  want to cache static assets (the webview's index.html template) in
    *  prod and re-read on every request in dev so source edits show up

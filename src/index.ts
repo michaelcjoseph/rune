@@ -7,6 +7,7 @@ import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
 import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
+import { runWorkRunGc } from './jobs/work-run-gc-runner.js';
 import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
@@ -74,6 +75,11 @@ void cleanupOrphanWorktrees({
 }).catch((err) => {
   log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
 });
+
+// Prune retained work-run artifacts (transcripts + forensics + branch refs)
+// over the retention caps. Best-effort, fire-and-forget — `runWorkRunGc`
+// swallows its own errors. Runs again on each run completion.
+void runWorkRunGc();
 
 // Rotate the Claude stream log if it has grown past the size cap. Idempotent
 // and best-effort — never blocks startup.
