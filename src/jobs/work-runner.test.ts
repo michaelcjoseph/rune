@@ -1008,6 +1008,55 @@ describe('workRunApplier', () => {
       expect(terminal.data.product).toBe('jarvis');
     });
 
+    it('emits a throttled progress event when the parent-side poll detects a new commit', async () => {
+      // Requirement 22: a parent-side poll of the run branch fires a throttled
+      // progress ping carrying the latest commit subject + task tally.
+      vi.useFakeTimers();
+      try {
+        setupValidProject('06-webview');
+        // The poll's `git log baseSha..branch` returns one commit; everything
+        // else (computeWorkProduct's rev-list/diff/status) stays empty → noop.
+        gitStub.stub.mockImplementation(async (args: string[]) =>
+          args.includes('log')
+            ? { stdout: 'abc1234 add the widget', stderr: '' }
+            : { stdout: '', stderr: '' },
+        );
+
+        // A child that does NOT auto-close, so the poll ticker has time to fire.
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        const child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 999;
+        mockSpawn.mockReturnValue(child);
+
+        const events: any[] = [];
+        const consume = (async () => {
+          for await (const e of workRunApplier.apply(descriptorFor('mut-poll'), { bus: null as any, cancel: () => false })) {
+            events.push(e);
+          }
+        })();
+
+        // Advance past one poll interval in a single step — robust to the exact
+        // microtask moment the ticker is installed during apply()'s startup.
+        await vi.advanceTimersByTimeAsync(10_100);
+
+        const progress = events.filter(e => e.kind === 'progress');
+        expect(progress.length).toBeGreaterThanOrEqual(1);
+        expect(String(progress[0].data.line)).toContain('add the widget');
+        // Task tally from the fixture tasks.md (1 of 2 checked).
+        expect(String(progress[0].data.line)).toMatch(/1\s*\/\s*2/);
+
+        child.emit('close', 0, null);
+        await vi.advanceTimersByTimeAsync(0);
+        await consume;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('exports forensics before the terminal event, into the per-run dir', async () => {
       // Requirement 16: forensics are exported (while the worktree still exists)
       // before apply() yields the terminal event — startApply tears the worktree

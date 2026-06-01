@@ -18,9 +18,15 @@
 export interface CommitPollState {
   /** SHA of the newest commit observed on the last ping (null = none yet). */
   lastSeenSha: string | null;
-  /** Epoch ms of the last emitted progress ping (0 = never pinged). */
+  /** Epoch ms of the last emitted progress ping. `0` is the "never pinged"
+   *  sentinel — `now - 0` is always ≫ throttle in production (real epoch), so
+   *  the first new commit always pings immediately. */
   lastPingAt: number;
 }
+
+/** Cap on the rendered commit subject so a pathological (e.g. multi-KB) subject
+ *  can't blow past Telegram's message limit or balloon a bus frame. */
+const SUBJECT_MAX_CHARS = 200;
 
 /** One commit on the run branch. */
 export interface CommitInfo {
@@ -53,9 +59,13 @@ export type CommitPollResult =
   | { ping: true; message: string; nextState: CommitPollState }
   | { ping: false; nextState: CommitPollState };
 
-function notImplemented(fn: string): never {
-  throw new Error(`work-run-commit-poll: ${fn} not implemented (project 11 Phase 4 pending)`);
-}
+/** Default cadence of the parent-side poll against the run branch. Spec open
+ *  question: start at 10s and tune. */
+export const COMMIT_POLL_INTERVAL_MS = 10_000;
+/** Minimum gap between progress pings — set to the poll interval so each poll
+ *  that finds a new commit pings the latest, but a burst within one window
+ *  coalesces into a single ping (never one per task). */
+export const COMMIT_PING_THROTTLE_MS = 10_000;
 
 /**
  * Decide whether to emit a commit-driven progress ping. A new commit (newest
@@ -63,8 +73,22 @@ function notImplemented(fn: string): never {
  * has elapsed since the last ping — otherwise the ping is suppressed and the
  * state is left UNCHANGED so the commit is still "new" and pings once the
  * throttle window clears (one ping per window with the latest subject, never one
- * per task). No new commit → no ping, state unchanged.
+ * per task). No new commit (or an empty list) → no ping, state unchanged.
  */
-export function planCommitProgress(_opts: PlanCommitProgressOpts): CommitPollResult {
-  notImplemented('planCommitProgress');
+export function planCommitProgress(opts: PlanCommitProgressOpts): CommitPollResult {
+  const { state, commits, taskTally, now, throttleMs } = opts;
+  const newest = commits.length > 0 ? commits[0]!.sha : null;
+  const hasNew = newest !== null && newest !== state.lastSeenSha;
+
+  // No new commit (or none at all, incl. a transient empty `rev-list`) — never
+  // a ping, and the state is preserved verbatim.
+  if (!hasNew) return { ping: false, nextState: state };
+
+  // Throttled: suppress but leave state UNCHANGED, so the (still-new) commit
+  // pings once the window clears, carrying whatever the latest head is then.
+  if (now - state.lastPingAt < throttleMs) return { ping: false, nextState: state };
+
+  const subject = commits[0]!.subject.slice(0, SUBJECT_MAX_CHARS);
+  const message = `📊 ${subject} · ${taskTally.done}/${taskTally.total} tasks`;
+  return { ping: true, message, nextState: { lastSeenSha: newest, lastPingAt: now } };
 }

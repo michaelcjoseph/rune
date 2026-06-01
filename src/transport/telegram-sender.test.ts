@@ -311,13 +311,39 @@ describe('TelegramSender', () => {
       await flush(); // let the rejected send settle; must not surface as unhandled
     });
 
-    it('ignores non-terminal work-run events (output/progress)', async () => {
+    it('ignores work-run output events (only terminals + progress pings are sent)', async () => {
       sender.onMutationEvent(workRunEvent('completed', { outcome: 'noop', workProduct: noopWorkProduct }));
-      // override subKind to a non-terminal value
+      // override subKind to a plain output event — not a terminal, not a ping
       sender.onMutationEvent({ ...workRunEvent('completed', {}), subKind: 'output', data: { line: 'x' } } as any);
       await flush();
       // only the terminal event produced a message
       expect(mockSendLongMessage).toHaveBeenCalledOnce();
+    });
+
+    it('delivers a work-run progress ping (commit poll) as a Telegram message', async () => {
+      // Requirement 22: the throttled commit-poll progress ping reaches the user.
+      sender.onMutationEvent({
+        ...workRunEvent('completed', {}),
+        subKind: 'progress',
+        data: { line: '📊 add the widget · 1/2 tasks' },
+      } as any);
+      await flush();
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      expect(mockSendLongMessage.mock.calls[0]![2]).toContain('add the widget');
+    });
+
+    it('does not deliver a progress event for a non-work-run mutation', async () => {
+      sender.onMutationEvent({
+        kind: 'mutation-event',
+        mutationId: 'x',
+        mutationKind: 'gen-eval-loop',
+        subKind: 'progress',
+        ts: new Date().toISOString(),
+        data: { line: 'should be ignored' },
+        userId: 123,
+      } as any);
+      await flush();
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
     });
   });
 

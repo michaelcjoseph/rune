@@ -6,7 +6,8 @@ import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectM
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, type TranscriptSink } from './work-run-transcript.js';
-import { computeWorkProduct, finalizeWorkRun, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
+import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
+import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
@@ -298,7 +299,21 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // (output/log/keep-alive) and hands back the facts; apply() owns the
         // single terminal event. `it.return()` in finally propagates an early
         // consumer-abort into streamProcess's cleanup, matching `yield*`.
-        const it = streamProcess(child, descriptor.id, ctx, t0, sink);
+        // Parent-side commit poll (requirement 22) — enabled only when a base
+        // sha was captured (so the `baseSha..branch` range is valid). The poll
+        // emits throttled `progress` events as the run lands commits.
+        const commitPoll: CommitPollConfig | null = sandbox.baseSha
+          ? {
+              runGit: deps.runGit,
+              cwd: sandbox.worktree,
+              baseSha: sandbox.baseSha,
+              branch,
+              tasksPath,
+              pollIntervalMs: COMMIT_POLL_INTERVAL_MS,
+              throttleMs: COMMIT_PING_THROTTLE_MS,
+            }
+          : null;
+        const it = streamProcess(child, descriptor.id, ctx, t0, sink, commitPoll);
         let step = await it.next();
         try {
           while (!step.done) {
@@ -496,12 +511,28 @@ interface StreamResult {
 /** Bound on the retained last-N stdout display lines and stderr tail. */
 const RING_CAPACITY = 50;
 
+/** Inputs for the parent-side commit poll that runs during the stream
+ *  (requirement 22). Null disables the poll (e.g. no captured baseSha, or a
+ *  unit test that doesn't exercise it). */
+interface CommitPollConfig {
+  runGit: GitRunner;
+  /** Worktree dir — cwd for the `git log` poll. */
+  cwd: string;
+  baseSha: string;
+  branch: string;
+  /** tasks.md path in the worktree, re-read each poll for the running tally. */
+  tasksPath: string;
+  pollIntervalMs: number;
+  throttleMs: number;
+}
+
 async function* streamProcess(
   child: ReturnType<typeof spawn>,
   mutationId: string,
   ctx: ApplyContext,
   t0: number,
   sink: TranscriptSink | null,
+  commitPoll: CommitPollConfig | null,
 ): AsyncGenerator<MutationEvent, StreamResult> {
   const queue: MutationEvent[] = [];
   let done = false;
@@ -542,6 +573,68 @@ async function* streamProcess(
     enqueue(evt('keep-alive', {}));
   }, 30_000);
   keepAliveTicker.unref();
+
+  // Parent-side commit poll (requirement 22). Every `pollIntervalMs` it lists
+  // commits on `baseSha..branch` + reads the running tasks.md tally, and
+  // `planCommitProgress` decides whether to enqueue a throttled `progress`
+  // event (the latest commit subject + X/Y tasks) — never one per task. State
+  // (last-seen SHA + last ping time) lives in this closure. Best-effort: a git
+  // failure is swallowed so a transient error never disrupts the stream.
+  let commitState: CommitPollState = { lastSeenSha: null, lastPingAt: 0 };
+  async function runCommitPoll(cfg: CommitPollConfig): Promise<void> {
+    try {
+      const { stdout } = await cfg.runGit(
+        ['log', `${cfg.baseSha}..${cfg.branch}`, '--format=%H %s'],
+        { cwd: cfg.cwd },
+      );
+      const commits = stdout
+        .split('\n')
+        .filter(Boolean)
+        .map(line => {
+          const sp = line.indexOf(' ');
+          return sp === -1
+            ? { sha: line, subject: '' }
+            : { sha: line.slice(0, sp), subject: line.slice(sp + 1) };
+        });
+      let tasksContent = '';
+      try {
+        // Sync read of a small bounded tasks.md. The worktree lives under
+        // <PROJECT_ROOT>/.worktrees (a normal repo, NOT the iCloud-synced
+        // vault), so this never hits an iCloud placeholder; the cost is sub-ms.
+        tasksContent = readFileSync(cfg.tasksPath, 'utf8');
+      } catch {
+        /* tasks.md unreadable this tick — tally falls back to 0/0 */
+      }
+      const tasks = parseTasks(tasksContent);
+      const tally = { done: tasks.filter(t => t.checked).length, total: tasks.length };
+      const result = planCommitProgress({
+        state: commitState,
+        commits,
+        taskTally: tally,
+        now: Date.now(),
+        throttleMs: cfg.throttleMs,
+      });
+      commitState = result.nextState;
+      // Scrub host paths from the (LLM-authored) commit subject before it rides
+      // the bus to Telegram/cockpit — same treatment as the transcript + the
+      // classification-error reason.
+      if (result.ping) enqueue(evt('progress', { line: scrubPathsInText(result.message) }));
+    } catch {
+      /* best-effort poll — a transient git error must not disrupt the stream */
+    }
+  }
+  // Re-entrancy guard: the poll is async (awaits git). If a `git log` runs long
+  // (slow/contended worktree) the next tick must not start a second pass that
+  // races the first on `commitState` (a double ping / clobbered state).
+  let pollInFlight = false;
+  const commitTicker = commitPoll
+    ? setInterval(() => {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        void runCommitPoll(commitPoll).finally(() => { pollInFlight = false; });
+      }, commitPoll.pollIntervalMs)
+    : null;
+  commitTicker?.unref();
 
   let stdoutBuf = '';
   let stderrBuf = '';
@@ -602,6 +695,7 @@ async function* streamProcess(
 
   child.on('close', (code, signal) => {
     clearInterval(keepAliveTicker);
+    if (commitTicker) clearInterval(commitTicker);
     if (stdoutBuf) emitStdoutLine(stdoutBuf);
     if (stderrBuf) {
       stderrTail.push(stderrBuf);
@@ -616,6 +710,7 @@ async function* streamProcess(
 
   child.on('error', (err) => {
     clearInterval(keepAliveTicker);
+    if (commitTicker) clearInterval(commitTicker);
     stderrTail.push(err.message);
     enqueue(evt('log', { line: err.message, stream: 'stderr' }));
     done = true;
@@ -647,9 +742,10 @@ async function* streamProcess(
     };
   } finally {
     // Belt-and-suspenders: the close/error handlers above also clear the
-    // timer, but a consumer that aborts the iteration before the child
-    // exits would otherwise leak it.
+    // timers, but a consumer that aborts the iteration before the child
+    // exits would otherwise leak them.
     clearInterval(keepAliveTicker);
+    if (commitTicker) clearInterval(commitTicker);
   }
 }
 

@@ -164,8 +164,26 @@ export class TelegramSender implements MessageSender {
    *  rounds, cross-model verdict, and a short id. Project 11 specializes
    *  `work-run` terminals into outcome-aware formats (✅ branch-complete /
    *  📊 partial / ⚠️ no-op / ⚠️ dirty / ❌ failed) so a no-op never reads as
-   *  success. Other kinds keep the generic `/work --auto` format. */
+   *  success, and forwards `work-run` `progress` events (the throttled
+   *  commit-poll ping) as a lightweight message. Other kinds keep the generic
+   *  `/work --auto` format. */
   onMutationEvent(event: BusMutationEvent): void {
+    // Project 11 commit-poll progress ping: a throttled work-run `progress`
+    // event carries a short "📊 <commit subject> · X/Y tasks" line. Deliver it
+    // as a lightweight Telegram message so the user sees mid-run progress; the
+    // throttle lives at the poll level so this never spams.
+    if (event.mutationKind === 'work-run' && event.subKind === 'progress') {
+      const data = event.data as Record<string, unknown> | undefined;
+      const line = String(data?.['line'] ?? '');
+      if (line) {
+        void this.send(event.userId, line).catch((err: unknown) => {
+          log.error('TelegramSender.onMutationEvent progress send failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return;
+    }
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
     const text = event.mutationKind === 'gen-eval-loop'
       ? formatGenEvalLoopTerminal(event)
