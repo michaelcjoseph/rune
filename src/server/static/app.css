@@ -259,6 +259,24 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .cockpit-heartbeat { color: var(--text2); }
 .cockpit-heartbeat-stale { color: #d98c4a; font-weight: 600; }
 .cockpit-progress-actions { display: flex; gap: .25rem; margin-top: .1rem; }
+
+/* Project 11 Phase 5: work-run projection block on a cockpit project card */
+.cockpit-workrun { display: flex; flex-direction: column; gap: .15rem; font-size: .7rem; color: var(--text2); padding: .1rem 0 .15rem .2rem; }
+.cockpit-workrun-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem; }
+.workrun-reason { color: var(--text2); opacity: .85; }
+.workrun-transcript { color: var(--accent, #6aa0ff); text-decoration: none; }
+.workrun-transcript:hover { text-decoration: underline; }
+.cockpit-workrun-output {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: .64rem;
+  color: var(--text2);
+  opacity: .85;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 4.5rem;
+  overflow: hidden;
+  line-height: 1.3;
+}
 .cockpit-cancel-btn {
   font-size: .66rem;
   padding: .08rem .35rem;

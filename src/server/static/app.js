@@ -692,6 +692,9 @@
             // third arg. Reuses the same .progress-bar-wrap / .progress-text
             // CSS classes the removed Projects panel used.
             const taskProgressHtml = proj.taskProgress ? renderTaskProgress(proj.taskProgress) : '';
+            // Phase 5: work-run projection block (live output + elapsed, or the
+            // terminal outcome + reason + transcript link).
+            const workRunHtml = proj.workRun ? renderWorkRun(proj.workRun) : '';
             return `<div class="cockpit-project">` +
               `<div class="cockpit-project-header">` +
                 `<span class="project-slug">${escHtml(proj.slug)}</span>` +
@@ -700,6 +703,7 @@
               `</div>` +
               taskProgressHtml +
               liveProgressHtml +
+              workRunHtml +
               `<div class="cockpit-actions">${actions}</div>` +
               `</div>`;
           }).join('');
@@ -771,6 +775,54 @@
       `</div>` +
       modelsLine +
       (cancelBtn ? `<div class="cockpit-progress-actions">${cancelBtn}</div>` : '') +
+      `</div>`;
+  }
+
+  // Project 11 Phase 5: render the work-run projection block (shape:
+  // WorkRunProjection from src/intent/cockpit.ts, fed by /api/cockpit). An
+  // ACTIVE run (no outcome yet) shows elapsed + the last-N output lines without
+  // opening the drawer; a TERMINATED run shows the typed outcome + reason in
+  // place of a stale `running` pill, so a noop/dirty-uncommitted run never reads
+  // as success. The transcript link points at the authenticated route when a
+  // transcript exists. Same outcome→colour mapping as renderMutations.
+  function workRunOutcomeClass(outcome) {
+    return outcome === 'branch-complete' ? 'run-ok'
+         : outcome === 'failed' ? 'run-error'
+         : 'run-warn'; // partial / noop / dirty-uncommitted — not success
+  }
+  function renderWorkRun(wr) {
+    if (!wr) return '';
+    // transcriptUrl is server-constructed (VALID_SLUG-guarded id), but guard the
+    // scheme client-side too so a future server change can't slip a
+    // javascript:/data: URI into the href — escHtml alone wouldn't stop that.
+    const safeUrl = wr.transcriptUrl && /^\/api\//.test(wr.transcriptUrl) ? wr.transcriptUrl : null;
+    const link = safeUrl
+      ? ` <a class="workrun-transcript" href="${escHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">transcript</a>`
+      : '';
+    if (wr.outcome) {
+      // Terminated: outcome verdict (coloured) + reason. `cls` is the output of
+      // a closed allowlist switch (run-ok/run-warn/run-error), never data —
+      // escHtml'd anyway to match the file-wide "escape every interpolation"
+      // convention so a future refactor can't silently introduce injection.
+      const cls = workRunOutcomeClass(wr.outcome);
+      const reason = wr.reason
+        ? ` <span class="workrun-reason">${escHtml(wr.reason)}</span>`
+        : '';
+      return `<div class="cockpit-workrun">` +
+        `<div class="cockpit-workrun-line"><span class="${escHtml(cls)}">${escHtml(wr.outcome)}</span>${reason}${link}</div>` +
+        `</div>`;
+    }
+    // Active: elapsed since start + last-N output lines. `running · ` is a
+    // literal; only the elapsed value is data (and escHtml'd).
+    const startMs = Date.parse(wr.startedAt ?? '');
+    const elapsed = Number.isFinite(startMs) ? fmtDuration(Math.max(0, Date.now() - startMs)) : '';
+    const head = elapsed ? `running · ${escHtml(elapsed)}` : 'running';
+    const lines = (Array.isArray(wr.lastOutput) ? wr.lastOutput : [])
+      .map(l => escHtml(String(l))).join('<br>');
+    const out = lines ? `<div class="cockpit-workrun-output">${lines}</div>` : '';
+    return `<div class="cockpit-workrun">` +
+      `<div class="cockpit-workrun-line">${head}${link}</div>` +
+      out +
       `</div>`;
   }
   function fmtAge(ms) {
@@ -1085,9 +1137,9 @@
       const label = outcome ?? m.status;
       let cls;
       if (outcome) {
-        cls = outcome === 'branch-complete' ? 'run-ok'
-            : outcome === 'failed' ? 'run-error'
-            : 'run-warn'; // partial / noop / dirty-uncommitted — not success
+        // Shared outcome→colour mapping (also used by the cockpit work-run card)
+        // — a noop/dirty-uncommitted run renders amber, never green success.
+        cls = workRunOutcomeClass(outcome);
       } else {
         cls = m.status === 'completed' ? 'run-ok' : 'run-error';
       }
