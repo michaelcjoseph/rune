@@ -39,7 +39,6 @@ import { join } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 import type { CockpitView } from '../intent/cockpit.js';
-import type { Registry } from '../intent/registry.js';
 
 // ---------------------------------------------------------------------------
 // Hoisted fixtures — a per-process work-runs dir the mocked config points at.
@@ -162,8 +161,12 @@ const { buildCockpitView } = await import('../intent/cockpit.js');
 // which is exactly what makes the projection assertions red until Phase 5.
 // TODO(phase-5): drop this `build` cast and the per-call `as any` on `project`
 // once `buildCockpitView` gains the work-runs param and `CockpitProject.workRun`.
+// `typeof mockRegistry` (not the real `Registry`) intentionally — the hoisted
+// mock literal types `status` as `string`, not `LifecycleStatus`, matching how
+// cockpit-ux.test.ts feeds the same fixture to buildCockpitView. Using `Registry`
+// here would add a spurious tsc error against the loose mock literal.
 const build = buildCockpitView as unknown as (
-  registry: Registry | null,
+  registry: typeof mockRegistry | null,
   runStatus: Record<string, unknown>,
   taskProgress?: Record<string, { done: number; total: number }>,
   workRuns?: Record<string, unknown>,

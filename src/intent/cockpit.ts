@@ -59,6 +59,35 @@ export interface CockpitProgress {
   lastHeartbeatAt: string;
 }
 
+/** Terminal verdict mirror of `WorkOutcome` in `src/jobs/work-run-classify.ts`
+ *  (project 11). Kept as a LOCAL union rather than imported so the intent layer
+ *  doesn't depend on the jobs layer (the dependency direction is jobs → intent).
+ *  The server-side bridge that maps the work-run store into this projection
+ *  (`src/server/work-run-projection.ts`) imports both and will fail to compile
+ *  if the two unions ever drift, so this duplication is drift-safe. */
+export type WorkRunOutcome = 'branch-complete' | 'partial' | 'noop' | 'dirty-uncommitted' | 'failed';
+
+/** Live/terminal projection of a single work run onto its project's cockpit
+ *  card (project 11, Phase 5). Sourced from the new work-run store
+ *  (`logs/work-runs/`), distinct from the gen-eval-loop `CockpitProgress`.
+ *  An active run carries `lastOutput` + `startedAt` (elapsed basis) with a null
+ *  `outcome`; a terminated run carries `outcome` + `reason`. `transcriptUrl` is
+ *  null until a transcript exists, so the card degrades gracefully. */
+export interface WorkRunProjection {
+  /** Mutation/run id — also the per-run dir name and the transcript route id. */
+  mutationId: string;
+  /** Terminal verdict, or null while the run is still in flight. */
+  outcome: WorkRunOutcome | null;
+  /** Terminal reason string, or null while in flight. */
+  reason: string | null;
+  /** Last N readable output lines (drawer-closed live tail / terminal tail). */
+  lastOutput: string[];
+  /** ISO-8601 run start — the card derives elapsed from this. */
+  startedAt: string;
+  /** Authenticated transcript route URL, or null when no transcript exists yet. */
+  transcriptUrl: string | null;
+}
+
 /** One project as the cockpit presents it — lifecycle status and run-status side by side. */
 export interface CockpitProject {
   /** Project slug, e.g. `08-intent-layer`. */
@@ -81,6 +110,10 @@ export interface CockpitProject {
    *  the `progress` field above, which carries gen-eval-loop run state
    *  (rounds + models + heartbeat). */
   taskProgress?: { done: number; total: number };
+  /** Live/terminal work-run projection (project 11, Phase 5), sourced from the
+   *  work-run store. Absent when the project has no recent work run. Distinct
+   *  from `progress` (gen-eval-loop run state). */
+  workRun?: WorkRunProjection;
 }
 
 /** A product and the projects under it, as the cockpit presents them. */
@@ -142,11 +175,16 @@ function normalizeRunStatusEntry(
  * (sourced from `getProjectSummaries()`); when supplied, each project's `taskProgress`
  * field is populated from it. Slugs absent from the map yield projects without `taskProgress`
  * — the renderer must handle that case (don't render a progress bar for unknown counts).
+ *
+ * The optional `workRuns` argument (project 11, Phase 5) is a slug-keyed map of work-run
+ * projections sourced from the new work-run store; when supplied, each matching project's
+ * `workRun` field is populated. Slugs absent from the map yield projects without `workRun`.
  */
 export function buildCockpitView(
   registry: Registry | null,
   runStatus: RunStatusByProject,
   taskProgress?: Record<string, { done: number; total: number }>,
+  workRuns?: Record<string, WorkRunProjection>,
 ): CockpitView {
   if (registry === null) {
     return {
@@ -173,6 +211,9 @@ export function buildCockpitView(
       // Static task progress from tasks.md when the caller supplied a slug-keyed map.
       const tp = taskProgress?.[project.slug];
       if (tp !== undefined) out.taskProgress = tp;
+      // Phase 5: work-run projection from the store when the caller supplied it.
+      const wr = workRuns?.[project.slug];
+      if (wr !== undefined) out.workRun = wr;
       return out;
     }),
   }));

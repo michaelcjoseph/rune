@@ -9,7 +9,7 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
-import { buildCockpitView } from '../intent/cockpit.js';
+import { buildCockpitView, type WorkRunProjection } from '../intent/cockpit.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -19,6 +19,7 @@ import type { MutationKind } from '../transport/mutations.js';
 import { cancelOp } from '../transport/in-flight.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
+import { readWorkRunProjections } from './work-run-projection.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
@@ -208,7 +209,16 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch (err) {
     log.warn('handleApiCockpit: getProjectSummaries failed', { error: (err as Error).message });
   }
-  const view = buildCockpitView(registry, runStatus, taskProgress);
+  // Enrich with the work-run projection (project 11 Phase 5) from the new
+  // work-run store. A failed read (missing/corrupt store) falls back to no
+  // projection — the cockpit must render even without it.
+  let workRuns: Record<string, WorkRunProjection> = {};
+  try {
+    workRuns = readWorkRunProjections(config.WORK_RUNS_DIR, config.WORK_RUNS_INDEX_FILE);
+  } catch (err) {
+    log.warn('handleApiCockpit: readWorkRunProjections failed', { error: (err as Error).message });
+  }
+  const view = buildCockpitView(registry, runStatus, taskProgress, workRuns);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }
