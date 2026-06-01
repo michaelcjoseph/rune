@@ -1027,6 +1027,43 @@ describe('workRunApplier', () => {
       expect(opts.nonClean).toBe(false);
     });
 
+    it('destroys the worktree only AFTER forensics export (finally runs after the body)', async () => {
+      // Requirement 17: the worktree is torn down in the generator finally,
+      // which runs after the body — so forensics (exported inside
+      // finalizeWorkRun, before the terminal yields) always completes while the
+      // worktree still exists.
+      setupValidProject('06-webview');
+      const order: string[] = [];
+      runForensicsSpy.mockImplementation(async () => { order.push('forensics'); return { forensicsPath: 'x', files: [] }; });
+      mockDestroyWorktree.mockImplementation(async () => { order.push('destroy'); });
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-order'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(order).toEqual(['forensics', 'destroy']);
+    });
+
+    it('still destroys the worktree when forensics export throws (failure cannot wedge teardown)', async () => {
+      setupValidProject('06-webview');
+      runForensicsSpy.mockImplementation(async () => { throw new Error('forensics boom'); });
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-fore-throw'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      // The deterministic worktree path is always freed for the next run…
+      expect(mockDestroyWorktree).toHaveBeenCalledOnce();
+      // …and a forensics failure never denies the terminal event.
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+    });
+
     it('still emits ONE terminal event when summary.json write throws (persist is best-effort)', async () => {
       // Edge case: a disk failure on writeSummary must not deny the terminal
       // event — the classification is the source of truth and must always reach
