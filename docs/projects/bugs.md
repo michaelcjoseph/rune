@@ -23,6 +23,7 @@
     - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
+- [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
 - [ ] module.register() -> module.registerHooks()
 - [x] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
