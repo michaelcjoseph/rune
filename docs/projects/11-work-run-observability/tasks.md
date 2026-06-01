@@ -78,7 +78,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Triggers
 
-- [ ] failure / noop / dirty-uncommitted / partial / branch-complete alerts carrying reason + outcome summary; specialized work-run rendering.
+- [x] failure / noop / dirty-uncommitted / partial / branch-complete alerts carrying reason + outcome summary; specialized work-run rendering. (Delivered in Phase 2 §"Persist": `formatWorkRunTerminal` in `telegram-sender.ts` + outcome-aware cockpit `renderRecentMutations`; covered by `telegram-sender.test.ts`.)
 - [ ] Parent-side commit poll (last-seen SHA) driving throttled progress pings; never one per task.
 - [ ] Quiet-run nudge via a distinct `lastOutputAt`/`quietNudgedAt` predicate alongside `isStalled`; add both fields to `SupervisedRun` and `isSupervisedRun`.
 - [ ] Replace the bare finished-in-Ns message everywhere.
