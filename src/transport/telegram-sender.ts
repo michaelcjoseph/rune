@@ -61,16 +61,27 @@ function formatGenEvalLoopTerminal(event: BusMutationEvent): string {
 /** Project 11: outcome-aware terminal message for a `work-run` mutation. Keyed
  *  on the typed `outcome` (carried on the terminal event's `data`), so a run
  *  that exited 0 while doing nothing renders as `⚠️ no-op`, never `✅ finished`.
- *  Falls back to the generic format for an early-exit failure terminal that
- *  carries no outcome (worktree-create / project-not-found). */
+ *  An early-exit terminal with no classified outcome (worktree-create /
+ *  project-not-found / spec-read failure) renders by `subKind` — never the bare
+ *  generic finished-in-Ns format — so a work run can't read as success without
+ *  a verified outcome. */
 function formatWorkRunTerminal(event: BusMutationEvent): string {
   const data = (event.data ?? {}) as Record<string, unknown>;
-  const outcome = typeof data['outcome'] === 'string' ? (data['outcome'] as string) : '';
-  if (!outcome) return formatGenericTerminal(event);
-
   const slug = String(data['projectSlug'] ?? event.mutationId.slice(0, 8));
   const reason = String(data['reason'] ?? '');
   const id = shortMutationId(event.mutationId);
+
+  const outcome = typeof data['outcome'] === 'string' ? (data['outcome'] as string) : '';
+  if (!outcome) {
+    // An early-exit work-run terminal (worktree-create / project-not-found /
+    // spec-read failure) carries no classified outcome. Render by subKind —
+    // NEVER the bare "✅ finished in Ns" (the generic format), so a work run can
+    // never read as success without a verified outcome (requirement 19).
+    return event.subKind === 'completed'
+      ? `✅ ${slug} completed (no outcome recorded) · id=${id}`
+      : `❌ ${slug} failed · ${reason || 'unknown'} · id=${id}`;
+  }
+
   const wp = (data['workProduct'] ?? {}) as Record<string, unknown>;
   const commits = typeof wp['commitCount'] === 'number' ? (wp['commitCount'] as number) : 0;
   const transitions = (wp['transitions'] ?? {}) as Record<string, unknown>;

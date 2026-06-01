@@ -216,15 +216,20 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // No worktree was created, so the outer finally's destroy is a
         // no-op (sandbox stays null). Surface the failure as a terminal
         // event so the mutation reaches a clean failed state.
+        // Scrub host paths: createWorktree's error embeds the worktree path
+        // (which carries the OS username), and this reason reaches Telegram +
+        // mutations.jsonl. `projectSlug` lets the work-run formatter label the
+        // run instead of degrading to the mutation-id prefix.
         yield term(descriptor.id, 'failed', {
-          reason: `worktree create failed: ${(err as Error).message}`,
+          reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
+          projectSlug,
         });
         return;
       }
 
       const dir = findProjectDir(projectSlug, sandbox.worktree);
       if (!dir) {
-        yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}` });
+        yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}`, projectSlug });
         return;
       }
 
@@ -235,7 +240,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       try {
         specContent = readFileSync(specPath, 'utf8');
       } catch {
-        yield term(descriptor.id, 'failed', { reason: `could not read spec.md for ${projectSlug}` });
+        yield term(descriptor.id, 'failed', { reason: `could not read spec.md for ${projectSlug}`, projectSlug });
         return;
       }
 

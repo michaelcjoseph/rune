@@ -190,12 +190,16 @@ describe('Telegram UX — engine notifications (C5)', () => {
     expect(mockSendLongMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('non-gen-eval-loop mutations keep the existing generic ✅ /work --auto format (no regression)', () => {
+  it('non-specialized mutation kinds keep the existing generic ✅ /work --auto format (no regression)', () => {
+    // gen-eval-loop (C5) and work-run (project 11) have specialized formatters;
+    // every OTHER kind (project-edit, proposal-action, …) keeps the generic
+    // format. work-run itself no longer uses it — its outcome-aware + early-exit
+    // rendering is covered in telegram-sender.test.ts.
     sender.onMutationEvent({
       kind: 'mutation-event',
       subKind: 'completed',
-      mutationId: 'mut-work-1',
-      mutationKind: 'work-run',
+      mutationId: 'mut-edit-1',
+      mutationKind: 'project-edit',
       userId: 42,
       ts: '2026-05-25T12:00:00Z',
       data: { slug: '08-intent-layer', durationMs: 5000 },

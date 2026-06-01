@@ -289,6 +289,27 @@ describe('TelegramSender', () => {
       expect(text).toMatch(/2/);
     });
 
+    it('an outcome-less completed work-run terminal never reads as bare "finished"', async () => {
+      // Early-exit terminals (worktree-create / project-not-found) carry no
+      // classified outcome — they must NOT fall through to "✅ finished in Ns",
+      // which would let a work run read as success without a verified outcome.
+      sender.onMutationEvent(workRunEvent('completed', {})); // no `outcome` key
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).not.toMatch(/finished/i);
+      expect(text).toContain('demo'); // the run is still labelled by slug
+      expect(text).toContain('no outcome recorded');
+    });
+
+    it('an outcome-less failed work-run terminal renders the reason (early-exit failure)', async () => {
+      sender.onMutationEvent(workRunEvent('failed', { reason: 'worktree create failed: boom' }));
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('❌');
+      expect(text).toContain('worktree create failed: boom');
+      expect(text).not.toMatch(/finished/i);
+    });
+
     it('a failed outcome renders the reason', async () => {
       sender.onMutationEvent(
         workRunEvent('failed', { outcome: 'failed', reason: 'exited with code 1' }),

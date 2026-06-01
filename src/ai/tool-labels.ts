@@ -33,6 +33,11 @@ export function scrubPathsInText(s: string): string {
   let out = s;
   if (config.VAULT_DIR)     out = out.split(config.VAULT_DIR + '/').join('');
   if (config.WORKSPACE_DIR) out = out.split(config.WORKSPACE_DIR + '/').join('');
+  // WORKTREE_ROOT before PROJECT_ROOT: when it's the default
+  // `<PROJECT_ROOT>/.worktrees` the PROJECT_ROOT pass would still catch it, but
+  // an env-overridden WORKTREE_ROOT outside PROJECT_ROOT (a host path with the
+  // username) is only stripped here.
+  if (config.WORKTREE_ROOT) out = out.split(config.WORKTREE_ROOT + '/').join('');
   out = out.split(PROJECT_ROOT + '/').join('');
   return out;
 }
