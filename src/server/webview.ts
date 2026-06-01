@@ -224,7 +224,28 @@ function handleApiCockpit(res: ServerResponse): void {
   // projection — the cockpit must render even without it.
   let workRuns: Record<string, WorkRunProjection> = {};
   try {
-    workRuns = readWorkRunProjections(config.WORK_RUNS_DIR, config.WORK_RUNS_INDEX_FILE);
+    // Feed in-flight runs (running / blocked-on-human) from the supervision
+    // store so a live run's card renders last-N output + elapsed immediately,
+    // rather than staying blank until termination writes the index row (Gap #2,
+    // phase-6-diagnosis.md; spec req 24). Terminal index rows still win once a
+    // run ends.
+    //
+    // This re-reads supervised-runs.json (readCockpitRunStatus above read it for
+    // runStatus). The second read is accepted rather than consolidated: the file
+    // is small and local, the cockpit is poll-driven, and the only divergence a
+    // mid-poll write could cause (runStatus vs. workRun reflecting different
+    // snapshots for one cycle) is cosmetic, not a correctness/security issue.
+    // Consolidating would require threading pre-loaded runs through
+    // readCockpitRunStatus and updating its three test mocks — not worth it here.
+    const activeRuns = readAllRuns(config.SUPERVISED_RUNS_FILE).filter(
+      (r) => r.status === 'running' || r.status === 'blocked-on-human',
+    );
+    workRuns = readWorkRunProjections(
+      config.WORK_RUNS_DIR,
+      config.WORK_RUNS_INDEX_FILE,
+      undefined,
+      activeRuns,
+    );
   } catch (err) {
     log.warn('handleApiCockpit: readWorkRunProjections failed', { error: (err as Error).message });
   }

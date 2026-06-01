@@ -126,6 +126,6 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Fix #2 — show active in-flight runs on the cockpit card
 
-- [ ] Write a failing test: an active run (present in the supervision store, absent from `index.jsonl`) appears in the cockpit projection with live `lastOutput` + elapsed.
-- [ ] Merge active runs from the in-memory supervision store (`activeRuns` / `SupervisedRun` ring buffer + `startedAt`) into `readWorkRunProjections` / `buildCockpitView`, layered over the terminal index rows (terminal row wins once the run ends). Satisfies spec req 24.
-- [ ] Confirm a live run renders last-N output + elapsed on the card without opening the drawer, then transitions to the outcome verdict on termination.
+- [x] Write a failing test: an active run (present in the supervision store, absent from `index.jsonl`) appears in the cockpit projection with live `lastOutput` + elapsed.
+- [x] Merge active runs from the in-memory supervision store (`activeRuns` / `SupervisedRun` ring buffer + `startedAt`) into `readWorkRunProjections` / `buildCockpitView`, layered over the terminal index rows (terminal row wins once the run ends). Satisfies spec req 24.
+- [x] Confirm a live run renders last-N output + elapsed on the card without opening the drawer, then transitions to the outcome verdict on termination.

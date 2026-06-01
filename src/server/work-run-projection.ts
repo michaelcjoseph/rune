@@ -35,6 +35,7 @@ import { parseStreamJsonLine, streamJsonToDisplay } from '../jobs/work-run-trans
 import type { WorkOutcome } from '../jobs/work-run-classify.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { WorkRunProjection, WorkRunOutcome } from '../intent/cockpit.js';
+import type { SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('work-run-projection');
@@ -84,15 +85,52 @@ function readTranscriptTail(transcriptPath: string, n: number): string[] {
 }
 
 /**
+ * Build one `WorkRunProjection` for a run id. Shared by the terminal-index and
+ * the active-run paths — both resolve `outcome`/`reason`/`startedAt` from their
+ * own source, then need the identical transcript-presence formula:
+ *
+ * One `existsSync` drives `transcriptUrl` (the card links only when a transcript
+ * is present, degrading to null otherwise). `readTranscriptTail` separately
+ * absorbs ENOENT → [], so a GC delete racing between this check and the read is
+ * benign (URL set, tail empty — the route would then 404).
+ */
+function buildProjection(
+  dir: string,
+  id: string,
+  outcome: WorkRunOutcome | null,
+  reason: string | null,
+  startedAt: string,
+): WorkRunProjection {
+  const transcriptPath = join(dir, id, 'transcript.jsonl');
+  const hasTranscript = existsSync(transcriptPath);
+  return {
+    mutationId: id,
+    outcome,
+    reason,
+    lastOutput: hasTranscript ? readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES) : [],
+    startedAt,
+    transcriptUrl: hasTranscript ? `/api/work-runs/${id}/transcript` : null,
+  };
+}
+
+/**
  * Build the slug-keyed work-run projection map from the store.
  *
- * @param dir       The work-runs root (`config.WORK_RUNS_DIR`).
- * @param indexFile The rolling index file (`config.WORK_RUNS_INDEX_FILE`).
+ * @param dir        The work-runs root (`config.WORK_RUNS_DIR`).
+ * @param indexFile  The rolling index file (`config.WORK_RUNS_INDEX_FILE`).
+ * @param recent     How many recent terminal index rows to scan.
+ * @param activeRuns In-flight runs from the supervision store (the caller passes
+ *   the `running`/`blocked-on-human` subset). Per spec req 15 the index row and
+ *   `summary.json` are written only at termination, so a live run has no index
+ *   row — without this, the card stays blank for the whole run (Gap #2,
+ *   phase-6-diagnosis.md). These are layered over the terminal rows below so a
+ *   live run renders last-N output + elapsed (spec req 24).
  */
 export function readWorkRunProjections(
   dir: string,
   indexFile: string,
   recent = DEFAULT_RECENT_RUNS,
+  activeRuns: readonly SupervisedRun[] = [],
 ): Record<string, WorkRunProjection> {
   const out: Record<string, WorkRunProjection> = {};
   // readRecentIndex is torn-line-tolerant and returns [] on a missing file.
@@ -115,28 +153,55 @@ export function readWorkRunProjections(
     if (!slug) continue;
     // Newest run per project wins — rows are newest-first, so skip if seen.
     if (out[slug]) continue;
-    const transcriptPath = join(dir, row.id, 'transcript.jsonl');
-    // One existsSync drives transcriptUrl (the card links only when a transcript
-    // is present, degrading gracefully to null otherwise). readTranscriptTail
-    // separately absorbs ENOENT → [], so a GC delete racing between this check
-    // and the read is benign (URL set, tail empty — the route would then 404).
-    const hasTranscript = existsSync(transcriptPath);
-    out[slug] = {
-      mutationId: row.id,
-      outcome: summary?.outcome ?? row.outcome ?? null,
-      reason: summary?.reason ?? null,
-      lastOutput: hasTranscript ? readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES) : [],
-      // `startedAt` is typed `string` on both summary and index row, but the
-      // index shape guard doesn't enforce it — fall back to '' so a torn row
-      // can't surface `undefined` (which would render as "NaN ago" on the card).
-      startedAt: summary?.startedAt ?? row.startedAt ?? '',
-      // Authenticated transcript route (Phase 5); null when no transcript exists
-      // yet so the card degrades gracefully rather than linking at a 404.
-      transcriptUrl: hasTranscript ? `/api/work-runs/${row.id}/transcript` : null,
-    };
+    // `startedAt` is typed `string` on both summary and index row, but the index
+    // shape guard doesn't enforce it — fall back to '' so a torn row can't
+    // surface `undefined` (which would render as "NaN ago" on the card).
+    out[slug] = buildProjection(
+      dir,
+      row.id,
+      summary?.outcome ?? row.outcome ?? null,
+      summary?.reason ?? null,
+      summary?.startedAt ?? row.startedAt ?? '',
+    );
   }
-  if (rows.length > 0) {
-    log.debug('readWorkRunProjections', { runs: rows.length, projected: Object.keys(out).length });
+  // Layer in-flight runs over the terminal index rows. An active run has no
+  // index row / summary.json yet (written only at termination, spec req 15), so
+  // its live data comes from the transcript.jsonl tail the sink writes from run
+  // start. The per-product concurrency cap (config.WORK_RUN_PER_PROJECT_CAP)
+  // makes an active run the newest activity for its slug, so it wins over an
+  // older terminal row — but a terminal row for a strictly-newer run still wins
+  // (defensive against a future cap relaxation; recency rule below).
+  for (const run of activeRuns) {
+    // `run.id` becomes a directory name in join() below — same boundary guard as
+    // the index-row path. A non-slug id is dropped rather than projected.
+    if (!VALID_SLUG.test(run.id)) {
+      log.warn('readWorkRunProjections: skipping active run with non-slug id', { id: run.id });
+      continue;
+    }
+    // `slug` is only a map key (never an fs path), but guard it too so a corrupt
+    // store entry can't pollute the cockpit view with a non-slug key — mirrors
+    // the run.id boundary above.
+    const slug = run.project;
+    if (!slug || !VALID_SLUG.test(slug)) continue;
+    // Recency: keep an existing terminal projection only when it has a valid,
+    // strictly-later startedAt. An unparseable/empty active startedAt loses to a
+    // valid existing one; otherwise the live run wins (visibility-favouring
+    // default, sound under the per-product cap that makes it the newest run).
+    const existing = out[slug];
+    if (existing) {
+      const existingTs = Date.parse(existing.startedAt);
+      const activeTs = Date.parse(run.startedAt);
+      if (!Number.isNaN(existingTs) && (Number.isNaN(activeTs) || existingTs > activeTs)) continue;
+    }
+    // In-flight → no terminal verdict yet (outcome/reason null).
+    out[slug] = buildProjection(dir, run.id, null, null, run.startedAt ?? '');
+  }
+  if (rows.length > 0 || activeRuns.length > 0) {
+    log.debug('readWorkRunProjections', {
+      runs: rows.length,
+      active: activeRuns.length,
+      projected: Object.keys(out).length,
+    });
   }
   return out;
 }
