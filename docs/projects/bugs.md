@@ -37,6 +37,7 @@
     - B. If using the allowlist route (not skip), re-add `--add-dir <PROJECT_ROOT>` so the node_modules symlink target resolves. Moot under `--dangerously-skip-permissions`.
     - C. Make deps available in `createWorktree` (`src/jobs/sandbox-runtime.ts`): symlink the parent's `node_modules` into the worktree (fast) or `npm ci` at setup. Required regardless of A/B or the run can't run tests.
     - D. (defense-in-depth) Fail fast: if the first mutating tool call is denied, classify `failed` with reason `permission-denied` rather than running 428s to a `noop` (depends on project-11 fix #1 surfacing the denial event).
+  - **Status (2026-06-01)** — A + B + C implemented in `b3ce3b3`: work-runner spawns with `--dangerously-skip-permissions` (mirrors `execClaude`), `createWorktree` symlinks the repo's `node_modules` into the worktree (`linkWorktreeDeps`), B moot under skip. Unit-tested (77 pass). **D deferred** (defense-in-depth) and **not yet validated by a real productive run** — that's the open project 11 Phase 6 task. Leave this open until a watched run lands real commits.
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.

@@ -109,8 +109,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Watched run
 
-- [x] Re-run a real project under instrumentation in a watched (not fire-and-forget) run. _(Pending. The 2026-06-01 run `7b8410fb` was fire-and-forget and surfaced follow-on #2 — the cockpit panel was blank for the whole run.)_
-- [~] Confirm the taxonomy fires correctly across at least one real and one empty run. _(Empty half validated: run `7b8410fb` classified `noop` correctly with full transcript + forensics. Real/productive half still pending — a productive run isn't currently possible until the `/work` permission gate is fixed; see `docs/projects/bugs.md`.)_
+- [ ] Re-run a real project under instrumentation in a watched (not fire-and-forget) run. _(Genuinely pending — not done despite an earlier bulk "mark complete". The only run so far (`7b8410fb`) was fire-and-forget and noop'd. Now unblocked: the permission-gate fix landed in `b3ce3b3` (`docs/projects/bugs.md`) and live-panel fixes #1/#2 shipped, so a watched run can finally land commits and be observed end to end.)_
+- [~] Confirm the taxonomy fires correctly across at least one real and one empty run. _(Empty half validated: run `7b8410fb` classified `noop` correctly with full transcript + forensics. Real/productive half pending the watched run above — unblocked as of `b3ce3b3`.)_
 - [x] Write up the original silent-failure root cause; file the `/work` fix follow-on if a structural mismatch is confirmed. → [phase-6-diagnosis.md](phase-6-diagnosis.md). Confirmed structural: the `--auto` permission gate refuses all mutations (`Edit`/`git`/`npm`/`vitest`), so runs exit clean with no work product. `/work` fix filed in `docs/projects/bugs.md`.
 
 ## Phase 6 follow-on — live-path observability fixes
