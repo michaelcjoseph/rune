@@ -23,14 +23,20 @@
     - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
 - [ ] `/work --auto` runs are blocked by the harness permission gate, so every run exits clean with zero work product (silent no-op). Surfaced by project 11 — see `docs/projects/11-work-run-observability/phase-6-diagnosis.md`.
   - **Issue**
-    - Validation run `7b8410fb` (project 10, 2026-06-01) classified `noop`: 0 commits, 0 task transitions, clean tree, `exitCode: 0`.
-    - The transcript shows the agent did the analysis, then every mutation was refused by the permission gate: `Edit` on `tasks.md` (twice), and `git` / `npm` / `npx` / `vitest` via Bash, for both the main agent and the test-specialist subagent.
-    - With no way to `Edit`, commit, or run tests, a clean exit with no work product is the only possible end state. Same structural signature as the original `7828477a` / `3b002b26` silent runs that motivated project 11.
-    - This blocks the "real/productive run" half of project 11's Phase 6 validation — a productive `/work` run can't happen until the gate is fixed.
-  - **Fix options**
-    - A. Configure the `--auto` sandbox to permit the writes a `/work` run must make — `Edit`/`Write` within the worktree, `git` commits on the run branch, and the project's test runner (`npm`/`npx`/`vitest`) — via the harness permission config (e.g. `settings.json` allowlist or `--permission-mode` for the spawned `claude -p`).
-    - B. Verify the spawn command in `src/jobs/work-runner.ts` passes the intended permission mode/allowlist; the gate refusing writes suggests it inherits a restrictive default.
-    - C. Fail fast: if the first mutating tool call is denied, classify `failed` with reason `permission-denied` rather than running 428s to a `noop`, so the cause is obvious without reading the transcript (depends on project-11 fix #1 surfacing the denial event).
+    - Validation run `7b8410fb` (project 10, 2026-06-01) classified `noop`: 0 commits, 0 task transitions, clean tree, `exitCode: 0`. Same structural signature as the original `7828477a` / `3b002b26` silent runs that motivated project 11. Blocks the "real/productive run" half of Phase 6 validation.
+    - Transcript shows 75 tool calls; the agent did the analysis, then every mutation was refused. Root cause is the spawn site `src/jobs/work-runner.ts:282`, which launches headless `claude -p` with **no permission flag** — no `--permission-mode`, no `--allowedTools`, no `--add-dir`. Default mode prompts for approval on every mutating/non-allowlisted tool, and headless (`-p`, no TTY) there is no approver, so the prompt auto-denies. Three distinct failure modes:
+    - **A. Default permission mode denies all mutations (core cause).**
+      - `This command requires approval` (~16): `npm install`, `npm ci`, `npm run build`, `npx vitest run …`, `tsx …`, `node -e …`, `ln -s …`.
+      - `contains multiple operations. The following part requires approval` (~6): anything piped, e.g. `… 2>&1 | tail -20`, `git show … | head -40`.
+      - `Claude requested permissions to write … you haven't granted it yet` (3): the two `Edit` calls on `tasks.md` (why no checkbox could be ticked → 0 task transitions), plus a `Glob` read.
+      - `Contains simple_expansion` (1): `echo $PATH`.
+    - **B. Allowed working dir is only the worktree.** `cwd: sandbox.worktree` is the sole allowed dir (the `--add-dir` was deliberately dropped, `work-runner.ts:278`), so reaching the parent repo was blocked: `ls …/jarvis/node_modules → "may only list files in the allowed working directories: …/.worktrees/jarvis/10-jarvis-identity-refactor"`; `Glob node_modules @ …/jarvis → "you haven't granted it yet"`.
+      - **C. Worktree has no `node_modules`.** `ls node_modules → No such file or directory`. Git worktrees don't carry the gitignored `node_modules`, so there's no local `vitest`/`tsx`. Reaching the parent's was blocked by B; `npm install` / symlink blocked by A. Dead end on tests even if A and B were fixed.
+  - **Fix** (all three, in order)
+    - A. Spawn with real permissions at `work-runner.ts:282`. The run is a throwaway worktree on a GC'd branch that can't touch `main` — the isolated sandbox `--dangerously-skip-permissions` is built for. Conservative alternative: `--allowedTools` covering `Edit`, `Write`, `Bash(git:*)`, `Bash(npm:*)`, `Bash(npx:*)`. Note `--permission-mode acceptEdits` alone is insufficient — it unblocks `Edit` but still prompts (→ denies) on `git`/`npm` Bash.
+    - B. If using the allowlist route (not skip), re-add `--add-dir <PROJECT_ROOT>` so the node_modules symlink target resolves. Moot under `--dangerously-skip-permissions`.
+    - C. Make deps available in `createWorktree` (`src/jobs/sandbox-runtime.ts`): symlink the parent's `node_modules` into the worktree (fast) or `npm ci` at setup. Required regardless of A/B or the run can't run tests.
+    - D. (defense-in-depth) Fail fast: if the first mutating tool call is denied, classify `failed` with reason `permission-denied` rather than running 428s to a `noop` (depends on project-11 fix #1 surfacing the denial event).
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.
