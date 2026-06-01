@@ -9,6 +9,18 @@
     - B. Add the rebuild to the nightly job for safety.
     - C. File-watcher on each product's `docs/projects/index.md` for instant rebuild.
     - D. Cockpit endpoint or CLI command to trigger a manual rebuild.
+- [ ] Review sessions stay "active" in the cockpit forever when the outline marker isn't detected (phase never reaches `done`).
+  - **Issue**
+    - The interview engine advances phases by string-matching the model's free-text reply: `detectOutline(responseText, config.outlineMarker)` in `src/reviews/interview.ts:238`. The weekly marker is the literal lowercase string `'week in review outline:'` (`src/reviews/weekly.ts:25`).
+    - When the model presents the outline without that exact phrase (e.g. "Here's the full outline for approval:" followed by a code block headed "Week in Review — <dates>"), `detectOutline` returns null. The engine treats the outline turn as an ordinary interview message and leaves `phase: 'interview'`.
+    - The user's "approve" then arrives while still in `interview`, so it routes to `handleInterview` (not `handleApproval`) and is forwarded to the model. The model, following `SKILL.md`, runs review-writer + post-agents + git commit itself.
+    - `runWriteupAndUpdates` is the only code path that sets `phase: 'done'` (`interview.ts:460`), and it never runs on this branch. `getActiveReviewSession` filters only on `phase === 'done'` (`session.ts:35`), so the session shows active indefinitely. `/cancel-review` is the sole escape.
+    - Dual orchestration is the deeper problem: both the daemon (`runWriteupAndUpdates`) and the model (per `SKILL.md`) believe they own writeup + post-agents + commit. On marker-detect success the daemon runs them; on failure the model does. The paths can double-write or, as here, strand the session. Confirmed instance: the weekly 2026-05-29 session sat stuck at `phase:"interview"` in `logs/review-sessions.json`.
+  - **Fix options** (A is the real fix; C is the safety net)
+    - A. Stop scraping free text for phase transitions. Drive interview→approval with a deterministic signal the model emits (a sentinel token, a fenced ` ```outline ` block, or a tool call) and assert its presence instead of matching prose.
+    - B. Resolve the dual orchestration — pick one writeup owner. Either the daemon owns `runWriteupAndUpdates` and `SKILL.md` must NOT instruct the model to write the journal / run updaters, or the model owns it end-to-end and the engine just needs a completion signal to flip `phase: 'done'`.
+    - C. Add a stuck-session watchdog: mirror `src/jobs/planning-expiry.ts` for review sessions, auto-closing any session left in a non-terminal phase past some age so the cockpit self-heals.
+    - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
@@ -16,4 +28,3 @@
 - [x] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
 - [x] The morning prep should include at the top this week’s goals
 - [x] Whoop numbers don’t match what’s in the app. I think there’s a date mismatch (pulling recovery and sleep for the day before, not this morning)
-- [x] Cockpit is showing weekly Active Review is still happening when it was completed
