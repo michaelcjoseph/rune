@@ -17,8 +17,22 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// work-run-forensics now imports `redactSecrets` from work-run-transcript, which
+// transitively imports tool-labels → config.js (which throws on missing env at
+// import time). Mock it so this suite loads with no real environment.
+vi.mock('../config.js', () => ({
+  default: {
+    LOGS_DIR: '/tmp',
+    VAULT_DIR: '/test/vault',
+    WORKSPACE_DIR: '/test/workspace',
+    PROJECT_ROOT: '/test/project',
+  },
+  PROJECT_ROOT: '/test/project',
+}));
 
 import { exportForensics } from './work-run-forensics.js';
 import type { ExportForensicsOpts } from './work-run-forensics.js';
@@ -122,6 +136,44 @@ describe('exportForensics', () => {
     const result = await exportForensics({ runGit: stub, ...baseOpts({ nonClean: false }) });
     expect(existsSync(join(outDir, 'untracked.tar'))).toBe(false);
     expect(result.files).not.toContain('untracked.tar');
+  });
+
+  it('archives real untracked files (incl. a leading-dash name) without tar arg-injection', async () => {
+    // The security-critical path: real `tar` over real files, including a
+    // filename that starts with `--` (a tar argument-injection vector). The `--`
+    // separator must make tar treat it as a file, not an option.
+    const worktree = mkdtempSync(join(tmpdir(), 'work-run-forensics-wt-'));
+    try {
+      writeFileSync(join(worktree, 'new.txt'), 'untracked content');
+      // A pathological name git could legitimately report from ls-files.
+      writeFileSync(join(worktree, '--checkpoint-action.txt'), 'evil');
+
+      // A git stub whose `ls-files -z` reports both files NUL-delimited.
+      const stub = vi.fn<GitRunner>().mockImplementation(async (args) => {
+        if (args.includes('ls-files')) {
+          return { stdout: 'new.txt\0--checkpoint-action.txt\0', stderr: '' };
+        }
+        if (args.includes('bundle') && args.includes('create')) {
+          const path = args[args.indexOf('create') + 1];
+          if (path) writeFileSync(path, 'BUNDLE');
+          return { stdout: '', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await exportForensics({ runGit: stub, ...baseOpts({ worktree, nonClean: true }) });
+
+      const tarPath = join(outDir, 'untracked.tar');
+      expect(existsSync(tarPath)).toBe(true);
+      expect(result.files).toContain('untracked.tar');
+      // Listing the archive proves both files (including the dash-named one)
+      // were archived as files, not interpreted as tar options.
+      const listing = execFileSync('tar', ['-tf', tarPath], { encoding: 'utf8' });
+      expect(listing).toContain('new.txt');
+      expect(listing).toContain('--checkpoint-action.txt');
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
   });
 
   it('returns the forensicsPath and the list of artifacts written', async () => {

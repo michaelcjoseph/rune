@@ -8,6 +8,7 @@ import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from '
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, type TranscriptSink } from './work-run-transcript.js';
 import { computeWorkProduct, finalizeWorkRun, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -44,6 +45,9 @@ export interface WorkRunRuntimeDeps {
   writeSummary: (dir: string, summary: WorkRunSummary) => void;
   /** Append one torn-line-tolerant row to the rolling index. */
   appendIndexRow: (filePath: string, row: WorkRunIndexRow) => void;
+  /** Export the forensic evidence bundle into the per-run dir (best-effort,
+   *  before the terminal event, while the worktree still exists). */
+  runForensics: (opts: ExportForensicsOpts) => Promise<ForensicsResult>;
 }
 
 /** Production defaults — real git, real config dir, real sink + store. */
@@ -55,6 +59,7 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
     createSink: (runId, baseDir) => createTranscriptSink({ runId, baseDir }),
     writeSummary,
     appendIndexRow,
+    runForensics: exportForensics,
   };
 }
 
@@ -342,9 +347,22 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               finalTasks,
             }),
           }),
-          // Forensics export lands in Phase 3; a no-op keeps finalizeWorkRun's
-          // single-terminal contract intact today.
-          exportForensics: async () => {},
+          // Export the forensic evidence bundle into the per-run dir while the
+          // worktree still exists (the outer `finally` destroys it only after
+          // the terminal event yields). `facts` is null on the classification-
+          // error path — capture everything best-effort (treat as non-clean).
+          // finalizeWorkRun wraps this call in its own try/catch, so a
+          // forensics failure never denies the terminal event.
+          exportForensics: async (facts) => {
+            await deps.runForensics({
+              runGit: deps.runGit,
+              worktree: worktreeDir,
+              outDir: join(deps.workRunsDir, descriptor.id),
+              baseSha,
+              branch,
+              nonClean: facts ? facts.product.dirty || facts.product.untracked : true,
+            });
+          },
         });
 
         // Augment the classified terminal event with the run's identity so

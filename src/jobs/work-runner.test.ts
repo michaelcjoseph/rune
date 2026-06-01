@@ -224,6 +224,7 @@ describe('workRunApplier', () => {
   let writeSummarySpy: ReturnType<typeof vi.fn>;
   let currentSink: ReturnType<typeof makeFakeSink>;
   let gitStub: ReturnType<typeof makeGitStub>;
+  let runForensicsSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -249,6 +250,10 @@ describe('workRunApplier', () => {
     gitStub = makeGitStub();
     currentSink = makeFakeSink();
     indexRows = [];
+    // runForensics is stubbed (the real export writes real fs, which node:fs is
+    // mocked away from here) — its own contract is covered by
+    // work-run-forensics.test.ts; here we only assert it's invoked correctly.
+    runForensicsSpy = vi.fn(async () => ({ forensicsPath: '/tmp/test-work-runs/x', files: [] }));
     __setWorkRunRuntimeForTest({
       runGit: gitStub.stub as never,
       workRunsDir: '/tmp/test-work-runs',
@@ -256,6 +261,7 @@ describe('workRunApplier', () => {
       createSink: () => currentSink.sink as never,
       writeSummary: writeSummarySpy as never,
       appendIndexRow: ((filePath: string, row: any) => { indexRows.push({ filePath, row }); }) as never,
+      runForensics: runForensicsSpy as never,
     });
   });
 
@@ -994,6 +1000,31 @@ describe('workRunApplier', () => {
       const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal.data.projectSlug).toBe('06-webview');
       expect(terminal.data.product).toBe('jarvis');
+    });
+
+    it('exports forensics before the terminal event, into the per-run dir', async () => {
+      // Requirement 16: forensics are exported (while the worktree still exists)
+      // before apply() yields the terminal event — startApply tears the worktree
+      // down on the terminal, so the bundle/diff/status reads must run first.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      let forensicsCalledAtTerminal: boolean | undefined;
+      for await (const event of workRunApplier.apply(descriptorFor('mut-forensics'), { bus: null as any, cancel: () => false })) {
+        if (event.kind === 'completed' || event.kind === 'failed') {
+          forensicsCalledAtTerminal = runForensicsSpy.mock.calls.length > 0;
+        }
+      }
+
+      expect(runForensicsSpy).toHaveBeenCalledOnce();
+      expect(forensicsCalledAtTerminal).toBe(true);
+      const opts = runForensicsSpy.mock.calls[0]![0] as any;
+      expect(opts.worktree).toBe(FAKE_WORKTREE);
+      expect(opts.branch).toBe('jarvis-work/mut-fore'); // first 8 of 'mut-forensics'
+      expect(opts.outDir).toBe('/tmp/test-work-runs/mut-forensics');
+      // The default git stub reports a clean tree → noop → nonClean false.
+      expect(opts.nonClean).toBe(false);
     });
 
     it('still emits ONE terminal event when summary.json write throws (persist is best-effort)', async () => {
