@@ -34,6 +34,7 @@ function buildSupervisedRun(
   status: SupervisedRun['status'],
   nowIso: string,
   lastChildAliveAt?: string,
+  lastOutputAt?: string,
 ): SupervisedRun {
   const p = d.payload as Record<string, unknown>;
   const product = typeof p['product'] === 'string' ? p['product'] : 'jarvis';
@@ -51,6 +52,13 @@ function buildSupervisedRun(
   };
   if (lastChildAliveAt !== undefined) {
     run.lastChildAliveAt = lastChildAliveAt;
+  }
+  // `lastOutputAt` is the LLM-output signal the quiet-run nudge keys on —
+  // distinct from `lastChildAliveAt` (child liveness). Only output events
+  // advance it; lifecycle/keep-alive writes thread the prior value back through
+  // so they don't reset it to undefined.
+  if (lastOutputAt !== undefined) {
+    run.lastOutputAt = lastOutputAt;
   }
   return run;
 }
@@ -245,6 +253,9 @@ async function startApply(
    *  lifecycle writes (terminal, post-keep-alive completed) preserve it
    *  instead of overwriting it with `undefined`. */
   let currentChildAliveAt: string | undefined;
+  /** Latest LLM-output timestamp persisted, so non-output writes (keep-alive,
+   *  terminal) preserve it for the quiet-run predicate instead of resetting it. */
+  let currentOutputAt: string | undefined;
   const HEARTBEAT_THROTTLE_MS = 30_000;
 
   // Use the real bus if available, else a no-op so appliers always receive a valid object
@@ -275,8 +286,11 @@ async function startApply(
       if (event.kind === 'output') {
         const now = Date.now();
         if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
+          const nowIso = new Date(now).toISOString();
+          // An output event is the LLM-output signal — advance lastOutputAt too.
+          currentOutputAt = nowIso;
           safeUpsertRun(
-            buildSupervisedRun(descriptor, 'running', new Date(now).toISOString(), currentChildAliveAt),
+            buildSupervisedRun(descriptor, 'running', nowIso, currentChildAliveAt, currentOutputAt),
           );
           lastHeartbeatUpsertAt = now;
         }
@@ -299,6 +313,7 @@ async function startApply(
               'running',
               new Date(lastHeartbeatUpsertAt).toISOString(),
               nowIso,
+              currentOutputAt,
             ),
           );
           lastKeepAliveUpsertAt = now;
@@ -326,6 +341,7 @@ async function startApply(
             descriptor.status,
             new Date().toISOString(),
             currentChildAliveAt,
+            currentOutputAt,
           ),
         );
         return;
@@ -335,7 +351,7 @@ async function startApply(
     descriptor.status = 'completed';
     appendMutationLine(descriptor);
     safeUpsertRun(
-      buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt),
+      buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
     );
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
@@ -346,7 +362,7 @@ async function startApply(
     // via `return`, so this catch is only reachable when the run is still
     // 'running' and a markCrashed() wrap would be a no-op composition.
     safeUpsertRun(
-      buildSupervisedRun(descriptor, 'failed', new Date().toISOString(), currentChildAliveAt),
+      buildSupervisedRun(descriptor, 'failed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
     );
   } finally {
     activeRuns.delete(descriptor.id);

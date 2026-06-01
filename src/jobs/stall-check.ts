@@ -100,15 +100,18 @@ export function checkStalledRuns(deps: CheckStalledRunsDeps): Set<string> {
  * full status dump. Exported so the timer-glue module can build the
  * Telegram message without duplicating the format rule.
  */
+/** Render an age (now − a timestamp) as a rounded "Nmin" label, or "?" for a
+ *  corrupt/unparseable timestamp (which reaches the formatters because the
+ *  predicates fail toward visibility). Shared by both nudge formatters. */
+function ageMinLabel(ts: string, now: number): string {
+  const delta = now - new Date(ts).getTime();
+  return Number.isFinite(delta) ? `${Math.round(delta / 60_000)}min` : '?';
+}
+
 export function formatStallNudge(run: SupervisedRun, now: number): string {
-  const rawAge = now - new Date(run.lastHeartbeatAt).getTime();
-  // A corrupt or unparseable lastHeartbeatAt reaches here because isStalled
-  // treats it as stalled (fail toward visibility). Guard against NaN in the
-  // user-visible string.
-  const ageLabel = Number.isFinite(rawAge) ? `${Math.round(rawAge / 60_000)}min` : '?';
   return (
     `⚠️ Run stalled: ${run.product}/${run.project} ` +
-    `(no heartbeat for ${ageLabel}). id=${run.id.slice(0, 8)}`
+    `(no heartbeat for ${ageMinLabel(run.lastHeartbeatAt, now)}). id=${run.id.slice(0, 8)}`
   );
 }
 
@@ -116,9 +119,11 @@ export function formatStallNudge(run: SupervisedRun, now: number): string {
  * Format a quiet-run nudge — a run that is alive but producing no LLM output.
  * Distinct wording from {@link formatStallNudge} so the operator can tell a
  * child-dead stall ("stalled") from a quiet-but-alive run ("quiet").
- *
- * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
  */
-export function formatQuietNudge(_run: SupervisedRun, _now: number): string {
-  throw new Error('stall-check: formatQuietNudge not implemented (project 11 Phase 4 pending)');
+export function formatQuietNudge(run: SupervisedRun, now: number): string {
+  return (
+    `🔇 Run quiet: ${run.product}/${run.project} ` +
+    `(no output for ${ageMinLabel(run.lastOutputAt ?? run.startedAt, now)}, but still alive). ` +
+    `id=${run.id.slice(0, 8)}`
+  );
 }

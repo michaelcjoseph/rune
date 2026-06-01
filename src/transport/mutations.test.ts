@@ -480,6 +480,55 @@ describe('mutations', () => {
       }
     });
 
+    it('an output event past the throttle window sets lastOutputAt (the quiet-run signal)', async () => {
+      // Project 11 Phase 4: lastOutputAt advances on output events, distinct
+      // from lastChildAliveAt (keep-alive). It is what the quiet-run nudge keys
+      // on. Throttled on the 30s heartbeat counter like lastHeartbeatAt.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+        let release: () => void = () => {};
+        const gate = new Promise<void>((r) => { release = r; });
+
+        async function* gen(): AsyncIterable<any> {
+          await gate;
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'output', data: { line: 'working' } };
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }
+
+        const applier = makeApplier({
+          kind: 'work-run',
+          autoApprove: true,
+          validateResult: { ok: true },
+          applyGen: gen(),
+        });
+        registerApplier(applier);
+
+        await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+        await vi.advanceTimersByTimeAsync(1); // settle seed + running upserts
+
+        vi.setSystemTime(new Date('2026-01-01T00:00:31.000Z')); // past the 30s throttle
+        release();
+        await vi.advanceTimersByTimeAsync(10);
+
+        const outputCall = mockUpsertRun.mock.calls.find((c) => {
+          const run = c[0] as { lastOutputAt?: string };
+          return run.lastOutputAt === '2026-01-01T00:00:31.000Z';
+        });
+        expect(outputCall, 'expected an output upsert carrying lastOutputAt at t=31s').toBeDefined();
+        const run = outputCall![0] as { lastOutputAt?: string; lastChildAliveAt?: string; status: string };
+        expect(run.lastOutputAt).toBe('2026-01-01T00:00:31.000Z');
+        // No keep-alive fired → lastChildAliveAt stays unset on this write.
+        expect(run.lastChildAliveAt).toBeUndefined();
+        // The terminal upsert preserves the output timestamp.
+        const terminalCall = mockUpsertRun.mock.calls.find((c) => (c[0] as { status: string }).status === 'completed');
+        expect((terminalCall![0] as { lastOutputAt?: string }).lastOutputAt).toBe('2026-01-01T00:00:31.000Z');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('copies outcome + workProduct from a work-run terminal event onto the descriptor before persist', async () => {
       // Project 11 Phase 2: the work-product classification rides on the
       // terminal event's `data.outcome` / `data.workProduct`. startApply must

@@ -120,15 +120,21 @@ export function isStalled(
  * Unlike `isStalled` (which fails toward visibility on a bad timestamp), a
  * quiet nudge is a soft prod: an unparseable baseline returns `false` rather
  * than firing a spurious nudge.
- *
- * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
  */
 export function isQuietRun(
-  _run: SupervisedRun,
-  _quietThresholdMs: number,
-  _now: number,
+  run: SupervisedRun,
+  quietThresholdMs: number,
+  now: number,
 ): boolean {
-  throw new Error('supervision: isQuietRun not implemented (project 11 Phase 4 pending)');
+  if (run.status !== 'running') return false;
+  if (run.quietNudgedAt) return false; // already nudged once
+  // Measure from the last output, or from the run start before any output.
+  const baseline = run.lastOutputAt ?? run.startedAt;
+  const parsed = Date.parse(baseline);
+  // Soft signal: an unparseable baseline does NOT fire a nudge (unlike
+  // isStalled, which fails toward visibility on a bad timestamp).
+  if (Number.isNaN(parsed)) return false;
+  return now - parsed > quietThresholdMs;
 }
 
 /** A quiet-nudge plan: the runs to nudge, plus those same runs with
@@ -143,16 +149,20 @@ export interface QuietNudgePlan {
 /**
  * Plan the quiet-run nudges over a set of runs: the subset that {@link isQuietRun}
  * flags, plus stamped copies (`quietNudgedAt = now`) for the persistence layer.
- * Pure — the runner sends the nudges and persists `updated`.
- *
- * SCAFFOLD: pinned test-first; body lands in the Phase 4 implementation task.
+ * Pure — the runner sends the nudges and persists `updated`. `toNudge[i]` and
+ * `updated[i]` are the same run (1:1, stamped) — the runner pairs them by index.
  */
 export function planQuietNudges(
-  _runs: SupervisedRun[],
-  _quietThresholdMs: number,
-  _now: number,
+  runs: SupervisedRun[],
+  quietThresholdMs: number,
+  now: number,
 ): QuietNudgePlan {
-  throw new Error('supervision: planQuietNudges not implemented (project 11 Phase 4 pending)');
+  const toNudge = runs.filter((r) => isQuietRun(r, quietThresholdMs, now));
+  const stamp = new Date(now).toISOString();
+  // Stamp copies (never mutate the inputs) so the runner persists the once-only
+  // marker.
+  const updated = toNudge.map((r) => ({ ...r, quietNudgedAt: stamp }));
+  return { toNudge, updated };
 }
 
 /**

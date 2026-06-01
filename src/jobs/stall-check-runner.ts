@@ -11,10 +11,13 @@
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus } from '../transport/notification-bus.js';
-import { readAllRuns } from './supervision-store.js';
+import { planQuietNudges } from '../intent/supervision.js';
+import { readAllRuns, upsertRun } from './supervision-store.js';
 import {
   checkStalledRuns,
   formatStallNudge,
+  formatQuietNudge,
+  QUIET_THRESHOLD_MS,
   STALL_THRESHOLD_MS,
   TICK_INTERVAL_MS,
 } from './stall-check.js';
@@ -41,18 +44,48 @@ export function startStallCheck(bus: NotificationBus): void {
     // a setInterval callback would otherwise hit process.uncaughtException
     // and crash the server. Better to log and skip a tick.
     try {
+      const now = Date.now();
+      const runs = readAllRuns(config.SUPERVISED_RUNS_FILE);
+
       nudged = checkStalledRuns({
-        readRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
-        now: Date.now(),
+        readRuns: () => runs,
+        now,
         stallThresholdMs: STALL_THRESHOLD_MS,
         alreadyNudged: nudged,
         sendNudge: (run) => {
           bus.publish({
             kind: 'message',
             userId: config.TELEGRAM_USER_ID,
-            text: formatStallNudge(run, Date.now()),
+            text: formatStallNudge(run, now),
           });
         },
+      });
+
+      // Quiet-run nudge — evaluated ALONGSIDE the stall check (req 23), on the
+      // same snapshot. A child-DEAD run is already handled by the stall path, so
+      // exclude the just-nudged stalled set (`nudged` carries every currently-
+      // stalled id): a quiet nudge is the "alive but no LLM output" case.
+      // Once-only is durable via persisted `quietNudgedAt` (unlike the in-process
+      // stall `nudged` set), so it survives ticks AND restarts.
+      const quietPlan = planQuietNudges(
+        runs.filter((r) => !nudged.has(r.id)),
+        QUIET_THRESHOLD_MS,
+        now,
+      );
+      quietPlan.toNudge.forEach((run, i) => {
+        // Per-run isolation (mirrors the stall path): a send failure must not
+        // skip the rest, and quietNudgedAt is persisted regardless so a
+        // transient send error doesn't become a recurring nudge.
+        try {
+          bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: formatQuietNudge(run, now) });
+        } catch (err) {
+          log.warn('quiet-nudge send failed', { id: run.id, error: (err as Error).message });
+        }
+        try {
+          upsertRun(quietPlan.updated[i]!, config.SUPERVISED_RUNS_FILE);
+        } catch (err) {
+          log.warn('quiet-nudge persist failed', { id: run.id, error: (err as Error).message });
+        }
       });
     } catch (err) {
       log.warn('stall-check tick failed', { error: (err as Error).message });
