@@ -21,6 +21,16 @@
     - B. Resolve the dual orchestration — pick one writeup owner. Either the daemon owns `runWriteupAndUpdates` and `SKILL.md` must NOT instruct the model to write the journal / run updaters, or the model owns it end-to-end and the engine just needs a completion signal to flip `phase: 'done'`.
     - C. Add a stuck-session watchdog: mirror `src/jobs/planning-expiry.ts` for review sessions, auto-closing any session left in a non-terminal phase past some age so the cockpit self-heals.
     - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
+- [ ] `/work --auto` runs are blocked by the harness permission gate, so every run exits clean with zero work product (silent no-op). Surfaced by project 11 — see `docs/projects/11-work-run-observability/phase-6-diagnosis.md`.
+  - **Issue**
+    - Validation run `7b8410fb` (project 10, 2026-06-01) classified `noop`: 0 commits, 0 task transitions, clean tree, `exitCode: 0`.
+    - The transcript shows the agent did the analysis, then every mutation was refused by the permission gate: `Edit` on `tasks.md` (twice), and `git` / `npm` / `npx` / `vitest` via Bash, for both the main agent and the test-specialist subagent.
+    - With no way to `Edit`, commit, or run tests, a clean exit with no work product is the only possible end state. Same structural signature as the original `7828477a` / `3b002b26` silent runs that motivated project 11.
+    - This blocks the "real/productive run" half of project 11's Phase 6 validation — a productive `/work` run can't happen until the gate is fixed.
+  - **Fix options**
+    - A. Configure the `--auto` sandbox to permit the writes a `/work` run must make — `Edit`/`Write` within the worktree, `git` commits on the run branch, and the project's test runner (`npm`/`npx`/`vitest`) — via the harness permission config (e.g. `settings.json` allowlist or `--permission-mode` for the spawned `claude -p`).
+    - B. Verify the spawn command in `src/jobs/work-runner.ts` passes the intended permission mode/allowlist; the gate refusing writes suggests it inherits a restrictive default.
+    - C. Fail fast: if the first mutating tool call is denied, classify `failed` with reason `permission-denied` rather than running 428s to a `noop`, so the cause is obvious without reading the transcript (depends on project-11 fix #1 surfacing the denial event).
 - [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.

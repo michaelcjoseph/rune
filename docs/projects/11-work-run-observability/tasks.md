@@ -109,6 +109,23 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Watched run
 
-- [ ] Re-run a real project under instrumentation in a watched (not fire-and-forget) run.
-- [ ] Confirm the taxonomy fires correctly across at least one real and one empty run.
-- [ ] Write up the original silent-failure root cause; file the `/work` fix follow-on if a structural mismatch is confirmed.
+- [ ] Re-run a real project under instrumentation in a watched (not fire-and-forget) run. _(Pending. The 2026-06-01 run `7b8410fb` was fire-and-forget and surfaced follow-on #2 — the cockpit panel was blank for the whole run.)_
+- [~] Confirm the taxonomy fires correctly across at least one real and one empty run. _(Empty half validated: run `7b8410fb` classified `noop` correctly with full transcript + forensics. Real/productive half still pending — a productive run isn't currently possible until the `/work` permission gate is fixed; see `docs/projects/bugs.md`.)_
+- [x] Write up the original silent-failure root cause; file the `/work` fix follow-on if a structural mismatch is confirmed. → [phase-6-diagnosis.md](phase-6-diagnosis.md). Confirmed structural: the `--auto` permission gate refuses all mutations (`Edit`/`git`/`npm`/`vitest`), so runs exit clean with no work product. `/work` fix filed in `docs/projects/bugs.md`.
+
+## Phase 6 follow-on — live-path observability fixes
+
+> Surfaced by the 2026-06-01 validation run. See [phase-6-diagnosis.md](phase-6-diagnosis.md).
+> Test-first: each fix opens with a failing test before implementation.
+
+### Fix #1 — surface error tool_results in the live display
+
+- [ ] Write a failing test: a `user`/`tool_result` envelope with `is_error: true` renders a readable line (not `null`) through `streamJsonToDisplay`.
+- [ ] Extend `streamJsonToDisplay` (`src/jobs/work-run-transcript.ts:154`) to convert `is_error` tool_results into a readable line (e.g. `⨯ blocked: <tool>` / the error text), instead of dropping all `user` frames at the `default` branch. Path-scrub like the other cases.
+- [ ] Confirm the block now appears in the drawer, card `lastOutput`, and the transcript-tail projection.
+
+### Fix #2 — show active in-flight runs on the cockpit card
+
+- [ ] Write a failing test: an active run (present in the supervision store, absent from `index.jsonl`) appears in the cockpit projection with live `lastOutput` + elapsed.
+- [ ] Merge active runs from the in-memory supervision store (`activeRuns` / `SupervisedRun` ring buffer + `startedAt`) into `readWorkRunProjections` / `buildCockpitView`, layered over the terminal index rows (terminal row wins once the run ends). Satisfies spec req 24.
+- [ ] Confirm a live run renders last-N output + elapsed on the card without opening the drawer, then transitions to the outcome verdict on termination.
