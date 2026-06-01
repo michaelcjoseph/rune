@@ -199,6 +199,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
 .run-meta { white-space: nowrap; flex-shrink: 0; }
 .run-ok { color: #5c9; }
 .run-error { color: #f66; }
+/* Work-run non-success outcomes (partial / noop / dirty-uncommitted): amber so
+ * they never read as the green success state. */
+.run-warn { color: #e8b54a; }
 .run-live .run-agent { color: var(--accent); }
 .run-live .run-meta { color: var(--accent); }
 

@@ -58,6 +58,43 @@ function formatGenEvalLoopTerminal(event: BusMutationEvent): string {
   return `💥 ${target} failed · ${reason} · id=${id}`;
 }
 
+/** Project 11: outcome-aware terminal message for a `work-run` mutation. Keyed
+ *  on the typed `outcome` (carried on the terminal event's `data`), so a run
+ *  that exited 0 while doing nothing renders as `⚠️ no-op`, never `✅ finished`.
+ *  Falls back to the generic format for an early-exit failure terminal that
+ *  carries no outcome (worktree-create / project-not-found). */
+function formatWorkRunTerminal(event: BusMutationEvent): string {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const outcome = typeof data['outcome'] === 'string' ? (data['outcome'] as string) : '';
+  if (!outcome) return formatGenericTerminal(event);
+
+  const slug = String(data['projectSlug'] ?? event.mutationId.slice(0, 8));
+  const reason = String(data['reason'] ?? '');
+  const id = shortMutationId(event.mutationId);
+  const wp = (data['workProduct'] ?? {}) as Record<string, unknown>;
+  const commits = typeof wp['commitCount'] === 'number' ? (wp['commitCount'] as number) : 0;
+  const transitions = (wp['transitions'] ?? {}) as Record<string, unknown>;
+  const checked = typeof transitions['tasksNewlyChecked'] === 'number' ? (transitions['tasksNewlyChecked'] as number) : 0;
+  const remaining = typeof transitions['tasksRemaining'] === 'number' ? (transitions['tasksRemaining'] as number) : 0;
+  const total = checked + remaining;
+
+  switch (outcome) {
+    case 'branch-complete':
+      return `✅ ${slug} branch-complete · ${commits} commit(s), all tasks checked (not yet on main) · id=${id}`;
+    case 'partial':
+      return `📊 ${slug} partial · ${commits} commit(s), ${checked}/${total} tasks done · id=${id}`;
+    case 'noop':
+      return `⚠️ ${slug} no-op · did nothing: 0 commits, no task changes, clean tree · id=${id}`;
+    case 'dirty-uncommitted':
+      return `⚠️ ${slug} dirty-uncommitted · uncommitted work left behind, 0 commits · id=${id}`;
+    case 'failed':
+      return `❌ ${slug} failed · ${reason || 'unknown'} · id=${id}`;
+    default:
+      // Unknown outcome — surface it rather than silently dropping to success.
+      return `⚠️ ${slug} ${outcome} · ${reason} · id=${id}`;
+  }
+}
+
 /** Legacy generic format for non-gen-eval-loop mutations — unchanged behavior. */
 function formatGenericTerminal(event: BusMutationEvent): string {
   const data = event.data as Record<string, unknown> | undefined;
@@ -124,13 +161,17 @@ export class TelegramSender implements MessageSender {
   /** Send a short summary to Telegram on mutation completed/failed. Ignores output/log/progress.
    *  Phase 6 C5 specializes `gen-eval-loop` terminal events into three
    *  structured formats (✅ merged / ⏸ blocked on you / 💥 failed) carrying
-   *  rounds, cross-model verdict, and a short id. Non-gen-eval-loop
-   *  mutations keep the existing generic `/work --auto` format. */
+   *  rounds, cross-model verdict, and a short id. Project 11 specializes
+   *  `work-run` terminals into outcome-aware formats (✅ branch-complete /
+   *  📊 partial / ⚠️ no-op / ⚠️ dirty / ❌ failed) so a no-op never reads as
+   *  success. Other kinds keep the generic `/work --auto` format. */
   onMutationEvent(event: BusMutationEvent): void {
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
     const text = event.mutationKind === 'gen-eval-loop'
       ? formatGenEvalLoopTerminal(event)
-      : formatGenericTerminal(event);
+      : event.mutationKind === 'work-run'
+        ? formatWorkRunTerminal(event)
+        : formatGenericTerminal(event);
     void this.send(event.userId, text).catch((err: unknown) => {
       log.error('TelegramSender.onMutationEvent send failed', { error: err instanceof Error ? err.message : String(err) });
     });

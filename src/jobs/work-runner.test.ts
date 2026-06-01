@@ -119,6 +119,10 @@ function makeGitStub(responses: Record<string, { stdout: string; stderr: string 
   return { stub, calls };
 }
 
+/** Records appendIndexRow calls so tests can assert the rolling index row is
+ *  written with the classified outcome. */
+let indexRows: Array<{ filePath: string; row: any }>;
+
 /** A fake transcript sink recording appends + a finish() spy, so tests can
  *  assert flush-before-terminal ordering without a real WriteStream. */
 function makeFakeSink(path = '/tmp/work-runs/run/transcript.jsonl') {
@@ -244,11 +248,14 @@ describe('workRunApplier', () => {
     writeSummarySpy = vi.fn();
     gitStub = makeGitStub();
     currentSink = makeFakeSink();
+    indexRows = [];
     __setWorkRunRuntimeForTest({
       runGit: gitStub.stub as never,
       workRunsDir: '/tmp/test-work-runs',
+      workRunsIndexFile: '/tmp/test-work-runs/index.jsonl',
       createSink: () => currentSink.sink as never,
       writeSummary: writeSummarySpy as never,
+      appendIndexRow: ((filePath: string, row: any) => { indexRows.push({ filePath, row }); }) as never,
     });
   });
 
@@ -947,6 +954,46 @@ describe('workRunApplier', () => {
       // display string.
       const firstAppend = currentSink.appended[0] as any;
       expect(firstAppend.type).toBe('assistant');
+    });
+
+    it('appends a torn-line-tolerant index row carrying the outcome after the run', async () => {
+      // Requirement 15: a summary row (id, project, outcome, duration, started,
+      // ended) is appended to logs/work-runs/index.jsonl on termination.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-index'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(indexRows).toHaveLength(1);
+      expect(indexRows[0]!.filePath).toBe('/tmp/test-work-runs/index.jsonl');
+      const row = indexRows[0]!.row;
+      expect(row.id).toBe('mut-index');
+      expect(row.project).toBe('06-webview');
+      expect(row.outcome).toBe('noop');
+      expect(typeof row.durationMs).toBe('number');
+      expect(typeof row.startedAt).toBe('string');
+      expect(typeof row.endedAt).toBe('string');
+    });
+
+    it('augments the terminal event data with projectSlug so downstream surfaces can name the run', async () => {
+      // The classified terminal event from finalizeWorkRun carries
+      // outcome/reason/workProduct/exit but not the project slug; work-runner
+      // augments it so TelegramSender / the bus can label the run by project.
+      setupValidProject('06-webview');
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-slug'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.data.projectSlug).toBe('06-webview');
+      expect(terminal.data.product).toBe('jarvis');
     });
 
     it('still emits ONE terminal event when summary.json write throws (persist is best-effort)', async () => {

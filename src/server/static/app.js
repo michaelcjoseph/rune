@@ -1077,11 +1077,24 @@
       return;
     }
     const html = shown.map(m => {
-      const cls = m.status === 'completed' ? 'run-ok' : 'run-error';
+      // Outcome-aware (project 11): a work-run carries a typed `outcome` whose
+      // verdict overrides the bare `status`, so a `noop`/`dirty-uncommitted`
+      // run (status 'completed') never renders as green success. Other kinds
+      // (no outcome) keep the status-based colouring.
+      const outcome = m.outcome;
+      const label = outcome ?? m.status;
+      let cls;
+      if (outcome) {
+        cls = outcome === 'branch-complete' ? 'run-ok'
+            : outcome === 'failed' ? 'run-error'
+            : 'run-warn'; // partial / noop / dirty-uncommitted — not success
+      } else {
+        cls = m.status === 'completed' ? 'run-ok' : 'run-error';
+      }
       const slug = escHtml(String(m.payload?.projectSlug ?? m.id.slice(0, 8)));
       return `<div class="mutation-row" data-mutation-id="${escHtml(m.id)}" onclick="window._openMutationDrawer('${escHtml(m.id)}', '${slug}')">` +
         `<span class="run-agent">${slug}</span>` +
-        `<span class="${cls} run-meta">${escHtml(m.status)}</span>` +
+        `<span class="${escHtml(cls)} run-meta">${escHtml(label)}</span>` +
         `</div>`;
     }).join('');
     setHTML(el, html);

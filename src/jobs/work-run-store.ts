@@ -13,7 +13,7 @@
  */
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classify.js';
 
@@ -84,8 +84,11 @@ export function writeSummary(dir: string, summary: WorkRunSummary): void {
   }
 }
 
-/** Append one row to `index.jsonl` (one JSON object per line). */
+/** Append one row to `index.jsonl` (one JSON object per line). Creates the
+ *  containing dir if absent — `appendFileSync` does not, and the work-runs dir
+ *  may not exist on the very first run. */
 export function appendIndexRow(filePath: string, row: WorkRunIndexRow): void {
+  mkdirSync(dirname(filePath), { recursive: true });
   appendFileSync(filePath, JSON.stringify(row) + '\n', 'utf8');
 }
 

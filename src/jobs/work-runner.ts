@@ -7,7 +7,7 @@ import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, type TranscriptSink } from './work-run-transcript.js';
 import { computeWorkProduct, finalizeWorkRun, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
-import { writeSummary, type WorkRunSummary } from './work-run-store.js';
+import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -35,11 +35,15 @@ export interface WorkRunRuntimeDeps {
   runGit: GitRunner;
   /** Base dir for per-run artifacts (`<workRunsDir>/<id>/{transcript,summary}`). */
   workRunsDir: string;
+  /** Rolling recent-runs index file (`logs/work-runs/index.jsonl`). */
+  workRunsIndexFile: string;
   /** Build the per-run durable transcript sink, or null to disable persistence
    *  (e.g. if the run dir can't be created). */
   createSink: (runId: string, baseDir: string) => TranscriptSink | null;
   /** Atomically write the run's `summary.json` into its per-run dir. */
   writeSummary: (dir: string, summary: WorkRunSummary) => void;
+  /** Append one torn-line-tolerant row to the rolling index. */
+  appendIndexRow: (filePath: string, row: WorkRunIndexRow) => void;
 }
 
 /** Production defaults — real git, real config dir, real sink + store. */
@@ -47,8 +51,10 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
   return {
     runGit: defaultRunGit,
     workRunsDir: config.WORK_RUNS_DIR,
+    workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
     createSink: (runId, baseDir) => createTranscriptSink({ runId, baseDir }),
     writeSummary,
+    appendIndexRow,
   };
 }
 
@@ -341,6 +347,15 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           exportForensics: async () => {},
         });
 
+        // Augment the classified terminal event with the run's identity so
+        // downstream surfaces (TelegramSender's work-run formatter, the cockpit
+        // bus frame) can label it by project — finalizeWorkRun only knows the
+        // mutation id, not the slug.
+        const augmentedData = (terminalEvent.data ?? {}) as Record<string, unknown>;
+        augmentedData['projectSlug'] = projectSlug;
+        augmentedData['product'] = product;
+        terminalEvent.data = augmentedData;
+
         // Flush + await the durable transcript's `finish` so every buffered
         // event is on disk before summary.json / the terminal event. A flush
         // failure is logged (and surfaced via the stderr tail upstream) but
@@ -356,26 +371,48 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           }
         }
 
+        // Single end timestamp shared by summary.json + the index row.
+        const endedAt = new Date().toISOString();
+        const summary = buildSummary({
+          id: descriptor.id,
+          project: projectSlug,
+          product,
+          branch,
+          baseSha,
+          t0,
+          exit: streamResult.exit,
+          terminalEvent,
+          sink,
+          workRunsDir: deps.workRunsDir,
+          endedAt,
+        });
+
         // Persist summary.json atomically (best-effort): a disk failure must not
         // deny the terminal event, which is the classification's source of truth.
         try {
-          deps.writeSummary(
-            join(deps.workRunsDir, descriptor.id),
-            buildSummary({
-              id: descriptor.id,
-              project: projectSlug,
-              product,
-              branch,
-              baseSha,
-              t0,
-              exit: streamResult.exit,
-              terminalEvent,
-              sink,
-              workRunsDir: deps.workRunsDir,
-            }),
-          );
+          deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
         } catch (err) {
           log.warn('work-runner: writeSummary failed', {
+            id: descriptor.id,
+            error: (err as Error).message,
+          });
+        }
+
+        // Append the rolling index row (best-effort — a failure here must not
+        // deny the terminal event). The reader (readRecentIndex) tolerates a
+        // torn trailing line, so a crash mid-append is recoverable. Reuses the
+        // already-classified `summary.outcome` rather than re-parsing the event.
+        try {
+          deps.appendIndexRow(deps.workRunsIndexFile, {
+            id: descriptor.id,
+            project: projectSlug,
+            outcome: summary.outcome,
+            durationMs: streamResult.exit.durationMs,
+            startedAt: new Date(t0).toISOString(),
+            endedAt,
+          });
+        } catch (err) {
+          log.warn('work-runner: appendIndexRow failed', {
             id: descriptor.id,
             error: (err as Error).message,
           });
@@ -603,10 +640,13 @@ interface BuildSummaryOpts {
   terminalEvent: MutationEvent;
   sink: TranscriptSink | null;
   workRunsDir: string;
+  /** Run end time (ISO). Captured once by the caller and shared with the index
+   *  row so the two artifacts agree to the millisecond. */
+  endedAt: string;
 }
 
 function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
-  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir } = opts;
+  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt } = opts;
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
   const outcome = (typeof data['outcome'] === 'string' ? data['outcome'] : 'failed') as WorkOutcome;
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
@@ -622,7 +662,7 @@ function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
     baseSha,
     branch,
     startedAt: new Date(t0).toISOString(),
-    endedAt: new Date().toISOString(),
+    endedAt,
     // Scrub the host PROJECT_ROOT prefix from the persisted paths so a future
     // reader (Phase 3 forensics, a cockpit detail route) can't leak the host
     // username — mirrors finalizeWorkRun's scrub of the classification-error

@@ -204,6 +204,111 @@ describe('TelegramSender', () => {
     };
   }
 
+  describe('onMutationEvent — work-run outcome rendering', () => {
+    /** Build a work-run terminal BusMutationEvent. */
+    function workRunEvent(subKind: 'completed' | 'failed', data: Record<string, unknown>) {
+      return {
+        kind: 'mutation-event' as const,
+        mutationId: 'abcd1234-5678-90ab-cdef-1234567890ab',
+        mutationKind: 'work-run',
+        subKind,
+        ts: new Date().toISOString(),
+        data: { projectSlug: 'demo', ...data },
+        userId: 123,
+      } as any;
+    }
+
+    const noopWorkProduct = {
+      commitCount: 0,
+      commitShas: [],
+      filesChanged: [],
+      diffstat: '',
+      dirty: false,
+      untracked: false,
+      transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+    };
+
+    /** Wait one macrotask so the fire-and-forget `void this.send()` resolves. */
+    async function flush() {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
+    it('a noop outcome never renders as "finished" success', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', { outcome: 'noop', reason: 'no commits, no task transitions, clean tree', workProduct: noopWorkProduct }),
+      );
+      await flush();
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).not.toMatch(/finished/i);
+      expect(text.toLowerCase()).toContain('no-op');
+      expect(text).toContain('demo');
+    });
+
+    it('a dirty-uncommitted outcome reads as a warning, not success', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'dirty-uncommitted',
+          reason: 'no commits but the working tree is dirty/untracked',
+          workProduct: { ...noopWorkProduct, dirty: true },
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).not.toMatch(/finished/i);
+      expect(text.toLowerCase()).toMatch(/dirty|uncommitted/);
+    });
+
+    it('a branch-complete outcome notes all tasks checked on the branch (not yet on main)', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'branch-complete',
+          reason: '2 commit(s), all original tasks checked',
+          workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('✅');
+      expect(text.toLowerCase()).toMatch(/branch|not yet|main/);
+    });
+
+    it('a partial outcome carries the commits + tasks X/Y summary', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'partial',
+          reason: '1 commit(s), 2 task(s) still unchecked',
+          workProduct: { ...noopWorkProduct, commitCount: 1, transitions: { tasksNewlyChecked: 1, tasksRemaining: 2, tasksAdded: 0, tasksRemoved: 0 } },
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).not.toMatch(/finished/i);
+      // commits + remaining tasks surfaced
+      expect(text).toMatch(/1/);
+      expect(text).toMatch(/2/);
+    });
+
+    it('a failed outcome renders the reason', async () => {
+      sender.onMutationEvent(
+        workRunEvent('failed', { outcome: 'failed', reason: 'exited with code 1' }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('❌');
+      expect(text).toContain('exited with code 1');
+    });
+
+    it('ignores non-terminal work-run events (output/progress)', async () => {
+      sender.onMutationEvent(workRunEvent('completed', { outcome: 'noop', workProduct: noopWorkProduct }));
+      // override subKind to a non-terminal value
+      sender.onMutationEvent({ ...workRunEvent('completed', {}), subKind: 'output', data: { line: 'x' } } as any);
+      await flush();
+      // only the terminal event produced a message
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+    });
+  });
+
   describe('onOpEvent — classifier filter', () => {
     it('ignores start events for classifier ops', () => {
       const event = makeOpEventStart({ opKind: 'classifier' });
