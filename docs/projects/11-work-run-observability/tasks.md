@@ -95,7 +95,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Data path + card
 
 - [x] Add the work-run projection to `buildCockpitView` from the new store (id, last-N output, elapsed, outcome, reason, transcript URL).
-- [ ] Add an authenticated `GET /api/work-runs/:id` (+ `/transcript`) route with path containment and content-type handling.
+- [x] Add an authenticated `GET /api/work-runs/:id` (+ `/transcript`) route with path containment and content-type handling.
 - [ ] Card shows live last-N output + elapsed; outcome + reason on termination in place of a stale `running` pill; transcript link.
 
 ## Phase 6 — Validation & diagnosis

@@ -15,6 +15,7 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
 import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classify.js';
 
 const log = createLogger('work-run-store');
@@ -82,6 +83,34 @@ export function writeSummary(dir: string, summary: WorkRunSummary): void {
     });
     throw err;
   }
+}
+
+/**
+ * Read a single run's `summary.json`, or `null` if it is missing/corrupt.
+ *
+ * `id` MUST be slug-validated by the caller (VALID_SLUG) before this is called —
+ * it is joined into the path verbatim, mirroring `writeSummary`'s contract. The
+ * caller (the authenticated `GET /api/work-runs/:id` route) is the boundary.
+ */
+export function readWorkRunSummary(dir: string, id: string): WorkRunSummary | null {
+  // Defense-in-depth: `id` is joined into the path, so reject a non-slug id here
+  // too — every call site gets the same hard boundary even if it forgot to
+  // guard (mirrors createTranscriptSink's VALID_SLUG check).
+  if (!VALID_SLUG.test(id)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(dir, id, 'summary.json'), 'utf8'));
+  } catch {
+    return null; // missing or corrupt
+  }
+  // Lightweight shape guard (mirrors readRecentIndex) — a well-formed-JSON file
+  // that isn't a summary is dropped, not returned as a bogus WorkRunSummary.
+  const s = parsed as Partial<WorkRunSummary>;
+  if (typeof s.id === 'string' && typeof s.outcome === 'string') {
+    return s as WorkRunSummary;
+  }
+  log.warn('readWorkRunSummary: summary.json has unexpected shape', { id });
+  return null;
 }
 
 /** Append one row to `index.jsonl` (one JSON object per line). Creates the

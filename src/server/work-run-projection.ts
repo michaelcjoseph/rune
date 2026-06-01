@@ -13,9 +13,9 @@
  *   - `outcome` / `reason` / `startedAt` from the per-run `summary.json`.
  *   - `lastOutput` from the tail of `transcript.jsonl` (readable display lines
  *     via the Phase 1 adapter), best-effort and capped.
- *   - `transcriptUrl` is `null` until the authenticated transcript route ships
- *     (the next Phase 5 task — see TODO below), so the card degrades gracefully
- *     rather than linking at a route that 404s.
+ *   - `transcriptUrl` points at the authenticated `GET /api/work-runs/:id/
+ *     transcript` route when a transcript file exists, and is `null` otherwise
+ *     so the card degrades gracefully rather than linking at a route that 404s.
  *
  * Best-effort by contract: any per-run read failure skips that run rather than
  * throwing, and the caller (`handleApiCockpit`) wraps the whole call so the
@@ -28,9 +28,9 @@
  * duplication in `cockpit.ts` can never silently fall out of sync.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readRecentIndex, type WorkRunSummary } from '../jobs/work-run-store.js';
+import { readRecentIndex, readWorkRunSummary } from '../jobs/work-run-store.js';
 import { parseStreamJsonLine, streamJsonToDisplay } from '../jobs/work-run-transcript.js';
 import type { WorkOutcome } from '../jobs/work-run-classify.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
@@ -108,34 +108,31 @@ export function readWorkRunProjections(
       continue;
     }
     // Per-run summary.json carries reason / startedAt / project; fall back to
-    // the index row's fields when it can't be read.
-    let summary: WorkRunSummary | null = null;
-    try {
-      summary = JSON.parse(readFileSync(join(dir, row.id, 'summary.json'), 'utf8')) as WorkRunSummary;
-    } catch {
-      // No summary (or corrupt) — fall back to the index row below.
-    }
+    // the index row's fields when it's missing/corrupt. Go through the guarded
+    // reader (shape + slug guard) rather than a bare cast.
+    const summary = readWorkRunSummary(dir, row.id);
     const slug = summary?.project ?? row.project;
     if (!slug) continue;
     // Newest run per project wins — rows are newest-first, so skip if seen.
     if (out[slug]) continue;
-    // readTranscriptTail absorbs ENOENT/read errors → [], so no existsSync
-    // pre-check is needed (and avoiding it sidesteps a benign TOCTOU if GC
-    // deletes the file between a check and the read).
     const transcriptPath = join(dir, row.id, 'transcript.jsonl');
+    // One existsSync drives transcriptUrl (the card links only when a transcript
+    // is present, degrading gracefully to null otherwise). readTranscriptTail
+    // separately absorbs ENOENT → [], so a GC delete racing between this check
+    // and the read is benign (URL set, tail empty — the route would then 404).
+    const hasTranscript = existsSync(transcriptPath);
     out[slug] = {
       mutationId: row.id,
       outcome: summary?.outcome ?? row.outcome ?? null,
       reason: summary?.reason ?? null,
-      lastOutput: readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES),
+      lastOutput: hasTranscript ? readTranscriptTail(transcriptPath, LAST_OUTPUT_LINES) : [],
       // `startedAt` is typed `string` on both summary and index row, but the
       // index shape guard doesn't enforce it — fall back to '' so a torn row
       // can't surface `undefined` (which would render as "NaN ago" on the card).
       startedAt: summary?.startedAt ?? row.startedAt ?? '',
-      // TODO(phase-5 route task): point at `/api/work-runs/${row.id}/transcript`
-      // once that authenticated route ships. Until then leave null so the card
-      // never links at a route that 404s.
-      transcriptUrl: null,
+      // Authenticated transcript route (Phase 5); null when no transcript exists
+      // yet so the card degrades gracefully rather than linking at a 404.
+      transcriptUrl: hasTranscript ? `/api/work-runs/${row.id}/transcript` : null,
     };
   }
   if (rows.length > 0) {

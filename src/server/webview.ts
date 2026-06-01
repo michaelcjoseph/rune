@@ -20,6 +20,8 @@ import { cancelOp } from '../transport/in-flight.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
+import { readWorkRunSummary } from '../jobs/work-run-store.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
@@ -54,6 +56,11 @@ const MIME: Record<string, string> = {
 
 function escapeHtmlAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function reject400(res: ServerResponse, msg: string): void {
+  res.writeHead(400, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: msg }));
 }
 
 function reject401(res: ServerResponse): void {
@@ -221,6 +228,67 @@ function handleApiCockpit(res: ServerResponse): void {
   const view = buildCockpitView(registry, runStatus, taskProgress, workRuns);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
+}
+
+// ---------------------------------------------------------------------------
+// Work-run record + transcript routes (project 11, Phase 5)
+// ---------------------------------------------------------------------------
+//
+// Authenticated GET /api/work-runs/:id (run summary.json) and
+// /api/work-runs/:id/transcript (raw stream-json transcript). The run id is
+// VALID_SLUG-validated before any fs join — that slug guard IS the path-
+// containment mechanism (a `..`- or `/`-bearing id can't match the slug
+// pattern), mirroring `createTranscriptSink`. Static serving is `/static/*`-only,
+// so these per-run files are reachable only through these guarded routes.
+
+/** Upper bound on a transcript served in full. Transcripts are GC-retention
+ *  bounded, but a single long run has no write-side cap, so refuse to stream an
+ *  oversized one rather than tie up the response / pressure the client. */
+const MAX_TRANSCRIPT_SERVE_BYTES = 50 * 1024 * 1024;
+
+function handleApiWorkRunRecord(res: ServerResponse, id: string): void {
+  if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
+  // summary.json is a small JSON object; the synchronous read here matches the
+  // existing sync-read precedent on cockpit data (handleApiCockpit).
+  const summary = readWorkRunSummary(config.WORK_RUNS_DIR, id);
+  if (!summary) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'work run not found' }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(summary));
+}
+
+async function handleApiWorkRunTranscript(res: ServerResponse, id: string): Promise<void> {
+  if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
+  const filePath = join(config.WORK_RUNS_DIR, id, 'transcript.jsonl');
+  let st;
+  try {
+    st = await stat(filePath);
+  } catch {
+    // The run record may exist (summary.json) while no transcript was persisted
+    // yet — a clean 404 the card degrades on, never a 500.
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'transcript not found' }));
+    return;
+  }
+  if (st.size > MAX_TRANSCRIPT_SERVE_BYTES) {
+    res.writeHead(413, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'transcript too large to serve' }));
+    return;
+  }
+  // JSONL transcript → ndjson (a readable text type, not a download blob).
+  // Content was already secret-redacted at persist time by createTranscriptSink.
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8' });
+  const rs = createReadStream(filePath);
+  try {
+    await pipeline(rs, res);
+  } catch {
+    // Stream aborted — either the client dropped the connection, or GC deleted
+    // the transcript in the window between stat() and the read (the 200 header
+    // is already sent in that case; pipeline cleans up the stream regardless).
+  }
 }
 
 async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
@@ -785,6 +853,23 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/cockpit') {
         handleApiCockpit(res);
+        return true;
+      }
+
+      // Work-run transcript (more specific) then record. Both regexes are
+      // `$`-anchored, so the record pattern can't match a sub-path like
+      // `/:id/transcript` — order is for clarity, not correctness. A future
+      // sub-path (e.g. `/forensics`) must be added before the record check.
+      // decodeURIComponent matches the other id-bearing routes; the handlers
+      // VALID_SLUG-guard the decoded id before any fs access.
+      const workRunTranscriptMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/transcript$/);
+      if (req.method === 'GET' && workRunTranscriptMatch) {
+        await handleApiWorkRunTranscript(res, decodeURIComponent(workRunTranscriptMatch[1]!));
+        return true;
+      }
+      const workRunRecordMatch = pathname.match(/^\/api\/work-runs\/([^/]+)$/);
+      if (req.method === 'GET' && workRunRecordMatch) {
+        handleApiWorkRunRecord(res, decodeURIComponent(workRunRecordMatch[1]!));
         return true;
       }
 
