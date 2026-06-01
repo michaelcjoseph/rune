@@ -23,7 +23,7 @@ import { join } from 'node:path';
 // config throws on missing env at import time. Mock it (mirrors
 // tool-labels.test.ts) so this pure suite loads without a real environment.
 vi.mock('../config.js', () => ({
-  default: { VAULT_DIR: '/test/vault', WORKSPACE_DIR: '/test/workspace' },
+  default: { VAULT_DIR: '/test/vault', WORKSPACE_DIR: '/test/workspace', WORKTREE_ROOT: '/test/worktrees' },
   PROJECT_ROOT: '/test/project',
 }));
 
@@ -373,6 +373,218 @@ describe('streamJsonToDisplay', () => {
         session_id: 'sess-abc',
       };
       expect(streamJsonToDisplay(envelope)).toBeNull();
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // Phase 6 follow-on Fix #1: user-envelope tool_result error rendering
+  // -------------------------------------------------------------------------
+
+  it(
+    // Fix #1 contract test 1: user envelope with tool_result is_error:true and
+    // STRING content renders a non-null ⨯-marked line containing the error text.
+    // The permission-gate denial case from a real transcript.jsonl.
+    'user envelope with tool_result is_error:true (string content) renders non-null ⨯-marked line with error text',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: 'This command requires approval',
+              is_error: true,
+              tool_use_id: 'toolu_01GQXZwDAhhCnYVQmhajEKq8',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      const display = streamJsonToDisplay(envelope);
+
+      // Must NOT return null — this is the core contract being added
+      expect(display).not.toBeNull();
+      // Must contain the error text
+      expect(display).toContain('This command requires approval');
+      // Must be marked with the ⨯ error marker
+      expect(display).toContain('⨯');
+      // Must NOT be raw JSON (not the raw envelope)
+      expect(display).not.toContain('"type":"user"');
+    },
+  );
+
+  it(
+    // Fix #1 contract test 2: user envelope with tool_result is_error:true whose
+    // content is an ARRAY of {type:'text', text:'...'} blocks renders the joined
+    // text, non-null, ⨯-marked.
+    'user envelope with tool_result is_error:true (array content) renders joined text, non-null, ⨯-marked',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: [{ type: 'text', text: 'Permission denied: write outside sandbox' }],
+              is_error: true,
+              tool_use_id: 'toolu_arraycontent',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      const display = streamJsonToDisplay(envelope);
+
+      expect(display).not.toBeNull();
+      expect(display).toContain('Permission denied: write outside sandbox');
+      expect(display).toContain('⨯');
+    },
+  );
+
+  it(
+    // Fix #1 contract test 3: user envelope with tool_result is_error:false
+    // returns null — non-error results stay quiet (preserves existing behavior).
+    'user envelope with tool_result is_error:false returns null (non-error stays quiet)',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              tool_use_id: 'toolu_non_error',
+              type: 'tool_result',
+              content: '---BRANCH---\njarvis-work/7b8410fb',
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      expect(streamJsonToDisplay(envelope)).toBeNull();
+    },
+  );
+
+  it(
+    // Fix #1 contract test 4: user envelope with tool_result that has NO
+    // is_error field returns null.
+    'user envelope with tool_result missing is_error field returns null',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: 'some output text',
+              tool_use_id: 'toolu_no_is_error',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      expect(streamJsonToDisplay(envelope)).toBeNull();
+    },
+  );
+
+  it(
+    // Fix #1 contract test 5: user envelope with MULTIPLE error tool_result
+    // blocks surfaces BOTH error texts in the returned string.
+    'user envelope with multiple error tool_result blocks surfaces all error texts',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: 'First error: unauthorized',
+              is_error: true,
+              tool_use_id: 'toolu_err1',
+            },
+            {
+              type: 'tool_result',
+              content: 'Second error: timeout',
+              is_error: true,
+              tool_use_id: 'toolu_err2',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      const display = streamJsonToDisplay(envelope);
+
+      expect(display).not.toBeNull();
+      expect(display).toContain('First error: unauthorized');
+      expect(display).toContain('Second error: timeout');
+    },
+  );
+
+  it(
+    // Fix #1 contract test 6: path-scrubbing — an error tool_result whose
+    // content embeds an absolute project path renders the scrubbed (relative)
+    // form. The config mock sets PROJECT_ROOT: '/test/project', so
+    // '/test/project/src/foo.ts' must render as 'src/foo.ts'.
+    'user envelope with tool_result is_error:true scrubs absolute project paths from error text',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: 'Cannot write to /test/project/src/foo.ts: permission denied',
+              is_error: true,
+              tool_use_id: 'toolu_path_scrub',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      const display = streamJsonToDisplay(envelope);
+
+      expect(display).not.toBeNull();
+      // The absolute project root prefix must be gone
+      expect(display).not.toContain('/test/project/');
+      // The relative path form must be present
+      expect(display).toContain('src/foo.ts');
+    },
+  );
+
+  it(
+    // Fix #1 contract test 7: worktree-path scrubbing — the most realistic
+    // permission-gate failure echoes an absolute worktree path (the sandbox
+    // denies a write under WORKTREE_ROOT). The config mock sets
+    // WORKTREE_ROOT: '/test/worktrees', so that prefix must be stripped too.
+    'user envelope with tool_result is_error:true scrubs absolute worktree paths from error text',
+    () => {
+      const envelope: StreamJsonEnvelope = {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              content: 'Cannot write to /test/worktrees/06-webview/src/bar.ts: permission denied',
+              is_error: true,
+              tool_use_id: 'toolu_worktree_scrub',
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      const display = streamJsonToDisplay(envelope);
+
+      expect(display).not.toBeNull();
+      // The absolute worktree root prefix must be gone
+      expect(display).not.toContain('/test/worktrees/');
+      // The relative path form must be present
+      expect(display).toContain('06-webview/src/bar.ts');
     },
   );
 });

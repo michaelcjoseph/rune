@@ -5,7 +5,7 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
-import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, type TranscriptSink } from './work-run-transcript.js';
+import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
@@ -670,10 +670,17 @@ async function* streamProcess(
     });
     const display = streamJsonToDisplay(envelope);
     if (display === null) return;
+    // Redact secrets on the display/bus path too. `streamJsonToDisplay` only
+    // scrubs host paths; an error tool_result can echo a credential-bearing URL
+    // or command. The durable sink redacts independently at append time (so the
+    // persisted transcript and the projection tail that reads it are covered);
+    // this single call covers the in-memory ring buffer and the bus → WS/TG
+    // surfaces uniformly for every display line (assistant, result, user-error).
+    const redacted = redactSecrets(display);
     // A single envelope may render multiple lines (mixed text + tool_use
     // blocks); emit one `output` event per line so downstream surfaces never
     // receive an embedded newline in a single line field.
-    for (const displayLine of display.split('\n')) {
+    for (const displayLine of redacted.split('\n')) {
       if (displayLine) {
         stdoutRing.push(displayLine);
         enqueue(evt('output', { line: displayLine }));

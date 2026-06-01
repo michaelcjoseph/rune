@@ -484,6 +484,82 @@ describe('workRunApplier', () => {
       expect(lines.some(l => l.includes('"type":"assistant"'))).toBe(false);
     });
 
+    it('surfaces an error tool_result (is_error:true) as a ⨯-marked output event (Fix #1)', async () => {
+      // Phase 6 follow-on Fix #1: a permission-gate denial arrives as a
+      // `user`/`tool_result` `is_error:true` frame. Previously it rendered
+      // nothing, so a silent no-op run had no visible explanation. It must now
+      // become a readable `⨯` output line in the drawer / ring buffer.
+      setupValidProject('06-webview');
+      const envelopes = [
+        JSON.stringify({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', content: 'This command requires approval', is_error: true, tool_use_id: 'toolu_x' }],
+          },
+        }),
+        JSON.stringify({ type: 'result', result: 'done' }),
+      ];
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: envelopes });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-err',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
+      expect(lines.some(l => l.includes('⨯') && l.includes('This command requires approval'))).toBe(true);
+    });
+
+    it('redacts secrets from output event lines on the display/bus path (Fix #1 hardening)', async () => {
+      // `streamJsonToDisplay` only scrubs host paths; the display/bus path must
+      // also redact secrets so a credential-bearing error message echoed by a
+      // tool_result never reaches the in-memory ring buffer or the bus → WS/TG
+      // surfaces un-redacted. (The durable sink redacts independently.)
+      setupValidProject('06-webview');
+      const secret = `ghp_${'A'.repeat(36)}`;
+      const envelopes = [
+        JSON.stringify({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', content: `git push failed: https://${secret}@github.com/x.git`, is_error: true, tool_use_id: 'toolu_s' }],
+          },
+        }),
+        JSON.stringify({ type: 'result', result: 'done' }),
+      ];
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: envelopes });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-secret',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      const lines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
+      // The raw secret must never appear in a display line
+      expect(lines.some(l => l.includes(secret))).toBe(false);
+      // The error is still surfaced (redacted form), not dropped
+      expect(lines.some(l => l.includes('⨯') && l.includes('git push failed'))).toBe(true);
+    });
+
     it('emits keep-alive events on a 30s ticker while the child is alive and stops on close', async () => {
       // The applier's process-liveness ticker. Distinct from output
       // events — fires regardless of stdout activity so the supervision

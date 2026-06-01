@@ -145,6 +145,25 @@ export function parseStreamJsonLine(line: string): StreamJsonEnvelope | null {
 }
 
 /**
+ * Extract the human-readable text from a `tool_result` block's `content`, which
+ * the CLI emits as either a plain string or an array of `{type:'text', text}`
+ * blocks. Returns the joined text (empty string when nothing extractable).
+ */
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const b = block as Record<string, unknown>;
+      if (b['type'] === 'text' && typeof b['text'] === 'string') parts.push(b['text']);
+    }
+    return parts.join('\n');
+  }
+  return '';
+}
+
+/**
  * Convert a parsed stream-json envelope into a human-readable display line for
  * the existing `output` MutationEvent (`data.line`). Returns `null` when the
  * envelope carries nothing worth showing in the drawer (e.g. a `system` init
@@ -178,9 +197,30 @@ export function streamJsonToDisplay(envelope: StreamJsonEnvelope): string | null
     }
     case 'result':
       // The final result text (assistant's last turn). Surfaced as a readable
-      // line (path-scrubbed); everything else (system init, user/tool_result
-      // frames) renders nothing in the drawer.
+      // line (path-scrubbed); other frames are handled below or render nothing.
       return typeof envelope['result'] === 'string' ? scrubPathsInText(envelope['result']).trimEnd() : null;
+    case 'user': {
+      // A `user` envelope carries tool_results. Most render nothing — a
+      // successful result is already implied by the assistant tool_use line, so
+      // echoing it would double every action in the drawer. But an ERROR result
+      // (`is_error: true`) is the one signal that explains blocked/failed work
+      // — e.g. a permission-gate denial that produces a silent no-op run. Surface
+      // those as a readable `⨯` line (path-scrubbed); leave the rest silent.
+      const message = envelope['message'];
+      if (!message || typeof message !== 'object') return null;
+      const content = (message as Record<string, unknown>)['content'];
+      if (!Array.isArray(content)) return null;
+      const parts: string[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== 'object') continue;
+        const b = block as Record<string, unknown>;
+        if (b['type'] === 'tool_result' && b['is_error'] === true) {
+          const text = scrubPathsInText(toolResultText(b['content'])).trim();
+          parts.push(`⨯ ${text || 'tool error'}`);
+        }
+      }
+      return parts.length > 0 ? parts.join('\n') : null;
+    }
     default:
       return null;
   }

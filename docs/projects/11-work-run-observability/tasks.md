@@ -120,9 +120,9 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Fix #1 — surface error tool_results in the live display
 
-- [ ] Write a failing test: a `user`/`tool_result` envelope with `is_error: true` renders a readable line (not `null`) through `streamJsonToDisplay`.
-- [ ] Extend `streamJsonToDisplay` (`src/jobs/work-run-transcript.ts:154`) to convert `is_error` tool_results into a readable line (e.g. `⨯ blocked: <tool>` / the error text), instead of dropping all `user` frames at the `default` branch. Path-scrub like the other cases.
-- [ ] Confirm the block now appears in the drawer, card `lastOutput`, and the transcript-tail projection.
+- [x] Write a failing test: a `user`/`tool_result` envelope with `is_error: true` renders a readable line (not `null`) through `streamJsonToDisplay`.
+- [x] Extend `streamJsonToDisplay` (`src/jobs/work-run-transcript.ts:154`) to convert `is_error` tool_results into a readable line (e.g. `⨯ blocked: <tool>` / the error text), instead of dropping all `user` frames at the `default` branch. Path-scrub like the other cases.
+- [x] Confirm the block now appears in the drawer, card `lastOutput`, and the transcript-tail projection.
 
 ### Fix #2 — show active in-flight runs on the cockpit card
 
