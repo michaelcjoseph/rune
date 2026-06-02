@@ -4,7 +4,15 @@
 
 Jarvis's identity is documented in three places — `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md` — with duplication between the Claude and Codex variants. After project 08, Jarvis is the orchestrator and the vault is one tool among many, but the docs still frame Jarvis as a vault layer. Top-level instructions are locked to model-specific filename conventions even though Jarvis already uses Claude and Codex with more agents likely.
 
-This project moves Jarvis's identity out of pkms and builds a compiler that generates `CLAUDE.md` and `AGENTS.md` (and future model-specific variants) from a single canonical instruction source per repo. Applies to five repos: jarvis, pkms, aura, assay, relay.
+This project **builds the machine and migrates jarvis itself**: a compiler that generates `CLAUDE.md` / `AGENTS.md` (and future model-specific variants) from a single canonical instruction source, plus jarvis's own canonical source. The four other repos (pkms, aura, assay, relay) each migrate via **their own per-repo project** that consumes the compiler — see "Consumer-repo migrations" below.
+
+### Why decomposed (the central design decision)
+
+The earlier draft of this project was one monolith spanning five repos. That doesn't match the execution model: a `/work --auto` run executes in an isolated worktree of **one** repo and classifies its work product against that repo's `baseSha..branch`. A run reaching into sibling repos can't commit there and can't have its cross-repo work counted — so every cross-repo phase hard-stopped (confirmed by run `20565e71`, 2026-06-01).
+
+The compiler's wrapper design already enables the fix. Per requirements 8-10, any consumer repo compiles via `$JARVIS_HOME` pointing at a jarvis checkout, with **no jarvis source co-located**. So each repo's migration is naturally self-contained: create `instructions/`, author a manifest, run `compile-instructions --bootstrap` through the wrapper, commit source + generated together. We make the **unit of work match the unit of automation** — one repo per project, each dispatchable as its own `/work --auto` (aura, assay, relay are already in `policies/products.json`).
+
+This is deliberately **not** solved by teaching the work-runner to write to multiple repos in one run (see Non-Goals).
 
 ### Core Value Proposition
 
@@ -12,9 +20,9 @@ One canonical source per repo, model-specific instruction files generated reprod
 
 ### Goals
 
-1. **Primary:** Move Jarvis identity, capabilities, execution surfaces, and routing defaults out of `pkms/CLAUDE.md` into `jarvis/`.
-2. **Secondary:** Build a reproducible canonical-source → model-specific-file compiler in `jarvis/bin/compile-instructions`. Apply to all five repos.
-3. **Tertiary:** CI drift check per PR in repos with CI configured.
+1. **Primary:** Build a reproducible canonical-source → model-specific-file compiler in `jarvis/bin/compile-instructions`, plus the shareable wrapper, drift check, and a machine-checkable behavior-preservation gate.
+2. **Secondary:** Migrate jarvis itself — author `jarvis/instructions/`, generate `jarvis/CLAUDE.md` + `jarvis/AGENTS.md`, and author the orchestrator fragments that the pkms migration will later remove from `pkms/CLAUDE.md`.
+3. **Tertiary:** Author the per-repo migration playbook so each consumer migration (pkms, aura, assay, relay) runs as its own self-contained project.
 
 ### Non-Goals
 
@@ -25,6 +33,35 @@ One canonical source per repo, model-specific instruction files generated reprod
 - Migrating "About Me" / "How to Help Me" to user-global. Stays in pkms canonical source for v1.
 - Adding CI to repos that don't have it. Repos without CI are explicitly best-effort.
 - Phrasing-level deduplication across `CLAUDE.md` / `AGENTS.md`. Editorial cleanup deferred unless duplication causes concrete maintenance problems.
+- **Multi-repo work-runs.** Teaching the work-runner to check out and commit across sibling repos in a single run is explicitly rejected — large change to the worktree/classifier/GC model, made unnecessary by decomposition and the `$JARVIS_HOME` indirection.
+
+---
+
+## Execution model
+
+The decomposition exists to keep every run inside one repo. Two rules:
+
+1. **Private content never lands in a public repo.** `jarvis` is **public**; `pkms` is **private** and `pkms/CLAUDE.md` carries personal PII (names, employer, project codenames). Pre-migration **snapshots are local-only audit artifacts** — written into `snapshots/` (gitignored via `.git/info/exclude`) purely as a diff aid, never committed. When orchestrator content moves out of `pkms/CLAUDE.md`, only the Jarvis/orchestrator sections move; "About Me" / "How to Help Me" and other personal content stay in pkms canonical source per the Non-Goals.
+
+2. **Each migration is a single-repo run.** This jarvis project (Phases 1-5) is jarvis-internal and fully `/work --auto`-runnable. Consumer migrations are separate projects, each in their own repo.
+
+### Human-in-the-loop without hard-stops
+
+The one inherently-human step (behavior-preservation sign-off) is handled two ways so it never silently strands a run:
+
+- **Machine gate (primary).** The disallowed losses are all *named tokens* — "silent loss of any named behavior, agent, command, route, or rule." The inventory verifier (below) extracts every heading, agent name, command, and route from the snapshot and asserts each appears in the generated output. This mechanically covers the disallowed set; allowed deltas (structural reorg, dedup) pass.
+- **Telegram checkpoint (residual).** For genuine judgment calls, the run emits a `blocked-on-human` checkpoint that forwards the question to Telegram and resumes on reply, rather than auto-denying into a silent stop. Depends on the work-run `blocked-on-human` outcome (filed in `docs/projects/bugs.md`).
+
+### Consumer-repo migrations (separate projects)
+
+Each consumer repo migrates via its own project, instantiated from `per-repo-migration.md` (the playbook authored in Phase 5). All are single-repo and self-contained.
+
+| Repo | Project home | Execution | Source material |
+| ---- | ------------ | --------- | --------------- |
+| pkms | `pkms/docs/projects/` | **MANUAL** — pkms is private, not in `policies/products.json`, and its CLAUDE.md forbids branches; a worktree run can't run there. Includes removing the moved orchestrator sections from `pkms/CLAUDE.md` and adding the pointer to jarvis. | existing `pkms/CLAUDE.md` (vault-only remainder) |
+| aura | `aura/docs/projects/` | `/work --auto` in aura | existing `aura/CLAUDE.md` |
+| assay | `assay/docs/projects/` | `/work --auto` in assay | existing `assay/CLAUDE.md` + `assay/AGENTS.md` |
+| relay | `relay/docs/projects/` | `/work --auto` in relay | none — fresh scaffold |
 
 ---
 
@@ -40,15 +77,15 @@ Edit fragment in instructions/ → run compile-instructions → commit source + 
                        CI runs --check on PR → passes (no drift)
 ```
 
-1. **Edit instructions** — developer edits a fragment in `instructions/<repo>/` and updates the manifest if adding/removing fragments.
+1. **Edit instructions** — developer edits a fragment in `instructions/` and updates the manifest if adding/removing fragments.
 2. **Regenerate** — runs `scripts/compile-instructions` locally; updates `CLAUDE.md` and (if applicable) `AGENTS.md` at repo root.
 3. **Commit + PR** — stages source and generated files in the same commit; opens PR. CI runs `--check`; passes.
 4. **Merge** — Claude Code and Codex sessions opening the repo load the regenerated instructions.
 
 ### Entry Points
 
-- Local: `scripts/compile-instructions` (with optional `--check`) invoked from any of the five repos.
-- CI: drift check step on every PR.
+- Local: `scripts/compile-instructions` (with optional `--check`) invoked from any consuming repo via `$JARVIS_HOME`.
+- CI: drift check step on every PR (repos with CI).
 - Pre-commit (optional): hook that runs `--check` before commits.
 
 ### Exit Points
@@ -80,17 +117,22 @@ Edit fragment in instructions/ → run compile-instructions → commit source + 
 
 11. Generated files use LF line endings, end with exactly one trailing newline, follow manifest order, and contain no normalization of fragment content beyond concatenation. If a fragment doesn't end in LF, a single LF is inserted between it and the next fragment.
 
-### Content ownership
+### Behavior-preservation gate
 
-12. After migration, `pkms/CLAUDE.md` contains zero hits for `## Jarvis` and `### How Reviews Work` headings.
-13. After migration, every fragment file declared owned by a repo in `ownership.md` exists in that repo's `instructions/` and nowhere else.
+12. The inventory verifier extracts every heading, named agent, command, and route from a repo's pre-migration snapshot and asserts each appears in that repo's generated output; a missing token fails non-zero, naming the token and the snapshot it came from. (Replaces the human reviewer sign-off as a blocking gate; human review becomes an optional spot-check.)
+13. For every row in a repo's `ownership.md`, the named fragment file exists in that repo's `instructions/` and the row's `notes` substrings appear in that fragment.
 
-### CI integration
+### jarvis migration
 
-14. WHEN a PR in a CI-configured repo includes a hand-edited generated file (header present, content drifted) and unchanged source THEN CI fails.
-15. WHEN a PR includes edited source but unchanged generated files THEN CI fails.
-16. WHEN a PR includes both source and generated files updated together THEN CI passes.
-17. WHEN the CI workflow runs THEN it successfully checks out jarvis as a sibling and resolves `$JARVIS_HOME` to that path.
+14. After Phase 3, `jarvis/CLAUDE.md` and `jarvis/AGENTS.md` are generated (header present) and `compile-instructions --check` exits 0 in jarvis.
+15. The orchestrator fragments authored in jarvis (`## Jarvis`, `### How Reviews Work`, morning-prep ownership) carry the content slated for removal from `pkms/CLAUDE.md` by the pkms migration, so the later pkms removal loses nothing.
+
+### CI integration (per repo, where CI exists)
+
+16. WHEN a PR in a CI-configured repo includes a hand-edited generated file (header present, content drifted) and unchanged source THEN CI fails.
+17. WHEN a PR includes edited source but unchanged generated files THEN CI fails.
+18. WHEN a PR includes both source and generated files updated together THEN CI passes.
+19. WHEN the CI workflow runs THEN it successfully checks out jarvis as a sibling and resolves `$JARVIS_HOME` to that path.
 
 ---
 
@@ -117,6 +159,10 @@ Pure-core / runtime-adapter / user-surface split:
   - Trigger: `scripts/compile-instructions` wrapper in each repo; CI step invoking `--check`; optional pre-commit hook.
   - Discovery: each repo's contributor docs / CLAUDE.md section explaining how to edit instructions and regenerate.
 
+### Inventory verifier
+
+Ships with the compiler (`compile-instructions --verify-inventory <snapshot> <generated>` or a sibling binary). Tokenizes a snapshot into headings (`^#+`), agent names (from `.claude/agents/` references and `agent` mentions in the snapshot), commands (`/<name>` and the command tables), and routes (`(GET|POST) /api/...`). Asserts each token is present in the generated file. Reusable by every consumer migration, so behavior-preservation is a machine gate in each repo's project, not a human bottleneck.
+
 ### Generated-file header
 
 Every generated `CLAUDE.md` / `AGENTS.md` begins with:
@@ -142,7 +188,7 @@ Each repo with CI checks out jarvis as a sibling (e.g., second `actions/checkout
 
 ### Sections moving from pkms to jarvis canonical source
 
-Final fragment filenames decided in Phase 1. Inbound:
+Final fragment filenames decided in Phase 1. These are **authored into jarvis** in Phase 3; the matching **removal from `pkms/CLAUDE.md`** happens in the (manual) pkms migration. Inbound:
 
 - `## Jarvis` section (agent split, KB raw-source routing, loadAgentDef order) — likely splits into `jarvis-overview.md`, `jarvis-agent-loading.md`, `jarvis-kb-routing.md`.
 - `### How Reviews Work` (specialist updater pipeline) → likely `jarvis-review-pipeline.md`.
@@ -152,78 +198,55 @@ Staying in pkms canonical source: repository overview, vault structure, journal 
 
 ### Behavior inventory
 
-`ownership.md` (Phase 1 output) doubles as a behavior inventory. Columns: heading | snapshot file | new owner repo | target fragment | notes. Behaviors that live in paragraphs/tables/examples without a clean heading get their own row with `notes` carrying the description.
-
-Post-migration assertion: machine-checkable part asserts each declared fragment file exists in the declared owner repo and that each fragment's expected substrings (from `notes`) are present. Full semantic preservation relies on reviewer sign-off.
+`ownership.md` (Phase 1 output) doubles as a behavior inventory. Columns: heading | snapshot file | new owner repo | target fragment | notes. Behaviors that live in paragraphs/tables/examples without a clean heading get their own row with `notes` carrying the description. The inventory verifier (req 12) consumes the snapshot directly; `ownership.md` drives the per-fragment substring assertion (req 13).
 
 ---
 
 ## Implementation Phases
 
-> Task breakdown lives in [tasks.md](tasks.md); verification in [test-plan.md](test-plan.md). Test-first: each phase opens with a **Tests (write first)** block.
+> This project = Phases 1-5 (jarvis-internal, all `/work --auto`-runnable). Consumer migrations are separate per-repo projects (see Execution model). Task breakdown lives in [tasks.md](tasks.md); verification in [test-plan.md](test-plan.md). Test-first: each phase opens with a **Tests (write first)** block.
 
-### Execution model & privacy boundary
-
-Two constraints govern how this project is executed. Both were surfaced by a real `/work --auto` run (`20565e71`, 2026-06-01) that correctly hard-stopped rather than violate them.
-
-**1. Private content must never land in a public repo.** `jarvis` is **public**; `pkms` is **private** and `pkms/CLAUDE.md` carries personal PII (names, employer, project codenames). Therefore:
-
-- Pre-migration **snapshots are local-only audit artifacts, never committed.** They are written into `snapshots/` (gitignored via `.git/info/exclude`) purely as a diff aid during migration. The verbatim copy requirement holds *on disk*; nothing private is committed to public `jarvis`.
-- When orchestrator content moves from `pkms/CLAUDE.md` into jarvis fragments, only the **Jarvis/orchestrator** sections move (see "Sections moving" below). "About Me" / "How to Help Me" and any other personal content stay in pkms canonical source per the Non-Goals.
-
-**2. `/work --auto` is scoped to Phases 1-2 only.** An `--auto` run executes in an isolated single-repo `jarvis` worktree on a throwaway branch. It **cannot** commit to sibling repos (pkms, aura, assay, relay) and **cannot** self-approve a human reviewer sign-off. Therefore:
-
-- **Phases 1-2** (snapshot, inventory, ownership manifest, compiler build) are jarvis-internal and `--auto`-runnable.
-- **Phases 3-6** require cross-repo writes and/or human sign-off and are **run manually** (or as separate per-repo runs inside each target repo), not via `/work --auto`. Tasks in those phases are marked accordingly in [tasks.md](tasks.md).
-
-### Phase 1: Snapshot + inventory + ownership decision
+### Phase 1: Snapshot + inventory + ownership decision  ·  `--auto`
 
 - [ ] Snapshot all existing instruction files into `snapshots/` (local-only, gitignored — never committed; pkms is private, jarvis is public).
 - [ ] Produce section-by-section table via `tools/list-sections.sh`.
 - [ ] Refine inbound section list into per-row `ownership.md`.
 - [ ] Choose canonical phrasing for each Claude/Codex duplicate.
 
-### Phase 2: Compiler design & build
+### Phase 2: Compiler, wrapper, and inventory verifier  ·  `--auto`
 
 > Depends on: Phase 1.
 
 - [ ] Build compiler in `jarvis/bin/compile-instructions` with explicit IR + pure-function renderers.
 - [ ] Implement claude and agents renderers (identical text per fragment in v1; divergence via manifest).
 - [ ] Ship wrapper template at `jarvis/bin/wrapper-template.sh`.
+- [ ] Build the inventory verifier (req 12) — the reusable machine behavior-preservation gate.
 
-### Phase 3: Migrate jarvis + pkms
+### Phase 3: Migrate jarvis itself  ·  `--auto`
 
-> Depends on: Phase 2.
+> Depends on: Phase 2. Single-repo: jarvis only.
 
-- [ ] Install wrapper in pkms at `scripts/compile-instructions`.
-- [ ] Author canonical source for jarvis (fragments per Phase 1 manifest).
-- [ ] Author canonical source for pkms (vault-only fragments).
-- [ ] Generate `CLAUDE.md` / `AGENTS.md` via `--bootstrap`; commit canonical + generated together.
+- [ ] Install wrapper in jarvis at `scripts/compile-instructions`.
+- [ ] Author `jarvis/instructions/` fragments per Phase 1 manifest, including the orchestrator content being moved out of pkms (req 15).
+- [ ] Author `jarvis/instructions/manifest.yaml`.
+- [ ] Generate `jarvis/CLAUDE.md` + `jarvis/AGENTS.md` via `--bootstrap`; commit canonical + generated together.
+- [ ] Inventory verifier passes for jarvis against the jarvis snapshot.
 
-### Phase 4: Migrate aura + assay + relay
+### Phase 4: Drift check (CI) for jarvis  ·  `--auto`
 
-> Depends on: Phase 3.
+> Depends on: Phase 2. Can land alongside Phase 3.
 
-- [ ] Install wrappers in aura, assay, and relay.
-- [ ] Author canonical source for each. Aura and assay port from existing instruction files (with snapshot diff); relay scaffolds from scratch (no pre-migration content exists).
-- [ ] Generate and commit outputs.
-- [ ] Reviewer sign-off on `ownership.md`-based behavior preservation for aura and assay. N/A for relay — fresh scaffold has nothing to preserve.
+- [ ] Add the drift-check step to jarvis CI (`scripts/compile-instructions --check`).
+- [ ] Ship optional pre-commit hook via `scripts/install-hooks.sh`.
 
-### Phase 5: Drift check (CI primary, pre-commit optional)
+### Phase 5: Per-repo migration playbook + handoff  ·  `--auto`
 
-> Depends on: Phase 2 (compiler must exist). Can land in parallel with Phases 3/4 for repos already migrated.
+> Depends on: Phases 2-4.
 
-- [ ] Identify which of the five repos have CI; add the drift check step per repo with CI.
-- [ ] For repos without CI, document the manual workflow in contributor docs.
-- [ ] Ship optional pre-commit hook via `scripts/install-hooks.sh` one-liner.
-
-### Phase 6: Cleanup
-
-> Depends on: Phases 3, 4, 5.
-
-- [ ] Update internal docs referencing old structure (project 08 docs, `agent-lessons.md`).
-- [ ] Add one-line pointer in pkms canonical source indicating Jarvis behavior is documented in jarvis repo.
-- [ ] Discard placeholder fragments and leftover migration scaffolding.
+- [ ] Author `per-repo-migration.md` — the template each consumer project (pkms, aura, assay, relay) is instantiated from: install wrapper, author `instructions/`, generate via `--bootstrap`, run inventory verifier, add CI/pointer.
+- [ ] Scaffold the per-repo migration project stubs in aura, assay, relay (and document the manual pkms path).
+- [ ] Update internal docs referencing the old structure (project 08 docs, `agent-lessons.md`).
+- [ ] Verify `snapshots/` remains on disk as a local-only audit artifact.
 
 ---
 
@@ -233,16 +256,17 @@ Two constraints govern how this project is executed. Both were surfaced by a rea
 
 | Metric | Target | How Measured |
 | ------ | ------ | ------------ |
-| `compile-instructions --check` exit 0 | 5/5 repos | CLI invocation post-migration |
-| Generated `pkms/CLAUDE.md` zero hits for moved headings | 0 occurrences of `## Jarvis`, `### How Reviews Work` | grep on generated file |
-| Behavior inventory rows preserved | 100% of `ownership.md` rows assert green | Phase 3/4 fragment-existence + substring assertions |
-| CI catches drift | 3/3 fixture cases pass | Local fixture tests in Phase 5 |
+| `compile-instructions --check` exit 0 in jarvis | pass | CLI invocation post-Phase-3 |
+| Inventory verifier green for jarvis | 100% of snapshot tokens present | `--verify-inventory` exit 0 |
+| Behavior inventory rows preserved | 100% of `ownership.md` rows assert green | Phase 3 fragment-existence + substring assertions |
+| CI catches drift (jarvis) | 3/3 fixture cases pass | Local fixture tests in Phase 4 |
 | ~/.claude/CLAUDE.md unchanged | sha256 unchanged from project start | `shasum` comparison |
+| Per-repo migration stubs exist | 3/3 (aura, assay, relay) | project dirs + index rows present |
 
 ### Observational metrics (post-merge, 3-run window)
 
 - Morning prep produces today's journal `# Morning prep` heading on each of the next 3 scheduled runs with no error-level log lines.
-- Next 3 `/work` runs targeting aura complete without missing-instruction errors.
+- Codex opening jarvis loads the regenerated `AGENTS.md` with the orchestrator identity intact.
 
 ---
 
@@ -264,19 +288,23 @@ Two constraints govern how this project is executed. Both were surfaced by a rea
 - `$JARVIS_HOME` points to non-existent directory → error.
 - Compiler file is not executable → error.
 
+### Inventory verifier
+
+- Snapshot token absent from generated output → non-zero, names the token + snapshot.
+- Snapshot file missing for a repo that should have one → non-zero (catches a skipped Phase 1 snapshot).
+
 ### CI
 
 - jarvis sibling checkout step fails → CI fails the workflow (no silent skip of the drift check).
-- Compiler version produces different output than committed → drift check fails on next PR in each consumer repo; developer regenerates as part of normal PR flow.
+- Compiler version produces different output than committed → drift check fails on next PR; developer regenerates as part of normal PR flow.
 
-### Migration
+### Consumer migrations (in their own projects)
 
-- Aura or assay has no existing instruction files → snapshot inventory marks them as "did not exist"; migration creates `instructions/` and generated files from scratch.
-- Relay has no existing instruction files at project start → no snapshot, no behavior-preservation review. Phase 4 authors a starter `instructions/` and manifest from scratch.
-- Mid-migration commit accidentally leaves generated file out of sync with source → caught by `--check` locally (if developer ran it) or on PR (via CI).
+- A consumer migration that needs a judgment call emits a `blocked-on-human` checkpoint (Telegram) instead of hard-stopping.
+- pkms migration is manual: a worktree run cannot operate in pkms (private, not in `products.json`, no-branch rule).
 
 ---
 
 ## Open Questions
 
-None. Source format (fragments + manifest), compiler location (jarvis/bin), versioning model (no formal versioning, CI-enforced lock-step), pre-commit posture (optional), and ~/.claude/CLAUDE.md treatment (untouched) are all settled.
+None. Source format (fragments + manifest), compiler location (jarvis/bin), versioning model (no formal versioning, CI-enforced lock-step), pre-commit posture (optional), `~/.claude/CLAUDE.md` treatment (untouched), the decomposition into per-repo projects, and pkms-as-manual are all settled.
