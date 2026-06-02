@@ -136,7 +136,7 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
 
-## 10-jarvis-identity-refactor — Not Started
+## 10-jarvis-identity-refactor — In Progress
 
 [Spec](10-jarvis-identity-refactor/spec.md)
 
@@ -148,7 +148,7 @@ Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler t
 - **Migration:** each repo's pre-migration instruction files snapshotted into `snapshots/` permanently as an audit artifact. `ownership.md` doubles as a behavior inventory; per-row fragment-existence assertions plus reviewer sign-off on semantic preservation.
 - **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md). Test-first per phase.
 
-## 12-work-run-observability — Not Started
+## 11-work-run-observability — Done
 
 [Spec](11-work-run-observability/spec.md)
 
