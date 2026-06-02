@@ -1,168 +1,70 @@
 # Jarvis Identity Refactor Test Plan
 
-Error handling and verification checklist for the canonical-source compiler, the jarvis migration, and the per-repo migration playbook.
+Verification for the rescoped project: symlink the model-specific instruction files and
+relocate orchestrator identity. See [spec.md](spec.md) for rationale, [tasks.md](tasks.md)
+for steps.
 
-This project is **test-first**: each numbered section below is written by a phase's **Tests (write first)** task in [tasks.md](tasks.md), and those tests must fail (red) before that phase's implementation tasks begin. A phase's implementation is done when its test-plan sections pass.
-
-> Scope = Phases 1-5 (jarvis-internal). Consumer-repo migrations (pkms, aura, assay, relay) are verified inside their own projects, reusing the same compiler `--check` and inventory verifier; their acceptance criteria are templated in `per-repo-migration.md`.
+> **Rescoped 2026-06-02.** The prior compiler/wrapper/verifier/CI/playbook test sections
+> are dropped along with the build they verified. What remains is a handful of checkable
+> facts, mostly one-line shell assertions plus one manual confirmation (Codex follows the
+> symlink) and one diff review (nothing lost in the move).
 
 ## Priority Levels
 
-- 🔴 **Critical**: Blocks migration or breaks Jarvis runtime; requires immediate attention.
-- 🟡 **High**: Degrades developer experience significantly; should be handled with a clear error.
-- 🟢 **Low**: Non-blocking; can fail with logging.
+- 🔴 **Critical**: Breaks an instruction file's loading or loses content.
+- 🟡 **High**: Leaves drift possible or the move incomplete.
+- 🟢 **Low**: Cosmetic / best-effort.
 
 ---
 
-## 1. Snapshot + inventory + ownership manifest
+## 1. Symlink correctness
 
-### Snapshot completeness
+- [ ] 🔴 In jarvis and pkms, `AGENTS.md` is a symlink to `CLAUDE.md`:
+      `test -L AGENTS.md && [ "$(readlink AGENTS.md)" = "CLAUDE.md" ]` succeeds.
+- [ ] 🔴 In every touched repo, `diff CLAUDE.md AGENTS.md` exits 0 (same bytes via the link).
+- [ ] 🔴 **Manual:** open a Codex session in jarvis; confirm it loads instructions through
+      `AGENTS.md` (the symlink) — the orchestrator identity is present in context. This is
+      the one assumption gating the symlink approach (spec.md → Risks). If it fails, the
+      `cp` + `diff` fallback applies and this plan's symlink assertions are replaced by a
+      copy-equality assertion.
+- [ ] 🔴 **Manual:** open Claude Code in jarvis; confirm `CLAUDE.md` loads as before.
+- [ ] 🟢 Best-effort: assay and aura have `AGENTS.md` as a symlink to `CLAUDE.md` (same
+      assertions). relay has neither file (nothing to assert).
+- [ ] 🟡 Git stores the symlink as a link, not a copied regular file:
+      `git ls-files -s AGENTS.md` shows mode `120000`.
 
-- [ ] 🔴 Every existing instruction file (`pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, aura/assay variants if present) is copied verbatim into `snapshots/` before any edits to source files. Relay has no pre-migration files; no snapshot taken for it.
-- [ ] 🔴 `snapshots/` is local-only: gitignored (e.g. via `.git/info/exclude`) and absent from `git status` / never committed, so private pkms PII cannot reach the public jarvis repo. The verbatim-copy assertion above checks on-disk files, not committed ones.
-- [ ] 🔴 Aura and assay snapshot entries are marked "did not exist" if no file was present at project start. The accounting lives in an always-present `snapshots/MISSING.md` ledger: every conditional variant is either copied into `snapshots/` as a real file or named in `MISSING.md`. `MISSING.md` is mandatory even when every variant exists (it then records "none missing").
+## 2. Content move (pkms → jarvis)
 
-### Inventory tooling
+- [ ] 🔴 The `## Jarvis` section and the `### How Reviews Work` mechanics appear in
+      `jarvis/CLAUDE.md` after the move.
+- [ ] 🔴 Both sections are absent from `pkms/CLAUDE.md` after the move.
+- [ ] 🔴 The pointer line ("Jarvis orchestration … is documented in `jarvis/CLAUDE.md`")
+      is present in `pkms/CLAUDE.md`.
+- [ ] 🔴 The "staying" sections from spec.md remain intact in `pkms/CLAUDE.md`: repository
+      overview, vault structure, journal format, reference system, tags, JSON schemas, the
+      Review Cadence + End-of-Month tables, the Claude Code Commands tables, About Me,
+      What I'm Working On, Git discipline.
+- [ ] 🟡 The move is content-preserving: a git diff review across both repos shows the moved
+      text is the same text (allowed deltas: heading-level adjustment and surrounding prose
+      to fit jarvis's structure). Read the diff — it is the proof, replacing the dropped
+      named-token verifier.
+- [ ] 🟢 Incidental agent-name references left in pkms (e.g. the worldview "propose-only"
+      note) are acceptable and need not be removed.
 
-- [ ] 🟡 `tools/list-sections.sh` produces a table covering every Markdown heading across all snapshot files; missing headings cause a non-zero exit.
-- [ ] 🟡 Script flags content duplicated between `jarvis/CLAUDE.md` and `jarvis/AGENTS.md` snapshots for explicit canonical-phrasing decision.
+## 3. No collateral damage
 
-### Ownership manifest
-
-- [ ] 🔴 Every row in `ownership.md` has all five columns populated (heading | snapshot file | new owner | target fragment | notes); verifier fails on any missing cell.
-- [ ] 🟡 Behaviors that live in paragraphs/tables/examples without a clean heading have their own row with `notes` carrying the description.
-
-### Integration verification
-
-> A developer running `tools/list-sections.sh` followed by manual review produces `ownership.md`. Verifier script confirms manifest completeness before Phase 2 begins.
-
----
-
-## 2. Compiler, wrapper, and inventory verifier
-
-### Determinism
-
-- [ ] 🔴 Running the compiler twice on the same canonical source produces byte-identical `CLAUDE.md` and `AGENTS.md`.
-- [ ] 🔴 Running the compiler from a fresh checkout produces output matching what's committed.
-- [ ] 🟡 Output uses LF line endings, ends with exactly one trailing newline, and applies no normalization to fragment content beyond concatenation.
-
-### Manifest validation
-
-- [ ] 🔴 Missing fragment file → non-zero exit, error names the missing file and the manifest line referencing it.
-- [ ] 🔴 Duplicate `(file, renderer)` pair → non-zero exit, error names the duplicate.
-- [ ] 🔴 Unknown renderer → non-zero exit, error lists valid renderer names.
-- [ ] 🔴 Malformed YAML → non-zero exit, error includes line number.
-- [ ] 🔴 Fragment contains frontmatter → non-zero exit, error names the offending fragment.
-
-### Model filtering
-
-- [ ] 🔴 Fragment with `renderers: [claude]` appears in `CLAUDE.md` and not in `AGENTS.md`.
-- [ ] 🔴 Fragment with `renderers: [agents]` appears in `AGENTS.md` and not in `CLAUDE.md`.
-- [ ] 🔴 Fragment with default renderers (or `[claude, agents]`) appears identically in both.
-
-### `--check` mode
-
-- [ ] 🔴 Compiles canonical source to temp dir, diffs against on-disk generated files.
-- [ ] 🔴 Exits 0 when in sync; exits 1 with unified diff on stdout when not.
-- [ ] 🔴 Treats a hand-edited generated file (header present, content drifted from recompile) as drift.
-
-### Header enforcement
-
-- [ ] 🔴 Refuses to overwrite a generated file lacking the autogenerated header unless `--bootstrap` is passed.
-- [ ] 🟡 With `--bootstrap`, overwrites missing-header files without error.
-
-### AGENTS.md orphan handling
-
-- [ ] 🔴 Manifest no longer produces agents content + on-disk `AGENTS.md` exists → compiler errors with clear "manifest no longer renders AGENTS.md; delete it" message.
-- [ ] 🟡 With `--bootstrap`, deletes orphaned generated files.
-
-### Wrapper
-
-- [ ] 🔴 Unset `$JARVIS_HOME` → error and exit 1 with clear message.
-- [ ] 🔴 `$JARVIS_HOME` points to non-existent path or non-executable compiler → error.
-- [ ] 🟡 Relative `$JARVIS_HOME` resolved to absolute. Symlinks followed. Spaces in paths supported.
-
-### Inventory verifier (named-token regression smoke gate)
-
-> A smoke test for gross drops, **not** a behavior-preservation sign-off — token presence does not prove the surrounding behavior or any non-token rule survived. Human semantic sign-off is still required (off the blocking path).
-
-- [ ] 🔴 Every heading, named agent, command (`/<name>`), and route (`(GET|POST) /api/...`) in a snapshot is asserted present in the generated output; a missing token → non-zero, naming the token and its snapshot.
-- [ ] 🔴 A snapshot with all tokens preserved (allowed deltas only: structural reorg, dedup) → exit 0.
-- [ ] 🟡 Missing snapshot file for a repo that should have one → non-zero (catches a skipped Phase 1 snapshot).
-- [ ] 🟡 For each `ownership.md` row, the row's `notes` substrings appear in the named fragment.
-
-### Integration verification
-
-> A developer invokes `scripts/compile-instructions` from a consumer repo with `$JARVIS_HOME` set. The wrapper execs the jarvis compiler against the local `instructions/` directory, producing or checking generated files at the repo root.
+- [ ] 🔴 `~/.claude/CLAUDE.md` sha256 is unchanged from project start
+      (`shasum ~/.claude/CLAUDE.md` before vs after).
+- [ ] 🟡 No compiler, manifest, wrapper, verifier, CI step, or `per-repo-migration.md`
+      was created (verify against git log — the rescope dropped all of it).
+- [ ] 🟢 relay is untouched (no instruction files added).
 
 ---
 
-## 3. Jarvis migration
+## Integration verification
 
-### Pre-merge gates (machine-checkable)
-
-- [ ] 🔴 For every row in `ownership.md` owned by jarvis, the named fragment file exists in `jarvis/instructions/` and nowhere else.
-- [ ] 🔴 `compile-instructions --check` exits 0 in jarvis.
-- [ ] 🔴 Generated `jarvis/CLAUDE.md` and `jarvis/AGENTS.md` both begin with the autogenerated header.
-- [ ] 🔴 Inventory verifier exits 0 for jarvis against the jarvis snapshot.
-- [ ] 🔴 The orchestrator content slated for removal from `pkms/CLAUDE.md` (`## Jarvis`, `### How Reviews Work`, morning-prep ownership) is present in jarvis fragments, so the later pkms removal loses nothing.
-- [ ] 🟡 `jarvis/CLAUDE.md` and `jarvis/AGENTS.md` have identical heading order for fragments rendered to both; divergent sections appear only where manifest declares model-specific fragments.
-
-### Post-merge monitors (operational, not phase-completion gates)
-
-> These cannot be satisfied by the `/work --auto` run itself — they are observed after merge.
-
-- [ ] 🟡 Next 3 scheduled morning prep runs produce today's journal with `# Morning prep` heading and no error-level log lines. Roll back the migration commit if any run fails.
-
-### Integration verification
-
-> Opening Codex in jarvis loads the new generated `AGENTS.md` with the moved orchestrator identity intact; Claude Code loads the new `CLAUDE.md`.
-
----
-
-## 4. Drift detection (jarvis)
-
-### Local fixture tests
-
-Tests run against temp repos populated with controlled drift cases. No actual PRs pushed.
-
-- [ ] 🔴 Fixture: hand-edited generated file (header present, content changed) + unchanged source → `--check` exits 1 with unified diff.
-- [ ] 🔴 Fixture: edited source + unchanged generated files → `--check` exits 1 with unified diff.
-- [ ] 🔴 Fixture: both source and generated updated together → `--check` exits 0.
-
-### CI workflow
-
-- [ ] 🔴 jarvis CI workflow syntax-validates and resolves `$JARVIS_HOME` to the in-tree checkout under test (no sibling checkout needed for jarvis's own CI).
-- [ ] 🔴 CI step invokes `scripts/compile-instructions --check`.
-
-### Optional pre-commit hook
-
-- [ ] 🟡 If installed via `scripts/install-hooks.sh`, hook reproduces the three drift cases locally before commit.
-
-### Integration verification
-
-> A PR with a hand-edited `jarvis/CLAUDE.md` fails the drift check step and surfaces the unified diff in the workflow output. Developer regenerates locally, re-pushes, CI passes.
-
----
-
-## 5. Per-repo migration playbook (jarvis-internal)
-
-> This project ships the playbook only. Actual consumer-repo stubs are created and verified inside each consumer's own run (out of scope here — a cross-repo write).
-
-### Playbook completeness
-
-- [ ] 🔴 `per-repo-migration.md` exists and documents the full sequence (install wrapper → author `instructions/` → `--bootstrap` → inventory smoke gate → human sign-off → CI/pointer), with per-repo source material and the relay (fresh) / pkms (manual + section removal) special cases.
-- [ ] 🔴 The playbook specifies the exact stub layout each per-repo run must create: a project doc under `<repo>/docs/projects/<n>-instructions-migration/` plus an `index.md` row in the same commit (and creating `relay/docs/projects/index.md` if absent).
-- [ ] 🟡 The playbook documents the manual pkms path (no auto stub): section removal from `pkms/CLAUDE.md` + jarvis pointer, committed straight to pkms `main`.
-- [ ] 🟢 The playbook is jarvis-internal: writing it touches no sibling repo.
-
-### Cleanup + cross-cutting non-goals
-
-- [ ] 🟡 Project 08 docs and `agent-lessons.md` no longer reference the old `pkms/CLAUDE.md` structure for Jarvis behavior.
-- [ ] 🟢 `snapshots/` remains on disk at `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/` permanently as a local-only (gitignored, uncommitted) audit artifact.
-- [ ] 🔴 `~/.claude/CLAUDE.md` sha256 unchanged from project start.
-- [ ] 🟡 No phrasing-level deduplication landed as part of this project (verify against git log).
-
-### Integration verification
-
-> A developer reads `per-repo-migration.md`, then dispatches a `/work --auto` run against aura (or assay/relay) from its scaffolded project, or manually executes the pkms path.
+> After both phases: a developer (or Codex/Claude session) opening jarvis loads a single
+> canonical instruction file under either name, with the orchestrator identity now present.
+> Opening pkms loads vault-only instructions plus a one-line pointer to jarvis. Editing
+> `CLAUDE.md` in any touched repo updates `AGENTS.md` for free — drift is structurally
+> impossible.

@@ -15,7 +15,7 @@ its `spec.md`.
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
-| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Move Jarvis identity out of pkms; compile CLAUDE.md/AGENTS.md from a canonical instruction source per repo across jarvis, pkms, aura, assay, relay. |
+| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [12-work-run-observability](12-work-run-observability/spec.md) | Not Started | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 
 ---
@@ -136,17 +136,17 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
 
-## 10-jarvis-identity-refactor — In Progress
+## 10-jarvis-identity-refactor — Not Started
 
 [Spec](10-jarvis-identity-refactor/spec.md)
 
-Move Jarvis's orchestrator identity out of pkms/CLAUDE.md and build a compiler that generates model-specific instruction files (CLAUDE.md, AGENTS.md) from a single canonical instruction source per repo. Applies to jarvis, pkms, aura, assay, relay. Relay is a fresh-scaffold case (no pre-migration instruction files exist).
+Two surgical edits: make `AGENTS.md` a symlink to `CLAUDE.md` per repo so the two can never drift, and move Jarvis's orchestrator identity out of `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`. **Rescoped 2026-06-02** from a five-repo canonical-source compiler — see the spec's Scope change section.
 
-- **Source format:** fragments + manifest.yaml per repo. Single-file tag-based approach rejected (parser edge cases, worse diffs, harder to share fragments).
-- **Compiler location:** `jarvis/bin/compile-instructions` with explicit IR + pure-function renderers. Consumer repos invoke via a `scripts/compile-instructions` wrapper that resolves `$JARVIS_HOME`.
-- **Drift detection:** CI authoritative where present (`--check` mode); pre-commit optional. Repos without CI are explicitly best-effort.
-- **Migration:** each repo's pre-migration instruction files snapshotted into `snapshots/` permanently as an audit artifact. `ownership.md` doubles as a behavior inventory; per-row fragment-existence assertions plus reviewer sign-off on semantic preservation.
-- **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md). Test-first per phase.
+- **Why rescoped:** no instruction will ever differ between CLAUDE.md and AGENTS.md (same instructions, different per-model prompts), so a compiler whose renderers must produce identical output is a copy with extra steps. A symlink delivers zero drift for zero machinery.
+- **Drift fix:** `ln -s CLAUDE.md AGENTS.md`. Core repos jarvis + pkms (both currently drifted); best-effort assay + aura; relay has no instruction files.
+- **Identity fix:** move the `## Jarvis` and `### How Reviews Work` sections from pkms to jarvis, leave a one-line pointer. The git diff is the proof of preservation.
+- **Dropped:** the compiler, IR, renderers, manifest, `$JARVIS_HOME` wrapper, inventory verifier, CI drift checks, and `per-repo-migration.md`. The persistent-role-agent / SOUL.md / per-agent-memory architecture is a separate project (ideas.md → "Better agentic systems").
+- **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md).
 
 ## 11-work-run-observability — Done
 

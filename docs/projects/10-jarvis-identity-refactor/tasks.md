@@ -1,155 +1,82 @@
 # Jarvis Identity Refactor — Tasks
 
-See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+See [spec.md](spec.md) for the rescope rationale and approach, and [test-plan.md](test-plan.md)
+for verification.
 
-> **Scope:** Phase 1 is **manual cross-repo prep** (read-only); Phases 2-5 are jarvis-internal and `/work --auto`-runnable in a single jarvis worktree. The four consumer migrations (pkms, aura, assay, relay) and their project stubs are **separate per-repo runs** instantiated from `per-repo-migration.md` (authored in Phase 5) — this project does not write to sibling repos. See the Execution model in spec.md.
->
-> **Test-first by default.** Every phase opens with a **Tests (write first)** block whose tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red) before any implementation task in the phase begins.
+> **Rescoped 2026-06-02.** This is no longer a compiler build — it is two surgical edits:
+> symlink `AGENTS.md` → `CLAUDE.md` per repo, and move orchestrator identity from
+> `pkms/CLAUDE.md` to `jarvis/CLAUDE.md`. The prior compiler/manifest/verifier/CI/playbook
+> tasks are dropped (see spec.md → Scope change). Small enough to do by hand in one sitting;
+> no `/work --auto` orchestration needed.
 
-## Phase 1 — Snapshot + inventory + ownership decision
+## Phase 0 — Remove the original-scope tests
 
-> Depends on: nothing.
-> **Execution: MANUAL — not `/work --auto`.** Inventorying what moves where requires reading pkms/aura/assay, outside any single-repo worktree. Run by hand (or an orchestrator with multi-repo read access); the output feeds the auto build (Phases 2-5).
+> The prior compiler-era plan was test-first and left one red test file behind. It asserts
+> dropped artifacts (snapshots, `tools/list-sections.sh`, `inventory.md`, `ownership.md`),
+> so it can never pass under the rescope. Delete it before anything else.
 
-### Tests (write first)
+- [ ] Delete `scripts/identity-refactor-phase1.test.ts` (the only spec-10 test; the
+      `'10-jarvis-identity-refactor'` string in `src/jobs/supervision-store.test.ts` is
+      unrelated test data — leave it).
+- [ ] Confirm the test suite is green without it (`npm test` or the repo's runner).
 
-- [x] Write the test suite for **snapshot + inventory completeness** — test-plan.md §1.
-- [x] Confirm the suite fails (red) before starting implementation.
+## Phase 1 — Content move (pkms ↔ jarvis)
 
-### Snapshot all existing instruction files
+> Depends on: Phase 0. Order matters: this precedes the pkms symlink in Phase 2.
 
-- [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`. Relay has no pre-migration instruction files; no snapshot taken. **Snapshots are local-only: gitignore the directory (`.git/info/exclude`) and never commit it — pkms is private, jarvis is public, so committing the verbatim pkms snapshot would publish PII.**
-- [ ] Write `snapshots/MISSING.md` (also gitignored): a ledger naming every conditional variant (aura/assay × CLAUDE/AGENTS) that was copied vs. absent — mandatory even when none are missing (records "none missing") so absence is stated affirmatively (test-plan §1).
+- [ ] Append the `## Jarvis` section (automation ownership, agent split, KB raw-source
+      routing, `loadAgentDef` order) from `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`, placed
+      coherently within its existing structure.
+- [ ] Append the `### How Reviews Work` mechanics (prep → interview → outline →
+      write-up + post-agent pipeline; the specialist updaters) into `jarvis/CLAUDE.md`.
+- [ ] Remove both sections from `pkms/CLAUDE.md`.
+- [ ] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Jarvis orchestration
+      … is documented in `jarvis/CLAUDE.md`."
+- [ ] Verify against the move boundary in spec.md: the listed "staying" sections remain in
+      pkms (overview, vault structure, journal format, reference system, tags, schemas,
+      cadence tables, command tables, About Me, etc.).
+- [ ] Read the git diff in both repos — moved content present in jarvis, absent in pkms,
+      pointer present (test-plan §2).
+- [ ] Commit jarvis to `main`. Commit pkms straight to `main` (no-branch rule).
 
-### Build inventory tooling
+## Phase 2 — Symlink AGENTS.md → CLAUDE.md
 
-- [ ] Author `tools/list-sections.sh` that emits a section-by-section table across all snapshot files.
-- [ ] Run it; write the raw output to `snapshots/inventory.md` (gitignored — it spans private content; **not** committed to public jarvis).
+> Depends on: Phase 1 (so the pkms symlink captures the post-move file).
 
-### Author ownership manifest
+### Core repos
 
-- [ ] Refine the inbound section list from spec.md into per-row `ownership.md` (heading | snapshot file | new owner | target fragment | notes). **Commit only the jarvis-owned rows** (pre-sanitized of PII); keep pkms-derived analysis in the gitignored `snapshots/` tree.
-- [ ] Capture paragraph/table/example-level behaviors as their own rows with `notes` carrying the description.
-- [ ] For each Claude/Codex duplicate flagged by the inventory script, choose canonical phrasing and record the decision in `ownership.md`.
+- [ ] **jarvis:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+- [ ] **Verify Codex reads through the symlink** in jarvis — open a Codex session, confirm
+      it loads the orchestrator identity — **before** rolling the pattern to other repos
+      (test-plan §1). If it fails, apply the `cp` + `diff` fallback (spec.md → Risks) and
+      stop.
+- [ ] **pkms:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
 
-### User-reachability check
+### Best-effort repos
 
-- [ ] Phase 1 produces internal prep artifacts only (local snapshots + inventory, jarvis-scoped committed ownership manifest). No user-facing surface; correct for a manual plan-prep phase.
+- [ ] **assay:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add`.
+- [ ] **aura:** `ln -s CLAUDE.md AGENTS.md`; `git add` (creates the previously-absent file).
+- [ ] **relay:** no action (no instruction files).
 
-## Phase 2 — Compiler, wrapper, and inventory verifier
+### Verify + commit
 
-> Depends on: Phase 1.
-> **Execution: `/work --auto`-runnable** (jarvis-internal; builds the compiler + wrapper + verifier in jarvis only).
-
-### Tests (write first)
-
-- [ ] Write the test suite for **compiler behavior** — test-plan.md §2.
-- [ ] Write the test suite for **inventory verifier** — test-plan.md §2 (verifier section).
-- [ ] Confirm red before implementation.
-
-### Build the compiler
-
-- [ ] Author parser that produces the explicit IR (list of `{ content, renderers }` tuples).
-- [ ] Author claude and agents renderers as pure functions over the filtered IR → markdown text.
-- [ ] Wire the binary at `jarvis/bin/compile-instructions` with `--check`, `--bootstrap`, and default modes.
-
-### Build the wrapper
-
-- [ ] Ship wrapper template at `jarvis/bin/wrapper-template.sh` honoring the wrapper contract from spec.md.
-
-### Build the inventory verifier
-
-- [ ] Author `--verify-inventory <snapshot> <generated>` (or sibling binary): tokenize headings, agent names, commands, routes from a snapshot; assert each present in the generated output; non-zero naming any missing token. This is a reusable **named-token regression smoke gate** (catches gross drops), **not** a behavior-preservation sign-off — human semantic review still required.
-
-### Validation surfaces
-
-- [ ] Manifest validator catches missing fragment, duplicate `(file, renderer)`, unknown renderer, malformed YAML, and fragments with frontmatter — each error naming the offending location.
-- [ ] Header enforcement: refuses to overwrite generated files lacking the autogenerated header without `--bootstrap`.
-- [ ] Orphan handling: errors on stale `AGENTS.md` when manifest no longer renders one; `--bootstrap` deletes orphans.
-
-### User-reachability check
-
-- [ ] Post-phase: developer can clone jarvis, run `jarvis/bin/compile-instructions --help`, and see usage. Pre-condition for Phase 3.
-
-## Phase 3 — Migrate jarvis itself
-
-> Depends on: Phase 2. **Single-repo: jarvis only.**
-> **Execution: `/work --auto`-runnable.**
-
-### Tests (write first)
-
-- [ ] Write the test suite for **jarvis migration** — test-plan.md §3.
-- [ ] Confirm red before implementation.
-
-### Install wrapper + author canonical source
-
-- [ ] Commit `scripts/compile-instructions` to jarvis per the wrapper template.
-- [ ] Create `jarvis/instructions/` directory.
-- [ ] Author fragments from the Phase 1 ownership manifest's **jarvis-owned rows** + jarvis's own runtime knowledge — authored **fresh** (the orchestrator content `## Jarvis`, `### How Reviews Work`, morning-prep ownership), no pkms-snapshot read, so the later pkms removal loses nothing.
-- [ ] Author `jarvis/instructions/manifest.yaml`.
-
-### Generate and verify
-
-- [ ] Run `compile-instructions --bootstrap` in jarvis; stage `instructions/` + generated `CLAUDE.md` + `AGENTS.md` together (the run's work product — the runner classifies the diff).
-- [ ] `compile-instructions --check` exits 0 in jarvis.
-- [ ] Inventory smoke gate passes for jarvis; human semantic sign-off recorded after the run (off the blocking path).
-
-### User-reachability check
-
-- [ ] Post-phase: opening Codex in jarvis loads the new generated `AGENTS.md` with the orchestrator identity intact; Claude Code loads the new `CLAUDE.md`.
-
-## Phase 4 — Drift check (CI) for jarvis
-
-> Depends on: Phase 2. Can land alongside Phase 3.
-> **Execution: `/work --auto`-runnable** (jarvis CI + hooks only).
-
-### Tests (write first)
-
-- [ ] Write the test suite for **drift detection (local fixtures)** — test-plan.md §4.
-- [ ] Confirm red before implementation.
-
-### CI + hook
-
-- [ ] Add the drift-check step to jarvis CI: set `$JARVIS_HOME` to the in-tree checkout under test (no sibling needed) and run `--check`.
-- [ ] Ship `scripts/install-hooks.sh` one-liner; hook reproduces the three drift cases locally (hand-edit, stale-gen, in-sync).
-
-### User-reachability check
-
-- [ ] Post-phase: a PR with intentionally drifted files in jarvis fails the CI check; developers see the failure and regenerate instructions in the failed step output.
-
-## Phase 5 — Per-repo migration playbook (jarvis-internal)
-
-> Depends on: Phases 2-4.
-> **Execution: `/work --auto`-runnable** — authors a jarvis doc only; does **not** write to any sibling repo. (Creating the actual stubs in aura/assay/relay is a cross-repo write → separate per-repo runs, tracked below.)
-
-### Tests (write first)
-
-- [ ] Write the test suite for **playbook completeness** — test-plan.md §5.
-- [ ] Confirm red before implementation.
-
-### Author the playbook
-
-- [ ] Author `per-repo-migration.md`: the template each consumer project is instantiated from (install wrapper → author `instructions/` → `--bootstrap` → run inventory smoke gate → human sign-off → add CI/pointer), with the per-repo source material and gotchas (relay = fresh scaffold; pkms = manual + section removal). Includes the exact stub layout (project doc + index.md row) each per-repo run should create.
-
-### Cleanup + docs
-
-- [ ] Update project 08 docs and `agent-lessons.md` references to the old `pkms/CLAUDE.md` structure.
-- [ ] Verify `snapshots/` remains on disk permanently as a local-only (gitignored, uncommitted) audit artifact.
-- [ ] Confirm `~/.claude/CLAUDE.md` sha256 unchanged from project start.
-
-### User-reachability check
-
-- [ ] Post-phase: a developer can read `per-repo-migration.md` and dispatch a per-repo run (or manually execute, for pkms) to migrate any consumer repo.
+- [ ] In each touched repo, confirm `diff CLAUDE.md AGENTS.md` exits 0 and
+      `readlink AGENTS.md` = `CLAUDE.md` (test-plan §1).
+- [ ] Confirm `~/.claude/CLAUDE.md` sha256 is unchanged from project start (test-plan §3).
+- [ ] Commit each repo to `main`.
 
 ---
 
-## Consumer migrations (tracked here, executed elsewhere)
+## Out of scope (recorded so the rescope is explicit)
 
-These are **not** tasks in this project. Each is a separate single-repo run that **creates its own stub** (project doc + index.md row) and migrates that repo, following `per-repo-migration.md`. Listed for tracking.
+Dropped from the prior plan; not deferred, not tracked elsewhere under this project:
 
-- [ ] **pkms** — MANUAL (private, no-branch, not in `products.json`). Author `instructions/`, generate `CLAUDE.md`, remove moved orchestrator sections, add jarvis pointer. Commit straight to pkms `main`.
-- [ ] **aura** — `/work --auto` in aura (creates `aura/docs/projects/<n>-instructions-migration` + index row). Port from existing `aura/CLAUDE.md`.
-- [ ] **assay** — `/work --auto` in assay. Port from existing `assay/CLAUDE.md` + `assay/AGENTS.md`.
-- [ ] **relay** — `/work --auto` in relay (also creates `relay/docs/projects/index.md` if absent). Fresh scaffold; no behavior to preserve.
+- The `compile-instructions` compiler, IR, `claude`/`agents` renderers, YAML manifest.
+- The `$JARVIS_HOME` wrapper and `wrapper-template.sh`.
+- The named-token inventory verifier and `ownership.md` / snapshot audit artifacts.
+- CI drift-check steps and the optional pre-commit hook.
+- `per-repo-migration.md` and the aura/assay/relay consumer-migration *projects* (the
+  best-effort symlinks above are one-line commits, not migrations).
 
-> **Note:** phrasing-level deduplication across `CLAUDE.md` / `AGENTS.md` is explicitly out of scope. Editorial cleanup happens opportunistically in future PRs only if duplication causes concrete maintenance friction.
+The persistent-role-agent / `SOUL.md` / per-agent-memory architecture is a **separate
+project** (`docs/projects/ideas.md` → "Better agentic systems"), not part of this one.
