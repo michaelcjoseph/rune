@@ -16,7 +16,8 @@ its `spec.md`.
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
-| [12-work-run-observability](12-work-run-observability/spec.md) | Not Started | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
+| [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
+| [12-writer-memory](12-writer-memory/spec.md) | Not Started | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 
 ---
 
@@ -161,4 +162,20 @@ Two runs on project 10 (2026-05-30) exited clean, did nothing, and were still re
 - **Forensics + GC:** export a `git bundle` plus status/diff/untracked evidence before teardown; always destroy the single-occupant worktree; GC by count and bytes with an active-run protected set.
 - **Alerts + cockpit:** failure / noop / dirty / partial / branch-complete alerts with an outcome summary, commit-driven progress, and a distinct quiet-run nudge; cockpit card shows live output, elapsed, outcome, and a transcript link.
 - **Provenance:** three review rounds (Codex grounded ×2 + a Claude pass that empirically verified the git and `claude -p` stream-json behaviors). Pause detection, phase display, and a restart button were considered and cut.
-- **Task breakdown & test plan:** see [tasks.md](12-work-run-observability/tasks.md) and [test-plan.md](12-work-run-observability/test-plan.md). Test-first per phase.
+- **Task breakdown & test plan:** see [tasks.md](11-work-run-observability/tasks.md) and [test-plan.md](11-work-run-observability/test-plan.md). Test-first per phase.
+
+## 12-writer-memory — Not Started
+
+[Spec](12-writer-memory/spec.md)
+
+A content-writer role-agent that accumulates craft across pieces.
+
+The smallest end-to-end test of the "better agentic systems" bet: a role-agent defined by a hand-authored charter (`SOUL.md`) plus a compounding memory (`memory.md`) beats a stateless one. Runs behind the existing `/blog` flow; v1 proves the loop closes, quality is judged later via engagement metrics.
+
+- **The role:** `jarvis/agents/writer/{SOUL.md, memory.md}` in the jarvis repo. `SOUL.md` (charter, system-prompt authority) references `writing/voice.md`; `memory.md` (accumulating craft lessons, low-authority reference) loads in the user turn, never the system prompt.
+- **Read path:** a loader reading from `PROJECT_ROOT/agents/writer/` returns `{ systemInstructions, referenceContext }` so memory never gains command authority; char-budgeted with a truncation marker.
+- **Write path:** after a mandatory feedback checkpoint the writer emits a completion sentinel; `blogHandler` closes the session and a TypeScript `captureLessons()` dedupes, privacy-filters, appends, and atomically commits to the jarvis repo. No approval gate; Michael reviews later.
+- **Gate:** loop closure, not quality — a fixture lesson captured on piece N appears in piece N+1's reference context. Quality eval (engagement metrics) is a future phase in [ideas.md](ideas.md).
+- **Scope:** one role, jarvis repo only, no cross-product. The planning pipeline and engagement-driven lessons are separate ideas in [ideas.md](ideas.md).
+- **Provenance:** planned 2026-06-02 from the top `ideas.md` bullet ("Better agentic systems"); three Codex critique rounds (over-engineering → adjust → architecture-fit) cut it from a five-role memory-substrate-plus-pipeline build down to this single-role wedge.
+- **Task breakdown & test plan:** see [tasks.md](12-writer-memory/tasks.md) and [test-plan.md](12-writer-memory/test-plan.md). Test-first per phase.

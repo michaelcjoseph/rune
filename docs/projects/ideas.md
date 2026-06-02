@@ -6,39 +6,19 @@ below it.
 
 ## User-authored
 
-- Better agentic systems
-  - agents
-    - product spec planning agent
-      - adversarial interviewer
-      - drafts product spec, self critiques using multiple models and fixes (multiple rounds of critique)
-      - should be human readable
-    - tech spec planning agent
-      - converts product spec into tech spec
-      - named modules with file paths
-      - explicit non-goals
-      - dependency list
-      - drafts product spec, self critiques using multiple models and fixes (multiple rounds of critique)
-    - tasks planning agent
-      - break down tech spec into a task list
-      - tasks should be as small as possible but still meaningful enough to be a commit
-    - test plan planning agent
-      - break down tech spec into a test plan
-    - project wrap up agent
-      - update projects index with final outcome of project
-      - update agent memory
-  - memory
-    - agent lessons
-      - track things the agent learned from mistakes / behaviors that had to be corrected so that they are not done again
-    - decision log
-      - One entry per non-obvious decision, with the context, the options considered, the choice, and crucially the reasoning and any expiration condition
-      - The agents reads this before proposing approaches. Wrap-up agent proposes new entries based on what was decided mid-project.
-    - patterns and anti-patterns library
-    - gotchas registry
-      - one liners are useful tidbits to keep in mind
-    - architecture docs
-    - glossary
-    - product spec template
-    - tech spec template
+- Planning pipeline — specialized planning role-agents (its own project)
+  - The pipeline that turns an approved product spec into a buildable plan, each stage a role-agent reusing project 08's Planner + `/work` + model-selection policy (retrofit, not a new runtime). The per-agent memory substrate is spun out to **project 12** (the writer-role compounding-memory wedge); this pipeline reuses that proven charter + memory + wrap-up-write pattern once it lands, rather than reinventing it.
+  - Stages:
+    - **product-spec agent** — the existing Planner, retrofit as the `pm` role-agent: adversarial interviewer, human-readable spec, multi-model self-critique (a different model critiques the draft, revise, repeat to a round cap).
+    - **tech-spec agent** — product spec → tech spec: named modules with file paths, explicit non-goals, dependency list; same multi-model self-critique.
+    - **tasks agent** — tech spec → task list; each task as small as possible but still a meaningful commit.
+    - **test-plan agent** — tech spec → test plan, mirroring the tasks' test-first blocks.
+    - **wrap-up agent** — update the projects index with the project's final outcome, and write durable memory (the compound step).
+  - Per-product / code memory the pipeline will want (decision log, gotchas registry, architecture docs, glossary, product-spec + tech-spec templates) builds on project 12's role-memory pattern; deferred until that wedge proves out. Memory is whole-file markdown loaded as low-authority reference (not system-prompt authority); the typed-schema / cascade-composer / conflict-resolution machinery was cut as premature ceremony.
+  - Open: does `tech-spec.md` become a required scaffold artifact (add a `techSpec` key to the Planner artifact + project 09's scaffold-result contract), or stay an optional stage output?
+  - Dependency: best started after project 12 validates the charter + memory + wrap-up-write loop end to end (writer role, jarvis repo), so the pipeline inherits a proven pattern.
+- Engagement-driven writing lessons (extends project 12)
+  - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
 - Agentic control surfaces — compile/cascade beyond prose
   - Premise: project 10 lifts category 1 (prose instructions: CLAUDE.md/AGENTS.md) to a canonical source and cascades it down. That's one of five agentic-control surfaces. The same "model-agnostic intent, model-specific encoding" pattern applies to the rest, which today are hand-set per-layer with no canonical home and real drift risk.
   - The five categories: (1) what the agent KNOWS — prose/context [project 10, separate]; (2) what it CAN DO — tools, MCP servers, permissions, --add-dir; (3) what it MUST/MUST NOT do — hooks/enforced behavior; (4) what it can INVOKE — skills, commands, sub-agent definitions; (5) what it RUNS IN — env, cwd, model, timeouts.
