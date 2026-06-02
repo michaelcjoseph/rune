@@ -19,6 +19,7 @@ This project is **test-first**: each numbered section below is written by a phas
 ### Snapshot completeness
 
 - [ ] 🔴 Every existing instruction file (`pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, aura/assay variants if present) is copied verbatim into `snapshots/` before any edits to source files. Relay has no pre-migration files; no snapshot taken for it.
+- [ ] 🔴 `snapshots/` is local-only: gitignored (e.g. via `.git/info/exclude`) and absent from `git status` / never committed, so private pkms PII cannot reach the public jarvis repo. The verbatim-copy assertion above checks on-disk files, not committed ones.
 - [ ] 🔴 Aura and assay snapshot entries are marked "did not exist" if no file was present at project start. The accounting lives in an always-present `snapshots/MISSING.md` ledger: every conditional variant (`aura/assay` × `CLAUDE.md/AGENTS.md`) is either copied into `snapshots/` as a real file or named in `MISSING.md`. `MISSING.md` is mandatory even when every variant exists (it then records "none missing") so absence is stated affirmatively rather than left implicit.
 
 ### Inventory tooling
@@ -166,7 +167,7 @@ Tests run against temp repos populated with controlled drift cases. No actual PR
 
 ### Migration scaffolding
 
-- [ ] 🟢 `snapshots/` directory remains in `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/` permanently.
+- [ ] 🟢 `snapshots/` directory remains on disk at `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/` permanently as a local-only (gitignored, uncommitted) audit artifact.
 - [ ] 🟢 No placeholder fragments or scratch files left in any repo's `instructions/`.
 
 ### Cross-cutting non-goal verification

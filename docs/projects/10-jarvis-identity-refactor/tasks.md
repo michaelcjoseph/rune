@@ -9,6 +9,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 1 — Snapshot + inventory + ownership decision
 
 > Depends on: nothing.
+> **Execution: `/work --auto`-runnable** (jarvis-internal; writes only the gitignored `snapshots/` + jarvis-local artifacts).
 
 ### Tests (write first)
 
@@ -17,7 +18,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Snapshot all existing instruction files
 
-- [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `aura/AGENTS.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`. Relay has no pre-migration instruction files; no snapshot taken.
+- [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `aura/AGENTS.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`. Relay has no pre-migration instruction files; no snapshot taken. **Snapshots are local-only: gitignore the directory (`.git/info/exclude`) and never commit it — pkms is private, jarvis is public, so committing the verbatim pkms snapshot would publish PII.**
 
 ### Build inventory tooling
 
@@ -37,6 +38,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 2 — Compiler design & build
 
 > Depends on: Phase 1.
+> **Execution: `/work --auto`-runnable** (jarvis-internal; builds the compiler + wrapper template in jarvis only).
 
 ### Tests (write first)
 
@@ -66,6 +68,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 3 — Migrate jarvis + pkms
 
 > Depends on: Phase 2.
+> **Execution: MANUAL — not `/work --auto`.** Writes to the pkms repo (private), which an isolated jarvis worktree run cannot commit to. Run by hand or as a separate run inside pkms.
 
 ### Tests (write first)
 
@@ -100,6 +103,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 4 — Migrate aura + assay + relay
 
 > Depends on: Phase 3.
+> **Execution: MANUAL — not `/work --auto`.** Writes to the aura/assay/relay repos and requires a human reviewer sign-off, neither of which an isolated jarvis worktree run can do.
 
 ### Tests (write first)
 
@@ -138,6 +142,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 5 — Drift check (CI primary, pre-commit optional)
 
 > Depends on: Phase 2. Can land in parallel with Phases 3/4 for already-migrated repos.
+> **Execution: MANUAL — not `/work --auto`.** Adds CI/hooks across the five repos; cross-repo writes an isolated jarvis worktree run cannot make.
 
 ### Tests (write first)
 
@@ -162,6 +167,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 6 — Cleanup
 
 > Depends on: Phases 3, 4, 5.
+> **Execution: MANUAL — not `/work --auto`.** Touches pkms canonical source + project 08 docs across repos.
 
 ### Tests (write first)
 
@@ -175,7 +181,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Migration scaffolding cleanup
 
-- [ ] Verify `snapshots/` remains in place permanently (audit artifact, not removed).
+- [ ] Verify `snapshots/` remains on disk permanently as a local-only (gitignored, uncommitted) audit artifact, not removed and not committed.
 - [ ] Remove any placeholder fragments or scratch files used during migration.
 
 ### User-reachability check

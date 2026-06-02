@@ -162,9 +162,23 @@ Post-migration assertion: machine-checkable part asserts each declared fragment 
 
 > Task breakdown lives in [tasks.md](tasks.md); verification in [test-plan.md](test-plan.md). Test-first: each phase opens with a **Tests (write first)** block.
 
+### Execution model & privacy boundary
+
+Two constraints govern how this project is executed. Both were surfaced by a real `/work --auto` run (`20565e71`, 2026-06-01) that correctly hard-stopped rather than violate them.
+
+**1. Private content must never land in a public repo.** `jarvis` is **public**; `pkms` is **private** and `pkms/CLAUDE.md` carries personal PII (names, employer, project codenames). Therefore:
+
+- Pre-migration **snapshots are local-only audit artifacts, never committed.** They are written into `snapshots/` (gitignored via `.git/info/exclude`) purely as a diff aid during migration. The verbatim copy requirement holds *on disk*; nothing private is committed to public `jarvis`.
+- When orchestrator content moves from `pkms/CLAUDE.md` into jarvis fragments, only the **Jarvis/orchestrator** sections move (see "Sections moving" below). "About Me" / "How to Help Me" and any other personal content stay in pkms canonical source per the Non-Goals.
+
+**2. `/work --auto` is scoped to Phases 1-2 only.** An `--auto` run executes in an isolated single-repo `jarvis` worktree on a throwaway branch. It **cannot** commit to sibling repos (pkms, aura, assay, relay) and **cannot** self-approve a human reviewer sign-off. Therefore:
+
+- **Phases 1-2** (snapshot, inventory, ownership manifest, compiler build) are jarvis-internal and `--auto`-runnable.
+- **Phases 3-6** require cross-repo writes and/or human sign-off and are **run manually** (or as separate per-repo runs inside each target repo), not via `/work --auto`. Tasks in those phases are marked accordingly in [tasks.md](tasks.md).
+
 ### Phase 1: Snapshot + inventory + ownership decision
 
-- [ ] Snapshot all existing instruction files into `snapshots/`.
+- [ ] Snapshot all existing instruction files into `snapshots/` (local-only, gitignored — never committed; pkms is private, jarvis is public).
 - [ ] Produce section-by-section table via `tools/list-sections.sh`.
 - [ ] Refine inbound section list into per-row `ownership.md`.
 - [ ] Choose canonical phrasing for each Claude/Codex duplicate.
