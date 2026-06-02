@@ -82,7 +82,9 @@ This project is **test-first**: each numbered section below is written by a phas
 - [ ] 🔴 `$JARVIS_HOME` points to non-existent path or non-executable compiler → error.
 - [ ] 🟡 Relative `$JARVIS_HOME` resolved to absolute. Symlinks followed. Spaces in paths supported.
 
-### Inventory verifier (the machine sign-off gate)
+### Inventory verifier (named-token regression smoke gate)
+
+> A smoke test for gross drops, **not** a behavior-preservation sign-off — token presence does not prove the surrounding behavior or any non-token rule survived. Human semantic sign-off is still required (off the blocking path).
 
 - [ ] 🔴 Every heading, named agent, command (`/<name>`), and route (`(GET|POST) /api/...`) in a snapshot is asserted present in the generated output; a missing token → non-zero, naming the token and its snapshot.
 - [ ] 🔴 A snapshot with all tokens preserved (allowed deltas only: structural reorg, dedup) → exit 0.
@@ -106,9 +108,11 @@ This project is **test-first**: each numbered section below is written by a phas
 - [ ] 🔴 The orchestrator content slated for removal from `pkms/CLAUDE.md` (`## Jarvis`, `### How Reviews Work`, morning-prep ownership) is present in jarvis fragments, so the later pkms removal loses nothing.
 - [ ] 🟡 `jarvis/CLAUDE.md` and `jarvis/AGENTS.md` have identical heading order for fragments rendered to both; divergent sections appear only where manifest declares model-specific fragments.
 
-### Post-merge monitors
+### Post-merge monitors (operational, not phase-completion gates)
 
-- [ ] 🔴 Next 3 scheduled morning prep runs produce today's journal with `# Morning prep` heading and no error-level log lines. Roll back the migration commit if any run fails.
+> These cannot be satisfied by the `/work --auto` run itself — they are observed after merge.
+
+- [ ] 🟡 Next 3 scheduled morning prep runs produce today's journal with `# Morning prep` heading and no error-level log lines. Roll back the migration commit if any run fails.
 
 ### Integration verification
 
@@ -128,7 +132,7 @@ Tests run against temp repos populated with controlled drift cases. No actual PR
 
 ### CI workflow
 
-- [ ] 🔴 jarvis CI workflow syntax-validates and successfully checks out jarvis as a sibling (self-checkout) and resolves `$JARVIS_HOME`.
+- [ ] 🔴 jarvis CI workflow syntax-validates and resolves `$JARVIS_HOME` to the in-tree checkout under test (no sibling checkout needed for jarvis's own CI).
 - [ ] 🔴 CI step invokes `scripts/compile-instructions --check`.
 
 ### Optional pre-commit hook
@@ -141,18 +145,16 @@ Tests run against temp repos populated with controlled drift cases. No actual PR
 
 ---
 
-## 5. Per-repo migration playbook + stubs
+## 5. Per-repo migration playbook (jarvis-internal)
 
-### Playbook
+> This project ships the playbook only. Actual consumer-repo stubs are created and verified inside each consumer's own run (out of scope here — a cross-repo write).
 
-- [ ] 🔴 `per-repo-migration.md` exists and documents the full sequence (install wrapper → author `instructions/` → `--bootstrap` → inventory verifier → CI/pointer), with per-repo source material and the relay (fresh) / pkms (manual + section removal) special cases.
+### Playbook completeness
 
-### Consumer stubs
-
-- [ ] 🔴 `aura/docs/projects/<n>-instructions-migration/` exists with a project doc, and an `index.md` row added in the same commit.
-- [ ] 🔴 `assay/docs/projects/<n>-instructions-migration/` exists with a project doc + `index.md` row.
-- [ ] 🔴 `relay/docs/projects/<n>-instructions-migration/` exists; relay's `docs/projects/index.md` created if it was absent.
-- [ ] 🟡 The manual pkms path is documented (no auto stub): section removal from `pkms/CLAUDE.md` + jarvis pointer, committed straight to pkms `main`.
+- [ ] 🔴 `per-repo-migration.md` exists and documents the full sequence (install wrapper → author `instructions/` → `--bootstrap` → inventory smoke gate → human sign-off → CI/pointer), with per-repo source material and the relay (fresh) / pkms (manual + section removal) special cases.
+- [ ] 🔴 The playbook specifies the exact stub layout each per-repo run must create: a project doc under `<repo>/docs/projects/<n>-instructions-migration/` plus an `index.md` row in the same commit (and creating `relay/docs/projects/index.md` if absent).
+- [ ] 🟡 The playbook documents the manual pkms path (no auto stub): section removal from `pkms/CLAUDE.md` + jarvis pointer, committed straight to pkms `main`.
+- [ ] 🟢 The playbook is jarvis-internal: writing it touches no sibling repo.
 
 ### Cleanup + cross-cutting non-goals
 

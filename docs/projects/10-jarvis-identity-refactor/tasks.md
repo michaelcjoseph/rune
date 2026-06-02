@@ -2,14 +2,14 @@
 
 See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
-> **Scope:** this project is Phases 1-5 — jarvis-internal, all `/work --auto`-runnable in a single jarvis worktree. The four consumer migrations (pkms, aura, assay, relay) are **separate per-repo projects** instantiated from `per-repo-migration.md` (authored in Phase 5). See the Execution model in spec.md.
+> **Scope:** Phase 1 is **manual cross-repo prep** (read-only); Phases 2-5 are jarvis-internal and `/work --auto`-runnable in a single jarvis worktree. The four consumer migrations (pkms, aura, assay, relay) and their project stubs are **separate per-repo runs** instantiated from `per-repo-migration.md` (authored in Phase 5) — this project does not write to sibling repos. See the Execution model in spec.md.
 >
 > **Test-first by default.** Every phase opens with a **Tests (write first)** block whose tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red) before any implementation task in the phase begins.
 
 ## Phase 1 — Snapshot + inventory + ownership decision
 
 > Depends on: nothing.
-> **Execution: `/work --auto`-runnable** (jarvis-internal; writes only the gitignored `snapshots/` + jarvis-local artifacts).
+> **Execution: MANUAL — not `/work --auto`.** Inventorying what moves where requires reading pkms/aura/assay, outside any single-repo worktree. Run by hand (or an orchestrator with multi-repo read access); the output feeds the auto build (Phases 2-5).
 
 ### Tests (write first)
 
@@ -19,21 +19,22 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 ### Snapshot all existing instruction files
 
 - [ ] Copy `pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, plus any existing `aura/CLAUDE.md`, `assay/CLAUDE.md`, `assay/AGENTS.md` into `jarvis/docs/projects/10-jarvis-identity-refactor/snapshots/`. Relay has no pre-migration instruction files; no snapshot taken. **Snapshots are local-only: gitignore the directory (`.git/info/exclude`) and never commit it — pkms is private, jarvis is public, so committing the verbatim pkms snapshot would publish PII.**
+- [ ] Write `snapshots/MISSING.md` (also gitignored): a ledger naming every conditional variant (aura/assay × CLAUDE/AGENTS) that was copied vs. absent — mandatory even when none are missing (records "none missing") so absence is stated affirmatively (test-plan §1).
 
 ### Build inventory tooling
 
 - [ ] Author `tools/list-sections.sh` that emits a section-by-section table across all snapshot files.
-- [ ] Run it; commit raw output as `inventory.md`.
+- [ ] Run it; write the raw output to `snapshots/inventory.md` (gitignored — it spans private content; **not** committed to public jarvis).
 
 ### Author ownership manifest
 
-- [ ] Refine the inbound section list from spec.md into per-row `ownership.md` (heading | snapshot file | new owner | target fragment | notes).
+- [ ] Refine the inbound section list from spec.md into per-row `ownership.md` (heading | snapshot file | new owner | target fragment | notes). **Commit only the jarvis-owned rows** (pre-sanitized of PII); keep pkms-derived analysis in the gitignored `snapshots/` tree.
 - [ ] Capture paragraph/table/example-level behaviors as their own rows with `notes` carrying the description.
 - [ ] For each Claude/Codex duplicate flagged by the inventory script, choose canonical phrasing and record the decision in `ownership.md`.
 
 ### User-reachability check
 
-- [ ] Phase 1 produces internal artifacts only (snapshots, inventory, ownership manifest). No user-facing surface; correct for plan-prep phase.
+- [ ] Phase 1 produces internal prep artifacts only (local snapshots + inventory, jarvis-scoped committed ownership manifest). No user-facing surface; correct for a manual plan-prep phase.
 
 ## Phase 2 — Compiler, wrapper, and inventory verifier
 
@@ -58,7 +59,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Build the inventory verifier
 
-- [ ] Author `--verify-inventory <snapshot> <generated>` (or sibling binary): tokenize headings, agent names, commands, routes from a snapshot; assert each present in the generated output; non-zero naming any missing token. This is the reusable behavior-preservation gate every consumer migration runs.
+- [ ] Author `--verify-inventory <snapshot> <generated>` (or sibling binary): tokenize headings, agent names, commands, routes from a snapshot; assert each present in the generated output; non-zero naming any missing token. This is a reusable **named-token regression smoke gate** (catches gross drops), **not** a behavior-preservation sign-off — human semantic review still required.
 
 ### Validation surfaces
 
@@ -84,14 +85,14 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [ ] Commit `scripts/compile-instructions` to jarvis per the wrapper template.
 - [ ] Create `jarvis/instructions/` directory.
-- [ ] Author fragments per Phase 1 ownership manifest, **including the orchestrator content being moved out of pkms** (`## Jarvis`, `### How Reviews Work`, morning-prep ownership) so the later pkms removal loses nothing.
+- [ ] Author fragments from the Phase 1 ownership manifest's **jarvis-owned rows** + jarvis's own runtime knowledge — authored **fresh** (the orchestrator content `## Jarvis`, `### How Reviews Work`, morning-prep ownership), no pkms-snapshot read, so the later pkms removal loses nothing.
 - [ ] Author `jarvis/instructions/manifest.yaml`.
 
 ### Generate and verify
 
-- [ ] Run `compile-instructions --bootstrap` in jarvis; commit `instructions/` + generated `CLAUDE.md` + `AGENTS.md` in a single commit.
+- [ ] Run `compile-instructions --bootstrap` in jarvis; stage `instructions/` + generated `CLAUDE.md` + `AGENTS.md` together (the run's work product — the runner classifies the diff).
 - [ ] `compile-instructions --check` exits 0 in jarvis.
-- [ ] Inventory verifier passes for jarvis against the jarvis snapshot.
+- [ ] Inventory smoke gate passes for jarvis; human semantic sign-off recorded after the run (off the blocking path).
 
 ### User-reachability check
 
@@ -109,33 +110,26 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### CI + hook
 
-- [ ] Add the drift-check step (jarvis sibling checkout + `--check`) to jarvis CI.
+- [ ] Add the drift-check step to jarvis CI: set `$JARVIS_HOME` to the in-tree checkout under test (no sibling needed) and run `--check`.
 - [ ] Ship `scripts/install-hooks.sh` one-liner; hook reproduces the three drift cases locally (hand-edit, stale-gen, in-sync).
 
 ### User-reachability check
 
 - [ ] Post-phase: a PR with intentionally drifted files in jarvis fails the CI check; developers see the failure and regenerate instructions in the failed step output.
 
-## Phase 5 — Per-repo migration playbook + handoff
+## Phase 5 — Per-repo migration playbook (jarvis-internal)
 
 > Depends on: Phases 2-4.
-> **Execution: `/work --auto`-runnable** (authors playbook + scaffolds stubs).
+> **Execution: `/work --auto`-runnable** — authors a jarvis doc only; does **not** write to any sibling repo. (Creating the actual stubs in aura/assay/relay is a cross-repo write → separate per-repo runs, tracked below.)
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **playbook + stub completeness** — test-plan.md §5.
+- [ ] Write the test suite for **playbook completeness** — test-plan.md §5.
 - [ ] Confirm red before implementation.
 
 ### Author the playbook
 
-- [ ] Author `per-repo-migration.md`: the template each consumer project is instantiated from (install wrapper → author `instructions/` → `--bootstrap` → run inventory verifier → add CI/pointer), with the per-repo source material and gotchas (relay = fresh scaffold; pkms = manual + section removal).
-
-### Scaffold consumer-repo migration projects
-
-- [ ] Scaffold `aura/docs/projects/<next>-instructions-migration` (+ index.md row).
-- [ ] Scaffold `assay/docs/projects/<next>-instructions-migration` (+ index.md row).
-- [ ] Scaffold `relay/docs/projects/<next>-instructions-migration` (+ create relay's `docs/projects/index.md` if absent).
-- [ ] Document the **manual** pkms migration path (no auto stub): section removal from `pkms/CLAUDE.md` + pointer to jarvis, committed straight to pkms `main`.
+- [ ] Author `per-repo-migration.md`: the template each consumer project is instantiated from (install wrapper → author `instructions/` → `--bootstrap` → run inventory smoke gate → human sign-off → add CI/pointer), with the per-repo source material and gotchas (relay = fresh scaffold; pkms = manual + section removal). Includes the exact stub layout (project doc + index.md row) each per-repo run should create.
 
 ### Cleanup + docs
 
@@ -145,17 +139,17 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### User-reachability check
 
-- [ ] Post-phase: each of aura/assay/relay has a ready-to-dispatch migration project; a developer can read `per-repo-migration.md` and run (or manually execute, for pkms) any one of them.
+- [ ] Post-phase: a developer can read `per-repo-migration.md` and dispatch a per-repo run (or manually execute, for pkms) to migrate any consumer repo.
 
 ---
 
 ## Consumer migrations (tracked here, executed elsewhere)
 
-These are **not** tasks in this project — each is its own project in its own repo, scaffolded in Phase 5. Listed for tracking.
+These are **not** tasks in this project. Each is a separate single-repo run that **creates its own stub** (project doc + index.md row) and migrates that repo, following `per-repo-migration.md`. Listed for tracking.
 
-- [ ] **pkms** — MANUAL (private, no-branch, not in `products.json`). Author `instructions/`, generate `CLAUDE.md`, remove moved orchestrator sections, add jarvis pointer.
-- [ ] **aura** — `/work --auto` in aura. Port from existing `aura/CLAUDE.md`.
+- [ ] **pkms** — MANUAL (private, no-branch, not in `products.json`). Author `instructions/`, generate `CLAUDE.md`, remove moved orchestrator sections, add jarvis pointer. Commit straight to pkms `main`.
+- [ ] **aura** — `/work --auto` in aura (creates `aura/docs/projects/<n>-instructions-migration` + index row). Port from existing `aura/CLAUDE.md`.
 - [ ] **assay** — `/work --auto` in assay. Port from existing `assay/CLAUDE.md` + `assay/AGENTS.md`.
-- [ ] **relay** — `/work --auto` in relay. Fresh scaffold; no behavior to preserve.
+- [ ] **relay** — `/work --auto` in relay (also creates `relay/docs/projects/index.md` if absent). Fresh scaffold; no behavior to preserve.
 
 > **Note:** phrasing-level deduplication across `CLAUDE.md` / `AGENTS.md` is explicitly out of scope. Editorial cleanup happens opportunistically in future PRs only if duplication causes concrete maintenance friction.
