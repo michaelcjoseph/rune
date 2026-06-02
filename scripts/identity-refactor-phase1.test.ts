@@ -8,10 +8,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import path from 'node:path';
 
-// All paths are resolved from project root (vitest cwd = /Users/jarvis/workspace/jarvis).
+// All paths are resolved dynamically from process.cwd(), which vitest sets to the repo root.
 const PROJECT_ROOT = path.resolve(process.cwd());
 const PHASE1_DIR = path.resolve(PROJECT_ROOT, 'docs/projects/10-jarvis-identity-refactor');
 const SNAPSHOTS_DIR = path.resolve(PHASE1_DIR, 'snapshots');
@@ -81,7 +81,7 @@ function parseMarkdownTableRows(text: string): string[][] {
     if (/^\|[\s\-|:]+\|$/.test(trimmed)) continue;
     const cells = trimmed
       .split('|')
-      .filter((_, i, arr) => i > 0 && i < arr.length - 1) // strip leading/trailing empty from split
+      .slice(1, -1) // drop the empty leading/trailing fields produced by split on a `|...|` row
       .map((c) => c.trim());
     if (cells.length > 0) {
       rows.push(cells);
@@ -90,28 +90,39 @@ function parseMarkdownTableRows(text: string): string[][] {
   return rows;
 }
 
+/** Run list-sections.sh, failing the test cleanly if the script does not exist yet. */
+function runListSections(): SpawnSyncReturns<string> {
+  if (!existsSync(LIST_SECTIONS_SCRIPT)) {
+    expect.fail(`${LIST_SECTIONS_SCRIPT} does not exist — cannot run it`);
+  }
+  return spawnSync('bash', [LIST_SECTIONS_SCRIPT], {
+    cwd: PHASE1_DIR,
+    encoding: 'utf8',
+    timeout: 8_000,
+  });
+}
+
+/** Read and parse ownership.md table rows, failing the test cleanly if it does not exist yet. */
+function readOwnershipRows(): string[][] {
+  if (!existsSync(OWNERSHIP_FILE)) {
+    expect.fail(`${OWNERSHIP_FILE} does not exist`);
+  }
+  return parseMarkdownTableRows(readFileSync(OWNERSHIP_FILE, 'utf8'));
+}
+
 // ---------------------------------------------------------------------------
 // 1. Snapshot completeness
 // ---------------------------------------------------------------------------
 
 describe('Snapshot completeness', () => {
-  it('always-required snapshot pkms-CLAUDE.md exists as a regular file', () => {
-    const p = path.resolve(SNAPSHOTS_DIR, 'pkms-CLAUDE.md');
-    expect(existsSync(p), `${p} does not exist`).toBe(true);
-    expect(statSync(p).isFile(), `${p} is not a regular file`).toBe(true);
-  });
-
-  it('always-required snapshot jarvis-CLAUDE.md exists as a regular file', () => {
-    const p = path.resolve(SNAPSHOTS_DIR, 'jarvis-CLAUDE.md');
-    expect(existsSync(p), `${p} does not exist`).toBe(true);
-    expect(statSync(p).isFile(), `${p} is not a regular file`).toBe(true);
-  });
-
-  it('always-required snapshot jarvis-AGENTS.md exists as a regular file', () => {
-    const p = path.resolve(SNAPSHOTS_DIR, 'jarvis-AGENTS.md');
-    expect(existsSync(p), `${p} does not exist`).toBe(true);
-    expect(statSync(p).isFile(), `${p} is not a regular file`).toBe(true);
-  });
+  it.each(REQUIRED_SNAPSHOTS)(
+    'always-required snapshot %s exists as a regular file',
+    (filename) => {
+      const p = path.resolve(SNAPSHOTS_DIR, filename);
+      expect(existsSync(p), `${p} does not exist`).toBe(true);
+      expect(statSync(p).isFile(), `${p} is not a regular file`).toBe(true);
+    },
+  );
 
   it.each(CONDITIONAL_SNAPSHOT_VARIANTS)(
     'conditional snapshot %s is either present or recorded in MISSING.md',
@@ -129,15 +140,12 @@ describe('Snapshot completeness', () => {
   );
 
   it('MISSING.md exists (required to account for conditional snapshots)', () => {
-    // MISSING.md must exist to satisfy the "accounted for" requirement —
-    // even if all conditional files happen to exist, the marker file must be present
-    // so the accounting is explicit.
-    // Actually: per spec, if aura/assay had no files, MISSING.md must record them.
-    // If they DO exist as snapshots, MISSING.md may or may not exist.
-    // This test verifies the file exists because at project start aura/assay are not
-    // guaranteed to exist — MISSING.md is the mechanism for recording absence.
-    // The conditional test above ensures each variant is accounted for.
-    // This test specifically checks MISSING.md exists as the marker file.
+    // Contract: MISSING.md must always exist as the explicit accounting record for
+    // the conditional aura/assay variants — even when every variant is present as a
+    // snapshot (in which case it records "none missing"). Making the file mandatory
+    // forces the implementer to affirmatively state which pre-migration files were
+    // absent rather than leaving absence implicit. The per-variant test above asserts
+    // each variant is either a real snapshot or named in this file.
     expect(
       existsSync(MISSING_MARKER),
       `${MISSING_MARKER} does not exist — needed to account for conditional snapshots`,
@@ -166,41 +174,21 @@ describe('Inventory tooling', () => {
   });
 
   it('tools/list-sections.sh is executable (mode bits include x)', () => {
-    // statSync throws if file doesn't exist; existsSync guard is in the preceding test.
-    // For safety use existsSync here too so the failure message is a clean expect.
-    const exists = existsSync(LIST_SECTIONS_SCRIPT);
-    expect(exists, `${LIST_SECTIONS_SCRIPT} does not exist — cannot check mode bits`).toBe(true);
-
-    if (exists) {
-      const mode = statSync(LIST_SECTIONS_SCRIPT).mode;
-      // Check owner-execute bit (0o100)
-      const ownerExecutable = (mode & 0o100) !== 0;
-      expect(ownerExecutable, `${LIST_SECTIONS_SCRIPT} is not executable (mode: ${mode.toString(8)})`).toBe(true);
-    }
+    // existsSync guard so a missing script fails on a clean expect, not a statSync throw.
+    expect(existsSync(LIST_SECTIONS_SCRIPT), `${LIST_SECTIONS_SCRIPT} does not exist — cannot check mode bits`).toBe(true);
+    const mode = statSync(LIST_SECTIONS_SCRIPT).mode;
+    // Check owner-execute bit (0o100)
+    const ownerExecutable = (mode & 0o100) !== 0;
+    expect(ownerExecutable, `${LIST_SECTIONS_SCRIPT} is not executable (mode: ${mode.toString(8)})`).toBe(true);
   });
 
   it('tools/list-sections.sh exits 0 when run', () => {
-    // Verify the script exists before trying to run it to avoid a confusing ENOENT.
-    if (!existsSync(LIST_SECTIONS_SCRIPT)) {
-      expect.fail(`${LIST_SECTIONS_SCRIPT} does not exist — cannot run it`);
-    }
-    const result = spawnSync('bash', [LIST_SECTIONS_SCRIPT], {
-      cwd: PHASE1_DIR,
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
+    const result = runListSections();
     expect(result.status, `list-sections.sh exited ${result.status}: ${result.stderr}`).toBe(0);
   });
 
   it('tools/list-sections.sh stdout is a non-empty markdown table', () => {
-    if (!existsSync(LIST_SECTIONS_SCRIPT)) {
-      expect.fail(`${LIST_SECTIONS_SCRIPT} does not exist — cannot run it`);
-    }
-    const result = spawnSync('bash', [LIST_SECTIONS_SCRIPT], {
-      cwd: PHASE1_DIR,
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
+    const result = runListSections();
     const stdout = result.stdout ?? '';
     expect(stdout.trim().length, 'script produced no output').toBeGreaterThan(0);
     // A markdown table has at least one line starting with |
@@ -210,18 +198,11 @@ describe('Inventory tooling', () => {
 
   it('every Markdown heading found in snapshot files appears in list-sections.sh output', () => {
     const headings = collectSnapshotHeadings();
-    // If there are no snapshot files yet, this will trivially pass — but REQUIRED_SNAPSHOTS
-    // tests above will fail first, making the red cascade clear.
+    // If there are no snapshot files yet, this assertion fails with a clear message;
+    // the REQUIRED_SNAPSHOTS tests above also fail, making the full red cascade visible.
     expect(headings.length, 'no headings found in snapshot files — snapshots may be missing').toBeGreaterThan(0);
 
-    if (!existsSync(LIST_SECTIONS_SCRIPT)) {
-      expect.fail(`${LIST_SECTIONS_SCRIPT} does not exist — cannot run it`);
-    }
-    const result = spawnSync('bash', [LIST_SECTIONS_SCRIPT], {
-      cwd: PHASE1_DIR,
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
+    const result = runListSections();
     const stdout = result.stdout ?? '';
 
     const missingFromOutput: string[] = [];
@@ -240,14 +221,7 @@ describe('Inventory tooling', () => {
   });
 
   it('list-sections.sh output flags duplicate/common/shared content between jarvis-CLAUDE.md and jarvis-AGENTS.md snapshots', () => {
-    if (!existsSync(LIST_SECTIONS_SCRIPT)) {
-      expect.fail(`${LIST_SECTIONS_SCRIPT} does not exist — cannot run it`);
-    }
-    const result = spawnSync('bash', [LIST_SECTIONS_SCRIPT], {
-      cwd: PHASE1_DIR,
-      encoding: 'utf8',
-      timeout: 15_000,
-    });
+    const result = runListSections();
     const stdout = (result.stdout ?? '').toLowerCase();
     const flagsDuplicates =
       stdout.includes('duplicate') || stdout.includes('common') || stdout.includes('shared');
@@ -272,15 +246,11 @@ describe('Ownership manifest', () => {
   });
 
   it('ownership.md contains a markdown table with exactly 5 header columns', () => {
-    if (!existsSync(OWNERSHIP_FILE)) {
-      expect.fail(`${OWNERSHIP_FILE} does not exist`);
-    }
-    const content = readFileSync(OWNERSHIP_FILE, 'utf8');
-    const rows = parseMarkdownTableRows(content);
+    const rows = readOwnershipRows();
     expect(rows.length, 'ownership.md contains no markdown table rows').toBeGreaterThan(0);
 
     // The first row must be the header row with 5 columns.
-    const headerRow = rows[0];
+    const headerRow = rows[0] ?? [];
     expect(
       headerRow.length,
       `ownership.md header row has ${headerRow.length} columns, expected 5 (heading | snapshot file | new owner | target fragment | notes)`,
@@ -288,14 +258,11 @@ describe('Ownership manifest', () => {
   });
 
   it('ownership.md header row contains expected column names (case-insensitive substring match)', () => {
-    if (!existsSync(OWNERSHIP_FILE)) {
-      expect.fail(`${OWNERSHIP_FILE} does not exist`);
-    }
-    const content = readFileSync(OWNERSHIP_FILE, 'utf8');
-    const rows = parseMarkdownTableRows(content);
+    const rows = readOwnershipRows();
     expect(rows.length, 'ownership.md contains no table rows').toBeGreaterThan(0);
 
-    const headerRow = rows[0].map((c) => c.toLowerCase());
+    const rawHeader = rows[0] ?? [];
+    const headerRow = rawHeader.map((c) => c.toLowerCase());
     const expectedSubstrings = ['heading', 'snapshot', 'owner', 'fragment', 'note'];
     const missing: string[] = [];
     for (const expected of expectedSubstrings) {
@@ -304,16 +271,12 @@ describe('Ownership manifest', () => {
     }
     expect(
       missing,
-      `ownership.md header row does not contain columns matching: ${missing.join(', ')}\nActual header: ${rows[0].join(' | ')}`,
+      `ownership.md header row does not contain columns matching: ${missing.join(', ')}\nActual header: ${rawHeader.join(' | ')}`,
     ).toHaveLength(0);
   });
 
   it('every data row in ownership.md has all 5 cells non-empty', () => {
-    if (!existsSync(OWNERSHIP_FILE)) {
-      expect.fail(`${OWNERSHIP_FILE} does not exist`);
-    }
-    const content = readFileSync(OWNERSHIP_FILE, 'utf8');
-    const rows = parseMarkdownTableRows(content);
+    const rows = readOwnershipRows();
     // Skip header row (index 0); check all data rows.
     const dataRows = rows.slice(1);
     expect(dataRows.length, 'ownership.md has no data rows (only header)').toBeGreaterThan(0);
@@ -321,13 +284,14 @@ describe('Ownership manifest', () => {
     const failingRows: Array<{ rowIndex: number; cells: string[]; emptyCols: number[] }> = [];
     for (let i = 0; i < dataRows.length; i++) {
       const row = dataRows[i];
+      if (!row) continue; // unreachable given the loop bound; narrows row to string[]
       if (row.length !== 5) {
         failingRows.push({ rowIndex: i + 2, cells: row, emptyCols: [] });
         continue;
       }
       const emptyCols: number[] = [];
       for (let j = 0; j < row.length; j++) {
-        const cell = row[j].trim();
+        const cell = (row[j] ?? '').trim();
         // Treat empty strings, single dashes, and placeholder-like values as empty.
         if (cell === '' || cell === '-' || cell === '—') {
           emptyCols.push(j + 1);

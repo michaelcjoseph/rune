@@ -19,7 +19,7 @@ This project is **test-first**: each numbered section below is written by a phas
 ### Snapshot completeness
 
 - [ ] 🔴 Every existing instruction file (`pkms/CLAUDE.md`, `jarvis/CLAUDE.md`, `jarvis/AGENTS.md`, aura/assay variants if present) is copied verbatim into `snapshots/` before any edits to source files. Relay has no pre-migration files; no snapshot taken for it.
-- [ ] 🔴 Aura and assay snapshot entries are marked "did not exist" if no file was present at project start.
+- [ ] 🔴 Aura and assay snapshot entries are marked "did not exist" if no file was present at project start. The accounting lives in an always-present `snapshots/MISSING.md` ledger: every conditional variant (`aura/assay` × `CLAUDE.md/AGENTS.md`) is either copied into `snapshots/` as a real file or named in `MISSING.md`. `MISSING.md` is mandatory even when every variant exists (it then records "none missing") so absence is stated affirmatively rather than left implicit.
 
 ### Inventory tooling
 

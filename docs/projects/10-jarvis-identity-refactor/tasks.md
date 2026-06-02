@@ -12,8 +12,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **snapshot + inventory completeness** — test-plan.md §1.
-- [ ] Confirm the suite fails (red) before starting implementation.
+- [x] Write the test suite for **snapshot + inventory completeness** — test-plan.md §1.
+- [x] Confirm the suite fails (red) before starting implementation.
 
 ### Snapshot all existing instruction files
 
