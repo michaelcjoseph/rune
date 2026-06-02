@@ -43,6 +43,25 @@
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
 - [ ] module.register() -> module.registerHooks()
+- [ ] Work-run terminal alert gives no "stopped / blocked on a decision" signal — a deliberate hard-stop reads as routine progress.
+  - **Issue**
+    - The classifier (`src/jobs/work-run-classify.ts:38`) only has `branch-complete | partial | noop | dirty-uncommitted | failed`. A run that hard-stops on a blocker (≥1 commit + tasks remaining) classifies `partial` — the exact same bucket as "ran out of turns mid-progress."
+    - The Telegram render for `partial` (`src/transport/telegram-sender.ts:96`) is `📊 <slug> partial · N commit(s), X/Y tasks done`. That reads as progress, not "stopped, needs you."
+    - The agent's actual stop reason lives only in the run `transcript.jsonl`; it never reaches Telegram or the cockpit card.
+    - Confirmed instance: run `20565e71` (project 10, 2026-06-01) deliberately hard-stopped on the pkms-PII-into-public-repo contradiction, made 1 commit, classified `partial`. The user saw only the commit-poll ping and never learned the run had stopped and was waiting on a decision.
+  - **Fix options** (A is the real fix)
+    - A. Add a distinct `blocked-on-human` / `stopped-early` outcome the agent signals explicitly (sentinel in its final message), classified separately with a ⚠️ alert that carries the stop reason.
+    - B. Regardless of outcome, include the agent's final-message reason on every non-`branch-complete` terminal Telegram alert so any incomplete run carries WHY.
+    - C. On the cockpit card + alert, distinguish "made progress, more to do" from "stopped, cannot proceed" (e.g. surface `tasksRemaining` + a blocked flag), so `partial` is never silent about a hard-stop.
+  - Related to the `AskUserQuestion` bug below.
+- [ ] `AskUserQuestion` in a headless `/work --auto` run auto-denies and silently strands the decision.
+  - **Issue**
+    - In headless `-p` mode there is no human attached to the run, so an `AskUserQuestion` tool call auto-fails. The question and its options never reach the user (Telegram/cockpit).
+    - Best case the agent then hard-stops (as in run `20565e71`); worst case it silently picks a default and proceeds. Either way the decision the agent surfaced is lost.
+  - **Fix options** (A is the real fix; C is the safety net)
+    - A. Detect `AskUserQuestion` in `--auto`, convert it into a `blocked-on-human` terminal that forwards the question + options to Telegram and pauses the run pending a reply (ties into the blocked-outcome bug above).
+    - B. Route the question through the existing intent-layer inline-keyboard approval surface (`8154b3b`) and resume the run on the answer.
+    - C. Minimum viable: classify any run that called `AskUserQuestion` as `blocked`, never `partial`/`noop`, so the stranded decision is at least never silent.
 - [x] Daily processing shouldn’t include any of the weekly, monthly, quarterly, or yearly reviews as part of the processed content
 - [x] The morning prep should include at the top this week’s goals
 - [x] Whoop numbers don’t match what’s in the app. I think there’s a date mismatch (pulling recovery and sleep for the day before, not this morning)
