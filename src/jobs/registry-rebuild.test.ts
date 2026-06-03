@@ -1,0 +1,100 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { scanRegistrySources } from './registry-rebuild.js';
+
+/**
+ * Build a fake multi-repo workspace on disk: a `products.json` plus per-product
+ * repos with `docs/projects/<slug>/{index row, tasks.md}`. Exercises the scanner
+ * end-to-end against real fs (mirrors the sandbox-runtime test convention).
+ */
+let root: string;
+
+function repoIndex(rows: Array<{ slug: string; status: string }>): string {
+  const header = '| Project | Status | Summary |\n|---|---|---|';
+  const body = rows.map((r) => `| [${r.slug}](${r.slug}/spec.md) | ${r.status} | x |`).join('\n');
+  return `# Projects\n\n${header}\n${body}\n`;
+}
+
+function makeProject(repo: string, slug: string, tasks: string | null) {
+  const dir = join(repo, 'docs', 'projects', slug);
+  mkdirSync(dir, { recursive: true });
+  if (tasks !== null) writeFileSync(join(dir, 'tasks.md'), tasks, 'utf8');
+}
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), 'jarvis-registry-scan-'));
+
+  // jarvis: two projects, both with tasks.md
+  const jarvis = join(root, 'jarvis');
+  makeProject(jarvis, '01-mvp', '- [x] a\n- [x] b\n');
+  makeProject(jarvis, '10-thing', '- [x] a\n- [ ] b\n- [ ] c\n');
+  mkdirSync(join(jarvis, 'docs', 'projects'), { recursive: true });
+  writeFileSync(
+    join(jarvis, 'docs', 'projects', 'index.md'),
+    repoIndex([{ slug: '01-mvp', status: 'Done' }, { slug: '10-thing', status: 'In Progress' }]),
+    'utf8',
+  );
+
+  // aura: one project, no tasks.md (status only)
+  const aura = join(root, 'aura');
+  makeProject(aura, '01-core', null);
+  writeFileSync(
+    join(aura, 'docs', 'projects', 'index.md'),
+    repoIndex([{ slug: '01-core', status: 'Planned' }]),
+    'utf8',
+  );
+
+  // relay: repo exists but no docs/projects at all
+  mkdirSync(join(root, 'relay'), { recursive: true });
+
+  const productsJson = {
+    jarvis: { repoPath: jarvis, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    aura: { repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    relay: { repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    // a product whose repo is absent on disk entirely
+    ghost: { repoPath: join(root, 'does-not-exist'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+  };
+  writeFileSync(join(root, 'products.json'), JSON.stringify(productsJson), 'utf8');
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('scanRegistrySources', () => {
+  it('scans every product in products.json', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    expect(sources.products.map((p) => p.name).sort()).toEqual(['aura', 'ghost', 'jarvis', 'relay']);
+  });
+
+  it('reads each repo index and per-project task progress', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    const jarvis = sources.products.find((p) => p.name === 'jarvis')!;
+    expect(jarvis.projectsIndex).toContain('10-thing');
+    expect(jarvis.taskProgress).toEqual({
+      '01-mvp': { done: 2, total: 2 },
+      '10-thing': { done: 1, total: 3 },
+    });
+  });
+
+  it('marks a product with no task files as having no progress entries', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    const aura = sources.products.find((p) => p.name === 'aura')!;
+    expect(aura.projectsIndex).toContain('01-core');
+    expect(aura.taskProgress).toEqual({});
+  });
+
+  it('tolerates a repo with no docs/projects and a repo absent on disk', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    const relay = sources.products.find((p) => p.name === 'relay')!;
+    expect(relay.repoBacked).toBe(true);
+    expect(relay.projectsIndex).toBeNull();
+    expect(relay.taskProgress).toEqual({});
+
+    const ghost = sources.products.find((p) => p.name === 'ghost')!;
+    expect(ghost.repoBacked).toBe(false);
+    expect(ghost.projectsIndex).toBeNull();
+  });
+});
