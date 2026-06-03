@@ -15,10 +15,15 @@ for verification.
 > dropped artifacts (snapshots, `tools/list-sections.sh`, `inventory.md`, `ownership.md`),
 > so it can never pass under the rescope. Delete it before anything else.
 
-- [ ] Delete `scripts/identity-refactor-phase1.test.ts` (the only spec-10 test; the
+- [x] Delete `scripts/identity-refactor-phase1.test.ts` (the only spec-10 test; the
       `'10-jarvis-identity-refactor'` string in `src/jobs/supervision-store.test.ts` is
-      unrelated test data — leave it).
-- [ ] Confirm the test suite is green without it (`npm test` or the repo's runner).
+      unrelated test data — leave it). _(Already removed in the rescope commit `ffd7178`;
+      verified absent.)_
+- [x] Confirm the test suite is green without it (`npm test` or the repo's runner).
+      _(2946 passing; the lone failure — `claude.test.ts` "does not set JARVIS_WORKSPACE_DIR"
+      — is a pre-existing env-pollution issue unrelated to spec-10: a Jarvis-spawned session
+      exports `JARVIS_WORKSPACE_DIR` into `process.env`, which the spawn env spread leaks into
+      the child. Passes in a normal terminal/CI. Not introduced by this project.)_
 
 ## Phase 1 — Content move (pkms ↔ jarvis)
 
