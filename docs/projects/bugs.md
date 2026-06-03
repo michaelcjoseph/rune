@@ -1,14 +1,18 @@
-- [ ] Registry doesn't auto-rebuild. Cockpit shows a stale project list until `logs/registry.json` is manually regenerated.
+- [x] Registry doesn't auto-rebuild. Cockpit shows a stale project list until `logs/registry.json` is manually regenerated. _(Fixed 2026-06-03 — chose A + B.)_
   - **Issue**
     - `buildRegistry` and `writeRegistry` exist in `src/intent/registry.ts:127-162` but no code path calls them.
     - `logs/registry.json` was last written by hand on 2026-05-22.
     - `handleApiCockpit` in `src/server/webview.ts:180-214` reads the stale file on every cockpit request.
     - Symptom: new projects don't appear and status changes don't propagate. Projects 09 and 10 were missing until manually rebuilt on 2026-05-27.
   - **Fix options** (minimum viable is A + B)
-    - A. Call `buildRegistry` + `writeRegistry` on Jarvis startup.
-    - B. Add the rebuild to the nightly job for safety.
+    - A. Call `buildRegistry` + `writeRegistry` on Jarvis startup. ✅
+    - B. Add the rebuild to the nightly job for safety. ✅
     - C. File-watcher on each product's `docs/projects/index.md` for instant rebuild.
     - D. Cockpit endpoint or CLI command to trigger a manual rebuild.
+  - **Resolution (2026-06-03)**
+    - New `src/jobs/registry-rebuild.ts`: scans `policies/products.json`, reads each product repo's `docs/projects/index.md` (lifecycle status) and each project's `tasks.md` (task progress), and writes a fresh registry.
+    - Wired to run on daemon startup (`src/index.ts`) — so the "Restart server" button also refreshes the cockpit — and as a nightly step (`Registry rebuild` in `src/jobs/nightly.ts`, before the journal-intent producer).
+    - The registry now carries per-project task progress (`RegistryProject.progress`), so the cockpit renders progress bars for **every** product, not just jarvis. `handleApiCockpit` overlays a live read of jarvis's own `tasks.md` so jarvis cards stay real-time.
 - [ ] Review sessions stay "active" in the cockpit forever when the outline marker isn't detected (phase never reaches `done`).
   - **Issue**
     - The interview engine advances phases by string-matching the model's free-text reply: `detectOutline(responseText, config.outlineMarker)` in `src/reviews/interview.ts:238`. The weekly marker is the literal lowercase string `'week in review outline:'` (`src/reviews/weekly.ts:25`).

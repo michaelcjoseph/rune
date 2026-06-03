@@ -126,3 +126,30 @@ describe('product/project cockpit — registry unavailable (test-plan §7)', () 
     expect(view.unavailableReason).toBeUndefined();
   });
 });
+
+describe('product/project cockpit — task progress (cross-product)', () => {
+  /** A registry whose projects carry baked-in `progress` (as a real rebuild produces). */
+  function registryWithProgress(): Registry {
+    const r = sampleRegistry();
+    const aura = r.products.find((p) => p.name === 'aura')!;
+    aura.projects.find((p) => p.slug === '01-mvp')!.progress = { done: 4, total: 4 };
+    aura.projects.find((p) => p.slug === '02-growth')!.progress = { done: 1, total: 5 };
+    return r;
+  }
+
+  it('surfaces the registry-baked progress when no live overlay is supplied', () => {
+    const view = buildCockpitView(registryWithProgress(), {});
+    const bySlug = Object.fromEntries(allProjects(view).map((p) => [p.slug, p.taskProgress]));
+    expect(bySlug['01-mvp']).toEqual({ done: 4, total: 4 });
+    expect(bySlug['02-growth']).toEqual({ done: 1, total: 5 });
+    // A project with no baked progress and no overlay carries none.
+    expect(bySlug['01-relay-core']).toBeUndefined();
+  });
+
+  it('lets the live overlay win over the registry-baked progress, by slug', () => {
+    const view = buildCockpitView(registryWithProgress(), {}, { '02-growth': { done: 3, total: 5 } });
+    const bySlug = Object.fromEntries(allProjects(view).map((p) => [p.slug, p.taskProgress]));
+    expect(bySlug['02-growth']).toEqual({ done: 3, total: 5 }); // overlay wins
+    expect(bySlug['01-mvp']).toEqual({ done: 4, total: 4 }); // untouched falls back to registry
+  });
+});

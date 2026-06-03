@@ -486,11 +486,16 @@ describe('server/webview', () => {
       });
     });
 
-    it('enriches each project with taskProgress when getProjectSummaries returns counts', async () => {
-      // Cockpit design tweak: handleApiCockpit calls getProjectSummaries() and
-      // passes a {slug → {done, total}} map to buildCockpitView so the cockpit
-      // card can render the same progress bar the (now-removed) Projects panel
-      // used. A successful read yields taskProgress on the matching project.
+    it('overlays a live read of jarvis tasks.md onto jarvis project cards', async () => {
+      // handleApiCockpit overlays getProjectSummaries() (a fresh, jarvis-local
+      // read) onto the registry's jarvis product so jarvis cards update in real
+      // time. The overlay is scoped to the jarvis product to avoid a slug shared
+      // with another product overriding its counts.
+      (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        version: 1,
+        builtAt: '2026-06-03T00:00:00.000Z',
+        products: [{ name: 'jarvis', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] }],
+      });
       mockGetProjectSummaries.mockReturnValueOnce([
         { slug: '01-mvp', progress: { done: 7, total: 12, perPhase: [] }, status: 'In Progress', specPath: '', lastModified: null } as any,
       ]);
@@ -502,6 +507,33 @@ describe('server/webview', () => {
         slug: '01-mvp',
         taskProgress: { done: 7, total: 12 },
       });
+    });
+
+    it('surfaces a non-jarvis product\'s task progress from the registry, not the live jarvis read', async () => {
+      // Cross-product progress rides on the registry entry (refreshed on rebuild);
+      // the live jarvis-local read must NOT bleed onto another product even when
+      // slugs collide. Here both jarvis and aura have a '01-mvp'; aura keeps its
+      // registry-baked counts.
+      (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        version: 1,
+        builtAt: '2026-06-03T00:00:00.000Z',
+        products: [
+          { name: 'aura', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active', progress: { done: 2, total: 9 } }] },
+          { name: 'jarvis', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] },
+        ],
+      });
+      // Live jarvis read reports different counts for the same slug.
+      mockGetProjectSummaries.mockReturnValueOnce([
+        { slug: '01-mvp', progress: { done: 7, total: 12, perPhase: [] }, status: 'In Progress', specPath: '', lastModified: null } as any,
+      ]);
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+      expect(res.status).toBe(200);
+      const aura = res.body.products.find((p: any) => p.name === 'aura');
+      const jarvis = res.body.products.find((p: any) => p.name === 'jarvis');
+      expect(aura.projects[0].taskProgress).toEqual({ done: 2, total: 9 }); // registry, not the live read
+      expect(jarvis.projects[0].taskProgress).toEqual({ done: 7, total: 12 }); // live overlay
     });
 
     it('survives a getProjectSummaries throw — cockpit still renders without taskProgress', async () => {

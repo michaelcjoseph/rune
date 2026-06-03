@@ -206,18 +206,28 @@ function handleApiCockpit(res: ServerResponse): void {
   // `activeRuns` map being cleared on shutdown. A project with no active
   // run defaults to `idle` in buildCockpitView.
   const runStatus = readCockpitRunStatus(config.SUPERVISED_RUNS_FILE);
-  // Enrich with static task progress (done / total) from tasks.md per project,
-  // so the cockpit card renders the same progress bar the (now-removed)
-  // Projects sidebar used. A failed read (corrupt tasks.md, missing dir)
-  // falls back to no progress data — the cockpit must render even without it.
-  let taskProgress: Record<string, { done: number; total: number }> = {};
-  try {
-    const summaries = getProjectSummaries();
-    taskProgress = Object.fromEntries(
-      summaries.map((s) => [s.slug, { done: s.progress.done, total: s.progress.total }]),
-    );
-  } catch (err) {
-    log.warn('handleApiCockpit: getProjectSummaries failed', { error: (err as Error).message });
+  // Cross-product task progress (done / total) rides on each project's registry
+  // entry, refreshed on registry rebuild — so every product's cards render a bar,
+  // not just jarvis's. On top of that, overlay a LIVE read of jarvis's own
+  // tasks.md so jarvis cards update in real time each poll (the daemon runs in
+  // the jarvis repo, so only it is cheap to read live). Scoped to the jarvis
+  // product so a slug shared with another product can't override its counts. A
+  // failed read just leaves the registry-baked progress in place.
+  if (registry) {
+    try {
+      const live = new Map(
+        getProjectSummaries().map((s) => [s.slug, { done: s.progress.done, total: s.progress.total }]),
+      );
+      const jarvis = registry.products.find((p) => p.name === 'jarvis');
+      if (jarvis) {
+        for (const project of jarvis.projects) {
+          const lp = live.get(project.slug);
+          if (lp && lp.total > 0) project.progress = lp;
+        }
+      }
+    } catch (err) {
+      log.warn('handleApiCockpit: live jarvis task-progress overlay failed', { error: (err as Error).message });
+    }
   }
   // Enrich with the work-run projection (project 11 Phase 5) from the new
   // work-run store. A failed read (missing/corrupt store) falls back to no
@@ -249,7 +259,7 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch (err) {
     log.warn('handleApiCockpit: readWorkRunProjections failed', { error: (err as Error).message });
   }
-  const view = buildCockpitView(registry, runStatus, taskProgress, workRuns);
+  const view = buildCockpitView(registry, runStatus, undefined, workRuns);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }

@@ -172,9 +172,10 @@ function normalizeRunStatusEntry(
  * product with zero projects yields a product with an empty `projects` list, not an error.
  *
  * The optional `taskProgress` argument is a slug-keyed map of `{done, total}` task counts
- * (sourced from `getProjectSummaries()`); when supplied, each project's `taskProgress`
- * field is populated from it. Slugs absent from the map yield projects without `taskProgress`
- * — the renderer must handle that case (don't render a progress bar for unknown counts).
+ * (a live overlay sourced from `getProjectSummaries()`); when a slug is present, it wins.
+ * Otherwise each project falls back to the `progress` carried on its registry entry (the
+ * cross-product source, refreshed on registry rebuild). A project with neither yields no
+ * `taskProgress` — the renderer must handle that (don't render a bar for unknown counts).
  *
  * The optional `workRuns` argument (project 11, Phase 5) is a slug-keyed map of work-run
  * projections sourced from the new work-run store; when supplied, each matching project's
@@ -208,8 +209,11 @@ export function buildCockpitView(
       };
       // Phase 6 C3: surface live gen-eval-loop progress when the entry carries it.
       if (entry.progress !== undefined) out.progress = entry.progress;
-      // Static task progress from tasks.md when the caller supplied a slug-keyed map.
-      const tp = taskProgress?.[project.slug];
+      // Task progress: prefer the caller's slug-keyed live overlay (a fresh
+      // read of the running product's tasks.md), falling back to the per-project
+      // `progress` baked into the registry at its last rebuild (the cross-product
+      // source — products other than the one the daemon runs in only have this).
+      const tp = taskProgress?.[project.slug] ?? project.progress;
       if (tp !== undefined) out.taskProgress = tp;
       // Phase 5: work-run projection from the store when the caller supplied it.
       const wr = workRuns?.[project.slug];
