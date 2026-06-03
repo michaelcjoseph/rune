@@ -6,6 +6,7 @@ below it.
 
 ## User-authored
 
+- As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
 - Planning pipeline — specialized planning role-agents (its own project)
   - The pipeline that turns an approved product spec into a buildable plan, each stage a role-agent reusing project 08's Planner + `/work` + model-selection policy (retrofit, not a new runtime). The per-agent memory substrate is spun out to **project 12** (the writer-role compounding-memory wedge); this pipeline reuses that proven charter + memory + wrap-up-write pattern once it lands, rather than reinventing it.
   - Stages:
@@ -18,6 +19,7 @@ below it.
   - Open: does `tech-spec.md` become a required scaffold artifact (add a `techSpec` key to the Planner artifact + project 09's scaffold-result contract), or stay an optional stage output?
   - Dependency: best started after project 12 validates the charter + memory + wrap-up-write loop end to end (writer role, jarvis repo), so the pipeline inherits a proven pattern.
 - Engagement-driven writing lessons (extends project 12)
+  - Set up email, X, blog, and website for Jarvis
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
 - Agentic control surfaces — compile/cascade beyond prose
   - Premise: project 10 lifts category 1 (prose instructions: CLAUDE.md/AGENTS.md) to a canonical source and cascades it down. That's one of five agentic-control surfaces. The same "model-agnostic intent, model-specific encoding" pattern applies to the rest, which today are hand-set per-layer with no canonical home and real drift risk.
@@ -28,12 +30,11 @@ below it.
   - Category 4 (skills/commands/sub-agent defs): the biggest duplication surface — 30+ agent defs split between jarvis/.claude/agents (generic) and pkms/.claude/agents (personal-specifics), plus .claude/skills. Project 10 EXPLICITLY deferred this (its non-goal: "compiling .claude/agents/*.md"). Highest-effort, highest-payoff, likely the last phase.
   - Relationship to project 10: sibling, not child. Project 10 = "compile category 1." Project 11 = "compile/cascade categories 2-4." Keep 10 clean and shipping; do not expand it. Project 11 should reuse 10's compiler architecture (canonical source → model-specific renderers → CI drift check) where the surface is file-based config; categories that live in spawn code (parts of 2 and 5) need a different mechanism than a markdown compiler — design question for the spec.
   - Dependency: best started after project 10 ships, so the compiler/IR/renderer pattern exists to extend rather than reinvent.
+- Use ampcode.com with Jarvis instead of Claude/Codex CLI
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily
 - Integrate Granola MCP for Jarvis to better manage meeting transcription notes
-- Set up email, X, blog, and website for Jarvis
-  - Self learning loops to identify what content generates engagement and what doesn't
 - set up child developmental agent support to help with monitoring progress and planning weekly
 
 ## Loop-filed
