@@ -9,7 +9,7 @@ Test commit lands before any implementation code per phase.
 **Tests (write first)**
 
 - [x] `backlog-parser.test.ts` — all accepted forms; all rejected forms produce typed warnings; CRLF and no-final-newline files; Unicode in bullet text; the strict slug suffix regex; ideas sub-bullet attachment across blank line (does NOT attach); sectioning before any heading defaults `user-authored`. (Test-first deliverable: suite is red against the not-yet-built `backlog-parser.ts` — `Cannot find module './backlog-parser.js'` — which is the success condition until the Phase 1 build task lands.)
-- [ ] `backlog-id.test.ts` — same line at same position → same id; line edit → different id; same line at different position → different id.
+- [x] `backlog-id.test.ts` — same line at same position → same id; line edit → different id; same line at different position → different id. (Test-first deliverable: red against the not-yet-built `backlog-id.ts`; pins the exact sha1-slice formula and product-locality.)
 - [ ] `backlog-reader.test.ts` — registry roll-up; ids are product-local; non-repo-backed → `not-repo-backed` flag; missing file → empty + no error; unreadable file → empty + file warning surfaces; symlink/path-escape rejection.
 
 **Build**
