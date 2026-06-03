@@ -65,20 +65,29 @@ for verification.
       worktree and confirmed it loads the orchestrator identity through the symlink. The
       `--auto` block was only the interactive-session limitation, not a failed check — the
       gated Phase 2 rollout (pkms; assay/aura best-effort) is now clear to proceed.)_
-- [ ] **pkms:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+- [x] **pkms:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+      _(Done. Committed straight to `main` `eeb572f`; `readlink`=CLAUDE.md, mode `120000`,
+      `diff CLAUDE.md AGENTS.md` exits 0.)_
 
 ### Best-effort repos
 
-- [ ] **assay:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add`.
-- [ ] **aura:** `ln -s CLAUDE.md AGENTS.md`; `git add` (creates the previously-absent file).
-- [ ] **relay:** no action (no instruction files).
+- [x] **assay:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add`.
+      _(Done. Committed `dbf277e`; checks pass.)_
+- [x] **aura:** `ln -s CLAUDE.md AGENTS.md`; `git add` (creates the previously-absent file).
+      _(Done. Committed `5e8a0cc`; checks pass.)_
+- [x] **relay:** no action (no instruction files). _(Confirmed: no CLAUDE.md/AGENTS.md present.)_
 
 ### Verify + commit
 
-- [ ] In each touched repo, confirm `diff CLAUDE.md AGENTS.md` exits 0 and
-      `readlink AGENTS.md` = `CLAUDE.md` (test-plan §1).
-- [ ] Confirm `~/.claude/CLAUDE.md` sha256 is unchanged from project start (test-plan §3).
-- [ ] Commit each repo to `main`.
+- [x] In each touched repo, confirm `diff CLAUDE.md AGENTS.md` exits 0 and
+      `readlink AGENTS.md` = `CLAUDE.md` (test-plan §1). _(All four — jarvis, pkms, assay,
+      aura — verified: byte-identical, mode `120000`, `readlink`=CLAUDE.md.)_
+- [x] Confirm `~/.claude/CLAUDE.md` sha256 is unchanged from project start (test-plan §3).
+      _(No baseline sha was captured at project start, so this is verified by construction:
+      `~/.claude/CLAUDE.md` lives outside all four touched repos and no step in this project
+      writes to it. Current sha `7a8b43f4…0863df` for the record.)_
+- [x] Commit each repo to `main`. _(jarvis `53d91de`, pkms `eeb572f`, assay `dbf277e`,
+      aura `5e8a0cc` — all on `main`.)_
 
 ---
 

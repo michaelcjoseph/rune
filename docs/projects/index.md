@@ -15,7 +15,7 @@ its `spec.md`.
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Not Started | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
-| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
+| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Not Started | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
@@ -138,7 +138,7 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
 
-## 10-jarvis-identity-refactor — Not Started
+## 10-jarvis-identity-refactor — Done
 
 [Spec](10-jarvis-identity-refactor/spec.md)
 

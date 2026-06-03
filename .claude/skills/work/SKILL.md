@@ -281,9 +281,20 @@ and skills tables, environment variables, and scripts.
 
 Skip this step if the task only changed existing file internals without adding new modules, commands, agents, config values, or scripts.
 
-### 18. Mark Task Done
+### 18. Mark Task Done & Sync Status
 
-Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` for the completed task. This applies in both modes, and it happens **before** step 19 so the tasks.md update lands in the same commit as the task's code changes.
+Status tracking must reflect reality, not lag it. A run that does the work but leaves the boxes unchecked (or the index stale) is **not** done — the bookkeeping is part of the task. Three updates, all of which land in this task's commit (step 19):
+
+**a. Tick the task in `tasks.md`.** Change `- [ ]` to `- [x]` for the completed task.
+
+**b. Reconcile the surrounding checkboxes.** Don't tick only the headline line. If completing this task also satisfied sibling sub-tasks — a "verify", "confirm", or "commit each repo" line that your work just made true — tick those too, with a short parenthetical noting the evidence (commit SHA, check result). The list must match the actual state of the repos at this moment; a box that is true on disk but unchecked in `tasks.md` is a bug.
+
+**c. Keep `docs/projects/index.md` in sync.** The project's status must track the work:
+- On the **first** completed task of a project currently marked `Not Started`, flip it to `In Progress` — in **both** places: the table row at the top and the `## <project> — <status>` section header.
+- Leave it `In Progress` while unchecked `- [ ]` lines remain.
+- Flipping to `Done` happens at step 20 when the list is fully clear — not here.
+
+This applies in **both** modes (with and without `--auto`), and happens **before** step 19 so all status updates land in the same commit as the task's code changes.
 
 ### 19. Commit (`--auto` only)
 
@@ -358,4 +369,4 @@ After outputting the summary, **re-read `tasks.md` from the top** and find the n
 - **If a next task exists**:
   - **Without `--auto`**: ask the user "Ready to start the next task: **[task name]**?" and if they confirm, loop back to **step 3** with that task.
   - **With `--auto`**: loop back to **step 3** immediately with that task — do not ask.
-- **If no tasks remain**: tell the user all tasks for the project are complete and stop.
+- **If no tasks remain**: before reporting completion, flip the project's status to `Done` in `docs/projects/index.md` — in **both** the table row and the `## <project> — <status>` section header. In `--auto`, fold this update into the final task's commit (or, if the tree is already clean, make a dedicated `docs:` commit for the status flip). Then tell the user all tasks for the project are complete and stop. A project reported complete while its `index.md` still reads `Not Started`/`In Progress` is the exact failure this step exists to prevent — the index is the at-a-glance source of truth and must not lie.
