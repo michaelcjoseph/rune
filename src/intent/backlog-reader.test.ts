@@ -22,6 +22,7 @@ import { join } from 'node:path';
 
 import {
   readBacklogs,
+  computeBacklogCounts,
   type ProductBacklog,
 } from './backlog-reader.js';
 import type { Registry } from './registry.js';
@@ -230,6 +231,37 @@ describe('backlog-reader — missing and unreadable files', () => {
     expect(hasWarning(jarvis, 'unreadable-file')).toBe(true);
     // The other file still reads — one unreadable file does not poison the product.
     expect(jarvis.ideas.map((i) => i.text)).toEqual(['ok idea']);
+  });
+});
+
+describe('backlog-reader — computeBacklogCounts', () => {
+  function backlog(over: Partial<ProductBacklog>): ProductBacklog {
+    return { product: 'jarvis', notRepoBacked: false, bugs: [], ideas: [], fileWarnings: [], ...over };
+  }
+
+  it('tallies open/done for bugs and ideas and counts file warnings', () => {
+    const root = makeRoot('backlog-counts-');
+    scaffoldRepo(root, 'jarvis', {
+      bugs: '- [ ] open bug\n- [x] done bug\n- [ ] another open\n',
+      ideas: '## User-authored\n- open idea\n- promoted idea → 09-expand-cockpit\n\t- tab warning\n',
+    });
+    const [product] = readBacklogs(
+      registryWith([{ name: 'jarvis', repoBacked: true }]),
+      configWith({ jarvis: join(root, 'jarvis') }),
+      { workspaceRoot: root },
+    );
+    const counts = computeBacklogCounts(product!);
+    expect(counts.bugs).toEqual({ open: 2, done: 1 });
+    expect(counts.ideas).toEqual({ open: 1, done: 1 }); // promoted idea is 'done'
+    expect(counts.warnings).toBe(1); // the tab-indented line
+  });
+
+  it('returns zeroes for an empty backlog', () => {
+    expect(computeBacklogCounts(backlog({}))).toEqual({
+      bugs: { open: 0, done: 0 },
+      ideas: { open: 0, done: 0 },
+      warnings: 0,
+    });
   });
 });
 

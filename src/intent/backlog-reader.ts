@@ -23,6 +23,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isContainedIn } from './sandbox.js';
 import { parseBugs, parseIdeas, type BacklogItem, type FileWarning } from './backlog-parser.js';
+import type { BacklogCounts } from './cockpit.js';
 import type { Registry } from './registry.js';
 
 /**
@@ -204,4 +205,18 @@ export function readBacklogs(
     result.ideas = readOne(canonicalRepo, IDEAS_REL, parseIdeas, result.fileWarnings);
     return result;
   });
+}
+
+/**
+ * Derive the cockpit's product-card `BacklogCounts` from a `ProductBacklog`: open/done tallies
+ * for bugs and ideas, plus the file-level warning count (the drawer's "Format warnings" banner;
+ * per-item `⚠` warnings are not counted here). Pure — the Phase 2 cockpit wiring calls this per
+ * product and feeds the result to `buildCockpitView`.
+ */
+export function computeBacklogCounts(backlog: ProductBacklog): BacklogCounts {
+  const tally = (items: BacklogItem[]) => ({
+    open: items.filter((i) => i.status === 'open').length,
+    done: items.filter((i) => i.status === 'done').length,
+  });
+  return { bugs: tally(backlog.bugs), ideas: tally(backlog.ideas), warnings: backlog.fileWarnings.length };
 }
