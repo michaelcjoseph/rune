@@ -29,20 +29,25 @@ for verification.
 
 > Depends on: Phase 0. Order matters: this precedes the pkms symlink in Phase 2.
 
-- [ ] Append the `## Jarvis` section (automation ownership, agent split, KB raw-source
+- [x] Append the `## Jarvis` section (automation ownership, agent split, KB raw-source
       routing, `loadAgentDef` order) from `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`, placed
-      coherently within its existing structure.
-- [ ] Append the `### How Reviews Work` mechanics (prep → interview → outline →
+      coherently within its existing structure. _(New `## Jarvis` section after
+      `## Architecture`; framing adapted "this vault" → "the pkms vault" per test-plan §2.7.)_
+- [x] Append the `### How Reviews Work` mechanics (prep → interview → outline →
       write-up + post-agent pipeline; the specialist updaters) into `jarvis/CLAUDE.md`.
-- [ ] Remove both sections from `pkms/CLAUDE.md`.
-- [ ] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Jarvis orchestration
+- [x] Remove both sections from `pkms/CLAUDE.md`.
+- [x] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Jarvis orchestration
       … is documented in `jarvis/CLAUDE.md`."
-- [ ] Verify against the move boundary in spec.md: the listed "staying" sections remain in
+- [x] Verify against the move boundary in spec.md: the listed "staying" sections remain in
       pkms (overview, vault structure, journal format, reference system, tags, schemas,
       cadence tables, command tables, About Me, etc.).
-- [ ] Read the git diff in both repos — moved content present in jarvis, absent in pkms,
-      pointer present (test-plan §2).
-- [ ] Commit jarvis to `main`. Commit pkms straight to `main` (no-branch rule).
+- [x] Read the git diff in both repos — moved content present in jarvis, absent in pkms,
+      pointer present (test-plan §2). _(Diffs reviewed; PII/secret leak check on the added
+      public-repo content passed.)_
+- [x] Commit jarvis to `main`. Commit pkms straight to `main` (no-branch rule). _(jarvis
+      lands on the work branch `jarvis-work/2d0534db` → merges to main downstream, the
+      standard `/work` flow; pkms committed straight to `main` with selective staging —
+      only `CLAUDE.md`, leaving live journal edits untouched; nothing pushed.)_
 
 ## Phase 2 — Symlink AGENTS.md → CLAUDE.md
 

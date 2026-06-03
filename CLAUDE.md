@@ -17,6 +17,26 @@ All AI operations use Claude Code CLI (Max subscription, no API key needed). Cus
 
 The server reads/writes to an Obsidian vault synced via iCloud. The vault has four distinct LLM-mutable content layers (knowledge/, world-view/, pages/playbook.md, projects/) plus JSON data stores and `pages/psychology.md`, each with its own write semantics and updater agent. See the **Vault Content Model** section below.
 
+## Jarvis
+
+Jarvis is the Node.js server in this repo that connects a Telegram bot to the **pkms vault** (`~/workspace/pkms`) via the Claude Code CLI. It owns: morning prep, the nightly job (KB ingestion queue + daily-tag processing + playbook extraction + Whoop sync + weekly KB lint), all interview-based reviews (`/daily`, `/weekly`, `/monthly`, `/quarterly`, `/yearly`, plus `/think`, `/health`, `/blog`), URL/photo content triage, and the post-review specialist updaters described under **How Reviews Work** below.
+
+**Agent split:**
+- This repo's `.claude/agents/` holds **generic tooling agents** (wiki-compiler, kb-query, wiki-linter, project-updater, playbook-{proposer,updater}, worldview-updater, psychology-updater, json-updater, system-scanner, content-triager, photo-classifier, morning-prep, session-summarizer). These are versioned with code in the public Jarvis repo and contain no personal specifics.
+- The pkms vault's `.claude/agents/` holds **personal-specifics agents** (review-writer, journal-scanner, project-scanner) whose prompts encode family names, employer, project codenames, and personal review templates.
+- `loadAgentDef` checks this repo's dir first, then falls back to the vault's dir.
+
+**KB raw-source routing:** When Jarvis ingests a source, it routes by path — `Readwise/*` → `knowledge/raw/articles/`, `world-view/*` → `knowledge/raw/world-view/`, `pages/playbook.md` → `knowledge/raw/playbook/`, `projects/*` (excl. `archive/`) → `knowledge/raw/projects/`. The mutable layers (world-view, playbook, active projects) overwrite their `raw/` copy on every re-ingest so wiki citations reflect current content.
+
+### How Reviews Work
+
+All reviews run through Jarvis (Telegram bot). They are **interview-based conversations**, not Claude generating summaries:
+
+1. **Prep** — `journal-scanner` and `system-scanner` agents read silently in parallel; for `/weekly`, a worldview-drift check flags any active project whose thesis cites a recently-shifted world-view topic; pending playbook drafts (queued nightly from `#playbook` tags) are surfaced.
+2. **Interview** — Conversation in Telegram covering memories, work, learning, reflection. Claude surfaces journal quotes, asks follow-ups, challenges narratives, surfaces pending drafts and worldview deltas for approval.
+3. **Outline** — Claude presents a structured outline for approval. The outline is the approval surface for *all* downstream writes, including proposed worldview diffs and playbook drafts.
+4. **Write-up + post-agents** — After approval, `review-writer` appends to today's journal, then specialist post-agents run in parallel: `project-updater` (writes `projects/*.md`), `playbook-updater` (appends approved drafts to `pages/playbook.md`), `worldview-updater` (applies approved diffs to `world-view/*.md` with changelog), `psychology-updater` (scoped updates to `pages/psychology.md`), `json-updater` (data stores). Files touched by the updaters are auto-enqueued for KB ingestion the same night.
+
 ## Project Structure
 
 ```
