@@ -55,11 +55,16 @@ for verification.
 
 ### Core repos
 
-- [ ] **jarvis:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+- [x] **jarvis:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+      _(Done. Deterministic checks pass: `readlink`=CLAUDE.md, git mode `120000`,
+      `diff CLAUDE.md AGENTS.md` exits 0.)_
 - [ ] **Verify Codex reads through the symlink** in jarvis — open a Codex session, confirm
       it loads the orchestrator identity — **before** rolling the pattern to other repos
       (test-plan §1). If it fails, apply the `cp` + `diff` fallback (spec.md → Risks) and
-      stop.
+      stop. _(⛔ BLOCKED — manual/interactive gate; an `--auto` run cannot open a Codex
+      session. The remaining Phase 2 repos (pkms core; assay/aura best-effort) are gated on
+      this check per the task's "before rolling the pattern to other repos" ordering. User
+      action required — see the /work completion report.)_
 - [ ] **pkms:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
 
 ### Best-effort repos
