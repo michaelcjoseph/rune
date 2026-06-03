@@ -10,7 +10,7 @@ Test commit lands before any implementation code per phase.
 
 - [ ] `backlog-parser.test.ts` — all accepted forms; all rejected forms produce typed warnings; CRLF and no-final-newline files; Unicode in bullet text; the strict slug suffix regex; ideas sub-bullet attachment across blank line (does NOT attach); sectioning before any heading defaults `user-authored`.
 - [ ] `backlog-id.test.ts` — same line at same position → same id; line edit → different id; same line at different position → different id.
-- [ ] `backlog-reader.test.ts` — registry roll-up; non-repo-backed → `not-repo-backed` flag; missing file → empty + no error; unreadable file → empty + file warning surfaces; symlink/path-escape rejection.
+- [ ] `backlog-reader.test.ts` — registry roll-up; ids are product-local; non-repo-backed → `not-repo-backed` flag; missing file → empty + no error; unreadable file → empty + file warning surfaces; symlink/path-escape rejection.
 
 **Build**
 
@@ -57,30 +57,32 @@ Test commit lands before any implementation code per phase.
 
 **Tests (write first)**
 
-- [ ] `scaffold-result-parser.test.ts` — extract `{ slug, filesCreated }` from agent message; malformed → undefined; cross-check against repo diff; mismatch → distinct error.
-- [ ] `promotion-job.test.ts` — state transitions; restart-replay resumes a `scaffolded` promotion to `marked-source`; backoff on repeated `mark-source-error`; terminal states are not re-entered.
+- [ ] `scaffold-result-parser.test.ts` — extract `{ slug, filesCreated }` from agent message; malformed → undefined; cross-check against repo diff; mismatch → distinct error; all `filesCreated` paths must be repo-relative.
+- [ ] `product-scaffold-target.test.ts` — approval resolves the target product's `repoPath` from `policies/products.json`, rejects non-repo-backed/unknown products, and passes the canonical target repo path to the setup writer with real write access (target `cwd`/allowed directory), not just prompt text; Jarvis remains the `jarvis` product, not a hard-coded default for every product.
+- [ ] `promotion-job.test.ts` — state transitions; restart-replay resumes a `scaffolded` promotion to `marked-source`; explicit retry endpoint resumes `mark-source-error` with backoff and capped attempts; terminal states are not re-entered; linked planning abandonment advances `planning-started` to `planning-abandoned`.
 - [ ] `planning-collision.test.ts` — second Plan click while a planning session is active → `409 active-planning-session`; cockpit's resume/abandon dialog wired.
 - [ ] `backlog-mark-done.test.ts` — match by snapshot, not line; `[x]` already-done is rewritten with suffix idempotently; ideas append suffix only once; ambiguous match → `mark-source-error`; surrounding bytes preserved (including sub-bullets).
-- [ ] `plan-button-api.test.ts` — `POST /api/backlog-items/:id/plan` returns `{ planningSessionId, promotionId }`; stale id → `409 stale-item`; loop-filed → `422 item-not-eligible`.
-- [ ] `plan-e2e.test.ts` (integration) — append idea → plan → approve → scaffold captured → bullet marked promoted → promotion `marked-source`. Retry of `/approve` is byte-equal no-op on the source file.
+- [ ] `plan-button-api.test.ts` — `POST /api/backlog/:product/items/:id/plan` returns `{ planningSessionId, promotionId }`; stale id → `409 stale-item`; product-local ids do not collide across products; loop-filed → `422 item-not-eligible`.
+- [ ] `plan-e2e.test.ts` (integration) — append idea → plan → approve → scaffold captured → bullet marked promoted → promotion `marked-source`. A duplicate mark-source attempt is a byte-equal no-op on the source file.
 
 **Build**
 
-- [ ] Update `project-setup-writer` agent prompt to emit `scaffold-result` JSON.
+- [ ] Generalize `runAgent`, `project-setup-writer`, and `buildSetupWriterBrief` so the approved session carries an explicit target product repo path from `policies/products.json`; the agent is spawned with that repo writable, writes to that target repo's `docs/projects/`, emits `scaffold-result` JSON, and keeps all returned paths repo-relative.
 - [ ] `src/intent/scaffold-result.ts` parser + repo-diff cross-check (the directory-diff verification from `approve.ts` commit `a5018e5` is the existing fallback; this phase formalizes the JSON block as the primary signal).
-- [ ] `src/intent/promotions.ts` — durable job log + restart replay.
+- [ ] `src/intent/promotions.ts` — durable job log at `config.PROMOTIONS_FILE` (`logs/promotions.jsonl` by default) + restart replay + explicit retry helper.
 - [ ] `src/intent/backlog-mark-done.ts` — pure rewriter returning `{ newText, matched }`.
 - [ ] Extend `StoredPlanningSession` with optional `promotionId`.
 - [ ] Extend approval path in `src/bot/commands/approve.ts` and webview approve route to drive the promotion job.
-- [ ] `POST /api/backlog-items/:id/plan` and `GET /api/promotions/:id` in `webview.ts`.
+- [ ] Wire `/clear`, `/fresh`, webview abandon, and planning expiry to mark linked `planning-started` promotions as `planning-abandoned`.
+- [ ] `POST /api/backlog/:product/items/:id/plan`, `GET /api/promotions/:id`, and `POST /api/promotions/:id/retry` in `webview.ts`.
 - [ ] Drawer Plan button wiring + planning panel hand-off + collision dialog.
 
 ## Phase 5 — Polish
 
 > Depends on: Phase 4
 
-- [ ] Manual smoke against jarvis: read drawer, add bug, add idea, plan an idea end-to-end, observe `marked-source`.
-- [ ] Add `docs/projects/BACKLOG-FORMAT.md` to the Jarvis repo (and a template for other product repos).
+- [ ] Add an automated HTTP/module smoke test using tmpdir product repos: read drawer data, add bug, add idea, plan an idea end-to-end with a stubbed setup writer, assert promotion `marked-source`, and assert no real product repo outside the tmpdir is touched.
+- [ ] Add `docs/projects/BACKLOG-FORMAT.md` to the Jarvis repo as the canonical format reference and include a copyable template section for product repos; do not require this project to edit every registered product repo.
 - [ ] Update `docs/projects/08-intent-layer/spec.md` cockpit section with a one-paragraph reference.
-- [ ] Strike `Expand cockpit` at `docs/projects/ideas.md` as `- Expand cockpit → 09-expand-cockpit` (this scaffolding commit already does it; re-verify nothing has drifted).
-- [ ] Open the follow-on spec `expand-cockpit-fix-autorun` and link it from `ideas.md`.
+- [ ] Add an automated docs check that `docs/projects/ideas.md` contains a promoted `Expand cockpit → 09-expand-cockpit` line, then update the line if the check fails.
+- [ ] Create the follow-on project stub `docs/projects/ideas.md` entry for `expand-cockpit-fix-autorun` with a one-sentence scope and a backlink from this spec; no separate `/plan` conversation required for v1 completion.

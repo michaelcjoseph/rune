@@ -44,14 +44,14 @@ real planning session in one click.
 type BacklogKind = 'bugs' | 'ideas';
 
 interface BacklogItem {
-  id: string;                    // sha1(`${file}:${topLevelStartLine}:${normalizedRaw}`).slice(0,12)
+  id: string;                    // product-local: sha1(`${kind}:${repoRelativeFile}:${topLevelStartLine}:${normalizedRaw}`).slice(0,12)
   kind: BacklogKind;
   text: string;
   status: 'open' | 'done';
   body: string[];                // ideas only
   promotedTo?: string;
   section?: 'user-authored' | 'loop-filed';
-  source: { file: string; lineNumber: number; raw: string };
+  source: { file: string; lineNumber: number; raw: string }; // file is repo-relative, never absolute
   actions: BacklogItemAction[];  // server-computed; see below
   warnings: string[];            // parser/format warnings for this item
 }
@@ -63,13 +63,15 @@ interface BacklogItemAction {
 }
 ```
 
-`id` is intentionally **unstable across line edits** — that's how stale URLs surface as `409 stale-item` and force the cockpit to re-fetch.
+`id` is intentionally **unstable across line edits** — that's how stale URLs surface as `409 stale-item` and force the cockpit to re-fetch. It is also intentionally **product-local**: every item API route carries `:product`, so two product repos can have the same bullet text without creating a global id collision.
+
+For bugs, `status` follows the checkbox. For ideas, `status` is `done` only when the top-level line has a valid `promotedTo` suffix; otherwise it is `open`. Loop-filed ideas can still be `open`, but their `plan` action is disabled with `disabledReason: 'loop-filed'`.
 
 `CockpitProduct` gains optional `backlogCounts?: { bugs: { open: number; done: number }; ideas: { open: number; done: number }; warnings: number }`. The full lists are NOT in `CockpitView` (drawer fetches them separately) — keeps the cockpit payload bounded.
 
 ## Parser contract (strict, documented)
 
-A new doc: `docs/projects/BACKLOG-FORMAT.md` in each product repo defines the format. The parser is strict; everything else warns + skips, with the warning attached to the *file* (rendered as a drawer banner) or to an item (rendered as a `⚠` chip on the row).
+A new canonical doc, `docs/projects/BACKLOG-FORMAT.md`, defines the format and includes a copyable template for product repos. Product repos may carry their own copy, but the parser does not require one to exist. The parser is strict; everything else warns + skips, with the warning attached to the *file* (rendered as a drawer banner) or to an item (rendered as a `⚠` chip on the row).
 
 **bugs.md — accepted lines:**
 - `- [ ] <text>` (open)
@@ -81,13 +83,14 @@ A new doc: `docs/projects/BACKLOG-FORMAT.md` in each product repo defines the fo
 - Top-level bullet: `- <text>` (optionally ` → \d{2}-[a-z0-9-]+`)
 - Sub-bullet: `  - <text>` (exactly two spaces; attaches as `body` to most recent top-level)
 - Loop-filed sentinel HTML comment is preserved verbatim
+- Top-level bullets before any recognized heading default to `section: 'user-authored'`
 
 **Always rejected with warning:**
 - Tab-indented bullets, `*` bullets, numbered lists, blockquotes, code fences inside the backlog, deeper than 2-space indent.
 
 **Promotion marker syntax** (both files):
 - Suffix ` → \d{2}-[a-z0-9-]+` at end of top-level line.
-- Strict regex prevents "real" text ending in `→ <something>` from being misread.
+- Strict regex prevents "real" text ending in `→ <something>` from being misread. A line ending in `→ <non-matching-slug>` remains an item, is NOT promoted, and receives an item warning `bad-promotion-marker`.
 
 ## API surface (typed errors)
 
@@ -95,14 +98,15 @@ A new doc: `docs/projects/BACKLOG-FORMAT.md` in each product repo defines the fo
 |---|---|---|---|---|
 | `GET` | `/api/backlog/:product` | – | `{ bugs, ideas, fileWarnings }` | `404 unknown-product`, `409 not-repo-backed` |
 | `POST` | `/api/backlog/:product/:kind` | `{ text }` | `{ item }` | `400 empty-text`, `400 multiline-text`, `404 unknown-product`, `404 unknown-kind` |
-| `POST` | `/api/backlog-items/:id/plan` | – | `{ planningSessionId, promotionId }` | `409 stale-item`, `409 active-planning-session` (returns `{activeSessionId}`), `422 item-not-eligible` (loop-filed, done, already-promoted) |
+| `POST` | `/api/backlog/:product/items/:id/plan` | – | `{ planningSessionId, promotionId }` | `409 stale-item`, `409 active-planning-session` (returns `{activeSessionId}`), `422 item-not-eligible` (loop-filed, done, already-promoted) |
 | `GET` | `/api/promotions/:id` | – | `{ state, slug?, errors[] }` | `404 unknown-promotion` |
+| `POST` | `/api/promotions/:id/retry` | – | `{ state, slug?, errors[] }` | `404 unknown-promotion`, `409 not-retryable` |
 
 Error envelope: `{ error: { code, message, retryable } }`. Every endpoint validates `product` against the registry and `kind` against the literal set.
 
 ## Promotion lifecycle (durable job)
 
-New module `src/intent/promotions.ts` owns a persisted job log at `state/promotions.jsonl` (append-only):
+New module `src/intent/promotions.ts` owns a persisted job log at `config.PROMOTIONS_FILE` (default: `logs/promotions.jsonl`, append-only). Keep this under `LOGS_DIR`, matching `mutations.jsonl`, `planning-sessions.json`, and the rest of Jarvis runtime state; do not introduce a separate top-level `state/` directory.
 
 ```ts
 type PromotionState =
@@ -129,14 +133,15 @@ interface Promotion {
 ```
 
 **Flow:**
-1. Plan click → `POST /api/backlog-items/:id/plan` → server creates a `Promotion` in `planning-started` and a `StoredPlanningSession` whose `promotionId` links them. Returns both ids.
+1. Plan click → `POST /api/backlog/:product/items/:id/plan` → server creates a `Promotion` in `planning-started` and a `StoredPlanningSession` whose `promotionId` links them. Returns both ids.
 2. Planning runs as today.
 3. On `/approve`, the existing approval path runs the scaffolder, then:
-   a. Parse structured `{ slug, filesCreated }` from the scaffolder's final message; validate by diffing `<repoPath>/docs/projects/` (exactly one new `NN-slug` dir with the three expected files).
+   a. Resolve the product's `repoPath` from `policies/products.json`; the scaffolder writes to that product repo (Jarvis is just one product). The approval helper must invoke the setup writer with that repo available as a writable Claude workspace (for example a target `cwd`/`--add-dir` option, depending on the final `runAgent` API), not merely mention the path in prompt text. Parse structured `{ slug, filesCreated }` from the scaffolder's final message; validate by diffing `<repoPath>/docs/projects/` (exactly one new `NN-slug` dir with the three expected files). All `filesCreated` entries are repo-relative.
    b. On valid → promotion advances to `scaffolded(slug)`.
    c. On invalid → `scaffold-error` (terminal); cockpit shows the error; source bullet untouched.
-4. Post-scaffold step rewrites source bullet by snapshot match (Bugs: `[ ] → [x] + → slug` suffix. Ideas: append ` → slug` suffix). On success → `marked-source`. On `noMatch`/`ambiguous` → `mark-source-error` (retryable — re-running `/approve` is idempotent on the source file).
+4. Post-scaffold step rewrites source bullet by snapshot match (Bugs: `[ ] → [x] + → slug` suffix. Ideas: append ` → slug` suffix). On success → `marked-source`. On `noMatch`/`ambiguous` → `mark-source-error`; retry is via `POST /api/promotions/:id/retry`, and the rewrite itself is idempotent if the source line is already marked.
 5. On Jarvis restart, the promotion job log is replayed: any promotion in `scaffolded` (i.e. scaffold succeeded but mark-source didn't run) is retried automatically with backoff.
+6. A `mark-source-error` retry is driven by an explicit retry endpoint/button (`POST /api/promotions/:id/retry`), not by requiring the user to re-run `/approve` after the planning session may have been deleted. Retries cap at a module constant that tests can override.
 
 ## Scaffold contract change (new prerequisite)
 
@@ -152,7 +157,7 @@ If absent or malformed, the approval path falls back to a directory diff between
 
 **Relationship to the recovery fixes:** the repo-diff verification path (Fix 2, commit `a5018e5`) is already implemented as the fallback. This project adds the structured JSON block as the primary signal and the cross-check between the two.
 
-This is a one-line change to the agent's prompt and a parser in `approve.ts` / the webview approval route. Tracked as Phase 4 task 1.
+This is not just a one-line prompt change: today `project-setup-writer` is Jarvis-workspace scoped. Phase 4 must generalize the brief + agent prompt + approval helper so the target product repo is explicit, canonicalized, and cross-checked against `policies/products.json`. Tracked as Phase 4 task 1.
 
 ## Cockpit UX (revised)
 
@@ -212,3 +217,4 @@ One compact line shows open-counts plus warning count. Clicking opens the drawer
 - Mark-source is idempotent: re-running against an already-promoted line is a byte-equal no-op.
 - Scaffolder failure leaves the source bullet untouched and the promotion in a terminal error state with a human-readable reason.
 - Mark-source failure leaves the project scaffolded and the promotion in `mark-source-error`; cockpit surfaces a retry button.
+- Planning abandonment (`/clear`, `/fresh`, webview abandon, or planning expiry) advances any linked `planning-started` promotion to `planning-abandoned` so restart replay never treats an abandoned plan as work to resume.
