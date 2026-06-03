@@ -24,7 +24,7 @@ Error handling and behavior coverage for the backlog → planning flow.
 ## §3 Reader + security
 
 - Roll-up per product; non-repo-backed flagged.
-- Missing/unreadable file → empty + warning, others intact.
+- Missing file → empty, **no** warning (graceful: a product simply may not have a backlog file yet). Unreadable file (EISDIR, permission denied — any non-ENOENT read error) → empty + a `unreadable-file` file warning. In both cases the other file in the same product still reads.
 - Path canonicalization rejects symlink escapes.
 - `repoPath` outside `$WORKSPACE_ROOT` rejected at read time.
 - Source paths in API responses are repo-relative and never leak absolute host paths.
