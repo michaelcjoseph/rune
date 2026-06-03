@@ -16,7 +16,7 @@ Test commit lands before any implementation code per phase.
 
 - [x] `src/intent/backlog-parser.ts` — `parseBugs`, `parseIdeas`, returning `{ items, fileWarnings }`. (`backlog-parser.test.ts` green — 31 cases.)
 - [x] `src/intent/backlog-id.ts` — deterministic id helper. (Implemented alongside the parser as its hard dependency; `backlog-id.test.ts` green — 22 cases.)
-- [ ] `src/intent/backlog-reader.ts` — `readBacklogs(registry, productsConfig)` with security checks.
+- [x] `src/intent/backlog-reader.ts` — `readBacklogs(registry, productsConfig)` with security checks. (`backlog-reader.test.ts` green — 9 cases; realpath+containment, symlink-escape, fd-based size-capped reads, fail-closed workspace root.)
 - [ ] Extend `CockpitProduct` with optional `backlogCounts`.
 
 ## Phase 2 — Drawer + sidebar count line

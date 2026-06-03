@@ -44,9 +44,10 @@ export interface BacklogItem {
 
 /** A file-level format warning — attached to the file, not an item. */
 export interface FileWarning {
-  /** Repo-relative file path, never absolute. */
+  /** Repo-relative file path, never absolute. Empty string for a whole-product warning. */
   file: string;
-  /** 1-based line number the warning points at. */
+  /** 1-based line number the warning points at, or `0` for a file/product-level warning not
+   *  tied to a specific line (e.g. the reader's `symlink-escape` / `repo-outside-workspace`). */
   lineNumber: number;
   /** Stable warning code, e.g. `tab-indented`, `over-indented`, `code-fence`. */
   code: string;
