@@ -90,6 +90,30 @@ describe('scanJournalForIntent (C7)', () => {
     expect(plan.proposals.some((p: IntentProposal) => p.kind === 'disambiguation')).toBe(true);
   });
 
+  it('ignores purely-numeric #<n> tags (prose list refs, not products)', async () => {
+    let scan: undefined | ((content: string) => JournalNote[]);
+    try {
+      scan = (await import('./journal-intent-producer.js')).scanJournalForIntent;
+    } catch {}
+    expect(scan).toBeDefined();
+    // Real misfires from the 2026-06-03 journal: "#4 is from your Julien call",
+    // "approach #2". These must produce no product attribution at all.
+    const notes = scan!(
+      '- The cold-data item (#4) is from your Julien call, not Peter\n' +
+        '- I narrowed the calldata question (#2) to just the assembly locus',
+    );
+    expect(notes).toEqual([]);
+    // And mixed: a real product tag on a line that also has a numeric ref keeps
+    // only the product.
+    const mixed = scan!('- 10am #aura preferred approach #2 for the resolver');
+    expect(mixed[0]!.products).toEqual(['aura']);
+    // End-to-end: a numeric-only line yields no register-product / disambiguation.
+    const plan = planJournalIntent({
+      notes, roadmapCandidates: [], registeredProducts: ['aura'],
+    });
+    expect(plan.proposals).toEqual([]);
+  });
+
   it('a note tagged with an UNregistered product yields a JournalNote so the planner emits a register-product proposal', async () => {
     let scan: undefined | ((content: string) => JournalNote[]);
     try {

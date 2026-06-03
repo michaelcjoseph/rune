@@ -72,6 +72,12 @@ function extractProducts(line: string): string[] {
   const out: string[] = [];
   for (const match of line.matchAll(SLUG_RE)) {
     const slug = match[1]!;
+    // Skip purely-numeric tags. A product slug is a named thing; an all-digit
+    // `#<n>` is always a prose list reference ("approach #2", "item #4 is from
+    // the Julien call"), never a product. Left unguarded these misfire as
+    // `register-product` proposals for products named "2"/"4" (and feed
+    // `disambiguation` candidate lists with the same junk).
+    if (/^\d+$/.test(slug)) continue;
     // Skip well-known non-product tags so a `#playbook` / `#crm` / `#meeting`
     // marker on a non-product line doesn't get mistaken for a product slug.
     if (NON_PRODUCT_TAGS.has(slug)) continue;
