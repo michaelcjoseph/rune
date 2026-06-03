@@ -188,7 +188,9 @@ src/
 │   ├── observation-triage.ts # Triage formatter: formatIdeasMarkdown(outcomes) — turns filed outcomes into markdown bullets for docs/projects/ideas.md; non-filed outcomes (discarded/duplicate/quiet) produce no line; pure, no I/O
 │   ├── observation-dispatch.ts # Self-generated-project dispatch adapter: DispatchPlan union ('dispatch'|'await-approval'); planEngineDispatch(idea, decideEscalation) — escalate verdict holds for approval, proceed verdict derives projectSlug from idea.id; uses existing mutation pipeline (no new execution subsystem)
 │   ├── observation-nightly.ts # Nightly observation composer: NightlyObservationDeps/NightlyObservationResult; runNightlyObservation(deps) wires sensors → synthesis → loop → triage/dispatch/format; every dep injected for testability
-│   └── friction-detect.ts   # Friction-detection extension to Ask-Twice telemetry: FrictionSignal (category/id/description), AggregatedFriction (adds occurrences); aggregateFrictions(raw) — dedupe-by-id with occurrence count, sorted most-frequent-first; deterministic aggregation only, detection is upstream integration
+│   ├── friction-detect.ts   # Friction-detection extension to Ask-Twice telemetry: FrictionSignal (category/id/description), AggregatedFriction (adds occurrences); aggregateFrictions(raw) — dedupe-by-id with occurrence count, sorted most-frequent-first; deterministic aggregation only, detection is upstream integration
+│   ├── backlog-id.ts        # Deterministic backlog item id helper: computeBacklogId, normalizeBacklogRaw, BacklogKind — pure, no I/O
+│   └── backlog-parser.ts    # Strict pure parser for docs/projects/{bugs,ideas}.md: parseBugs, parseIdeas → { items, fileWarnings }; types BacklogItem, FileWarning, ParsedBacklog — pure, no I/O
 ├── mcp/
 │   ├── server.ts            # MCP server: exposes KB tools (query, search, ingest, stats, lint)
 │   └── index.ts             # Standalone stdio entry point for Claude Code

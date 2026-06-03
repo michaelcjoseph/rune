@@ -39,7 +39,7 @@ function byText(parsed: ParsedBacklog, text: string): BacklogItem {
       `expected exactly one item with text ${JSON.stringify(text)}, found ${matches.length}`,
     );
   }
-  return matches[0];
+  return matches[0]!;
 }
 
 /** True if any file warning carries the given code (optionally at the given 1-based line). */
@@ -57,7 +57,7 @@ describe('backlog-parser — parseBugs accepted forms', () => {
   it('parses an open checkbox bug', () => {
     const parsed = parseBugs('- [ ] Cockpit shows wrong status', BUGS_FILE);
     expect(parsed.items).toHaveLength(1);
-    const item = parsed.items[0];
+    const item = parsed.items[0]!;
     expect(item.kind).toBe('bugs');
     expect(item.text).toBe('Cockpit shows wrong status');
     expect(item.status).toBe('open');
@@ -256,6 +256,28 @@ describe('backlog-parser — parseIdeas accepted forms', () => {
     expect(parsed.items).toHaveLength(1);
     expect(byText(parsed, 'Filed idea').section).toBe('loop-filed');
   });
+
+  it('warns (not silently) when an HTML comment is opened but never closed', () => {
+    const parsed = parseIdeas(
+      lines('## User-authored', '- Visible idea', '<!-- never closed', '- Hidden idea'),
+      IDEAS_FILE,
+    );
+    // The idea above the open comment is parsed; the one below is suppressed — but the
+    // suppression is surfaced, never silent.
+    expect(parsed.items.map((i) => i.text)).toEqual(['Visible idea']);
+    expect(hasFileWarning(parsed, 'unclosed-comment', 3)).toBe(true);
+  });
+
+  it('does not let an unclosed comment inside a code fence corrupt fence state', () => {
+    // The `<!--` sits inside a fenced block, so it must be treated as fenced content, not a
+    // comment opener. The fence closes normally and the item after it still parses.
+    const parsed = parseIdeas(
+      lines('## User-authored', '```', '<!-- unclosed in fence', 'code', '```', '- Real idea'),
+      IDEAS_FILE,
+    );
+    expect(byText(parsed, 'Real idea').section).toBe('user-authored');
+    expect(hasFileWarning(parsed, 'unclosed-comment')).toBe(false);
+  });
 });
 
 describe('backlog-parser — parseIdeas sub-bullet attachment rules', () => {
@@ -308,20 +330,20 @@ describe('backlog-parser — line-ending and whitespace handling', () => {
   it('parses CRLF files, stripping the carriage return from text', () => {
     const parsed = parseBugs('- [ ] First bug\r\n- [x] Second bug\r\n', BUGS_FILE);
     expect(parsed.items).toHaveLength(2);
-    expect(parsed.items[0].text).toBe('First bug');
-    expect(parsed.items[1].text).toBe('Second bug');
-    expect(parsed.items[1].status).toBe('done');
+    expect(parsed.items[0]!.text).toBe('First bug');
+    expect(parsed.items[1]!.text).toBe('Second bug');
+    expect(parsed.items[1]!.status).toBe('done');
   });
 
   it('parses a file with no final newline', () => {
     const parsed = parseBugs('- [ ] Only bug', BUGS_FILE);
     expect(parsed.items).toHaveLength(1);
-    expect(parsed.items[0].text).toBe('Only bug');
+    expect(parsed.items[0]!.text).toBe('Only bug');
   });
 
   it('preserves Unicode in bullet text', () => {
     const parsed = parseBugs('- [ ] Fix café 日本語 ½ rendering', BUGS_FILE);
-    expect(parsed.items[0].text).toBe('Fix café 日本語 ½ rendering');
+    expect(parsed.items[0]!.text).toBe('Fix café 日本語 ½ rendering');
   });
 
   it('returns empty items and no error for an empty file', () => {
@@ -341,7 +363,7 @@ describe('backlog-parser — item ids', () => {
 
   it('gives distinct items distinct ids', () => {
     const parsed = parseBugs(lines('- [ ] First', '- [ ] Second'), BUGS_FILE);
-    expect(parsed.items[0].id).not.toBe(parsed.items[1].id);
+    expect(parsed.items[0]!.id).not.toBe(parsed.items[1]!.id);
   });
 
   it('is deterministic: re-parsing identical content yields identical ids', () => {
