@@ -18,6 +18,7 @@ its `spec.md`.
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Not Started | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Not Started | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
+| [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
 
 ---
 
@@ -179,3 +180,28 @@ The smallest end-to-end test of the "better agentic systems" bet: a role-agent d
 - **Scope:** one role, jarvis repo only, no cross-product. The planning pipeline and engagement-driven lessons are separate ideas in [ideas.md](ideas.md).
 - **Provenance:** planned 2026-06-02 from the top `ideas.md` bullet ("Better agentic systems"); three Codex critique rounds (over-engineering → adjust → architecture-fit) cut it from a five-role memory-substrate-plus-pipeline build down to this single-role wedge.
 - **Task breakdown & test plan:** see [tasks.md](12-writer-memory/tasks.md) and [test-plan.md](12-writer-memory/test-plan.md). Test-first per phase.
+
+## 13-work-run-monitoring — Not Started
+
+[Spec](13-work-run-monitoring/spec.md)
+
+Make an automated `/work --auto` run reachable and testable by a human when it needs one.
+
+Today the runner executes in a worktree at a deterministic path that is never surfaced, and always
+destroys it at teardown; the single-model path never reaches main (`branch-complete · not yet on
+main`). So when a run hits a step `--auto` can't do — the interactive Codex check that stalled
+project 10 — there's no signal a human is needed and no live worktree to act in.
+
+- **Findability:** surface the (already-deterministic) worktree path + run id in notifications, on
+  a local-operator field that stays un-scrubbed (the scrubber strips exactly the prefix you'd `cd`
+  to).
+- **Parked state:** a run that needs a human emits a durable `blocked-on-human` state, keeps its
+  worktree alive, and holds the per-project slot — surviving a Jarvis restart.
+- **Release:** one explicit action (Telegram + cockpit) tears down the worktree and frees the slot.
+  Net-new, since today's `blocked-on-human` approval rows are intentionally non-actionable.
+- **Provenance:** 2026-06-03 conversation — diagnosed from project 10, where the worktree was
+  unreachable for a manual test. Scoped down from an original two-phase plan after a Codex critique
+  (verdict RETHINK) found the durable-integration-branch topology invalid; that ambition is recorded
+  as Deferred in the spec. Phase 0 (how work reaches main) is resolved in the spec: nothing
+  auto-promotes a plain work-run — merge-to-main is gen-eval-loop only.
+- **Task breakdown & test plan:** see [tasks.md](13-work-run-monitoring/tasks.md) and [test-plan.md](13-work-run-monitoring/test-plan.md). Test-first per phase.
