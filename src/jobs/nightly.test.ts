@@ -60,6 +60,9 @@ vi.mock('../intent/intent-proposal-queue.js', () => ({
 vi.mock('../intent/registry.js', () => ({
   readRegistry: vi.fn(() => ({ products: [] })),
 }));
+vi.mock('./registry-rebuild.js', () => ({
+  rebuildRegistry: vi.fn(() => ({ products: 4, projects: 23 })),
+}));
 vi.mock('./meeting-extract.js', () => ({
   extractMeetings: vi.fn(() => Promise.resolve([])),
   appendProjectDecisions: vi.fn(() => ({ status: 'skipped', appended: 0, detail: 'no decisions to append' })),
@@ -124,14 +127,15 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 13 steps and returns results', async () => {
+    it('runs all 14 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(13);
+      expect(result.steps).toHaveLength(14);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
         'Birthday alerts',
         'Playbook extract',
+        'Registry rebuild',
         'Journal-intent producer',
         'Journal ingest',
         'Meeting extract',
@@ -918,7 +922,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(13);
+      expect(result.steps).toHaveLength(14);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -947,7 +951,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(13);
+      expect(result.steps).toHaveLength(14);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -978,7 +982,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(13);
+      expect(result.steps).toHaveLength(14);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -989,23 +993,22 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(13);
-      // After Phase 6 C7 inserted Journal-intent producer between Playbook
-      // extract and Journal ingest, KB queue shifted from index 7 → 8.
-      // Library sync is at index 7, KB queue at 8 (after Session capture,
-      // Daily tags, Birthday alerts, Playbook extract, Journal-intent
-      // producer, Journal ingest, Meeting extract).
-      expect(result.steps[8]!.step).toBe('KB queue');
-      expect(result.steps[8]!.status).toBe('error');
+      expect(result.steps).toHaveLength(14);
+      // Registry rebuild (inserted between Playbook extract and Journal-intent
+      // producer) shifts KB queue from index 8 → 9. Order ahead of it: Session
+      // capture, Daily tags, Birthday alerts, Playbook extract, Registry rebuild,
+      // Journal-intent producer, Journal ingest, Meeting extract, Library sync.
+      expect(result.steps[9]!.step).toBe('KB queue');
+      expect(result.steps[9]!.status).toBe('error');
       // Whoop activity still ran after it
-      expect(result.steps[9]!.step).toBe('Whoop activity');
+      expect(result.steps[10]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(13);
+      expect(result.steps).toHaveLength(14);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -1016,8 +1019,9 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is now last (index 12 — Journal-intent producer step added between Playbook extract and Journal ingest shifts it down by one more, on top of the earlier Observation loop addition).
-      expect(result.steps[12]!.step).toBe('Mark processed');
+      // Mark processed is last (index 13 after the Registry rebuild step was
+      // inserted; it shifts the tail down by one more).
+      expect(result.steps[13]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {

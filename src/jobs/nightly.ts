@@ -19,6 +19,7 @@ import {
   type QueuedIntentProposal,
 } from '../intent/intent-proposal-queue.js';
 import { readRegistry } from '../intent/registry.js';
+import { rebuildRegistry } from './registry-rebuild.js';
 import { extractMeetings, appendProjectDecisions } from './meeting-extract.js';
 import { askClaudeOneShot, runAgent, registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import { readVaultFile, writeVaultFile } from '../vault/files.js';
@@ -258,6 +259,20 @@ function stepBirthdayAlerts(date: string): NightlyStepResult {
 async function stepPlaybookExtract(): Promise<NightlyStepResult> {
   const result = await extractPlaybookDrafts();
   return { step: 'Playbook extract', status: result.status, detail: result.detail };
+}
+
+/** Rebuild the cross-product registry so the cockpit's project list, lifecycle
+ *  status, and task progress self-heal without a daemon restart (the other
+ *  rebuild trigger is the startup hook in src/index.ts). Runs before the
+ *  journal-intent producer so that step sees freshly-registered products the
+ *  same night. A scan/write failure is captured as an error step, not fatal. */
+function stepRebuildRegistry(): NightlyStepResult {
+  const { products, projects } = rebuildRegistry();
+  return {
+    step: 'Registry rebuild',
+    status: 'success',
+    detail: `${products} product(s), ${projects} project(s)`,
+  };
 }
 
 /**
@@ -657,6 +672,7 @@ export async function executeNightly(
 
   await run('Birthday alerts', () => stepBirthdayAlerts(todayDate));
   await run('Playbook extract', stepPlaybookExtract);
+  await run('Registry rebuild', stepRebuildRegistry);
   await run('Journal-intent producer', () => stepJournalIntentProducer(todayJournal));
   await run('Journal ingest', () => stepJournalIngest(todayFilename, todayJournal));
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));

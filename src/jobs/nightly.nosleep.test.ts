@@ -57,6 +57,11 @@ vi.mock('../ai/claude.js', () => ({
 }));
 vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn(), writeVaultFile: vi.fn() }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
+// Mock the registry rebuild so its transitive sandbox-runtime → node:child_process
+// (execFile) import never loads; this suite mocks child_process with spawn only.
+vi.mock('./registry-rebuild.js', () => ({
+  rebuildRegistry: vi.fn(() => ({ products: 0, projects: 0 })),
+}));
 vi.mock('../utils/time.js', () => ({
   getTodayDate: vi.fn(),
   getTodayFilename: vi.fn(),

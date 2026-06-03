@@ -8,6 +8,7 @@ import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
 import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
 import { runWorkRunGc } from './jobs/work-run-gc-runner.js';
+import { rebuildRegistry } from './jobs/registry-rebuild.js';
 import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
@@ -44,6 +45,21 @@ loadModelPolicy(config.MODEL_POLICY_FILE);
 
 // Ensure knowledge base structure exists
 initKB();
+
+// Rebuild the cross-product registry from the product repos so the cockpit
+// reflects current project status + task progress on every boot. Because the
+// "Restart server" button relaunches the daemon, this also makes that button a
+// registry refresh. Best-effort: a missing/malformed products.json or repo must
+// never block startup — the cockpit degrades to "registry unavailable", and the
+// nightly rebuild step is the safety net. (docs/projects/bugs.md item 1.)
+try {
+  const { products, projects } = rebuildRegistry();
+  log.info('Registry rebuilt on startup', { products, projects });
+} catch (err) {
+  log.warn('Startup registry rebuild failed — cockpit may show a stale list', {
+    error: (err as Error).message,
+  });
+}
 
 // Flip any stale 'running' mutations from a prior interrupted run to 'failed'
 reconcileOrphans();
