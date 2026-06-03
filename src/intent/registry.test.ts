@@ -103,6 +103,29 @@ describe('registry — aggregation (test-plan §1)', () => {
     expect(bySlug['08-intent-layer']).toBe('planned'); // "Planned"
   });
 
+  it('attaches per-project task progress from the source map, by slug', () => {
+    const registry = buildRegistry({
+      products: [
+        {
+          name: 'jarvis',
+          repoBacked: true,
+          projectsIndex: JARVIS_INDEX,
+          taskProgress: {
+            '01-mvp': { done: 5, total: 5 },
+            '07-spaced-repetition': { done: 2, total: 8 },
+            // 08-intent-layer intentionally omitted — no tasks.md / no checkboxes.
+          },
+        },
+      ],
+    });
+    const jarvis = registry.products.find((p) => p.name === 'jarvis')!;
+    const bySlug = Object.fromEntries(jarvis.projects.map((p) => [p.slug, p.progress]));
+    expect(bySlug['01-mvp']).toEqual({ done: 5, total: 5 });
+    expect(bySlug['07-spaced-repetition']).toEqual({ done: 2, total: 8 });
+    // A slug absent from the map carries no progress field at all.
+    expect(bySlug['08-intent-layer']).toBeUndefined();
+  });
+
   it('parses an index whose table has a leading column before the project link', () => {
     // Some repos format docs/projects/index.md as `| # | [Name](slug/) | Status | … |` —
     // the project link is not the first cell, and the status column sits further right.

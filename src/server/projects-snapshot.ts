@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '../utils/logger.js';
+import { parseTaskProgress, type PhaseProgress } from '../utils/task-progress.js';
 
 const log = createLogger('projects-snapshot');
 
@@ -10,11 +11,7 @@ const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PROJECTS_DIR = join(PROJECT_ROOT, 'docs', 'projects');
 const INDEX_FILE = join(PROJECTS_DIR, 'index.md');
 
-export interface PhaseProgress {
-  phase: string;
-  done: number;
-  total: number;
-}
+export type { PhaseProgress };
 
 export interface ProjectSummary {
   slug: string;
@@ -45,7 +42,9 @@ function parseIndex(): Map<string, string> {
   return result;
 }
 
-/** Parse a tasks.md file and count done/total items, grouped by Phase headers. */
+/** Read a tasks.md file and count done/total items, grouped by Phase headers.
+ *  Pure tally logic lives in `parseTaskProgress`; this wrapper handles the read
+ *  (a missing/unreadable file is an empty tally, not an error). */
 function parseTasksProgress(tasksPath: string): { done: number; total: number; perPhase: PhaseProgress[] } {
   let raw: string;
   try {
@@ -53,39 +52,7 @@ function parseTasksProgress(tasksPath: string): { done: number; total: number; p
   } catch {
     return { done: 0, total: 0, perPhase: [] };
   }
-
-  const perPhase: PhaseProgress[] = [];
-  let currentPhase = 'General';
-  let phaseDone = 0;
-  let phaseTotal = 0;
-
-  function flushPhase() {
-    if (phaseTotal > 0) {
-      perPhase.push({ phase: currentPhase, done: phaseDone, total: phaseTotal });
-    }
-  }
-
-  for (const line of raw.split('\n')) {
-    const phaseMatch = line.match(/^#+\s+(Phase\s+\S+.*)/i);
-    if (phaseMatch) {
-      if (phaseTotal > 0) flushPhase();
-      currentPhase = phaseMatch[1]!.trim();
-      phaseDone = 0;
-      phaseTotal = 0;
-      continue;
-    }
-    if (line.match(/^- \[x\]/i)) {
-      phaseDone++;
-      phaseTotal++;
-    } else if (line.match(/^- \[ \]/)) {
-      phaseTotal++;
-    }
-  }
-  if (phaseTotal > 0) flushPhase();
-
-  const totalDone = perPhase.reduce((sum, p) => sum + p.done, 0);
-  const totalAll = perPhase.reduce((sum, p) => sum + p.total, 0);
-  return { done: totalDone, total: totalAll, perPhase };
+  return parseTaskProgress(raw);
 }
 
 /** Read mtime from a file, return ISO string or null. */

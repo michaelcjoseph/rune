@@ -31,6 +31,10 @@ export interface RegistryProject {
   slug: string;
   /** Durable lifecycle status — derived from the product repo's project docs. */
   status: LifecycleStatus;
+  /** Task tally (done / total) parsed from the project's `tasks.md` at build
+   *  time. Absent when the project has no `tasks.md` or no checkbox lines.
+   *  Refreshed on each registry rebuild — not live. */
+  progress?: { done: number; total: number };
 }
 
 /** A product and the projects under it. */
@@ -62,6 +66,12 @@ export interface ProductSource {
    * no project docs (or the product has no repo at all).
    */
   projectsIndex: string | null;
+  /**
+   * Per-project task tally, keyed by project slug, parsed from each project's
+   * `tasks.md` by the scanner (which has filesystem access). Optional; slugs
+   * absent from the map yield projects without `progress`.
+   */
+  taskProgress?: Record<string, { done: number; total: number }>;
 }
 
 /** The complete set of scanned product sources — the input to a registry build. */
@@ -129,7 +139,10 @@ export function buildRegistry(sources: RegistrySources): Registry {
   const products: RegistryProduct[] = sources.products.map((source) => ({
     name: source.name,
     repoBacked: source.repoBacked,
-    projects: parseProjects(source.projectsIndex),
+    projects: parseProjects(source.projectsIndex).map((project) => {
+      const progress = source.taskProgress?.[project.slug];
+      return progress ? { ...project, progress } : project;
+    }),
   }));
   const projectCount = products.reduce((sum, p) => sum + p.projects.length, 0);
   log.info('registry built', {
