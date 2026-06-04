@@ -25,7 +25,7 @@ Test commit lands before any implementation code per phase.
 
 **Tests (write first)**
 
-- [ ] `cockpit-backlog-counts.test.ts` — sidebar one-liner reflects counts and warning count; clicking opens drawer; non-repo-backed product → drawer shows `not repo-backed`.
+- [x] `cockpit-backlog-counts.test.ts` — sidebar one-liner reflects counts and warning count; clicking opens drawer; non-repo-backed product → drawer shows `not repo-backed`. (Test-first deliverable: HTTP suite over `GET /api/cockpit` asserting `backlogCounts` per repo-backed product + none for non-repo-backed; the count assertions stay red until the Phase 2 build wires `readBacklogs`/`computeBacklogCounts` into `handleApiCockpit`. DOM-side sidebar/drawer behavior is the integration check, per the cockpit-ux precedent.)
 - [ ] `backlog-drawer.test.ts` — `GET /api/backlog/:product` returns parsed items + warnings; drawer renders Bugs/Ideas tabs; tab persists; disabled actions show tooltip with `disabledReason`; ideas body renders as nested list; source-file link constructed correctly.
 
 **Build**
