@@ -217,8 +217,9 @@ function isPromotionShape(value: unknown): value is Promotion {
 /**
  * Replay the append-only log into the latest state per id (last line wins). Missing file → empty
  * map. Torn or unparseable lines are skipped with a warning so one bad line can't lose the rest.
- * Startup-only: this reads the whole log synchronously — call it at boot (restart replay), not on a
- * request hot path.
+ * Reads the whole log synchronously: intended for boot (restart replay) and for the low-frequency
+ * single-promotion lookups on the approval / abandonment paths (the log stays small by design — it
+ * grows one line per promotion transition). Do not put it on a high-frequency hot path.
  */
 export function loadPromotions(logPath: string): Map<string, Promotion> {
   let raw: string;

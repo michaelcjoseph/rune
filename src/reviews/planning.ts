@@ -32,6 +32,7 @@ import {
   type PlanningSurface,
   type SpecArtifact,
 } from '../intent/planner.js';
+import { loadPromotions, appendPromotion, transitionPromotion } from '../intent/promotions.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('planning-session');
@@ -199,9 +200,31 @@ function snapshotArtifact(
 export function deletePlanningSession(chatId: number): void {
   const session = sessions.get(chatId);
   if (!session) return;
+  // If this session was opened from a backlog Plan click, mark its linked promotion abandoned —
+  // this is the chokepoint every abandonment path funnels through (/clear, /fresh, webview abandon
+  // all go via abandonActivePlanningSession → here; planning expiry calls here directly). The
+  // state machine only permits planning-started → planning-abandoned, so a scaffolded promotion is
+  // left for restart-replay and a marked-source/mark-source-error one (post-approval delete) is a
+  // no-op — exactly the spec's "any linked planning-started promotion" semantics.
+  if (session.promotionId) abandonLinkedPromotion(session.promotionId);
   cleanupSession(session.claudeSessionId);
   sessions.delete(chatId);
   persistPlanningSessions();
+}
+
+/** Best-effort: advance a linked promotion to `planning-abandoned` (only legal from
+ *  planning-started; refused otherwise → no-op). A promotion-log failure must never block the
+ *  session cleanup the user actually asked for. */
+function abandonLinkedPromotion(promotionId: string): void {
+  try {
+    const promotions = loadPromotions(config.PROMOTIONS_FILE);
+    const promotion = promotions.get(promotionId);
+    if (!promotion) return;
+    const t = transitionPromotion(promotion, 'planning-abandoned', { now: new Date().toISOString() });
+    if (t.ok) appendPromotion(config.PROMOTIONS_FILE, t.promotion);
+  } catch (err) {
+    log.warn('abandonLinkedPromotion failed', { promotionId, error: (err as Error).message });
+  }
 }
 
 /** Result of attempting to approve an active planning session. The
