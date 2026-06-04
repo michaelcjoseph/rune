@@ -35,8 +35,15 @@ export interface SandboxSpec {
   /** The commit the run's branch was cut from — the stable diff base
    *  (`baseSha..branch`) for work-product computation. Set by `createWorktree`
    *  when a branch is created (captured atomically with the branch point so a
-   *  moving `HEAD` can't change it); absent for base-branch-tracking worktrees. */
+   *  moving `HEAD` can't change it); absent for base-branch-tracking worktrees.
+   *  On a resume (the requested branch already existed), this is the branch's
+   *  pre-run tip, so the work product is only the commits THIS run adds. */
   baseSha?: string;
+  /** True when `createWorktree` checked out an existing branch (a resumed,
+   *  in-progress project) rather than cutting a fresh one. The runner uses this
+   *  to tell the agent prior commits are already present so it continues from
+   *  the first incomplete task instead of restarting from Phase 1. */
+  resumed?: boolean;
 }
 
 /**

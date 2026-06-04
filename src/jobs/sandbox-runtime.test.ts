@@ -389,9 +389,73 @@ describe('createWorktree', () => {
 
     // Caller supplied the base — no rev-parse needed.
     expect(runGit.mock.calls.some(c => c[0].includes('rev-parse'))).toBe(false);
+    // An explicit startPoint forces a fresh branch — the resume probe is skipped.
+    expect(runGit.mock.calls.some(c => c[0][0] === 'show-ref')).toBe(false);
     const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).toContain('-b');
     expect(addCall[0]).toContain('abc1234base');
     expect(spec.baseSha).toBe('abc1234base');
+    expect(spec.resumed).toBe(false);
+  });
+
+  it('RESUMES an existing branch: checks it out (no -b), tip becomes baseSha, resumed=true', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const tip = 'resumetip0987654321fedcba0987654321fedcba';
+    const branch = 'jarvis-work/01-growth';
+    // show-ref reports the branch exists, printing "<sha> <ref>". rev-parse is
+    // never consulted on the resume path — the branch tip IS the base.
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // No HEAD resolve on a resume — the existing tip is the diff base.
+    expect(runGit.mock.calls.some(c => c[0][0] === 'rev-parse')).toBe(false);
+    // worktree-add checks out the EXISTING branch, with NO -b flag, so the
+    // project's prior commits are present in the worktree.
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).not.toContain('-b');
+    expect(addCall[0]).toContain(expectedPath);
+    // The branch (a commit-ish) is the last arg — not a fresh sha.
+    expect(addCall[0][addCall[0].length - 1]).toBe(branch);
+    expect(spec.baseSha).toBe(tip);
+    expect(spec.resumed).toBe(true);
+  });
+
+  it('cuts a FRESH branch (resumed=false) when the requested branch does not exist', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const headSha = 'freshhead1234567890abcdef';
+    // show-ref rejects (branch absent) → fresh path resolves HEAD and uses -b.
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') throw Object.assign(new Error('not found'), { stderr: '' });
+      if (args.includes('rev-parse')) return { stdout: `${headSha}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch: 'jarvis-work/01-growth',
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
+    expect(addCall[0]).toContain('-b');
+    expect(addCall[0][addCall[0].length - 1]).toBe(headSha);
+    expect(spec.baseSha).toBe(headSha);
+    expect(spec.resumed).toBe(false);
   });
 
   it('throws a clear error when the product is unknown', async () => {

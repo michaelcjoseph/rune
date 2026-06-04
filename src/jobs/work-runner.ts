@@ -20,6 +20,22 @@ const log = createLogger('work-runner');
 
 const PROJECTS_SUBDIR = join('docs', 'projects');
 
+/**
+ * Stable per-PROJECT work-run branch name (not per-run-id).
+ *
+ * A per-run-id branch (`jarvis-work/<short-id>`) gave every run a fresh target,
+ * so `createWorktree` always forked off `main` and the agent restarted the
+ * project from Phase 1, stranding the prior run's commits (docs/projects/bugs.md).
+ * A per-project name is the deterministic resume target: `createWorktree` checks
+ * the branch out when it already exists, carrying committed progress forward.
+ * Safe to embed `projectSlug` directly — it is git-ref-safe (validated by
+ * `worktreePathFor`/`VALID_SLUG`), and branches are per-repo so two products
+ * sharing a slug never collide.
+ */
+export function workBranchName(projectSlug: string): string {
+  return `jarvis-work/${projectSlug}`;
+}
+
 // ---------------------------------------------------------------------------
 // Classification + persist runtime seam
 // ---------------------------------------------------------------------------
@@ -189,10 +205,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // re-reading the module-level `runtimeDeps`, which a concurrent test reset
     // could swap mid-run).
     const deps = runtimeDeps;
-    // Deterministic per-mutation branch name, mirroring gen-eval-loop's
-    // `jarvis-gen-eval/<short-id>` so the two run kinds are visually
-    // distinguishable in `git branch` output.
-    const branch = `jarvis-work/${descriptor.id.slice(0, 8)}`;
+    // Stable per-project branch so a later run for the same project RESUMES it
+    // instead of re-forking off `main` and restarting from Phase 1 — the
+    // re-fork bug in docs/projects/bugs.md. The per-project run cap of 1 keeps
+    // a single run on the branch at a time.
+    const branch = workBranchName(projectSlug);
 
     let sandbox: SandboxSpec | null = null;
     // Per-run durable transcript sink — created once the worktree exists, teed
@@ -251,7 +268,20 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // tasks.md is optional
       }
 
-      const prompt = `${specContent}${tasksContent ? `\n\n${tasksContent}` : ''}\n\n/work --auto`;
+      // On a resume the worktree already holds the project's prior commits, so
+      // tell the agent not to restart — the core symptom of the re-fork bug was
+      // an agent reading an all-unchecked tasks.md and re-doing shipped phases
+      // (docs/projects/bugs.md).
+      if (sandbox.resumed) {
+        log.info('work-runner: resuming existing work branch', { id: descriptor.id, projectSlug, branch });
+      }
+      const resumeNote = sandbox.resumed
+        ? '\n\nNOTE: This is a RESUMED run — the project\'s prior commits are already ' +
+          'present in this worktree. Do NOT restart from Phase 1. Continue from the first ' +
+          'genuinely incomplete task, treating the committed files and tasks.md checkboxes ' +
+          'as the source of truth for what is already done.'
+        : '';
+      const prompt = `${specContent}${tasksContent ? `\n\n${tasksContent}` : ''}${resumeNote}\n\n/work --auto`;
       const t0 = Date.now();
 
       // Open the durable transcript sink before spawning so every stream-json

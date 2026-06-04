@@ -190,9 +190,15 @@ export interface CreateWorktreeOpts {
  * path produced by `worktreePathFor`. Returns a `SandboxSpec` ready for the
  * policy module's checks.
  *
- * - When `branch` is given, a new branch is created and the worktree checks
- *   it out via `git worktree add -b <branch> <path>` (no implicit base —
- *   git uses HEAD of the repo).
+ * - When `branch` is given and does NOT yet exist, a new branch is created and
+ *   checked out via `git worktree add -b <branch> <path> <baseSha>`, cut from
+ *   `startPoint` (or the repo's HEAD when omitted).
+ * - When `branch` is given and ALREADY exists (and no `startPoint` forces a
+ *   fresh base), the worktree resumes it via `git worktree add <path> <branch>`
+ *   — the project's prior commits are present, `SandboxSpec.resumed` is true,
+ *   and `baseSha` is the branch's pre-run tip (so the work product is only the
+ *   commits this run adds). This is what lets `/work --auto` continue an
+ *   interrupted project instead of re-forking off `main` (docs/projects/bugs.md).
  * - When `branch` is omitted, the worktree tracks the product's `baseBranch`
  *   via `git worktree add <path> <baseBranch>`.
  *
@@ -243,42 +249,65 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     );
   }
 
-  // When branching, capture the base sha BEFORE the add so the branch point
-  // and the diff base are one stable value — a `HEAD` that moves after this
-  // can't change `baseSha..branch`. An explicit `startPoint` skips the resolve.
+  // Resolve the branch point + the `git worktree add` args. Three cases:
+  //  - branch requested AND already exists (no explicit startPoint) → RESUME:
+  //    check the branch out in the new worktree (no -b) so the project's prior
+  //    commits are present. Without this every run re-forked off `main` and
+  //    restarted the project from scratch, stranding committed work
+  //    (docs/projects/bugs.md). The pre-run tip becomes the diff base, so the
+  //    work product is only the commits THIS run adds.
+  //  - branch requested, does not exist → FRESH: cut it from `startPoint` or the
+  //    repo's HEAD, captured BEFORE the add so a moving HEAD can't shift the
+  //    diff base.
+  //  - no branch → track the product's baseBranch.
   let baseSha: string | undefined;
+  let resumed = false;
+  let args: string[];
   if (opts.branch) {
-    baseSha = opts.startPoint?.trim() || undefined;
-    if (!baseSha) {
-      try {
-        const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd: product.repoPath });
-        baseSha = stdout.trim() || undefined;
-      } catch (err) {
-        const stderr = (err as { stderr?: string })?.stderr ?? '';
-        throw new Error(
-          `createWorktree: git rev-parse HEAD failed for ${product.repoPath}: ` +
-            `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
-        );
-      }
-      // A repo that can host a run always has a HEAD commit — empty stdout means
-      // a misconfigured/empty repo. Fail loudly rather than silently branching
-      // with no base (which would leave the diff base undefined downstream).
+    // An explicit `startPoint` means the caller wants a fresh branch from a
+    // specific commit — honor it and skip the resume probe.
+    const existingTip = opts.startPoint
+      ? null
+      : await resolveBranchTip(runGit, product.repoPath, opts.branch);
+    if (existingTip) {
+      resumed = true;
+      baseSha = existingTip;
+      // No -b: check out the existing branch. The per-project run cap is 1 and
+      // the worktree path is per-project, so the branch is never already
+      // checked out in another live worktree at this point.
+      args = ['worktree', 'add', worktree, opts.branch];
+    } else {
+      baseSha = opts.startPoint?.trim() || undefined;
       if (!baseSha) {
-        throw new Error(
-          `createWorktree: git rev-parse HEAD returned empty for ${product.repoPath} ` +
-            `(repo has no commits?) — cannot capture a stable base sha`,
-        );
+        try {
+          const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd: product.repoPath });
+          baseSha = stdout.trim() || undefined;
+        } catch (err) {
+          const stderr = (err as { stderr?: string })?.stderr ?? '';
+          throw new Error(
+            `createWorktree: git rev-parse HEAD failed for ${product.repoPath}: ` +
+              `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+          );
+        }
+        // A repo that can host a run always has a HEAD commit — empty stdout
+        // means a misconfigured/empty repo. Fail loudly rather than silently
+        // branching with no base (which leaves the diff base undefined
+        // downstream).
+        if (!baseSha) {
+          throw new Error(
+            `createWorktree: git rev-parse HEAD returned empty for ${product.repoPath} ` +
+              `(repo has no commits?) — cannot capture a stable base sha`,
+          );
+        }
       }
+      // `git worktree add -b <new-branch> <path> <commit-ish>` — flag before
+      // path is the canonical form older git versions require; the start-point
+      // goes last. baseSha is guaranteed non-empty here (else we threw).
+      args = ['worktree', 'add', '-b', opts.branch, worktree, baseSha];
     }
+  } else {
+    args = ['worktree', 'add', worktree, product.baseBranch];
   }
-
-  // `git worktree add [-b <new-branch>] <path> [<commit-ish>]` — flag before
-  // path is the canonical form and what older git versions require. The
-  // start-point (baseSha) goes last when branching from a captured commit.
-  // When branching, baseSha is guaranteed non-empty above (else we threw).
-  const args: string[] = opts.branch
-    ? ['worktree', 'add', '-b', opts.branch, worktree, baseSha!]
-    : ['worktree', 'add', worktree, product.baseBranch];
 
   try {
     await runGit(args, { cwd: product.repoPath });
@@ -301,7 +330,35 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     worktree,
     egressAllowlist: product.egressAllowlist,
     baseSha,
+    resumed,
   };
+}
+
+/**
+ * Resolve a local branch's tip sha, or `null` when the branch doesn't exist.
+ *
+ * `git show-ref --verify refs/heads/<branch>` prints "<sha> <ref>" and exits 0
+ * when the branch exists, or exits non-zero (→ `runGit` rejects) when it
+ * doesn't. Any rejection is treated as "absent" so the caller takes the
+ * fresh-branch path. Uses `show-ref` rather than `rev-parse` so a resume probe
+ * is never conflated with the HEAD capture in callers/tests that key on the
+ * `rev-parse` subcommand.
+ */
+async function resolveBranchTip(
+  runGit: GitRunner,
+  repoPath: string,
+  branch: string,
+): Promise<string | null> {
+  try {
+    const { stdout } = await runGit(
+      ['show-ref', '--verify', `refs/heads/${branch}`],
+      { cwd: repoPath },
+    );
+    const sha = stdout.trim().split(/\s+/)[0] ?? '';
+    return sha || null;
+  } catch {
+    return null;
+  }
 }
 
 export interface DestroyWorktreeOpts {

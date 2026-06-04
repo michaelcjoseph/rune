@@ -187,6 +187,65 @@ describe('gcWorkRuns', () => {
     expect(branchPrune!.some(a => a.includes('jarvis-work/run-0'))).toBe(true);
   });
 
+  /** Seed a run that lives on a SPECIFIC (shared) branch — the stable
+   *  per-project resume branch every run of a project records. */
+  function seedRunOnBranch(id: string, i: number, branch: string, bytes = 100) {
+    const dir = join(workRunsDir, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'transcript.jsonl'), 'x'.repeat(bytes));
+    writeFileSync(
+      join(dir, 'summary.json'),
+      JSON.stringify({ id, outcome: 'noop', branch, endedAt: `2026-05-30T1${i}:00:00.000Z` }),
+    );
+  }
+
+  it('NEVER prunes a shared resume branch while a retained run still references it', async () => {
+    // Three runs of the same project all live on the stable resume branch. The
+    // cap forces the 2 oldest dirs out, but the branch must survive because the
+    // newest retained run still lives on it — else GC re-creates the data-loss
+    // the resume fix exists to prevent (docs/projects/bugs.md).
+    const SHARED = 'jarvis-work/09-expand-cockpit';
+    for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
+    const { stub, calls } = makeGitStub();
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      repoPath: '/fake/repo',
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 1,
+      maxBytes: 100_000,
+    });
+
+    // Oldest two dirs pruned to honor the cap…
+    expect(result.deletedIds).toEqual(['run-0', 'run-1']);
+    // …but the shared branch is NEVER force-deleted (run-2 retains it).
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D'));
+    expect(branchPrune).toBeUndefined();
+  });
+
+  it('force-deletes the shared branch only once its LAST run ages out', async () => {
+    const SHARED = 'jarvis-work/09-expand-cockpit';
+    for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
+    const { stub, calls } = makeGitStub();
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      repoPath: '/fake/repo',
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0, // prune every run → no run retains the branch
+      maxBytes: 100_000,
+    });
+
+    expect(result.deletedIds).toEqual(['run-0', 'run-1', 'run-2']);
+    // No run references the branch anymore → it is finally pruned.
+    const branchPrune = calls.find(c => c.includes('branch') && c.includes('-D') && c.includes(SHARED));
+    expect(branchPrune).toBeDefined();
+  });
+
   it('is idempotent — after pruning over-cap runs, a second pass deletes nothing', async () => {
     for (let i = 0; i < 4; i++) seedRun(`run-${i}`, i);
     const { stub } = makeGitStub();

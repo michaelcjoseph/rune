@@ -194,6 +194,19 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
     }
   }
 
+  // The stable per-project resume branch (`jarvis-work/<slug>`) is shared by
+  // EVERY run for that project, so the same branch name appears in many runs'
+  // summaries. Pruning an aged-out run must never delete a branch a RETAINED
+  // (newer) run still lives on — that would throw away the project's resume
+  // point and re-introduce the re-fork bug in a new form (docs/projects/bugs.md).
+  // Collect the branches still referenced by retained runs; the shared branch is
+  // only deleted once the LAST run referencing it ages out.
+  const deleteIdSet = new Set(deleteIds);
+  const retainedBranches = new Set<string>();
+  for (const e of entries) {
+    if (!deleteIdSet.has(e.id) && e.branch) retainedBranches.add(e.branch);
+  }
+
   // --- Phase C: prune the deleted runs' branch refs (after the dirs are gone).
   //     `-D` (force) because a run branch is intentionally never merged into the
   //     checkout; a checked-out branch is already excluded via protectedIds, and
@@ -201,6 +214,9 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
   for (const id of deleteIds) {
     const branch = byId.get(id)?.branch;
     if (!branch) continue;
+    // A retained run still lives on this branch (shared per-project resume
+    // branch) — keep it, even though this run's dir was pruned.
+    if (retainedBranches.has(branch)) continue;
     // Only ever force-delete a work-run branch. The branch value comes from the
     // run's summary.json on disk; a tampered value (e.g. `main`) is already
     // blocked by the checked-out-branch protection + git's own refusal to delete

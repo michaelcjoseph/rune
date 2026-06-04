@@ -628,7 +628,7 @@ describe('workRunApplier', () => {
       }
     });
 
-    it('calls createWorktree with product=jarvis, project=slug, branch=jarvis-work/<short-id>', async () => {
+    it('calls createWorktree with product=jarvis, project=slug, branch=jarvis-work/<slug>', async () => {
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });
       mockSpawn.mockReturnValue(fakeChild);
@@ -649,9 +649,51 @@ describe('workRunApplier', () => {
       const callArgs = mockCreateWorktree.mock.calls[0]![0] as Record<string, unknown>;
       expect(callArgs.product).toBe('jarvis');
       expect(callArgs.project).toBe('06-webview');
-      // Deterministic per-mutation branch — `jarvis-work/<first 8 of id>`.
-      // Parallels gen-eval-loop's `jarvis-gen-eval/<short-id>` convention.
-      expect(callArgs.branch).toBe('jarvis-work/abcdef12');
+      // Stable per-PROJECT branch (NOT per-run-id), so the next run resumes this
+      // branch instead of re-forking off main and restarting from Phase 1
+      // (docs/projects/bugs.md). Independent of the run id.
+      expect(callArgs.branch).toBe('jarvis-work/06-webview');
+    });
+
+    it('adds a RESUME note to the agent prompt when createWorktree resumed an existing branch', async () => {
+      setupValidProject('06-webview');
+      // createWorktree reports it checked out an existing (in-progress) branch.
+      mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec({ resumed: true }));
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-resume', kind: 'work-run', payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      for await (const _ of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
+      const [, args] = mockSpawn.mock.calls[0]!;
+      const prompt = String((args as string[])[(args as string[]).indexOf('-p') + 1]);
+      // The note tells the agent prior commits are present so it doesn't restart —
+      // the core symptom of the re-fork bug (docs/projects/bugs.md).
+      expect(prompt).toContain('RESUMED');
+      expect(prompt).toMatch(/do NOT restart from Phase 1/i);
+    });
+
+    it('does NOT add the resume note on a fresh (non-resumed) run', async () => {
+      setupValidProject('06-webview');
+      // Default createWorktree mock returns a spec with no `resumed` flag.
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-fresh', kind: 'work-run', payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      for await (const _ of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      const [, args] = mockSpawn.mock.calls[0]!;
+      const prompt = String((args as string[])[(args as string[]).indexOf('-p') + 1]);
+      expect(prompt).not.toContain('RESUMED');
     });
 
     it('honors payload.product when present (not hardcoded to jarvis)', async () => {
@@ -1155,7 +1197,7 @@ describe('workRunApplier', () => {
       expect(forensicsCalledAtTerminal).toBe(true);
       const opts = runForensicsSpy.mock.calls[0]![0] as any;
       expect(opts.worktree).toBe(FAKE_WORKTREE);
-      expect(opts.branch).toBe('jarvis-work/mut-fore'); // first 8 of 'mut-forensics'
+      expect(opts.branch).toBe('jarvis-work/06-webview'); // stable per-project branch
       expect(opts.outDir).toBe('/tmp/test-work-runs/mut-forensics');
       // The default git stub reports a clean tree → noop → nonClean false.
       expect(opts.nonClean).toBe(false);
