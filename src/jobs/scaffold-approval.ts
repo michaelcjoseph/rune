@@ -41,6 +41,7 @@ import { markBacklogItemDone } from '../intent/backlog-mark-done.js';
 import type { BacklogKind } from '../intent/backlog-id.js';
 import {
   appendPromotion,
+  canRetryMarkSource,
   loadPromotions,
   transitionPromotion,
   type Promotion,
@@ -183,12 +184,11 @@ function inferKind(snapshotRaw: string): BacklogKind {
   return /^- \[[ xX]\] /.test(snapshotRaw) ? 'bugs' : 'ideas';
 }
 
-/** Resolve and security-check the target repo for the session's product. */
+/** Resolve and security-check the target repo for a product. */
 function resolveTargetRepo(
-  session: StoredPlanningSession,
+  product: string,
   deps: ScaffoldApprovalDeps,
 ): { ok: true; repoPath: string } | { ok: false; message: string } {
-  const product = session.planning.product;
   let registry: Registry;
   try {
     registry = deps.readRegistry();
@@ -234,7 +234,7 @@ export async function runScaffoldApproval(
   session: StoredPlanningSession,
   deps: ScaffoldApprovalDeps = defaultScaffoldApprovalDeps(),
 ): Promise<ScaffoldApprovalOutcome> {
-  const target = resolveTargetRepo(session, deps);
+  const target = resolveTargetRepo(session.planning.product, deps);
   if (!target.ok) {
     failPromotion(session, deps, target.message);
     return { ok: false, reason: 'target', message: target.message };
@@ -280,6 +280,41 @@ export async function runScaffoldApproval(
 
   const promotionResult = await drivePromotion(session.promotionId, repoPath, slug, deps);
   return { ok: true, slug, agentText: agent.text, promotion: promotionResult };
+}
+
+/** Result of an explicit mark-source retry (POST /api/promotions/:id/retry). On success the final
+ *  promotion fields are carried so the caller needn't re-read the log. (`drivePromotion`'s `'none'`
+ *  can't occur here — the promotion is fetched and guarded before the drive.) */
+export type RetryOutcome =
+  | { ok: true; state: 'marked-source' | 'mark-source-error'; slug?: string; errors: string[] }
+  | { ok: false; error: 'unknown-promotion' | 'not-retryable' | 'target'; message?: string };
+
+/**
+ * Re-attempt the source-bullet marking for a `mark-source-error` promotion (the explicit retry
+ * endpoint / cockpit button). Idempotent: `markBacklogItemDone` is a byte-equal no-op against
+ * already-promoted content. Refuses anything that isn't a retryable `mark-source-error` under the
+ * attempt cap. Does NOT re-scaffold — the project files already exist; only the source mark is retried.
+ */
+export async function retryPromotionMarkSource(
+  promotionId: string,
+  deps: ScaffoldApprovalDeps = defaultScaffoldApprovalDeps(),
+): Promise<RetryOutcome> {
+  const promotion = deps.loadPromotions(deps.promotionsFile).get(promotionId);
+  if (!promotion) return { ok: false, error: 'unknown-promotion' };
+  if (!canRetryMarkSource(promotion) || !promotion.slug) {
+    return { ok: false, error: 'not-retryable' };
+  }
+  const target = resolveTargetRepo(promotion.product, deps);
+  if (!target.ok) return { ok: false, error: 'target', message: target.message };
+  const state = await drivePromotion(promotionId, target.repoPath, promotion.slug, deps);
+  // `state` is the drive result; re-read once for the final slug/errors the caller surfaces.
+  const after = deps.loadPromotions(deps.promotionsFile).get(promotionId);
+  return {
+    ok: true,
+    state: state === 'none' ? 'mark-source-error' : state,
+    slug: after?.slug ?? promotion.slug,
+    errors: after?.errors ?? promotion.errors,
+  };
 }
 
 /** Capture the target repo's branch + dirty flag for the audit log (best-effort — failure yields a

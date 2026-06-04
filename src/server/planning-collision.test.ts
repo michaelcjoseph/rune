@@ -47,6 +47,13 @@ vi.mock('../reviews/planning.js', () => ({
   approveActivePlanningSession: vi.fn(),
   abandonActivePlanningSession: vi.fn(),
 }));
+// The Plan route creates + persists a promotion on the non-collision (200) path; mock the
+// promotions module so the success cases don't hit the real append-only log fs write.
+vi.mock('../intent/promotions.js', () => ({
+  createPromotion: vi.fn((input: any) => ({ ...input, id: 'promo-new', state: 'planning-started', attempts: 0, errors: [] })),
+  appendPromotion: vi.fn(),
+  loadPromotions: vi.fn(() => new Map()),
+}));
 vi.mock('../reviews/planning-handler.js', () => ({ handlePlanningTurn: vi.fn(), defaultScopingTurn: vi.fn() }));
 vi.mock('../vault/sessions.js', () => ({ getSession: vi.fn(() => null) }));
 vi.mock('./state-snapshot.js', () => ({ getStateSnapshot: vi.fn(() => ({ version: 1, ready: true })) }));

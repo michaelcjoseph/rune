@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { join, extname, resolve as resolvePath, dirname } from 'node:path';
@@ -46,7 +47,8 @@ import {
   abandonActivePlanningSession,
 } from '../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
-import { runScaffoldApproval } from '../jobs/scaffold-approval.js';
+import { runScaffoldApproval, retryPromotionMarkSource } from '../jobs/scaffold-approval.js';
+import { createPromotion, appendPromotion, loadPromotions, transitionPromotion } from '../intent/promotions.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { readIntentProposalQueue } from '../intent/intent-proposal-queue.js';
 import { readProposalQueue } from '../jobs/proposal-queue.js';
@@ -307,9 +309,11 @@ function sendErrorEnvelope(
   code: string,
   message: string,
   retryable = false,
+  /** Extra fields merged into the error object (e.g. `activeSessionId` on a collision 409). */
+  extras?: Record<string, unknown>,
 ): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: { code, message, retryable } }));
+  res.end(JSON.stringify({ error: { code, message, retryable, ...extras } }));
 }
 
 /**
@@ -376,16 +380,23 @@ function handleApiBacklog(res: ServerResponse, product: string): void {
   );
 }
 
-/** True when an IN-PROGRESS planning session exists for the product (the product is scoped, but
- *  sessions are chatId-keyed, so scan all). Mirrors `getActivePlanningSession`'s "active"
- *  definition — terminal `approved` (awaiting/retrying scaffold) and `abandoned` don't gate. */
-function isPlanningActiveForProduct(product: string): boolean {
-  return getAllPlanningSessions().some(
+/** The IN-PROGRESS planning session for a product (the product is scoped, but sessions are
+ *  chatId-keyed, so scan all), or undefined. "In progress" mirrors `getActivePlanningSession`'s
+ *  definition — terminal `approved` (awaiting/retrying scaffold) and `abandoned` don't count. The
+ *  single predicate both the drawer's action-disable (`isPlanningActiveForProduct`) and the Plan
+ *  collision check use, so they can't drift. */
+function findActivePlanningSessionForProduct(product: string) {
+  return getAllPlanningSessions().find(
     ([, s]) =>
       s.planning?.product === product &&
       s.planning.status !== 'approved' &&
       s.planning.status !== 'abandoned',
   );
+}
+
+/** True when an in-progress planning session exists for the product. */
+function isPlanningActiveForProduct(product: string): boolean {
+  return findActivePlanningSessionForProduct(product) !== undefined;
 }
 
 /** Relative path of each backlog file under a product repo. */
@@ -552,6 +563,184 @@ async function handleApiBacklogAppend(
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ item }));
+}
+
+// ---------------------------------------------------------------------------
+// Plan-button + promotion routes (09-expand-cockpit, Phase 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/backlog/:product/items/:id/plan — open a planning session seeded from an eligible
+ * backlog item and create a linked durable Promotion. Returns `{ planningSessionId, promotionId }`.
+ * Errors (typed envelope): 409 `stale-item` (id no longer matches an item in that product — the
+ * cockpit re-fetches), 422 `item-not-eligible` (loop-filed / done / already-promoted / parse-warning
+ * — the plan action is disabled), 409 `active-planning-session` (a session is already in progress
+ * for the product; carries `activeSessionId` for the resume/abandon dialog). Ids are product-local,
+ * so the `:product` segment disambiguates an id shared across repos.
+ */
+async function handleApiPlanItem(res: ServerResponse, product: string, id: string): Promise<void> {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+  // Backlog item ids are 12-char hex (a strict subset of VALID_SLUG); a non-conforming id is
+  // definitionally stale. Guard it like every other URL-segment id before it reaches a lookup/echo.
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid item id');
+    return;
+  }
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let backlogs;
+  try {
+    const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+    backlogs = readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+  } catch (err) {
+    log.warn('handleApiPlanItem: backlog read failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'backlog-read-failed', 'could not read the backlog', false);
+    return;
+  }
+
+  const pb = backlogs.find((b) => b.product === product);
+  // Product-LOCAL lookup: only items from the routed product, so an id shared across repos resolves
+  // within this product.
+  const item = [...(pb?.bugs ?? []), ...(pb?.ideas ?? [])].find((i) => i.id === id);
+  if (!item) {
+    // The id no longer matches an item — a stale cockpit URL. Retryable: re-fetch the drawer.
+    sendErrorEnvelope(res, 409, 'stale-item', `backlog item '${id}' not found in '${product}'`, true);
+    return;
+  }
+
+  // Eligibility is the item's plan action with planning-active EXCLUDED (collision is a separate,
+  // more specific 409 below) — so an otherwise-eligible item still surfaces its own disabled reason.
+  const planAction = withActions(item, false).actions.find((a) => a.kind === 'plan');
+  if (!planAction || !planAction.enabled) {
+    sendErrorEnvelope(
+      res,
+      422,
+      'item-not-eligible',
+      `item '${id}' is not eligible for Plan${planAction?.disabledReason ? ` (${planAction.disabledReason})` : ''}`,
+    );
+    return;
+  }
+
+  // Collision: an in-progress planning session for this product blocks a second one. Carry the
+  // active session id so the cockpit can offer resume/abandon.
+  const active = findActivePlanningSessionForProduct(product);
+  if (active) {
+    sendErrorEnvelope(
+      res,
+      409,
+      'active-planning-session',
+      `a planning session is already active for '${product}'`,
+      false,
+      { activeSessionId: active[1].id },
+    );
+    return;
+  }
+
+  // Create the durable Promotion (persisted at creation so a restart never loses it) and a linked
+  // planning session whose id we generate up front so we can return + link it without a read-back.
+  const planningSessionId = randomUUID();
+  const seedIdea = [item.text, ...(item.body ?? [])].join('\n');
+  const promotion = createPromotion({
+    id: randomUUID(),
+    product,
+    backlogItemId: item.id,
+    snapshotRaw: item.source.raw,
+    planningSessionId,
+    now: new Date().toISOString(),
+  });
+  appendPromotion(config.PROMOTIONS_FILE, promotion);
+  try {
+    createPlanningSession(config.TELEGRAM_USER_ID, seedIdea, 'cockpit', product, {
+      id: planningSessionId,
+      promotionId: promotion.id,
+    });
+  } catch (err) {
+    // The promotion is already persisted but the session didn't open — reclaim the orphan by
+    // abandoning the (still planning-started) promotion so restart-replay never chases a session
+    // that will never exist.
+    log.warn('handleApiPlanItem: createPlanningSession failed; abandoning orphan promotion', {
+      product,
+      promotionId: promotion.id,
+      error: (err as Error).message,
+    });
+    const t = transitionPromotion(promotion, 'planning-abandoned', { now: new Date().toISOString() });
+    if (t.ok) {
+      try { appendPromotion(config.PROMOTIONS_FILE, t.promotion); } catch { /* best-effort cleanup */ }
+    }
+    sendErrorEnvelope(res, 500, 'plan-failed', 'could not open the planning session', true);
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ planningSessionId, promotionId: promotion.id }));
+}
+
+/** GET /api/promotions/:id — the promotion's current state for the cockpit. 404 `unknown-promotion`. */
+function handleApiPromotionGet(res: ServerResponse, id: string): void {
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid promotion id');
+    return;
+  }
+  const promotion = loadPromotions(config.PROMOTIONS_FILE).get(id);
+  if (!promotion) {
+    sendErrorEnvelope(res, 404, 'unknown-promotion', `unknown promotion '${id}'`);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  // Scrub absolute host paths from persisted error strings before they cross the HTTP boundary.
+  res.end(JSON.stringify({
+    state: promotion.state,
+    slug: promotion.slug,
+    errors: promotion.errors.map(scrubAbsolutePaths),
+  }));
+}
+
+/**
+ * POST /api/promotions/:id/retry — re-attempt the source-bullet marking for a `mark-source-error`
+ * promotion (idempotent; does not re-scaffold). 404 `unknown-promotion`, 409 `not-retryable`.
+ */
+async function handleApiPromotionRetry(res: ServerResponse, id: string): Promise<void> {
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid promotion id');
+    return;
+  }
+  const outcome = await retryPromotionMarkSource(id);
+  if (!outcome.ok) {
+    if (outcome.error === 'unknown-promotion') {
+      sendErrorEnvelope(res, 404, 'unknown-promotion', `unknown promotion '${id}'`);
+      return;
+    }
+    if (outcome.error === 'not-retryable') {
+      sendErrorEnvelope(res, 409, 'not-retryable', `promotion '${id}' is not in a retryable state`);
+      return;
+    }
+    sendErrorEnvelope(res, 500, 'retry-failed', scrubAbsolutePaths(outcome.message ?? 'retry failed'), false);
+    return;
+  }
+  // The outcome carries the final state/slug/errors — no second log read needed.
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    state: outcome.state,
+    slug: outcome.slug,
+    errors: outcome.errors.map(scrubAbsolutePaths),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1207,6 +1396,17 @@ export function mountWebviewRoutes(
         handleApiBacklog(res, decodeURIComponent(backlogMatch[1]!));
         return true;
       }
+      // Plan button (09-expand-cockpit): more segments than the append route, so its `$`-anchored
+      // regex can't collide with the 2-segment append match — checked first for clarity.
+      const planItemMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/items\/([^/]+)\/plan$/);
+      if (req.method === 'POST' && planItemMatch) {
+        await handleApiPlanItem(
+          res,
+          decodeURIComponent(planItemMatch[1]!),
+          decodeURIComponent(planItemMatch[2]!),
+        );
+        return true;
+      }
       const backlogAppendMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/([^/]+)$/);
       if (req.method === 'POST' && backlogAppendMatch) {
         await handleApiBacklogAppend(
@@ -1215,6 +1415,18 @@ export function mountWebviewRoutes(
           decodeURIComponent(backlogAppendMatch[1]!),
           decodeURIComponent(backlogAppendMatch[2]!),
         );
+        return true;
+      }
+
+      // Promotion job routes (09-expand-cockpit): retry (more specific) before the record GET.
+      const promotionRetryMatch = pathname.match(/^\/api\/promotions\/([^/]+)\/retry$/);
+      if (req.method === 'POST' && promotionRetryMatch) {
+        await handleApiPromotionRetry(res, decodeURIComponent(promotionRetryMatch[1]!));
+        return true;
+      }
+      const promotionGetMatch = pathname.match(/^\/api\/promotions\/([^/]+)$/);
+      if (req.method === 'GET' && promotionGetMatch) {
+        handleApiPromotionGet(res, decodeURIComponent(promotionGetMatch[1]!));
         return true;
       }
 

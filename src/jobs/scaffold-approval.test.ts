@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   runScaffoldApproval,
+  retryPromotionMarkSource,
   type ScaffoldApprovalDeps,
 } from './scaffold-approval.js';
 import { createPromotion, type Promotion } from '../intent/promotions.js';
@@ -217,5 +218,40 @@ describe('runScaffoldApproval — failures', () => {
     const out = await runScaffoldApproval(makeSession(), h.deps);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe('target');
+  });
+});
+
+describe('retryPromotionMarkSource', () => {
+  it('returns unknown-promotion when the id is not in the log', async () => {
+    const h = makeHarness();
+    const out = await retryPromotionMarkSource('nope', h.deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error).toBe('unknown-promotion');
+  });
+
+  it('returns not-retryable for a non-error promotion', async () => {
+    const h = makeHarness();
+    h.promotions.set('p1', createPromotion({
+      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      snapshotRaw: '- idea', planningSessionId: 's1', now: 'T0',
+    }));
+    const out = await retryPromotionMarkSource('p1', h.deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error).toBe('not-retryable');
+  });
+
+  it('re-marks a mark-source-error promotion and reaches marked-source (does not re-scaffold)', async () => {
+    const h = makeHarness({}, '- Expand the cockpit\n');
+    const base = createPromotion({
+      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
+    });
+    h.promotions.set('p1', { ...base, state: 'mark-source-error', slug: SLUG, attempts: 1 });
+    const out = await retryPromotionMarkSource('p1', h.deps);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.state).toBe('marked-source');
+    expect(h.writes).toHaveLength(1);
+    // No agent spawn on retry — only the source mark is re-attempted.
+    expect(h.appended.map((p) => p.state)).toEqual(['marked-source']);
   });
 });

@@ -99,6 +99,10 @@ export function createPlanningSession(
   idea: string,
   surface: PlanningSurface,
   product: string,
+  /** Optional overrides for a session opened from a backlog Plan click (09-expand-cockpit): a
+   *  caller-supplied `id` (so the route can return + link the id without reading back the store)
+   *  and the linking `promotionId`. Both default to generated/absent for the plain `/plan` path. */
+  opts: { id?: string; promotionId?: string } = {},
 ): StoredPlanningSession {
   const existing = getActivePlanningSession(chatId);
   if (existing) {
@@ -111,12 +115,13 @@ export function createPlanningSession(
   }
   const now = new Date().toISOString();
   const session: StoredPlanningSession = {
-    id: randomUUID(),
+    id: opts.id ?? randomUUID(),
     chatId,
     claudeSessionId: randomUUID(),
     planning: startPlanning(idea, surface, product),
     createdAt: now,
     lastActivity: now,
+    ...(opts.promotionId ? { promotionId: opts.promotionId } : {}),
   };
   sessions.set(chatId, session);
   persistPlanningSessions();
