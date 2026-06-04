@@ -109,6 +109,20 @@ describe('backlog-append — appendIdea', () => {
     );
   });
 
+  it('inserts above a Loop-filed sentinel that is the very first line (never among filed bullets)', () => {
+    // Degenerate input — no User-authored section. The new idea must still land ABOVE the
+    // sentinel (an EOF append would wrongly drop it into the loop-filed section).
+    const input = `${LF}\n- **Filed** — friction\n`;
+    const out = ok(appendIdea(input, 'New idea'));
+    expect(out).toBe(`- New idea\n${LF}\n- **Filed** — friction\n`);
+  });
+
+  it('normalizes CRLF input to LF so no mixed line endings are produced', () => {
+    const out = ok(appendIdea(`## User-authored\r\n- Idea A\r\n\r\n${LF}\r\n`, 'New idea'));
+    expect(out).not.toContain('\r');
+    expect(out).toBe(`## User-authored\n- Idea A\n- New idea\n\n${LF}\n`);
+  });
+
   it('rejects empty / whitespace-only text with empty-text', () => {
     expect(appendIdea('- Idea A\n', '  ')).toEqual({ ok: false, error: 'empty-text' });
   });
