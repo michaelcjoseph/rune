@@ -30,7 +30,7 @@ Test commit lands before any implementation code per phase.
 
 **Build**
 
-- [ ] `GET /api/backlog/:product` in `src/server/webview.ts`.
+- [x] `GET /api/backlog/:product` in `src/server/webview.ts`. (`handleApiBacklog` + `sendErrorEnvelope`; new pure `src/server/backlog-actions.ts` computes the per-item `plan` action with disabledReason precedence; planning-active gate excludes terminal approved/abandoned sessions; `backlog-drawer.test.ts` green — 12 cases.)
 - [ ] New drawer HTML/JS/CSS in `index.html` / `app.js` / `app.css` (modeled on existing `mutation-drawer`).
 - [ ] Sidebar one-liner replaces the placeholder sub-section.
 

@@ -10,6 +10,9 @@ import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
 import { buildCockpitView, type WorkRunProjection } from '../intent/cockpit.js';
+import { readBacklogs } from '../intent/backlog-reader.js';
+import { readProductsConfig } from '../jobs/sandbox-runtime.js';
+import { withActions } from './backlog-actions.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -27,6 +30,7 @@ import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
   getActivePlanningSession,
+  getAllPlanningSessions,
   deletePlanningSession,
   approveActivePlanningSession,
   abandonActivePlanningSession,
@@ -262,6 +266,95 @@ function handleApiCockpit(res: ServerResponse): void {
   const view = buildCockpitView(registry, runStatus, undefined, workRuns);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
+}
+
+// ---------------------------------------------------------------------------
+// Backlog drawer route (09-expand-cockpit, Phase 2)
+// ---------------------------------------------------------------------------
+
+/** Typed error envelope `{ error: { code, message, retryable } }` per spec "API surface". */
+function sendErrorEnvelope(
+  res: ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+  retryable = false,
+): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: { code, message, retryable } }));
+}
+
+/**
+ * GET /api/backlog/:product — the drawer's full-list fetch. Returns the product's parsed bugs
+ * and ideas (each augmented with a server-computed `plan` action) plus file-level warnings.
+ * 404 `unknown-product` when the slug isn't in the registry; 409 `not-repo-backed` when the
+ * product has no repo. `planning-active` disables every item's action while a planning session
+ * is open for the product — the endpoint is product-scoped, so it scans all sessions (which are
+ * chatId-keyed) for one whose `planning.product` matches.
+ */
+function handleApiBacklog(res: ServerResponse, product: string): void {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let backlogs;
+  try {
+    const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+    // Synchronous read on the request fiber: sound while product repos live on local SSD. If
+    // WORKSPACE_DIR is ever pointed at an iCloud-synced path, this should be deferred off the
+    // event loop (a `.icloud` placeholder read would block the process) — see ReadBacklogsOpts.
+    backlogs = readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+  } catch (err) {
+    log.warn('handleApiBacklog: read failed', { product, error: (err as Error).message });
+    // Not retryable: a missing/malformed products.json or an unreadable backlog file does not
+    // resolve on an immediate retry — it needs operator action.
+    sendErrorEnvelope(res, 500, 'backlog-read-failed', 'could not read the backlog', false);
+    return;
+  }
+
+  const pb = backlogs.find((b) => b.product === product);
+  // A repo-backed registry product the reader didn't return is an internal inconsistency;
+  // degrade to an empty backlog rather than 500 so the drawer still renders.
+  const bugs = pb?.bugs ?? [];
+  const ideas = pb?.ideas ?? [];
+  const fileWarnings = pb?.fileWarnings ?? [];
+
+  // planning-active: an IN-PROGRESS session for this product disables new planning. Mirror
+  // `getActivePlanningSession`'s definition of active — `approved` (awaiting/retrying scaffold)
+  // and `abandoned` are terminal and must NOT gate the drawer (an approved session would
+  // otherwise freeze every action during scaffolding).
+  const planningActive = getAllPlanningSessions().some(
+    ([, s]) =>
+      s.planning?.product === product &&
+      s.planning.status !== 'approved' &&
+      s.planning.status !== 'abandoned',
+  );
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      bugs: bugs.map((i) => withActions(i, planningActive)),
+      ideas: ideas.map((i) => withActions(i, planningActive)),
+      fileWarnings,
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -904,6 +997,14 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/cockpit') {
         handleApiCockpit(res);
+        return true;
+      }
+
+      // Backlog drawer (09-expand-cockpit): GET /api/backlog/:product. The handler
+      // VALID_SLUG-guards the decoded product before any registry/fs access.
+      const backlogMatch = pathname.match(/^\/api\/backlog\/([^/]+)$/);
+      if (req.method === 'GET' && backlogMatch) {
+        handleApiBacklog(res, decodeURIComponent(backlogMatch[1]!));
         return true;
       }
 

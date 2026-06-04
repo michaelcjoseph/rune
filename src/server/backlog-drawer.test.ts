@@ -45,6 +45,14 @@ const mockConfig = {
   WORK_RUNS_INDEX_FILE: '/test/logs/work-runs/index.jsonl',
 };
 vi.mock('../config.js', () => ({ default: mockConfig, PROJECT_ROOT: '/test/project' }));
+// handleApiBacklog reads products.json via readProductsConfig — mock it so the endpoint has a
+// product config without staging a real file (readBacklogs itself is mocked, so the value's
+// content is irrelevant; only the call must not throw on a missing file).
+vi.mock('../jobs/sandbox-runtime.js', () => ({
+  readProductsConfig: vi.fn(() => ({
+    aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+  })),
+}));
 vi.mock('./restart.js', () => ({ restartServer: vi.fn(() => ({ ok: true as const })) }));
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn(async () => ({ text: 'ok', error: null })) }));
 
@@ -260,15 +268,24 @@ describe('GET /api/backlog/:product (09-expand-cockpit Phase 2)', () => {
       [42, { id: 's1', chatId: 42, planning: { product: 'aura', status: 'scoping', idea: 'x', surface: 'cockpit' } }],
     ]);
     const res = await makeRequest(port, '/api/backlog/aura', AUTH);
-    // planning-active disables ALL items regardless of kind/state — assert across both lists.
-    expect(planAction(findItem(res.body, 'b-open'))).toMatchObject({
-      enabled: false,
-      disabledReason: 'planning-active',
-    });
-    expect(planAction(findItem(res.body, 'i-open'))).toMatchObject({
-      enabled: false,
-      disabledReason: 'planning-active',
-    });
+    // planning-active disables ALL items regardless of kind/state, and OUTRANKS the item's own
+    // disabledReason — assert across both lists and over items that would otherwise be
+    // bug-done / already-promoted.
+    for (const id of ['b-open', 'i-open', 'b-done', 'b-promoted']) {
+      expect(planAction(findItem(res.body, id))).toMatchObject({
+        enabled: false,
+        disabledReason: 'planning-active',
+      });
+    }
+  });
+
+  it('does NOT gate the drawer for an approved session (terminal — scaffolding in progress)', async () => {
+    mockGetAllPlanningSessions.mockReturnValue([
+      [42, { id: 's1', chatId: 42, planning: { product: 'aura', status: 'approved', idea: 'x', surface: 'cockpit' } }],
+    ]);
+    const res = await makeRequest(port, '/api/backlog/aura', AUTH);
+    // An approved session is terminal — the open bug's plan action stays enabled.
+    expect(planAction(findItem(res.body, 'b-open'))).toMatchObject({ kind: 'plan', enabled: true });
   });
 
   it('returns 404 unknown-product (structured error envelope) for a product not in the registry', async () => {
