@@ -577,11 +577,12 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         }
       }
       // Prune retained work-run artifacts over the retention caps now that this
-      // run is terminal. Fire-and-forget + best-effort (runWorkRunGc swallows
-      // its own errors). This run's own dir is still protected here — its
-      // mutation id is in activeRuns until startApply's finally — so a freshly
-      // completed run is never GC'd by its own completion pass.
-      void runWorkRunGc(product);
+      // run is terminal. Sweeps ALL products (not just this run's) — the dir
+      // retention is global and branch pruning is per-repo. Fire-and-forget +
+      // best-effort (runWorkRunGc swallows its own errors). This run's own dir is
+      // still protected here — its mutation id is in activeRuns until startApply's
+      // finally — so a freshly completed run is never GC'd by its own pass.
+      void runWorkRunGc();
     }
   },
 };

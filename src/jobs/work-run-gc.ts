@@ -47,6 +47,10 @@ export interface GcRunEntry {
   /** The run branch ref, if known — pruned alongside the dir (never when the
    *  branch is checked out in a worktree). */
   branch?: string;
+  /** The product the run belongs to — selects which repo the branch ref lives
+   *  in for pruning. Absent on pre-multi-product summaries (all jarvis then),
+   *  so callers default to `'jarvis'`. */
+  product?: string;
 }
 
 export interface PlanGcOpts {
@@ -69,8 +73,12 @@ export interface GcWorkRunsOpts {
   workRunsDir: string;
   /** Injected git runner — for `worktree list --porcelain` + `branch -d`. */
   runGit: GitRunner;
-  /** Product repo path — cwd for the worktree-list + branch-prune git calls. */
-  repoPath: string;
+  /** Every registered product → its repo path. The dir retention is global over
+   *  `workRunsDir` (all products' run dirs live there), but worktree-checkout
+   *  protection and branch pruning are per-repo: each run's branch ref lives in
+   *  its OWN product's repo, so GC reads every repo's worktree list and prunes a
+   *  run's branch in the repo named by its `product`. */
+  productRepos: Record<string, string>;
   /** Run ids currently active (from `activeRuns`) — never pruned. */
   activeIds: Set<string>;
   /** Run ids with a non-terminal run-store status — never pruned. */
@@ -133,7 +141,7 @@ export function planGc(opts: PlanGcOpts): GcPlan {
  * logged warning.
  */
 export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
-  const { workRunsDir, runGit, repoPath, activeIds, nonTerminalIds, maxRuns, maxBytes } = opts;
+  const { workRunsDir, runGit, productRepos, activeIds, nonTerminalIds, maxRuns, maxBytes } = opts;
 
   // --- Phase A: gather all inputs (the only awaits live here) ---
   let dirNames: string[];
@@ -154,18 +162,23 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
     entries.push(discoverRun(name, dir));
   }
 
-  // Branches checked out in a worktree must never be deleted — read the live
-  // worktree list (best-effort; a failure leaves the worktree-protected set
-  // empty rather than aborting GC).
-  let porcelain = '';
-  try {
-    porcelain = (await runGit(['worktree', 'list', '--porcelain'], { cwd: repoPath })).stdout;
-  } catch (err) {
-    log.warn('gcWorkRuns: worktree list failed; proceeding without worktree protection', {
-      error: (err as Error).message,
-    });
+  // Branches checked out in ANY product's worktree must never be deleted — read
+  // each repo's live worktree list and union the results (best-effort per repo;
+  // one repo failing leaves only its contribution empty rather than aborting GC).
+  // Keying the protected set on branch NAME can over-protect if two products
+  // share a project slug, which is safe (it only ever keeps a live branch).
+  const checkedOutBranches = new Set<string>();
+  for (const [product, repoPath] of Object.entries(productRepos)) {
+    try {
+      const porcelain = (await runGit(['worktree', 'list', '--porcelain'], { cwd: repoPath })).stdout;
+      for (const b of parseCheckedOutBranches(porcelain)) checkedOutBranches.add(b);
+    } catch (err) {
+      log.warn('gcWorkRuns: worktree list failed; proceeding without that repo\'s protection', {
+        product,
+        error: (err as Error).message,
+      });
+    }
   }
-  const checkedOutBranches = parseCheckedOutBranches(porcelain);
 
   // --- Phase B: build protected set + plan + delete dirs, with NO await between
   //     reading the protected set and the rmSync deletes (same-tick discipline,
@@ -212,7 +225,8 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
   //     checkout; a checked-out branch is already excluded via protectedIds, and
   //     git refuses to delete a checked-out ref regardless. Best-effort. ---
   for (const id of deleteIds) {
-    const branch = byId.get(id)?.branch;
+    const e = byId.get(id);
+    const branch = e?.branch;
     if (!branch) continue;
     // A retained run still lives on this branch (shared per-project resume
     // branch) — keep it, even though this run's dir was pruned.
@@ -226,10 +240,18 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
       log.warn('gcWorkRuns: refusing to prune a non-work-run branch', { id, branch });
       continue;
     }
+    // The branch lives in the run's own product repo. Default to 'jarvis' for
+    // pre-multi-product summaries (every run was jarvis then).
+    const product = e?.product ?? 'jarvis';
+    const repoPath = productRepos[product];
+    if (!repoPath) {
+      log.warn('gcWorkRuns: no repo for run product; skipping branch prune', { id, product, branch });
+      continue;
+    }
     try {
       await runGit(['branch', '-D', branch], { cwd: repoPath });
     } catch (err) {
-      log.warn('gcWorkRuns: branch prune failed', { id, branch, error: (err as Error).message });
+      log.warn('gcWorkRuns: branch prune failed', { id, product, branch, error: (err as Error).message });
     }
   }
 
@@ -253,6 +275,7 @@ function discoverRun(id: string, dir: string): GcRunEntry {
       endedAt: typeof summary['endedAt'] === 'string' ? summary['endedAt'] : '',
       terminal: true,
       branch: typeof summary['branch'] === 'string' ? summary['branch'] : undefined,
+      product: typeof summary['product'] === 'string' ? summary['product'] : undefined,
     };
   } catch {
     return { id, dir, bytes, endedAt: '', terminal: false };

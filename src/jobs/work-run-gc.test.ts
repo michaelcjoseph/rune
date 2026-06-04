@@ -152,7 +152,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -173,7 +173,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -211,7 +211,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -233,7 +233,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 0, // prune every run → no run retains the branch
@@ -246,13 +246,62 @@ describe('gcWorkRuns', () => {
     expect(branchPrune).toBeDefined();
   });
 
+  it('prunes each run\'s branch in its OWN product repo, and checks every repo\'s worktrees', async () => {
+    // A jarvis run and an aura run both age out. Each branch ref lives in its own
+    // product repo, so GC must prune in the right repo — not a single hardcoded
+    // one (the cross-repo GC gap).
+    const seed = (id: string, i: number, product: string, branch: string) => {
+      const dir = join(workRunsDir, id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'transcript.jsonl'), 'x'.repeat(100));
+      writeFileSync(
+        join(dir, 'summary.json'),
+        JSON.stringify({ id, outcome: 'noop', product, branch, endedAt: `2026-05-30T1${i}:00:00.000Z` }),
+      );
+    };
+    seed('run-jarvis', 0, 'jarvis', 'jarvis-work/09-cockpit');
+    seed('run-aura', 1, 'aura', 'jarvis-work/03-mobile');
+
+    // A cwd-recording stub (makeGitStub records args only).
+    const calls: Array<{ args: string[]; cwd?: string }> = [];
+    const stub = vi.fn<GitRunner>(async (args, opts) => {
+      calls.push({ args: [...args], cwd: opts?.cwd });
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { jarvis: '/repos/jarvis', aura: '/repos/aura' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(),
+      maxRuns: 0, // age everything out
+      maxBytes: 100_000,
+    });
+
+    expect([...result.deletedIds].sort()).toEqual(['run-aura', 'run-jarvis']);
+
+    // Each branch is force-deleted in ITS product's repo.
+    const jarvisPrune = calls.find(c => c.args.includes('branch') && c.args.includes('jarvis-work/09-cockpit'));
+    const auraPrune = calls.find(c => c.args.includes('branch') && c.args.includes('jarvis-work/03-mobile'));
+    expect(jarvisPrune?.cwd).toBe('/repos/jarvis');
+    expect(auraPrune?.cwd).toBe('/repos/aura');
+
+    // Worktree-checkout protection reads EVERY repo's worktree list.
+    const wtListCwds = calls
+      .filter(c => c.args.includes('worktree') && c.args.includes('list'))
+      .map(c => c.cwd);
+    expect(wtListCwds).toContain('/repos/jarvis');
+    expect(wtListCwds).toContain('/repos/aura');
+  });
+
   it('is idempotent — after pruning over-cap runs, a second pass deletes nothing', async () => {
     for (let i = 0; i < 4; i++) seedRun(`run-${i}`, i);
     const { stub } = makeGitStub();
     const opts = {
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set<string>(),
       nonTerminalIds: new Set<string>(),
       maxRuns: 2,
@@ -276,7 +325,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      repoPath: '/fake/repo',
+      productRepos: { jarvis: '/fake/repo' },
       activeIds: new Set(['run-0']),
       nonTerminalIds: new Set(['run-1']),
       maxRuns: 1,
