@@ -7,6 +7,7 @@ below it.
 ## User-authored
 
 - Expand cockpit → 09-expand-cockpit
+- Expand cockpit: fix autorun (expand-cockpit-fix-autorun) — a one-click **Fix** button on cockpit bugs that generalizes `/work --auto` across product repos (its own concurrency, branch, and sandbox/egress model), the follow-on cut from [09-expand-cockpit](09-expand-cockpit/spec.md) v1.
 - As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
 - Planning pipeline — specialized planning role-agents (its own project)
   - The pipeline that turns an approved product spec into a buildable plan, each stage a role-agent reusing project 08's Planner + `/work` + model-selection policy (retrofit, not a new runtime). The per-agent memory substrate is spun out to **project 12** (the writer-role compounding-memory wedge); this pipeline reuses that proven charter + memory + wrap-up-write pattern once it lands, rather than reinventing it.

@@ -14,7 +14,7 @@ its `spec.md`.
 | [06-webview](06-webview/spec.md) | Done | A localhost web chat surface mirroring Telegram. |
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
-| [09-expand-cockpit](09-expand-cockpit/spec.md) | In Progress | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
+| [09-expand-cockpit](09-expand-cockpit/spec.md) | Done | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Not Started | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
@@ -123,7 +123,7 @@ self-improvement to cover Jarvis's own operation.
 - **v1 wedge:** take a coding idea, discuss it into a spec, dispatch Claude plus Codex to build and cross-review it in a sandbox, supervise, and report back — for the repo-backed products (Assay and Aura), git worktree per project, Relay repo out of scope.
 - **Task breakdown & test plan:** see [tasks.md](08-intent-layer/tasks.md) and [test-plan.md](08-intent-layer/test-plan.md). Built test-first — every phase opens by writing the tests that mirror the test plan, then the implementation that makes them pass.
 
-## 09-expand-cockpit — In Progress
+## 09-expand-cockpit — Done
 
 [Spec](09-expand-cockpit/spec.md)
 
