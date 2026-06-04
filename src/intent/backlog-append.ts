@@ -13,7 +13,12 @@
  */
 
 export type AppendError = 'empty-text' | 'multiline-text';
-export type AppendResult = { ok: true; content: string } | { ok: false; error: AppendError };
+/** On success, `lineNumber` is the 1-based line of the inserted bullet in `content`. The caller
+ *  uses it to find the new item after re-parsing — for ideas the bullet is inserted ABOVE the
+ *  Loop-filed sentinel, so it is NOT necessarily the last parsed item. */
+export type AppendResult =
+  | { ok: true; content: string; lineNumber: number }
+  | { ok: false; error: AppendError };
 
 const LOOP_FILED_RE = /^##\s+Loop-filed\s*$/i;
 
@@ -24,10 +29,13 @@ function validateText(text: string): AppendError | null {
   return null;
 }
 
-/** Append `line` at EOF, ensuring the file ended in a newline first and the result does too. */
-function appendAtEof(content: string, line: string): string {
+/** Append `line` at EOF, ensuring the file ended in a newline first and the result does too.
+ *  Returns the new content and the 1-based line number the appended bullet landed on. */
+function appendAtEof(content: string, line: string): { content: string; lineNumber: number } {
   const sep = content === '' || content.endsWith('\n') ? '' : '\n';
-  return `${content}${sep}${line}\n`;
+  const newContent = `${content}${sep}${line}\n`;
+  // newContent ends in '\n', so split yields a trailing '' — the bullet is the line before it.
+  return { content: newContent, lineNumber: newContent.split('\n').length - 1 };
 }
 
 /** Normalize CRLF → LF so an inserted (LF) bullet never creates mixed line endings; a backlog
@@ -39,7 +47,8 @@ function toLf(content: string): string {
 export function appendBug(content: string, text: string): AppendResult {
   const error = validateText(text);
   if (error) return { ok: false, error };
-  return { ok: true, content: appendAtEof(toLf(content), `- [ ] ${text}`) };
+  const { content: newContent, lineNumber } = appendAtEof(toLf(content), `- [ ] ${text}`);
+  return { ok: true, content: newContent, lineNumber };
 }
 
 export function appendIdea(content: string, text: string): AppendResult {
@@ -52,13 +61,15 @@ export function appendIdea(content: string, text: string): AppendResult {
   const loopFiledIndex = lines.findIndex((l) => LOOP_FILED_RE.test(l));
   if (loopFiledIndex === -1) {
     // No Loop-filed sentinel (and the no-heading case) → EOF append within user-authored.
-    return { ok: true, content: appendAtEof(normalized, bullet) };
+    const { content: newContent, lineNumber } = appendAtEof(normalized, bullet);
+    return { ok: true, content: newContent, lineNumber };
   }
 
   // Insert directly after the last non-blank line before the sentinel, so the new idea joins
   // the existing user-authored bullets rather than landing after a blank gap.
   let j = loopFiledIndex - 1;
   while (j >= 0 && (lines[j] ?? '').trim() === '') j--;
-  lines.splice(j + 1, 0, bullet);
-  return { ok: true, content: lines.join('\n') };
+  const insertAt = j + 1;
+  lines.splice(insertAt, 0, bullet);
+  return { ok: true, content: lines.join('\n'), lineNumber: insertAt + 1 };
 }

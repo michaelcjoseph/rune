@@ -9,9 +9,19 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
+import { readFileSync } from 'node:fs';
 import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '../intent/cockpit.js';
 import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
-import { readProductsConfig } from '../jobs/sandbox-runtime.js';
+import { parseBugs, parseIdeas } from '../intent/backlog-parser.js';
+import { appendBug, appendIdea } from '../intent/backlog-append.js';
+import {
+  withFileLock,
+  writeFileAtomic,
+  assertBacklogWriteAllowed,
+  appendBacklogMutationLog,
+  BacklogWriteError,
+} from '../intent/backlog-write-lock.js';
+import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
 import { withActions } from './backlog-actions.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
@@ -354,16 +364,7 @@ function handleApiBacklog(res: ServerResponse, product: string): void {
   const ideas = pb?.ideas ?? [];
   const fileWarnings = pb?.fileWarnings ?? [];
 
-  // planning-active: an IN-PROGRESS session for this product disables new planning. Mirror
-  // `getActivePlanningSession`'s definition of active — `approved` (awaiting/retrying scaffold)
-  // and `abandoned` are terminal and must NOT gate the drawer (an approved session would
-  // otherwise freeze every action during scaffolding).
-  const planningActive = getAllPlanningSessions().some(
-    ([, s]) =>
-      s.planning?.product === product &&
-      s.planning.status !== 'approved' &&
-      s.planning.status !== 'abandoned',
-  );
+  const planningActive = isPlanningActiveForProduct(product);
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(
@@ -373,6 +374,184 @@ function handleApiBacklog(res: ServerResponse, product: string): void {
       fileWarnings,
     }),
   );
+}
+
+/** True when an IN-PROGRESS planning session exists for the product (the product is scoped, but
+ *  sessions are chatId-keyed, so scan all). Mirrors `getActivePlanningSession`'s "active"
+ *  definition — terminal `approved` (awaiting/retrying scaffold) and `abandoned` don't gate. */
+function isPlanningActiveForProduct(product: string): boolean {
+  return getAllPlanningSessions().some(
+    ([, s]) =>
+      s.planning?.product === product &&
+      s.planning.status !== 'approved' &&
+      s.planning.status !== 'abandoned',
+  );
+}
+
+/** Relative path of each backlog file under a product repo. */
+const BACKLOG_REL: Record<'bugs' | 'ideas', string> = {
+  bugs: 'docs/projects/bugs.md',
+  ideas: 'docs/projects/ideas.md',
+};
+
+/** Best-effort current branch + worktree-dirty status for the audit log. Never throws. The two
+ *  git probes run in parallel. Captured BEFORE the write (inside the lock) so `dirty` reflects
+ *  whether the repo had uncommitted work prior to Jarvis's append, not the always-true
+ *  post-write state. */
+async function getBacklogGitState(repoPath: string): Promise<{ branch: string; dirty: boolean }> {
+  try {
+    const [b, s] = await Promise.all([
+      defaultRunGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath }),
+      defaultRunGit(['status', '--porcelain'], { cwd: repoPath }),
+    ]);
+    return { branch: b.stdout.trim() || 'unknown', dirty: s.stdout.trim() !== '' };
+  } catch {
+    return { branch: 'unknown', dirty: false };
+  }
+}
+
+/**
+ * POST /api/backlog/:product/:kind — the drawer's `+` add. Validates product (404
+ * unknown-product) and kind (404 unknown-kind), reads `{ text }`, then under a per-file mutex:
+ * guards the write target, reads the current content, appends via the pure core (400 empty-text
+ * / multiline-text on rejection), and atomically writes. Audit-logs every write (best-effort,
+ * with git branch + dirty), then re-parses the NEW content in memory and returns the appended
+ * item (`{ item }`) with its computed action. A guard rejection → 500.
+ */
+async function handleApiBacklogAppend(
+  req: IncomingMessage,
+  res: ServerResponse,
+  product: string,
+  kind: string,
+): Promise<void> {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+  if (kind !== 'bugs' && kind !== 'ideas') {
+    sendErrorEnvelope(res, 404, 'unknown-kind', `unknown backlog kind '${kind}'`);
+    return;
+  }
+
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let text: string;
+  try {
+    const parsed = JSON.parse(await readBody(req));
+    text = typeof parsed?.text === 'string' ? parsed.text : '';
+  } catch {
+    sendErrorEnvelope(res, 400, 'bad-request', 'invalid JSON body');
+    return;
+  }
+
+  let repoPath: string;
+  try {
+    repoPath = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product]?.repoPath ?? '';
+  } catch (err) {
+    log.warn('handleApiBacklogAppend: products config read failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'config-read-failed', 'could not resolve the product repo', false);
+    return;
+  }
+  if (!repoPath) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' has no configured repo`);
+    return;
+  }
+
+  const relFile = BACKLOG_REL[kind];
+  const filePath = join(repoPath, relFile);
+
+  // One critical section per file: guard → read → append → (capture pre-write git) → atomic
+  // write, so two concurrent adds can't both read the pre-append content and clobber each other,
+  // and the audited `dirty` flag reflects the repo state BEFORE this write.
+  let outcome:
+    | { kind: 'invalid'; error: 'empty-text' | 'multiline-text' }
+    | {
+        kind: 'written';
+        before: string;
+        after: string;
+        lineNumber: number;
+        git: { branch: string; dirty: boolean };
+      };
+  try {
+    outcome = await withFileLock(filePath, async () => {
+      assertBacklogWriteAllowed(repoPath, filePath);
+      let before = '';
+      try {
+        before = readFileSync(filePath, 'utf8');
+      } catch {
+        before = ''; // missing file → start fresh
+      }
+      const appended = kind === 'bugs' ? appendBug(before, text) : appendIdea(before, text);
+      if (!appended.ok) return { kind: 'invalid' as const, error: appended.error };
+      const git = await getBacklogGitState(repoPath);
+      writeFileAtomic(filePath, appended.content);
+      return {
+        kind: 'written' as const,
+        before,
+        after: appended.content,
+        lineNumber: appended.lineNumber,
+        git,
+      };
+    });
+  } catch (err) {
+    if (err instanceof BacklogWriteError) {
+      log.warn('handleApiBacklogAppend: write guard rejected', { product, error: err.message });
+      sendErrorEnvelope(res, 500, 'write-rejected', 'write rejected by the safety guard', false);
+      return;
+    }
+    log.warn('handleApiBacklogAppend: append failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'append-failed', 'could not append to the backlog', false);
+    return;
+  }
+
+  if (outcome.kind === 'invalid') {
+    sendErrorEnvelope(
+      res,
+      400,
+      outcome.error,
+      outcome.error === 'empty-text' ? 'text is empty' : 'text must be a single line',
+    );
+    return;
+  }
+
+  // Audit every write (best-effort — a logging failure must not fail the user's add). The log
+  // `file` is the repo-RELATIVE path, never the absolute host path.
+  try {
+    appendBacklogMutationLog(config.BACKLOG_MUTATIONS_FILE, {
+      product,
+      file: relFile,
+      branch: outcome.git.branch,
+      dirty: outcome.git.dirty,
+      before: outcome.before,
+      after: outcome.after,
+    });
+  } catch (err) {
+    log.warn('handleApiBacklogAppend: audit log failed', { product, error: (err as Error).message });
+  }
+
+  // Re-parse the NEW content in memory (not via readBacklogs) and find the appended item by its
+  // line number — for ideas the bullet is inserted ABOVE the Loop-filed sentinel, so it is NOT
+  // necessarily the last parsed item.
+  const parsed = kind === 'bugs' ? parseBugs(outcome.after, relFile) : parseIdeas(outcome.after, relFile);
+  const appendedItem = parsed.items.find((i) => i.source.lineNumber === outcome.lineNumber);
+  const item = appendedItem ? withActions(appendedItem, isPlanningActiveForProduct(product)) : null;
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ item }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1202,16 @@ export function mountWebviewRoutes(
       const backlogMatch = pathname.match(/^\/api\/backlog\/([^/]+)$/);
       if (req.method === 'GET' && backlogMatch) {
         handleApiBacklog(res, decodeURIComponent(backlogMatch[1]!));
+        return true;
+      }
+      const backlogAppendMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/([^/]+)$/);
+      if (req.method === 'POST' && backlogAppendMatch) {
+        await handleApiBacklogAppend(
+          req,
+          res,
+          decodeURIComponent(backlogAppendMatch[1]!),
+          decodeURIComponent(backlogAppendMatch[2]!),
+        );
         return true;
       }
 

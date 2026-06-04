@@ -54,10 +54,19 @@ vi.mock('node:fs', async (importOriginal) => {
       }
       return (actual.renameSync as any)(from, to);
     }),
-    mkdirSync: vi.fn((p: any, ...rest: any[]) => {
+    // No real dirs are needed in this test — no-op all mkdir.
+    mkdirSync: vi.fn(() => undefined),
+    // The audit-log write goes through appendFileSync; no-op it so no real file is touched.
+    appendFileSync: vi.fn(() => undefined),
+    // The write guard realpaths the repo + closest-existing ancestor. The /test repo isn't on
+    // disk, so resolve those to identity and treat /test paths as existing.
+    realpathSync: vi.fn((p: any) => {
       const s = String(p);
-      if (s.includes('/docs/projects/bugs') || s.includes('/docs/projects/ideas') || isBacklog(p)) return undefined;
-      return (actual.mkdirSync as any)(p, ...rest);
+      return s.startsWith('/test/') ? s : (actual.realpathSync as any)(p);
+    }),
+    existsSync: vi.fn((p: any) => {
+      const s = String(p);
+      return s.startsWith('/test/') ? true : (actual.existsSync as any)(p);
     }),
   };
 });
@@ -76,12 +85,15 @@ const mockConfig = {
   PRODUCTS_CONFIG_FILE: '/test/policies/products.json',
   SUPERVISED_RUNS_FILE: '/test/logs/supervised-runs.json', WORK_RUNS_DIR: '/test/logs/work-runs',
   WORK_RUNS_INDEX_FILE: '/test/logs/work-runs/index.jsonl',
+  BACKLOG_MUTATIONS_FILE: '/test/logs/backlog-mutations.jsonl',
 };
 vi.mock('../config.js', () => ({ default: mockConfig, PROJECT_ROOT: '/test/project' }));
 vi.mock('../jobs/sandbox-runtime.js', () => ({
   readProductsConfig: vi.fn(() => ({
     aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   })),
+  // The audit-log git probe; empty stdout → branch 'unknown', dirty false.
+  defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 vi.mock('./restart.js', () => ({ restartServer: vi.fn(() => ({ ok: true as const })) }));
 vi.mock('../ai/claude.js', () => ({ runAgent: vi.fn(async () => ({ text: 'ok', error: null })) }));
@@ -195,6 +207,16 @@ describe('POST /api/backlog/:product/:kind (09-expand-cockpit Phase 3)', () => {
     expect(res.body.item.text).toBe('A new idea');
     expect(fsState.writes[0]!.data).toContain('- A new idea');
     expect(fsState.writes[0]!.data).not.toContain('- [ ] A new idea');
+  });
+
+  it('returns the NEW idea (not a loop-filed item) when a Loop-filed section exists', async () => {
+    // Regression: appendIdea inserts ABOVE the sentinel, so the new idea is not the last parsed
+    // item. The endpoint must return the inserted user-authored idea, not the trailing filed one.
+    fsState.content = '## User-authored\n- Idea A\n\n## Loop-filed\n- **Filed** — friction\n';
+    const res = await request(port, 'POST', '/api/backlog/aura/ideas', { text: 'A new idea' }, AUTH);
+    expect(res.status).toBe(200);
+    expect(res.body.item.text).toBe('A new idea');
+    expect(res.body.item.section).toBe('user-authored');
   });
 
   it('rejects empty text with 400 empty-text', async () => {
