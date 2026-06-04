@@ -52,6 +52,12 @@ export interface StoredPlanningSession {
   createdAt: string;
   /** ISO timestamp of the most recent state mutation. */
   lastActivity: string;
+  /** Links this session to a durable {@link Promotion} (09-expand-cockpit) when the session was
+   *  opened from a backlog Plan click. The approval path advances the linked promotion to
+   *  `scaffolded`/`marked-source`; abandonment (/clear, /fresh, webview abandon, expiry) advances a
+   *  linked `planning-started` promotion to `planning-abandoned`. Absent for plain `/plan` sessions.
+   *  Round-trips through persist/restore as part of the stored session object. */
+  promotionId?: string;
 }
 
 const sessions = new Map<number, StoredPlanningSession>();
