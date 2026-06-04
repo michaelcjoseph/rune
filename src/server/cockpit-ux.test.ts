@@ -69,7 +69,14 @@ vi.mock('../config.js', () => ({
   PROJECT_ROOT: '/test/project',
 }));
 
-// runAgent is invoked by handleApiPlanningApprove for scaffolding.
+// handleApiPlanningApprove delegates scaffolding to the shared scaffold-approval runtime.
+vi.mock('../jobs/scaffold-approval.js', () => ({
+  runScaffoldApproval: vi.fn(async () => ({
+    ok: true, slug: '09-x', agentText: 'scaffolded', promotion: 'none',
+  })),
+  defaultScaffoldApprovalDeps: vi.fn(),
+}));
+// Still mocked because other transitively-imported modules touch the Claude CLI at load.
 vi.mock('../ai/claude.js', () => ({
   runAgent: vi.fn(async () => ({ text: 'scaffolded', error: null })),
 }));

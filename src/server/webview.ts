@@ -46,8 +46,8 @@ import {
   abandonActivePlanningSession,
 } from '../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
-import { buildSetupWriterBrief } from '../intent/planner.js';
-import { runAgent } from '../ai/claude.js';
+import { runScaffoldApproval } from '../jobs/scaffold-approval.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { readIntentProposalQueue } from '../intent/intent-proposal-queue.js';
 import { readProposalQueue } from '../jobs/proposal-queue.js';
 import { readAllRuns } from '../jobs/supervision-store.js';
@@ -858,24 +858,27 @@ async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  // Approved — scaffold via project-setup-writer (A4.4 pattern). Tolerate
-  // agent failure by leaving the session in approved state (retry via the
-  // /approve slash path or a re-click here will pick it up).
-  const brief = buildSetupWriterBrief(result.session.planning);
-  const agentResult = await runAgent('project-setup-writer', brief);
-  if (agentResult.error || !agentResult.text) {
-    log.error('handleApiPlanningApprove: project-setup-writer failed', {
-      error: agentResult.error ?? 'empty output',
+  // Approved — run the shared scaffold-approval flow (resolve the target product repo, spawn the
+  // setup-writer scoped to it, cross-check the scaffold-result, and drive any linked promotion).
+  // Tolerate failure by leaving the session approved (retry via /approve or a re-click).
+  const outcome = await runScaffoldApproval(result.session);
+  if (!outcome.ok) {
+    log.error('handleApiPlanningApprove: scaffold-approval failed', {
+      reason: outcome.reason,
+      message: outcome.message,
     });
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: `scaffolding failed: ${agentResult.error ?? 'empty output'}`,
-    }));
+    res.end(JSON.stringify({ error: `scaffolding failed: ${scrubAbsolutePaths(outcome.message)}` }));
     return;
   }
   deletePlanningSession(userId);
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, output: agentResult.text }));
+  res.end(JSON.stringify({
+    ok: true,
+    output: outcome.agentText,
+    slug: outcome.slug,
+    promotion: outcome.promotion,
+  }));
 }
 
 function handleApiPlanningAbandon(_req: IncomingMessage, res: ServerResponse): void {

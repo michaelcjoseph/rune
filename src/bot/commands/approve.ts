@@ -21,12 +21,9 @@
  * explicit gate, never inferred from free-form text.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import type { MessageSender } from '../../transport/sender.js';
-import { runAgent } from '../../ai/claude.js';
-import config, { PROJECT_ROOT } from '../../config.js';
-import { buildSetupWriterBrief } from '../../intent/planner.js';
+import { runScaffoldApproval } from '../../jobs/scaffold-approval.js';
+import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
 import {
   approveActivePlanningSession,
   deletePlanningSession,
@@ -73,143 +70,58 @@ export async function handleApprove(sender: MessageSender, userId: number): Prom
   await scaffoldAndDelete(sender, userId, result.session);
 }
 
-/** Invoke project-setup-writer for an `approved` session and delete the
- *  session on success. On agent failure (or scaffold-verification failure)
- *  the session is left intact so the retry path in `handleApprove` can
- *  pick it up.
+/** Run the scaffold-approval flow for an `approved` session and delete the
+ *  session on success. On any failure (target resolution, agent, or
+ *  scaffold-verification) the session is left intact so the retry path in
+ *  `handleApprove` can pick it up — never lose the spec.
  *
- *  Scaffold verification (the off-process backstop against agents that
- *  return success text but write no files — see
- *  docs/projects/08-intent-layer/agent-lessons.md): snapshot the project
- *  directories on disk before runAgent, re-list after, demand exactly one
- *  new `NN-<slug>` directory containing spec.md, tasks.md, and
- *  test-plan.md. Without this check, an agent that hallucinates "I
- *  scaffolded it" reaches the delete-session line and the spec is lost. */
+ *  All the heavy lifting (resolve the target product repo, spawn the
+ *  setup-writer scoped to it, cross-check the `scaffold-result` block
+ *  against the on-disk diff, and drive any linked promotion job) lives in
+ *  the shared `runScaffoldApproval` runtime so the Telegram and webview
+ *  approval surfaces behave identically. */
 async function scaffoldAndDelete(
   sender: MessageSender,
   userId: number,
   session: StoredPlanningSession,
 ): Promise<void> {
-  const brief = buildSetupWriterBrief(session.planning);
-  log.info('Dispatching project-setup-writer', {
+  log.info('Dispatching scaffold-approval', {
     userId,
     product: session.planning.product,
+    promotionId: session.promotionId,
   });
 
-  const projectsDir = join(PROJECT_ROOT, 'docs', 'projects');
-  const beforeDirs = listProjectDirs(projectsDir);
-
-  // The op-tracker registered inside runAgent is the canonical progress
-  // surface for agent ops on Telegram — no extra startTyping needed here.
-  const agentResult = await runAgent('project-setup-writer', brief);
-  if (agentResult.error || !agentResult.text) {
-    log.error('project-setup-writer failed; session left approved for retry', {
+  const outcome = await runScaffoldApproval(session);
+  if (!outcome.ok) {
+    log.error('scaffold-approval failed; session left approved for retry', {
       userId,
-      error: agentResult.error ?? 'empty output',
+      reason: outcome.reason,
+      message: outcome.message,
     });
+    // Echo the agent's reply on a verify failure so the user sees what it said.
+    const body = outcome.agentText
+      ? `${scrubAbsolutePaths(outcome.message)}\n\nAgent reply:\n${outcome.agentText}`
+      : scrubAbsolutePaths(outcome.message);
     await sender.send(
       userId,
-      `Scaffolding failed: ${sanitizeAgentError(agentResult.error ?? 'empty output')}\n\n` +
+      `Scaffolding failed: ${body}\n\n` +
         `Planning session is still approved — run /approve again to retry.`,
     );
     return;
   }
 
-  // Verify the agent actually wrote files. The setup-writer prompt
-  // tightening (Fix 3) reduces the chance of this firing in practice, but
-  // it's the load-bearing backstop — without it, the agent's mere text
-  // reply is enough to delete the session and lose the spec.
-  const verification = verifyScaffoldLanded(projectsDir, beforeDirs);
-  if (!verification.ok) {
-    log.error(
-      'project-setup-writer ran but no project scaffolded; session left approved for retry',
-      {
-        userId,
-        verification,
-        agentTextHead: agentResult.text.slice(0, 500),
-      },
-    );
-    await sender.send(
-      userId,
-      `Scaffold verification failed: ${describeVerificationFailure(verification)}\n\n` +
-        `Agent reply:\n${agentResult.text}\n\n` +
-        `Planning session is still approved — run /approve again to retry.`,
-    );
-    return;
+  let reply = outcome.agentText;
+  if (outcome.promotion === 'mark-source-error') {
+    // The project scaffolded but the source bullet couldn't be marked — the promotion is in a
+    // retryable error state. Tell the user; the project itself is fine.
+    reply += `\n\n⚠️ Project ${outcome.slug} scaffolded, but the source backlog bullet couldn't be ` +
+      `marked promoted — retry it from the cockpit's backlog drawer.`;
   }
-
-  await sender.send(userId, agentResult.text);
+  await sender.send(userId, reply);
   deletePlanningSession(userId);
   log.info('Project scaffolded; planning session deleted', {
     userId,
-    slug: verification.slug,
+    slug: outcome.slug,
+    promotion: outcome.promotion,
   });
-}
-
-const PROJECT_DIR_PATTERN = /^\d+-/;
-
-/** Returns the set of `NN-slug` project directories currently under
- *  `projectsDir`. Errors (missing directory, permission, etc.) collapse
- *  to an empty set — verification still works because "no new dir" is
- *  the failure mode we care about. */
-function listProjectDirs(projectsDir: string): Set<string> {
-  try {
-    return new Set(
-      readdirSync(projectsDir)
-        .filter((name) => PROJECT_DIR_PATTERN.test(name))
-        .filter((name) => {
-          try {
-            return statSync(join(projectsDir, name)).isDirectory();
-          } catch {
-            return false;
-          }
-        }),
-    );
-  } catch {
-    return new Set();
-  }
-}
-
-type ScaffoldVerification =
-  | { ok: true; slug: string }
-  | { ok: false; reason: 'no-new-dir' }
-  | { ok: false; reason: 'missing-files'; slug: string; missing: string[] };
-
-/** Verify the project-setup-writer agent actually wrote files. Demand
- *  exactly one new `NN-slug` directory under `projectsDir` that contains
- *  spec.md, tasks.md, and test-plan.md. */
-function verifyScaffoldLanded(
-  projectsDir: string,
-  beforeDirs: Set<string>,
-): ScaffoldVerification {
-  const afterDirs = listProjectDirs(projectsDir);
-  const newDirs = [...afterDirs].filter((d) => !beforeDirs.has(d)).sort();
-  if (newDirs.length === 0) return { ok: false, reason: 'no-new-dir' };
-  // If the agent somehow created multiple new dirs, the canonical "new
-  // project" is the highest-numbered one (matching project-setup-writer's
-  // index-bump logic). Verify against that.
-  const slug = newDirs[newDirs.length - 1]!;
-  const required = ['spec.md', 'tasks.md', 'test-plan.md'];
-  const missing = required.filter((f) => !existsSync(join(projectsDir, slug, f)));
-  if (missing.length > 0) return { ok: false, reason: 'missing-files', slug, missing };
-  return { ok: true, slug };
-}
-
-function describeVerificationFailure(v: ScaffoldVerification & { ok: false }): string {
-  if (v.reason === 'no-new-dir') {
-    return 'agent did not create a new docs/projects/NN-slug/ directory';
-  }
-  return `new project ${v.slug} is missing required files: ${v.missing.join(', ')}`;
-}
-
-/** Strip absolute paths the user shouldn't see (vault, project root,
- *  workspace) from raw agent error text before surfacing it in the chat
- *  reply. The full message is preserved in the structured log via
- *  `log.error`. */
-function sanitizeAgentError(raw: string): string {
-  let sanitized = raw;
-  if (config.VAULT_DIR) sanitized = sanitized.split(config.VAULT_DIR).join('<vault>');
-  if (PROJECT_ROOT) sanitized = sanitized.split(PROJECT_ROOT).join('<project>');
-  if (config.WORKSPACE_DIR) sanitized = sanitized.split(config.WORKSPACE_DIR).join('<workspace>');
-  return sanitized;
 }
