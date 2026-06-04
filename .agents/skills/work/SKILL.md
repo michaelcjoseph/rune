@@ -1,6 +1,23 @@
+---
+name: work
+description: Pick the next pending docs/projects task and drive it through planning, test-first implementation, review, simplification, status sync, and optional unattended --auto commits. Use when the user invokes /work or asks Codex to execute the next project task.
+metadata:
+  short-description: Run the next project task
+---
+
 # /work
 
-Pick the next pending task from a project's task list and drive it through the full implementation cycle: plan, implement, test, review, fix, simplify, and mark complete.
+Pick the next pending task from a project's task list and drive it through the full implementation cycle: plan, write failing tests, implement, test, review, fix, simplify, and mark complete.
+
+## Execution discipline (reinforces `AGENTS.md`)
+
+Two failure modes the /work skill specifically must defend against — both surfaced during the 2026-05-26 09-expand-cockpit recovery session (see `docs/projects/08-intent-layer/agent-lessons.md` Lesson 11):
+
+- **Don't end a turn on an intermediate tool call.** Within the /work cycle, a turn must end at a meaningful checkpoint — a green test run, a successful commit, or an explicit hard stop. Ending after a single `Edit` or `Read` leaves the implementation half-done; the next turn often cannot resume cleanly because the harness may revert uncommitted file edits between turns. Push through to the commit (step 19) before ending the turn, even if it means a longer single turn.
+
+- **"Continue from where you left off" is never a no-op.** When the harness fires a resume prompt mid-cycle (`Continue from where you left off.`, `continue`, `proceed`), the correct response is to resume the in-flight step with a tool call. The literal reply `No response requested.` to a resume prompt is always wrong — there is no reading of "continue" that resolves to "stay silent". If the cycle is genuinely complete or blocked, say so explicitly.
+
+These are belt-and-suspenders to the same rules in `AGENTS.md`. The active Codex instructions are canonical; the duplication here is so /work spawns see the rules in skill context.
 
 ## Usage
 
@@ -10,7 +27,7 @@ Pick the next pending task from a project's task list and drive it through the f
 
 If no argument is given, list all projects in `docs/projects/` and ask the user which one to work on.
 
-**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), step 17 creates one git commit per completed task (using the release-notes agent to draft the message) without pausing for approval, and step 18 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 11 BLOCK verdict, step 12 tests failing twice, step 17 commit still failing after one retry, step 18 empty list) still terminate the run — those are error/completion exits, not checkpoints.
+**`--auto` (unattended mode)**: skips all user-interaction gates so one invocation sweeps the entire task list end-to-end. Specifically: step 2 skips the "confirm before proceeding" gate, Phase 1 skips Plan Mode entirely (still does exploration and writes the plan to the turn output for the transcript record, but does not call `EnterPlanMode`/`ExitPlanMode` since those require human approval), step 19 creates one git commit per completed task (using the release-notes agent to draft the message) without pausing for approval, and step 20 auto-continues to the next unchecked task without asking. Hard stops (step 2 empty list, step 12 BLOCK verdict, step 13 a regression persisting after two fix attempts, step 19 commit still failing after one retry, step 20 empty list) still terminate the run — those are error/completion exits, not checkpoints.
 
 Because `--auto` commits everything in the working tree at the end of each task, start from a clean working tree (no unrelated uncommitted changes). If `git status` is dirty at step 2 in `--auto` mode, stop and report to the user instead of sweeping those changes into a task commit.
 
@@ -31,9 +48,11 @@ Match the argument to a folder in `docs/projects/`:
 
 Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`).
 
+**"First" means the literal next `- [ ]` line in document order**, top-down. If the previous `/work` cycle completed a task in a section whose other sub-task lines remain unchecked, those earlier-line sub-tasks are the next tasks — not anything in a later section. A multi-sub-task section is not "done" after one of its lines ticks; it is done when zero `- [ ]` lines remain inside it.
+
 - If no unchecked tasks remain, tell the user all tasks are complete and stop.
 - Announce which task you're picking up.
-- **With `--auto`**: run `git status --porcelain` first. If the working tree is not clean, stop and report the dirty files to the user — do not proceed, because step 17 would otherwise sweep those unrelated changes into the task commit. Then proceed immediately.
+- **With `--auto`**: run `git status --porcelain` first. If the working tree is not clean, stop and report the dirty files to the user — do not proceed, because step 19 would otherwise sweep those unrelated changes into the task commit. Then proceed immediately.
 - **Without `--auto`**: confirm with the user before proceeding. A dirty working tree is fine here since the user commits manually.
 
 ---
@@ -89,7 +108,30 @@ After the user approves the plan, create `TaskCreate` items for each sub-task fr
 - Use clear descriptions and `activeForm` labels
 - Set up `blockedBy` dependencies where sub-tasks must be sequential
 
-### 8. Implement
+### 8. Write Failing Tests (test-first)
+
+Before writing any implementation, write the tests that define this task's contract. Settling that contract before the code exists gives the review step (step 11) something objective to check and keeps the cycle from grading vibes.
+
+Use the `Agent` tool with `subagent_type: "test-specialist"`:
+
+```
+Write failing tests for the [task name] task in project [project], before any
+implementation exists. Mirror the test scenarios from test-plan.md that relate
+to this task. If test infrastructure is not yet configured, set it up using the
+project's idiomatic framework. Do NOT implement the feature — write only the
+tests. Run them and confirm they fail (red) for the right reason: a clean
+assertion or missing-symbol failure, not a syntax error or a bad import. Report
+which tests were written and the failure output.
+```
+
+Confirm the suite fails before proceeding to step 9. A test that passes before the implementation exists is not exercising the new behavior — have the agent revise it.
+
+**Two cases where step 8 deviates:**
+
+- **The task's deliverable is itself a test suite** — e.g. a "Tests (write first)" task that exists precisely to write a phase's tests ahead of its implementation tasks. Then step 8 *is* the task: write the suite here, and step 9 has nothing further to add. The suite is expected to stay red until its implementation task lands in a later `/work` run — do NOT implement the feature to turn it green. Red is the success condition for this task; the test rounds confirm the suite stays red cleanly (no syntax errors, no bad imports) until its implementation task lands.
+- **The task changes only non-code artifacts** — markdown, docs, templates, prose. There is nothing to assert in a unit test. Note that in the turn output and proceed to step 9; the test-first discipline applies to code changes, it does not force synthetic tests onto documentation tasks. The test rounds still run the existing suite as a plain regression check.
+
+### 9. Implement
 
 Work through the sub-tasks in order:
 
@@ -97,24 +139,31 @@ Work through the sub-tasks in order:
 - Mark each sub-task `completed` when done
 - Follow all conventions in `AGENTS.md`
 - Keep changes minimal and focused on the task
+- Write implementation until the failing tests from step 8 pass
 
 After implementation is complete, stage all changes but do NOT commit yet. This ensures review agents can see the full diff via `git diff HEAD`.
 
-### 9. Test — Round 1
+### 10. Test — Round 1
 
-Use the `Agent` tool with `subagent_type: "test-specialist"` to write and run tests:
+Use the `Agent` tool with `subagent_type: "test-specialist"` to confirm the test-first tests from step 8 now pass and no regressions were introduced:
 
 ```
-Write tests for the changes just implemented for the [task name] task
-in project [project]. The following files were changed: [list changed files].
-If test infrastructure is not yet configured, set it up using the project's
-idiomatic framework. Run all tests and fix any failures. Focus on the test
-scenarios from the test plan that relate to this task.
+Run the full test suite after implementing the [task name] task in project
+[project]. The tests for this task were written test-first in step 8 and were
+failing before implementation — confirm they now pass. The following files were
+changed: [list changed files]. Fix any regressions (previously-passing tests
+that now fail) and any broken test code. Do NOT implement unrelated features to
+satisfy tests that are red only because their feature is not built yet.
 ```
 
-Wait for the agent to finish and confirm all tests pass before proceeding.
+Wait for the agent to finish. Before proceeding, confirm both:
 
-### 10. Review — Conditional, Parallel
+- The test-first tests from step 8 now pass — or, for the "test suite as deliverable" deviation (step 8 first deviation), confirm they stay red cleanly.
+- No previously-passing test regressed.
+
+Tests that are red only because their feature is not yet built are expected — do not treat them as failures (see the step 8 deviations).
+
+### 11. Review — Conditional, Parallel
 
 Run `git diff HEAD --name-only` to get the list of changed files, then launch the applicable reviewers in parallel:
 
@@ -153,7 +202,7 @@ in AGENTS.md.
 
 If a reviewer is not applicable, skip it and note "N/A — no relevant changes" in the completion summary.
 
-### 11. Fix Review Issues
+### 12. Fix Review Issues
 
 Collect findings from all reviewers. Address issues in priority order:
 
@@ -161,25 +210,26 @@ Collect findings from all reviewers. Address issues in priority order:
 2. **Warnings** — fix unless there's a clear reason to skip (explain why if skipping)
 3. **Suggestions** — apply easy wins (< 5 min effort); skip the rest
 
-If no issues were found, skip to step 12.
+If no issues were found, skip to step 13.
 
 If any reviewer returns a BLOCK verdict, or fixing issues requires fundamentally changing the approach, stop and report to the user with blocking findings and a proposed alternative. Do NOT proceed until the user confirms.
 
-### 12. Test — Round 2
+### 13. Test — Round 2
 
 Use the `Agent` tool with `subagent_type: "test-specialist"`:
 
 ```
 Run all tests to verify the review fixes for [task name] didn't break
-anything. The following files were changed: [list changed files].
-Fix any failures.
+anything. The following files were changed: [list changed files]. Fix any
+regressions. Tests that are red only because their feature is not built yet
+are expected — do not implement features to satisfy them.
 ```
 
-Skip this step if no code changes were made in step 11.
+Skip this step if no code changes were made in step 12.
 
-If tests fail after two fix attempts, stop and report the failures to the user. Do not loop indefinitely.
+If a regression persists after two fix attempts — a previously-passing test still failing, or broken test code — stop and report the failures to the user. Do not loop indefinitely. Expected-red tests (per the step 8 deviations) do not count as a failure here.
 
-### 13. Simplify
+### 14. Simplify
 
 Use the `Agent` tool with `subagent_type: "code-simplifier"`:
 
@@ -194,24 +244,25 @@ The code-simplifier is read-only — it reports findings but cannot edit files. 
 - **Medium Effort** — apply if clearly beneficial
 - **Structural Changes** — do NOT apply; mention them to the user for future consideration
 
-### 14. Test — Round 3
+### 15. Test — Round 3
 
 Use the `Agent` tool with `subagent_type: "test-specialist"` one final time:
 
 ```
 Final test run after simplification for [task name]. The following files
-were changed: [list changed files]. Run all tests and fix any failures.
+were changed: [list changed files]. Run all tests and fix any regressions.
+Tests that are red only because their feature is not built yet are expected.
 ```
 
-Skip this step if step 13 made no code changes.
+Skip this step if step 14 made no code changes.
 
-### 15. Evals — Conditional
+### 16. Evals — Conditional
 
 If the task modified agent behavior in any of these ways, run the relevant evals:
 
-- Any file under `.Codex/agents/` (Jarvis) or `$VAULT_DIR/.Codex/agents/` (vault-resident) changed
+- Any file under `.claude/agents/` (Jarvis) or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
 - The prompt strings, context assembly, or args passed to `runAgent()` changed in a source file (grep the diff for `runAgent(`)
-- `AGENT_MODEL` / agent-loading logic in `src/ai/Codex.ts` changed
+- `AGENT_MODEL` / agent-loading logic in `src/ai/claude.ts` changed
 
 ```bash
 npm run evals -- <agent-name>     # single agent
@@ -225,7 +276,7 @@ If no `evals/<agent-name>.yaml` exists for an affected agent yet, note it in the
 
 Skip this step if the task didn't touch agent behavior. MVP: no CI gate, manual cadence, pass/fail goes in the completion summary alongside test results.
 
-### 16. Sync Docs
+### 17. Sync Docs
 
 Use the `Agent` tool with `subagent_type: "docs-sync"`:
 
@@ -237,11 +288,22 @@ and skills tables, environment variables, and scripts.
 
 Skip this step if the task only changed existing file internals without adding new modules, commands, agents, config values, or scripts.
 
-### 17. Mark Task Done
+### 18. Mark Task Done & Sync Status
 
-Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` for the completed task. This applies in both modes, and it happens **before** step 18 so the tasks.md update lands in the same commit as the task's code changes.
+Status tracking must reflect reality, not lag it. A run that does the work but leaves the boxes unchecked (or the index stale) is **not** done — the bookkeeping is part of the task. Three updates, all of which land in this task's commit (step 19):
 
-### 18. Commit (`--auto` only)
+**a. Tick the task in `tasks.md`.** Change `- [ ]` to `- [x]` for the completed task.
+
+**b. Reconcile the surrounding checkboxes.** Don't tick only the headline line. If completing this task also satisfied sibling sub-tasks — a "verify", "confirm", or "commit each repo" line that your work just made true — tick those too, with a short parenthetical noting the evidence (commit SHA, check result). The list must match the actual state of the repos at this moment; a box that is true on disk but unchecked in `tasks.md` is a bug.
+
+**c. Keep `docs/projects/index.md` in sync.** The project's status must track the work:
+- On the **first** completed task of a project currently marked `Not Started`, flip it to `In Progress` — in **both** places: the table row at the top and the `## <project> — <status>` section header.
+- Leave it `In Progress` while unchecked `- [ ]` lines remain.
+- Flipping to `Done` happens at step 20 when the list is fully clear — not here.
+
+This applies in **both** modes (with and without `--auto`), and happens **before** step 19 so all status updates land in the same commit as the task's code changes.
+
+### 19. Commit (`--auto` only)
 
 **Without `--auto`**: Skip this step. The user will review the diff and commit manually.
 
@@ -263,7 +325,7 @@ Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` fo
    git commit -m "$(cat <<'EOF'
    <message returned by release-notes agent>
 
-   Co-Authored-By: Codex <noreply@anthropic.com>
+   Co-Authored-By: Codex <noreply@openai.com>
    EOF
    )"
    ```
@@ -271,7 +333,7 @@ Mark the task done in the project's `tasks.md` by changing `- [ ]` to `- [x]` fo
 4. Run `git status` to verify the commit landed and the tree is clean.
 5. If the commit fails (pre-commit hook, signing issue, etc.), diagnose the failure, fix the underlying issue, re-stage with `git add -A`, and create a **new** commit with the same message — do not use `--amend` or `--no-verify`. If the retry also fails, stop and report to the user with the hook output; do not loop.
 
-### 19. Report and Continue
+### 20. Report and Continue
 
 Output a completion summary:
 
@@ -309,9 +371,9 @@ Output a completion summary:
 - [next unchecked task from tasks.md, or "All tasks complete!"]
 ```
 
-After outputting the summary, check `tasks.md` for the next unchecked task (`- [ ]`):
+After outputting the summary, **re-read `tasks.md` from the top** and find the next unchecked task (`- [ ]`). The next task is whichever `- [ ]` line is **first in document order** — even if it is in a section you have just shipped a different sub-task in. The most common failure mode here is treating a section as "done" after one of its sub-task lines ticks; the contract is per-line, not per-section. If an earlier `- [ ]` line remains in the section you just worked, that line is the next task — not anything in a later section.
 
 - **If a next task exists**:
   - **Without `--auto`**: ask the user "Ready to start the next task: **[task name]**?" and if they confirm, loop back to **step 3** with that task.
   - **With `--auto`**: loop back to **step 3** immediately with that task — do not ask.
-- **If no tasks remain**: tell the user all tasks for the project are complete and stop.
+- **If no tasks remain**: before reporting completion, flip the project's status to `Done` in `docs/projects/index.md` — in **both** the table row and the `## <project> — <status>` section header. In `--auto`, fold this update into the final task's commit (or, if the tree is already clean, make a dedicated `docs:` commit for the status flip). Then tell the user all tasks for the project are complete and stop. A project reported complete while its `index.md` still reads `Not Started`/`In Progress` is the exact failure this step exists to prevent — the index is the at-a-glance source of truth and must not lie.

@@ -1,3 +1,10 @@
+---
+name: review
+description: Run the full review panel against current uncommitted changes, optionally with --cross-model adjudication, and return one consolidated verdict. Use when the user invokes /review or asks Codex to review the working tree before commit.
+metadata:
+  short-description: Review uncommitted changes
+---
+
 # /review
 
 Run the full review panel — `test-specialist`, `security-auditor`, `code-reviewer`, `code-simplifier`, and `architecture-reviewer` — in parallel against the current uncommitted working tree, then return one consolidated verdict.
@@ -7,10 +14,18 @@ Use this as a pre-commit gate, after exploratory work outside `/work`, or any ti
 ## Usage
 
 ```
-/review
+/review [--cross-model]
 ```
 
-No arguments. The skill always operates on the current working tree (staged + unstaged + untracked).
+One optional flag, `--cross-model`. The skill always operates on the current working tree (staged + unstaged + untracked).
+
+## Modes
+
+`/review` is **single-model by default** — every reviewer runs on the same Claude session. Pass `--cross-model` to opt into cross-model adjudication: the panel runs on Claude AND on a different-provider Evaluator (Codex via OpenAI), and both verdicts are reconciled into one consolidated answer (step 3 wires the dispatch; step 4 reconciles).
+
+The cross-model dispatch goes through `scripts/dispatch-review.ts` (npm script `dispatch-review`), which wraps `dispatchToExecutor` (`src/jobs/dispatch-runtime.ts`) with target `'codex'`. The dispatch handoff is built per `src/intent/dispatch.ts`'s `buildHandoff` / `recordDispatch` so the dispatch log records the model + provider that ran each reviewer.
+
+The mode itself is resolved by `resolveReviewMode` in `src/intent/adjudication.ts` (with `autonomous: false` for any manual `/review`). An autonomous engine run forces cross-model regardless of this flag — per `docs/projects/08-intent-layer/test-plan.md` §14, autonomous merges always require cross-model review.
 
 ## Scope
 
@@ -30,7 +45,21 @@ If both lists are empty, exit immediately with "Nothing to review — working tr
 
 ## Instructions
 
-### 1. Collect the change set and capture the diff
+### 1. Parse args and resolve the review mode
+
+Before doing any other work, scan the invocation args for `--cross-model`:
+
+- If the args contain `--cross-model`, set `crossModelFlag = true`.
+- Otherwise, set `crossModelFlag = false`.
+
+Then resolve the review mode by applying the same rule as `resolveReviewMode` in `src/intent/adjudication.ts`:
+
+- This is a manual `/review` (the autonomous gen-eval-loop never calls this skill), so `autonomous = false`.
+- `mode = crossModelFlag ? 'cross-model' : 'single-model'` — manual `/review` is single-model by default and opts in via the flag.
+
+Log the chosen mode at the top of the run summary (`Mode: <mode>`). The mode affects how the rest of the instructions execute: in `single-model` (the default today) the rest of the skill runs as written. In `cross-model` the reviewer panel is dispatched twice — once on Claude (the existing path) and once on Codex (via `dispatchToExecutor` from `src/jobs/dispatch-runtime.ts`); the two verdicts are reconciled into the consolidated answer. See the Modes section above for the current implementation status.
+
+### 2. Collect the change set and capture the diff
 
 Run these in parallel:
 
@@ -58,11 +87,21 @@ Untracked files never appear in `diff_text` regardless of mode; agents are told 
 
 Print a one-line scope summary, e.g. `Reviewing 7 files (5 tracked, 2 untracked) — diff embedded…` (or `…— agents will fetch diff…` in fetch mode), then proceed.
 
-### 2. Launch all five agents in parallel
+### 3. Launch all five agents in parallel
 
 **All five `Agent` tool calls MUST be issued in a single assistant turn** so the harness runs them concurrently. Do not invoke them sequentially across turns — that defeats the point of the skill.
 
-Each prompt carries the file lists and tells the agent to read `AGENTS.md` for project rules. Each agent uses its **native verdict and severity vocabulary** — the skill normalizes these in step 3.
+In `cross-model` mode (set in step 1), the **same prompt body** that each Claude reviewer receives is ALSO dispatched to a Codex (OpenAI) executor for that reviewer. Build the Claude `Agent` calls as written below, and in the same turn — in parallel with those — for each reviewer write the prompt to a temp file (e.g. `/tmp/review-<agent>-<ts>.txt`) and run a Bash invocation:
+
+```bash
+npm run dispatch-review -- <agent-name> /tmp/review-<agent>-<ts>.txt
+```
+
+The script wraps `dispatchToExecutor` (target `'codex'`) — it loads the agent's NeutralAgentDef from `.claude/agents/<agent-name>.md`, compiles it for Codex, dispatches, prints the Codex executor's output to stdout, and exits 0 on success. On dispatcher failure (probe says Codex is absent or unauthenticated, spawn error, etc.) the script prints a `DISPATCH-FAILED: <reason>` line to stderr and exits 1 — treat this exit as the Codex pass being `UNAVAILABLE` for that reviewer and proceed with only the Claude verdict for it.
+
+The Bash invocations run in parallel with the `Agent` tool calls in the same turn (one Bash call per reviewer, plus the five `Agent` calls — 10 tool calls in one turn). On Telegram/cockpit users this can look chatty; that's expected and the consolidated answer (step 4) is what the user reads.
+
+Each prompt carries the file lists and tells the agent to read `AGENTS.md` for project rules. Each agent uses its **native verdict and severity vocabulary** — the skill normalizes these in step 4.
 
 In every prompt below, the block
 
@@ -218,7 +257,7 @@ Run `git diff HEAD` yourself to see the full diff for tracked changes.
   (PASS / PASS_WITH_WARNINGS / BLOCK).
   ```
 
-### 3. Normalize, dedupe, synthesize
+### 4. Normalize, dedupe, synthesize
 
 After all five agents return, normalize their **findings** into a unified `BLOCK / WARN / INFO` taxonomy using this map:
 
@@ -244,6 +283,14 @@ After all five agents return, normalize their **findings** into a unified `BLOCK
 > **Why a panel-authored test that still fails ends up as the panel's own BLOCK:** the new test file is part of the diff, so `caused-by-diff → BLOCK` applies as written. This is intentional: a test the panel itself wrote that won't pass after two fix attempts means either the changed code is broken or the test's premise is wrong. Either way the user needs to see it before committing — that's exactly what BLOCK is for.
 
 **Dedupe**: if two or more agents report substantively the same concern at the same `file:line` (or `file` if no line is given), list it once and tag with all agent names: `[security-auditor + code-reviewer]`. Pick the most severe normalized severity across the duplicates. "Substantively the same" means same root cause: a null-deref and a shell-injection both at `foo.ts:42` are different concerns and stay as separate findings. When in doubt, keep them separate.
+
+**Cross-model reconciliation** (only when step 1 set `mode = 'cross-model'`): each reviewer now has *two* outputs — the Claude pass (from the `Agent` tool call) and the Codex pass (from `npm run dispatch-review`'s stdout). Normalize and dedupe both into the same finding stream:
+
+- Apply the severity-mapping table above to **each** output independently. Then dedupe across them with the same rule (`file:line` + same root cause) — a finding both models flagged is tagged with both providers: `[code-reviewer claude+codex]`. A finding only one model flagged is tagged with just that provider: `[code-reviewer codex]`.
+- The overall-verdict computation still runs on the unified finding stream — a BLOCK from either model is a BLOCK on the overall verdict. Cross-model adjudication for the *manual* `/review` is conservative-by-union: anything either model flagged shows up. (The autonomous engine's adjudication, in contrast, requires both models to align; that's a different gate, in `evaluateMergeContract`.)
+- When the two models **disagree** on a specific finding (one flagged, the other did not), list it with a single-provider tag — that *is* the disagreement signal. No extra prose needed unless the disagreement is structural (e.g., one model returned `UNAVAILABLE`).
+- Add a Cross-model section at the end of Per-agent results showing the disagreement count: `<N> findings flagged by Claude only, <M> by Codex only, <K> by both`. This is the user's at-a-glance "where did the two models see different things" view.
+- If the Codex dispatch wrapper returned `UNAVAILABLE` for a reviewer (the script exited 1), include that reviewer's Claude verdict as written and tag the Codex side `UNAVAILABLE` in the Cross-model section. The overall verdict is still computed from whatever findings the available passes produced.
 
 Compute the overall verdict from normalized findings only:
 
@@ -280,7 +327,7 @@ Print the report in this format:
 
 ## Per-agent results
 
-> Each agent's native verdict line is shown here for reference only — it does not influence the overall verdict (which is computed from normalized findings in step 3). If an agent is UNAVAILABLE, replace its body with `UNAVAILABLE — <one-line reason>`.
+> Each agent's native verdict line is shown here for reference only — it does not influence the overall verdict (which is computed from normalized findings in step 4). If an agent is UNAVAILABLE, replace its body with `UNAVAILABLE — <one-line reason>`.
 
 ### test-specialist — <PASS / FAIL>
 - Suite: <N passing / M failing>
@@ -294,6 +341,13 @@ Print the report in this format:
 
 ### code-reviewer — <PASS / PASS_WITH_WARNINGS / BLOCK>
 - <one-line summary>
+
+### Cross-model (only in `cross-model` mode)
+
+- Findings flagged by Claude only: N
+- Findings flagged by Codex only: M
+- Findings flagged by both: K
+- Codex UNAVAILABLE for: <comma-separated reviewer list, or "none">
 
 ### code-simplifier (advisory)
 - Quick Wins: N | Medium: N | Structural: N
