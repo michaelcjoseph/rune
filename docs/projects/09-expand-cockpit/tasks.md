@@ -67,7 +67,7 @@ Test commit lands before any implementation code per phase.
 
 **Build**
 
-- [ ] Generalize `runAgent`, `project-setup-writer`, and `buildSetupWriterBrief` so the approved session carries an explicit target product repo path from `policies/products.json`; the agent is spawned with that repo writable, writes to that target repo's `docs/projects/`, emits `scaffold-result` JSON, and keeps all returned paths repo-relative.
+- [x] Generalize `runAgent`, `project-setup-writer`, and `buildSetupWriterBrief` so the approved session carries an explicit target product repo path from `policies/products.json`; the agent is spawned with that repo writable, writes to that target repo's `docs/projects/`, emits `scaffold-result` JSON, and keeps all returned paths repo-relative. (`src/intent/scaffold-target.ts`: `resolveScaffoldTarget` + `scaffoldWriteScope` → `scaffold-target.test.ts` green, 12 cases. `runAgent`/`execClaude` gained optional `writeScope` (cwd override + `--add-dir`); `buildSetupWriterBrief(session, targetRepoPath?)` emits the `scaffold-result` contract; `project-setup-writer.md` writes to `{TARGET_REPO}` + emits the JSON block. Approval-path call-site wiring + full realpath/$WORKSPACE_ROOT containment are the explicit later "Extend approval path" task.)
 - [ ] `src/intent/scaffold-result.ts` parser + repo-diff cross-check (the directory-diff verification from `approve.ts` commit `a5018e5` is the existing fallback; this phase formalizes the JSON block as the primary signal).
 - [ ] `src/intent/promotions.ts` — durable job log at `config.PROMOTIONS_FILE` (`logs/promotions.jsonl` by default) + restart replay + explicit retry helper.
 - [ ] `src/intent/backlog-mark-done.ts` — pure rewriter returning `{ newText, matched }`.
