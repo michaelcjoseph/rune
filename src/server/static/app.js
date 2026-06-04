@@ -708,9 +708,22 @@
               `</div>`;
           }).join('');
       const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
+      // 09-expand-cockpit: one compact backlog count line per product. data-backlog-open
+      // carries the (escHtml'd) product name; a delegated click in handleCockpitClick opens
+      // the backlog drawer. Absent for products with no backlogCounts (non-repo-backed or
+      // counts unavailable this poll).
+      const bc = product.backlogCounts;
+      const backlogLine = bc
+        ? `<div class="cockpit-backlog" data-backlog-open="${escHtml(product.name)}" title="Open backlog">` +
+            `Bugs ${escHtml(String(bc.bugs.open))} · Ideas ${escHtml(String(bc.ideas.open))}` +
+            (bc.warnings ? ` · <span class="cockpit-backlog-warn">⚠ ${escHtml(String(bc.warnings))}</span>` : '') +
+            ` <span class="cockpit-backlog-open">open ↗</span>` +
+          `</div>`
+        : '';
       return `<div class="cockpit-product">` +
         `<div class="cockpit-product-name">${escHtml(product.name)}${trackedLabel}</div>` +
         rows +
+        backlogLine +
         `</div>`;
     }).join('');
     setHTML(el, html);
@@ -889,9 +902,254 @@
         .catch(() => { cancelBtn.disabled = false; });
       return;
     }
+    // 09-expand-cockpit: the sidebar backlog count line carries data-backlog-open=<product>
+    // and opens the backlog drawer. Checked before the action button so the count line never
+    // falls through to a project action.
+    const backlogTrigger = e.target.closest('[data-backlog-open]');
+    if (backlogTrigger) {
+      openBacklogDrawer(backlogTrigger.dataset.backlogOpen);
+      return;
+    }
     const btn = e.target.closest('.cockpit-action-btn');
     if (!btn) return;
     cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);
+  }
+
+  // ---- Backlog drawer (09-expand-cockpit) ----
+  //
+  // Opened from a product's sidebar count line (data-backlog-open). Fetches the full backlog
+  // for that product via GET /api/backlog/:product and renders Bugs/Ideas tabs. The last-
+  // selected tab persists in localStorage. Each open item renders a Plan button (disabled with
+  // a tooltip showing its disabledReason); ideas with a body render it as a nested list; file
+  // warnings render as a banner. An enabled Plan button POSTs the Plan endpoint (handleBacklogPlan)
+  // and hands off to the planning panel (Phase 4).
+  let backlogData = null;
+  let backlogProduct = null;
+
+  function backlogActiveTab() {
+    return localStorage.getItem('backlogTab') === 'ideas' ? 'ideas' : 'bugs';
+  }
+
+  function resetBacklogAddRow() {
+    const row = document.getElementById('backlog-add-row');
+    const input = document.getElementById('backlog-add-input');
+    const err = document.getElementById('backlog-add-error');
+    if (row) row.classList.add('hidden');
+    if (input) input.value = '';
+    if (err) err.textContent = '';
+  }
+
+  function basename(p) {
+    return String(p || '').split('/').pop();
+  }
+
+  function openBacklogDrawer(product) {
+    const drawer = document.getElementById('backlog-drawer');
+    const title = document.getElementById('backlog-drawer-title');
+    const content = document.getElementById('backlog-drawer-content');
+    if (!drawer || !title || !content) return;
+    backlogProduct = product;
+    title.textContent = product + ' backlog';
+    content.innerHTML = '<span class="muted">Loading…</span>';
+    const warnEl = document.getElementById('backlog-drawer-warnings');
+    if (warnEl) warnEl.innerHTML = '';
+    resetBacklogAddRow();
+    drawer.classList.remove('hidden');
+    fetch(`/api/backlog/${encodeURIComponent(product)}`)
+      .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e))))
+      .then(data => { backlogData = data; renderBacklogDrawer(); })
+      .catch(err => {
+        const code = (err && err.error && (err.error.code || err.error)) || 'error';
+        content.innerHTML = `<span class="muted">Could not load backlog (${escHtml(String(code))})</span>`;
+      });
+  }
+
+  function renderBacklogDrawer() {
+    if (!backlogData) return;
+    const tab = backlogActiveTab();
+    document.querySelectorAll('.backlog-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.backlogTab === tab);
+    });
+    const items = tab === 'ideas' ? (backlogData.ideas || []) : (backlogData.bugs || []);
+    const content = document.getElementById('backlog-drawer-content');
+    if (content) {
+      content.innerHTML = items.length === 0
+        ? '<span class="muted">none</span>'
+        : items.map(renderBacklogItem).join('');
+    }
+    const warnEl = document.getElementById('backlog-drawer-warnings');
+    const warns = backlogData.fileWarnings || [];
+    if (warnEl) {
+      warnEl.innerHTML = warns.length === 0 ? '' :
+        `<div class="backlog-warnings-title">Format warnings (${escHtml(String(warns.length))}):</div>` +
+        warns.map(w => {
+          const loc = (basename(w.file) || w.file || '') + (w.lineNumber ? ':' + w.lineNumber : '');
+          return `<div class="backlog-warning">· ${escHtml(loc)} — ${escHtml(w.code || '')}</div>`;
+        }).join('');
+    }
+  }
+
+  function renderBacklogItem(item) {
+    const plan = (item.actions || []).find(a => a.kind === 'plan') || { enabled: false };
+    const statusIcon = item.status === 'done' ? '✓' : '◯';
+    const promoted = item.promotedTo
+      ? ` <span class="backlog-promoted muted">→ ${escHtml(item.promotedTo)}</span>` : '';
+    const warnChip = (item.warnings && item.warnings.length)
+      ? ` <span class="backlog-warn-chip" title="${escHtml(item.warnings.join(', '))}">⚠</span>` : '';
+    const body = (item.body && item.body.length)
+      ? `<ul class="backlog-item-body">${item.body.map(b => `<li>${escHtml(b)}</li>`).join('')}</ul>` : '';
+    const planBtn = plan.enabled
+      ? `<button class="backlog-plan-btn" data-backlog-plan="${escHtml(item.id)}">Plan</button>`
+      : `<button class="backlog-plan-btn" disabled title="${escHtml(plan.disabledReason || 'unavailable')}">Plan</button>`;
+    const src = item.source && item.source.file
+      ? `<a class="backlog-src" href="obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(item.source.file)}" title="${escHtml(item.source.file + ':' + item.source.lineNumber)}">${escHtml(basename(item.source.file) + ':' + item.source.lineNumber)}</a>`
+      : '';
+    return `<div class="backlog-item ${item.status === 'done' ? 'backlog-item-done' : ''}">` +
+      `<div class="backlog-item-head">` +
+        `<span class="backlog-item-status">${statusIcon}</span>` +
+        `<span class="backlog-item-text">${escHtml(item.text)}${promoted}${warnChip}</span>` +
+        planBtn +
+      `</div>` +
+      body +
+      (src ? `<div class="backlog-item-src">${src}</div>` : '') +
+      `</div>`;
+  }
+
+  // Static tab buttons: persist the selected tab and re-render.
+  document.querySelectorAll('.backlog-tab').forEach(b => {
+    b.addEventListener('click', () => {
+      localStorage.setItem('backlogTab', b.dataset.backlogTab);
+      renderBacklogDrawer();
+    });
+  });
+  document.getElementById('backlog-drawer-close')?.addEventListener('click', () => {
+    document.getElementById('backlog-drawer')?.classList.add('hidden');
+    backlogData = null;
+    backlogProduct = null;
+  });
+
+  // `+` chip: reveal the inline add input. The add targets the ACTIVE tab's kind. No optimistic
+  // commit — the row stays pending until the POST resolves; on success the server's parsed item
+  // is appended, on error the typed error.code shows inline and the user's text is preserved.
+  document.getElementById('backlog-add-chip')?.addEventListener('click', () => {
+    const row = document.getElementById('backlog-add-row');
+    if (!row) return;
+    const hidden = row.classList.toggle('hidden');
+    if (!hidden) document.getElementById('backlog-add-input')?.focus();
+  });
+
+  function submitBacklogAdd() {
+    const input = document.getElementById('backlog-add-input');
+    const submit = document.getElementById('backlog-add-submit');
+    const err = document.getElementById('backlog-add-error');
+    if (!input || !submit || !backlogProduct || !backlogData) return;
+    if (submit.disabled) return; // in-flight — guard against Enter double-submit
+    const text = input.value;
+    if (err) err.textContent = '';
+    if (!text.trim()) { if (err) err.textContent = 'empty-text'; return; }
+    const kind = backlogActiveTab();
+    submit.disabled = true;
+    submit.textContent = '…';
+    fetch(`/api/backlog/${encodeURIComponent(backlogProduct)}/${encodeURIComponent(kind)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+      .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e))))
+      .then(data => {
+        if (data && data.item && backlogData && Array.isArray(backlogData[kind])) {
+          // Append the server's fully-parsed item to the active tab's list and re-render.
+          backlogData[kind].push(data.item);
+          resetBacklogAddRow();
+          renderBacklogDrawer();
+        } else {
+          // Written, but the server couldn't echo the parsed item — re-fetch so the list
+          // reflects the write rather than leaving a stale view (and the user doesn't re-submit).
+          resetBacklogAddRow();
+          openBacklogDrawer(backlogProduct);
+        }
+      })
+      .catch(e => {
+        // Keep the user's text for retry; surface the typed error code/message inline.
+        const code = (e && e.error && (e.error.code || e.error.message)) || 'error';
+        if (err) err.textContent = String(code);
+      })
+      .finally(() => {
+        submit.disabled = false;
+        submit.textContent = 'Add';
+      });
+  }
+
+  document.getElementById('backlog-add-submit')?.addEventListener('click', submitBacklogAdd);
+  document.getElementById('backlog-add-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitBacklogAdd(); }
+    if (e.key === 'Escape') resetBacklogAddRow();
+  });
+
+  // Plan button (09-expand-cockpit Phase 4). Delegated on the stable drawer-content element so it
+  // survives the innerHTML re-renders. POSTs the Plan endpoint and hands off to the planning panel.
+  document.getElementById('backlog-drawer-content')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-backlog-plan]');
+    if (btn && !btn.disabled) {
+      // Disable immediately so a double-click can't fire two POSTs. The drawer closes (200) or
+      // re-renders (error) afterward, so we never need to re-enable this exact node.
+      btn.disabled = true;
+      handleBacklogPlan(btn.dataset.backlogPlan);
+    }
+  });
+
+  /** Drive a Plan click for `itemId` in the open drawer's product:
+   *   200 → close the drawer and hand off to the planning panel over the just-created session
+   *         (skipStart so we don't replace the promotion-linked session the server made);
+   *   409 active-planning-session → confirm-dialog: resume the active session, or abandon it and
+   *         re-try this Plan;
+   *   anything else (409 stale-item, 422 item-not-eligible) → the drawer view is out of date, so
+   *         re-fetch it (an ineligible item then renders its disabled Plan button). */
+  function handleBacklogPlan(itemId, retried) {
+    if (!backlogProduct || !itemId) return;
+    const product = backlogProduct;
+    fetch(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`, {
+      method: 'POST',
+    })
+      .then(r => r.json().then(body => ({ status: r.status, body })).catch(() => ({ status: r.status, body: {} })))
+      .then(({ status, body }) => {
+        const code = body && body.error && body.error.code;
+        if (status === 200) {
+          document.getElementById('backlog-drawer')?.classList.add('hidden');
+          backlogData = null;
+          backlogProduct = null;
+          if (typeof window.openPlanningPanel === 'function') {
+            window.openPlanningPanel(product, { skipStart: true });
+          }
+          return;
+        }
+        // Only offer the collision dialog on the FIRST attempt — after an abandon+retry a fresh
+        // collision means an external race (another tab / Telegram); fall through to a re-fetch
+        // rather than looping the dialog.
+        if (status === 409 && code === 'active-planning-session' && !retried) {
+          const safeProduct = product.replace(/[\r\n]/g, ' ');
+          const resume = window.confirm(
+            `A planning session is already active for "${safeProduct}".\n\n` +
+            `OK = resume it.   Cancel = abandon it and plan this item fresh.`,
+          );
+          if (resume) {
+            document.getElementById('backlog-drawer')?.classList.add('hidden');
+            if (typeof window.openPlanningPanel === 'function') {
+              window.openPlanningPanel(product, { skipStart: true });
+            }
+          } else {
+            // Abandon the active session, then re-try this Plan ONCE from a clean slate.
+            fetch('/api/planning/abandon', { method: 'POST' })
+              .then(() => handleBacklogPlan(itemId, true))
+              .catch(() => openBacklogDrawer(product));
+          }
+          return;
+        }
+        // Stale view (stale-item), now-ineligible (item-not-eligible), or a post-retry collision —
+        // re-fetch so the drawer reflects the true state rather than leaving an out-of-date list.
+        openBacklogDrawer(product);
+      })
+      .catch(() => openBacklogDrawer(product));
   }
 
   // ---- Pending Approvals panel (Phase 6 C2) ----
@@ -1351,9 +1609,13 @@
 
   /** Open the panel scoped to a product slug. POSTs /api/planning/start to
    *  create the session, then renders the empty-scoping state. Exposed via
-   *  window.openPlanningPanel so the cockpit Plan button (C1.3) can call it. */
-  async function openPlanningPanel(product) {
+   *  window.openPlanningPanel so the cockpit Plan button (C1.3) can call it.
+   *  Pass `{ skipStart: true }` when a session was ALREADY created server-side
+   *  (the backlog Plan button — 09-expand-cockpit — creates a promotion-linked
+   *  session via /api/backlog/.../plan; starting another here would clobber it). */
+  async function openPlanningPanel(product, opts) {
     if (!product) return;
+    const skipStart = !!(opts && opts.skipStart);
     const panel = planningEl('planning-panel');
     if (!panel) return;
     planningState.open = true;
@@ -1366,6 +1628,9 @@
     renderPlanningView();
     panel.classList.remove('hidden');
     panel.setAttribute('aria-hidden', 'false');
+    // The backlog Plan button already created the session server-side — opening here is a pure
+    // hand-off, so don't POST /api/planning/start (it would cancel + replace the linked session).
+    if (skipStart) return;
     // Best-effort start — if it fails (e.g., 401 in dev), the panel stays
     // open with a friendly transcript message so the user knows something
     // went wrong rather than seeing a silent blank.

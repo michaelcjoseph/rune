@@ -19,6 +19,8 @@ Three rules, in order:
 
 1. **You MUST write files.** A run is only successful if you have called `Write` at least three times (one per file: `spec.md`, `tasks.md`, `test-plan.md`) and `Edit` once on `docs/projects/index.md`. Returning a text summary without writing files is a hard failure. The caller (`cmd-approve` in `src/bot/commands/approve.ts`) verifies the files landed on disk and will reject your run if they didn't — see project 08 `agent-lessons.md` for the silent-failure incident that motivated this check.
 
+   You MUST also end your reply with a fenced ```scaffold-result JSON block naming the slug and the repo-relative files you created (see **Output** below). The caller parses this as the primary signal and cross-checks it against the repo diff; a mismatch or a missing block fails the run.
+
 2. **You MUST NOT ask questions or enter clarification mode.** No "before I start, a few things to confirm", no numbered question lists, no "want me to read X first?". The brief is what you have; work with it. If a section of the brief is genuinely missing required content (no Name, no Slug, no Spec body, no Tasks, no Test Plan), abort by returning the single line `BRIEF INCOMPLETE: <which field>` and STOP. Do not invent content, do not propose a conversation, do not enter Plan Mode.
 
 3. **You MUST NOT enter Plan Mode** (`EnterPlanMode`). This agent operates in execute mode. Read the brief, write the files, output the summary, return.
@@ -27,17 +29,23 @@ A run that violates rule 1 or rule 2 is the failure mode the calling code is now
 
 ## Workflow
 
-**Write scope:** You write exclusively to the Jarvis workspace — `{PROJECT_ROOT}/docs/projects/` and `{PROJECT_ROOT}/docs/projects/index.md`. You do not touch the Obsidian vault.
+**Write scope:** You write exclusively under the **target repo's** `docs/projects/`. The brief names the target repo:
+- If the brief contains a `Target repo: <path>` line, that path is your repo root — write to `<path>/docs/projects/` and `<path>/docs/projects/index.md`. This is the target *product's* repo, which is not necessarily Jarvis.
+- If the brief has no `Target repo:` line, default to the Jarvis workspace — `{PROJECT_ROOT}/docs/projects/`.
 
-You will receive an approved Project Brief and a path to the Jarvis project root. Your job is to:
+In both cases you write only under that repo's `docs/projects/`. You do not touch the Obsidian vault, and you do not write outside the named repo.
+
+Throughout the steps below, **`{TARGET_REPO}` means the repo root resolved here** — the `Target repo:` path if the brief has one, otherwise `{PROJECT_ROOT}` (Jarvis). Every path in the steps is under `{TARGET_REPO}`.
+
+You will receive an approved Project Brief. Your job is to:
 1. Parse the slug and name from the brief
-2. Determine the next project number by reading the index
+2. Determine the next project number by reading the target repo's index
 3. Create the project directory and three files
 4. Update the project index
 
 ## Step 1: Determine the next project number
 
-Read `{PROJECT_ROOT}/docs/projects/index.md`. Find all rows matching the pattern `| [NN-slug](...) |` and extract the highest number. The new project number is that + 1, zero-padded to 2 digits (e.g., current max `06` → new is `07`).
+Read `{TARGET_REPO}/docs/projects/index.md`. Find all rows matching the pattern `| [NN-slug](...) |` and extract the highest number. The new project number is that + 1, zero-padded to 2 digits (e.g., current max `06` → new is `07`).
 
 ## Step 2: Parse the brief
 
@@ -47,20 +55,22 @@ From the Project Brief extract:
 - **One-line description** — derive from the Core Value Proposition (used in index.md)
 - All other sections for the spec
 
-The new project directory is: `{PROJECT_ROOT}/docs/projects/NN-slug/`
+The new project directory is: `{TARGET_REPO}/docs/projects/NN-slug/`
 
 ## Step 3: Read the templates
 
-Read the three templates as structure guides:
-- `{PROJECT_ROOT}/docs/projects/templates/spec.md`
-- `{PROJECT_ROOT}/docs/projects/templates/tasks.md`
-- `{PROJECT_ROOT}/docs/projects/templates/test-plan.md`
+Read the three templates as structure guides from `<repo>/docs/projects/templates/` (where `<repo>` is the target repo from the **Write scope** section):
+- `spec.md`
+- `tasks.md`
+- `test-plan.md`
+
+If the target repo has no `docs/projects/templates/` (a non-Jarvis product repo may not), fall back to the Jarvis templates at `{PROJECT_ROOT}/docs/projects/templates/` for structure, but still write the new files under the **target** repo.
 
 ## Step 4: Write the three files
 
 ### spec.md
 
-Write `{PROJECT_ROOT}/docs/projects/NN-slug/spec.md` following the template structure exactly. Fill in every section from the brief:
+Write `{TARGET_REPO}/docs/projects/NN-slug/spec.md` following the template structure exactly. Fill in every section from the brief:
 
 - **Overview** section: use the Overview + Core Value Proposition from the brief
 - **Goals** / **Non-Goals**: from the brief's Goals and Non-Goals sections
@@ -77,7 +87,7 @@ Remove any template placeholder sections that don't apply (e.g., Database Schema
 
 ### tasks.md
 
-Write `{PROJECT_ROOT}/docs/projects/NN-slug/tasks.md`:
+Write `{TARGET_REPO}/docs/projects/NN-slug/tasks.md`:
 
 ```markdown
 # [Name] — Tasks
@@ -100,7 +110,7 @@ Extract phase names and deliverables directly from the Implementation Phases in 
 
 ### test-plan.md
 
-Write `{PROJECT_ROOT}/docs/projects/NN-slug/test-plan.md`:
+Write `{TARGET_REPO}/docs/projects/NN-slug/test-plan.md`:
 
 ```markdown
 # [Name] Test Plan
@@ -133,7 +143,7 @@ Generate test scenarios based on the requirements in the spec. Focus on:
 
 ## Step 5: Update the index
 
-`{PROJECT_ROOT}/docs/projects/index.md` has two parts that both need a new entry — the at-a-glance table and the per-project detail sections below it. Update both.
+`{TARGET_REPO}/docs/projects/index.md` has two parts that both need a new entry — the at-a-glance table and the per-project detail sections below it. Update both.
 
 1. Append a row to the table (the last column is a single tight sentence):
 
@@ -168,3 +178,11 @@ Created docs/projects/NN-slug/
 - test-plan.md — [N] test scenarios
 - index.md updated
 ```
+
+Then, as the **last** thing in your reply, emit a fenced `scaffold-result` block (this is required — see the Hard contract). The `slug` is the new `NN-slug`, and `filesCreated` lists every file you created/edited as **repo-relative** paths (no leading `/`, no `..`):
+
+````
+```scaffold-result
+{ "slug": "NN-slug", "filesCreated": ["docs/projects/NN-slug/spec.md", "docs/projects/NN-slug/tasks.md", "docs/projects/NN-slug/test-plan.md"] }
+```
+````

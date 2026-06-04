@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   buildCockpitView,
+  type BacklogCounts,
   type CockpitView,
 } from './cockpit.js';
 import type { Registry } from './registry.js';
@@ -151,5 +152,40 @@ describe('product/project cockpit — task progress (cross-product)', () => {
     const bySlug = Object.fromEntries(allProjects(view).map((p) => [p.slug, p.taskProgress]));
     expect(bySlug['02-growth']).toEqual({ done: 3, total: 5 }); // overlay wins
     expect(bySlug['01-mvp']).toEqual({ done: 4, total: 4 }); // untouched falls back to registry
+  });
+});
+
+describe('product/project cockpit — backlog counts (09-expand-cockpit)', () => {
+  it('carries no backlogCounts when the optional map is omitted', () => {
+    const view = buildCockpitView(sampleRegistry(), {});
+    for (const product of view.products) {
+      expect(product.backlogCounts).toBeUndefined();
+    }
+  });
+
+  it('populates backlogCounts on the matching product, keyed by product NAME (not slug)', () => {
+    const counts: Record<string, BacklogCounts> = {
+      aura: { bugs: { open: 4, done: 1 }, ideas: { open: 7, done: 2 }, warnings: 2 },
+    };
+    const view = buildCockpitView(sampleRegistry(), {}, undefined, undefined, counts);
+    const aura = view.products.find((p) => p.name === 'aura')!;
+    expect(aura.backlogCounts).toEqual({
+      bugs: { open: 4, done: 1 },
+      ideas: { open: 7, done: 2 },
+      warnings: 2,
+    });
+    // Products absent from the map carry no counts.
+    expect(view.products.find((p) => p.name === 'relay')!.backlogCounts).toBeUndefined();
+    expect(view.products.find((p) => p.name === 'family')!.backlogCounts).toBeUndefined();
+  });
+
+  it('never populates backlogCounts on a non-repo-backed product, even if the map carries an entry', () => {
+    // `readBacklogs` returns an all-zeros entry for non-repo-backed products; the view must
+    // leave such a product absent (no "Bugs 0 · Ideas 0" card) rather than render empty counts.
+    const counts: Record<string, BacklogCounts> = {
+      family: { bugs: { open: 0, done: 0 }, ideas: { open: 0, done: 0 }, warnings: 0 },
+    };
+    const view = buildCockpitView(sampleRegistry(), {}, undefined, undefined, counts);
+    expect(view.products.find((p) => p.name === 'family')!.backlogCounts).toBeUndefined();
   });
 });

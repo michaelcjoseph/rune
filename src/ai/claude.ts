@@ -130,6 +130,18 @@ export interface OpMeta {
   userId?: number;
 }
 
+/** A spawn-scope override for a single Claude CLI run. By default an agent runs
+ *  with `cwd: VAULT_DIR` and only `WORKSPACE_DIR` added as a writable dir. A
+ *  write-scoped run (e.g. project-setup-writer scaffolding into a TARGET product
+ *  repo — see src/intent/scaffold-target.ts) overrides the cwd and adds the
+ *  target repo via `--add-dir` so the agent has real write access there. */
+export interface AgentWriteScope {
+  /** Working directory the child runs in (overrides the default vault cwd). */
+  cwd: string;
+  /** Directories to expose to the agent via `--add-dir` (in addition to WORKSPACE_DIR). */
+  writableDirs: string[];
+}
+
 /** Append a single stream-json event line (envelope) to logs/claude-stream.jsonl.
  *  Best-effort + async: a log-write failure must not surface to the caller, and
  *  the fs write must not block the stdout `data` handler (which fires per line
@@ -214,7 +226,7 @@ function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | un
   }
 }
 
-function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promise<ClaudeResult> {
+function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
   // Haiku calls) bypass it because their callers expect a single JSON blob on
@@ -227,6 +239,9 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
     '--dangerously-skip-permissions',
     ...getProjectMcpArgs(),
     ...(config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : []),
+    // A write-scoped run adds its target dirs so the agent can write there
+    // (default cwd is the vault, which is otherwise its only writable root).
+    ...(writeScope ? writeScope.writableDirs.flatMap((d) => ['--add-dir', d]) : []),
   ];
   const streamArgs = streaming
     ? ['--output-format', 'stream-json', '--verbose']
@@ -235,7 +250,7 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta): Promis
 
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
-      cwd: config.VAULT_DIR,
+      cwd: writeScope?.cwd ?? config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Expose PROJECT_ROOT so agents that shell out can locate the Jarvis
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
@@ -603,7 +618,7 @@ function resolveAgentModel(agentName: string, def: AgentDef): string {
  *  that produce prose the user reads (kb-query, review-writer, etc.); leave
  *  unset for classifiers and JSON/structured agents so their output stays
  *  deterministic. */
-export async function runAgent(agentName: string, prompt: string, timeoutMs?: number, userVisible = true, voice?: boolean): Promise<ClaudeResult> {
+export async function runAgent(agentName: string, prompt: string, timeoutMs?: number, userVisible = true, voice?: boolean, writeScope?: AgentWriteScope): Promise<ClaudeResult> {
   const dateCtx = getDateContext();
   let def: AgentDef;
   try {
@@ -657,7 +672,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   const opMeta: OpMeta | undefined = userVisible
     ? { kind: 'agent', label: agentName, agentName, userId }
     : undefined;
-  const result = await execClaude(args, timeoutMs, opMeta);
+  const result = await execClaude(args, timeoutMs, opMeta, writeScope);
   const durationMs = Date.now() - t0;
   const status = result.error ? 'error' : 'success';
   _bus?.publish({ kind: 'agent-event', subKind: 'end', agent: agentName, runId, userId, startedAt, durationMs, status });

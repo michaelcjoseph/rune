@@ -31,7 +31,7 @@ real planning session in one click.
 
 ## Out of v1 (separate spec to follow)
 
-- **Fix autorun** for bugs (`expand-cockpit-fix-autorun`). Cut because `/work --auto` is currently Jarvis-only; generalizing it across product repos is a separate piece of work with its own concurrency, branch, and security questions.
+- **Fix autorun** for bugs (`expand-cockpit-fix-autorun`). Cut because `/work --auto` is currently Jarvis-only; generalizing it across product repos is a separate piece of work with its own concurrency, branch, and security questions. Tracked as a follow-on idea in [`docs/projects/ideas.md`](../ideas.md) — no separate `/plan` conversation is required for this project's v1 completion.
 - Cross-product backlog views.
 - Editing/reordering bullets in place.
 - Plan on Loop-filed ideas.

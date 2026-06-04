@@ -116,11 +116,24 @@ export interface CockpitProject {
   workRun?: WorkRunProjection;
 }
 
+/** Open/done tallies for a product's backlog (09-expand-cockpit). Surfaced on the product
+ *  card so the sidebar can render a `Bugs N · Ideas N · ⚠ N` one-liner without fetching the
+ *  full lists — the drawer fetches those separately, keeping the cockpit payload bounded.
+ *  `warnings` is the file-level format-warning count (the drawer's "Format warnings" banner). */
+export interface BacklogCounts {
+  bugs: { open: number; done: number };
+  ideas: { open: number; done: number };
+  warnings: number;
+}
+
 /** A product and the projects under it, as the cockpit presents them. */
 export interface CockpitProduct {
   name: string;
   repoBacked: boolean;
   projects: CockpitProject[];
+  /** Backlog open/done + warning counts (09-expand-cockpit). Absent unless the caller passes
+   *  the `backlogCounts` map to `buildCockpitView`; product repos with no backlog stay absent. */
+  backlogCounts?: BacklogCounts;
 }
 
 /** The cockpit view — every product/project, or a clear unavailable state. */
@@ -180,12 +193,20 @@ function normalizeRunStatusEntry(
  * The optional `workRuns` argument (project 11, Phase 5) is a slug-keyed map of work-run
  * projections sourced from the new work-run store; when supplied, each matching project's
  * `workRun` field is populated. Slugs absent from the map yield projects without `workRun`.
+ *
+ * The optional `backlogCounts` argument (09-expand-cockpit) is a PRODUCT-NAME-keyed map of
+ * backlog open/done + warning counts sourced from `readBacklogs` + `computeBacklogCounts`;
+ * when supplied, each matching product's `backlogCounts` field is populated. Products absent
+ * from the map (or non-repo-backed) yield no `backlogCounts`.
  */
 export function buildCockpitView(
   registry: Registry | null,
   runStatus: RunStatusByProject,
   taskProgress?: Record<string, { done: number; total: number }>,
   workRuns?: Record<string, WorkRunProjection>,
+  // NOTE: keyed by product NAME (product-level), unlike the slug-keyed (project-level)
+  // taskProgress/workRuns above — products have no slug, so name is the only product key.
+  backlogCounts?: Record<string, BacklogCounts>,
 ): CockpitView {
   if (registry === null) {
     return {
@@ -194,10 +215,8 @@ export function buildCockpitView(
       unavailableReason: 'registry unavailable — it has not been built yet',
     };
   }
-  const products: CockpitProduct[] = registry.products.map((product) => ({
-    name: product.name,
-    repoBacked: product.repoBacked,
-    projects: product.projects.map((project) => {
+  const products: CockpitProduct[] = registry.products.map((product) => {
+    const projects = product.projects.map((project) => {
       const entry = normalizeRunStatusEntry(runStatus[project.slug]);
       const out: CockpitProject = {
         slug: project.slug,
@@ -219,7 +238,19 @@ export function buildCockpitView(
       const wr = workRuns?.[project.slug];
       if (wr !== undefined) out.workRun = wr;
       return out;
-    }),
-  }));
+    });
+    const prod: CockpitProduct = {
+      name: product.name,
+      repoBacked: product.repoBacked,
+      projects,
+    };
+    // 09-expand-cockpit: product-name-keyed backlog counts when the caller supplied them.
+    // Guard on repoBacked so a caller that feeds the all-zeros entry `readBacklogs` returns
+    // for a non-repo-backed product can't render "Bugs 0 · Ideas 0" on a repo-less card —
+    // "no backlog" (absent) stays distinct from "empty backlog".
+    const counts = backlogCounts?.[product.name];
+    if (counts !== undefined && product.repoBacked) prod.backlogCounts = counts;
+    return prod;
+  });
   return { available: true, products };
 }

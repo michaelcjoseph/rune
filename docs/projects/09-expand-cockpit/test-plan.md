@@ -8,7 +8,7 @@ Error handling and behavior coverage for the backlog → planning flow.
 ## §1 Parser
 
 - Accepted forms round-trip exactly.
-- Each rejected form produces a typed warning (`tab-indent`, `bad-bullet-glyph`, `numbered-list`, `nested-deeper-than-2`, `non-matching-line`, `bad-promotion-marker`).
+- Each rejected form produces a typed warning. File-level warning codes: `tab-indented`, `star-bullet`, `numbered-list`, `blockquote`, `code-fence`, `over-indented`, `non-checkbox-bullet` (bugs), `orphan-subbullet` (ideas sub-bullet detached from its top-level). Item-level warning string: `bad-promotion-marker`. (The test suite `backlog-parser.test.ts` is the authoritative source for these codes.)
 - CRLF and no-final-newline tolerated.
 - Strict slug regex: `→ foo-bar` (no digits) → NOT promoted; `→ 09-foo` → promoted; `→ 9-foo` → NOT promoted.
 - Sub-bullet across blank line does NOT attach.
@@ -24,7 +24,7 @@ Error handling and behavior coverage for the backlog → planning flow.
 ## §3 Reader + security
 
 - Roll-up per product; non-repo-backed flagged.
-- Missing/unreadable file → empty + warning, others intact.
+- Missing file → empty, **no** warning (graceful: a product simply may not have a backlog file yet). Unreadable file (EISDIR, permission denied — any non-ENOENT read error) → empty + a `unreadable-file` file warning. In both cases the other file in the same product still reads.
 - Path canonicalization rejects symlink escapes.
 - `repoPath` outside `$WORKSPACE_ROOT` rejected at read time.
 - Source paths in API responses are repo-relative and never leak absolute host paths.

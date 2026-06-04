@@ -22,6 +22,7 @@ const { mockConfig, mockCleanupSession } = vi.hoisted(() => ({
   mockConfig: {
     PLANNING_SESSIONS_FILE: '/test/planning-sessions.json',
     PLANNING_ARTIFACTS_DIR: '/test/planning-artifacts',
+    PROMOTIONS_FILE: '/test/promotions.jsonl',
   },
   mockCleanupSession: vi.fn(),
 }));
@@ -33,6 +34,7 @@ vi.mock('../ai/claude.js', () => ({
 // --- Imports under test (after mocks) ---
 
 import {
+  abandonActivePlanningSession,
   createPlanningSession,
   deletePlanningSession,
   getActivePlanningSession,
@@ -42,6 +44,9 @@ import {
   restorePlanningSessions,
   updatePlanningSession,
 } from './planning.js';
+// Real promotions module (uses real fs against the per-test tmpdir log) — verifies the
+// abandonment hook in deletePlanningSession against the actual state machine.
+import { createPromotion, appendPromotion, loadPromotions, transitionPromotion } from '../intent/promotions.js';
 
 let tmpDir: string;
 
@@ -49,6 +54,7 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-planning-store-test-'));
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
   mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
+  mockConfig.PROMOTIONS_FILE = join(tmpDir, 'promotions.jsonl');
   mockCleanupSession.mockReset();
   // Ensure no leftover sessions from previous test runs (in-memory state
   // is module-scoped; the persist file is per-test so a fresh restore
@@ -307,5 +313,68 @@ describe('spec-artifact snapshots', () => {
     const f = listArtifactFiles(mockConfig.PLANNING_ARTIFACTS_DIR)[0]!;
     expect(f.startsWith(created.id)).toBe(true);
     expect(f.endsWith('.json')).toBe(true);
+  });
+});
+
+describe('deletePlanningSession — linked promotion abandonment (09-expand-cockpit)', () => {
+  function seedPromotion(id: string) {
+    return createPromotion({
+      id, product: 'jarvis', backlogItemId: 'b1',
+      snapshotRaw: '- some idea', planningSessionId: 's', now: 'T0',
+    });
+  }
+
+  it('advances a linked planning-started promotion to planning-abandoned on delete', () => {
+    appendPromotion(mockConfig.PROMOTIONS_FILE, seedPromotion('p1'));
+    createPlanningSession(7, 'idea', 'cockpit', 'jarvis');
+    updatePlanningSession(7, (s) => ({ ...s, promotionId: 'p1' }));
+
+    deletePlanningSession(7);
+
+    expect(loadPromotions(mockConfig.PROMOTIONS_FILE).get('p1')?.state).toBe('planning-abandoned');
+  });
+
+  it('also fires through /clear-style abandonment (abandonActivePlanningSession → delete)', () => {
+    appendPromotion(mockConfig.PROMOTIONS_FILE, seedPromotion('p2'));
+    createPlanningSession(8, 'idea', 'cockpit', 'jarvis');
+    updatePlanningSession(8, (s) => ({ ...s, promotionId: 'p2' }));
+
+    abandonActivePlanningSession(8);
+
+    expect(loadPromotions(mockConfig.PROMOTIONS_FILE).get('p2')?.state).toBe('planning-abandoned');
+  });
+
+  it('approval-success delete leaves a marked-source promotion untouched (terminal, not abandoned)', () => {
+    // After a successful /approve, scaffoldAndDelete drives the promotion to marked-source then
+    // deletes the session via this same chokepoint — the terminal-state guard must no-op.
+    const sc = transitionPromotion(seedPromotion('p-done'), 'scaffolded', { slug: '09-x', now: 'T1' });
+    if (!sc.ok) throw new Error('setup');
+    const done = transitionPromotion(sc.promotion, 'marked-source', { now: 'T2' });
+    if (!done.ok) throw new Error('setup');
+    appendPromotion(mockConfig.PROMOTIONS_FILE, done.promotion);
+    createPlanningSession(11, 'idea', 'cockpit', 'jarvis');
+    updatePlanningSession(11, (s) => ({ ...s, promotionId: 'p-done' }));
+
+    deletePlanningSession(11);
+
+    expect(loadPromotions(mockConfig.PROMOTIONS_FILE).get('p-done')?.state).toBe('marked-source');
+  });
+
+  it('leaves a scaffolded promotion untouched (resumable, not abandoned)', () => {
+    const sc = transitionPromotion(seedPromotion('p3'), 'scaffolded', { slug: '09-x', now: 'T1' });
+    if (!sc.ok) throw new Error('setup');
+    appendPromotion(mockConfig.PROMOTIONS_FILE, sc.promotion);
+    createPlanningSession(9, 'idea', 'cockpit', 'jarvis');
+    updatePlanningSession(9, (s) => ({ ...s, promotionId: 'p3' }));
+
+    deletePlanningSession(9);
+
+    expect(loadPromotions(mockConfig.PROMOTIONS_FILE).get('p3')?.state).toBe('scaffolded');
+  });
+
+  it('a plain session with no promotionId writes nothing to the promotions log', () => {
+    createPlanningSession(10, 'idea', 'cockpit', 'jarvis');
+    deletePlanningSession(10);
+    expect(loadPromotions(mockConfig.PROMOTIONS_FILE).size).toBe(0);
   });
 });

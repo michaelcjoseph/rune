@@ -123,6 +123,17 @@ const config = {
     return join(this.LOGS_DIR, 'registry.json');
   },
 
+  /** Append-only audit log of backlog `+` add writes (09-expand-cockpit). */
+  get BACKLOG_MUTATIONS_FILE() {
+    return join(this.LOGS_DIR, 'backlog-mutations.jsonl');
+  },
+
+  /** Append-only durable promotion job log — the planning→scaffold→mark-source chain
+   *  (09-expand-cockpit). Replayed at startup to resume interrupted promotions. */
+  get PROMOTIONS_FILE() {
+    return join(this.LOGS_DIR, 'promotions.jsonl');
+  },
+
   /** Declarative model selection policy (project 08). A committed repo file, not
    *  runtime state, so it lives under `policies/` rather than `LOGS_DIR`. */
   get MODEL_POLICY_FILE() {

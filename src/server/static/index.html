@@ -102,6 +102,26 @@
     <pre id="drawer-output" class="drawer-output"></pre>
   </div>
 
+  <!-- Backlog drawer (09-expand-cockpit) — opened from a product's sidebar count line. -->
+  <div id="backlog-drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <span id="backlog-drawer-title">Backlog</span>
+      <button id="backlog-drawer-close">✕</button>
+    </div>
+    <div class="backlog-tabs">
+      <button class="backlog-tab" data-backlog-tab="bugs">Bugs</button>
+      <button class="backlog-tab" data-backlog-tab="ideas">Ideas</button>
+      <button id="backlog-add-chip" class="backlog-add-chip" title="Add an item">+</button>
+    </div>
+    <div id="backlog-add-row" class="backlog-add-row hidden">
+      <input id="backlog-add-input" type="text" placeholder="New item…" autocomplete="off" />
+      <button id="backlog-add-submit">Add</button>
+      <span id="backlog-add-error" class="backlog-add-error"></span>
+    </div>
+    <div id="backlog-drawer-content" class="backlog-content"></div>
+    <div id="backlog-drawer-warnings" class="backlog-warnings"></div>
+  </div>
+
   <!-- Planning panel (project 08 Phase 6 C1.1).
        Opens when the cockpit's Plan button is clicked (C1.3) or the engine
        routes a /plan Telegram conversation in. Three view-states driven by

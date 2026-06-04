@@ -32,6 +32,7 @@ import {
   type PlanningSurface,
   type SpecArtifact,
 } from '../intent/planner.js';
+import { loadPromotions, appendPromotion, transitionPromotion } from '../intent/promotions.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('planning-session');
@@ -52,6 +53,12 @@ export interface StoredPlanningSession {
   createdAt: string;
   /** ISO timestamp of the most recent state mutation. */
   lastActivity: string;
+  /** Links this session to a durable {@link Promotion} (09-expand-cockpit) when the session was
+   *  opened from a backlog Plan click. The approval path advances the linked promotion to
+   *  `scaffolded`/`marked-source`; abandonment (/clear, /fresh, webview abandon, expiry) advances a
+   *  linked `planning-started` promotion to `planning-abandoned`. Absent for plain `/plan` sessions.
+   *  Round-trips through persist/restore as part of the stored session object. */
+  promotionId?: string;
 }
 
 const sessions = new Map<number, StoredPlanningSession>();
@@ -92,6 +99,10 @@ export function createPlanningSession(
   idea: string,
   surface: PlanningSurface,
   product: string,
+  /** Optional overrides for a session opened from a backlog Plan click (09-expand-cockpit): a
+   *  caller-supplied `id` (so the route can return + link the id without reading back the store)
+   *  and the linking `promotionId`. Both default to generated/absent for the plain `/plan` path. */
+  opts: { id?: string; promotionId?: string } = {},
 ): StoredPlanningSession {
   const existing = getActivePlanningSession(chatId);
   if (existing) {
@@ -104,12 +115,13 @@ export function createPlanningSession(
   }
   const now = new Date().toISOString();
   const session: StoredPlanningSession = {
-    id: randomUUID(),
+    id: opts.id ?? randomUUID(),
     chatId,
     claudeSessionId: randomUUID(),
     planning: startPlanning(idea, surface, product),
     createdAt: now,
     lastActivity: now,
+    ...(opts.promotionId ? { promotionId: opts.promotionId } : {}),
   };
   sessions.set(chatId, session);
   persistPlanningSessions();
@@ -193,9 +205,31 @@ function snapshotArtifact(
 export function deletePlanningSession(chatId: number): void {
   const session = sessions.get(chatId);
   if (!session) return;
+  // If this session was opened from a backlog Plan click, mark its linked promotion abandoned —
+  // this is the chokepoint every abandonment path funnels through (/clear, /fresh, webview abandon
+  // all go via abandonActivePlanningSession → here; planning expiry calls here directly). The
+  // state machine only permits planning-started → planning-abandoned, so a scaffolded promotion is
+  // left for restart-replay and a marked-source/mark-source-error one (post-approval delete) is a
+  // no-op — exactly the spec's "any linked planning-started promotion" semantics.
+  if (session.promotionId) abandonLinkedPromotion(session.promotionId);
   cleanupSession(session.claudeSessionId);
   sessions.delete(chatId);
   persistPlanningSessions();
+}
+
+/** Best-effort: advance a linked promotion to `planning-abandoned` (only legal from
+ *  planning-started; refused otherwise → no-op). A promotion-log failure must never block the
+ *  session cleanup the user actually asked for. */
+function abandonLinkedPromotion(promotionId: string): void {
+  try {
+    const promotions = loadPromotions(config.PROMOTIONS_FILE);
+    const promotion = promotions.get(promotionId);
+    if (!promotion) return;
+    const t = transitionPromotion(promotion, 'planning-abandoned', { now: new Date().toISOString() });
+    if (t.ok) appendPromotion(config.PROMOTIONS_FILE, t.promotion);
+  } catch (err) {
+    log.warn('abandonLinkedPromotion failed', { promotionId, error: (err as Error).message });
+  }
 }
 
 /** Result of attempting to approve an active planning session. The

@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { join, extname, resolve as resolvePath, dirname } from 'node:path';
@@ -9,7 +10,20 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
-import { buildCockpitView, type WorkRunProjection } from '../intent/cockpit.js';
+import { readFileSync } from 'node:fs';
+import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '../intent/cockpit.js';
+import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
+import { parseBugs, parseIdeas } from '../intent/backlog-parser.js';
+import { appendBug, appendIdea } from '../intent/backlog-append.js';
+import {
+  withFileLock,
+  writeFileAtomic,
+  assertBacklogWriteAllowed,
+  appendBacklogMutationLog,
+  BacklogWriteError,
+} from '../intent/backlog-write-lock.js';
+import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
+import { withActions } from './backlog-actions.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -27,13 +41,15 @@ import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
   getActivePlanningSession,
+  getAllPlanningSessions,
   deletePlanningSession,
   approveActivePlanningSession,
   abandonActivePlanningSession,
 } from '../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
-import { buildSetupWriterBrief } from '../intent/planner.js';
-import { runAgent } from '../ai/claude.js';
+import { runScaffoldApproval, retryPromotionMarkSource } from '../jobs/scaffold-approval.js';
+import { createPromotion, appendPromotion, loadPromotions, transitionPromotion } from '../intent/promotions.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { readIntentProposalQueue } from '../intent/intent-proposal-queue.js';
 import { readProposalQueue } from '../jobs/proposal-queue.js';
 import { readAllRuns } from '../jobs/supervision-store.js';
@@ -259,9 +275,472 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch (err) {
     log.warn('handleApiCockpit: readWorkRunProjections failed', { error: (err as Error).message });
   }
-  const view = buildCockpitView(registry, runStatus, undefined, workRuns);
+  // Per-product backlog counts (09-expand-cockpit) for the sidebar one-liner. Bounded
+  // (counts only, not the full lists — the drawer fetches those). Fail-soft: a missing
+  // products.json or unreadable backlog leaves counts absent so the cockpit still renders.
+  // Synchronous reads on the poll path (2 files per repo-backed product): sound on local SSD;
+  // if WORKSPACE_DIR is ever iCloud-synced, a `.icloud` placeholder read would block — defer
+  // off the event loop then (same caveat as ReadBacklogsOpts / handleApiBacklog).
+  let backlogCounts: Record<string, BacklogCounts> = {};
+  if (registry) {
+    try {
+      const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+      for (const pb of readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR })) {
+        if (!pb.notRepoBacked) backlogCounts[pb.product] = computeBacklogCounts(pb);
+      }
+    } catch (err) {
+      log.warn('handleApiCockpit: backlog counts failed', { error: (err as Error).message });
+    }
+  }
+
+  const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
+}
+
+// ---------------------------------------------------------------------------
+// Backlog drawer route (09-expand-cockpit, Phase 2)
+// ---------------------------------------------------------------------------
+
+/** Typed error envelope `{ error: { code, message, retryable } }` per spec "API surface". */
+function sendErrorEnvelope(
+  res: ServerResponse,
+  status: number,
+  code: string,
+  message: string,
+  retryable = false,
+  /** Extra fields merged into the error object (e.g. `activeSessionId` on a collision 409). */
+  extras?: Record<string, unknown>,
+): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: { code, message, retryable, ...extras } }));
+}
+
+/**
+ * GET /api/backlog/:product — the drawer's full-list fetch. Returns the product's parsed bugs
+ * and ideas (each augmented with a server-computed `plan` action) plus file-level warnings.
+ * 404 `unknown-product` when the slug isn't in the registry; 409 `not-repo-backed` when the
+ * product has no repo. `planning-active` disables every item's action while a planning session
+ * is open for the product — the endpoint is product-scoped, so it scans all sessions (which are
+ * chatId-keyed) for one whose `planning.product` matches.
+ */
+function handleApiBacklog(res: ServerResponse, product: string): void {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let backlogs;
+  try {
+    const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+    // Synchronous read on the request fiber: sound while product repos live on local SSD. If
+    // WORKSPACE_DIR is ever pointed at an iCloud-synced path, this should be deferred off the
+    // event loop (a `.icloud` placeholder read would block the process) — see ReadBacklogsOpts.
+    backlogs = readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+  } catch (err) {
+    log.warn('handleApiBacklog: read failed', { product, error: (err as Error).message });
+    // Not retryable: a missing/malformed products.json or an unreadable backlog file does not
+    // resolve on an immediate retry — it needs operator action.
+    sendErrorEnvelope(res, 500, 'backlog-read-failed', 'could not read the backlog', false);
+    return;
+  }
+
+  const pb = backlogs.find((b) => b.product === product);
+  // A repo-backed registry product the reader didn't return is an internal inconsistency;
+  // degrade to an empty backlog rather than 500 so the drawer still renders.
+  const bugs = pb?.bugs ?? [];
+  const ideas = pb?.ideas ?? [];
+  const fileWarnings = pb?.fileWarnings ?? [];
+
+  const planningActive = isPlanningActiveForProduct(product);
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      bugs: bugs.map((i) => withActions(i, planningActive)),
+      ideas: ideas.map((i) => withActions(i, planningActive)),
+      fileWarnings,
+    }),
+  );
+}
+
+/** The IN-PROGRESS planning session for a product (the product is scoped, but sessions are
+ *  chatId-keyed, so scan all), or undefined. "In progress" mirrors `getActivePlanningSession`'s
+ *  definition — terminal `approved` (awaiting/retrying scaffold) and `abandoned` don't count. The
+ *  single predicate both the drawer's action-disable (`isPlanningActiveForProduct`) and the Plan
+ *  collision check use, so they can't drift. */
+function findActivePlanningSessionForProduct(product: string) {
+  return getAllPlanningSessions().find(
+    ([, s]) =>
+      s.planning?.product === product &&
+      s.planning.status !== 'approved' &&
+      s.planning.status !== 'abandoned',
+  );
+}
+
+/** True when an in-progress planning session exists for the product. */
+function isPlanningActiveForProduct(product: string): boolean {
+  return findActivePlanningSessionForProduct(product) !== undefined;
+}
+
+/** Relative path of each backlog file under a product repo. */
+const BACKLOG_REL: Record<'bugs' | 'ideas', string> = {
+  bugs: 'docs/projects/bugs.md',
+  ideas: 'docs/projects/ideas.md',
+};
+
+/** Best-effort current branch + worktree-dirty status for the audit log. Never throws. The two
+ *  git probes run in parallel. Captured BEFORE the write (inside the lock) so `dirty` reflects
+ *  whether the repo had uncommitted work prior to Jarvis's append, not the always-true
+ *  post-write state. */
+async function getBacklogGitState(repoPath: string): Promise<{ branch: string; dirty: boolean }> {
+  try {
+    const [b, s] = await Promise.all([
+      defaultRunGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath }),
+      defaultRunGit(['status', '--porcelain'], { cwd: repoPath }),
+    ]);
+    return { branch: b.stdout.trim() || 'unknown', dirty: s.stdout.trim() !== '' };
+  } catch {
+    return { branch: 'unknown', dirty: false };
+  }
+}
+
+/**
+ * POST /api/backlog/:product/:kind — the drawer's `+` add. Validates product (404
+ * unknown-product) and kind (404 unknown-kind), reads `{ text }`, then under a per-file mutex:
+ * guards the write target, reads the current content, appends via the pure core (400 empty-text
+ * / multiline-text on rejection), and atomically writes. Audit-logs every write (best-effort,
+ * with git branch + dirty), then re-parses the NEW content in memory and returns the appended
+ * item (`{ item }`) with its computed action. A guard rejection → 500.
+ */
+async function handleApiBacklogAppend(
+  req: IncomingMessage,
+  res: ServerResponse,
+  product: string,
+  kind: string,
+): Promise<void> {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+  if (kind !== 'bugs' && kind !== 'ideas') {
+    sendErrorEnvelope(res, 404, 'unknown-kind', `unknown backlog kind '${kind}'`);
+    return;
+  }
+
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let text: string;
+  try {
+    const parsed = JSON.parse(await readBody(req));
+    text = typeof parsed?.text === 'string' ? parsed.text : '';
+  } catch {
+    sendErrorEnvelope(res, 400, 'bad-request', 'invalid JSON body');
+    return;
+  }
+
+  let repoPath: string;
+  try {
+    repoPath = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product]?.repoPath ?? '';
+  } catch (err) {
+    log.warn('handleApiBacklogAppend: products config read failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'config-read-failed', 'could not resolve the product repo', false);
+    return;
+  }
+  if (!repoPath) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' has no configured repo`);
+    return;
+  }
+
+  const relFile = BACKLOG_REL[kind];
+  const filePath = join(repoPath, relFile);
+
+  // One critical section per file: guard → read → append → (capture pre-write git) → atomic
+  // write, so two concurrent adds can't both read the pre-append content and clobber each other,
+  // and the audited `dirty` flag reflects the repo state BEFORE this write.
+  let outcome:
+    | { kind: 'invalid'; error: 'empty-text' | 'multiline-text' }
+    | {
+        kind: 'written';
+        before: string;
+        after: string;
+        lineNumber: number;
+        git: { branch: string; dirty: boolean };
+      };
+  try {
+    outcome = await withFileLock(filePath, async () => {
+      assertBacklogWriteAllowed(repoPath, filePath);
+      let before = '';
+      try {
+        before = readFileSync(filePath, 'utf8');
+      } catch {
+        before = ''; // missing file → start fresh
+      }
+      const appended = kind === 'bugs' ? appendBug(before, text) : appendIdea(before, text);
+      if (!appended.ok) return { kind: 'invalid' as const, error: appended.error };
+      const git = await getBacklogGitState(repoPath);
+      writeFileAtomic(filePath, appended.content);
+      return {
+        kind: 'written' as const,
+        before,
+        after: appended.content,
+        lineNumber: appended.lineNumber,
+        git,
+      };
+    });
+  } catch (err) {
+    if (err instanceof BacklogWriteError) {
+      log.warn('handleApiBacklogAppend: write guard rejected', { product, error: err.message });
+      sendErrorEnvelope(res, 500, 'write-rejected', 'write rejected by the safety guard', false);
+      return;
+    }
+    log.warn('handleApiBacklogAppend: append failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'append-failed', 'could not append to the backlog', false);
+    return;
+  }
+
+  if (outcome.kind === 'invalid') {
+    sendErrorEnvelope(
+      res,
+      400,
+      outcome.error,
+      outcome.error === 'empty-text' ? 'text is empty' : 'text must be a single line',
+    );
+    return;
+  }
+
+  // Audit every write (best-effort — a logging failure must not fail the user's add). The log
+  // `file` is the repo-RELATIVE path, never the absolute host path.
+  try {
+    appendBacklogMutationLog(config.BACKLOG_MUTATIONS_FILE, {
+      product,
+      file: relFile,
+      branch: outcome.git.branch,
+      dirty: outcome.git.dirty,
+      before: outcome.before,
+      after: outcome.after,
+    });
+  } catch (err) {
+    log.warn('handleApiBacklogAppend: audit log failed', { product, error: (err as Error).message });
+  }
+
+  // Re-parse the NEW content in memory (not via readBacklogs) and find the appended item by its
+  // line number — for ideas the bullet is inserted ABOVE the Loop-filed sentinel, so it is NOT
+  // necessarily the last parsed item.
+  const parsed = kind === 'bugs' ? parseBugs(outcome.after, relFile) : parseIdeas(outcome.after, relFile);
+  const appendedItem = parsed.items.find((i) => i.source.lineNumber === outcome.lineNumber);
+  const item = appendedItem ? withActions(appendedItem, isPlanningActiveForProduct(product)) : null;
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ item }));
+}
+
+// ---------------------------------------------------------------------------
+// Plan-button + promotion routes (09-expand-cockpit, Phase 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/backlog/:product/items/:id/plan — open a planning session seeded from an eligible
+ * backlog item and create a linked durable Promotion. Returns `{ planningSessionId, promotionId }`.
+ * Errors (typed envelope): 409 `stale-item` (id no longer matches an item in that product — the
+ * cockpit re-fetches), 422 `item-not-eligible` (loop-filed / done / already-promoted / parse-warning
+ * — the plan action is disabled), 409 `active-planning-session` (a session is already in progress
+ * for the product; carries `activeSessionId` for the resume/abandon dialog). Ids are product-local,
+ * so the `:product` segment disambiguates an id shared across repos.
+ */
+async function handleApiPlanItem(res: ServerResponse, product: string, id: string): Promise<void> {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+  // Backlog item ids are 12-char hex (a strict subset of VALID_SLUG); a non-conforming id is
+  // definitionally stale. Guard it like every other URL-segment id before it reaches a lookup/echo.
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid item id');
+    return;
+  }
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  const regProduct = registry?.products.find((p) => p.name === product);
+  if (!registry || !regProduct) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`);
+    return;
+  }
+  if (!regProduct.repoBacked) {
+    sendErrorEnvelope(res, 409, 'not-repo-backed', `product '${product}' is not repo-backed`);
+    return;
+  }
+
+  let backlogs;
+  try {
+    const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+    backlogs = readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+  } catch (err) {
+    log.warn('handleApiPlanItem: backlog read failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'backlog-read-failed', 'could not read the backlog', false);
+    return;
+  }
+
+  const pb = backlogs.find((b) => b.product === product);
+  // Product-LOCAL lookup: only items from the routed product, so an id shared across repos resolves
+  // within this product.
+  const item = [...(pb?.bugs ?? []), ...(pb?.ideas ?? [])].find((i) => i.id === id);
+  if (!item) {
+    // The id no longer matches an item — a stale cockpit URL. Retryable: re-fetch the drawer.
+    sendErrorEnvelope(res, 409, 'stale-item', `backlog item '${id}' not found in '${product}'`, true);
+    return;
+  }
+
+  // Eligibility is the item's plan action with planning-active EXCLUDED (collision is a separate,
+  // more specific 409 below) — so an otherwise-eligible item still surfaces its own disabled reason.
+  const planAction = withActions(item, false).actions.find((a) => a.kind === 'plan');
+  if (!planAction || !planAction.enabled) {
+    sendErrorEnvelope(
+      res,
+      422,
+      'item-not-eligible',
+      `item '${id}' is not eligible for Plan${planAction?.disabledReason ? ` (${planAction.disabledReason})` : ''}`,
+    );
+    return;
+  }
+
+  // Collision: an in-progress planning session for this product blocks a second one. Carry the
+  // active session id so the cockpit can offer resume/abandon.
+  const active = findActivePlanningSessionForProduct(product);
+  if (active) {
+    sendErrorEnvelope(
+      res,
+      409,
+      'active-planning-session',
+      `a planning session is already active for '${product}'`,
+      false,
+      { activeSessionId: active[1].id },
+    );
+    return;
+  }
+
+  // Create the durable Promotion (persisted at creation so a restart never loses it) and a linked
+  // planning session whose id we generate up front so we can return + link it without a read-back.
+  const planningSessionId = randomUUID();
+  const seedIdea = [item.text, ...(item.body ?? [])].join('\n');
+  const promotion = createPromotion({
+    id: randomUUID(),
+    product,
+    backlogItemId: item.id,
+    snapshotRaw: item.source.raw,
+    planningSessionId,
+    now: new Date().toISOString(),
+  });
+  appendPromotion(config.PROMOTIONS_FILE, promotion);
+  try {
+    createPlanningSession(config.TELEGRAM_USER_ID, seedIdea, 'cockpit', product, {
+      id: planningSessionId,
+      promotionId: promotion.id,
+    });
+  } catch (err) {
+    // The promotion is already persisted but the session didn't open — reclaim the orphan by
+    // abandoning the (still planning-started) promotion so restart-replay never chases a session
+    // that will never exist.
+    log.warn('handleApiPlanItem: createPlanningSession failed; abandoning orphan promotion', {
+      product,
+      promotionId: promotion.id,
+      error: (err as Error).message,
+    });
+    const t = transitionPromotion(promotion, 'planning-abandoned', { now: new Date().toISOString() });
+    if (t.ok) {
+      try { appendPromotion(config.PROMOTIONS_FILE, t.promotion); } catch { /* best-effort cleanup */ }
+    }
+    sendErrorEnvelope(res, 500, 'plan-failed', 'could not open the planning session', true);
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ planningSessionId, promotionId: promotion.id }));
+}
+
+/** GET /api/promotions/:id — the promotion's current state for the cockpit. 404 `unknown-promotion`. */
+function handleApiPromotionGet(res: ServerResponse, id: string): void {
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid promotion id');
+    return;
+  }
+  const promotion = loadPromotions(config.PROMOTIONS_FILE).get(id);
+  if (!promotion) {
+    sendErrorEnvelope(res, 404, 'unknown-promotion', `unknown promotion '${id}'`);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  // Scrub absolute host paths from persisted error strings before they cross the HTTP boundary.
+  res.end(JSON.stringify({
+    state: promotion.state,
+    slug: promotion.slug,
+    errors: promotion.errors.map(scrubAbsolutePaths),
+  }));
+}
+
+/**
+ * POST /api/promotions/:id/retry — re-attempt the source-bullet marking for a `mark-source-error`
+ * promotion (idempotent; does not re-scaffold). 404 `unknown-promotion`, 409 `not-retryable`.
+ */
+async function handleApiPromotionRetry(res: ServerResponse, id: string): Promise<void> {
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid promotion id');
+    return;
+  }
+  const outcome = await retryPromotionMarkSource(id);
+  if (!outcome.ok) {
+    if (outcome.error === 'unknown-promotion') {
+      sendErrorEnvelope(res, 404, 'unknown-promotion', `unknown promotion '${id}'`);
+      return;
+    }
+    if (outcome.error === 'not-retryable') {
+      sendErrorEnvelope(res, 409, 'not-retryable', `promotion '${id}' is not in a retryable state`);
+      return;
+    }
+    sendErrorEnvelope(res, 500, 'retry-failed', scrubAbsolutePaths(outcome.message ?? 'retry failed'), false);
+    return;
+  }
+  // The outcome carries the final state/slug/errors — no second log read needed.
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    state: outcome.state,
+    slug: outcome.slug,
+    errors: outcome.errors.map(scrubAbsolutePaths),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -568,24 +1047,27 @@ async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  // Approved — scaffold via project-setup-writer (A4.4 pattern). Tolerate
-  // agent failure by leaving the session in approved state (retry via the
-  // /approve slash path or a re-click here will pick it up).
-  const brief = buildSetupWriterBrief(result.session.planning);
-  const agentResult = await runAgent('project-setup-writer', brief);
-  if (agentResult.error || !agentResult.text) {
-    log.error('handleApiPlanningApprove: project-setup-writer failed', {
-      error: agentResult.error ?? 'empty output',
+  // Approved — run the shared scaffold-approval flow (resolve the target product repo, spawn the
+  // setup-writer scoped to it, cross-check the scaffold-result, and drive any linked promotion).
+  // Tolerate failure by leaving the session approved (retry via /approve or a re-click).
+  const outcome = await runScaffoldApproval(result.session);
+  if (!outcome.ok) {
+    log.error('handleApiPlanningApprove: scaffold-approval failed', {
+      reason: outcome.reason,
+      message: outcome.message,
     });
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: `scaffolding failed: ${agentResult.error ?? 'empty output'}`,
-    }));
+    res.end(JSON.stringify({ error: `scaffolding failed: ${scrubAbsolutePaths(outcome.message)}` }));
     return;
   }
   deletePlanningSession(userId);
   res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, output: agentResult.text }));
+  res.end(JSON.stringify({
+    ok: true,
+    output: outcome.agentText,
+    slug: outcome.slug,
+    promotion: outcome.promotion,
+  }));
 }
 
 function handleApiPlanningAbandon(_req: IncomingMessage, res: ServerResponse): void {
@@ -904,6 +1386,47 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/cockpit') {
         handleApiCockpit(res);
+        return true;
+      }
+
+      // Backlog drawer (09-expand-cockpit): GET /api/backlog/:product. The handler
+      // VALID_SLUG-guards the decoded product before any registry/fs access.
+      const backlogMatch = pathname.match(/^\/api\/backlog\/([^/]+)$/);
+      if (req.method === 'GET' && backlogMatch) {
+        handleApiBacklog(res, decodeURIComponent(backlogMatch[1]!));
+        return true;
+      }
+      // Plan button (09-expand-cockpit): more segments than the append route, so its `$`-anchored
+      // regex can't collide with the 2-segment append match — checked first for clarity.
+      const planItemMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/items\/([^/]+)\/plan$/);
+      if (req.method === 'POST' && planItemMatch) {
+        await handleApiPlanItem(
+          res,
+          decodeURIComponent(planItemMatch[1]!),
+          decodeURIComponent(planItemMatch[2]!),
+        );
+        return true;
+      }
+      const backlogAppendMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/([^/]+)$/);
+      if (req.method === 'POST' && backlogAppendMatch) {
+        await handleApiBacklogAppend(
+          req,
+          res,
+          decodeURIComponent(backlogAppendMatch[1]!),
+          decodeURIComponent(backlogAppendMatch[2]!),
+        );
+        return true;
+      }
+
+      // Promotion job routes (09-expand-cockpit): retry (more specific) before the record GET.
+      const promotionRetryMatch = pathname.match(/^\/api\/promotions\/([^/]+)\/retry$/);
+      if (req.method === 'POST' && promotionRetryMatch) {
+        await handleApiPromotionRetry(res, decodeURIComponent(promotionRetryMatch[1]!));
+        return true;
+      }
+      const promotionGetMatch = pathname.match(/^\/api\/promotions\/([^/]+)$/);
+      if (req.method === 'GET' && promotionGetMatch) {
+        handleApiPromotionGet(res, decodeURIComponent(promotionGetMatch[1]!));
         return true;
       }
 

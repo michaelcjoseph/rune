@@ -122,8 +122,15 @@ export function isScaffoldReady(session: PlanningSession): boolean {
  * approved planning session to project scaffolding. The brief carries the artifact's spec,
  * tasks (with its per-phase Tests blocks intact), and test plan. Throws unless the session
  * is scaffold-ready (approved): nothing is scaffolded before approval.
+ *
+ * When `targetRepoPath` is supplied (09-expand-cockpit: the product's canonical repo path
+ * resolved from `policies/products.json`), the brief tells the agent to scaffold into THAT
+ * repo's `docs/projects/` — Jarvis is just one product — and to emit a `scaffold-result`
+ * JSON block with the new slug and the repo-relative paths it created, the structured signal
+ * the approval path cross-checks against the repo diff. Omitting it preserves the legacy
+ * Jarvis-workspace-scoped brief.
  */
-export function buildSetupWriterBrief(session: PlanningSession): string {
+export function buildSetupWriterBrief(session: PlanningSession, targetRepoPath?: string): string {
   const { artifact } = session;
   if (!isScaffoldReady(session) || artifact === undefined) {
     throw new Error(
@@ -131,10 +138,30 @@ export function buildSetupWriterBrief(session: PlanningSession): string {
         `approval (session status is '${session.status}')`,
     );
   }
-  return [
+  const lines = [
     `# Project Brief: ${artifact.title}`,
     '',
     `Product: ${artifact.product}`,
+  ];
+  if (targetRepoPath !== undefined) {
+    lines.push(
+      '',
+      `Target repo: ${targetRepoPath}`,
+      '',
+      `Scaffold into \`${targetRepoPath}/docs/projects/\` — this is the target product's repo, ` +
+        `not necessarily Jarvis. Determine the next project number from that repo's ` +
+        `\`docs/projects/index.md\`.`,
+      '',
+      'When done, emit a fenced ```scaffold-result block as the LAST thing in your reply:',
+      '',
+      '```scaffold-result',
+      '{ "slug": "NN-slug", "filesCreated": ["docs/projects/NN-slug/spec.md", "docs/projects/NN-slug/tasks.md", "docs/projects/NN-slug/test-plan.md"] }',
+      '```',
+      '',
+      'Every `filesCreated` path MUST be repo-relative (no leading `/`, no `..`).',
+    );
+  }
+  lines.push(
     '',
     '## Spec',
     artifact.spec,
@@ -144,5 +171,6 @@ export function buildSetupWriterBrief(session: PlanningSession): string {
     '',
     '## Test Plan',
     artifact.testPlan,
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
