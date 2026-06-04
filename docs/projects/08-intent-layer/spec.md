@@ -282,6 +282,15 @@ The cockpit surface extends the existing webview from
 shipped; the three panels below are what the engine needs the cockpit to
 add so every Layer is **user-reachable** from the web surface.
 
+> **Follow-on — backlog drawer (09-expand-cockpit).** Project
+> [09-expand-cockpit](../09-expand-cockpit/spec.md) extends this cockpit with a per-product
+> **Bugs (N) · Ideas (N)** count line that opens a right-side **backlog drawer** sourced from each
+> product repo's `docs/projects/{bugs,ideas}.md` (format: [BACKLOG-FORMAT.md](../BACKLOG-FORMAT.md)).
+> Each open item gets a one-click **Plan** button that opens a planning session seeded from the
+> bullet and, on approval, scaffolds the project into the target product repo and marks the source
+> bullet promoted — driven by a durable promotion job (`src/intent/promotions.ts`) that survives
+> restart across the `planning-started → scaffolded → marked-source` chain.
+
 #### Planning panel
 
 Opens when the user clicks a project's **Plan** button on the cockpit
