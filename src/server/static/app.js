@@ -708,9 +708,22 @@
               `</div>`;
           }).join('');
       const trackedLabel = product.repoBacked ? '' : ' <span class="cockpit-tracked muted">tracked</span>';
+      // 09-expand-cockpit: one compact backlog count line per product. data-backlog-open
+      // carries the (escHtml'd) product name; a delegated click in handleCockpitClick opens
+      // the backlog drawer. Absent for products with no backlogCounts (non-repo-backed or
+      // counts unavailable this poll).
+      const bc = product.backlogCounts;
+      const backlogLine = bc
+        ? `<div class="cockpit-backlog" data-backlog-open="${escHtml(product.name)}" title="Open backlog">` +
+            `Bugs ${escHtml(String(bc.bugs.open))} · Ideas ${escHtml(String(bc.ideas.open))}` +
+            (bc.warnings ? ` · <span class="cockpit-backlog-warn">⚠ ${escHtml(String(bc.warnings))}</span>` : '') +
+            ` <span class="cockpit-backlog-open">open ↗</span>` +
+          `</div>`
+        : '';
       return `<div class="cockpit-product">` +
         `<div class="cockpit-product-name">${escHtml(product.name)}${trackedLabel}</div>` +
         rows +
+        backlogLine +
         `</div>`;
     }).join('');
     setHTML(el, html);

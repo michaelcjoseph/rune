@@ -9,8 +9,8 @@ import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
-import { buildCockpitView, type WorkRunProjection } from '../intent/cockpit.js';
-import { readBacklogs } from '../intent/backlog-reader.js';
+import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '../intent/cockpit.js';
+import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
 import { readProductsConfig } from '../jobs/sandbox-runtime.js';
 import { withActions } from './backlog-actions.js';
 import { getSession } from '../vault/sessions.js';
@@ -263,7 +263,25 @@ function handleApiCockpit(res: ServerResponse): void {
   } catch (err) {
     log.warn('handleApiCockpit: readWorkRunProjections failed', { error: (err as Error).message });
   }
-  const view = buildCockpitView(registry, runStatus, undefined, workRuns);
+  // Per-product backlog counts (09-expand-cockpit) for the sidebar one-liner. Bounded
+  // (counts only, not the full lists — the drawer fetches those). Fail-soft: a missing
+  // products.json or unreadable backlog leaves counts absent so the cockpit still renders.
+  // Synchronous reads on the poll path (2 files per repo-backed product): sound on local SSD;
+  // if WORKSPACE_DIR is ever iCloud-synced, a `.icloud` placeholder read would block — defer
+  // off the event loop then (same caveat as ReadBacklogsOpts / handleApiBacklog).
+  let backlogCounts: Record<string, BacklogCounts> = {};
+  if (registry) {
+    try {
+      const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+      for (const pb of readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR })) {
+        if (!pb.notRepoBacked) backlogCounts[pb.product] = computeBacklogCounts(pb);
+      }
+    } catch (err) {
+      log.warn('handleApiCockpit: backlog counts failed', { error: (err as Error).message });
+    }
+  }
+
+  const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }

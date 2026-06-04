@@ -110,6 +110,7 @@ const mockAbandonActivePlanningSession = vi.fn();
 vi.mock('../reviews/planning.js', () => ({
   createPlanningSession: mockCreatePlanningSession,
   getActivePlanningSession: mockGetActivePlanningSession,
+  getAllPlanningSessions: vi.fn(() => []),
   deletePlanningSession: mockDeletePlanningSession,
   approveActivePlanningSession: mockApproveActivePlanningSession,
   abandonActivePlanningSession: mockAbandonActivePlanningSession,

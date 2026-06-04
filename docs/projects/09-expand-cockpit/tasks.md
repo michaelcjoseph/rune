@@ -32,7 +32,7 @@ Test commit lands before any implementation code per phase.
 
 - [x] `GET /api/backlog/:product` in `src/server/webview.ts`. (`handleApiBacklog` + `sendErrorEnvelope`; new pure `src/server/backlog-actions.ts` computes the per-item `plan` action with disabledReason precedence; planning-active gate excludes terminal approved/abandoned sessions; `backlog-drawer.test.ts` green — 12 cases.)
 - [x] New drawer HTML/JS/CSS in `index.html` / `app.js` / `app.css` (modeled on existing `mutation-drawer`). (`#backlog-drawer` + `openBacklogDrawer`/`renderBacklogItem`; Bugs/Ideas tabs w/ localStorage persistence, disabled-action tooltips, nested ideas body, obsidian source link, warnings banner; opened via a `[data-backlog-open]` trigger in `handleCockpitClick`. Pure frontend — DOM verified by the integration check per the cockpit-ux precedent; Plan POST wiring is Phase 4.)
-- [ ] Sidebar one-liner replaces the placeholder sub-section.
+- [x] Sidebar one-liner replaces the placeholder sub-section. (`handleApiCockpit` computes per-product `backlogCounts` fail-soft and feeds them as `buildCockpitView`'s 5th arg → `cockpit-backlog-counts.test.ts` green; `renderCockpit` emits a `.cockpit-backlog` count line `Bugs N · Ideas N · ⚠ N · open ↗` per product carrying `data-backlog-open` to open the drawer.)
 
 ## Phase 3 — Add
 

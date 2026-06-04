@@ -67,6 +67,7 @@ vi.mock('../ai/claude.js', () => ({
 vi.mock('../reviews/planning.js', () => ({
   createPlanningSession: vi.fn(),
   getActivePlanningSession: vi.fn(() => null),
+  getAllPlanningSessions: vi.fn(() => []),
   deletePlanningSession: vi.fn(),
   approveActivePlanningSession: vi.fn(),
   abandonActivePlanningSession: vi.fn(),

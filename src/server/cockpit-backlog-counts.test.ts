@@ -66,6 +66,13 @@ const mockConfig = {
 };
 vi.mock('../config.js', () => ({ default: mockConfig, PROJECT_ROOT: '/test/project' }));
 
+// handleApiCockpit now reads products.json via readProductsConfig to compute backlog counts.
+vi.mock('../jobs/sandbox-runtime.js', () => ({
+  readProductsConfig: vi.fn(() => ({
+    aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+  })),
+}));
+
 vi.mock('./restart.js', () => ({ restartServer: vi.fn(() => ({ ok: true as const })) }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -75,6 +82,7 @@ vi.mock('../ai/claude.js', () => ({
 vi.mock('../reviews/planning.js', () => ({
   createPlanningSession: vi.fn(),
   getActivePlanningSession: vi.fn(() => null),
+  getAllPlanningSessions: vi.fn(() => []),
   deletePlanningSession: vi.fn(),
   approveActivePlanningSession: vi.fn(),
   abandonActivePlanningSession: vi.fn(),

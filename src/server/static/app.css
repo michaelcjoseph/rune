@@ -460,7 +460,15 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   color: var(--text);
 }
 
-/* Backlog drawer (09-expand-cockpit) */
+/* Backlog count line + drawer (09-expand-cockpit) */
+.cockpit-backlog {
+  margin-top: .4rem; padding-top: .35rem; border-top: 1px solid var(--border);
+  font-size: .76rem; color: var(--text2); cursor: pointer;
+  display: flex; align-items: center; gap: .3rem;
+}
+.cockpit-backlog:hover { color: var(--text); }
+.cockpit-backlog-warn { color: #d6a248; }
+.cockpit-backlog-open { margin-left: auto; color: var(--accent); }
 #backlog-drawer-close { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 1rem; }
 .backlog-tabs { display: flex; gap: .4rem; padding: .5rem 1rem; border-bottom: 1px solid var(--border); }
 .backlog-tab {
