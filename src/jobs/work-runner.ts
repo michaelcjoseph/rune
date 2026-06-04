@@ -93,6 +93,46 @@ export function __resetWorkRunRuntimeForTest(): void {
   runtimeDeps = productionRuntimeDeps();
 }
 
+/**
+ * Reap a `/work` agent's entire process group.
+ *
+ * The agent spawns grandchildren (e.g. a `vitest` via a Bash tool call) that
+ * inherit its stdio fds. If one hangs, it holds the run's stdout/stderr pipes
+ * open and the runner's `close` event never fires — the run sits `running` for
+ * hours (docs/projects/bugs.md, "wedges open"). The child is spawned `detached`,
+ * so it is its own process-group leader and signalling the NEGATIVE pid reaches
+ * the whole tree — even after the leader itself has exited, because orphaned
+ * grandchildren keep the leader's pgid.
+ *
+ * Indirected behind a module-level binding so the unit suite can stub it: a real
+ * `process.kill(-pid)` against a fake test pid could signal an unrelated group.
+ */
+const defaultKillProcessTree = (child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void => {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, signal); // negative pid → the whole process GROUP
+  } catch {
+    // Group already gone, or a platform without group signalling — fall back to
+    // the direct child so a cancel still does something.
+    try { child.kill(signal); } catch { /* already dead */ }
+  }
+};
+
+let killProcessTree = defaultKillProcessTree;
+
+/** Test-only: stub the process-group reaper (avoids real signals in unit runs). */
+export function __setKillProcessTreeForTest(
+  fn: (child: ReturnType<typeof spawn>, signal: NodeJS.Signals) => void,
+): void {
+  killProcessTree = fn;
+}
+
+/** Test-only: restore the production reaper. */
+export function __resetKillProcessTreeForTest(): void {
+  killProcessTree = defaultKillProcessTree;
+}
+
 /** Zero work-product blob — the `summary.json` fallback when classification
  *  failed before facts were computed (the classification-error path), so the
  *  summary still carries a well-typed `workProduct`. */
@@ -327,6 +367,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         '-p', prompt,
       ], {
         cwd: sandbox.worktree,
+        // Own process group (child is the leader) so `killProcessTree` can reap
+        // orphaned grandchildren — a hung `vitest` that holds the inherited
+        // stdio open and otherwise wedges the run open (docs/projects/bugs.md).
+        // NOT unref'd: we still manage and reap this child.
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
@@ -555,6 +600,14 @@ interface StreamResult {
 /** Bound on the retained last-N stdout display lines and stderr tail. */
 const RING_CAPACITY = 50;
 
+/** Once the agent process exits, how long to let its stdio close on its own
+ *  before escalating SIGTERM→SIGKILL to the (possibly orphaned) process group,
+ *  and a hard ceiling after which the run force-completes even if `close` never
+ *  fires — so a grandchild holding the pipes open can no longer wedge the run
+ *  open for hours (docs/projects/bugs.md). */
+const REAP_SIGKILL_MS = 3_000;
+const REAP_FORCE_DONE_MS = 10_000;
+
 /** Inputs for the parent-side commit poll that runs during the stream
  *  (requirement 22). Null disables the poll (e.g. no captured baseSha, or a
  *  unit test that doesn't exercise it). */
@@ -584,6 +637,9 @@ async function* streamProcess(
   let cancelSent = false;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
+  let reapStarted = false;
+  let reapSigkillTimer: ReturnType<typeof setTimeout> | null = null;
+  let reapForceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Last-N stdout display lines + stderr tail, retained for the terminal
   // classification/forensics (independent of what the drawer consumed).
@@ -744,7 +800,50 @@ async function* streamProcess(
     }
   });
 
+  function clearReapTimers() {
+    if (reapSigkillTimer) { clearTimeout(reapSigkillTimer); reapSigkillTimer = null; }
+    if (reapForceTimer) { clearTimeout(reapForceTimer); reapForceTimer = null; }
+  }
+
+  // Reap the agent's process group and guarantee the run completes. Called once
+  // the agent process has exited: any grandchildren it left (e.g. a hung
+  // `vitest`) hold the inherited stdio open, so `close` may never fire and the
+  // run would otherwise sit `running` indefinitely (docs/projects/bugs.md).
+  // SIGTERM the group now, escalate to SIGKILL after a grace, and force the loop
+  // to complete if `close` STILL never arrives — the agent already exited, so we
+  // complete from the captured exit facts rather than waiting on dead pipes.
+  function reapTree() {
+    if (reapStarted) return;
+    reapStarted = true;
+    killProcessTree(child, 'SIGTERM');
+    reapSigkillTimer = setTimeout(() => killProcessTree(child, 'SIGKILL'), REAP_SIGKILL_MS);
+    reapSigkillTimer.unref?.();
+    reapForceTimer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolveWaiter?.();
+        resolveWaiter = null;
+      }
+    }, REAP_FORCE_DONE_MS);
+    reapForceTimer.unref?.();
+  }
+
+  // `exit` fires when the agent process itself terminates — BEFORE `close`,
+  // which additionally waits for every inherited stdio fd to drain. Capture the
+  // real exit code/signal here (so a clean exit isn't later misread) and reap
+  // any orphaned grandchildren so `close` can fire promptly instead of hanging
+  // on their still-open pipes. The runner previously keyed completion only on
+  // `close`, which is exactly why a wedged grandchild stranded the run.
+  child.on('exit', (code, signal) => {
+    if (exitCode === null && exitSignal === null) {
+      exitCode = code;
+      exitSignal = signal;
+    }
+    reapTree();
+  });
+
   child.on('close', (code, signal) => {
+    clearReapTimers();
     clearInterval(keepAliveTicker);
     if (commitTicker) clearInterval(commitTicker);
     if (stdoutBuf) emitStdoutLine(stdoutBuf);
@@ -760,6 +859,7 @@ async function* streamProcess(
   });
 
   child.on('error', (err) => {
+    clearReapTimers();
     clearInterval(keepAliveTicker);
     if (commitTicker) clearInterval(commitTicker);
     stderrTail.push(err.message);
@@ -773,7 +873,10 @@ async function* streamProcess(
     while (!done || queue.length > 0) {
       if (ctx.cancel() && !cancelSent) {
         cancelSent = true;
-        child.kill('SIGTERM');
+        // Group kill, not just the direct child — otherwise a cancel leaves the
+        // agent's grandchildren (vitest, etc.) orphaned and still holding the
+        // pipes open (docs/projects/bugs.md).
+        killProcessTree(child, 'SIGTERM');
       }
       await waitForNext();
       while (queue.length > 0) yield queue.shift()!;
@@ -795,6 +898,7 @@ async function* streamProcess(
     // Belt-and-suspenders: the close/error handlers above also clear the
     // timers, but a consumer that aborts the iteration before the child
     // exits would otherwise leak them.
+    clearReapTimers();
     clearInterval(keepAliveTicker);
     if (commitTicker) clearInterval(commitTicker);
   }

@@ -106,6 +106,8 @@ const {
   workRunApplier,
   __setWorkRunRuntimeForTest,
   __resetWorkRunRuntimeForTest,
+  __setKillProcessTreeForTest,
+  __resetKillProcessTreeForTest,
 } = await import('./work-runner.js');
 
 // --- Runtime-deps test doubles (Phase 2: classification + persist seam) ---
@@ -269,10 +271,15 @@ describe('workRunApplier', () => {
       appendIndexRow: ((filePath: string, row: any) => { indexRows.push({ filePath, row }); }) as never,
       runForensics: runForensicsSpy as never,
     });
+    // Stub the process-group reaper for every test so a cancel/exit reap never
+    // fires a real `process.kill(-pid)` at the fake test pid (12345). Tests that
+    // assert on reaping install their own spy via __setKillProcessTreeForTest.
+    __setKillProcessTreeForTest(() => {});
   });
 
   afterEach(() => {
     __resetWorkRunRuntimeForTest();
+    __resetKillProcessTreeForTest();
   });
 
   describe('validate', () => {
@@ -406,6 +413,10 @@ describe('workRunApplier', () => {
       // Headless `claude -p` must skip permission prompts or every mutating
       // tool auto-denies (the 2026-06-01 noop). Mirrors execClaude.
       expect(args).toContain('--dangerously-skip-permissions');
+      // Spawned detached so the child leads its own process group — the
+      // prerequisite for reaping orphaned grandchildren that would otherwise
+      // wedge the run open (docs/projects/bugs.md).
+      expect(spawnOpts.detached).toBe(true);
     });
 
     it('yields a completed terminal event on exit code 0', async () => {
@@ -623,6 +634,70 @@ describe('workRunApplier', () => {
         const countAfterClose = events.filter((e) => e.kind === 'keep-alive').length;
         await vi.advanceTimersByTimeAsync(60_000);
         expect(events.filter((e) => e.kind === 'keep-alive').length).toBe(countAfterClose);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('completes a wedged run: agent exits but stdio never closes (orphaned grandchild holds the pipes)', async () => {
+      // The wedge bug (docs/projects/bugs.md): the agent emits its terminal
+      // result and the process exits, but a grandchild it spawned (e.g. a hung
+      // `vitest`) inherited the stdio fds and keeps them open, so `close` never
+      // fires. Keying completion only on `close` left the run `running` for
+      // hours. The fix keys off `exit` + reaps the process group.
+      vi.useFakeTimers();
+      try {
+        setupValidProject('06-webview');
+        const killSpy = vi.fn();
+        __setKillProcessTreeForTest(killSpy);
+
+        // Manual child that emits its terminal result + `exit`, but NEVER `close`.
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        const child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        mockSpawn.mockReturnValue(child);
+
+        const descriptor = {
+          id: 'mut-wedge',
+          kind: 'work-run',
+          payload: { projectSlug: '06-webview' },
+          status: 'running',
+        } as any;
+
+        const events: any[] = [];
+        let finished = false;
+        const consume = (async () => {
+          for await (const event of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+            events.push(event);
+          }
+          finished = true;
+        })();
+
+        await vi.advanceTimersByTimeAsync(0);
+        // Agent finishes: terminal result on stdout, then the process exits 0 —
+        // but no `close` (the grandchild still holds the pipes).
+        stdout.emit('data', Buffer.from(JSON.stringify({ type: 'result', result: 'done' }) + '\n'));
+        child.emit('exit', 0, null);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Reap kicks off immediately with a group SIGTERM.
+        expect(killSpy).toHaveBeenCalledWith(child, 'SIGTERM');
+        // Not done yet — `close` never fired.
+        expect(finished).toBe(false);
+
+        // Past the SIGKILL grace + the force-done ceiling, the run completes
+        // anyway instead of hanging forever.
+        await vi.advanceTimersByTimeAsync(10_000);
+        await consume;
+
+        expect(killSpy).toHaveBeenCalledWith(child, 'SIGKILL');
+        expect(finished).toBe(true);
+        const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+        expect(terminal).toBeDefined();
       } finally {
         vi.useRealTimers();
       }
