@@ -98,7 +98,7 @@ vi.mock('./state-snapshot.js', () => ({
   getStateSnapshot: vi.fn(() => ({
     version: 1,
     ready: true,
-    activeSession: null,
+    sessions: { webview: null, telegram: null },
     activeReview: null,
     ingestionQueueDepth: 0,
     recentAgentRuns: [],

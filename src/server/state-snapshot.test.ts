@@ -124,35 +124,32 @@ describe('state-snapshot / getStateSnapshot', () => {
     expect(snap.ready).toBe(true);
   });
 
-  it('returns null activeSession when no session exists', () => {
+  it('returns null sessions for both transports when none exist', () => {
     const snap = getStateSnapshot();
-    expect(snap.activeSession).toBeNull();
+    expect(snap.sessions).toEqual({ webview: null, telegram: null });
   });
 
-  it('maps active session to { sessionId, model, messageCount }', () => {
+  it('maps each transport session to { sessionId, model, messageCount }', () => {
     mockGetSession.mockReturnValue(makeSession());
     const snap = getStateSnapshot();
-    expect(snap.activeSession).toEqual({
-      sessionId: 'sess-1',
-      model: 'claude-opus-4-7',
-      messageCount: 5,
-    });
+    const summary = { sessionId: 'sess-1', model: 'claude-opus-4-7', messageCount: 5 };
+    expect(snap.sessions).toEqual({ webview: summary, telegram: summary });
   });
 
-  it('prefers the webview session and queries it first', () => {
-    mockGetSession.mockReturnValue(makeSession());
+  it('queries webview and telegram independently', () => {
     getStateSnapshot();
-    expect(mockGetSession).toHaveBeenNthCalledWith(1, mockConfig.TELEGRAM_USER_ID, 'webview');
+    expect(mockGetSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'webview');
+    expect(mockGetSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'telegram');
   });
 
-  it('falls back to the telegram session when no webview session exists', () => {
-    const tgSession = makeSession();
+  it('reports a telegram-only thread without collapsing it onto webview', () => {
+    const tgSession = makeSession({ sessionId: 'tg-only' });
     mockGetSession
       .mockReturnValueOnce(null)        // webview lookup misses
       .mockReturnValueOnce(tgSession);  // telegram lookup hits
     const snap = getStateSnapshot();
-    expect(mockGetSession).toHaveBeenNthCalledWith(2, mockConfig.TELEGRAM_USER_ID, 'telegram');
-    expect(snap.activeSession).toEqual({
+    expect(snap.sessions.webview).toBeNull();
+    expect(snap.sessions.telegram).toEqual({
       sessionId: tgSession.sessionId,
       model: tgSession.model,
       messageCount: tgSession.messageCount,

@@ -110,7 +110,7 @@ vi.mock('../vault/sessions.js', () => ({ getSession: vi.fn(() => null) }));
 
 vi.mock('./state-snapshot.js', () => ({
   getStateSnapshot: vi.fn(() => ({
-    version: 1, ready: true, activeSession: null, activeReview: null,
+    version: 1, ready: true, sessions: { webview: null, telegram: null }, activeReview: null,
     ingestionQueueDepth: 0, recentAgentRuns: [], pendingApprovals: {},
     lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],
   })),

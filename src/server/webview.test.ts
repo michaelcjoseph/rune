@@ -85,7 +85,7 @@ vi.mock('./state-snapshot.js', () => ({
   getStateSnapshot: vi.fn(() => ({
     version: 1,
     ready: true,
-    activeSession: null,
+    sessions: { webview: null, telegram: null },
     activeReview: null,
     ingestionQueueDepth: 0,
     recentAgentRuns: [],
@@ -216,7 +216,7 @@ describe('server/webview', () => {
     (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
       version: 1,
       ready: true,
-      activeSession: null,
+      sessions: { webview: null, telegram: null },
       activeReview: null,
       ingestionQueueDepth: 0,
       recentAgentRuns: [],
@@ -369,15 +369,18 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body.ready).toBe(true);
-      expect(res.body.activeSession).toBeNull();
+      expect(res.body.sessions).toEqual({ webview: null, telegram: null });
       expect(res.body.activeReview).toBeNull();
       expect(res.body.ingestionQueueDepth).toBe(0);
     });
 
-    it('reflects active session in snapshot', async () => {
+    it('reflects active sessions in snapshot', async () => {
       (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
         version: 1, ready: true,
-        activeSession: { sessionId: 'sess-abc', model: 'opus', messageCount: 3 },
+        sessions: {
+          webview: { sessionId: 'sess-abc', model: 'opus', messageCount: 3 },
+          telegram: null,
+        },
         activeReview: null, ingestionQueueDepth: 0, recentAgentRuns: [],
         pendingApprovals: { playbook: 0, proposal: 0 },
         lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],
@@ -386,16 +389,15 @@ describe('server/webview', () => {
         headers: { authorization: 'Bearer test-secret' },
       });
       expect(res.status).toBe(200);
-      expect(res.body.activeSession).toEqual({
-        sessionId: 'sess-abc',
-        model: 'opus',
-        messageCount: 3,
+      expect(res.body.sessions).toEqual({
+        webview: { sessionId: 'sess-abc', model: 'opus', messageCount: 3 },
+        telegram: null,
       });
     });
 
     it('reflects active review in snapshot', async () => {
       (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
-        version: 1, ready: true, activeSession: null,
+        version: 1, ready: true, sessions: { webview: null, telegram: null },
         activeReview: { type: 'daily', phase: 'interview', targetDate: '2026-05-05' },
         ingestionQueueDepth: 0, recentAgentRuns: [],
         pendingApprovals: { playbook: 0, proposal: 0 },
@@ -414,7 +416,7 @@ describe('server/webview', () => {
 
     it('reflects non-empty ingestion queue depth', async () => {
       (getStateSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
-        version: 1, ready: true, activeSession: null, activeReview: null,
+        version: 1, ready: true, sessions: { webview: null, telegram: null }, activeReview: null,
         ingestionQueueDepth: 2, recentAgentRuns: [],
         pendingApprovals: { playbook: 0, proposal: 0 },
         lastMorningPrepAt: null, lastNightlyAt: null, warnings: [],

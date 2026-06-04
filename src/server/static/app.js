@@ -549,14 +549,16 @@
   }
 
   function renderState(state) {
-    // Session panel
+    // Session panel — webview and telegram threads are independent (keyed
+    // per-transport) and `/clear` only affects its own channel, so show each
+    // explicitly. Collapsing them hid which thread `/clear` here would touch.
     const sessionEl = document.getElementById('session-content');
-    if (state.activeSession) {
-      const s = state.activeSession;
-      setText(sessionEl, `${s.sessionId.slice(0, 8)} · ${s.model} · ${s.messageCount} msgs`, false);
-    } else {
-      setText(sessionEl, 'No active session', true);
-    }
+    const sessions = state.sessions || { webview: null, telegram: null };
+    const sessionLine = (label, s) => s
+      ? `<div>${label}: ${s.sessionId.slice(0, 8)} · ${s.model} · ${s.messageCount} msgs</div>`
+      : `<div class="muted">${label}: none</div>`;
+    setHTML(sessionEl, sessionLine('Web view', sessions.webview) + sessionLine('Telegram', sessions.telegram));
+    sessionEl.classList.remove('muted');
 
     // Queue panel
     const queueEl = document.getElementById('queue-content');

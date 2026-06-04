@@ -23,10 +23,23 @@ export interface AgentRunEntry {
   status: 'success' | 'error';
 }
 
+export interface SessionSummary {
+  sessionId: string;
+  model: string;
+  messageCount: number;
+}
+
 export interface StateSnapshot {
   version: 1;
   ready: boolean;
-  activeSession: { sessionId: string; model: string; messageCount: number } | null;
+  /** Active chat threads, reported per transport. Each channel holds an
+   *  independent session keyed `${transport}:${userId}`, so they surface
+   *  separately rather than collapsing through a `webview ?? telegram`
+   *  fallback. The old fallback let a Telegram thread show in the cockpit
+   *  while `/clear` from the web view (webview-scoped) reported "nothing to
+   *  clear" — you couldn't tell which thread you were looking at. See the
+   *  2026-06-04 transport-scope fix. */
+  sessions: { webview: SessionSummary | null; telegram: SessionSummary | null };
   activeReview: { type: string; phase: string; targetDate: string } | null;
   /** An in-flight planning conversation (scoping or spec-proposed). Free-form
    *  webview messages route to a planning session ahead of the chat path in
@@ -78,11 +91,14 @@ export function getStateSnapshot(): StateSnapshot {
   const userId = config.TELEGRAM_USER_ID;
   const warnings: string[] = [];
 
-  // State snapshot is webview-consumed; prefer the webview session so the UI
-  // reflects its own thread. Fall back to the telegram session when none
-  // exists on webview — operator-level state should still surface a TG-only
-  // conversation rather than show "no active session" misleadingly.
-  const session = getSession(userId, 'webview') ?? getSession(userId, 'telegram');
+  // Report each transport's thread independently. Sessions are keyed per
+  // transport, and `/clear` only clears the channel it was issued from, so
+  // collapsing the two (the old `webview ?? telegram` fallback) hid which
+  // thread was live and made cockpit `/clear` look like a no-op.
+  const toSummary = (s: ReturnType<typeof getSession>): SessionSummary | null =>
+    s ? { sessionId: s.sessionId, model: s.model, messageCount: s.messageCount } : null;
+  const webviewSession = toSummary(getSession(userId, 'webview'));
+  const telegramSession = toSummary(getSession(userId, 'telegram'));
   const review = getActiveReviewSession(userId);
   const planning = getActivePlanningSession(userId);
   const schedulerState = readSchedulerState();
@@ -118,9 +134,7 @@ export function getStateSnapshot(): StateSnapshot {
   return {
     version: 1,
     ready: true,
-    activeSession: session
-      ? { sessionId: session.sessionId, model: session.model, messageCount: session.messageCount }
-      : null,
+    sessions: { webview: webviewSession, telegram: telegramSession },
     activeReview: review
       ? { type: review.type, phase: review.phase, targetDate: review.targetDate }
       : null,
