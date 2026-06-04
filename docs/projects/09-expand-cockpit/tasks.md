@@ -47,7 +47,7 @@ Test commit lands before any implementation code per phase.
 **Build**
 
 - [x] `src/intent/backlog-append.ts` (pure). (`appendBug`/`appendIdea` → `{ok,content}|{ok:false,error}`; CRLF→LF normalization; sentinel-first stays above the loop-filed section; `backlog-append.test.ts` green — 16 cases.)
-- [ ] `src/intent/backlog-write-lock.ts` (per-file mutex).
+- [x] `src/intent/backlog-write-lock.ts` (per-file mutex). (`withFileLock` async mutex + `writeFileAtomic` temp-then-rename + `assertBacklogWriteAllowed` (allowed-files + symlink-escape guard) + `appendBacklogMutationLog`; `backlog-security.test.ts` green (9), `backlog-append-api.test.ts` mutex tests green.)
 - [ ] `POST /api/backlog/:product/:kind`; integration with security checks + audit log.
 - [ ] Drawer `+` chip with pending-state input.
 
