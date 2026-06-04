@@ -476,6 +476,24 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   padding: .25rem .7rem; border-radius: 4px; cursor: pointer; font-size: .82rem;
 }
 .backlog-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.backlog-add-chip {
+  margin-left: auto; background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
+  width: 1.6rem; height: 1.6rem; border-radius: 4px; cursor: pointer; font-size: 1rem; line-height: 1;
+}
+.backlog-add-chip:hover { border-color: var(--accent); color: var(--accent); }
+.backlog-add-row { display: flex; align-items: center; gap: .4rem; padding: .4rem 1rem; border-bottom: 1px solid var(--border); }
+.backlog-add-row.hidden { display: none; }
+.backlog-add-row input {
+  flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: .3rem .5rem; font-size: .85rem;
+}
+.backlog-add-row button {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  padding: .3rem .7rem; border-radius: 4px; cursor: pointer; font-size: .82rem;
+}
+.backlog-add-row button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.backlog-add-row button:disabled { opacity: .5; cursor: progress; }
+.backlog-add-error { color: #d66; font-size: .75rem; }
 .backlog-content { flex: 1; overflow-y: auto; padding: .5rem 1rem; }
 .backlog-item { padding: .45rem 0; border-bottom: 1px solid var(--border); }
 .backlog-item-head { display: flex; align-items: baseline; gap: .5rem; }

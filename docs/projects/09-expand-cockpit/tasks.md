@@ -49,7 +49,7 @@ Test commit lands before any implementation code per phase.
 - [x] `src/intent/backlog-append.ts` (pure). (`appendBug`/`appendIdea` → `{ok,content}|{ok:false,error}`; CRLF→LF normalization; sentinel-first stays above the loop-filed section; `backlog-append.test.ts` green — 16 cases.)
 - [x] `src/intent/backlog-write-lock.ts` (per-file mutex). (`withFileLock` async mutex + `writeFileAtomic` temp-then-rename + `assertBacklogWriteAllowed` (allowed-files + symlink-escape guard) + `appendBacklogMutationLog`; `backlog-security.test.ts` green (9), `backlog-append-api.test.ts` mutex tests green.)
 - [x] `POST /api/backlog/:product/:kind`; integration with security checks + audit log. (`handleApiBacklogAppend`: per-file-mutex critical section (guard → read → append → capture pre-write git → atomic write), 400 empty-text/multiline-text, 404 unknown-product/unknown-kind, best-effort audit to `config.BACKLOG_MUTATIONS_FILE`; returns the appended item found by line number (ideas insert above the sentinel, so not the last item). `backlog-append-api.test.ts` green — 11.)
-- [ ] Drawer `+` chip with pending-state input.
+- [x] Drawer `+` chip with pending-state input. (`#backlog-add-chip` toggles an inline input; `submitBacklogAdd` POSTs to the active tab's kind with a disabled-button pending state + double-submit guard, no optimistic commit — appends the server's parsed item on success (re-fetches if unechoed), shows the typed error.code inline + keeps text on error. Pure frontend; DOM verified by the integration check.)
 
 ## Phase 4 — Plan + promotion job + scaffold contract
 

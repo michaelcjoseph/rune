@@ -111,6 +111,12 @@
     <div class="backlog-tabs">
       <button class="backlog-tab" data-backlog-tab="bugs">Bugs</button>
       <button class="backlog-tab" data-backlog-tab="ideas">Ideas</button>
+      <button id="backlog-add-chip" class="backlog-add-chip" title="Add an item">+</button>
+    </div>
+    <div id="backlog-add-row" class="backlog-add-row hidden">
+      <input id="backlog-add-input" type="text" placeholder="New item…" autocomplete="off" />
+      <button id="backlog-add-submit">Add</button>
+      <span id="backlog-add-error" class="backlog-add-error"></span>
     </div>
     <div id="backlog-drawer-content" class="backlog-content"></div>
     <div id="backlog-drawer-warnings" class="backlog-warnings"></div>

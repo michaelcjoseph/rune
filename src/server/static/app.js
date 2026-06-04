@@ -923,9 +923,19 @@
   // a tooltip showing its disabledReason); ideas with a body render it as a nested list; file
   // warnings render as a banner. The Plan button's POST wiring lands in Phase 4.
   let backlogData = null;
+  let backlogProduct = null;
 
   function backlogActiveTab() {
     return localStorage.getItem('backlogTab') === 'ideas' ? 'ideas' : 'bugs';
+  }
+
+  function resetBacklogAddRow() {
+    const row = document.getElementById('backlog-add-row');
+    const input = document.getElementById('backlog-add-input');
+    const err = document.getElementById('backlog-add-error');
+    if (row) row.classList.add('hidden');
+    if (input) input.value = '';
+    if (err) err.textContent = '';
   }
 
   function basename(p) {
@@ -937,10 +947,12 @@
     const title = document.getElementById('backlog-drawer-title');
     const content = document.getElementById('backlog-drawer-content');
     if (!drawer || !title || !content) return;
+    backlogProduct = product;
     title.textContent = product + ' backlog';
     content.innerHTML = '<span class="muted">Loading…</span>';
     const warnEl = document.getElementById('backlog-drawer-warnings');
     if (warnEl) warnEl.innerHTML = '';
+    resetBacklogAddRow();
     drawer.classList.remove('hidden');
     fetch(`/api/backlog/${encodeURIComponent(product)}`)
       .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e))))
@@ -1012,6 +1024,65 @@
   document.getElementById('backlog-drawer-close')?.addEventListener('click', () => {
     document.getElementById('backlog-drawer')?.classList.add('hidden');
     backlogData = null;
+    backlogProduct = null;
+  });
+
+  // `+` chip: reveal the inline add input. The add targets the ACTIVE tab's kind. No optimistic
+  // commit — the row stays pending until the POST resolves; on success the server's parsed item
+  // is appended, on error the typed error.code shows inline and the user's text is preserved.
+  document.getElementById('backlog-add-chip')?.addEventListener('click', () => {
+    const row = document.getElementById('backlog-add-row');
+    if (!row) return;
+    const hidden = row.classList.toggle('hidden');
+    if (!hidden) document.getElementById('backlog-add-input')?.focus();
+  });
+
+  function submitBacklogAdd() {
+    const input = document.getElementById('backlog-add-input');
+    const submit = document.getElementById('backlog-add-submit');
+    const err = document.getElementById('backlog-add-error');
+    if (!input || !submit || !backlogProduct || !backlogData) return;
+    if (submit.disabled) return; // in-flight — guard against Enter double-submit
+    const text = input.value;
+    if (err) err.textContent = '';
+    if (!text.trim()) { if (err) err.textContent = 'empty-text'; return; }
+    const kind = backlogActiveTab();
+    submit.disabled = true;
+    submit.textContent = '…';
+    fetch(`/api/backlog/${encodeURIComponent(backlogProduct)}/${encodeURIComponent(kind)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+      .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e))))
+      .then(data => {
+        if (data && data.item && backlogData && Array.isArray(backlogData[kind])) {
+          // Append the server's fully-parsed item to the active tab's list and re-render.
+          backlogData[kind].push(data.item);
+          resetBacklogAddRow();
+          renderBacklogDrawer();
+        } else {
+          // Written, but the server couldn't echo the parsed item — re-fetch so the list
+          // reflects the write rather than leaving a stale view (and the user doesn't re-submit).
+          resetBacklogAddRow();
+          openBacklogDrawer(backlogProduct);
+        }
+      })
+      .catch(e => {
+        // Keep the user's text for retry; surface the typed error code/message inline.
+        const code = (e && e.error && (e.error.code || e.error.message)) || 'error';
+        if (err) err.textContent = String(code);
+      })
+      .finally(() => {
+        submit.disabled = false;
+        submit.textContent = 'Add';
+      });
+  }
+
+  document.getElementById('backlog-add-submit')?.addEventListener('click', submitBacklogAdd);
+  document.getElementById('backlog-add-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitBacklogAdd(); }
+    if (e.key === 'Escape') resetBacklogAddRow();
   });
 
   // ---- Pending Approvals panel (Phase 6 C2) ----
