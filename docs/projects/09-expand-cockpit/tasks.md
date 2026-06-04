@@ -81,7 +81,7 @@ Test commit lands before any implementation code per phase.
 
 > Depends on: Phase 4
 
-- [ ] Add an automated HTTP/module smoke test using tmpdir product repos: read drawer data, add bug, add idea, plan an idea end-to-end with a stubbed setup writer, assert promotion `marked-source`, and assert no real product repo outside the tmpdir is touched.
+- [x] Add an automated HTTP/module smoke test using tmpdir product repos: read drawer data, add bug, add idea, plan an idea end-to-end with a stubbed setup writer, assert promotion `marked-source`, and assert no real product repo outside the tmpdir is touched. (`src/jobs/plan-flow-smoke.test.ts` — real tmpdir repo + real fs, drives the actual `runScaffoldApproval` orchestration with tmpdir-scoped deps + a stubbed setup-writer that writes the scaffold files; asserts marked-source + the source idea rewritten + every write target under the tmpdir root. Green — 1 case.)
 - [ ] Add `docs/projects/BACKLOG-FORMAT.md` to the Jarvis repo as the canonical format reference and include a copyable template section for product repos; do not require this project to edit every registered product repo.
 - [ ] Update `docs/projects/08-intent-layer/spec.md` cockpit section with a one-paragraph reference.
 - [ ] Add an automated docs check that `docs/projects/ideas.md` contains a promoted `Expand cockpit → 09-expand-cockpit` line, then update the line if the check fails.
