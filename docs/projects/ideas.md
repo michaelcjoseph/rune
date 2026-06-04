@@ -6,6 +6,7 @@ below it.
 
 ## User-authored
 
+- Expand cockpit → 09-expand-cockpit
 - As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
 - Planning pipeline — specialized planning role-agents (its own project)
   - The pipeline that turns an approved product spec into a buildable plan, each stage a role-agent reusing project 08's Planner + `/work` + model-selection policy (retrofit, not a new runtime). The per-agent memory substrate is spun out to **project 12** (the writer-role compounding-memory wedge); this pipeline reuses that proven charter + memory + wrap-up-write pattern once it lands, rather than reinventing it.
