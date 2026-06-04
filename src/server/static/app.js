@@ -921,7 +921,8 @@
   // for that product via GET /api/backlog/:product and renders Bugs/Ideas tabs. The last-
   // selected tab persists in localStorage. Each open item renders a Plan button (disabled with
   // a tooltip showing its disabledReason); ideas with a body render it as a nested list; file
-  // warnings render as a banner. The Plan button's POST wiring lands in Phase 4.
+  // warnings render as a banner. An enabled Plan button POSTs the Plan endpoint (handleBacklogPlan)
+  // and hands off to the planning panel (Phase 4).
   let backlogData = null;
   let backlogProduct = null;
 
@@ -1084,6 +1085,72 @@
     if (e.key === 'Enter') { e.preventDefault(); submitBacklogAdd(); }
     if (e.key === 'Escape') resetBacklogAddRow();
   });
+
+  // Plan button (09-expand-cockpit Phase 4). Delegated on the stable drawer-content element so it
+  // survives the innerHTML re-renders. POSTs the Plan endpoint and hands off to the planning panel.
+  document.getElementById('backlog-drawer-content')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-backlog-plan]');
+    if (btn && !btn.disabled) {
+      // Disable immediately so a double-click can't fire two POSTs. The drawer closes (200) or
+      // re-renders (error) afterward, so we never need to re-enable this exact node.
+      btn.disabled = true;
+      handleBacklogPlan(btn.dataset.backlogPlan);
+    }
+  });
+
+  /** Drive a Plan click for `itemId` in the open drawer's product:
+   *   200 → close the drawer and hand off to the planning panel over the just-created session
+   *         (skipStart so we don't replace the promotion-linked session the server made);
+   *   409 active-planning-session → confirm-dialog: resume the active session, or abandon it and
+   *         re-try this Plan;
+   *   anything else (409 stale-item, 422 item-not-eligible) → the drawer view is out of date, so
+   *         re-fetch it (an ineligible item then renders its disabled Plan button). */
+  function handleBacklogPlan(itemId, retried) {
+    if (!backlogProduct || !itemId) return;
+    const product = backlogProduct;
+    fetch(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`, {
+      method: 'POST',
+    })
+      .then(r => r.json().then(body => ({ status: r.status, body })).catch(() => ({ status: r.status, body: {} })))
+      .then(({ status, body }) => {
+        const code = body && body.error && body.error.code;
+        if (status === 200) {
+          document.getElementById('backlog-drawer')?.classList.add('hidden');
+          backlogData = null;
+          backlogProduct = null;
+          if (typeof window.openPlanningPanel === 'function') {
+            window.openPlanningPanel(product, { skipStart: true });
+          }
+          return;
+        }
+        // Only offer the collision dialog on the FIRST attempt — after an abandon+retry a fresh
+        // collision means an external race (another tab / Telegram); fall through to a re-fetch
+        // rather than looping the dialog.
+        if (status === 409 && code === 'active-planning-session' && !retried) {
+          const safeProduct = product.replace(/[\r\n]/g, ' ');
+          const resume = window.confirm(
+            `A planning session is already active for "${safeProduct}".\n\n` +
+            `OK = resume it.   Cancel = abandon it and plan this item fresh.`,
+          );
+          if (resume) {
+            document.getElementById('backlog-drawer')?.classList.add('hidden');
+            if (typeof window.openPlanningPanel === 'function') {
+              window.openPlanningPanel(product, { skipStart: true });
+            }
+          } else {
+            // Abandon the active session, then re-try this Plan ONCE from a clean slate.
+            fetch('/api/planning/abandon', { method: 'POST' })
+              .then(() => handleBacklogPlan(itemId, true))
+              .catch(() => openBacklogDrawer(product));
+          }
+          return;
+        }
+        // Stale view (stale-item), now-ineligible (item-not-eligible), or a post-retry collision —
+        // re-fetch so the drawer reflects the true state rather than leaving an out-of-date list.
+        openBacklogDrawer(product);
+      })
+      .catch(() => openBacklogDrawer(product));
+  }
 
   // ---- Pending Approvals panel (Phase 6 C2) ----
   //
@@ -1542,9 +1609,13 @@
 
   /** Open the panel scoped to a product slug. POSTs /api/planning/start to
    *  create the session, then renders the empty-scoping state. Exposed via
-   *  window.openPlanningPanel so the cockpit Plan button (C1.3) can call it. */
-  async function openPlanningPanel(product) {
+   *  window.openPlanningPanel so the cockpit Plan button (C1.3) can call it.
+   *  Pass `{ skipStart: true }` when a session was ALREADY created server-side
+   *  (the backlog Plan button — 09-expand-cockpit — creates a promotion-linked
+   *  session via /api/backlog/.../plan; starting another here would clobber it). */
+  async function openPlanningPanel(product, opts) {
     if (!product) return;
+    const skipStart = !!(opts && opts.skipStart);
     const panel = planningEl('planning-panel');
     if (!panel) return;
     planningState.open = true;
@@ -1557,6 +1628,9 @@
     renderPlanningView();
     panel.classList.remove('hidden');
     panel.setAttribute('aria-hidden', 'false');
+    // The backlog Plan button already created the session server-side — opening here is a pure
+    // hand-off, so don't POST /api/planning/start (it would cancel + replace the linked session).
+    if (skipStart) return;
     // Best-effort start — if it fails (e.g., 401 in dev), the panel stays
     // open with a friendly transcript message so the user knows something
     // went wrong rather than seeing a silent blank.
