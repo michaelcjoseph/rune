@@ -889,10 +889,117 @@
         .catch(() => { cancelBtn.disabled = false; });
       return;
     }
+    // 09-expand-cockpit: the sidebar backlog count line carries data-backlog-open=<product>
+    // and opens the backlog drawer. Checked before the action button so the count line never
+    // falls through to a project action.
+    const backlogTrigger = e.target.closest('[data-backlog-open]');
+    if (backlogTrigger) {
+      openBacklogDrawer(backlogTrigger.dataset.backlogOpen);
+      return;
+    }
     const btn = e.target.closest('.cockpit-action-btn');
     if (!btn) return;
     cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);
   }
+
+  // ---- Backlog drawer (09-expand-cockpit) ----
+  //
+  // Opened from a product's sidebar count line (data-backlog-open). Fetches the full backlog
+  // for that product via GET /api/backlog/:product and renders Bugs/Ideas tabs. The last-
+  // selected tab persists in localStorage. Each open item renders a Plan button (disabled with
+  // a tooltip showing its disabledReason); ideas with a body render it as a nested list; file
+  // warnings render as a banner. The Plan button's POST wiring lands in Phase 4.
+  let backlogData = null;
+
+  function backlogActiveTab() {
+    return localStorage.getItem('backlogTab') === 'ideas' ? 'ideas' : 'bugs';
+  }
+
+  function basename(p) {
+    return String(p || '').split('/').pop();
+  }
+
+  function openBacklogDrawer(product) {
+    const drawer = document.getElementById('backlog-drawer');
+    const title = document.getElementById('backlog-drawer-title');
+    const content = document.getElementById('backlog-drawer-content');
+    if (!drawer || !title || !content) return;
+    title.textContent = product + ' backlog';
+    content.innerHTML = '<span class="muted">Loading…</span>';
+    const warnEl = document.getElementById('backlog-drawer-warnings');
+    if (warnEl) warnEl.innerHTML = '';
+    drawer.classList.remove('hidden');
+    fetch(`/api/backlog/${encodeURIComponent(product)}`)
+      .then(r => (r.ok ? r.json() : r.json().then(e => Promise.reject(e))))
+      .then(data => { backlogData = data; renderBacklogDrawer(); })
+      .catch(err => {
+        const code = (err && err.error && (err.error.code || err.error)) || 'error';
+        content.innerHTML = `<span class="muted">Could not load backlog (${escHtml(String(code))})</span>`;
+      });
+  }
+
+  function renderBacklogDrawer() {
+    if (!backlogData) return;
+    const tab = backlogActiveTab();
+    document.querySelectorAll('.backlog-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.backlogTab === tab);
+    });
+    const items = tab === 'ideas' ? (backlogData.ideas || []) : (backlogData.bugs || []);
+    const content = document.getElementById('backlog-drawer-content');
+    if (content) {
+      content.innerHTML = items.length === 0
+        ? '<span class="muted">none</span>'
+        : items.map(renderBacklogItem).join('');
+    }
+    const warnEl = document.getElementById('backlog-drawer-warnings');
+    const warns = backlogData.fileWarnings || [];
+    if (warnEl) {
+      warnEl.innerHTML = warns.length === 0 ? '' :
+        `<div class="backlog-warnings-title">Format warnings (${escHtml(String(warns.length))}):</div>` +
+        warns.map(w => {
+          const loc = (basename(w.file) || w.file || '') + (w.lineNumber ? ':' + w.lineNumber : '');
+          return `<div class="backlog-warning">· ${escHtml(loc)} — ${escHtml(w.code || '')}</div>`;
+        }).join('');
+    }
+  }
+
+  function renderBacklogItem(item) {
+    const plan = (item.actions || []).find(a => a.kind === 'plan') || { enabled: false };
+    const statusIcon = item.status === 'done' ? '✓' : '◯';
+    const promoted = item.promotedTo
+      ? ` <span class="backlog-promoted muted">→ ${escHtml(item.promotedTo)}</span>` : '';
+    const warnChip = (item.warnings && item.warnings.length)
+      ? ` <span class="backlog-warn-chip" title="${escHtml(item.warnings.join(', '))}">⚠</span>` : '';
+    const body = (item.body && item.body.length)
+      ? `<ul class="backlog-item-body">${item.body.map(b => `<li>${escHtml(b)}</li>`).join('')}</ul>` : '';
+    const planBtn = plan.enabled
+      ? `<button class="backlog-plan-btn" data-backlog-plan="${escHtml(item.id)}">Plan</button>`
+      : `<button class="backlog-plan-btn" disabled title="${escHtml(plan.disabledReason || 'unavailable')}">Plan</button>`;
+    const src = item.source && item.source.file
+      ? `<a class="backlog-src" href="obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(item.source.file)}" title="${escHtml(item.source.file + ':' + item.source.lineNumber)}">${escHtml(basename(item.source.file) + ':' + item.source.lineNumber)}</a>`
+      : '';
+    return `<div class="backlog-item ${item.status === 'done' ? 'backlog-item-done' : ''}">` +
+      `<div class="backlog-item-head">` +
+        `<span class="backlog-item-status">${statusIcon}</span>` +
+        `<span class="backlog-item-text">${escHtml(item.text)}${promoted}${warnChip}</span>` +
+        planBtn +
+      `</div>` +
+      body +
+      (src ? `<div class="backlog-item-src">${src}</div>` : '') +
+      `</div>`;
+  }
+
+  // Static tab buttons: persist the selected tab and re-render.
+  document.querySelectorAll('.backlog-tab').forEach(b => {
+    b.addEventListener('click', () => {
+      localStorage.setItem('backlogTab', b.dataset.backlogTab);
+      renderBacklogDrawer();
+    });
+  });
+  document.getElementById('backlog-drawer-close')?.addEventListener('click', () => {
+    document.getElementById('backlog-drawer')?.classList.add('hidden');
+    backlogData = null;
+  });
 
   // ---- Pending Approvals panel (Phase 6 C2) ----
   //
