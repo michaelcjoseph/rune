@@ -41,7 +41,7 @@ Test commit lands before any implementation code per phase.
 **Tests (write first)**
 
 - [x] `backlog-append.test.ts` — pure: bugs append `\n- [ ] <text>` at EOF (ensures trailing newline); ideas insert above Loop-filed sentinel inside User-authored, with sentinel-missing and section-missing fallbacks; empty/multiline rejected with typed errors. (Test-first deliverable: exact-string assertions pin the insertion algorithm — new idea lands directly after the last User-authored bullet, loop-filed section preserved verbatim. Red until the Phase 3 build lands `backlog-append.ts`.)
-- [ ] `backlog-append-api.test.ts` — endpoint happy + each typed error; per-file mutex serializes concurrent appends; temp-then-rename verified via mocked fs.
+- [x] `backlog-append-api.test.ts` — endpoint happy + each typed error; per-file mutex serializes concurrent appends; temp-then-rename verified via mocked fs. (Test-first deliverable: HTTP suite over `POST /api/backlog/:product/:kind` (happy → `{item}` with computed actions; 400 empty-text/multiline-text; 404 unknown-product/unknown-kind) + `backlog-write-lock` mutex (structural overlap proofs) + temp-then-rename via a path-gated `node:fs` override. Red until the Phase 3 build lands `backlog-write-lock.ts` + the POST route.)
 - [ ] `backlog-security.test.ts` — write paths outside the two allowed files → 500; symlink target outside repoPath → 500; write logged to `logs/backlog-mutations.jsonl`.
 
 **Build**
