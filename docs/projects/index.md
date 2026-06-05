@@ -19,6 +19,7 @@ its `spec.md`.
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Not Started | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
+| [14-product-team-agents](14-product-team-agents/spec.md) | Not Started | A simulated product team of role-agents (PM, tech lead, QA, coder, reviewer, designer), each a SOUL.md charter + compounding memory.md, that takes a spec to autonomous merge via `plan` + `work` on the existing gen-eval-loop, and compounds from vault feedback through a nightly post-mortem. |
 
 ---
 
@@ -205,3 +206,20 @@ project 10 — there's no signal a human is needed and no live worktree to act i
   as Deferred in the spec. Phase 0 (how work reaches main) is resolved in the spec: nothing
   auto-promotes a plain work-run — merge-to-main is gen-eval-loop only.
 - **Task breakdown & test plan:** see [tasks.md](13-work-run-monitoring/tasks.md) and [test-plan.md](13-work-run-monitoring/test-plan.md). Test-first per phase.
+
+## 14-product-team-agents — Not Started
+
+[Spec](14-product-team-agents/spec.md)
+
+A simulated product team of role-agents that takes a spec to a merged, reviewed implementation autonomously, and gets sharper every cycle.
+
+Generalizes the project-12 role-agent pattern (`SOUL.md` charter + compounding `memory.md`) from one writer to six roles — PM, tech lead, QA, coder, reviewer, designer — and runs them on the existing gen-eval-loop (project 08 Phase 6) behind two manual commands. Michael stays at the idea layer; he's only pulled in for the PM interview when a spec runs out, and finds the rest through usage.
+
+- **The team:** fixed roles with fixed review edges. PM writes the spec (interviewing only when underspecified, emitting its assumptions into the spec) and owns "done"; tech lead breaks it down and sizes; QA writes tests first; coder implements; reviewer (cross-model) and tech lead review; designer checks FE.
+- **Built on what exists:** the worktree, Generator→Evaluator loop, cross-model adjudication (Claude codes / Codex reviews), round cap, and autonomous `git merge --no-ff` + push already ship in `gen-eval-loop-runner.ts`. v1 layers role identity, QA-first, and objection-class merge gates on top.
+- **`plan` = PM + tech lead; `work` = the rest.** Both manual in v1; the autonomous scheduler is deferred.
+- **Objection classes are hard gates:** security, data integrity, concurrency, irreversibility, cost — the failure class dogfooding can't surface. An open finding blocks merge and the PM cannot wave it through.
+- **The learning loop:** Michael leaves feedback in the vault; the nightly runs a Jarvis-owned (neutral, not a team role) post-mortem that attributes the miss to a stage and writes one atomic lesson into that role's `memory.md`. Feedback-gated; "no lesson warranted" is allowed.
+- **Gate:** loop closure, not quality — a real jarvis task goes `plan` → `work` → autonomous merge to main with ≥1 diff-changing review round and no human at the merge. Quality is deferred to usage/engagement, the project-12 way.
+- **Provenance:** 2026-06-05 Jarvis conversation extending projects 08 (intent-layer) and 12 (writer memory). The PM-interviews-when-underspecified rule resolves the oracle question; the neutral post-mortem and objection-class gates came out of the design discussion.
+- **Task breakdown & test plan:** see [tasks.md](14-product-team-agents/tasks.md) and [test-plan.md](14-product-team-agents/test-plan.md). Test-first per phase.
