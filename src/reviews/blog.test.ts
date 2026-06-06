@@ -29,17 +29,26 @@ vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
 }));
 
+// The writer-role loader is mocked so the wiring tests control SOUL/memory
+// deterministically — independent of whatever `agents/writer/{SOUL,memory}.md`
+// happen to be on disk in this repo (memory.md may not exist yet pre-seed).
+vi.mock('../writer/memory.js', () => ({
+  composeWriterContext: vi.fn(),
+}));
+
 // --- Imports ---
 
 const { registerReviewHandler } = await import('./orchestrator.js');
 const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext } = await import('../ai/claude.js');
 const { readVaultFile } = await import('../vault/files.js');
+const { composeWriterContext } = await import('../writer/memory.js');
 
 const registerMock = registerReviewHandler as ReturnType<typeof vi.fn>;
 const updateSessionMock = updateReviewSession as ReturnType<typeof vi.fn>;
 const askClaudeMock = askClaudeWithContext as ReturnType<typeof vi.fn>;
 const readVaultMock = readVaultFile as ReturnType<typeof vi.fn>;
+const composeMock = composeWriterContext as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
 await import('./blog.js');
@@ -86,6 +95,13 @@ describe('reviews/blog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sender = makeSender();
+    // Default: SOUL prefixes the base instructions on the system channel; memory
+    // is empty (cold start) so the user turn stays exactly the topic line. The
+    // base flows through verbatim so the existing system-prompt assertions hold.
+    composeMock.mockImplementation((base: string) => ({
+      systemInstructions: `WRITER-SOUL-MARKER\n\n${base}`,
+      referenceContext: '',
+    }));
   });
 
   describe('registration', () => {
@@ -167,6 +183,71 @@ describe('reviews/blog', () => {
         expect.any(String),
         { opLabel: 'review:blog', voice: true },
       );
+    });
+  });
+
+  describe('writer-memory wiring', () => {
+    it('injects fenced memory into the first user turn, not the system prompt', async () => {
+      const session = makeSession({ topic: 'compounding memory' });
+      readVaultMock.mockReturnValue(null);
+      composeMock.mockReturnValue({
+        systemInstructions: 'WRITER-SOUL-MARKER\n\nbase instructions',
+        referenceContext: '<writer-memory>\nWRITER-MEMORY-MARKER lesson\n</writer-memory>',
+      });
+      askClaudeMock.mockResolvedValue({ text: 'ok', error: null });
+
+      await blogHandler.start(session, sender);
+
+      // askClaudeWithContext signature: (message, sessionId, systemPrompt, opts)
+      const firstCall = askClaudeMock.mock.calls[0]!;
+      const [userTurn, , systemPrompt] = firstCall;
+      // Memory rides the low-authority user turn alongside the topic line...
+      expect(userTurn).toContain('WRITER-MEMORY-MARKER');
+      expect(userTurn).toContain('I want to write about: compounding memory');
+      // ...and the system prompt carries SOUL + base only — memory absent from it.
+      expect(systemPrompt).toBe('WRITER-SOUL-MARKER\n\nbase instructions');
+      expect(systemPrompt).not.toContain('WRITER-MEMORY-MARKER');
+    });
+
+    it('persists systemInstructions (no memory) as prepContext for recovery', async () => {
+      const session = makeSession({ topic: 'recovery' });
+      readVaultMock.mockReturnValue(null);
+      composeMock.mockReturnValue({
+        systemInstructions: 'WRITER-SOUL-MARKER\n\nbase',
+        referenceContext: '<writer-memory>\nWRITER-MEMORY-MARKER\n</writer-memory>',
+      });
+      askClaudeMock.mockResolvedValue({ text: 'ok', error: null });
+
+      await blogHandler.start(session, sender);
+
+      // The exact-match pins prepContext to the memory-free systemInstructions —
+      // recovery (handleMessage) reads prepContext verbatim, so memory can never
+      // reach the system channel on resume.
+      expect(updateSessionMock).toHaveBeenCalledWith(100, { prepContext: 'WRITER-SOUL-MARKER\n\nbase' });
+    });
+
+    it('cold start (empty memory) → first user turn is just the topic line, no fence', async () => {
+      const session = makeSession({ topic: 'cold' });
+      readVaultMock.mockReturnValue(null);
+      composeMock.mockReturnValue({ systemInstructions: 'SOUL\n\nbase', referenceContext: '' });
+      askClaudeMock.mockResolvedValue({ text: 'ok', error: null });
+
+      await blogHandler.start(session, sender);
+
+      const [userTurn] = askClaudeMock.mock.calls[0]!;
+      expect(userTurn).toBe('I want to write about: cold');
+    });
+
+    it('passes the base blog instructions through composeWriterContext', async () => {
+      const session = makeSession({ topic: 'x' });
+      readVaultMock.mockImplementation((path: string) =>
+        path === '.claude/skills/blog/SKILL.md' ? 'Custom blog skill instructions' : null,
+      );
+      askClaudeMock.mockResolvedValue({ text: 'ok', error: null });
+
+      await blogHandler.start(session, sender);
+
+      expect(composeMock).toHaveBeenCalledWith(expect.stringContaining('Custom blog skill instructions'));
     });
   });
 

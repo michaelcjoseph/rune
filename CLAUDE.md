@@ -225,6 +225,9 @@ src/
 │   ├── equipment.ts         # readEquipment() parses health/equipment.md into {home, gym} raw blocks
 │   ├── whoop-recent.ts      # readRecentWhoopDays(n) returns last n parsed WhoopDailyData from health/whoop/
 │   └── watcher.ts           # FSWatcher for Readwise article detection, TG notify + enqueue
+├── writer/
+│   ├── memory.ts            # Writer-role memory loader (project 12): composeWriterContext(baseInstructions) reads SOUL.md (system-prompt authority) + memory.md (budget-trimmed, low-authority reference) from PROJECT_ROOT/agents/writer/; SOUL is prepended to baseInstructions on the system channel; memory rides the first user turn inside a <writer-memory> fence — never the system prompt; WRITER_MEMORY_CHAR_BUDGET (14000 chars) is the load-time truncation cap; cold-start (missing files) degrades gracefully; read via node:fs, not readVaultFile
+│   └── seed.ts              # Seed-mining contract (project 12): type-safe scaffolding for the one-time memory.md baseline mine — extractSeedLinks, assertSeedSourceCount, capSeedBullets (≤20), stampSeedLesson (provenance format), planSeedMining; bodies throw notImplemented() pending Phase 1 seed task
 └── utils/
     ├── time.ts              # America/Chicago timezone helpers (getTodayFilename, getYesterdayFilename, getTimestamp, getDayOfWeek, getRecentFilenames, etc.)
     ├── logger.ts            # Structured JSON logging with component tags
@@ -269,6 +272,8 @@ Plus `pages/psychology.md` (living profile, updated by `psychology-updater` with
 **Opted in** (prose the user reads): `handleConversation` (TG/webview chat), `/ask`, `summarizeSession` (/fresh + nightly capture), `morning-prep`, the blog/health/interview/new-project review sessions, the `review-writer` agent, `kb-query`, and the prose-writing post-agents `project-updater`, `worldview-updater`, and `psychology-updater`.
 
 **Deliberately not opted in** (structured / classifier output): resolver Haiku, content-triager, photo-classifier, meeting/book extract, the review-routing one-shot JSON extract, wiki-compiler, wiki-linter, `json-updater`, `playbook-updater`, `proposal-updater`, and prep agents (journal-scanner, project-scanner, system-scanner). These stay deterministic.
+
+**Writer-role memory (project 12):** The `/blog` flow additionally layers a writer-role identity on top of the voice prompt. `src/reviews/blog.ts` calls `composeWriterContext(buildBaseInstructions(topic))` (from `src/writer/memory.ts`) before the first Claude turn. The SOUL charter (`agents/writer/SOUL.md`) is prepended to the base blog instructions on the system channel (`--append-system-prompt` via `askClaudeWithContext`). The accumulating craft lessons (`agents/writer/memory.md`) ride the first user turn inside a `<writer-memory>` fence — never the system channel — so they carry reference weight rather than rule weight; on any SOUL ↔ memory conflict, SOUL governs. Only `systemInstructions` (SOUL + base, no memory text) is persisted as `prepContext`, so session recovery cannot accidentally promote memory into the system channel. Cold start (missing files) degrades gracefully to voice-only behavior.
 
 ### Review → post-agent flow
 

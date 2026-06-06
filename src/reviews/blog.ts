@@ -5,6 +5,7 @@ import type { MessageSender } from '../transport/sender.js';
 import { registerReviewHandler } from './orchestrator.js';
 import { askClaudeWithContext } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
+import { composeWriterContext } from '../writer/memory.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('blog');
@@ -37,7 +38,11 @@ function gatherWritingContext(): string {
   return sections.join('\n\n');
 }
 
-function buildSystemPrompt(topic: string): string {
+// The BASE blog instructions (skill/default text + topic queue). The writer
+// role's SOUL charter is layered on top by composeWriterContext (project 12),
+// which prepends SOUL to these instructions on the system channel and keeps the
+// accumulating memory.md on the low-authority user channel.
+function buildBaseInstructions(topic: string): string {
   const skill = readVaultFile(SKILL_PATH);
   const instructions = skill?.trim() || DEFAULT_INSTRUCTIONS;
   const writingContext = gatherWritingContext();
@@ -53,18 +58,26 @@ const blogHandler: ReviewTypeHandler = {
   async start(session: ReviewSession, sender: MessageSender): Promise<void> {
     const topic = session.topic || 'untitled';
 
-    const systemPrompt = buildSystemPrompt(topic);
-    sessionPrompts.set(session.claudeSessionId, systemPrompt);
-    updateReviewSession(session.chatId, { prepContext: systemPrompt });
+    // Compose the writer role: SOUL charter (+ base blog instructions) carries
+    // system-prompt authority; the accumulating memory.md rides the first user
+    // turn as low-authority reference, never the system prompt. Only the
+    // memory-free systemInstructions is persisted as prepContext, so session
+    // recovery (handleMessage) can never promote memory into the system channel.
+    const { systemInstructions, referenceContext } = composeWriterContext(buildBaseInstructions(topic));
+    sessionPrompts.set(session.claudeSessionId, systemInstructions);
+    updateReviewSession(session.chatId, { prepContext: systemInstructions });
 
     await sender.send(session.chatId, `Blog session started: "${topic}"\nSend /done when finished.`);
     sender.startTyping(session.chatId);
 
+    const topicTurn = `I want to write about: ${topic}`;
+    const firstTurn = referenceContext ? `${referenceContext}\n\n${topicTurn}` : topicTurn;
+
     try {
       const result = await askClaudeWithContext(
-        `I want to write about: ${topic}`,
+        firstTurn,
         session.claudeSessionId,
-        systemPrompt,
+        systemInstructions,
         { opLabel: 'review:blog', voice: true },
       );
       sender.stopTyping(session.chatId);

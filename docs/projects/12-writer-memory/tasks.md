@@ -39,9 +39,12 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
       old entries from `memory.md` to enforce the read budget. (`src/writer/memory.ts`
       `composeWriterContext`; 12 tests green. `voice:true` injection wired at the blog call
       site in the next task.)
-- [ ] Wire the loader into `src/reviews/blog.ts`; reference goes in the initial user turn, not
+- [x] Wire the loader into `src/reviews/blog.ts`; reference goes in the initial user turn, not
       `--append-system-prompt`; persisted session recovery keeps enough context to continue
-      without putting memory in the system prompt.
+      without putting memory in the system prompt. (`blogHandler.start` calls
+      `composeWriterContext(buildBaseInstructions(topic))`; `systemInstructions` → system
+      channel + `prepContext`, fenced `referenceContext` → first user turn; 4 wiring tests in
+      `src/reviews/blog.test.ts`, 11 green.)
 - [ ] Mine the filled seed-source list into a ≤20-bullet, provenance-stamped `memory.md`;
       source inputs may be 20-50 links, unfetchable supplied URLs are skipped, and there is no
       second manual approval gate.
