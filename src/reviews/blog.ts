@@ -5,6 +5,9 @@ import type { MessageSender } from '../transport/sender.js';
 import { registerReviewHandler } from './orchestrator.js';
 import { askClaudeWithContext } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
+import { composeWriterContext } from '../writer/memory.js';
+import { detectCompletionSentinel } from '../writer/sentinel.js';
+import { captureLessons } from '../writer/capture.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('blog');
@@ -19,7 +22,26 @@ Rules:
 - When we have enough material, propose an outline
 - No artifacts or documents until I approve the outline`;
 
+// Capture (parse → privacy → append → git commit) must never hold the blog turn
+// open indefinitely — e.g. a `.git/index` lock contended by the nightly job. The
+// user's reply is already sent before capture runs, so on timeout we log and
+// close the session anyway.
+const CAPTURE_TIMEOUT_MS = 20_000;
+
 const sessionPrompts = new Map<string, string>();
+
+/** Reject if `p` doesn't settle within `ms`, clearing the timer either way. */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
@@ -37,7 +59,11 @@ function gatherWritingContext(): string {
   return sections.join('\n\n');
 }
 
-function buildSystemPrompt(topic: string): string {
+// The BASE blog instructions (skill/default text + topic queue). The writer
+// role's SOUL charter is layered on top by composeWriterContext (project 12),
+// which prepends SOUL to these instructions on the system channel and keeps the
+// accumulating memory.md on the low-authority user channel.
+function buildBaseInstructions(topic: string): string {
   const skill = readVaultFile(SKILL_PATH);
   const instructions = skill?.trim() || DEFAULT_INSTRUCTIONS;
   const writingContext = gatherWritingContext();
@@ -53,18 +79,26 @@ const blogHandler: ReviewTypeHandler = {
   async start(session: ReviewSession, sender: MessageSender): Promise<void> {
     const topic = session.topic || 'untitled';
 
-    const systemPrompt = buildSystemPrompt(topic);
-    sessionPrompts.set(session.claudeSessionId, systemPrompt);
-    updateReviewSession(session.chatId, { prepContext: systemPrompt });
+    // Compose the writer role: SOUL charter (+ base blog instructions) carries
+    // system-prompt authority; the accumulating memory.md rides the first user
+    // turn as low-authority reference, never the system prompt. Only the
+    // memory-free systemInstructions is persisted as prepContext, so session
+    // recovery (handleMessage) can never promote memory into the system channel.
+    const { systemInstructions, referenceContext } = composeWriterContext(buildBaseInstructions(topic));
+    sessionPrompts.set(session.claudeSessionId, systemInstructions);
+    updateReviewSession(session.chatId, { prepContext: systemInstructions });
 
     await sender.send(session.chatId, `Blog session started: "${topic}"\nSend /done when finished.`);
     sender.startTyping(session.chatId);
 
+    const topicTurn = `I want to write about: ${topic}`;
+    const firstTurn = referenceContext ? `${referenceContext}\n\n${topicTurn}` : topicTurn;
+
     try {
       const result = await askClaudeWithContext(
-        `I want to write about: ${topic}`,
+        firstTurn,
         session.claudeSessionId,
-        systemPrompt,
+        systemInstructions,
         { opLabel: 'review:blog', voice: true },
       );
       sender.stopTyping(session.chatId);
@@ -116,7 +150,35 @@ const blogHandler: ReviewTypeHandler = {
         return;
       }
 
-      await sender.send(session.chatId, result.text || '');
+      // Server-owned closure: the writer can't issue /done, so it emits a
+      // final-line sentinel. On detection, strip it from the user-visible reply,
+      // run capture, and close the session.
+      const raw = result.text || '';
+      const detection = detectCompletionSentinel(raw);
+      if (!detection.complete) {
+        await sender.send(session.chatId, raw);
+        return;
+      }
+
+      await sender.send(session.chatId, detection.cleaned || 'All set — session closed.');
+
+      // Capture is fault-isolated: a parse/privacy/commit failure must never deny
+      // the user their session close. The raw text (with the candidate block) is
+      // the capture input; TS does the gating, filtering, and commit.
+      try {
+        await withTimeout(
+          captureLessons({ assistantText: raw, fallbackTopic: session.topic ?? undefined }),
+          CAPTURE_TIMEOUT_MS,
+          'writer memory capture',
+        );
+      } catch (err) {
+        log.error('Writer memory capture failed', { error: (err as Error).message });
+      }
+
+      // Close order mirrors the /done path: drop the in-memory prompt first, then
+      // persist phase 'done'.
+      sessionPrompts.delete(session.claudeSessionId);
+      updateReviewSession(session.chatId, { phase: 'done' });
     } catch (err) {
       sender.stopTyping(session.chatId);
       throw err;
