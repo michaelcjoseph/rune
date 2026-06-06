@@ -134,7 +134,9 @@ blog tests stay green.
       start; confirm the lesson is loaded into N+1's `referenceContext`. (Satisfied by the
       automated `src/writer/loop-closure.test.ts` gate — green; uses the real capture→store→load
       path end-to-end.)
-- [ ] Record the loop-closure outcome in the project's index row.
+- [x] Record the loop-closure outcome in the project's index row. (docs/projects/index.md:
+      project flipped to **Done** in both the table row and section header; an **Outcome (loop
+      closes ✅)** bullet records the gate result and the shipped end-to-end flow.)
 
 ---
 
