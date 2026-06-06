@@ -13,18 +13,20 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 **Tests (write first)**
 
-- [ ] Authority test: the composed call puts `SOUL.md` (+ voice) in `--append-system-prompt`
+- [x] Authority test: the composed call puts `SOUL.md` (+ voice) in `--append-system-prompt`
       and `memory.md` in the first user message; assert memory text is absent from the
-      appended system prompt.
-- [ ] Cold-start test: empty `memory.md` yields a valid prompt (SOUL + voice), no error.
-- [ ] Budget test: a `memory.md` over `WRITER_MEMORY_CHAR_BUDGET` is truncated with a visible
-      marker; under budget passes through whole.
-- [ ] Path test: the loader reads SOUL/memory from `PROJECT_ROOT/agents/writer/`, not via
-      `readVaultFile`.
-- [ ] Seed parser test: when `spec.md` has 20-50 seed links, the seeding helper reads only
+      appended system prompt. (`src/writer/memory.test.ts` — authority-boundary group; red.)
+- [x] Cold-start test: empty `memory.md` yields a valid prompt (SOUL + voice), no error.
+      (`src/writer/memory.test.ts` — cold-start group; red.)
+- [x] Budget test: a `memory.md` over `WRITER_MEMORY_CHAR_BUDGET` is truncated with a visible
+      marker; under budget passes through whole. (`src/writer/memory.test.ts` — char-budget
+      group; red.)
+- [x] Path test: the loader reads SOUL/memory from `PROJECT_ROOT/agents/writer/`, not via
+      `readVaultFile`. (`src/writer/memory.test.ts` — path-contract group; red.)
+- [x] Seed parser test: when `spec.md` has 20-50 seed links, the seeding helper reads only
       those links and emits ≤20 provenance-stamped memory bullets; fewer than 20 link entries
       fails with a clear prerequisite error, more than 50 fails with a clear cap error, and
-      unfetchable supplied URLs are skipped with a note.
+      unfetchable supplied URLs are skipped with a note. (`src/writer/seed.test.ts`; red.)
 
 **Implementation**
 
