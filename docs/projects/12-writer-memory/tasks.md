@@ -5,8 +5,9 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 ## Phase 0 — Human seed-source prerequisite
 
-- [ ] Michael adds 20-50 seed links under `spec.md` → **Seed sources**. This is the only
-      intentional human blocker; every later task is agent-runnable.
+- [x] Michael adds 20-50 seed links under `spec.md` → **Seed sources**. This is the only
+      intentional human blocker; every later task is agent-runnable. (46 links present under
+      Seed sources, within the 20-50 range — commit 93d3754.)
 
 ## Phase 1 — Writer role + seed + read path
 
