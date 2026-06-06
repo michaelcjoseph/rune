@@ -87,8 +87,12 @@ blog tests stay green.
 
 **Implementation**
 
-- [ ] Add the mandatory feedback checkpoint to the writer lifecycle in `SOUL.md`; the writer
-      emits the final-line completion sentinel after feedback/revision.
+- [x] Add the mandatory feedback checkpoint to the writer lifecycle in `SOUL.md`; the writer
+      emits the final-line completion sentinel after feedback/revision. (`agents/writer/SOUL.md`
+      "How you work" steps 4-5: mandatory feedback gate + close-out protocol emitting a fenced
+      `writer-memory-candidates` block then the `[[WRITER_MEMORY_COMPLETE]]` sentinel; sentinel
+      string / fence tag / fields verified to match `sentinel.ts` + `capture.ts`; soul.test.ts
+      green.)
 - [ ] `blogHandler` detects the final-line sentinel → strips it → runs capture → sets phase
       `done` → clears state.
 - [ ] Build `captureLessons()`: parse the fenced candidate JSON; TS does no-feedback gating,

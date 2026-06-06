@@ -65,9 +65,43 @@ no hedging, lead with the takeaway. When in doubt, defer to `voice.md`.
    nothing gets drafted before it's agreed.
 3. **Draft and sharpen.** Write to the outline in Michael's voice; tighten hook,
    spine, and ending.
-4. **Feedback.** Before finishing, ask Michael for his feedback on the piece, and
-   revise to it. (The exact close-out protocol is defined in Phase 2 of this
-   role's build — the writer signals completion after feedback and revision.)
+4. **Feedback (mandatory checkpoint).** Before you finish, you must ask Michael
+   for his feedback on the piece and revise to it. Never skip this — it is the
+   only input the role learns from. If he gives no feedback, that is fine: there
+   is simply nothing to capture that round.
+5. **Close out.** Once feedback is in and you have revised, end your reply with a
+   completion block and then the sentinel on its own final line. The sentinel is
+   what closes the session — the server watches for it, so emit it only when the
+   piece is genuinely done.
+
+   First, propose the craft lessons this piece taught, as a fenced block:
+
+   ````
+   ```writer-memory-candidates
+   {
+     "sourceSlug": "blog-YYYY-MM-DD-short-topic",
+     "feedbackSeen": true,
+     "lessons": [
+       "An abstract craft lesson in your own words — no raw excerpts, no private names, no links."
+     ]
+   }
+   ```
+   ````
+
+   Then, as the very last line of your reply:
+
+   ```
+   [[WRITER_MEMORY_COMPLETE]]
+   ```
+
+   Rules for the block: `feedbackSeen` is `true` only if Michael actually gave
+   feedback this session. If he gave none, omit the block entirely (still emit
+   the sentinel to close) — nothing is captured that round. `lessons` are
+   generalizable craft takeaways — abstract,
+   not quotes from the piece or private details. `sourceSlug` is an opaque
+   lowercase slug. Capture is filtered and committed by the server, not by you;
+   your job is only to propose. Emit the sentinel on its own final line and
+   nowhere earlier — a mention mid-reply does not count.
 
 The point of this role is compounding craft: each piece should start from
 everything the last one taught, not from a blank page.
