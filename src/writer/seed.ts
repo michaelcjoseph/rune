@@ -13,9 +13,6 @@
  *
  * The actual URL→lesson distillation is the agent's job (web fetch + judgment),
  * not a runtime function — this module makes the surrounding contract testable.
- *
- * SCAFFOLD: bodies throw `notImplemented(...)` so the Phase 1 seed test suite is
- * RED until the seed implementation task lands.
  */
 
 /** Minimum supplied seed links (human prerequisite, spec Phase 0). */
@@ -59,34 +56,81 @@ export interface SeedMiningPlan {
   skipped: { url: string; note: string }[];
 }
 
-function notImplemented(fn: string): never {
-  throw new Error(`writer/seed: ${fn} not implemented (project 12 Phase 1 pending)`);
-}
+/** Header that opens the seed-source list in spec.md. */
+const SEED_SECTION_RE = /^###\s+Seed sources\b/m;
+/** Next `##`-or-higher header — bounds the section end (excludes `###`/`####`). */
+const SEED_SECTION_END_RE = /^##\s+/m;
+/** Any http(s) URL token, stopping at whitespace or a closing markdown paren. */
+const URL_RE = /https?:\/\/[^\s)]+/g;
+/** Sentence punctuation stripped from a URL's tail so a link embedded in prose
+ *  (`see https://x.com.`) yields the bare URL, not one with a trailing dot. */
+const TRAILING_PUNCT_RE = /[.,;:!?]+$/;
 
-/** Extract the http(s) links under the `### Seed sources` section of spec.md. */
-export function extractSeedLinks(_specContent: string): string[] {
-  return notImplemented('extractSeedLinks');
+/** Extract the http(s) links under the `### Seed sources` section of spec.md.
+ *  Scopes extraction to that section only — the section runs from its `###`
+ *  header to the next `##`-or-higher header (matched as `## `, which excludes
+ *  the `### `/`#### ` subheaders inside) or end of file, so the `####` category
+ *  subheaders inside it are kept and surrounding prose links excluded. */
+export function extractSeedLinks(specContent: string): string[] {
+  const startMatch = SEED_SECTION_RE.exec(specContent);
+  if (!startMatch) return [];
+
+  // Section body begins after the header line.
+  const afterHeader = specContent.slice(startMatch.index + startMatch[0].length);
+  // Terminate at the next h2 (`## `) header — `###`/`####` headers stay in scope.
+  const endMatch = SEED_SECTION_END_RE.exec(afterHeader);
+  const section = endMatch ? afterHeader.slice(0, endMatch.index) : afterHeader;
+
+  return (section.match(URL_RE) ?? []).map((url) => url.replace(TRAILING_PUNCT_RE, ''));
 }
 
 /** Throw SeedPrerequisiteError (<20) or SeedCapError (>50); otherwise return. */
-export function assertSeedSourceCount(_links: string[]): void {
-  return notImplemented('assertSeedSourceCount');
+export function assertSeedSourceCount(links: string[]): void {
+  if (links.length < SEED_MIN_LINKS) {
+    throw new SeedPrerequisiteError(
+      `Seed prerequisite unmet: ${links.length} links supplied, need at least ${SEED_MIN_LINKS}.`,
+    );
+  }
+  if (links.length > SEED_MAX_LINKS) {
+    throw new SeedCapError(
+      `Seed input cap exceeded: ${links.length} links supplied, max ${SEED_MAX_LINKS}.`,
+    );
+  }
 }
 
 /** Cap distilled bullets to ≤ SEED_BULLET_CAP (keeps the first N). */
-export function capSeedBullets(_bullets: string[]): string[] {
-  return notImplemented('capSeedBullets');
+export function capSeedBullets(bullets: string[]): string[] {
+  return bullets.slice(0, SEED_BULLET_CAP);
 }
 
-/** Stamp a lesson in the canonical provenance format. */
-export function stampSeedLesson(_lesson: string, _sourceSlug: string, _date: string): string {
-  return notImplemented('stampSeedLesson');
+/** Stamp a lesson in the canonical provenance format
+ *  `- [YYYY-MM-DD · source: <slug>] <lesson>`. The caller owns slug/date
+ *  validity (a lowercase slug matching PROVENANCE_RE, a `YYYY-MM-DD` date); only
+ *  the empty-lesson case is guarded here, since it would silently produce a stamp
+ *  that fails PROVENANCE_RE's trailing `.+`. */
+export function stampSeedLesson(lesson: string, sourceSlug: string, date: string): string {
+  if (!lesson.trim()) {
+    throw new Error('stampSeedLesson: lesson must be non-empty');
+  }
+  return `- [${date} · source: ${sourceSlug}] ${lesson}`;
 }
 
-/** Split links into fetchable (toMine) and unfetchable (skipped-with-note). */
+/** Split links into fetchable (toMine) and unfetchable (skipped-with-note).
+ *  Decisions key off `outcomes`; a link with no matching outcome is treated as
+ *  unfetchable (skipped) so a missing fetch result never silently mines nothing. */
 export function planSeedMining(
-  _links: string[],
-  _outcomes: SeedFetchOutcome[],
+  links: string[],
+  outcomes: SeedFetchOutcome[],
 ): SeedMiningPlan {
-  return notImplemented('planSeedMining');
+  const fetchedByUrl = new Map(outcomes.map((o) => [o.url, o.fetched]));
+  const plan: SeedMiningPlan = { toMine: [], skipped: [] };
+
+  for (const url of links) {
+    if (fetchedByUrl.get(url) === true) {
+      plan.toMine.push(url);
+    } else {
+      plan.skipped.push({ url, note: 'unfetchable — skipped during seed mining' });
+    }
+  }
+  return plan;
 }

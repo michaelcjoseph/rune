@@ -45,9 +45,12 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
       `composeWriterContext(buildBaseInstructions(topic))`; `systemInstructions` → system
       channel + `prepContext`, fenced `referenceContext` → first user turn; 4 wiring tests in
       `src/reviews/blog.test.ts`, 11 green.)
-- [ ] Mine the filled seed-source list into a ≤20-bullet, provenance-stamped `memory.md`;
+- [x] Mine the filled seed-source list into a ≤20-bullet, provenance-stamped `memory.md`;
       source inputs may be 20-50 links, unfetchable supplied URLs are skipped, and there is no
-      second manual approval gate.
+      second manual approval gate. (Implemented the pure `seed.ts` helpers (26 writer tests
+      green); mined the 46 spec links via parallel fetch agents — x.com/paywalled URLs skipped —
+      into `agents/writer/memory.md`: 20 provenance-stamped abstract-craft bullets, opaque
+      slugs, all matching `PROVENANCE_RE`, loaded into the writer's `referenceContext`.)
 
 ## Phase 2 — Feedback phase + lesson capture + auto-commit
 
