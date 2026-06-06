@@ -161,16 +161,79 @@ junk lesson is reverted by hand one commit at a time.
 
 Before the first run, seed `memory.md` with a craft baseline mined from a list of writers,
 their online presences, and writing-lesson links. Michael's only manual prerequisite is adding
-20 seed links below before the agent starts Phase 1. After those links exist, the agent mines
-only the supplied links, writes **at most 20** provenance-stamped bullets, and proceeds without
-a second approval gate. No autonomous crawling beyond the supplied links. If a supplied link is
-unfetchable, the agent skips it with a note and continues; seed mining must not block the core
-read/write/closure implementation once the 20-link prerequisite is satisfied.
+20-50 seed links below before the agent starts Phase 1. After those links exist, the agent
+mines only the supplied links, distills them into **at most 20** provenance-stamped memory
+bullets, and proceeds without a second approval gate. The input-source list may grow to 50 for
+coverage; the output memory stays compact. No autonomous crawling beyond the supplied links. If
+a supplied link is unfetchable, the agent skips it with a note and continues; seed mining must
+not block the core read/write/closure implementation once the 20-link minimum is satisfied.
 
 ### Seed sources (Michael to add before agent run)
 
 > _The writers, online presences, and writing-lesson links to mine for the initial
-> `memory.md` baseline. Michael fills this in with 20 links before Phase 1 begins._
+> `memory.md` baseline. Michael fills this in with 20-50 links before Phase 1 begins._
+
+#### Best works — long-form essays
+- https://www.eugenewei.com/blog/2019/2/19/status-as-a-service
+- https://www.eugenewei.com/blog/2018/5/21/invisible-asymptotes
+- https://stratechery.com/2015/aggregation-theory/
+- https://www.notboring.co/p/most-human-wins
+- https://collabfund.com/blog/the-psychology-of-money/
+- https://waitbutwhy.com/2013/10/why-procrastinators-procrastinate.html
+- https://waitbutwhy.com/2015/11/the-cook-and-the-chef-musks-secret-sauce.html
+- https://www.kalzumeus.com/2012/01/23/salary-negotiation/
+- https://nav.al/rich
+- https://perell.com/essay/the-ultimate-guide-to-writing-online/
+- https://vitalik.eth.limo/general/2021/12/06/endgame.html
+- https://thenetworkstate.com/the-network-state-in-one-essay
+- https://andrewchen.com/the-law-of-shitty-clickthroughs/
+- https://avc.com/2011/03/airbnb/
+
+#### Best works — tweet threads
+- https://x.com/naval/status/1002103360646823936
+- https://x.com/Julian/status/1460306494159609856
+- https://x.com/trq212/status/2052809885763747935
+- https://x.com/andrewchen/status/1743309075096723681
+- https://www.lennysnewsletter.com/p/head-of-claude-code-what-happens
+- https://creatoreconomy.so/
+
+#### Hooks, headlines, virality
+- https://www.julian.com/guide/write/ideas
+- https://www.julian.com/guide/write/intro
+- https://copyblogger.com/how-to-write-headlines-that-work/
+- https://marketingexamples.com/copywriting/tips
+- https://marketingexamples.com/copywriting
+- https://www.ship30for30.com/post/how-to-write-viral-twitter-thread-hooks-with-6-clear-examples
+- https://www.tweetarchivist.com/how-to-write-viral-twitter-threads
+
+#### Quality, clarity, finishing
+- https://www.julian.com/guide/write/rewriting
+- https://www.julian.com/guide/write/style
+- https://paulgraham.com/talk.html
+- https://www.paulgraham.com/writing44.html
+- https://paulgraham.com/useful.html
+- https://sive.rs/book/SenseOfStyle
+- https://www.animalz.co/blog/how-to-write-a-blog-post-outline
+- https://www.animalz.co/blog/steal-this-strategy
+- https://perell.com/essay/my-writing-syllabus/
+
+#### Newsletter / distribution craft
+- https://on.substack.com/p/how-lenny-rachitsky-earned-65000
+- https://www.lennysnewsletter.com/p/how-i-built-a-1m-subscriber-newsletter
+- https://growthinreverse.com/lenny/
+- https://www.notboring.co/about
+
+#### Tweet-thread mechanics
+- https://www.ship30for30.com/post/how-to-write-a-twitter-thread
+- https://www.ship30for30.com/post/how-to-start-writing-online-the-ship-30-for-30-ultimate-guide
+- https://typeshare.co/Nishtar/posts/my-twitter-writing-system-inspired-by-dickie-bush-and-nicolas-cole
+
+#### Editing & revision craft
+- https://www.julian.com/guide/write/first-draft
+- https://www.kalzumeus.com/greatest-hits/
+
+#### Narrative structure for nonfiction
+- https://www.acquired.fm/episodes/not-boring-with-packy-mccormick
 
 ---
 
@@ -189,7 +252,7 @@ to the engagement phase (`ideas.md`), where metrics make it objective.
 
 ### Phase 0 — Human seed-source prerequisite
 
-- Michael adds 20 seed links under **Seed sources**. This is the only intentional human
+- Michael adds 20-50 seed links under **Seed sources**. This is the only intentional human
   blocker before an agent can run the implementation through the end.
 
 ### Phase 1 — Writer role + seed + read path
@@ -197,8 +260,8 @@ to the engagement phase (`ideas.md`), where metrics make it objective.
 - `SOUL.md` (references `voice.md`); the loader reading from `PROJECT_ROOT/agents/writer/` and
   returning `{ systemInstructions, referenceContext }` with the char budget + truncation
   marker; wired into the `/blog` flow.
-- Mine the filled seed-source list into a ≤20-bullet `memory.md`; no second manual approval
-  gate.
+- Mine the filled seed-source list into a ≤20-bullet `memory.md`; the source list can contain
+  up to 50 links, but memory output remains capped. No second manual approval gate.
 
 ### Phase 2 — Feedback phase + lesson capture + auto-commit
 

@@ -15,8 +15,9 @@ auto-commit write path, and the loop-closure gate. See [spec.md](spec.md) and
 
 ## 0. Seed-source prerequisite
 
-- [ ] 🔴 `spec.md` contains 20 seed links before Phase 1 starts; if not, the seeding helper
-      fails with a clear prerequisite error and does not invent sources.
+- [ ] 🔴 `spec.md` contains 20-50 seed links before Phase 1 starts; fewer than 20 fails with a
+      clear prerequisite error, more than 50 fails with a clear cap error, and the seeding
+      helper does not invent sources.
 - [ ] 🔴 The seed helper mines only the supplied links and emits ≤20 provenance-stamped
       bullets.
 - [ ] 🟡 Unfetchable supplied URLs are skipped with a note and do not create a human blocker
@@ -66,7 +67,7 @@ auto-commit write path, and the loop-closure gate. See [spec.md](spec.md) and
 
 ## Integration verification
 
-> With the 20 seed links already present, run the automated fixture flow through `/blog` prompt
+> With 20-50 seed links already present, run the automated fixture flow through `/blog` prompt
 > composition and capture seams. The writer loads SOUL + seeded memory (memory as user-turn
 > reference, not system prompt). A fixture feedback/candidate block plus final sentinel closes
 > the session; `captureLessons()` writes abstract, stamped lessons and commits only

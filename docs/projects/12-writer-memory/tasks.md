@@ -5,7 +5,7 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 ## Phase 0 — Human seed-source prerequisite
 
-- [ ] Michael adds 20 seed links under `spec.md` → **Seed sources**. This is the only
+- [ ] Michael adds 20-50 seed links under `spec.md` → **Seed sources**. This is the only
       intentional human blocker; every later task is agent-runnable.
 
 ## Phase 1 — Writer role + seed + read path
@@ -20,9 +20,10 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
       marker; under budget passes through whole.
 - [ ] Path test: the loader reads SOUL/memory from `PROJECT_ROOT/agents/writer/`, not via
       `readVaultFile`.
-- [ ] Seed parser test: when `spec.md` has 20 seed links, the seeding helper reads only those
-      links and emits ≤20 provenance-stamped memory bullets; missing link entries fail with a
-      clear prerequisite error, while unfetchable supplied URLs are skipped with a note.
+- [ ] Seed parser test: when `spec.md` has 20-50 seed links, the seeding helper reads only
+      those links and emits ≤20 provenance-stamped memory bullets; fewer than 20 link entries
+      fails with a clear prerequisite error, more than 50 fails with a clear cap error, and
+      unfetchable supplied URLs are skipped with a note.
 
 **Implementation**
 
@@ -36,7 +37,8 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
       `--append-system-prompt`; persisted session recovery keeps enough context to continue
       without putting memory in the system prompt.
 - [ ] Mine the filled seed-source list into a ≤20-bullet, provenance-stamped `memory.md`;
-      unfetchable supplied URLs are skipped, and there is no second manual approval gate.
+      source inputs may be 20-50 links, unfetchable supplied URLs are skipped, and there is no
+      second manual approval gate.
 
 ## Phase 2 — Feedback phase + lesson capture + auto-commit
 
