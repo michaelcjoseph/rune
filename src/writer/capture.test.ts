@@ -196,6 +196,30 @@ describe('writer/capture — isLessonPrivacySafe', () => {
       '"the cook follows the recipe while the chef reasons from first principles every single time"';
     expect(isLessonPrivacySafe(`Echo ${longQuote} in the close.`, [])).toBe(false);
   });
+
+  it('rejects a lesson carrying a long curly-single-quoted excerpt', () => {
+    const longQuote =
+      '‘the cook follows the recipe while the chef reasons from first principles every time’';
+    expect(isLessonPrivacySafe(`Mirror ${longQuote} at the open.`, [])).toBe(false);
+  });
+
+  it('rejects a lesson containing a bare URL (no markdown syntax)', () => {
+    expect(isLessonPrivacySafe('Borrow the cadence from https://personal.blog.io/draft.', [])).toBe(false);
+  });
+
+  it('rejects a lesson containing a reference-style markdown link', () => {
+    expect(isLessonPrivacySafe('Mirror the structure of [this post][smith-2023].', [])).toBe(false);
+  });
+
+  it('rejects an over-long lesson (likely a paraphrase/excerpt, not abstract craft)', () => {
+    expect(isLessonPrivacySafe('word '.repeat(80).trim(), [])).toBe(false);
+  });
+
+  it('rejects an accented private name (unicode-aware boundary, not ASCII \\b)', () => {
+    expect(isLessonPrivacySafe('Ángel wanted a punchier ending.', ['Ángel'])).toBe(false);
+    // ...but does not trip on an unrelated accented word.
+    expect(isLessonPrivacySafe('Open on a concrete tension.', ['Ángel'])).toBe(true);
+  });
 });
 
 describe('writer/capture — captureLessons privacy integration', () => {

@@ -99,8 +99,12 @@ blog tests stay green.
       runs `captureLessons` fault-isolated (a capture failure never denies closure), then
       delete-then-`done` mirroring the `/done` path; sentinel + blog suites green, 20 tests. A
       `Promise.race` timeout around capture is deferred to the commit-impl task once git spawns.)
-- [ ] Build `captureLessons()`: parse the fenced candidate JSON; TS does no-feedback gating,
-      dedupe, privacy filter, provenance-stamp, and append to `memory.md`.
+- [x] Build `captureLessons()`: parse the fenced candidate JSON; TS does no-feedback gating,
+      dedupe, privacy filter, provenance-stamp, and append to `memory.md`. (`src/writer/capture.ts`:
+      `parseCandidateBlock` + `isLessonPrivacySafe` (over-long / private-name unicode-aware /
+      markdown+reference links / wikilinks / bare URLs / email / phone / long quotes) + async
+      `captureLessons` (gate → filter → dedupe → stamp → append → commit seam). 23 capture tests
+      green incl. hardening guards. Commit seam wiring is the next task.)
 - [ ] Build the memory-scoped commit helper (jarvis repo, stages only
       `agents/writer/memory.md`); call it from `captureLessons()`. Commit only, no approval
       gate and no push requirement.
