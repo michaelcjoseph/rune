@@ -43,6 +43,15 @@ teardown.
 - **Auto-promotion to main.** Reaching main stays the gen-eval-loop's cross-model merge contract;
   a parked run's branch (and any human commits on it) persists per existing GC but is not promoted.
 
+### Agent-runnable acceptance
+
+All required acceptance checks for this project are automated. The implementation agent should use
+fixture-driven work-run streams, temp product repositories/worktrees, injected clocks, injected
+notification sinks, and the existing supervision/mutation stores under test paths. No required
+verification depends on a real Telegram chat, a production cockpit click, an actual Jarvis restart,
+or Michael manually running commands in a live parked worktree. A live smoke check is optional after
+the automated suites pass.
+
 ---
 
 ## Background: verified current-state
@@ -112,15 +121,18 @@ run starts (notification: path + id) → commits accrue on the run branch
 1. WHEN a run starts THEN its start notification includes the deterministic worktree path and the
    run id.
 2. WHEN a notification carries the worktree path for the operator to act on THEN that path is
-   un-scrubbed and rides a local-operator-only field; it MUST NOT flow into `mutations.jsonl`,
-   forensics, or any committed/remote artifact (those stay scrubbed). Resolves the
-   path-vs-scrubbing contradiction.
+   un-scrubbed and rides a local-operator-only field named `operatorWorktreePath`; it MUST NOT
+   flow into `mutations.jsonl`, forensics, summaries/indexes, transcripts, or any committed/remote
+   artifact (those stay scrubbed). Resolves the path-vs-scrubbing contradiction.
 
 ### Parked state
 
-3. WHEN a run emits the blocked-on-human sentinel THEN it records a durable supervision
-   `blocked-on-human` state (the mutation still terminates normally; no new `MutationStatus` value).
-   The state survives a Jarvis restart via the existing supervision store + recovery.
+3. WHEN a run emits the blocked-on-human sentinel THEN the terminal work-run event carries
+   `parked` metadata and the supervision record for that run is set/preserved as durable
+   `blocked-on-human` after terminal classification (the mutation still terminates normally; no new
+   `MutationStatus` value). The terminal mutation path MUST NOT overwrite that supervision record
+   with `completed`/`failed`. The state survives a Jarvis restart via the existing supervision store
+   + recovery.
 4. WHEN a run is parked THEN `work-runner`'s teardown does NOT destroy its worktree, and GC +
    `cleanupOrphanWorktrees` do NOT reap the worktree or its run dir while the supervision
    `blocked-on-human` record stands (parked runs join the protected set).
@@ -141,11 +153,16 @@ run starts (notification: path + id) → commits accrue on the run branch
    net-new actionable path: existing `blocked-on-human` approval rows are intentionally
    non-actionable (`approval-actions.ts:155`).
 8. WHEN a release is requested AND the parked worktree has dirty/uncommitted changes THEN release
-   does NOT silently `destroyWorktree` (which force-removes — `sandbox-runtime.ts:333`). It warns
-   with the dirty file list and requires an explicit confirm, so a half-finished human fix is never
-   discarded without consent. A clean worktree releases directly.
-9. WHEN a release is requested THEN it is available from both Telegram and the cockpit, routed
-   through the existing mutation pipeline.
+   does NOT silently `destroyWorktree` (which force-removes — `sandbox-runtime.ts:333`). Dirty
+   state is detected with `git status --porcelain` in the parked worktree. The release response
+   warns with the dirty file list and requires an explicit `confirmDirty=true`, so a half-finished
+   human fix is never discarded without consent. A clean worktree releases directly.
+9. WHEN a release is requested THEN it is available from both Telegram and the cockpit through one
+   shared release runtime. The cockpit route is `POST /api/work-runs/:id/release` with optional JSON
+   `{ "confirmDirty": true }`; the Telegram action uses callback id `work-run-release:<id>` and the
+   same dirty-confirm branch. Destructive release runs as a new auto-approved mutation kind
+   `work-run-release` with payload `{ "runId": "<id>", "confirmDirty": true|false }`, so terminal
+   status, cancellation, audit, and cockpit/Telegram events use the existing mutation machinery.
 
 ---
 
@@ -171,6 +188,11 @@ source of truth for "parked." Cap checks, GC protection, cockpit visibility, and
 it does not belong in the `work-run-classify.ts` enum (`branch-complete | partial | noop |
 dirty-uncommitted | failed`).
 
+The terminal branch must treat parked metadata as a supervision override: the mutation descriptor
+can still become `completed` or `failed`, but the supervised run remains `blocked-on-human` until
+the release runtime clears it. This avoids the current `startApply` terminal write from erasing the
+parked state immediately after it is created.
+
 **How the run signals "a human is required".** The child only emits NDJSON envelopes that the runner
 parses then converts to display lines (`work-runner.ts:661`); there is no custom stream-event
 channel, and the `/work` SKILL today only says hard stops "report to the user" with no machine
@@ -180,6 +202,42 @@ blocked-on-human stop with one exact final line — `JARVIS_WORK_RUN_SENTINEL { 
 scrubbing**, not from a tasks.md freetext marker. The sentinel JSON carries the pending-check
 description and any command to run. A run that needs a human but emits no sentinel falls through to
 an ordinary terminal outcome (no park, no regression).
+
+Sentinel schema is fixed for Phase 1:
+
+```json
+{
+  "version": 1,
+  "pendingCheck": "Run the interactive Codex check and confirm the result",
+  "command": "optional shell command for the operator",
+  "reason": "optional short reason the agent could not proceed"
+}
+```
+
+`version` must be `1`, `pendingCheck` must be a non-empty string, and `command` / `reason` are
+optional strings. Invalid JSON, a missing sentinel, an unsupported version, or a missing/empty
+`pendingCheck` is logged and falls through to the ordinary terminal path.
+
+**Parked staleness policy.** A parked run is never auto-released. The cockpit always surfaces it
+while the `blocked-on-human` record stands. A staleness nudge fires after
+`PARKED_RUN_NUDGE_AFTER_MS` (default 24 hours), using an injected clock in tests and the existing
+quiet-run supervision machinery for delivery.
+
+**Release preflight and mutation kind.** Add `work-run-release` to `MutationKind` and register an
+auto-approved applier. The shared release runtime has a pure preflight step used by both the HTTP
+route and Telegram callback before creating the mutation:
+
+- not parked / unknown run → return a clear no-op outcome; do not create a mutation.
+- dirty worktree and no confirmation → return dirty-confirm outcome with the `git status
+  --porcelain` file list; do not create a mutation.
+- clean worktree or confirmed dirty worktree → create `work-run-release` with payload
+  `{ runId, confirmDirty }`; the applier rechecks the parked record and dirty state before
+  destroying the worktree, then clears supervision and emits terminal mutation events.
+
+The cockpit route returns `202 { "mutationId": "..." }` when it creates a clean/confirmed release
+mutation, `200` for not-parked no-op outcomes, and `409 { "error": "dirty-worktree", "files": [...]
+}` for dirty-confirm. Telegram uses the same preflight result to send either the confirm prompt or
+the mutation-created message; final release success/failure comes from the mutation terminal event.
 
 ### Touch points
 
@@ -193,6 +251,11 @@ an ordinary terminal outcome (no park, no regression).
 - **supervision / run store** — a durable parked record + a release transition.
 - **`src/transport/`** (telegram-sender + cockpit bus + a release action) — path on start/parked
   notifications; a release control wired through the mutation pipeline.
+- **`src/server/webview.ts`** — `POST /api/work-runs/:id/release` delegates to the shared release
+  runtime and returns dirty-confirm, mutation-created, or not-parked outcomes without exposing
+  unrelated paths.
+- **`src/transport/mutations.ts`** — add `work-run-release` to `MutationKind` and register its
+  auto-approved applier.
 
 ---
 
@@ -214,7 +277,8 @@ an ordinary terminal outcome (no park, no regression).
 - [ ] Define + parse the structured blocked-on-human sentinel from the `/work --auto` stream.
 - [ ] Durable parked record (survives restart); teardown + GC + orphan-cleanup skip a parked run.
 - [ ] Per-project cap consults durable parked state.
-- [ ] Parked alert carries worktree path + the pending check.
+- [ ] Parked alert carries `operatorWorktreePath`, `pendingCheck`, optional `command`, and optional
+  `reason`.
 
 ### Phase 1c: Release
 
@@ -228,18 +292,19 @@ an ordinary terminal outcome (no park, no regression).
 
 | Metric | Target | How Measured |
 | ------ | ------ | ------------ |
-| Steps to reach a parked run's worktree | 1 (copy path from alert) | Manual: trigger a park, follow the alert |
-| Parked worktree survives until released | Yes | Park a run; confirm worktree present after a Jarvis restart |
-| Parked run blocks a new run for the same project | Yes | Attempt a second dispatch; expect the cap to reject |
-| Operator path leaks to a committed/remote artifact | Never | Grep `mutations.jsonl` / forensics for the un-scrubbed prefix |
+| Steps to reach a parked run's worktree | 1 (copy path from alert) | Formatter/bus tests assert `operatorWorktreePath` is present on start + parked notifications |
+| Parked worktree survives until released | Yes | Temp-repo lifecycle tests write a parked supervision record, run recovery/orphan cleanup, and assert the registered worktree remains |
+| Parked run blocks a new run for the same project | Yes | Per-project cap tests seed active, parked, and registered-worktree cases and assert validation rejects before `createWorktree` |
+| Operator path leaks to a committed/remote artifact | Never | Leak-containment tests seed a fake absolute worktree prefix and assert mutation log, summary/index, transcript, and forensics payloads contain only scrubbed paths |
 
 ---
 
 ## Edge Cases & Error Handling
 
 - **Parked worktree never released:** the slot blocks new runs for that project indefinitely.
-  Surface parked runs in the cockpit and add a staleness nudge (reuse project 11's quiet-run
-  machinery) rather than auto-releasing, which would discard an unfinished manual check.
+  Surface parked runs in the cockpit and send a staleness nudge after
+  `PARKED_RUN_NUDGE_AFTER_MS` (default 24 hours) rather than auto-releasing, which would discard an
+  unfinished manual check.
 - **Crash while parked:** the parked record must be durable in the run store; startup recovery
   re-derives the held slot and does not reap the worktree.
 - **Human commits a fix in the parked worktree:** those commits land on the run branch, which
@@ -253,16 +318,18 @@ an ordinary terminal outcome (no park, no regression).
 
 ---
 
-## Open Questions
+## Settled decisions for agent execution
 
-- [ ] Release UX: a button on the cockpit run card vs. a Telegram reply action vs. both.
-- [ ] Parked-worktree TTL/nudge cadence before it reads as a forgotten disk + slot leak.
-- [ ] The exact JSON fields the `JARVIS_WORK_RUN_SENTINEL` line carries (pending-check text +
-  command at minimum) — pin the schema in tasks.md before Phase 1b implementation.
-
-> Resolved in this round (was open): the sentinel mechanism (a final
-> `JARVIS_WORK_RUN_SENTINEL {…}` line parsed pre-scrub) and where the parked state lives (reuse
-> supervision `blocked-on-human`, made actionable). See Resolved design decisions.
+- Release UX is both cockpit and Telegram, backed by one shared release runtime.
+- Destructive release work runs through a new auto-approved mutation kind, `work-run-release`.
+- The cockpit release endpoint is `POST /api/work-runs/:id/release`; dirty release confirmation is
+  JSON `{ "confirmDirty": true }`.
+- The Telegram callback id is `work-run-release:<id>` and uses the same shared runtime.
+- Parked worktrees have no TTL and are never auto-released; staleness nudges fire after the
+  configured 24-hour default threshold.
+- The sentinel schema is the fixed `version` + `pendingCheck` contract above.
+- All required verification is automated with temp repos, injected streams, injected clocks, and
+  fake sender/HTTP tests; manual live smoke testing is optional only.
 
 ---
 
