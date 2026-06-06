@@ -56,24 +56,34 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 > Depends on: Phase 1
 
-**Tests (write first)**
+**Tests (write first)** — RED suites + throwing `notImplemented()` scaffolds
+(`src/writer/{sentinel,capture,commit}.ts`) landed together; suites stay red until
+the Phase 2 implementation tasks below land. 27 red by design, Phase 1 + existing
+blog tests stay green.
 
-- [ ] Sentinel test: when the writer emits the completion sentinel, `blogHandler` closes the
+- [x] Sentinel test: when the writer emits the completion sentinel, `blogHandler` closes the
       session (phase → `done`, state cleared) and triggers capture; no reliance on literal
-      assistant `/done`.
-- [ ] Sentinel hygiene test: only a final-line `[[WRITER_MEMORY_COMPLETE]]` sentinel counts;
+      assistant `/done`. (`src/reviews/blog.test.ts` — "completion sentinel (Phase 2)" group.)
+- [x] Sentinel hygiene test: only a final-line `[[WRITER_MEMORY_COMPLETE]]` sentinel counts;
       the sentinel is stripped before sending the assistant reply and capture runs at most once.
-- [ ] Capture test: given a feedback payload, `captureLessons()` emits ≥1 provenance-stamped
-      craft lesson.
-- [ ] No-feedback test: no feedback supplied → no memory write.
-- [ ] Candidate-parse test: `captureLessons()` accepts only a fenced
+      (`src/writer/sentinel.test.ts` + the blog "sends the sentinel-stripped reply" test.)
+- [x] Capture test: given a feedback payload, `captureLessons()` emits ≥1 provenance-stamped
+      craft lesson. (`src/writer/capture.test.ts` — captureLessons happy-path group.)
+- [x] No-feedback test: no feedback supplied → no memory write. (`src/writer/capture.test.ts`
+      — `feedbackSeen:false` → `skipReason:'no-feedback'`, no append, no commit.)
+- [x] Candidate-parse test: `captureLessons()` accepts only a fenced
       `writer-memory-candidates` JSON block with `feedbackSeen`, `sourceSlug`, and `lessons`.
-- [ ] Dedup test: a candidate matching an existing entry is dropped.
-- [ ] Privacy test: a candidate containing a raw excerpt / private name is blocked or
+      (`src/writer/capture.test.ts` — parseCandidateBlock group.)
+- [x] Dedup test: a candidate matching an existing entry is dropped. (`src/writer/capture.test.ts`
+      — dedup test.)
+- [x] Privacy test: a candidate containing a raw excerpt / private name is blocked or
       abstracted by the TS filter; source is an opaque slug matching the slug regex.
-- [ ] Atomic-commit test (temp repo): the memory-scoped commit helper stages **only**
+      (`src/writer/capture.test.ts` — `isLessonPrivacySafe` group + privacy integration +
+      `SOURCE_SLUG_RE` slug assertions.)
+- [x] Atomic-commit test (temp repo): the memory-scoped commit helper stages **only**
       `agents/writer/memory.md` and commits one batch as one commit with a clear message; it
-      does not stage unrelated dirty files and does not require a push.
+      does not stage unrelated dirty files and does not require a push. (`src/writer/commit.test.ts`
+      — real temp git repo.)
 
 **Implementation**
 

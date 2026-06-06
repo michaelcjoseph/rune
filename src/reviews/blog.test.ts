@@ -36,6 +36,16 @@ vi.mock('../writer/memory.js', () => ({
   composeWriterContext: vi.fn(),
 }));
 
+// Phase 2 closure seams — mocked so the sentinel/capture handler tests assert
+// blogHandler's behavior without real sentinel parsing, capture, or git commits.
+vi.mock('../writer/sentinel.js', () => ({
+  detectCompletionSentinel: vi.fn(),
+  WRITER_COMPLETION_SENTINEL: '[[WRITER_MEMORY_COMPLETE]]',
+}));
+vi.mock('../writer/capture.js', () => ({
+  captureLessons: vi.fn(),
+}));
+
 // --- Imports ---
 
 const { registerReviewHandler } = await import('./orchestrator.js');
@@ -43,12 +53,16 @@ const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext } = await import('../ai/claude.js');
 const { readVaultFile } = await import('../vault/files.js');
 const { composeWriterContext } = await import('../writer/memory.js');
+const { detectCompletionSentinel } = await import('../writer/sentinel.js');
+const { captureLessons } = await import('../writer/capture.js');
 
 const registerMock = registerReviewHandler as ReturnType<typeof vi.fn>;
 const updateSessionMock = updateReviewSession as ReturnType<typeof vi.fn>;
 const askClaudeMock = askClaudeWithContext as ReturnType<typeof vi.fn>;
 const readVaultMock = readVaultFile as ReturnType<typeof vi.fn>;
 const composeMock = composeWriterContext as ReturnType<typeof vi.fn>;
+const sentinelMock = detectCompletionSentinel as ReturnType<typeof vi.fn>;
+const captureMock = captureLessons as ReturnType<typeof vi.fn>;
 
 // Import module under test (triggers registerReviewHandler side effect)
 await import('./blog.js');
@@ -102,7 +116,17 @@ describe('reviews/blog', () => {
       systemInstructions: `WRITER-SOUL-MARKER\n\n${base}`,
       referenceContext: '',
     }));
+    armClosureMocks();
   });
+
+  // Re-armable defaults: no sentinel (normal turn) → cleaned === input; capture
+  // is a resolved no-op. Hoisted into a helper so the mid-test vi.clearAllMocks()
+  // calls below can restore them (otherwise blog.ts's detectCompletionSentinel
+  // call would destructure undefined once the handler is implemented).
+  function armClosureMocks() {
+    sentinelMock.mockImplementation((t: string) => ({ complete: false, cleaned: t }));
+    captureMock.mockResolvedValue({ captured: [], committed: false });
+  }
 
   describe('registration', () => {
     it('calls registerReviewHandler with "blog" at import time', () => {
@@ -251,6 +275,63 @@ describe('reviews/blog', () => {
     });
   });
 
+  describe('completion sentinel (Phase 2)', () => {
+    async function startSession(topic = 'sentinel topic') {
+      const session = makeSession({ topic });
+      readVaultMock.mockReturnValue(null);
+      askClaudeMock.mockResolvedValue({ text: 'Initial', error: null });
+      await blogHandler.start(session, sender);
+      vi.clearAllMocks();
+      sender = makeSender();
+      // Re-arm defaults cleared above; individual tests override sentinelMock and,
+      // when they assert on it, captureMock.
+      armClosureMocks();
+      composeMock.mockImplementation((base: string) => ({ systemInstructions: base, referenceContext: '' }));
+      return session;
+    }
+
+    it('closes the session and triggers capture when the assistant emits the sentinel', async () => {
+      const session = await startSession();
+      const rawWithSentinel = 'Final draft is ready.\n\n[[WRITER_MEMORY_COMPLETE]]';
+      askClaudeMock.mockResolvedValue({ text: rawWithSentinel, error: null });
+      sentinelMock.mockReturnValue({ complete: true, cleaned: 'Final draft is ready.' });
+
+      await blogHandler.handleMessage(session, 'looks good, ship it', sender);
+
+      // Capture runs exactly once, fed the raw assistant text (with the block).
+      expect(captureMock).toHaveBeenCalledTimes(1);
+      expect(captureMock).toHaveBeenCalledWith(
+        expect.objectContaining({ assistantText: rawWithSentinel }),
+      );
+      // Session is closed server-side — no reliance on a literal assistant "/done".
+      expect(updateSessionMock).toHaveBeenCalledWith(session.chatId, { phase: 'done' });
+    });
+
+    it('sends the sentinel-stripped reply, never the raw sentinel text', async () => {
+      const session = await startSession();
+      askClaudeMock.mockResolvedValue({ text: 'Done.\n\n[[WRITER_MEMORY_COMPLETE]]', error: null });
+      sentinelMock.mockReturnValue({ complete: true, cleaned: 'Done.' });
+
+      await blogHandler.handleMessage(session, 'great', sender);
+
+      const sent = (sender.send as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]).join('\n');
+      expect(sent).not.toContain('[[WRITER_MEMORY_COMPLETE]]');
+      expect(sender.send).toHaveBeenCalledWith(session.chatId, 'Done.');
+    });
+
+    it('does not capture or close on a normal turn (no final-line sentinel)', async () => {
+      const session = await startSession();
+      askClaudeMock.mockResolvedValue({ text: 'What about the ending?', error: null });
+      sentinelMock.mockReturnValue({ complete: false, cleaned: 'What about the ending?' });
+
+      await blogHandler.handleMessage(session, 'still drafting', sender);
+
+      expect(captureMock).not.toHaveBeenCalled();
+      expect(updateSessionMock).not.toHaveBeenCalledWith(session.chatId, { phase: 'done' });
+      expect(sender.send).toHaveBeenCalledWith(session.chatId, 'What about the ending?');
+    });
+  });
+
   describe('handleMessage', () => {
     it('forwards messages to Claude with system prompt', async () => {
       // Start a session first to populate sessionPrompts
@@ -261,6 +342,7 @@ describe('reviews/blog', () => {
 
       vi.clearAllMocks();
       sender = makeSender();
+      armClosureMocks();
       askClaudeMock.mockResolvedValue({ text: 'Great point, what about X?', error: null });
 
       await blogHandler.handleMessage(session, 'The key argument is Y', sender);
@@ -285,6 +367,7 @@ describe('reviews/blog', () => {
 
       vi.clearAllMocks();
       sender = makeSender();
+      armClosureMocks();
 
       await blogHandler.handleMessage(session, '/done', sender);
 
