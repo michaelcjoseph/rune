@@ -119,15 +119,21 @@ blog tests stay green.
 
 **Tests (write first)**
 
-- [ ] Closure test: a fixture lesson (with an observable marker) captured on piece N appears in
-      the `referenceContext` loaded for piece N+1.
-- [ ] No-subjective-gate test: the loop-closure verification does not require a real post,
-      Telegram interaction, or judging whether a draft "feels" improved.
+- [x] Closure test: a fixture lesson (with an observable marker) captured on piece N appears in
+      the `referenceContext` loaded for piece N+1. (`src/writer/loop-closure.test.ts` — real
+      `captureLessons` → temp `memory.md` → real `composeWriterContext`; marker round-trips into
+      `referenceContext`, absent from `systemInstructions`. Green.)
+- [x] No-subjective-gate test: the loop-closure verification does not require a real post,
+      Telegram interaction, or judging whether a draft "feels" improved. (Same suite: pure
+      string-membership over temp files with injected deps + a no-block negative control; no
+      sender/bot/LLM.)
 
 **Implementation**
 
-- [ ] Run an automated fixture flow that captures a lesson, then composes a second `/blog`
-      start; confirm the lesson is loaded into N+1's `referenceContext`.
+- [x] Run an automated fixture flow that captures a lesson, then composes a second `/blog`
+      start; confirm the lesson is loaded into N+1's `referenceContext`. (Satisfied by the
+      automated `src/writer/loop-closure.test.ts` gate — green; uses the real capture→store→load
+      path end-to-end.)
 - [ ] Record the loop-closure outcome in the project's index row.
 
 ---
