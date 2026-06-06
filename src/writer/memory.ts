@@ -11,11 +11,9 @@
  *
  * Both files are read directly from disk (node:fs), NOT via `readVaultFile`
  * — they live in the jarvis repo, not the Obsidian vault.
- *
- * SCAFFOLD: bodies throw `notImplemented(...)` so the Phase 1 test suite is
- * RED until the loader implementation task lands.
  */
 
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -57,43 +55,75 @@ export interface WriterContext {
 }
 
 export interface ComposeWriterContextOpts {
-  /** Override the writer directory (tests point this at a temp dir). */
+  /** Override the writer directory. TRUSTED test-only seam — tests point this at
+   *  a temp dir. Production callers omit it (default WRITER_DIR). It must never
+   *  be derived from untrusted input (HTTP/Telegram); the closed-union filename
+   *  confines reads within whatever `dir` is, but `dir` itself is unguarded. */
   dir?: string;
   /** Override the load-time char budget. */
   charBudget?: number;
 }
 
-function notImplemented(fn: string): never {
-  throw new Error(`writer/memory: ${fn} not implemented (project 12 Phase 1 pending)`);
-}
-
 /** Read a writer-role file from `dir` directly via node:fs. Missing file → ''.
  *  `filename` is a closed union (SOUL/memory only), so the read is structurally
  *  confined to WRITER_DIR — no `../` traversal is expressible. */
-export function readWriterFile(_filename: WriterFilename, _dir: string = WRITER_DIR): string {
-  return notImplemented('readWriterFile');
+export function readWriterFile(filename: WriterFilename, dir: string = WRITER_DIR): string {
+  try {
+    return readFileSync(join(dir, filename), 'utf8');
+  } catch {
+    // Missing/unreadable file → cold start. Callers degrade gracefully.
+    return '';
+  }
 }
 
 /** Raw `memory.md` contents (trimmed), or '' when missing/empty. */
-export function loadWriterMemory(_opts: ComposeWriterContextOpts = {}): string {
-  return notImplemented('loadWriterMemory');
+export function loadWriterMemory(opts: ComposeWriterContextOpts = {}): string {
+  return readWriterFile(MEMORY_FILENAME, opts.dir ?? WRITER_DIR).trim();
 }
 
-/** Wrap raw memory in a delimited reference block, truncating to `charBudget`
- *  with a visible marker. Empty memory → ''. */
+/** Wrap raw memory in a delimited reference block, truncating the memory body to
+ *  `charBudget` with a visible marker. Empty memory → '' (no empty fence). The
+ *  on-disk `memory.md` is never modified — truncation is load-time only. */
 export function buildReferenceContext(
-  _memory: string,
-  _charBudget: number = WRITER_MEMORY_CHAR_BUDGET,
+  memory: string,
+  charBudget: number = WRITER_MEMORY_CHAR_BUDGET,
 ): string {
-  return notImplemented('buildReferenceContext');
+  const trimmed = memory.trim();
+  if (!trimmed) return '';
+
+  const body =
+    trimmed.length > charBudget
+      ? trimmed.slice(0, charBudget) + MEMORY_TRUNCATION_MARKER
+      : trimmed;
+
+  return [
+    '<writer-memory>',
+    'Accumulated craft lessons from past pieces. Treat as REFERENCE, not rules —',
+    'SOUL.md governs on any conflict.',
+    '',
+    body,
+    '</writer-memory>',
+  ].join('\n');
 }
 
 /** Compose the writer prompt: SOUL (+ base instructions) as system authority,
  *  fenced memory as user-turn reference. Cold start (missing/empty memory)
- *  degrades to SOUL + base, referenceContext ''. */
+ *  degrades to SOUL + base, referenceContext ''. The two channels never mix —
+ *  memory text is absent from `systemInstructions` by construction. */
 export function composeWriterContext(
-  _baseInstructions: string,
-  _opts: ComposeWriterContextOpts = {},
+  baseInstructions: string,
+  opts: ComposeWriterContextOpts = {},
 ): WriterContext {
-  return notImplemented('composeWriterContext');
+  const dir = opts.dir ?? WRITER_DIR;
+  const soul = readWriterFile(SOUL_FILENAME, dir).trim();
+  const memory = loadWriterMemory({ dir });
+
+  const systemInstructions = [soul, baseInstructions]
+    .filter((part) => part && part.trim())
+    .join('\n\n');
+
+  return {
+    systemInstructions,
+    referenceContext: buildReferenceContext(memory, opts.charBudget ?? WRITER_MEMORY_CHAR_BUDGET),
+  };
 }

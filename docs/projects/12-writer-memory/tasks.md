@@ -33,10 +33,12 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 - [x] Write `jarvis/agents/writer/SOUL.md` from this spec — charter referencing
       `writing/voice.md` (no duplication). (`agents/writer/SOUL.md`; contract pinned
       by `src/writer/soul.test.ts`.)
-- [ ] Build the loader returning `{ systemInstructions: SOUL (+ existing voice:true),
+- [x] Build the loader returning `{ systemInstructions: SOUL (+ existing voice:true),
       referenceContext: fenced memory.md }`; read from `PROJECT_ROOT/agents/writer/`; enforce
       `WRITER_MEMORY_CHAR_BUDGET` (~12–16k) with a load-time truncation marker; do not delete
-      old entries from `memory.md` to enforce the read budget.
+      old entries from `memory.md` to enforce the read budget. (`src/writer/memory.ts`
+      `composeWriterContext`; 12 tests green. `voice:true` injection wired at the blog call
+      site in the next task.)
 - [ ] Wire the loader into `src/reviews/blog.ts`; reference goes in the initial user turn, not
       `--append-system-prompt`; persisted session recovery keeps enough context to continue
       without putting memory in the system prompt.
