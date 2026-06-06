@@ -9,9 +9,6 @@
  *
  * Only a final-line sentinel counts — earlier appearances in prose are ignored,
  * so the model discussing the sentinel mid-conversation never triggers closure.
- *
- * SCAFFOLD: the body throws `notImplemented(...)` so the Phase 2 test suite is
- * RED until the sentinel implementation lands.
  */
 
 /** The exact sentinel the writer emits on its own final line to signal done. */
@@ -25,12 +22,30 @@ export interface SentinelDetection {
   cleaned: string;
 }
 
-function notImplemented(fn: string): never {
-  throw new Error(`writer/sentinel: ${fn} not implemented (project 12 Phase 2 pending)`);
-}
-
 /** Detect a final-line completion sentinel and return the cleaned text.
- *  A sentinel that appears only earlier in the prose does NOT count. */
-export function detectCompletionSentinel(_text: string): SentinelDetection {
-  return notImplemented('detectCompletionSentinel');
+ *  A sentinel that appears only earlier in the prose does NOT count — only the
+ *  last non-empty line is checked, and trailing blank lines after it are ignored. */
+export function detectCompletionSentinel(text: string): SentinelDetection {
+  const lines = text.split('\n');
+
+  // Index of the last non-empty (trimmed) line — trailing blank lines are skipped.
+  let lastIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trim() !== '') {
+      lastIdx = i;
+      break;
+    }
+  }
+
+  // Compare the trimmed last line: incidental indentation/CR around the sentinel
+  // still counts. A missed real sentinel (false negative) forces the user to type
+  // /done, which is worse than the near-impossible false positive of the model
+  // emitting an indented sentinel it did not mean as the final line.
+  if (lastIdx === -1 || lines[lastIdx]!.trim() !== WRITER_COMPLETION_SENTINEL) {
+    return { complete: false, cleaned: text };
+  }
+
+  // Drop the sentinel line and any trailing whitespace it left behind.
+  const cleaned = lines.slice(0, lastIdx).join('\n').trimEnd();
+  return { complete: true, cleaned };
 }

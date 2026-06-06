@@ -93,8 +93,12 @@ blog tests stay green.
       `writer-memory-candidates` block then the `[[WRITER_MEMORY_COMPLETE]]` sentinel; sentinel
       string / fence tag / fields verified to match `sentinel.ts` + `capture.ts`; soul.test.ts
       green.)
-- [ ] `blogHandler` detects the final-line sentinel → strips it → runs capture → sets phase
-      `done` → clears state.
+- [x] `blogHandler` detects the final-line sentinel → strips it → runs capture → sets phase
+      `done` → clears state. (`detectCompletionSentinel` implemented in `src/writer/sentinel.ts`
+      (final-line-only, trim-lenient); `blogHandler.handleMessage` sends the stripped reply,
+      runs `captureLessons` fault-isolated (a capture failure never denies closure), then
+      delete-then-`done` mirroring the `/done` path; sentinel + blog suites green, 20 tests. A
+      `Promise.race` timeout around capture is deferred to the commit-impl task once git spawns.)
 - [ ] Build `captureLessons()`: parse the fenced candidate JSON; TS does no-feedback gating,
       dedupe, privacy filter, provenance-stamp, and append to `memory.md`.
 - [ ] Build the memory-scoped commit helper (jarvis repo, stages only

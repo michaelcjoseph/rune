@@ -6,6 +6,8 @@ import { registerReviewHandler } from './orchestrator.js';
 import { askClaudeWithContext } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
 import { composeWriterContext } from '../writer/memory.js';
+import { detectCompletionSentinel } from '../writer/sentinel.js';
+import { captureLessons } from '../writer/capture.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('blog');
@@ -129,7 +131,31 @@ const blogHandler: ReviewTypeHandler = {
         return;
       }
 
-      await sender.send(session.chatId, result.text || '');
+      // Server-owned closure: the writer can't issue /done, so it emits a
+      // final-line sentinel. On detection, strip it from the user-visible reply,
+      // run capture, and close the session.
+      const raw = result.text || '';
+      const detection = detectCompletionSentinel(raw);
+      if (!detection.complete) {
+        await sender.send(session.chatId, raw);
+        return;
+      }
+
+      await sender.send(session.chatId, detection.cleaned || 'All set — session closed.');
+
+      // Capture is fault-isolated: a parse/privacy/commit failure must never deny
+      // the user their session close. The raw text (with the candidate block) is
+      // the capture input; TS does the gating, filtering, and commit.
+      try {
+        await captureLessons({ assistantText: raw, fallbackTopic: session.topic ?? undefined });
+      } catch (err) {
+        log.error('Writer memory capture failed', { error: (err as Error).message });
+      }
+
+      // Close order mirrors the /done path: drop the in-memory prompt first, then
+      // persist phase 'done'.
+      sessionPrompts.delete(session.claudeSessionId);
+      updateReviewSession(session.chatId, { phase: 'done' });
     } catch (err) {
       sender.stopTyping(session.chatId);
       throw err;

@@ -54,4 +54,12 @@ describe('writer/sentinel — detectCompletionSentinel', () => {
     expect(out.complete).toBe(true);
     expect(out.cleaned.trim()).toBe('');
   });
+
+  it('still counts an incidentally-indented final-line sentinel (trim leniency)', () => {
+    // Deliberate: a missed real sentinel forces a manual /done, worse than the
+    // near-impossible false positive of an unintended indented final-line sentinel.
+    const out = detectCompletionSentinel(`Draft done.\n\n   ${S}`);
+    expect(out.complete).toBe(true);
+    expect(out.cleaned).toBe('Draft done.');
+  });
 });
