@@ -30,8 +30,9 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 **Implementation**
 
-- [ ] Write `jarvis/agents/writer/SOUL.md` from this spec — charter referencing
-      `writing/voice.md` (no duplication).
+- [x] Write `jarvis/agents/writer/SOUL.md` from this spec — charter referencing
+      `writing/voice.md` (no duplication). (`agents/writer/SOUL.md`; contract pinned
+      by `src/writer/soul.test.ts`.)
 - [ ] Build the loader returning `{ systemInstructions: SOUL (+ existing voice:true),
       referenceContext: fenced memory.md }`; read from `PROJECT_ROOT/agents/writer/`; enforce
       `WRITER_MEMORY_CHAR_BUDGET` (~12–16k) with a load-time truncation marker; do not delete
