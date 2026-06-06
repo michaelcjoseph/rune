@@ -29,7 +29,8 @@ function git(args: string[]): string {
 
 beforeEach(() => {
   repo = mkdtempSync(join(tmpdir(), 'writer-commit-'));
-  git(['init', '-q']);
+  // Init explicitly on main — commitWriterMemory refuses to commit off it.
+  git(['init', '-q', '-b', 'main']);
   git(['config', 'user.email', 'test@example.com']);
   git(['config', 'user.name', 'Test']);
   // Seed the memory file and an initial commit so HEAD exists.
@@ -73,5 +74,29 @@ describe('writer/commit — commitWriterMemory', () => {
     const result = await commitWriterMemory({ cwd: repo, message: 'capture: no-op' });
     expect(result.committed).toBe(false);
     expect(git(['rev-parse', 'HEAD'])).toBe(headBefore);
+  });
+
+  it('does not sweep in a pre-STAGED unrelated file (pathspec isolation)', async () => {
+    writeFileSync(join(repo, MEMORY_REPO_PATH), '# Writer Memory\n- [2026-06-05 · source: x] L.\n');
+    writeFileSync(join(repo, 'other.txt'), 'staged but unrelated');
+    git(['add', '--', 'other.txt']); // pre-stage an unrelated file in the index
+
+    const result = await commitWriterMemory({ cwd: repo, message: 'capture: isolation' });
+    expect(result.committed).toBe(true);
+
+    const changed = git(['show', '--name-only', '--pretty=format:', 'HEAD']).split('\n').filter(Boolean);
+    expect(changed).toEqual([MEMORY_REPO_PATH]);
+    // other.txt stays staged (in the index), not folded into the commit.
+    expect(git(['status', '--porcelain'])).toMatch(/^A\s+other\.txt/m);
+  });
+
+  it('soft-fails (no commit) when the repo is not on the canonical main branch', async () => {
+    git(['checkout', '-q', '-b', 'feature-x']);
+    writeFileSync(join(repo, MEMORY_REPO_PATH), '# Writer Memory\n- [2026-06-05 · source: x] L.\n');
+    const headBefore = git(['rev-parse', 'HEAD']);
+
+    const result = await commitWriterMemory({ cwd: repo, message: 'capture: off-main' });
+    expect(result.committed).toBe(false);
+    expect(git(['rev-parse', 'HEAD'])).toBe(headBefore); // no commit on the feature branch
   });
 });

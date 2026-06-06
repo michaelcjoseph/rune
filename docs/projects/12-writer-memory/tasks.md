@@ -105,9 +105,13 @@ blog tests stay green.
       markdown+reference links / wikilinks / bare URLs / email / phone / long quotes) + async
       `captureLessons` (gate → filter → dedupe → stamp → append → commit seam). 23 capture tests
       green incl. hardening guards. Commit seam wiring is the next task.)
-- [ ] Build the memory-scoped commit helper (jarvis repo, stages only
+- [x] Build the memory-scoped commit helper (jarvis repo, stages only
       `agents/writer/memory.md`); call it from `captureLessons()`. Commit only, no approval
-      gate and no push requirement.
+      gate and no push requirement. (`src/writer/commit.ts` `commitWriterMemory`: on-`main`
+      guard, pathspec add+commit of only memory.md, no-op when unchanged, no push; called via
+      `captureLessons`' default commit seam. Added a per-process capture mutex + a 20s
+      `withTimeout` around capture in `blogHandler` (review-driven). 73 writer+blog tests green
+      incl. pre-staged-isolation + off-main soft-fail.)
 
 ## Phase 3 — Loop-closure eval
 

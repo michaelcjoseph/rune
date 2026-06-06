@@ -157,10 +157,26 @@ export function isLessonPrivacySafe(lesson: string, privateNames: string[]): boo
   return true;
 }
 
+// Per-process serialization so two near-simultaneous session closures can't
+// interleave the read-dedupe → append → commit sequence on memory.md (which would
+// risk duplicate lessons or `.git/index.lock` contention). Only one Jarvis runs at
+// a time, so a single promise chain is sufficient; a rejected run never poisons it.
+let captureChain: Promise<unknown> = Promise.resolve();
+
 /** Parse → gate on feedback → privacy-filter → dedupe → stamp → append → commit.
  *  No feedback / no block / empty / all-filtered → no write and no commit. Async
- *  because it awaits the memory-scoped commit (`./commit.ts`). */
-export async function captureLessons(input: CaptureLessonsInput): Promise<CaptureResult> {
+ *  because it awaits the memory-scoped commit (`./commit.ts`). Serialized against
+ *  itself so concurrent closures don't interleave the read-modify-commit sequence. */
+export function captureLessons(input: CaptureLessonsInput): Promise<CaptureResult> {
+  const run = captureChain.then(
+    () => captureLessonsUnlocked(input),
+    () => captureLessonsUnlocked(input),
+  );
+  captureChain = run.catch(() => {});
+  return run;
+}
+
+async function captureLessonsUnlocked(input: CaptureLessonsInput): Promise<CaptureResult> {
   const parsed = parseCandidateBlock(input.assistantText);
   if (!parsed) return { captured: [], committed: false, skipReason: 'no-block' };
   if (parsed.feedbackSeen !== true) return { captured: [], committed: false, skipReason: 'no-feedback' };

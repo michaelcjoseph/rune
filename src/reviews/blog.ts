@@ -22,7 +22,26 @@ Rules:
 - When we have enough material, propose an outline
 - No artifacts or documents until I approve the outline`;
 
+// Capture (parse → privacy → append → git commit) must never hold the blog turn
+// open indefinitely — e.g. a `.git/index` lock contended by the nightly job. The
+// user's reply is already sent before capture runs, so on timeout we log and
+// close the session anyway.
+const CAPTURE_TIMEOUT_MS = 20_000;
+
 const sessionPrompts = new Map<string, string>();
+
+/** Reject if `p` doesn't settle within `ms`, clearing the timer either way. */
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
@@ -147,7 +166,11 @@ const blogHandler: ReviewTypeHandler = {
       // the user their session close. The raw text (with the candidate block) is
       // the capture input; TS does the gating, filtering, and commit.
       try {
-        await captureLessons({ assistantText: raw, fallbackTopic: session.topic ?? undefined });
+        await withTimeout(
+          captureLessons({ assistantText: raw, fallbackTopic: session.topic ?? undefined }),
+          CAPTURE_TIMEOUT_MS,
+          'writer memory capture',
+        );
       } catch (err) {
         log.error('Writer memory capture failed', { error: (err as Error).message });
       }
