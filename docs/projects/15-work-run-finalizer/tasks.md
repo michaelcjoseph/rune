@@ -90,14 +90,19 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P0.2 — Terminal-result watchdog
 
-- [ ] On the terminal `result` event, transition the run out of plain `running` and open a bounded
-      drain window; do NOT kill the child on `result` (`work-runner.ts:838-871`).
-- [ ] If the child exits within the window, proceed via the existing `exit`-keyed teardown with no
+- [x] On the terminal `result` event, transition the run out of plain `running` and open a bounded
+      drain window; do NOT kill the child on `result` (`work-runner.ts:838-871`). (Result envelope
+      detected in `emitStdoutLine` → `drainTimer` (TERMINAL_DRAIN_MS); no kill on result.)
+- [x] If the child exits within the window, proceed via the existing `exit`-keyed teardown with no
       reap; if it does not, reap the process group (SIGTERM → SIGKILL → force-complete) via
-      `reapTree()` (`:816-830`) and emit an explicit `reapedAfterTerminalResult` exit fact.
-- [ ] Add typed config constants: `WORK_RUN_TERMINAL_DRAIN_MS=30000`,
+      `reapTree()` (`:816-830`) and emit an explicit `reapedAfterTerminalResult` exit fact. (`exit`
+      handler clears the drain timer; drain callback sets `reapedAfterTerminalResult` + reaps;
+      `deriveExitFact()` stamps `ExitFacts.exitFact`. 2 watchdog tests green, no regressions.)
+- [x] Add typed config constants: `WORK_RUN_TERMINAL_DRAIN_MS=30000`,
       `WORK_RUN_REAP_GRACE_MS=5000`, `WORK_RUN_QUIET_CANCEL_AFTER_MS=1200000`,
-      `WORK_RUN_MAX_RUNTIME_MS=7200000`, and `WORK_RUN_GATE_COMMAND_TIMEOUT_MS=600000`.
+      `WORK_RUN_MAX_RUNTIME_MS=7200000`, and `WORK_RUN_GATE_COMMAND_TIMEOUT_MS=600000`. (Added via
+      `parseNumericEnv` (min 1); reap-grace + drain wired into work-runner; documented in CLAUDE.md;
+      4 config tests green.)
 
 ### P0.4a — Finalizer hold mode
 

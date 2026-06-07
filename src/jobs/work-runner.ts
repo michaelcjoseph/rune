@@ -6,7 +6,7 @@ import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectM
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
-import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
+import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
@@ -605,9 +605,17 @@ const RING_CAPACITY = 50;
  *  before escalating SIGTERM→SIGKILL to the (possibly orphaned) process group,
  *  and a hard ceiling after which the run force-completes even if `close` never
  *  fires — so a grandchild holding the pipes open can no longer wedge the run
- *  open for hours (docs/projects/bugs.md). */
-const REAP_SIGKILL_MS = 3_000;
+ *  open for hours (docs/projects/bugs.md). The SIGTERM→SIGKILL grace is the
+ *  project-15 `WORK_RUN_REAP_GRACE_MS` config constant. */
+const REAP_SIGKILL_MS = config.WORK_RUN_REAP_GRACE_MS;
 const REAP_FORCE_DONE_MS = 10_000;
+
+/** Terminal-result watchdog window (project 15, P0.2): after the agent emits a
+ *  terminal `result` envelope, wait this long for the child to exit on its own
+ *  before reaping the process group. The child is NEVER killed on `result`
+ *  itself (that would re-introduce the false `failed` the 2026-06-04 fix
+ *  removed) — only if it wedges past the drain window. */
+const TERMINAL_DRAIN_MS = config.WORK_RUN_TERMINAL_DRAIN_MS;
 
 /** Inputs for the parent-side commit poll that runs during the stream
  *  (requirement 22). Null disables the poll (e.g. no captured baseSha, or a
@@ -641,6 +649,20 @@ async function* streamProcess(
   let reapStarted = false;
   let reapSigkillTimer: ReturnType<typeof setTimeout> | null = null;
   let reapForceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Terminal-result watchdog (P0.2). `terminalResultSeen` flips when the agent
+  // emits a `result` envelope; `drainTimer` is the bounded grace before the
+  // watchdog reaps a wedged (never-exiting) child; `reapedAfterTerminalResult`
+  // records that the reap was the watchdog's (an internal post-result reap),
+  // distinct from a user-cancel or an external kill, so the classifier reads a
+  // clean+complete branch as `branch-complete` rather than `failed`.
+  // `exitFired` / `closeFired` let the final exit-fact derivation tell a clean
+  // self-exit from a stdio-wedged one.
+  let terminalResultSeen = false;
+  let reapedAfterTerminalResult = false;
+  let exitFired = false;
+  let closeFired = false;
+  let drainTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Last-N stdout display lines + stderr tail, retained for the terminal
   // classification/forensics (independent of what the drawer consumed).
@@ -764,6 +786,27 @@ async function* streamProcess(
     void sink?.append(envelope).catch((err: Error) => {
       stderrTail.push(`[transcript] append failed: ${err.message}`);
     });
+    // Terminal-result watchdog (P0.2): the agent's `result` envelope means it
+    // declared done — but `claude -p` won't exit while a backgrounded task is
+    // still alive (the d0679453 wedge). Open a bounded drain window; if the
+    // child exits on its own first, the `exit` handler clears this timer and the
+    // normal teardown runs (no watchdog reap). If it never exits, reap the
+    // group and mark `reapedAfterTerminalResult` so the classifier treats a
+    // clean+complete branch as branch-complete, not failed. Do NOT kill on
+    // `result` — that re-introduces the false `failed` the 2026-06-04 fix removed.
+    if (envelope.type === 'result' && !terminalResultSeen) {
+      terminalResultSeen = true;
+      drainTimer = setTimeout(() => {
+        // Skip if the child already exited, a reap already started, or the user
+        // cancelled — a cancelled run must classify as a cancel, never as a
+        // watchdog reap (makes the precedence explicit, not order-dependent).
+        if (!done && !exitFired && !reapStarted && !cancelSent) {
+          reapedAfterTerminalResult = true;
+          reapTree();
+        }
+      }, TERMINAL_DRAIN_MS);
+      drainTimer.unref?.();
+    }
     const display = streamJsonToDisplay(envelope);
     if (display === null) return;
     // Redact secrets on the display/bus path too. `streamJsonToDisplay` only
@@ -804,6 +847,27 @@ async function* streamProcess(
   function clearReapTimers() {
     if (reapSigkillTimer) { clearTimeout(reapSigkillTimer); reapSigkillTimer = null; }
     if (reapForceTimer) { clearTimeout(reapForceTimer); reapForceTimer = null; }
+    if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+  }
+
+  /**
+   * Derive the P0.3 exit fact (project 15) from what was observed, so the
+   * classifier decides on the MANNER of exit + work product. Order matters:
+   *  - user cancel and watchdog reap are the two facts we set ourselves;
+   *  - a signalled termination we did NOT initiate (no clean code) is external;
+   *  - `close` firing means stdio drained → a clean self-exit; `exit` without
+   *    `close` (we force-completed) is a stdio-wedged clean exit;
+   *  - nothing observed (e.g. a spawn `error`) returns undefined so the
+   *    classifier falls back to the legacy derivation (which fails closed on a
+   *    null exit code).
+   */
+  function deriveExitFact(): ExitFact | undefined {
+    if (cancelSent) return 'user-cancel';
+    if (reapedAfterTerminalResult) return 'reaped-after-terminal-result';
+    if (exitSignal !== null && exitCode === null) return 'external-kill';
+    if (closeFired) return 'clean-exit';
+    if (exitFired) return 'clean-exit-wedged-stdio';
+    return undefined;
   }
 
   // Reap the agent's process group and guarantee the run completes. Called once
@@ -836,14 +900,20 @@ async function* streamProcess(
   // on their still-open pipes. The runner previously keyed completion only on
   // `close`, which is exactly why a wedged grandchild stranded the run.
   child.on('exit', (code, signal) => {
+    exitFired = true;
     if (exitCode === null && exitSignal === null) {
       exitCode = code;
       exitSignal = signal;
     }
+    // The child exited on its own — cancel the terminal-result watchdog so it
+    // can't reap an already-exited process; teardown proceeds via the existing
+    // exit-keyed path (reapTree reaps any orphaned grandchildren).
+    if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
     reapTree();
   });
 
   child.on('close', (code, signal) => {
+    closeFired = true;
     clearReapTimers();
     clearInterval(keepAliveTicker);
     if (commitTicker) clearInterval(commitTicker);
@@ -852,8 +922,15 @@ async function* streamProcess(
       stderrTail.push(stderrBuf);
       enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
     }
-    exitCode = code;
-    exitSignal = signal;
+    // Preserve the first-seen exit facts (the `exit` handler captures the real
+    // code/signal): a reap's SIGKILL must not stomp a clean exit code captured
+    // earlier, or the external-kill reason string would change. `exit` always
+    // fires before `close`; this only assigns on the error-less close-without-
+    // prior-exit path (where both are still null).
+    if (exitCode === null && exitSignal === null) {
+      exitCode = code;
+      exitSignal = signal;
+    }
     done = true;
     resolveWaiter?.();
     resolveWaiter = null;
@@ -885,12 +962,14 @@ async function* streamProcess(
 
     // Return exit facts instead of yielding a terminal event — apply() owns
     // the single terminal (and, in a later Phase 2 task, classification).
+    const exitFact = deriveExitFact();
     return {
       exit: {
         exitCode,
         signal: exitSignal,
         cancelled: cancelSent,
         durationMs: Date.now() - t0,
+        ...(exitFact !== undefined ? { exitFact } : {}),
       },
       ringBuffer: stdoutRing.items(),
       stderrTail: stderrTail.items(),

@@ -371,6 +371,11 @@ Optional:
 - `WORK_RUN_GLOBAL_CAP` — max concurrent `work-run` mutations across all projects (default `2`, min `1`)
 - `WORK_RUN_RETENTION_MAX_RUNS` — max terminal work-run artifact dirs to keep under `logs/work-runs/` (default `3`, min `1`); enforced by `gcWorkRuns` (project 11 Phase 3) at startup and on each run completion
 - `WORK_RUN_RETENTION_MAX_BYTES` — max total bytes of terminal work-run artifact dirs under `logs/work-runs/` (default `200 MB`, min `1`); enforced alongside `WORK_RUN_RETENTION_MAX_RUNS` — pruning stops when both caps are satisfied
+- `WORK_RUN_TERMINAL_DRAIN_MS` — after a `/work --auto` agent emits a terminal `result`, how long (ms) the terminal-result watchdog waits for the child to exit on its own before reaping the process group (default `30000`, min `1`); the child is never killed on `result` itself, only if it wedges past this window (project 15 P0.2)
+- `WORK_RUN_REAP_GRACE_MS` — SIGTERM→SIGKILL grace (ms) when reaping a work-run process group (default `5000`, min `1`)
+- `WORK_RUN_QUIET_CANCEL_AFTER_MS` — how long (ms) a run may stay quiet past the first quiet nudge before the backstop actuator escalates to cancel/reap/finalize (default `1200000` = 20 min, min `1`; project 15 P2.7)
+- `WORK_RUN_MAX_RUNTIME_MS` — hard ceiling (ms) after which a run is group-killed and finalized regardless of apparent liveness (default `7200000` = 2 h, min `1`; project 15 P2.7)
+- `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` — per validation-command budget (ms) in the gated-merge finalizer; a timeout is a red gate result, not a wedge (default `600000` = 10 min, min `1`; project 15 P1.5)
 - `WORKTREE_ROOT` — directory where git worktrees are created per product/project (default `<project-root>/.worktrees`, gitignored); exposed via `config.WORKTREE_ROOT`
 - `LAUNCHD_LABEL` — launchd service label the cockpit "Restart server" button kickstarts (default `com.jarvis.daemon`); exposed via `config.LAUNCHD_LABEL`. Override if the daemon is loaded under a different label.
 

@@ -41,6 +41,10 @@ vi.mock('../config.js', () => ({
     PROJECT_ROOT: TEST_PROJECT_ROOT,
     WORK_RUN_PER_PROJECT_CAP: 1,
     WORK_RUN_GLOBAL_CAP: 2,
+    // Project 15 (P0.2) — read at module load into TERMINAL_DRAIN_MS /
+    // REAP_SIGKILL_MS. Spec defaults so the watchdog timing matches the tests.
+    WORK_RUN_TERMINAL_DRAIN_MS: 30_000,
+    WORK_RUN_REAP_GRACE_MS: 5_000,
     WORKSPACE_DIR: undefined,
     TELEGRAM_USER_ID: 42,
     // Used by productionRuntimeDeps() (the seam __resetWorkRunRuntimeForTest
