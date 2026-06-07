@@ -49,9 +49,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       never merges or pushes — test-plan.md §4. (Added the `work-run-finalizer.ts` scaffold
       (types + `notImplemented` `runFinalizer`, incl. a `readLastPhase` resume seam) and
       `work-run-finalizer.test.ts`: 5 hold-mode tests red via the scaffold throw.)
-- [ ] Write recovery-finalize tests: a stale `running` run at startup is classified on work product
+- [x] Write recovery-finalize tests: a stale `running` run at startup is classified on work product
       and driven through finalizer `hold` mode to a real terminal state, and recovery runs **before**
-      the orphan-worktree sweep so the worktree it needs still exists — test-plan.md §4.
+      the orphan-worktree sweep so the worktree it needs still exists — test-plan.md §4. (Added the
+      `recoverAndFinalizeStaleRuns` scaffold to `supervision-recovery.ts` + a 4-test "P0.4" describe:
+      terminal-not-unknown, untouched terminal/blocked/unknown, serial awaitable-before-sweep, and
+      per-run fault isolation — all red via the scaffold throw.)
 - [ ] Write config tests for `WORK_RUN_TERMINAL_DRAIN_MS`, `WORK_RUN_REAP_GRACE_MS`,
       `WORK_RUN_QUIET_CANCEL_AFTER_MS`, `WORK_RUN_MAX_RUNTIME_MS`, and
       `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`: defaults match the spec, invalid values reject, and tests

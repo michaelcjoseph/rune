@@ -11,7 +11,7 @@
  * supervision store.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'; // writeFileSync used by malformed-JSON test
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,7 +20,12 @@ import type { SupervisedRun } from '../intent/supervision.js';
 import { readAllRuns, writeAllRuns } from './supervision-store.js';
 
 // The module under test — does not exist yet; the suite fails at import.
-import { recoverSupervisedRuns } from './supervision-recovery.js';
+import {
+  recoverSupervisedRuns,
+  recoverAndFinalizeStaleRuns,
+  type RecoverAndFinalizeDeps,
+} from './supervision-recovery.js';
+import type { FinalizerSupervisionStatus } from './work-run-finalizer.js';
 
 let tmpDir: string;
 let filePath: string;
@@ -149,5 +154,118 @@ describe('recoverSupervisedRuns', () => {
 
     const result = recoverSupervisedRuns(filePath);
     expect(result).toEqual({ transitioned: 0, total: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0.4 (project 15) — recovery FINALIZES stale runs through the finalizer in
+// HOLD mode rather than only relabeling them `unknown`. test-plan.md §4
+// "Startup recovery". WRITE-FIRST: `recoverAndFinalizeStaleRuns` is a scaffold
+// that throws notImplemented, so every test below is RED until P0.4 lands.
+// ---------------------------------------------------------------------------
+
+describe('recoverAndFinalizeStaleRuns (P0.4)', () => {
+  /** Deps bag backed by the temp store, with a spy finalizer. */
+  function makeDeps(
+    finalize: (run: SupervisedRun) => Promise<FinalizerSupervisionStatus>,
+  ): RecoverAndFinalizeDeps {
+    return {
+      readRuns: () => readAllRuns(filePath),
+      writeRuns: (runs) => writeAllRuns(runs, filePath),
+      finalizeStaleRun: vi.fn(finalize),
+    };
+  }
+
+  it('drives a stale running run to a real terminal state via the finalizer — NOT left as unknown', async () => {
+    // Also the test-plan §4 "orphaned-across-restart, clean complete branch"
+    // case: hold-mode classification yields a terminal 'completed' (the old
+    // path would have relabeled it the useless 'unknown'). Recovery never
+    // merges — there is no merge seam at this layer (gated-merge is a separate
+    // mode that recovery never invokes), so `.toBe('completed')` is the whole
+    // contract: a real terminal status, not 'unknown' and not still 'running'.
+    writeAllRuns([makeRun('run-stale', { status: 'running' })], filePath);
+    const deps = makeDeps(async () => 'completed');
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    expect(result.finalized).toBe(1);
+    expect(deps.finalizeStaleRun).toHaveBeenCalledOnce();
+    expect(readAllRuns(filePath)[0]!.status).toBe('completed');
+  });
+
+  it('leaves terminal / blocked / unknown runs untouched and does not finalize them', async () => {
+    writeAllRuns(
+      [
+        makeRun('run-done', { status: 'completed' }),
+        makeRun('run-fail', { status: 'failed' }),
+        makeRun('run-blocked', { status: 'blocked-on-human' }),
+        makeRun('run-unknown', { status: 'unknown' }),
+      ],
+      filePath,
+    );
+    const deps = makeDeps(async () => 'completed');
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    expect(result.finalized).toBe(0);
+    expect(deps.finalizeStaleRun).not.toHaveBeenCalled();
+    const byId = Object.fromEntries(readAllRuns(filePath).map((r) => [r.id, r.status]));
+    expect(byId).toEqual({
+      'run-done': 'completed',
+      'run-fail': 'failed',
+      'run-blocked': 'blocked-on-human',
+      'run-unknown': 'unknown',
+    });
+  });
+
+  it('awaits the finalizer serially — recovery completes before resolving (so index.ts can order it before the sweep)', async () => {
+    // The orphan-worktree sweep (index.ts:84) runs AFTER recovery. Recovery
+    // must be awaitable so index.ts can finish finalizing — while the worktree
+    // still exists — before launching the sweep. This pins (a) every stale run
+    // is finalized before the promise resolves, and (b) finalization is SERIAL
+    // (one worktree at a time), the safe startup contract.
+    writeAllRuns(
+      [makeRun('run-1', { status: 'running' }), makeRun('run-2', { status: 'running' })],
+      filePath,
+    );
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let completed = 0;
+    const deps = makeDeps(async () => {
+      inFlight++;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await Promise.resolve();
+      inFlight--;
+      completed++;
+      return 'completed';
+    });
+
+    await recoverAndFinalizeStaleRuns(deps);
+
+    // Both stale runs were finalized before the promise resolved, one at a time.
+    expect(completed).toBe(2);
+    expect(maxConcurrent).toBe(1);
+    expect(readAllRuns(filePath).every((r) => r.status === 'completed')).toBe(true);
+  });
+
+  it('isolates a per-run finalize failure: one rejecting run does not abort the rest', async () => {
+    writeAllRuns(
+      [makeRun('run-bad', { status: 'running' }), makeRun('run-good', { status: 'running' })],
+      filePath,
+    );
+    const deps = makeDeps(async (run) => {
+      if (run.id === 'run-bad') throw new Error('git failure / worktree gone');
+      return 'completed';
+    });
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    // The good run was still finalized; the bad one is counted, not fatal.
+    expect(result.finalized).toBe(1);
+    expect(result.failedToFinalize).toBe(1);
+    const byId = Object.fromEntries(readAllRuns(filePath).map((r) => [r.id, r.status]));
+    expect(byId['run-good']).toBe('completed');
+    // The failed run is left as-is (still running) rather than crashing recovery.
+    expect(byId['run-bad']).toBe('running');
   });
 });
