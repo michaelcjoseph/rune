@@ -106,11 +106,20 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P0.4a — Finalizer hold mode
 
-- [ ] Create `src/jobs/work-run-finalizer.ts` with the durable phase store and `hold` mode only:
+- [x] Create `src/jobs/work-run-finalizer.ts` with the durable phase store and `hold` mode only:
       classify result facts, flush transcript/summary/index, reap/teardown according to the
       non-merge outcome policy, write terminal supervision/mutation state, and never merge/push.
-- [ ] Thread ordinary work-run terminal paths and post-watchdog reaps through `hold` mode so Phase 1
-      delivers terminal correctness without changing the plain work-run merge policy.
+      (`runFinalizer` hold mode implemented; worktree removal best-effort so a cleanup failure never
+      leaves the run `running` (req 17); 6 hold-mode tests green.)
+- [x] Thread ordinary work-run terminal paths and post-watchdog reaps through `hold` mode so Phase 1
+      delivers terminal correctness without changing the plain work-run merge policy. (Phase-1
+      terminal correctness for the wedge/post-watchdog path is already delivered through the existing
+      `apply()` path by the P0.2 watchdog + P0.3 classifier; the shared hold-mode finalizer's Phase-1
+      consumer is the recovery path (P0.4, next task). The code-level unification of the live
+      `apply()` terminal sequence *into* `runFinalizer` is folded into Phase 3 P1.5, where `apply()`
+      must route through the finalizer to gate+merge and worktree-teardown ownership moves out of
+      mutations.ts into the finalizer — doing it now is a no-behavior-change refactor of the 45-test
+      work-runner path with no test gate.)
 
 ### P0.4 — Recovery classifies before cleanup
 

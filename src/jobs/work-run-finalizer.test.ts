@@ -188,6 +188,23 @@ describe('runFinalizer — hold mode (P0.4a)', () => {
     expect(result.phases).toEqual(phases);
   });
 
+  it('a worktree-removal failure does NOT block the terminal supervision write (never left running)', async () => {
+    // req 17: a cleanup failure must never strand the run as a quiet-pinging
+    // `running`. Worktree removal is best-effort inside hold mode.
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev, {
+      removeWorktree: vi.fn(async () => { throw new Error('worktree busy'); }),
+    });
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    // The run still reaches a real terminal supervision status.
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    expect(result.supervisionStatus).toBe('completed');
+    // The decision is recorded truthfully: the worktree was NOT removed.
+    expect(result.worktreeRemoved).toBe(false);
+  });
+
   it('on a failed run writes failed supervision, never merges, and still resolves the worktree', async () => {
     const ev = failedEvent();
     const { effects } = makeEffects(ev);

@@ -22,19 +22,31 @@
  * side-effect is an injected seam (`FinalizerEffects`) so the machine is
  * unit-testable with spies — no real git, worktree, or store.
  *
- * STATUS: SCAFFOLD (test-first). `runFinalizer` throws `notImplemented` until the
- * P0.4a task implements `hold` mode and the P1.5 task extends it to
- * `gated-merge`. The type surface here is the contract pinned by
- * `work-run-finalizer.test.ts` (test-plan.md §4, §6, §7).
+ * STATUS: `hold` mode is implemented (P0.4a) and pinned by
+ * `work-run-finalizer.test.ts` (test-plan.md §4). `gated-merge` mode throws
+ * `notImplemented` until P1.5 (test-plan.md §6, §7). The crash-resume matrix
+ * (consulting `readLastPhase()` to skip already-committed phases) lands in
+ * Phase 3.
  *
  * See docs/projects/15-work-run-finalizer/{spec.md, tasks.md, test-plan.md}.
  */
 
 import type { MutationEvent } from '../transport/mutations.js';
 import type { WorkOutcome } from './work-run-classify.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('work-run-finalizer');
 
 function notImplemented(fn: string): never {
-  throw new Error(`work-run-finalizer: ${fn} not implemented (project 15 Phase 1 P0.4a pending)`);
+  throw new Error(`work-run-finalizer: ${fn} not implemented (project 15 pending)`);
+}
+
+/** Read the typed `outcome` off a classified terminal event (mirrors
+ *  applyOutcomeToDescriptor / buildSummary). Falls back to `failed` if absent
+ *  (the classification-error path omits it). */
+function readOutcome(terminalEvent: MutationEvent): WorkOutcome {
+  const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
+  return typeof data['outcome'] === 'string' ? (data['outcome'] as WorkOutcome) : 'failed';
 }
 
 /** Terminal-write strategy. `hold` never touches `main`; `gated-merge` lands the
@@ -126,12 +138,83 @@ export interface FinalizerResult {
 
 /**
  * Drive a work run to a correct terminal state through the shared, idempotent,
- * phase-recorded state machine. SCAFFOLD — throws until P0.4a implements `hold`
- * mode (and P1.5 extends `gated-merge`).
+ * phase-recorded state machine.
+ *
+ * `hold` mode (P0.4a) is implemented: classify on work product → flush the
+ * transcript → write summary + index → resolve the worktree (remove it; the
+ * branch ref is left intact) → write terminal supervision. It NEVER merges,
+ * pushes, or deletes the branch, and the run never ends `running`. Each step
+ * records a durable phase so the P-3 resume matrix can resume mid-finalize.
+ *
+ * `gated-merge` mode (P1.5) is not built yet — it throws until that task.
+ *
+ * NB: hold mode runs straight through. The crash-resume matrix (Phase 3,
+ * test-plan §6) is what consults `effects.readLastPhase()` to skip
+ * already-committed phases (e.g. to avoid a duplicate index-row append on
+ * resume); P0.4a does not yet branch on it.
  */
 export async function runFinalizer(
-  _input: FinalizerInput,
-  _effects: FinalizerEffects,
+  input: FinalizerInput,
+  effects: FinalizerEffects,
 ): Promise<FinalizerResult> {
-  return notImplemented('runFinalizer');
+  if (input.mode === 'gated-merge') {
+    return notImplemented('runFinalizer(gated-merge)');
+  }
+
+  const phases: FinalizerPhase[] = [];
+  const record = (phase: FinalizerPhase): void => {
+    effects.recordPhase(phase);
+    phases.push(phase);
+  };
+
+  // Classify on work product (wraps finalizeWorkRun, incl. forensics).
+  const terminalEvent = await effects.classify();
+  record('classified');
+
+  // Flush the durable transcript before the summary/index/terminal writes so
+  // every buffered event is on disk first.
+  await effects.flushTranscript();
+  record('transcript-flushed');
+
+  effects.writeSummary(terminalEvent);
+  record('summary-written');
+
+  // `appendIndexRow` is append-only. Phase 3's resume matrix MUST consult
+  // `readLastPhase()` and skip this when `index-appended` is already recorded,
+  // or a crash-then-resume produces a duplicate index row for the same run.
+  effects.appendIndexRow(terminalEvent);
+  record('index-appended');
+
+  // Hold mode: remove the worktree per the existing non-merge policy (branch ref
+  // left intact — no merge → no delete). Best-effort: a removal failure must NOT
+  // block the terminal supervision write (req 17 — the run must never be left a
+  // quiet-pinging `running`). A leftover worktree is reaped later by the orphan
+  // sweep / GC; the decision is recorded in `worktreeRemoved`.
+  let worktreeRemoved = false;
+  try {
+    await effects.removeWorktree();
+    worktreeRemoved = true;
+  } catch (err) {
+    log.warn('hold-mode worktree removal failed; finalizing anyway', {
+      runId: input.runId,
+      error: (err as Error).message,
+    });
+  }
+  record('worktree-resolved');
+
+  // Terminal supervision write — the run reaches a real terminal status and
+  // never stays a quiet-pinging `running`.
+  const supervisionStatus: FinalizerSupervisionStatus =
+    terminalEvent.kind === 'completed' ? 'completed' : 'failed';
+  effects.writeSupervisionTerminal(supervisionStatus, terminalEvent);
+  record('finalized');
+
+  return {
+    outcome: readOutcome(terminalEvent),
+    supervisionStatus,
+    worktreeRemoved,
+    merged: false,
+    branchDeleted: false,
+    phases,
+  };
 }
