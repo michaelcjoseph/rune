@@ -35,18 +35,18 @@
  * `work-run-merge-lock.test.ts` (test-plan §6 "Concurrency + durability").
  */
 
-function notImplemented(fn: string): never {
-  throw new Error(`work-run-merge-lock: ${fn} not implemented (project 15 P1.5 pending)`);
-}
+import { withFileLock } from '../intent/backlog-write-lock.js';
 
 /**
  * The lock key for a run landing on `baseBranch` of `product`. Per-product AND
  * per-base-branch: two projects of the same product targeting the same base
  * branch share a key (they serialize); a different base branch (or product) is a
- * different key (they don't block each other). SCAFFOLD — throws until P1.5.
+ * different key (they don't block each other). The `:` delimiter guards against
+ * a delimiter-less format letting (`jar`,`vis/main`) collide with
+ * (`jarvis`,`/main`). Takes no project arg — that is the whole point.
  */
-export function baseBranchLockKey(_product: string, _baseBranch: string): string {
-  return notImplemented('baseBranchLockKey');
+export function baseBranchLockKey(product: string, baseBranch: string): string {
+  return `${product}:${baseBranch}`;
 }
 
 /**
@@ -54,12 +54,18 @@ export function baseBranchLockKey(_product: string, _baseBranch: string): string
  * after the previously-queued finalize for the same product+base branch has
  * settled. Different keys never block each other, and the lock is released even
  * when `fn` throws (so one failed finalize never deadlocks the next run on that
- * base branch). SCAFFOLD — throws until P1.5.
+ * base branch).
+ *
+ * Delegates to `withFileLock` (the in-process per-key async mutex in
+ * `src/intent/backlog-write-lock.ts`, which already prunes the lock table and
+ * releases on throw) rather than re-implementing the tail-chaining queue. The
+ * key is `merge:`-prefixed so this lock domain can never collide with
+ * `withFileLock`'s backlog file-path keys.
  */
 export function withBaseBranchLock<T>(
-  _product: string,
-  _baseBranch: string,
-  _fn: () => Promise<T> | T,
+  product: string,
+  baseBranch: string,
+  fn: () => Promise<T> | T,
 ): Promise<T> {
-  return notImplemented('withBaseBranchLock');
+  return withFileLock(`merge:${baseBranchLockKey(product, baseBranch)}`, fn);
 }

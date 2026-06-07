@@ -340,8 +340,15 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       scrubbed merge + teardown logs, `exit`→`close`, documented the merge-lock @precondition. Deferred
       (justified): schema stays `string[]` per spec req 16; VALID_SLUG path-guard on the worktree path
       noted (caller computes it via slug-validated machinery).)
-- [ ] Per-product / per-base-branch lock (not per-project), respecting the single-writer assumption
-      (`config.ts:250`, `supervision-store.ts:10-15`).
+- [x] Per-product / per-base-branch lock (not per-project), respecting the single-writer assumption
+      (`config.ts:250`, `supervision-store.ts:10-15`). (Implemented `baseBranchLockKey(product,
+      baseBranch)` → `<product>:<baseBranch>` and `withBaseBranchLock(product, baseBranch, fn)` in
+      `work-run-merge-lock.ts` by DELEGATING to the existing `withFileLock` in-process async mutex
+      (`src/intent/backlog-write-lock.ts`) with a `merge:`-prefixed key — no re-implemented
+      tail-chaining queue, separate lock domain from backlog file-path keys. Inherits
+      serialize-same-key / parallelize-distinct-key / release-on-throw / value-passthrough. 9
+      merge-lock tests green; tsc unchanged; code review PASS (security N/A — in-process mutex, no I/O).
+      The jobs→intent crossing matches `scaffold-approval.ts`'s existing `withFileLock` import.)
 - [ ] Push before deleting the branch; record durable resumable phases (`merged-not-pushed`,
       `pushed-not-deleted`, …) so a crash mid-finalize is resumable by Phase 1's P0.4 recovery.
 
