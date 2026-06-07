@@ -28,9 +28,10 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write supervision-store metadata-merge tests: a quiet nudge stamps `quietNudgedAt`, a
+- [x] Write supervision-store metadata-merge tests: a quiet nudge stamps `quietNudgedAt`, a
       keep-alive heartbeat rebuilds the `SupervisedRun`, and the field survives so the nudge does not
-      re-fire — test-plan.md §1.
+      re-fire — test-plan.md §1. (Added the "upsertRun — field-merge across heartbeats (P0.1)" block
+      to `src/jobs/supervision-store.test.ts`: 4 tests, red against current replace-by-id upsertRun.)
 - [ ] Write classifier exit-fact taxonomy tests covering user-cancel, external-kill,
       clean-exit-with-wedged-stdio, and internal-reap-after-terminal-result, each crossed with a
       clean+complete branch and an incomplete/dirty branch — test-plan.md §2.
