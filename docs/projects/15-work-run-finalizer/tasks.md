@@ -349,8 +349,14 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       serialize-same-key / parallelize-distinct-key / release-on-throw / value-passthrough. 9
       merge-lock tests green; tsc unchanged; code review PASS (security N/A — in-process mutex, no I/O).
       The jobs→intent crossing matches `scaffold-approval.ts`'s existing `withFileLock` import.)
-- [ ] Push before deleting the branch; record durable resumable phases (`merged-not-pushed`,
+- [x] Push before deleting the branch; record durable resumable phases (`merged-not-pushed`,
       `pushed-not-deleted`, …) so a crash mid-finalize is resumable by Phase 1's P0.4 recovery.
+      (Delivered by the gated-merge finalizer impl — `runGatedMerge` records `merged-not-pushed`
+      BEFORE calling pushBranch and `pushed-not-deleted` BEFORE deleteBranch, so push always precedes
+      delete (origin is the durable backup) and `readLastPhase()` lets a crash resume at the exact
+      next step: resume from `merged-not-pushed` skips re-merge → push→delete; from
+      `pushed-not-deleted` skips merge+push → delete only. Pinned by the push-before-delete ordering
+      test + the 4-case crash-resume matrix in `work-run-finalizer.test.ts` — all green.)
 
 ### P1.6 — Failure / partial / cancelled path
 
