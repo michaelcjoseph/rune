@@ -218,9 +218,20 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       `work-run-gate.ts` (re-exported from `work-run-finalizer.ts` so existing imports hold) to break
       the latent `finalizer → gate-runtime → finalizer` import cycle. 3 tests red via clean
       `notImplemented`; tsc unchanged.)
-- [ ] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
+- [x] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
       Jarvis has `["npm run build", "npm test"]`, products without commands fail closed, and each
-      command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`.
+      command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`. (Added a `readProductsConfig —
+      validationCommands (P1.5)` describe to `sandbox-runtime.test.ts`: 5 fixture tests — parses the
+      array, fail-closed `[]` when absent, non-array→`[]`, `String()`-coerces entries (mirrors
+      egressAllowlist), and a read-only real-`products.json` test pinning jarvis =
+      `["npm run build","npm test"]`. Added the optional `validationCommands?: string[]` field to
+      `ProductConfig` (type-only scaffold; parsing is the P1.5 impl task) with a security-sensitive
+      JSDoc. The per-command timeout is the constant `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` (default
+      pinned in `config.test.ts`, Phase 1) threaded as `GateRuntimeOpts.commandTimeoutMs`; bounding
+      each command is the gate-runtime contract. 5 tests red via clean assertion (parsing absent);
+      41 existing sandbox-runtime tests green; tsc unchanged. Security review surfaced the
+      execFile/no-shell command-injection mandate for the P1.5 runtime — captured in the
+      `runValidationCommand` JSDoc.)
 - [ ] Write per-product / per-base-branch lock tests proving two projects sharing one `main`
       serialize, and a single-writer assumption is not violated — test-plan.md §6.
 - [ ] Write resume tests: kill at each durable phase (`merged-not-pushed`, `pushed-not-deleted`, …)

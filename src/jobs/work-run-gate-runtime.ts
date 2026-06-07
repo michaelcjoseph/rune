@@ -87,6 +87,16 @@ export interface ValidationCommandResult {
  * same contract `gen-eval-loop-runner` and `work-runner` honor — so a validation
  * command in flight during a graceful shutdown is reaped, not orphaned. On
  * timeout it reaps the command's process tree and returns `{ timedOut: true }`.
+ *
+ * SECURITY (P1.5, hard requirement): `validationCommands` entries come from
+ * `policies/products.json` and become EXECUTED shell commands here, so the spawn
+ * MUST use `execFile`/`spawn` with an argv array and NEVER a shell string
+ * (`exec`/`execSync` or `spawn(..., { shell: true })`). A shell spawn would turn
+ * any metacharacter in a product's command (`;`, `&&`, `|`, `$(…)`, backticks,
+ * redirects) into injection — and the scaffold-approval pipeline can now write
+ * products.json at runtime, so this is not purely a hand-edited-config threat.
+ * Treat each command as `[argv0, ...args]` (split, or move the JSON schema to
+ * pre-split `string[][]`); reject metacharacters at the parse boundary.
  */
 export interface GateRuntimeIO {
   runGit: GitRunner;

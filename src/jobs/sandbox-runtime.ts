@@ -52,6 +52,18 @@ export interface ProductConfig {
   credentialsFile: string;
   /** Hosts a sandboxed run for this product may make network egress to. */
   egressAllowlist: string[];
+  /** Shell commands the gated-merge finalizer runs in an integration worktree to
+   *  decide whether a `branch-complete` run may land on `main` (project 15,
+   *  P1.5). Always an array once parsed — `[]` (or absent) fails the merge gate
+   *  CLOSED with `missing-validation-command`, never an unverified merge.
+   *  Optional on the type only so the literal in `readProductsConfig` compiles
+   *  before the P1.5 parsing lands; the contract (pinned by tests) is that
+   *  `readProductsConfig` always populates it, defaulting to `[]`.
+   *  SECURITY-SENSITIVE: editing this authorizes new shell commands to RUN
+   *  during automated gated-merge runs — review a change to it like a change to
+   *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
+   *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
+  validationCommands?: string[];
 }
 
 /** Pluggable git runner — production wraps `execFile('git', …)`, tests inject
