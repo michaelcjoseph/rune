@@ -194,6 +194,38 @@ export function planQuietCancel(
   throw new Error('supervision: planQuietCancel not implemented (project 15 P2.7 pending)');
 }
 
+/** A max-runtime-ceiling kill plan: the runs that have exceeded the hard
+ *  runtime ceiling and must be group-killed + finalized regardless of apparent
+ *  liveness (project 15, P2.7). */
+export interface MaxRuntimeKillPlan {
+  toKill: SupervisedRun[];
+}
+
+/**
+ * Plan the max-runtime-ceiling kills (project 15, P2.7): select the `running`
+ * runs whose total wall-clock age (now − {@link SupervisedRun.startedAt})
+ * exceeds `maxRuntimeMs`. This is the HARD backstop — it keys on `startedAt`,
+ * NOT on any liveness signal, so a run with a fresh keep-alive ticker
+ * (`lastChildAliveAt` kept current) cannot defeat the ceiling. The actuator
+ * group-kills and finalizes the selected runs. Pure — never mutates inputs.
+ *
+ * Unlike the quiet→cancel predicate (which soft-fails), this FAILS TOWARD KILL
+ * on an unparseable `startedAt`: the ceiling is the LAST backstop against a
+ * run that keeps its keep-alive ticker fresh, so a corrupt-timestamp record
+ * must not be allowed to evade it forever. The finalizer classifies on work
+ * product, so a killed run's committed branch is preserved (branch-complete /
+ * partial), not lost — making fail-toward-kill safe.
+ *
+ * SCAFFOLD — throws until the P2.7 actuator implementation task.
+ */
+export function planMaxRuntimeKills(
+  _runs: SupervisedRun[],
+  _maxRuntimeMs: number,
+  _now: number,
+): MaxRuntimeKillPlan {
+  throw new Error('supervision: planMaxRuntimeKills not implemented (project 15 P2.7 pending)');
+}
+
 /**
  * Build the visibility surface from the tracked runs: `active` (running or blocked),
  * `blocked` (blocked-on-human only), and `stalled` (running but quiet past the heartbeat

@@ -145,9 +145,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       than nudging again — test-plan.md §5. (Added `planQuietCancel` scaffold + `QuietCancelPlan` to
       supervision.ts and `supervision-quiet-cancel.test.ts`: 7 tests red via the scaffold throw,
       incl. the notifies-once-then-escalates handoff.)
-- [ ] Write max-runtime-ceiling tests with an injected clock proving a run that keeps `lastChildAliveAt`
+- [x] Write max-runtime-ceiling tests with an injected clock proving a run that keeps `lastChildAliveAt`
       fresh (keep-alive ticker active) is still group-killed and finalized once the ceiling is
-      exceeded — test-plan.md §5.
+      exceeded — test-plan.md §5. (Added `planMaxRuntimeKills` scaffold + `MaxRuntimeKillPlan` and
+      `supervision-max-runtime.test.ts`: 6 red tests; headline proves fresh-liveness can't defeat the
+      ceiling, and the corrupt-`startedAt` case fails toward kill since the ceiling is the last
+      backstop.)
 - [ ] Write worktree-scoped sweep tests: a reparented/detached process whose cwd is under the run's
       worktree path is reaped by the fallback sweep, and a process outside that path is left
       untouched. Use an injected process table/kill adapter; do not spawn real long-lived processes —
