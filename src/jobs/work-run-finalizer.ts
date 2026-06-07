@@ -22,11 +22,12 @@
  * side-effect is an injected seam (`FinalizerEffects`) so the machine is
  * unit-testable with spies — no real git, worktree, or store.
  *
- * STATUS: `hold` mode is implemented (P0.4a) and pinned by
- * `work-run-finalizer.test.ts` (test-plan.md §4). `gated-merge` mode throws
- * `notImplemented` until P1.5 (test-plan.md §6, §7). The crash-resume matrix
- * (consulting `readLastPhase()` to skip already-committed phases) lands in
- * Phase 3.
+ * STATUS: both modes are implemented and pinned by `work-run-finalizer.test.ts`
+ * — `hold` (P0.4a, test-plan §4) and `gated-merge` (P1.5, test-plan §6/§7),
+ * including the crash-resume matrix (`runGatedMerge` consults `readLastPhase()`
+ * to skip already-committed phases). The gate DECISION (`evaluateGate`), the
+ * gate RUNTIME (`runGate`), and the per-base-branch lock are injected as effects
+ * here and implemented in their own modules.
  *
  * See docs/projects/15-work-run-finalizer/{spec.md, tasks.md, test-plan.md}.
  */
@@ -35,12 +36,9 @@ import type { MutationEvent } from '../transport/mutations.js';
 import type { WorkOutcome } from './work-run-classify.js';
 import type { GateFailReason, GateResult } from './work-run-gate.js';
 import { createLogger } from '../utils/logger.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 const log = createLogger('work-run-finalizer');
-
-function notImplemented(fn: string): never {
-  throw new Error(`work-run-finalizer: ${fn} not implemented (project 15 pending)`);
-}
 
 /** Read the typed `outcome` off a classified terminal event (mirrors
  *  applyOutcomeToDescriptor / buildSummary). Falls back to `failed` if absent
@@ -59,16 +57,17 @@ export type FinalizerMode = 'hold' | 'gated-merge';
  * phase lets recovery resume at the next one rather than re-running a mutating
  * step. `merged-not-pushed` / `pushed-not-deleted` are reached only in
  * `gated-merge` mode (push-before-delete: origin is the backup before the local
- * branch is removed).
+ * branch is removed). The union is declared in committed order — the SAME order
+ * as `PHASE_ORDER`, which drives the `reached()` resume comparison.
  */
 export type FinalizerPhase =
   | 'classified'
   | 'transcript-flushed'
   | 'summary-written'
   | 'index-appended'
-  | 'worktree-resolved'
   | 'merged-not-pushed'
   | 'pushed-not-deleted'
+  | 'worktree-resolved'
   | 'finalized';
 
 /** Terminal supervision status the finalizer writes — always one of these, so a
@@ -156,36 +155,108 @@ export interface FinalizerResult {
   phases: FinalizerPhase[];
 }
 
+/** Durable phases in their committed order — the resume axis. `reached(phase)`
+ *  (in `gated-merge`) compares the last persisted phase against this list to
+ *  skip steps a prior attempt already committed. */
+const PHASE_ORDER: FinalizerPhase[] = [
+  'classified',
+  'transcript-flushed',
+  'summary-written',
+  'index-appended',
+  'merged-not-pushed',
+  'pushed-not-deleted',
+  'worktree-resolved',
+  'finalized',
+];
+
+/** Build the durable-phase recorder both modes use: each `record(phase)` writes
+ *  the phase to the durable store AND appends it to the returned `phases` array
+ *  (the in-order list surfaced on `FinalizerResult`). */
+function makeRecorder(effects: FinalizerEffects): {
+  phases: FinalizerPhase[];
+  record: (phase: FinalizerPhase) => void;
+} {
+  const phases: FinalizerPhase[] = [];
+  return {
+    phases,
+    record: (phase: FinalizerPhase): void => {
+      effects.recordPhase(phase);
+      phases.push(phase);
+    },
+  };
+}
+
+/**
+ * The shared finalize tail used by BOTH modes: resolve the worktree (best-effort
+ * removal — a failure must never block the terminal write, req 17) then write a
+ * terminal supervision status (never a quiet-pinging `running`). Records
+ * `worktree-resolved` then `finalized`.
+ */
+async function resolveWorktreeAndFinalize(
+  input: FinalizerInput,
+  effects: FinalizerEffects,
+  terminalEvent: MutationEvent,
+  record: (phase: FinalizerPhase) => void,
+  phases: FinalizerPhase[],
+  merged: boolean,
+  branchDeleted: boolean,
+): Promise<FinalizerResult> {
+  let worktreeRemoved = false;
+  try {
+    await effects.removeWorktree();
+    worktreeRemoved = true;
+  } catch (err) {
+    // Scrub host-absolute paths from the git error before logging — a worktree
+    // path lives under PROJECT_ROOT/.worktrees and would otherwise reach the
+    // (process-local) stdout log stream verbatim.
+    log.warn('worktree removal failed; finalizing anyway', {
+      runId: input.runId,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+  }
+  record('worktree-resolved');
+
+  const supervisionStatus: FinalizerSupervisionStatus =
+    terminalEvent.kind === 'completed' ? 'completed' : 'failed';
+  effects.writeSupervisionTerminal(supervisionStatus, terminalEvent);
+  record('finalized');
+
+  return {
+    outcome: readOutcome(terminalEvent),
+    supervisionStatus,
+    worktreeRemoved,
+    merged,
+    branchDeleted,
+    phases,
+  };
+}
+
 /**
  * Drive a work run to a correct terminal state through the shared, idempotent,
  * phase-recorded state machine.
  *
- * `hold` mode (P0.4a) is implemented: classify on work product → flush the
- * transcript → write summary + index → resolve the worktree (remove it; the
- * branch ref is left intact) → write terminal supervision. It NEVER merges,
- * pushes, or deletes the branch, and the run never ends `running`. Each step
- * records a durable phase so the P-3 resume matrix can resume mid-finalize.
+ * `hold` mode (P0.4a): classify on work product → flush the transcript → write
+ * summary + index → resolve the worktree (remove it; the branch ref is left
+ * intact) → write terminal supervision. It NEVER merges, pushes, or deletes the
+ * branch, and the run never ends `running`. It runs straight through (no resume
+ * skipping) — the P0.4 recovery path always re-drives a hold-mode run from the
+ * top, and its only append-only side-effect (the index row) is idempotent enough
+ * for that.
  *
- * `gated-merge` mode (P1.5) is not built yet — it throws until that task.
- *
- * NB: hold mode runs straight through. The crash-resume matrix (Phase 3,
- * test-plan §6) is what consults `effects.readLastPhase()` to skip
- * already-committed phases (e.g. to avoid a duplicate index-row append on
- * resume); P0.4a does not yet branch on it.
+ * `gated-merge` mode (P1.5) is delegated to `runGatedMerge`, which consults
+ * `effects.readLastPhase()` for crash-resume (skipping an already-committed
+ * merge/push/index-append) and lands a branch-complete run on the base branch
+ * through the injected hard gate.
  */
 export async function runFinalizer(
   input: FinalizerInput,
   effects: FinalizerEffects,
 ): Promise<FinalizerResult> {
   if (input.mode === 'gated-merge') {
-    return notImplemented('runFinalizer(gated-merge)');
+    return runGatedMerge(input, effects);
   }
 
-  const phases: FinalizerPhase[] = [];
-  const record = (phase: FinalizerPhase): void => {
-    effects.recordPhase(phase);
-    phases.push(phase);
-  };
+  const { phases, record } = makeRecorder(effects);
 
   // Classify on work product (wraps finalizeWorkRun, incl. forensics).
   const terminalEvent = await effects.classify();
@@ -199,42 +270,103 @@ export async function runFinalizer(
   effects.writeSummary(terminalEvent);
   record('summary-written');
 
-  // `appendIndexRow` is append-only. Phase 3's resume matrix MUST consult
-  // `readLastPhase()` and skip this when `index-appended` is already recorded,
-  // or a crash-then-resume produces a duplicate index row for the same run.
   effects.appendIndexRow(terminalEvent);
   record('index-appended');
 
   // Hold mode: remove the worktree per the existing non-merge policy (branch ref
-  // left intact — no merge → no delete). Best-effort: a removal failure must NOT
-  // block the terminal supervision write (req 17 — the run must never be left a
-  // quiet-pinging `running`). A leftover worktree is reaped later by the orphan
-  // sweep / GC; the decision is recorded in `worktreeRemoved`.
-  let worktreeRemoved = false;
-  try {
-    await effects.removeWorktree();
-    worktreeRemoved = true;
-  } catch (err) {
-    log.warn('hold-mode worktree removal failed; finalizing anyway', {
-      runId: input.runId,
-      error: (err as Error).message,
-    });
+  // left intact — no merge → no delete) and write the terminal supervision
+  // status through the shared tail. `merged`/`branchDeleted` are always false.
+  return resolveWorktreeAndFinalize(input, effects, terminalEvent, record, phases, false, false);
+}
+
+/**
+ * `gated-merge` mode (P1.5): the policy path that lands a clean, complete run on
+ * the base branch through the hard gate. Sequence (fresh run):
+ *
+ *   classify → flush → summary → index → gate → merge → push → delete → terminal
+ *
+ * recording `merged-not-pushed` after the merge and `pushed-not-deleted` after
+ * the push so a crash mid-finalize resumes at the right step (push happens
+ * BEFORE delete — origin is the durable backup before the local branch is
+ * removed). A failed gate STOPS at `branch-complete`: it alerts and never
+ * touches the base branch. A non-`branch-complete` run never consults the gate.
+ *
+ * Resume: `readLastPhase()` is consulted so an already-committed step is skipped
+ * — never a re-merge of an already-merged branch, a double-push, or a duplicate
+ * index-row append.
+ */
+async function runGatedMerge(
+  input: FinalizerInput,
+  effects: FinalizerEffects,
+): Promise<FinalizerResult> {
+  const { gate, mergeBranch, pushBranch, deleteBranch, alert } = effects;
+  // `alert` is required too: a gate-fail MUST notify the operator that a
+  // branch-complete run was held off `main` — a silently-dropped alert would
+  // leave a held run invisible. (`deleteBranch` must be idempotent: a resume
+  // from `pushed-not-deleted` re-invokes it since there is no post-delete phase.)
+  if (!gate || !mergeBranch || !pushBranch || !deleteBranch || !alert) {
+    throw new Error(
+      'gated-merge mode requires the gate, alert, mergeBranch, pushBranch, and deleteBranch effects',
+    );
   }
-  record('worktree-resolved');
 
-  // Terminal supervision write — the run reaches a real terminal status and
-  // never stays a quiet-pinging `running`.
-  const supervisionStatus: FinalizerSupervisionStatus =
-    terminalEvent.kind === 'completed' ? 'completed' : 'failed';
-  effects.writeSupervisionTerminal(supervisionStatus, terminalEvent);
-  record('finalized');
+  const { phases, record } = makeRecorder(effects);
+  const lastPhase = effects.readLastPhase();
+  const reached = (phase: FinalizerPhase): boolean =>
+    lastPhase !== null && PHASE_ORDER.indexOf(lastPhase) >= PHASE_ORDER.indexOf(phase);
 
-  return {
-    outcome: readOutcome(terminalEvent),
-    supervisionStatus,
-    worktreeRemoved,
-    merged: false,
-    branchDeleted: false,
-    phases,
-  };
+  // Prologue. `classify()` is ALWAYS re-run — it returns the in-memory terminal
+  // event every downstream step needs (it is not persisted), so it is exempt
+  // from the resume skip; the `reached()` guards below skip only the durable
+  // side-effects (notably the append-only index row) a prior attempt committed.
+  const terminalEvent = await effects.classify();
+  if (!reached('classified')) record('classified');
+  if (!reached('transcript-flushed')) {
+    await effects.flushTranscript();
+    record('transcript-flushed');
+  }
+  if (!reached('summary-written')) {
+    effects.writeSummary(terminalEvent);
+    record('summary-written');
+  }
+  if (!reached('index-appended')) {
+    effects.appendIndexRow(terminalEvent);
+    record('index-appended');
+  }
+
+  const outcome = readOutcome(terminalEvent);
+  let merged = false;
+  let branchDeleted = false;
+
+  // Only a branch-complete run is eligible to land on the base branch; anything
+  // else (partial/noop/dirty/failed) never merges and never consults the gate.
+  if (outcome === 'branch-complete') {
+    if (reached('merged-not-pushed')) {
+      // A prior attempt already merged — NEVER re-merge (exactly-once).
+      merged = true;
+    } else {
+      const verdict = await gate();
+      if (verdict.ok) {
+        await mergeBranch();
+        record('merged-not-pushed');
+        merged = true;
+      } else {
+        // Gate refused — STOP at branch-complete: alert, never touch the base.
+        alert(verdict.reason);
+      }
+    }
+
+    if (merged) {
+      // Push BEFORE delete: origin is the durable backup before the local
+      // branch ref is removed. Skip the push on resume if it already landed.
+      if (!reached('pushed-not-deleted')) {
+        await pushBranch();
+        record('pushed-not-deleted');
+      }
+      await deleteBranch();
+      branchDeleted = true;
+    }
+  }
+
+  return resolveWorktreeAndFinalize(input, effects, terminalEvent, record, phases, merged, branchDeleted);
 }

@@ -276,10 +276,29 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P1.5 — Shared finalizer + gate
 
-- [ ] Extend `src/jobs/work-run-finalizer.ts` from Phase 1 `hold` mode to `gated-merge` mode:
+- [x] Extend `src/jobs/work-run-finalizer.ts` from Phase 1 `hold` mode to `gated-merge` mode:
       verify gate → merge → push + verify → worktree remove → branch delete → terminal `merged`.
       Reuse/refactor `realMergeBranch` (`gen-eval-loop-runner.ts:254-302`) rather than duplicating
-      it; honor its half-merged push-failure warning (`:274`).
+      it; honor its half-merged push-failure warning (`:274`). (Implemented `runGatedMerge`: prologue
+      (classify → flush → summary → index, each resume-skippable via `readLastPhase()`/`PHASE_ORDER`)
+      → gate → merge → push → delete → shared terminal tail. Records `merged-not-pushed` then
+      `pushed-not-deleted` so push happens BEFORE delete (origin is the durable backup) and a crash
+      resumes exactly-once (no re-merge / double-push / duplicate index-row). A failed gate STOPS at
+      branch-complete + `alert(reason)` (never merges); a non-branch-complete run never consults the
+      gate; requires the gate/alert/merge/push/delete effects. Extracted a shared
+      `resolveWorktreeAndFinalize` tail + `makeRecorder` used by both modes; removed the dead
+      `notImplemented` stub. NOTE: `realMergeBranch`'s git logic (merge/push/branch-d + credential
+      redaction + half-merged warning) is reused by the RUNTIME that constructs the injected
+      merge/push/delete effects — decomposed into three separate effects (vs realMergeBranch's single
+      combined call) precisely because the push-before-delete crash-resume contract needs durable
+      checkpoints between the steps; that effect-construction wiring lands with the live work-runner
+      gated-merge wiring. All 31 finalizer tests (incl. the 14 gated-merge + 4 resume) green; tsc
+      unchanged; CLAUDE.md updated. Review: code/arch/security PASS_WITH_WARNINGS — applied stale-JSDoc
+      fix, `alert` added to required effects, `FinalizerPhase` union reordered to match `PHASE_ORDER`,
+      worktree-error scrubbed before logging, classify-always-runs + deleteBranch-idempotency comments.
+      Known follow-up for the wiring: `recovery-finalize-runner` currently re-drives in `hold` mode
+      only — a run that crashed mid-gated-merge should resume in `gated-merge` mode off its phase
+      records.)
 - [ ] Implement the hard gate — merge only if ALL hold: tests green, working tree clean,
       `tasksRemaining == 0`, no merge conflict / sane base relationship, no concurrent run owns the
       branch/project, product has `validationCommands`, and each validation command finishes within
