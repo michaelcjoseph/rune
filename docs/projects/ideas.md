@@ -6,7 +6,6 @@ below it.
 
 ## User-authored
 
-- Expand cockpit → 09-expand-cockpit
 - Expand cockpit: fix autorun (expand-cockpit-fix-autorun) — a one-click **Fix** button on cockpit bugs that generalizes `/work --auto` across product repos (aura, assay, relay), the follow-on cut from [09-expand-cockpit](09-expand-cockpit/spec.md) v1.
   - **What already works (2026-06-04).** The execution substrate is cross-repo-ready. `policies/products.json` configures aura/assay/relay/jarvis (repo path, base branch, scoped credentials, egress allowlist); `work-runner` takes a `product` and `createWorktree` spins the worktree in that repo with that repo's egress; the manual cockpit trigger already passes `product` end-to-end (`app.js` → `webview.ts` `createMutation` → runner). So a cockpit-triggered run in another repo works today, modulo validation. GC was generalized to sweep all products the same day (dir retention global, branch prune per-repo). The resume + wedge bugs (see [bugs.md](bugs.md)) were also fixed — prerequisites for trusting unattended cross-repo runs.
   - **The actual gap — automated dispatch is jarvis-only and partly unwired.** Three layers, only the top one done:
@@ -16,17 +15,6 @@ below it.
   - **The Fix button itself is the small part.** The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
   - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
 - As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
-- Planning pipeline — specialized planning role-agents (its own project)
-  - The pipeline that turns an approved product spec into a buildable plan, each stage a role-agent reusing project 08's Planner + `/work` + model-selection policy (retrofit, not a new runtime). The per-agent memory substrate is spun out to **project 12** (the writer-role compounding-memory wedge); this pipeline reuses that proven charter + memory + wrap-up-write pattern once it lands, rather than reinventing it.
-  - Stages:
-    - **product-spec agent** — the existing Planner, retrofit as the `pm` role-agent: adversarial interviewer, human-readable spec, multi-model self-critique (a different model critiques the draft, revise, repeat to a round cap).
-    - **tech-spec agent** — product spec → tech spec: named modules with file paths, explicit non-goals, dependency list; same multi-model self-critique.
-    - **tasks agent** — tech spec → task list; each task as small as possible but still a meaningful commit.
-    - **test-plan agent** — tech spec → test plan, mirroring the tasks' test-first blocks.
-    - **wrap-up agent** — update the projects index with the project's final outcome, and write durable memory (the compound step).
-  - Per-product / code memory the pipeline will want (decision log, gotchas registry, architecture docs, glossary, product-spec + tech-spec templates) builds on project 12's role-memory pattern; deferred until that wedge proves out. Memory is whole-file markdown loaded as low-authority reference (not system-prompt authority); the typed-schema / cascade-composer / conflict-resolution machinery was cut as premature ceremony.
-  - Open: does `tech-spec.md` become a required scaffold artifact (add a `techSpec` key to the Planner artifact + project 09's scaffold-result contract), or stay an optional stage output?
-  - Dependency: best started after project 12 validates the charter + memory + wrap-up-write loop end to end (writer role, jarvis repo), so the pipeline inherits a proven pattern.
 - Engagement-driven writing lessons (extends project 12)
   - Set up email, X, blog, and website for Jarvis
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
