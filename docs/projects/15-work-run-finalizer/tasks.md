@@ -140,9 +140,11 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write quiet→cancel actuator tests with an injected clock: sustained quiet past the first
+- [x] Write quiet→cancel actuator tests with an injected clock: sustained quiet past the first
       threshold notifies; quiet past the longer threshold escalates to cancel/reap/finalize rather
-      than nudging again — test-plan.md §5.
+      than nudging again — test-plan.md §5. (Added `planQuietCancel` scaffold + `QuietCancelPlan` to
+      supervision.ts and `supervision-quiet-cancel.test.ts`: 7 tests red via the scaffold throw,
+      incl. the notifies-once-then-escalates handoff.)
 - [ ] Write max-runtime-ceiling tests with an injected clock proving a run that keeps `lastChildAliveAt`
       fresh (keep-alive ticker active) is still group-killed and finalized once the ceiling is
       exceeded — test-plan.md §5.

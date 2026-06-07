@@ -165,6 +165,35 @@ export function planQuietNudges(
   return { toNudge, updated };
 }
 
+/** A quiet→cancel escalation plan: the runs the actuator should cancel/reap/
+ *  finalize because their quiet persisted past the longer cancel threshold
+ *  after a one-time nudge (project 15, P2.7). */
+export interface QuietCancelPlan {
+  toCancel: SupervisedRun[];
+}
+
+/**
+ * Plan the quiet→cancel escalations (project 15, P2.7): select the `running`
+ * runs that have ALREADY been quiet-nudged ({@link SupervisedRun.quietNudgedAt}
+ * set) and whose quiet has persisted longer than `quietCancelAfterMs` measured
+ * from that nudge. This is the backstop that stops the loop from nudging a
+ * never-recovering run forever — once a run stays quiet this long past its
+ * one-time nudge, the actuator escalates to cancel/reap/finalize instead of
+ * nudging again. Escalation requires a prior nudge (the nudge is the gentler
+ * first step). Pure — the runner performs the cancel/reap/finalize; never
+ * mutates the inputs. Soft-fail on an unparseable `quietNudgedAt` (no
+ * escalation), mirroring {@link isQuietRun}.
+ *
+ * SCAFFOLD — throws until the P2.7 actuator implementation task.
+ */
+export function planQuietCancel(
+  _runs: SupervisedRun[],
+  _quietCancelAfterMs: number,
+  _now: number,
+): QuietCancelPlan {
+  throw new Error('supervision: planQuietCancel not implemented (project 15 P2.7 pending)');
+}
+
 /**
  * Build the visibility surface from the tracked runs: `active` (running or blocked),
  * `blocked` (blocked-on-human only), and `stalled` (running but quiet past the heartbeat
