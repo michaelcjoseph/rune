@@ -68,11 +68,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P0.1 — Supervision-store field-merge
 
-- [ ] Make `upsertRun` field-merge unknown/current fields (or thread `quietNudgedAt` through
+- [x] Make `upsertRun` field-merge unknown/current fields (or thread `quietNudgedAt` through
       `buildSupervisedRun`) so a keep-alive heartbeat can never clear a persisted supervision field
-      (`supervision-store.ts:138-145`, `mutations.ts:32-63,305-320`).
-- [ ] Assert the one-shot quiet guard holds across heartbeats (`supervision.ts:124-138`,
-      `stall-check-runner.ts:70-85`).
+      (`supervision-store.ts:138-145`, `mutations.ts:32-63,305-320`). (Changed `upsertRun` to
+      `{ ...current, ...run }` field-merge; 4 P0.1 tests green, no regressions.)
+- [x] Assert the one-shot quiet guard holds across heartbeats (`supervision.ts:124-138`,
+      `stall-check-runner.ts:70-85`). (The P0.1 re-fire + 30s-loop tests now pass: a stamped
+      `quietNudgedAt` survives the keep-alive rebuild, so exactly one nudge fires per run.)
 
 ### P0.3 — Classifier exit-fact taxonomy
 
