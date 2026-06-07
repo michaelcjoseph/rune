@@ -424,3 +424,84 @@ describe('runFinalizer — gated-merge gate: each condition stops at branch-comp
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §6 — Gated-merge crash-resume matrix (P1.5). WRITE-FIRST: gated-merge throws
+// notImplemented, so these are RED until the P1.5 impl consults
+// `readLastPhase()` at the top of `runFinalizer` and skips already-committed
+// steps. The contract (spec req 15, test-plan §6 "Concurrency + durability"):
+// a crash mid-finalize resumes at the RIGHT step — the merge is applied
+// EXACTLY ONCE and push always happens before branch delete, so a resume can
+// never re-merge an already-merged branch or delete a branch whose work isn't
+// yet on origin.
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
+  it('resume from `merged-not-pushed`: does NOT re-merge — completes push then delete (exactly-once merge)', async () => {
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'merged-not-pushed'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    // The merge already landed before the crash — never re-merge.
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    // The append-only index row was already written — never duplicate it.
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    // Resume completes the remaining mutating steps, push BEFORE delete.
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
+    const deleteOrder = vi.mocked(effects.deleteBranch!).mock.invocationCallOrder[0]!;
+    expect(pushOrder).toBeLessThan(deleteOrder);
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+  });
+
+  it('resume from `pushed-not-deleted`: does NOT re-merge OR re-push — only completes the branch delete', async () => {
+    // The push already put the work on origin (the durable backup); a resume
+    // must finish the delete WITHOUT re-merging or re-pushing.
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'pushed-not-deleted'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+  });
+
+  it('resume from `index-appended` (pre-merge): re-evaluates the gate and merges exactly once', async () => {
+    // The crash happened AFTER the index row but BEFORE the merge, so the merge
+    // never landed — resume must run gate → merge → push → delete, merging once,
+    // and must NOT re-append the index row (already written).
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'index-appended'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+  });
+
+  it('fresh run (no prior phase) merges EXACTLY once — the resume guard never double-applies a fresh merge', async () => {
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase | null => null),
+    });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+  });
+});

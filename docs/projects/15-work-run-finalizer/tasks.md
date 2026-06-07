@@ -243,9 +243,15 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       invariant). Serialization probe uses a held-open deferred + macrotask flush so it's robust to the
       impl's dispatch depth. Scaffold JSDoc directs the P1.5 impl to reuse `withFileLock` (separate lock
       domain) rather than duplicate the mutex. 9 red via clean `notImplemented`; tsc unchanged.)
-- [ ] Write resume tests: kill at each durable phase (`merged-not-pushed`, `pushed-not-deleted`, …)
+- [x] Write resume tests: kill at each durable phase (`merged-not-pushed`, `pushed-not-deleted`, …)
       and prove recovery resumes at the right step with exactly-once merge and push-before-delete —
-      test-plan.md §6.
+      test-plan.md §6. (Added a `gated-merge crash-resume matrix (P1.5)` describe to
+      `work-run-finalizer.test.ts`: 4 tests keyed on the `readLastPhase()` seam — resume from
+      `merged-not-pushed` never re-merges (push→delete only, push before delete), resume from
+      `pushed-not-deleted` neither re-merges nor re-pushes (delete only), resume from the pre-merge
+      `index-appended` re-gates and merges exactly once, and a fresh run (null) merges exactly once;
+      each asserts `appendIndexRow` is not re-run after the index phase (no duplicate row). Red until
+      the P1.5 impl consults `readLastPhase()` to skip committed steps; tsc unchanged.)
 - [ ] Write failure/partial/cancelled-path tests proving the tree is always reaped + transcript/summary
       flushed, nothing merges, supervision becomes terminal or explicit `blocked-on-human` (never
       quiet-pinging `running`), and branch retention/deletion is recorded — test-plan.md §7.
