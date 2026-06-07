@@ -32,9 +32,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       keep-alive heartbeat rebuilds the `SupervisedRun`, and the field survives so the nudge does not
       re-fire — test-plan.md §1. (Added the "upsertRun — field-merge across heartbeats (P0.1)" block
       to `src/jobs/supervision-store.test.ts`: 4 tests, red against current replace-by-id upsertRun.)
-- [ ] Write classifier exit-fact taxonomy tests covering user-cancel, external-kill,
+- [x] Write classifier exit-fact taxonomy tests covering user-cancel, external-kill,
       clean-exit-with-wedged-stdio, and internal-reap-after-terminal-result, each crossed with a
-      clean+complete branch and an incomplete/dirty branch — test-plan.md §2.
+      clean+complete branch and an incomplete/dirty branch — test-plan.md §2. (Added the
+      "classifyOutcome — exit-fact taxonomy (P0.3)" + "finalizeWorkRun — external-kill carries
+      truthful work product" blocks to `src/jobs/work-run-classify.test.ts`; the
+      reaped-after-terminal-result cases are red, the rest are green reorder-guards.)
 - [ ] Write terminal-result watchdog tests with an injected clock and a fixture stream: `result`
       emitted then child exits within the drain window (no reap); `result` emitted then child never
       exits (drain → SIGTERM → SIGKILL group reap → `reapedAfterTerminalResult` exit fact); assert no
