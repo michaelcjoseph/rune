@@ -33,6 +33,7 @@
 
 import type { MutationEvent } from '../transport/mutations.js';
 import type { WorkOutcome } from './work-run-classify.js';
+import type { GateFailReason, GateResult } from './work-run-gate.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('work-run-finalizer');
@@ -137,18 +138,12 @@ export interface FinalizerEffects {
   deleteBranch?: () => Promise<void>;
 }
 
-/** Why the hard merge gate refused to land a run on `main`. */
-export type GateFailReason =
-  | 'tests-red'
-  | 'dirty-tree'
-  | 'tasks-remaining'
-  | 'merge-conflict'
-  | 'concurrent-run'
-  | 'missing-validation-command'
-  | 'validation-timeout';
-
-/** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
-export type GateResult = { ok: true } | { ok: false; reason: GateFailReason };
+// `GateFailReason` / `GateResult` are defined alongside the pure gate decision
+// in `work-run-gate.ts` and re-exported here so existing
+// `from './work-run-finalizer.js'` imports keep working. The canonical home is
+// the gate module — that's what the effectful `runGate` runtime imports — so
+// the P1.5 wiring (finalizer → gate-runtime) can't form an import cycle.
+export type { GateFailReason, GateResult };
 
 export interface FinalizerResult {
   outcome: WorkOutcome;

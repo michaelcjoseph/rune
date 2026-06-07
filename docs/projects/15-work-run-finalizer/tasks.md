@@ -206,8 +206,18 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       phase-guard pinning the exact hold-mode phase sequence on the gate-fail path (no
       `merged-not-pushed`/`pushed-not-deleted`). 8 new tests red via clean `notImplemented` until
       P1.5 impl; 6 hold-mode green.)
-- [ ] Write test-before-mutating-main tests proving the gate's checks run in an integration worktree
-      (or on the branch) so a red result never alters local `main` — test-plan.md §6.
+- [x] Write test-before-mutating-main tests proving the gate's checks run in an integration worktree
+      (or on the branch) so a red result never alters local `main` — test-plan.md §6. (Added the gate
+      RUNTIME scaffold `src/jobs/work-run-gate-runtime.ts` — `runGate(opts, io?)` fact-gathering half
+      that the pure `evaluateGate` decides on, `notImplemented` until P1.5 — and a real-temp-repo
+      `work-run-gate-runtime.test.ts`: 3 tests proving a RED gate leaves the base-branch ref + working
+      tree byte-for-byte unchanged, a GREEN gate still doesn't merge (decision-not-mutation), and
+      validation runs with cwd === the integration worktree (never the product checkout); each also
+      asserts the throwaway worktree is torn down. Real git on a `mkdtemp` repo; validation command
+      injected. Also relocated `GateResult`/`GateFailReason` to their canonical home in
+      `work-run-gate.ts` (re-exported from `work-run-finalizer.ts` so existing imports hold) to break
+      the latent `finalizer → gate-runtime → finalizer` import cycle. 3 tests red via clean
+      `notImplemented`; tsc unchanged.)
 - [ ] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
       Jarvis has `["npm run build", "npm test"]`, products without commands fail closed, and each
       command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`.

@@ -18,7 +18,26 @@
  * SCAFFOLD — `evaluateGate` throws until the P1.5 implementation task.
  */
 
-import type { GateResult } from './work-run-finalizer.js';
+/**
+ * Why the hard merge gate refused to land a run on `main`. Canonical home is
+ * here, alongside the pure decision (`evaluateGate`); `work-run-finalizer.ts`
+ * re-exports both so existing `from './work-run-finalizer.js'` imports keep
+ * working. Keeping the type beside the decision avoids a
+ * `finalizer → gate-runtime → finalizer` import cycle once the P1.5 runtime
+ * lands (the effectful `runGate` imports `GateResult` from HERE, not the
+ * finalizer).
+ */
+export type GateFailReason =
+  | 'tests-red'
+  | 'dirty-tree'
+  | 'tasks-remaining'
+  | 'merge-conflict'
+  | 'concurrent-run'
+  | 'missing-validation-command'
+  | 'validation-timeout';
+
+/** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
+export type GateResult = { ok: true } | { ok: false; reason: GateFailReason };
 
 /** The facts the gate decides on, gathered by the runtime before `evaluateGate`. */
 export interface GateFacts {
