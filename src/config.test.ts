@@ -83,4 +83,70 @@ describe('config', () => {
     expect(config.WORKSPACE_DIR).toBe(`${homedir()}/workspace`);
     expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
   });
+
+  // -------------------------------------------------------------------------
+  // Project 15 (P0.2) — work-run finalizer timing constants. WRITE-FIRST: the
+  // five constants don't exist in config.ts yet, so they read `undefined` and
+  // every assertion below is red until the P0.2 task adds them via
+  // parseNumericEnv with the spec defaults + a positive-integer (min 1) guard.
+  // No wall-clock sleeps — these are plain numeric values; the timers that use
+  // them are exercised with injected clocks in their own suites.
+  // -------------------------------------------------------------------------
+  describe('work-run finalizer timing constants (P0.2)', () => {
+    const REQUIRED = {
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_USER_ID: '12345',
+      VAULT_DIR: '/tmp/vault',
+    };
+
+    /** Spec defaults (spec.md "Pinned runtime constants"). */
+    const DEFAULTS: Record<string, number> = {
+      WORK_RUN_TERMINAL_DRAIN_MS: 30_000,
+      WORK_RUN_REAP_GRACE_MS: 5_000,
+      WORK_RUN_QUIET_CANCEL_AFTER_MS: 1_200_000,
+      WORK_RUN_MAX_RUNTIME_MS: 7_200_000,
+      WORK_RUN_GATE_COMMAND_TIMEOUT_MS: 600_000,
+    };
+
+    async function loadConfig(extra: Record<string, string> = {}): Promise<Record<string, unknown>> {
+      Object.assign(process.env, REQUIRED, extra);
+      const { default: config } = await import('./config.js');
+      return config as unknown as Record<string, unknown>;
+    }
+
+    it('default to the spec values when the env vars are unset', async () => {
+      // Defensive: beforeEach restores ORIGINAL_ENV, which would carry these
+      // vars if a developer has them set in their real shell — delete so the
+      // unset-defaults assertion isn't masked by an inherited override.
+      for (const k of Object.keys(DEFAULTS)) delete process.env[k];
+      const config = await loadConfig();
+      // Single source of the five spec defaults (also used by the fallback tests).
+      for (const [key, value] of Object.entries(DEFAULTS)) {
+        expect(config[key]).toBe(value);
+      }
+    });
+
+    it('respect a valid numeric override', async () => {
+      const config = await loadConfig({
+        WORK_RUN_TERMINAL_DRAIN_MS: '45000',
+        WORK_RUN_MAX_RUNTIME_MS: '3600000',
+      });
+      expect(config['WORK_RUN_TERMINAL_DRAIN_MS']).toBe(45_000);
+      expect(config['WORK_RUN_MAX_RUNTIME_MS']).toBe(3_600_000);
+    });
+
+    it('reject a non-numeric value and fall back to the default', async () => {
+      const config = await loadConfig({ WORK_RUN_TERMINAL_DRAIN_MS: 'not-a-number' });
+      expect(config['WORK_RUN_TERMINAL_DRAIN_MS']).toBe(DEFAULTS['WORK_RUN_TERMINAL_DRAIN_MS']);
+    });
+
+    it('reject a non-positive value and fall back to the default (min-1 guard)', async () => {
+      const config = await loadConfig({
+        WORK_RUN_REAP_GRACE_MS: '0',
+        WORK_RUN_QUIET_CANCEL_AFTER_MS: '-1',
+      });
+      expect(config['WORK_RUN_REAP_GRACE_MS']).toBe(DEFAULTS['WORK_RUN_REAP_GRACE_MS']);
+      expect(config['WORK_RUN_QUIET_CANCEL_AFTER_MS']).toBe(DEFAULTS['WORK_RUN_QUIET_CANCEL_AFTER_MS']);
+    });
+  });
 });

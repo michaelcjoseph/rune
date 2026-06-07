@@ -55,10 +55,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       `recoverAndFinalizeStaleRuns` scaffold to `supervision-recovery.ts` + a 4-test "P0.4" describe:
       terminal-not-unknown, untouched terminal/blocked/unknown, serial awaitable-before-sweep, and
       per-run fault isolation — all red via the scaffold throw.)
-- [ ] Write config tests for `WORK_RUN_TERMINAL_DRAIN_MS`, `WORK_RUN_REAP_GRACE_MS`,
+- [x] Write config tests for `WORK_RUN_TERMINAL_DRAIN_MS`, `WORK_RUN_REAP_GRACE_MS`,
       `WORK_RUN_QUIET_CANCEL_AFTER_MS`, `WORK_RUN_MAX_RUNTIME_MS`, and
       `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`: defaults match the spec, invalid values reject, and tests
-      use injected clocks rather than wall-clock sleeps.
+      use injected clocks rather than wall-clock sleeps. (Added the "work-run finalizer timing
+      constants (P0.2)" describe to `src/config.test.ts`: defaults / override / non-numeric +
+      non-positive fallback — 4 tests red until the constants land.)
 - [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### P0.1 — Supervision-store field-merge
