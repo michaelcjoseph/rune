@@ -252,9 +252,19 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       `index-appended` re-gates and merges exactly once, and a fresh run (null) merges exactly once;
       each asserts `appendIndexRow` is not re-run after the index phase (no duplicate row). Red until
       the P1.5 impl consults `readLastPhase()` to skip committed steps; tsc unchanged.)
-- [ ] Write failure/partial/cancelled-path tests proving the tree is always reaped + transcript/summary
+- [x] Write failure/partial/cancelled-path tests proving the tree is always reaped + transcript/summary
       flushed, nothing merges, supervision becomes terminal or explicit `blocked-on-human` (never
-      quiet-pinging `running`), and branch retention/deletion is recorded — test-plan.md §7.
+      quiet-pinging `running`), and branch retention/deletion is recorded — test-plan.md §7. (Added a
+      `failure / partial / cancelled path (P1.6)` describe to `work-run-finalizer.test.ts` + an
+      `outcomeEvent(outcome, reason?)` fixture: a parametrized `it.each` over failed / cancelled /
+      partial / noop / dirty-uncommitted asserting each routes through hold mode — never
+      merge/push/delete, always flush transcript + write summary + append index row, always reap the
+      worktree, terminal supervision (`failed` for failed/cancelled, `completed` otherwise — never
+      `running`), branch retained (`branchDeleted:false`); plus flush-before-summary ordering and a
+      reap-failure-still-terminal guard. These pass against the implemented hold mode (P0.4a
+      regression guards for the §7 invariant); the P1.6 impl task wires the LIVE work-runner
+      failure/cancelled paths through this finalizer (runtime) and the "OR blocked-on-human" option
+      reuses the existing persisted supervision status — no new status enum (§7 🟢). tsc unchanged.)
 - [ ] Confirm red before implementation.
 
 ### P1.5 — Shared finalizer + gate

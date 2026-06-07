@@ -101,6 +101,31 @@ function failedEvent(): MutationEvent {
   };
 }
 
+/** A classified terminal event for an arbitrary non-merge outcome. `failed`
+ *  carries event kind `'failed'`; every other WorkOutcome carries `'completed'`
+ *  (mirrors `finalizeWorkRun`: kind = outcome === 'failed' ? 'failed' :
+ *  'completed'). `cancelled` is a `failed` outcome whose reason is "cancelled". */
+function outcomeEvent(
+  outcome: 'partial' | 'noop' | 'dirty-uncommitted' | 'failed',
+  reason: string = outcome,
+): MutationEvent {
+  return {
+    mutationId: DEFAULT_RUN_ID,
+    ts: '2026-06-07T00:00:00.000Z',
+    kind: outcome === 'failed' ? 'failed' : 'completed',
+    data: {
+      outcome,
+      reason,
+      exit: {
+        exitCode: outcome === 'failed' ? 1 : 0,
+        signal: null,
+        cancelled: reason === 'cancelled',
+        durationMs: 3000,
+      },
+    },
+  };
+}
+
 /** Effects bag: every seam a spy, the durable phase store an array. */
 function makeEffects(terminalEvent: MutationEvent, over: Partial<FinalizerEffects> = {}) {
   const phases: FinalizerPhase[] = [];
@@ -503,5 +528,81 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
     expect(effects.mergeBranch).toHaveBeenCalledOnce();
     expect(effects.pushBranch).toHaveBeenCalledOnce();
     expect(effects.deleteBranch).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §7 — Failure / partial / cancelled path (P1.6). These outcomes NEVER merge,
+// so they finalize through `hold` mode (already implemented in P0.4a) — the
+// finalizer guarantees: always flush transcript + write summary, always reap the
+// worktree, NEVER merge/push/delete, and ALWAYS reach a terminal supervision
+// status (never a quiet-pinging `running`), with the branch retained for
+// inspection. These are the regression guards for the §7 invariant; the P1.6
+// impl task wires the LIVE work-runner failure/cancelled paths through this same
+// finalizer (a runtime concern). The "OR mark explicit blocked-on-human" option
+// reuses the EXISTING persisted supervision status — no new status enum (§7 🟢).
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — failure / partial / cancelled path (P1.6)', () => {
+  // Every non-merge outcome, including a cancelled run (failed + reason
+  // "cancelled"), routed through hold mode.
+  const NON_MERGE_CASES: Array<{ label: string; ev: () => MutationEvent; supervision: 'completed' | 'failed' }> = [
+    { label: 'failed', ev: () => outcomeEvent('failed'), supervision: 'failed' },
+    { label: 'cancelled (failed + reason cancelled)', ev: () => outcomeEvent('failed', 'cancelled'), supervision: 'failed' },
+    { label: 'partial', ev: () => outcomeEvent('partial'), supervision: 'completed' },
+    { label: 'noop', ev: () => outcomeEvent('noop'), supervision: 'completed' },
+    { label: 'dirty-uncommitted', ev: () => outcomeEvent('dirty-uncommitted'), supervision: 'completed' },
+  ];
+
+  it.each(NON_MERGE_CASES)(
+    '$label: always reaps + flushes, NEVER merges, ends terminal (never running), branch retained',
+    async ({ ev, supervision }) => {
+      const event = ev();
+      const { effects } = makeEffects(event);
+
+      const result = await runFinalizer(holdInput(), effects);
+
+      // Never merges — no path to `main` for a non-branch-complete run.
+      expect(effects.mergeBranch).not.toHaveBeenCalled();
+      expect(effects.pushBranch).not.toHaveBeenCalled();
+      expect(effects.deleteBranch).not.toHaveBeenCalled();
+      // Always flushes the transcript and writes the summary + index row
+      // (forensics durable — the index row must not be dropped on the failure path).
+      expect(effects.flushTranscript).toHaveBeenCalledOnce();
+      expect(effects.writeSummary).toHaveBeenCalledWith(event);
+      expect(effects.appendIndexRow).toHaveBeenCalledWith(event);
+      // Always reaps the worktree.
+      expect(effects.removeWorktree).toHaveBeenCalledOnce();
+      // ALWAYS terminal — never left a quiet-pinging `running`.
+      expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith(supervision, event);
+      expect(result.supervisionStatus).toBe(supervision);
+      // The merge never happened and the branch is retained for inspection.
+      expect(result.merged).toBe(false);
+      expect(result.branchDeleted).toBe(false);
+    },
+  );
+
+  it('flushes the transcript BEFORE writing the summary on the failure path too', async () => {
+    const { effects } = makeEffects(outcomeEvent('failed'));
+
+    await runFinalizer(holdInput(), effects);
+
+    const flushOrder = vi.mocked(effects.flushTranscript).mock.invocationCallOrder[0]!;
+    const summaryOrder = vi.mocked(effects.writeSummary).mock.invocationCallOrder[0]!;
+    expect(flushOrder).toBeLessThan(summaryOrder);
+  });
+
+  it('a worktree-reap failure on the failure path still reaches a terminal supervision status (never left running)', async () => {
+    // req 17 again, for the failure path: a cleanup hiccup must not strand the
+    // run as a quiet-pinging `running`.
+    const { effects } = makeEffects(outcomeEvent('failed'), {
+      removeWorktree: vi.fn(async () => { throw new Error('worktree busy'); }),
+    });
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    expect(result.supervisionStatus).toBe('failed');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalled();
+    expect(result.worktreeRemoved).toBe(false);
   });
 });
