@@ -41,6 +41,7 @@ import {
   type FinalizerEffects,
   type FinalizerInput,
   type FinalizerPhase,
+  type GateFailReason,
   type GateResult,
 } from './work-run-finalizer.js';
 
@@ -332,5 +333,94 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(result.merged).toBe(false);
     expect(result.supervisionStatus).toBe('failed');
     expect(effects.removeWorktree).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 — Gate: EACH failing condition stops at branch-complete, main unchanged
+// (P1.5, this Phase-3 test task). WRITE-FIRST: gated-merge throws
+// notImplemented, so every case is RED until the P1.5 impl. The PURE per-reason
+// gate DECISION (`evaluateGate(facts) → reason`) is pinned separately in
+// work-run-gate.test.ts; this block pins the FINALIZER-LEVEL contract — that for
+// EVERY gate-fail reason the gated-merge finalizer stops at `branch-complete`,
+// alerts with that exact reason, and never mutates the base branch (no
+// merge/push/delete), so a red gate can never land broken work on `main`.
+//
+// At the spy level "main unchanged" == merge/push/delete never fire; the
+// byte-for-byte temp-repo `main`-unchanged proof is a separate Phase-3 task
+// (test-plan §6 "Gate checks run in an integration worktree").
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge gate: each condition stops at branch-complete (P1.5)', () => {
+  // Every typed GateFailReason — if a new reason is added to the union without a
+  // case here, this list (and the alert/no-merge contract) must be updated too.
+  const FAIL_REASONS: GateFailReason[] = [
+    'tests-red',
+    'dirty-tree',
+    'tasks-remaining',
+    'merge-conflict',
+    'concurrent-run',
+    'missing-validation-command',
+    'validation-timeout',
+  ];
+
+  it.each(FAIL_REASONS)(
+    'gate fails with %s → stop at branch-complete, alert(reason), no merge/push/delete, main untouched',
+    async (reason) => {
+      const ev = branchCompleteEvent();
+      const { effects } = makeEffects(ev, {
+        gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason })),
+      });
+
+      const result = await runFinalizer(gatedMergeInput(), effects);
+
+      // The gate WAS consulted (the run is branch-complete) and refused.
+      expect(effects.gate).toHaveBeenCalledOnce();
+      // Operator is alerted with the precise reason — never a silent hold.
+      expect(effects.alert).toHaveBeenCalledWith(reason);
+      // `main` is byte-for-byte untouched: not one ref-mutating step fired.
+      expect(effects.mergeBranch).not.toHaveBeenCalled();
+      expect(effects.pushBranch).not.toHaveBeenCalled();
+      expect(effects.deleteBranch).not.toHaveBeenCalled();
+      // The run holds on its branch: outcome stays the work-product
+      // classification, nothing merged or deleted.
+      expect(result.outcome).toBe('branch-complete');
+      expect(result.merged).toBe(false);
+      expect(result.branchDeleted).toBe(false);
+      // Still reaches a real terminal supervision status — never quiet-pinging.
+      expect(result.supervisionStatus).toBe('completed');
+      expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+      // The worktree is reaped (branch ref persists for inspection/retry),
+      // matching the hold-mode non-merge policy — never left orphaned.
+      expect(effects.removeWorktree).toHaveBeenCalledOnce();
+      expect(result.worktreeRemoved).toBe(true);
+    },
+  );
+
+  it('a failed gate records exactly the hold-mode phase sequence — no gated-merge-only checkpoints', async () => {
+    // A run that stops at the gate must record the SAME phases as hold mode and
+    // never the push-before-delete checkpoints — otherwise a crash-resume would
+    // wrongly believe a merge landed and skip straight to push/delete on a
+    // branch that never merged. Pinning the full sequence (not just the absent
+    // ones) also catches a regression that drops an earlier phase like
+    // `index-appended` on the gate-fail path.
+    const ev = branchCompleteEvent();
+    const { effects, phases } = makeEffects(ev, {
+      gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason: 'tasks-remaining' })),
+    });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    // Exact equality pins both the order AND the absence of the gated-merge-only
+    // checkpoints (`merged-not-pushed`/`pushed-not-deleted`) — if either leaked
+    // onto the gate-fail path this fails first with a clear diff.
+    expect(phases).toEqual([
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'worktree-resolved',
+      'finalized',
+    ]);
   });
 });

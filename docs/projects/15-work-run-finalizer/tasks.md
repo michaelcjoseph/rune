@@ -194,10 +194,18 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       (outcome stays branch-complete, merged disposition via result.merged), exact ordered phases,
       push-before-delete, gate-fail-stops-at-branch-complete + alert, non-branch-complete-never-merges,
       and a missing-gate-effect guard.)
-- [ ] Write gate tests proving each failing condition (tests red, dirty working tree,
+- [x] Write gate tests proving each failing condition (tests red, dirty working tree,
       `tasksRemaining > 0`, merge conflict / bad base relationship, concurrent run owns the
       branch/project, missing product `validationCommands`, validation command timeout) stops at
-      `branch-complete` + alert and leaves `main` unchanged — test-plan.md §6.
+      `branch-complete` + alert and leaves `main` unchanged — test-plan.md §6. (Pure per-condition
+      gate DECISION pinned in `work-run-gate.test.ts` (committed `4ff0f96`: `evaluateGate(facts)` →
+      typed reason, first-failure-wins precedence). Added the FINALIZER-LEVEL counterpart to
+      `work-run-finalizer.test.ts`: a parametrized `it.each` over all seven `GateFailReason` values
+      asserting the gated-merge finalizer stops at `branch-complete`, `alert(reason)`, no
+      merge/push/delete (main untouched), terminal `completed` supervision, worktree reaped — plus a
+      phase-guard pinning the exact hold-mode phase sequence on the gate-fail path (no
+      `merged-not-pushed`/`pushed-not-deleted`). 8 new tests red via clean `notImplemented` until
+      P1.5 impl; 6 hold-mode green.)
 - [ ] Write test-before-mutating-main tests proving the gate's checks run in an integration worktree
       (or on the branch) so a red result never alters local `main` — test-plan.md §6.
 - [ ] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
