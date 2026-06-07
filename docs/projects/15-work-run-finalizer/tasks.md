@@ -123,11 +123,16 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P0.4 — Recovery classifies before cleanup
 
-- [ ] Make startup recovery (and the restart path) compute work product and drive a stale `running`
+- [x] Make startup recovery (and the restart path) compute work product and drive a stale `running`
       run to a real terminal state through finalizer `hold` mode, instead of only relabeling it
-      `unknown` (`supervision-recovery.ts:36-55`, `supervision.ts:201-203`).
-- [ ] Order recovery classification/finalize **before** the orphan-worktree sweep (`index.ts:64`) so
-      the sweep cannot race away the worktree the finalizer needs.
+      `unknown` (`supervision-recovery.ts:36-55`, `supervision.ts:201-203`). (`recoverAndFinalizeStaleRuns`
+      core + real `finalizeStaleRun` in `recovery-finalize-runner.ts`: merge-base baseSha →
+      computeWorkProduct → classify via reaped-after-terminal-result → hold-mode finalizer; 19 tests
+      green incl. a real-wiring unit suite with injected git/fs/stores.)
+- [x] Order recovery classification/finalize **before** the orphan-worktree sweep (`index.ts:64`) so
+      the sweep cannot race away the worktree the finalizer needs. (`await runRecoveryFinalize()`
+      added before `cleanupOrphanWorktrees`; `recoverSupervisedRuns` kept after it as the
+      unknown-relabel fallback for runs that couldn't be finalized.)
 
 ## Phase 2 — Backstops independent of agent cooperation (P2.7)
 

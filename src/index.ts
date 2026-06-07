@@ -10,6 +10,7 @@ import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
 import { runWorkRunGc } from './jobs/work-run-gc-runner.js';
 import { rebuildRegistry } from './jobs/registry-rebuild.js';
 import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
+import { runRecoveryFinalize } from './jobs/recovery-finalize-runner.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
@@ -64,12 +65,15 @@ try {
 // Flip any stale 'running' mutations from a prior interrupted run to 'failed'
 reconcileOrphans();
 
-// Recover the supervision visibility surface — flip stale 'running' entries
-// in `logs/supervised-runs.json` to 'unknown' since a run that was in-flight
-// at the time of the prior shutdown can no longer be observed. Best-effort;
-// a malformed or missing file is tolerated. The function logs its own
-// success and failure; the catch here only guards against the write
-// throwing so a disk-full condition can't crash startup.
+// Recover stale `running` supervised runs (project 15, P0.4). FIRST, drive each
+// to a real terminal state through the hold-mode finalizer — classified on its
+// work product while its worktree STILL EXISTS (this is awaited before the
+// orphan-worktree sweep below, so the sweep can't race away the evidence the
+// finalizer needs). THEN flip any run that couldn't be finalized to `unknown`
+// as the fallback (`recoverAndFinalizeStaleRuns` only changed the ones it
+// finalized, so this no longer pre-empts the finalizer). Both are best-effort
+// and must not crash boot.
+await runRecoveryFinalize();
 try {
   recoverSupervisedRuns(config.SUPERVISED_RUNS_FILE);
 } catch (err) {

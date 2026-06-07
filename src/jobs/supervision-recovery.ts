@@ -111,13 +111,46 @@ export interface RecoverFinalizeResult {
  * `finalizeStaleRun` rejection is isolated (counted, logged, run left as-is) so
  * one bad run never strands the rest as `running` for the sweep to delete.
  *
- * WIRING OBLIGATION (P0.4): when this replaces the sync `recoverSupervisedRuns`
- * call in index.ts, that old call MUST be removed — left in place it would flip
- * `running` → `unknown` first, pre-empting the finalizer's classification.
- * SCAFFOLD — throws until P0.4.
+ * WIRING (P0.4, index.ts): this is awaited via `runRecoveryFinalize()` FIRST,
+ * then the legacy `recoverSupervisedRuns` runs as the fallback. Order matters —
+ * this only mutates the runs it successfully finalizes (to `completed`/`failed`),
+ * so the subsequent `recoverSupervisedRuns` flips only the runs that COULDN'T be
+ * finalized (still `running`) to `unknown`. Running the legacy call first would
+ * pre-empt the finalizer by flipping `running` → `unknown` before classification,
+ * so the finalize MUST precede it.
  */
 export async function recoverAndFinalizeStaleRuns(
-  _deps: RecoverAndFinalizeDeps,
+  deps: RecoverAndFinalizeDeps,
 ): Promise<RecoverFinalizeResult> {
-  return notImplemented('recoverAndFinalizeStaleRuns');
+  const runs = deps.readRuns();
+  const next = [...runs];
+  let finalized = 0;
+  let failedToFinalize = 0;
+
+  // Serial — one worktree finalized at a time (startup is not perf-critical and
+  // serial keeps the worktree lifecycle simple). Per-run fault isolation: a
+  // single rejecting run is counted and left as-is, never aborting the rest.
+  for (let i = 0; i < next.length; i++) {
+    const run = next[i]!;
+    if (run.status !== 'running') continue;
+    try {
+      const status = await deps.finalizeStaleRun(run);
+      next[i] = { ...run, status };
+      finalized++;
+    } catch (err) {
+      failedToFinalize++;
+      log.warn('recoverAndFinalizeStaleRuns: finalize failed; leaving run for the unknown-relabel fallback', {
+        id: run.id,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  // Persist only when a run actually transitioned (failed runs are unchanged).
+  if (finalized > 0) {
+    deps.writeRuns(next);
+    log.info('Recovered + finalized stale supervised runs', { finalized, failedToFinalize, total: runs.length });
+  }
+
+  return { finalized, failedToFinalize, total: runs.length };
 }
