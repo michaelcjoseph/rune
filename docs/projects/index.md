@@ -20,6 +20,7 @@ its `spec.md`.
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Not Started | A simulated product team of role-agents (PM, tech lead, QA, coder, reviewer, designer), each a SOUL.md charter + compounding memory.md, that takes a spec to autonomous merge via `plan` + `work` on the existing gen-eval-loop, and compounds from vault feedback through a nightly post-mortem. |
+| [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Not Started | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 
 ---
 
@@ -224,3 +225,41 @@ Generalizes the project-12 role-agent pattern (`SOUL.md` charter + compounding `
 - **Gate:** loop closure, not quality — a real jarvis task goes `plan` → `work` → autonomous merge to main with ≥1 diff-changing review round and no human at the merge. Quality is deferred to usage/engagement, the project-12 way.
 - **Provenance:** 2026-06-05 Jarvis conversation extending projects 08 (intent-layer) and 12 (writer memory). The PM-interviews-when-underspecified rule resolves the oracle question; the neutral post-mortem and objection-class gates came out of the design discussion.
 - **Task breakdown & test plan:** see [tasks.md](14-product-team-agents/tasks.md) and [test-plan.md](14-product-team-agents/test-plan.md). Test-first per phase.
+
+## 15-work-run-finalizer — Not Started
+
+[Spec](15-work-run-finalizer/spec.md)
+
+Make every `/work --auto` run reach a correct, durable terminal state on its own — even when the
+agent emits `result: success` and then never exits — and give plain work-runs one gated path onto
+`main`.
+
+On 2026-06-06, run `d0679453` (project 12) emitted `result: success` at 04:38 and then sat `running`
+until a human killed the process tree at 13:12 — ~8.5h. Hung background `vitest` tasks kept
+`claude -p` alive; the keep-alive ticker made it look "quiet, not stalled"; the quiet nudge re-fired
+every 30s; and the SIGTERM that finally killed it mis-classified the run `failed` despite a complete
+branch. The work only reached `main` because a Jarvis assistant session merged it by hand. Same
+symptom class as the 2026-06-04 wedge fix, different trigger (that fix assumed the process eventually
+exits).
+
+- **P0 — terminal correctness, no policy change.** A supervision-store field-merge so a heartbeat
+  can't clear `quietNudgedAt`; a result-seen **watchdog** (bounded drain → conditional group reap →
+  `reapedAfterTerminalResult` exit fact, never finalize-on-`result`); a classifier exit-fact taxonomy
+  that calls an internal post-result reap of a clean branch `branch-complete` while a real
+  user-cancel stays `failed`; and recovery that classifies/finalizes stale runs before the
+  orphan-worktree sweep can race away the evidence.
+- **P2 — backstops independent of agent cooperation.** A quiet→cancel actuator, a hard max-runtime
+  ceiling the keep-alive ticker can't defeat, and a worktree-scoped process sweep for reparented
+  grandchildren. Sequenced ahead of the policy change so an unattended sweep is safe.
+- **P1 — gated auto-merge (decided policy change).** One shared, idempotent, phase-recorded
+  `work-run-finalizer.ts` owning classify → gate → merge → push+verify → worktree remove → branch
+  delete → terminal writes, resumable after a crash. The gate (tests green, clean tree, zero tasks
+  remaining, no conflict, no concurrent owner) is the line between "autonomous" and "lands broken
+  work on main," since runs use `--dangerously-skip-permissions`; the lock is per-product /
+  per-base-branch; push happens before branch delete.
+- **Self-reference:** Phase 4's regression suite reproduces the wedge trigger, so the watchdog and
+  backstops land **attended** before any unattended `--auto` sweep of the later phases.
+- **Provenance:** promoted 2026-06-06 from the `bugs.md` "`/work --auto` wedges open AGAIN" entry —
+  two independent investigations (Claude + Codex) plus an adversarial Codex critique that converted
+  an unsafe "finalize on `result`" proposal into the watchdog and flagged gated auto-merge as policy.
+- **Task breakdown & test plan:** see [tasks.md](15-work-run-finalizer/tasks.md) and [test-plan.md](15-work-run-finalizer/test-plan.md). Test-first per phase.
