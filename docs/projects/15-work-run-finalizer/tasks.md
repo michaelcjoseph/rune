@@ -265,7 +265,14 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       regression guards for the §7 invariant); the P1.6 impl task wires the LIVE work-runner
       failure/cancelled paths through this finalizer (runtime) and the "OR blocked-on-human" option
       reuses the existing persisted supervision status — no new status enum (§7 🟢). tsc unchanged.)
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Aggregate of the Phase 3 write-first suites —
+      work-run-gate / work-run-gate-runtime / work-run-merge-lock / work-run-finalizer (gated-merge +
+      resume) / sandbox-runtime (validationCommands): 46 red, 54 green. Every red is the RIGHT reason —
+      clean `notImplemented` throws (evaluateGate ×11, runGate ×3, baseBranchLockKey/withBaseBranchLock
+      ×9, runFinalizer(gated-merge) ×11 incl. the resume matrix) or clean value assertions
+      (validationCommands ×5: `undefined ≠ expected`) plus the one by-design regex-mismatch guard
+      (missing-gate-effect) — ZERO syntax/import/resolution errors. The 54 green are the implemented
+      hold-mode + §7 failure-path guards + existing sandbox-runtime tests. tsc unchanged at baseline.)
 
 ### P1.5 — Shared finalizer + gate
 
