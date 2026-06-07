@@ -703,6 +703,226 @@ describe('workRunApplier', () => {
       }
     });
 
+    // -----------------------------------------------------------------------
+    // P0.2 (project 15) — terminal-result watchdog. test-plan §3. WRITE-FIRST.
+    //
+    // The NEW gap (distinct from the wedge test above): the agent emits a
+    // terminal `result` and then the process NEVER exits — `exit` never fires
+    // because backgrounded tasks (a hung `vitest`) keep `claude -p` alive. The
+    // existing reapTree() is triggered only from `on('exit')`, so nothing
+    // finalizes; the run sits `running` for hours (the d0679453 incident).
+    //
+    // The watchdog the impl must add: on the terminal `result` envelope, open a
+    // bounded drain window (WORK_RUN_TERMINAL_DRAIN_MS). If the child exits on
+    // its own within it, teardown proceeds via the existing exit-keyed path with
+    // NO watchdog reap. If it does NOT, the watchdog reaps the process group
+    // (SIGTERM → SIGKILL → force-complete) and stamps the exit fact
+    // `reaped-after-terminal-result` so the classifier can tell an internal
+    // post-result reap apart from an external kill.
+    //
+    // RED cases: "never exits → reap + exit fact" and the incident-shape replay
+    // (no watchdog exists yet → no reap, run never finishes). GREEN guards:
+    // "exits within window → no watchdog reap" and "not killed before the drain
+    // deadline" both hold under current code and protect against a
+    // finalize-immediately-on-result regression (the unsafe early proposal).
+    // -----------------------------------------------------------------------
+    describe('terminal-result watchdog (P0.2)', () => {
+      /** Manual child that emits nothing on its own — the test drives stdout +
+       *  exit/close explicitly so the drain window can be exercised. */
+      function makeManualChild() {
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        const child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        return { child, stdout, stderr };
+      }
+
+      const RESULT_LINE = Buffer.from(
+        JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }) + '\n',
+      );
+
+      it('result emitted then child never exits → drain → group reap → reaped-after-terminal-result', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        let consume: Promise<void> | undefined;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-hang', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => { /* current-code red path: the loop never completes */ });
+
+          await vi.advanceTimersByTimeAsync(0);
+          // Agent reports success but the process never exits (hung background task).
+          m.stdout.emit('data', RESULT_LINE);
+          // No `exit`, no `close`. Advance past the drain window + SIGKILL grace +
+          // force-done ceiling (drain 30s + reap 3s + force 10s, with headroom).
+          await vi.advanceTimersByTimeAsync(60_000);
+
+          // The watchdog must have reaped the group and force-completed the run.
+          expect(killSpy).toHaveBeenCalledWith(child, 'SIGTERM');
+          expect(finished).toBe(true);
+          const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+          expect(terminal).toBeDefined();
+          expect((terminal!.data as any)?.exit?.exitFact).toBe('reaped-after-terminal-result');
+        } finally {
+          // Release any still-hanging consume on the red path, THEN await it so
+          // the generator is fully drained before timers/seams are reset.
+          try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+          await consume;
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('result emitted then child exits within the drain window → no watchdog reap, clean exit fact', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-clean', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          const consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // Child exits on its own well within the drain window, then stdio closes.
+          await vi.advanceTimersByTimeAsync(2_000);
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+          await vi.advanceTimersByTimeAsync(0);
+          await consume;
+
+          expect(finished).toBe(true);
+          const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+          expect(terminal).toBeDefined();
+          // Teardown went through the exit-keyed path — NOT a watchdog reap.
+          expect((terminal!.data as any)?.exit?.exitFact).not.toBe('reaped-after-terminal-result');
+        } finally {
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('does NOT kill the child immediately on result (no signal before the drain deadline)', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-nokill', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const consume = (async () => {
+            for await (const _e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              /* drain */
+            }
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // Advance only PART of the drain window — the child must not be killed
+          // yet (guards against the unsafe finalize-immediately-on-result path
+          // that re-introduces the false `failed` the 2026-06-04 fix removed).
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(killSpy).not.toHaveBeenCalled();
+
+          // Release the run for cleanup.
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+          await vi.advanceTimersByTimeAsync(0);
+          await consume;
+        } finally {
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('incident replay shape: result:success then a never-exiting child reaches a terminal state with no human', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        let consume: Promise<void> | undefined;
+        try {
+          setupValidProject('06-webview');
+          // beforeEach already installs a no-op kill stub; this test doesn't
+          // assert on reaping, so it neither overrides nor resets that seam.
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-incident-d0679453', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // The keep-alive ticker stays fresh forever (the incident: "quiet, not
+          // stalled") — only the watchdog can break the wedge. Inject the clock
+          // past the drain window; no exit, no external kill.
+          await vi.advanceTimersByTimeAsync(60_000);
+
+          expect(finished).toBe(true);
+          expect(events.some((e) => e.kind === 'completed' || e.kind === 'failed')).toBe(true);
+        } finally {
+          try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+          await consume;
+          vi.useRealTimers();
+          // afterEach resets the kill seam; this test installed no override.
+        }
+      });
+    });
+
     it('calls createWorktree with product=jarvis, project=slug, branch=jarvis-work/<slug>', async () => {
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });

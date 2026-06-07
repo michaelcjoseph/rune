@@ -38,10 +38,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       "classifyOutcome — exit-fact taxonomy (P0.3)" + "finalizeWorkRun — external-kill carries
       truthful work product" blocks to `src/jobs/work-run-classify.test.ts`; the
       reaped-after-terminal-result cases are red, the rest are green reorder-guards.)
-- [ ] Write terminal-result watchdog tests with an injected clock and a fixture stream: `result`
+- [x] Write terminal-result watchdog tests with an injected clock and a fixture stream: `result`
       emitted then child exits within the drain window (no reap); `result` emitted then child never
       exits (drain → SIGTERM → SIGKILL group reap → `reapedAfterTerminalResult` exit fact); assert no
-      immediate kill on `result` — test-plan.md §3.
+      immediate kill on `result` — test-plan.md §3. (Added "terminal-result watchdog (P0.2)" describe
+      to `src/jobs/work-runner.test.ts`: never-exits + incident-replay cases red, the
+      exits-within-window + no-immediate-kill guards green; fake-timer driven, no hangs.)
 - [ ] Write P0 finalizer `hold` mode tests: branch-complete writes terminal summary/index and
       supervision, preserves or removes the worktree according to the existing non-merge policy, and
       never merges or pushes — test-plan.md §4.
