@@ -9,6 +9,12 @@ This project is **test-first**: each numbered section below is written by a phas
 before that phase's implementation tasks begin. A phase's implementation is done when its
 test-plan sections pass.
 
+Required verification is automated and fixture-driven. Use temp product repos/worktrees, local bare
+remotes, injected work-run streams, mocked child processes, injected process-table/kill adapters,
+fake sender surfaces, test-scoped stores, and injected clocks. Do not require a real Telegram chat,
+a production cockpit click, a real Jarvis restart, wall-clock sleeps, or a human killing a live
+process tree. Phase 4's incident replay must stay disabled/skipped until Phase 1 and Phase 2 pass.
+
 > See also: [Cross-cutting test plan](../../tech/test-plan.md) for shared guidelines, monitoring, and security checks.
 
 ## Priority Levels
@@ -54,17 +60,28 @@ test-plan sections pass.
 - [ ] 🟡 Backgrounded-task hang fixture (the incident shape: `result: success` then ≥1 never-exiting
       child) reaches a terminal state without a human, with an injected clock advancing past the
       drain window.
+- [ ] 🔴 Runtime constants default correctly and are validated: `WORK_RUN_TERMINAL_DRAIN_MS=30000`,
+      `WORK_RUN_REAP_GRACE_MS=5000`, `WORK_RUN_QUIET_CANCEL_AFTER_MS=1200000`,
+      `WORK_RUN_MAX_RUNTIME_MS=7200000`, and `WORK_RUN_GATE_COMMAND_TIMEOUT_MS=600000`.
 
 ## 4. Recovery finalizes (P0.4)
+
+### Finalizer hold mode
+
+- [ ] 🔴 Finalizer `hold` mode writes terminal summary/index/supervision for a clean
+      `branch-complete` run without merging, pushing, or deleting the branch.
+- [ ] 🔴 Finalizer `hold` mode preserves/removes the worktree according to the existing
+      non-merge outcome policy and records the decision; it never leaves supervision `running`.
+- [ ] 🟡 Finalizer phase records are durable in test-scoped storage and can be read on recovery.
 
 ### Startup recovery
 
 - [ ] 🔴 A stale `running` run at startup is classified on work product and driven to a real terminal
-      state through the finalizer, not left as `unknown`.
+      state through finalizer `hold` mode, not left as `unknown`.
 - [ ] 🔴 Recovery classification/finalize runs BEFORE the orphan-worktree sweep (`index.ts:64`) —
       assert the worktree still exists when the finalizer reads it.
 - [ ] 🟡 A run orphaned across a simulated restart with a clean, complete branch finalizes to
-      `branch-complete`/`merged` (per gate), not a permanent `unknown`/`running`.
+      `branch-complete` in `hold` mode, not `merged` and not a permanent `unknown`/`running`.
 
 ## 5. Backstops independent of agent cooperation (P2.7)
 
@@ -81,7 +98,7 @@ test-plan sections pass.
 ### Worktree-scoped sweep
 
 - [ ] 🟡 A reparented/detached process whose cwd is under the run's worktree path is reaped by the
-      fallback sweep.
+      fallback sweep, using an injected process table and kill adapter.
 - [ ] 🔴 A process whose cwd is OUTSIDE the run's worktree path is left untouched (the sweep is
       scoped to exactly one worktree path).
 
@@ -90,7 +107,7 @@ test-plan sections pass.
 ### Happy path
 
 - [ ] 🔴 Classify `branch-complete` → gate green → merge → push + verify → worktree remove → branch
-      delete → terminal `merged`, with no operator action (temp repo).
+      delete → terminal `merged`, with no operator action (temp repo + local bare remote).
 
 ### Gate (each condition stops at branch-complete, main unchanged)
 
@@ -99,6 +116,13 @@ test-plan sections pass.
 - [ ] 🔴 `tasksRemaining > 0` → stop, no merge.
 - [ ] 🔴 Merge conflict / unsound base relationship → stop, no merge, no half-applied `main`.
 - [ ] 🔴 Concurrent run owns the branch/project → stop, no merge.
+- [ ] 🔴 Missing product `validationCommands` → stop at `branch-complete` with
+      `missing-validation-command`, no merge.
+- [ ] 🔴 Validation command timeout → stop at `branch-complete`, no merge, and the command process
+      tree is reaped.
+- [ ] 🔴 Jarvis product config includes `validationCommands: ["npm run build", "npm test"]`; tests
+      use product-config fixtures and never mutate the real product config except through the
+      implementation task.
 - [ ] 🔴 Gate checks run in an integration worktree (or on the branch); a red result leaves local
       `main` byte-for-byte unchanged (test before mutating main).
 

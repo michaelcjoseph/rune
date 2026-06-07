@@ -69,11 +69,11 @@ test-scoped supervision/mutation stores. No required verification depends on a r
 production cockpit click, an actual Jarvis restart, or a human killing a live process tree. A live
 smoke check is optional after the automated suites pass.
 
-> **Self-reference warning.** This project's own regression suite (Phase 4) runs the exact
-> background-`vitest` pattern that triggered the incident. Land the Phase 2 backstops (max-runtime
-> ceiling + worktree-scoped sweep) and the Phase 1 watchdog **before** trusting an unattended
-> `--auto` sweep of the later phases, or the run building the fix can wedge the same way the fix is
-> meant to prevent. Phases 1 and 2 should land attended.
+> **Self-reference sequencing guard.** This project's Phase 4 regression suite reproduces the exact
+> background-`vitest` hang that triggered the incident. To keep the project agent-runnable, the
+> implementation agent must land and verify Phase 1 and Phase 2 in order using bounded fixture tests
+> before enabling/running the Phase 4 incident replay. Do not require a human to watch the run; use
+> injected clocks, mocked children, and hard test timeouts so every phase can finish unattended.
 
 ---
 
@@ -199,16 +199,18 @@ classify → gate check (tests red OR dirty tree OR tasksRemaining>0 OR conflict
 ### Recovery finalizes (P0.4)
 
 9. WHEN startup recovery encounters a stale `running` run THEN it computes work product and drives
-   the run to a real terminal state through the same finalizer, rather than only relabeling it
-   `unknown`.
+   the run to a real terminal state through the finalizer in **hold mode** (no auto-merge), rather
+   than only relabeling it `unknown`.
 10. WHEN recovery runs at startup THEN it classifies/finalizes **before** the orphan-worktree sweep
     (`index.ts:64`), so the sweep cannot race away the evidence the finalizer needs.
 
 ### Gated auto-merge finalizer (P1.5)
 
 11. WHEN a run is classified `branch-complete` THEN a shared, idempotent, phase-recorded finalizer
-    (`work-run-finalizer.ts`) owns the terminal sequence: classify → verify gate → merge → push +
-    verify → worktree remove → branch delete → terminal writes, as one resumable state machine.
+    (`work-run-finalizer.ts`) owns terminalization in two explicit modes:
+    `hold` (P0: classify → flush transcript/summary/index → teardown/preserve per outcome →
+    terminal writes, no merge) and `gated-merge` (P1: verify gate → merge → push + verify →
+    worktree remove → branch delete → terminal writes). Both modes are one resumable state machine.
 12. WHEN the finalizer evaluates the gate THEN it merges ONLY if ALL hold: tests green, working tree
     clean, `tasksRemaining == 0`, no merge conflict / sane base relationship, and no concurrent run
     owns the branch/project. If any fails, it stops at `branch-complete`, alerts, and does not merge.
@@ -220,21 +222,26 @@ classify → gate check (tests red OR dirty tree OR tasksRemaining>0 OR conflict
 15. WHEN the finalizer mutates refs THEN it pushes before deleting the branch (origin is the durable
     backup) and records durable phases (`merged-not-pushed`, `pushed-not-deleted`, …) so a crash
     mid-finalize is resumable by the P0.4 recovery path.
+16. WHEN the merge gate needs to run validation commands THEN it reads product-scoped
+    `validationCommands` from `policies/products.json`; if absent, the gate fails closed with
+    `missing-validation-command` and stops at `branch-complete`. Jarvis starts with
+    `["npm run build", "npm test"]`. Each command runs with `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`
+    (default 10 minutes) in the integration worktree; timeout is a red gate result, not a wedge.
 
 ### Failure / partial / cancelled path (P1.6)
 
-16. WHEN a run is failure/partial/cancelled THEN the finalizer always reaps the tree and flushes
+17. WHEN a run is failure/partial/cancelled THEN the finalizer always reaps the tree and flushes
     transcript/summary, never merges, and either removes the worktree after preserving forensics OR
     marks an explicit `blocked-on-human`; supervision becomes terminal or intentionally blocked,
     never a quiet-pinging `running`. Branch retention/deletion is recorded.
 
 ### Backstops independent of agent cooperation (P2.7)
 
-17. WHEN a run stays quiet past a first threshold THEN it notifies; WHEN quiet persists past a
+18. WHEN a run stays quiet past a first threshold THEN it notifies; WHEN quiet persists past a
     longer threshold THEN an actuator escalates to cancel/reap/finalize instead of nagging forever.
-18. WHEN a run exceeds a hard max-runtime ceiling THEN it is group-killed and finalized regardless
+19. WHEN a run exceeds a hard max-runtime ceiling THEN it is group-killed and finalized regardless
     of apparent liveness (the keep-alive ticker must not be able to defeat this).
-19. WHEN the process-group reap misses reparented/detached grandchildren THEN a fallback sweep of
+20. WHEN the process-group reap misses reparented/detached grandchildren THEN a fallback sweep of
     processes whose cwd is under the run's worktree path reaps them (scoped to that one worktree
     path; defense-in-depth, not the happy path).
 
@@ -261,12 +268,13 @@ taxonomy — user-cancel vs external-kill vs clean-exit-with-wedged-stdio vs
 internal-reap-after-terminal-result — and decides on the combination of exit fact + work product,
 not exit code alone. `parked`/`blocked-on-human` is supervision state, not a `WorkOutcome` value.
 
-**One shared finalizer.** Today only the gen-eval-loop merges; plain work-runs never do (defect 5).
-Rather than duplicate `realMergeBranch`, build a single `work-run-finalizer.ts` that both the happy
-path and recovery drive, structured as a resumable state machine with durable phase records so a
-crash mid-finalize resumes at the right step instead of re-merging or orphaning. Reuse/refactor
-`realMergeBranch` (`gen-eval-loop-runner.ts:254-302`); note its existing half-merged push-failure
-warning (`:274`).
+**One shared finalizer, two modes.** Today only the gen-eval-loop merges; plain work-runs never do
+(defect 5). Rather than duplicate `realMergeBranch`, build a single `work-run-finalizer.ts` with
+two modes. P0 recovery and watchdog paths call `hold` mode so terminal correctness can land without
+policy change. P1 calls `gated-merge` mode for clean branch-complete runs. Both modes use the same
+durable phase store and terminal-write path so a crash mid-finalize resumes at the right step
+instead of re-merging or orphaning. Reuse/refactor `realMergeBranch`
+(`gen-eval-loop-runner.ts:254-302`); note its existing half-merged push-failure warning (`:274`).
 
 **Gated, because of `--dangerously-skip-permissions`.** Auto-merge is a *policy* change, not a bug
 fix. Autonomous runs skip permission prompts, so the gate (tests green, clean tree, zero tasks
@@ -282,12 +290,24 @@ between terminal-result and finalized. Model it without adding a `MutationStatus
 value unless unavoidable; if a new value is truly required, treat it as a deliberate cross-surface
 change (`supervision.ts` + `supervision-store.ts:25`) made explicitly, not silently.
 
+**Pinned runtime constants.** Add typed config for the backstops so tests and production share one
+contract:
+
+- `WORK_RUN_TERMINAL_DRAIN_MS` default `30000` — wait after a terminal `result` before internal reap.
+- `WORK_RUN_REAP_GRACE_MS` default `5000` — SIGTERM grace before SIGKILL.
+- `WORK_RUN_QUIET_CANCEL_AFTER_MS` default `1200000` — 20 minutes after first quiet nudge.
+- `WORK_RUN_MAX_RUNTIME_MS` default `7200000` — 2 hours hard ceiling.
+- `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` default `600000` — 10 minutes per validation command.
+
+All timer tests use injected clocks; no test sleeps for these wall-clock durations.
+
 ### Touch points
 
 - **`src/jobs/work-runner.ts`** — the terminal-result watchdog (drain window + conditional group
   reap + `reapedAfterTerminalResult` exit fact); hand the terminal sequence to the finalizer.
 - **`src/jobs/work-run-finalizer.ts`** (new) — the shared, idempotent, phase-recorded state machine:
-  classify → gate → merge → push+verify → worktree remove → branch delete → terminal writes.
+  `hold` mode terminalizes without merge; `gated-merge` mode verifies the gate, merges, pushes,
+  removes the worktree, deletes the branch, and writes terminal state.
 - **`src/jobs/work-run-classify.ts`** — exit-fact taxonomy; classify on exit-fact + work product so
   an internal post-result reap of a clean branch is `branch-complete`, a real cancel stays `failed`.
 - **`src/jobs/supervision-store.ts`** + **`src/transport/mutations.ts`** — field-merge in
@@ -299,6 +319,8 @@ change (`supervision.ts` + `supervision-store.ts:25`) made explicitly, not silen
   quiet→cancel actuator and the hard max-runtime ceiling.
 - **`src/jobs/gen-eval-loop-runner.ts`** — source of `realMergeBranch` to reuse/refactor (do not
   duplicate); honor its half-merged push-failure warning.
+- **`policies/products.json`** — add optional `validationCommands` per product; Jarvis gets
+  `["npm run build", "npm test"]`. Products without validation commands fail the merge gate closed.
 - **`src/transport/`** (telegram-sender + cockpit bus) — truthful terminal notifications: `merged`,
   `branch-complete` (gate failed), backstop-cancelled.
 
@@ -315,7 +337,7 @@ change (`supervision.ts` + `supervision-store.ts:25`) made explicitly, not silen
 - [ ] P0.1 supervision-store field-merge so a heartbeat can't clear `quietNudgedAt`.
 - [ ] P0.3 classifier exit-fact taxonomy (foundation the watchdog + recovery classify against).
 - [ ] P0.2 terminal-result watchdog (drain window, conditional group reap, new exit fact).
-- [ ] P0.4 recovery classifies/finalizes stale runs before the orphan-worktree sweep.
+- [ ] P0.4 recovery classifies/finalizes stale runs in `hold` mode before the orphan-worktree sweep.
 
 ### Phase 2: Backstops independent of agent cooperation (P2.7)
 
@@ -329,7 +351,8 @@ change (`supervision.ts` + `supervision-store.ts:25`) made explicitly, not silen
 
 > Depends on: Phase 1, Phase 2.
 
-- [ ] Shared, idempotent, phase-recorded `work-run-finalizer.ts` state machine.
+- [ ] Extend the shared, idempotent, phase-recorded `work-run-finalizer.ts` state machine from
+  `hold` mode to `gated-merge` mode.
 - [ ] The hard gate (tests green, clean tree, zero tasks remaining, no conflict, no concurrent
   owner), tested in an integration worktree before main is mutated.
 - [ ] Per-product / per-base-branch lock; push-before-delete; durable resumable phases.
@@ -386,13 +409,16 @@ change (`supervision.ts` + `supervision-store.ts:25`) made explicitly, not silen
 - The classifier decides on exit-fact + work product; `reapedAfterTerminalResult` of a clean branch
   is `branch-complete`; a real user-cancel stays `failed`.
 - One shared `work-run-finalizer.ts` owns terminal writes for both the happy path and recovery,
-  structured as a resumable state machine with durable phase records.
+  structured as a resumable state machine with durable phase records and explicit `hold` /
+  `gated-merge` modes.
 - Auto-merge is **gated**, not unconditional, because runs use `--dangerously-skip-permissions`.
+- Merge validation commands come from product config and fail closed when absent; command timeouts
+  are gate failures, not wedges.
 - The concurrency lock is per-product / per-base-branch; push happens before branch delete.
 - Backstops (quiet→cancel actuator, max-runtime ceiling, worktree-scoped sweep) hold even if the
   agent never cooperates and the keep-alive ticker stays fresh.
-- Land Phase 1 (watchdog + classifier) and Phase 2 (backstops) **attended** before any unattended
-  `--auto` sweep of Phases 3–4, because Phase 4's regression suite reproduces the wedge trigger.
+- Land Phase 1 (watchdog + classifier) and Phase 2 (backstops) before running the Phase 4 incident
+  replay; this is an automated sequencing rule, not a manual attendance requirement.
 - All required verification is automated with temp repos, injected streams, injected clocks, and
   fake sender/HTTP tests; live smoke testing is optional only.
 

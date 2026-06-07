@@ -16,11 +16,11 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 > live Jarvis restart, or a human killing a real process tree. A live smoke check may be added after
 > the automated suites pass, but it is not a blocking task.
 >
-> **Self-reference warning (sequencing is load-bearing):** Phase 4's regression suite reproduces the
-> exact background-`vitest` hang that triggered the incident. Land Phase 1 (watchdog) and Phase 2
-> (backstops) **attended** before running Phases 3–4 under unattended `--auto`, or the run building
-> the fix can wedge the way the fix is meant to prevent. Phases 1 and 2 are no-policy-change P0/P2
-> correctness; Phase 3 is the decided auto-merge policy change.
+> **Self-reference sequencing guard:** Phase 4's regression suite reproduces the
+> exact background-`vitest` hang that triggered the incident. Land and verify Phase 1 (watchdog)
+> and Phase 2 (backstops) with bounded fixture tests before enabling/running Phase 4's incident
+> replay. This is an automated sequencing rule, not a manual attendance requirement. Phases 1 and 2
+> are no-policy-change P0/P2 correctness; Phase 3 is the decided auto-merge policy change.
 
 ## Phase 1 — Terminal correctness (P0, no policy change)
 
@@ -38,9 +38,16 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       emitted then child exits within the drain window (no reap); `result` emitted then child never
       exits (drain → SIGTERM → SIGKILL group reap → `reapedAfterTerminalResult` exit fact); assert no
       immediate kill on `result` — test-plan.md §3.
+- [ ] Write P0 finalizer `hold` mode tests: branch-complete writes terminal summary/index and
+      supervision, preserves or removes the worktree according to the existing non-merge policy, and
+      never merges or pushes — test-plan.md §4.
 - [ ] Write recovery-finalize tests: a stale `running` run at startup is classified on work product
-      and driven to a real terminal state, and recovery runs **before** the orphan-worktree sweep so
-      the worktree it needs still exists — test-plan.md §4.
+      and driven through finalizer `hold` mode to a real terminal state, and recovery runs **before**
+      the orphan-worktree sweep so the worktree it needs still exists — test-plan.md §4.
+- [ ] Write config tests for `WORK_RUN_TERMINAL_DRAIN_MS`, `WORK_RUN_REAP_GRACE_MS`,
+      `WORK_RUN_QUIET_CANCEL_AFTER_MS`, `WORK_RUN_MAX_RUNTIME_MS`, and
+      `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`: defaults match the spec, invalid values reject, and tests
+      use injected clocks rather than wall-clock sleeps.
 - [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### P0.1 — Supervision-store field-merge
@@ -67,11 +74,22 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [ ] If the child exits within the window, proceed via the existing `exit`-keyed teardown with no
       reap; if it does not, reap the process group (SIGTERM → SIGKILL → force-complete) via
       `reapTree()` (`:816-830`) and emit an explicit `reapedAfterTerminalResult` exit fact.
+- [ ] Add typed config constants: `WORK_RUN_TERMINAL_DRAIN_MS=30000`,
+      `WORK_RUN_REAP_GRACE_MS=5000`, `WORK_RUN_QUIET_CANCEL_AFTER_MS=1200000`,
+      `WORK_RUN_MAX_RUNTIME_MS=7200000`, and `WORK_RUN_GATE_COMMAND_TIMEOUT_MS=600000`.
+
+### P0.4a — Finalizer hold mode
+
+- [ ] Create `src/jobs/work-run-finalizer.ts` with the durable phase store and `hold` mode only:
+      classify result facts, flush transcript/summary/index, reap/teardown according to the
+      non-merge outcome policy, write terminal supervision/mutation state, and never merge/push.
+- [ ] Thread ordinary work-run terminal paths and post-watchdog reaps through `hold` mode so Phase 1
+      delivers terminal correctness without changing the plain work-run merge policy.
 
 ### P0.4 — Recovery classifies before cleanup
 
 - [ ] Make startup recovery (and the restart path) compute work product and drive a stale `running`
-      run to a real terminal state through the shared finalizer entry, instead of only relabeling it
+      run to a real terminal state through finalizer `hold` mode, instead of only relabeling it
       `unknown` (`supervision-recovery.ts:36-55`, `supervision.ts:201-203`).
 - [ ] Order recovery classification/finalize **before** the orphan-worktree sweep (`index.ts:64`) so
       the sweep cannot race away the worktree the finalizer needs.
@@ -90,7 +108,8 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       exceeded — test-plan.md §5.
 - [ ] Write worktree-scoped sweep tests: a reparented/detached process whose cwd is under the run's
       worktree path is reaped by the fallback sweep, and a process outside that path is left
-      untouched — test-plan.md §5.
+      untouched. Use an injected process table/kill adapter; do not spawn real long-lived processes —
+      test-plan.md §5.
 - [ ] Confirm red before implementation.
 
 ### Actuator + ceiling + sweep
@@ -114,9 +133,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       worktree remove → branch delete → terminal `merged`, with no operator action — test-plan.md §6.
 - [ ] Write gate tests proving each failing condition (tests red, dirty working tree,
       `tasksRemaining > 0`, merge conflict / bad base relationship, concurrent run owns the
-      branch/project) stops at `branch-complete` + alert and leaves `main` unchanged — test-plan.md §6.
+      branch/project, missing product `validationCommands`, validation command timeout) stops at
+      `branch-complete` + alert and leaves `main` unchanged — test-plan.md §6.
 - [ ] Write test-before-mutating-main tests proving the gate's checks run in an integration worktree
       (or on the branch) so a red result never alters local `main` — test-plan.md §6.
+- [ ] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
+      Jarvis has `["npm run build", "npm test"]`, products without commands fail closed, and each
+      command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`.
 - [ ] Write per-product / per-base-branch lock tests proving two projects sharing one `main`
       serialize, and a single-writer assumption is not violated — test-plan.md §6.
 - [ ] Write resume tests: kill at each durable phase (`merged-not-pushed`, `pushed-not-deleted`, …)
@@ -129,13 +152,17 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P1.5 — Shared finalizer + gate
 
-- [ ] Build `src/jobs/work-run-finalizer.ts`: a shared, idempotent, phase-recorded state machine
-      owning classify → verify gate → merge → push + verify → worktree remove → branch delete →
-      terminal writes. Reuse/refactor `realMergeBranch` (`gen-eval-loop-runner.ts:254-302`) rather
-      than duplicating it; honor its half-merged push-failure warning (`:274`).
+- [ ] Extend `src/jobs/work-run-finalizer.ts` from Phase 1 `hold` mode to `gated-merge` mode:
+      verify gate → merge → push + verify → worktree remove → branch delete → terminal `merged`.
+      Reuse/refactor `realMergeBranch` (`gen-eval-loop-runner.ts:254-302`) rather than duplicating
+      it; honor its half-merged push-failure warning (`:274`).
 - [ ] Implement the hard gate — merge only if ALL hold: tests green, working tree clean,
       `tasksRemaining == 0`, no merge conflict / sane base relationship, no concurrent run owns the
-      branch/project. Any failure stops at `branch-complete` + alert; no merge, no branch delete.
+      branch/project, product has `validationCommands`, and each validation command finishes within
+      `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`. Any failure stops at `branch-complete` + alert; no merge,
+      no branch delete.
+- [ ] Add `validationCommands` support to `policies/products.json` / product config parsing; set
+      Jarvis to `["npm run build", "npm test"]`.
 - [ ] Run the gate's checks in an integration worktree (or on the branch) so a red result never
       leaves local `main` altered (test before mutating main).
 - [ ] Per-product / per-base-branch lock (not per-project), respecting the single-writer assumption
