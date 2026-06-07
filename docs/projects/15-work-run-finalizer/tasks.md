@@ -299,11 +299,18 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       Known follow-up for the wiring: `recovery-finalize-runner` currently re-drives in `hold` mode
       only — a run that crashed mid-gated-merge should resume in `gated-merge` mode off its phase
       records.)
-- [ ] Implement the hard gate — merge only if ALL hold: tests green, working tree clean,
+- [x] Implement the hard gate — merge only if ALL hold: tests green, working tree clean,
       `tasksRemaining == 0`, no merge conflict / sane base relationship, no concurrent run owns the
       branch/project, product has `validationCommands`, and each validation command finishes within
       `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`. Any failure stops at `branch-complete` + alert; no merge,
-      no branch delete.
+      no branch delete. (Implemented the pure DECISION `evaluateGate(facts)` in `work-run-gate.ts` —
+      an ordered first-failure-wins guard chain: missing-validation-command (fail-closed) →
+      concurrent-run → merge-conflict → tasks-remaining → dirty-tree → validation-timeout → tests-red
+      → `{ok:true}`. All 11 `work-run-gate.test.ts` tests green; tsc unchanged; code+security review
+      PASS (removed the stale SCAFFOLD comment). The "stops at branch-complete + alert" half is the
+      finalizer's gate-fail path (already implemented in `runGatedMerge`); GATHERING the facts —
+      running validationCommands in an integration worktree, the conflict probe, the lock check,
+      timeout enforcement — is the gate RUNTIME (`runGate`, next tasks), which feeds `evaluateGate`.)
 - [ ] Add `validationCommands` support to `policies/products.json` / product config parsing; set
       Jarvis to `["npm run build", "npm test"]`.
 - [ ] Run the gate's checks in an integration worktree (or on the branch) so a red result never

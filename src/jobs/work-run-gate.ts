@@ -14,8 +14,6 @@
  *
  * Fail-closed: a product with no `validationCommands` fails the gate with
  * `missing-validation-command` (req 16) — never an unverified merge.
- *
- * SCAFFOLD — `evaluateGate` throws until the P1.5 implementation task.
  */
 
 /**
@@ -74,8 +72,24 @@ export interface GateFacts {
  *
  * `mergeConflict` is a pre-gathered dry-run PROBE result; the actual `git merge`
  * mutation happens in the finalizer AFTER this gate passes, not here.
- * SCAFFOLD — throws until P1.5.
  */
-export function evaluateGate(_facts: GateFacts): GateResult {
-  throw new Error('work-run-gate: evaluateGate not implemented (project 15 P1.5 pending)');
+export function evaluateGate(facts: GateFacts): GateResult {
+  // Fail-closed first: a product with no validationCommands can't even run the
+  // gate, so it never merges unverified (req 16).
+  if (!facts.hasValidationCommands) return { ok: false, reason: 'missing-validation-command' };
+  // Another run owns the base branch — bail before burning an expensive
+  // validation run that would race the shared `main`.
+  if (facts.concurrentRun) return { ok: false, reason: 'concurrent-run' };
+  // A conflicting branch can't be set up cleanly in the integration worktree, so
+  // validating pre-merge code is moot — the conflict probe wins over the result.
+  if (facts.mergeConflict) return { ok: false, reason: 'merge-conflict' };
+  // Work product incomplete.
+  if (facts.tasksRemaining > 0) return { ok: false, reason: 'tasks-remaining' };
+  // Uncommitted changes in the integration worktree.
+  if (!facts.treeClean) return { ok: false, reason: 'dirty-tree' };
+  // A validation command ran past its budget (a timeout is a red gate, not a wedge).
+  if (facts.validationTimedOut) return { ok: false, reason: 'validation-timeout' };
+  // A validation command exited non-zero.
+  if (!facts.testsGreen) return { ok: false, reason: 'tests-red' };
+  return { ok: true };
 }
