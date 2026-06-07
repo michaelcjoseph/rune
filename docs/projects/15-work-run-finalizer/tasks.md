@@ -44,9 +44,11 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       immediate kill on `result` — test-plan.md §3. (Added "terminal-result watchdog (P0.2)" describe
       to `src/jobs/work-runner.test.ts`: never-exits + incident-replay cases red, the
       exits-within-window + no-immediate-kill guards green; fake-timer driven, no hangs.)
-- [ ] Write P0 finalizer `hold` mode tests: branch-complete writes terminal summary/index and
+- [x] Write P0 finalizer `hold` mode tests: branch-complete writes terminal summary/index and
       supervision, preserves or removes the worktree according to the existing non-merge policy, and
-      never merges or pushes — test-plan.md §4.
+      never merges or pushes — test-plan.md §4. (Added the `work-run-finalizer.ts` scaffold
+      (types + `notImplemented` `runFinalizer`, incl. a `readLastPhase` resume seam) and
+      `work-run-finalizer.test.ts`: 5 hold-mode tests red via the scaffold throw.)
 - [ ] Write recovery-finalize tests: a stale `running` run at startup is classified on work product
       and driven through finalizer `hold` mode to a real terminal state, and recovery runs **before**
       the orphan-worktree sweep so the worktree it needs still exists — test-plan.md §4.
