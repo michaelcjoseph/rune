@@ -151,11 +151,15 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       `supervision-max-runtime.test.ts`: 6 red tests; headline proves fresh-liveness can't defeat the
       ceiling, and the corrupt-`startedAt` case fails toward kill since the ceiling is the last
       backstop.)
-- [ ] Write worktree-scoped sweep tests: a reparented/detached process whose cwd is under the run's
+- [x] Write worktree-scoped sweep tests: a reparented/detached process whose cwd is under the run's
       worktree path is reaped by the fallback sweep, and a process outside that path is left
       untouched. Use an injected process table/kill adapter; do not spawn real long-lived processes —
-      test-plan.md §5.
-- [ ] Confirm red before implementation.
+      test-plan.md §5. (Added `src/jobs/worktree-sweep.ts` scaffold (`planWorktreeScopedReap` +
+      SweepProcess/WorktreeReapPlan, isContainedIn-based) + `worktree-sweep.test.ts`: 6 red tests
+      incl. the prefix-sibling exclusion; impl note re macOS realpath captured.)
+- [x] Confirm red before implementation. (Phase 2 write-first suites red: 7 quiet→cancel + 6
+      max-runtime + 6 worktree-sweep = 19 tests, each via a clean notImplemented throw; no
+      syntax/import errors.)
 
 ### Actuator + ceiling + sweep
 
