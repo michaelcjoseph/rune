@@ -220,15 +220,22 @@ export interface MaxRuntimeKillPlan {
  * must not be allowed to evade it forever. The finalizer classifies on work
  * product, so a killed run's committed branch is preserved (branch-complete /
  * partial), not lost — making fail-toward-kill safe.
- *
- * SCAFFOLD — throws until the P2.7 actuator implementation task.
  */
 export function planMaxRuntimeKills(
-  _runs: SupervisedRun[],
-  _maxRuntimeMs: number,
-  _now: number,
+  runs: SupervisedRun[],
+  maxRuntimeMs: number,
+  now: number,
 ): MaxRuntimeKillPlan {
-  throw new Error('supervision: planMaxRuntimeKills not implemented (project 15 P2.7 pending)');
+  const toKill = runs.filter((r) => {
+    if (r.status !== 'running') return false;
+    const parsed = Date.parse(r.startedAt);
+    // Fail-toward-kill on a corrupt startedAt: the ceiling is the last backstop
+    // against a fresh-keep-alive run, so a record we can't age must not evade it
+    // (the finalizer preserves the branch's committed work).
+    if (Number.isNaN(parsed)) return true;
+    return now - parsed > maxRuntimeMs;
+  });
+  return { toKill };
 }
 
 /**

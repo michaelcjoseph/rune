@@ -169,8 +169,11 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       green); wired into the stall-check tick — escalation calls `cancelMutation(run.id)` →
       SIGTERM → existing teardown/finalize; excludes the stalled set; per-run isolated. CLAUDE.md
       updated.)
-- [ ] Hard max-runtime ceiling that group-kills and finalizes regardless of apparent liveness; the
-      keep-alive ticker (`work-runner.ts:673`) must not be able to defeat it.
+- [x] Hard max-runtime ceiling that group-kills and finalizes regardless of apparent liveness; the
+      keep-alive ticker (`work-runner.ts:673`) must not be able to defeat it. (`planMaxRuntimeKills`
+      keys on `startedAt` (6 tests green, incl. fresh-liveness-can't-defeat + fail-toward-kill on a
+      corrupt timestamp); wired into the stall-check tick over the full snapshot → cancelMutation →
+      teardown/finalize. CLAUDE.md updated.)
 - [ ] Worktree-scoped cwd process sweep as a fallback reap for reparented/detached grandchildren the
       pgid kill misses, scoped to the one worktree path (demoted from the happy path, kept for
       defense-in-depth).
