@@ -41,6 +41,7 @@ import {
   type ExitFacts,
 } from './work-run-classify.js';
 import { runFinalizer, type FinalizerSupervisionStatus } from './work-run-finalizer.js';
+import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary } from './work-run-store.js';
 import { upsertRun, readAllRuns, writeAllRuns } from './supervision-store.js';
 import {
@@ -109,11 +110,16 @@ function defaultIO(): RecoveryFinalizeIO {
     writeSummaryFile: writeSummary,
     appendIndex: appendIndexRow,
     upsertSupervision: (run) => upsertRun(run, config.SUPERVISED_RUNS_FILE),
-    removeWorktree: (run, worktreePath, baseSha, egressAllowlist) =>
-      destroyWorktree(
+    removeWorktree: async (run, worktreePath, baseSha, egressAllowlist) => {
+      // Defense-in-depth (P2.7): SIGKILL any reparented grandchild that escaped
+      // the process group and is still holding this worktree, BEFORE removing it.
+      // Best-effort — sweepWorktreeProcesses never throws.
+      sweepWorktreeProcesses(worktreePath);
+      await destroyWorktree(
         { product: run.product, project: run.project, worktree: worktreePath, egressAllowlist, baseSha },
         { productsConfigPath: config.PRODUCTS_CONFIG_FILE, worktreeRoot: config.WORKTREE_ROOT, runGit: defaultRunGit },
-      ),
+      );
+    },
     now: () => Date.now(),
   };
 }

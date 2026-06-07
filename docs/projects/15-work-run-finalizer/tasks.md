@@ -174,9 +174,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       keys on `startedAt` (6 tests green, incl. fresh-liveness-can't-defeat + fail-toward-kill on a
       corrupt timestamp); wired into the stall-check tick over the full snapshot → cancelMutation →
       teardown/finalize. CLAUDE.md updated.)
-- [ ] Worktree-scoped cwd process sweep as a fallback reap for reparented/detached grandchildren the
+- [x] Worktree-scoped cwd process sweep as a fallback reap for reparented/detached grandchildren the
       pgid kill misses, scoped to the one worktree path (demoted from the happy path, kept for
-      defense-in-depth).
+      defense-in-depth). (`src/jobs/worktree-sweep.ts`: pure `planWorktreeScopedReap` (6 tests) +
+      `parseLsofCwd` (3 tests, incl. the kill(0|-1) guard) + `sweepWorktreeProcesses` runtime
+      (4 injected-io tests); wired best-effort into recovery removeWorktree before destroyWorktree.
+      CLAUDE.md updated.)
 
 ## Phase 3 — Gated auto-merge finalizer (P1.5 + P1.6, policy change)
 
