@@ -187,8 +187,13 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write finalizer state-machine tests in a temp repo: classify → gate → merge → push+verify →
+- [x] Write finalizer state-machine tests in a temp repo: classify → gate → merge → push+verify →
       worktree remove → branch delete → terminal `merged`, with no operator action — test-plan.md §6.
+      (Added `GateResult`/`GateFailReason` + optional `gate`/`alert` effects to
+      `work-run-finalizer.ts`; "gated-merge mode (P1.5)" describe — 6 red tests: happy path
+      (outcome stays branch-complete, merged disposition via result.merged), exact ordered phases,
+      push-before-delete, gate-fail-stops-at-branch-complete + alert, non-branch-complete-never-merges,
+      and a missing-gate-effect guard.)
 - [ ] Write gate tests proving each failing condition (tests red, dirty working tree,
       `tasksRemaining > 0`, merge conflict / bad base relationship, concurrent run owns the
       branch/project, missing product `validationCommands`, validation command timeout) stops at

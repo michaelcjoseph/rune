@@ -120,10 +120,35 @@ export interface FinalizerEffects {
    *  one (e.g. a re-merge or double-push). */
   readLastPhase: () => FinalizerPhase | null;
   // --- gated-merge only (P1) — MUST NOT be invoked in `hold` mode. ---
+  /** Evaluate the hard merge gate (tests green, clean tree, zero tasks
+   *  remaining, no conflict/bad-base, no concurrent owner, product has
+   *  validationCommands and they pass within the timeout). Runs in an
+   *  integration worktree so a red check never alters local `main`. */
+  gate?: () => Promise<GateResult>;
+  /** Alert the operator that a `gated-merge` run STOPPED at `branch-complete`
+   *  (gate failed) instead of landing on `main`. */
+  alert?: (reason: GateFailReason) => void;
+  /** `git merge --no-ff <branch>` onto the base branch (in an integration
+   *  worktree / on the base). */
   mergeBranch?: () => Promise<void>;
+  /** Push the merged base branch to origin (the durable backup BEFORE delete). */
   pushBranch?: () => Promise<void>;
+  /** Delete the work branch — only AFTER a successful push. */
   deleteBranch?: () => Promise<void>;
 }
+
+/** Why the hard merge gate refused to land a run on `main`. */
+export type GateFailReason =
+  | 'tests-red'
+  | 'dirty-tree'
+  | 'tasks-remaining'
+  | 'merge-conflict'
+  | 'concurrent-run'
+  | 'missing-validation-command'
+  | 'validation-timeout';
+
+/** Gate verdict: merge only on `ok`; otherwise stop at `branch-complete`. */
+export type GateResult = { ok: true } | { ok: false; reason: GateFailReason };
 
 export interface FinalizerResult {
   outcome: WorkOutcome;

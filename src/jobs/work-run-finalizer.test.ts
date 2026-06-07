@@ -41,6 +41,7 @@ import {
   type FinalizerEffects,
   type FinalizerInput,
   type FinalizerPhase,
+  type GateResult,
 } from './work-run-finalizer.js';
 
 // ---------------------------------------------------------------------------
@@ -112,12 +113,18 @@ function makeEffects(terminalEvent: MutationEvent, over: Partial<FinalizerEffect
     recordPhase: vi.fn((p: FinalizerPhase) => { phases.push(p); }),
     // Fresh run by default — recovery resume tests (P0.4) override this.
     readLastPhase: vi.fn((): FinalizerPhase | null => null),
+    gate: vi.fn(async (): Promise<GateResult> => ({ ok: true })),
+    alert: vi.fn(),
     mergeBranch: vi.fn(async () => {}),
     pushBranch: vi.fn(async () => {}),
     deleteBranch: vi.fn(async () => {}),
     ...over,
   };
   return { effects, phases };
+}
+
+function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
+  return holdInput({ mode: 'gated-merge', ...over });
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +224,113 @@ describe('runFinalizer — hold mode (P0.4a)', () => {
     expect(effects.mergeBranch).not.toHaveBeenCalled();
     expect(result.merged).toBe(false);
     // Failure path still reaps/tears down — never left quiet-pinging running.
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 — Gated-merge mode state machine (P1.5). WRITE-FIRST: gated-merge throws
+// notImplemented, so these are RED until the P1.5 impl. The per-gate-condition
+// matrix + lock + resume are separate Phase 3 test tasks.
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge mode (P1.5)', () => {
+  it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    // Gate consulted; all merge steps fired; no operator alert.
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+    expect(effects.alert).not.toHaveBeenCalled();
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    // Result reflects the landed merge. `outcome` stays the work-product
+    // classification (branch-complete); the merge DISPOSITION is signalled by
+    // `result.merged` (no `merged` value is added to the WorkOutcome enum — that
+    // would ripple across the cockpit/projection/formatters).
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.supervisionStatus).toBe('completed');
+  });
+
+  it('records the exact ordered gated-merge phase sequence (push-before-delete durable checkpoints)', async () => {
+    const { effects, phases } = makeEffects(branchCompleteEvent());
+    await runFinalizer(gatedMergeInput(), effects);
+    expect(phases).toEqual([
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'merged-not-pushed',
+      'pushed-not-deleted',
+      'worktree-resolved',
+      'finalized',
+    ]);
+  });
+
+  it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {
+    const { effects } = makeEffects(branchCompleteEvent());
+    await runFinalizer(gatedMergeInput(), effects);
+    // Legible failure if a step never fired (vs a confusing NaN comparison).
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    const mergeOrder = vi.mocked(effects.mergeBranch!).mock.invocationCallOrder[0]!;
+    const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
+    const deleteOrder = vi.mocked(effects.deleteBranch!).mock.invocationCallOrder[0]!;
+    expect(mergeOrder).toBeLessThan(pushOrder);
+    expect(pushOrder).toBeLessThan(deleteOrder);
+  });
+
+  it('gated-merge requires the gate/merge/push/delete effects — rejects if a caller omits them', async () => {
+    // The optional-on-the-interface effects MUST be present in gated-merge mode;
+    // the impl guards so a missing `gate` can never silently skip verification.
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+    const withoutGate: FinalizerEffects = { ...effects, gate: undefined };
+    await expect(runFinalizer(gatedMergeInput(), withoutGate)).rejects.toThrow(/gated-merge.*require|require.*gate/i);
+  });
+
+  it('a failed gate STOPS at branch-complete: alert, no merge/push/delete, main untouched', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev, {
+      gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason: 'tests-red' })),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.alert).toHaveBeenCalledWith('tests-red');
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+    // Still reaches a terminal supervision status (branch-complete held on a branch).
+    expect(result.outcome).toBe('branch-complete');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    // The worktree is removed (the branch ref persists for inspection/retry),
+    // matching the hold-mode non-merge policy — never left orphaned.
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+    expect(result.worktreeRemoved).toBe(true);
+  });
+
+  it('never merges a non-branch-complete run (partial/failed): the gate is not even consulted', async () => {
+    const ev = failedEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    expect(result.supervisionStatus).toBe('failed');
     expect(effects.removeWorktree).toHaveBeenCalledOnce();
   });
 });
