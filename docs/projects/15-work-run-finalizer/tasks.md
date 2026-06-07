@@ -232,8 +232,17 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       41 existing sandbox-runtime tests green; tsc unchanged. Security review surfaced the
       execFile/no-shell command-injection mandate for the P1.5 runtime — captured in the
       `runValidationCommand` JSDoc.)
-- [ ] Write per-product / per-base-branch lock tests proving two projects sharing one `main`
-      serialize, and a single-writer assumption is not violated — test-plan.md §6.
+- [x] Write per-product / per-base-branch lock tests proving two projects sharing one `main`
+      serialize, and a single-writer assumption is not violated — test-plan.md §6. (Added the merge-lock
+      scaffold `src/jobs/work-run-merge-lock.ts` — `baseBranchLockKey(product, baseBranch)` +
+      `withBaseBranchLock(product, baseBranch, fn)`, both `notImplemented` until P1.5 — and
+      `work-run-merge-lock.test.ts`: 9 tests pinning the key is the `<product>:<baseBranch>` composite
+      (not per-project), differs by product/base, and that the mutex serializes two finalizers sharing
+      one product/base, runs distinct keys concurrently, releases on throw, and returns fn's value. The
+      key takes no project arg, so two projects of one product collide on one lock (the single-writer
+      invariant). Serialization probe uses a held-open deferred + macrotask flush so it's robust to the
+      impl's dispatch depth. Scaffold JSDoc directs the P1.5 impl to reuse `withFileLock` (separate lock
+      domain) rather than duplicate the mutex. 9 red via clean `notImplemented`; tsc unchanged.)
 - [ ] Write resume tests: kill at each durable phase (`merged-not-pushed`, `pushed-not-deleted`, …)
       and prove recovery resumes at the right step with exactly-once merge and push-before-delete —
       test-plan.md §6.
