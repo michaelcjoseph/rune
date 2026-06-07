@@ -61,7 +61,10 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       use injected clocks rather than wall-clock sleeps. (Added the "work-run finalizer timing
       constants (P0.2)" describe to `src/config.test.ts`: defaults / override / non-numeric +
       non-positive fallback — 4 tests red until the constants land.)
-- [ ] Confirm every suite above fails (red) before starting the implementation blocks.
+- [x] Confirm every suite above fails (red) before starting the implementation blocks. (21 tests
+      red across the 6 Phase 1 write-first suites — 4 P0.1 + 2 P0.3 + 2 P0.2 watchdog + 5 P0.4a + 4
+      P0.4 + 4 config — each a clean assertion / thrown-`notImplemented` / missing-value red, not a
+      syntax or import error; 122 existing + green-guard tests still pass.)
 
 ### P0.1 — Supervision-store field-merge
 
