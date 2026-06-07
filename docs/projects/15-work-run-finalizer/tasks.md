@@ -78,12 +78,15 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P0.3 — Classifier exit-fact taxonomy
 
-- [ ] Introduce an exit-fact taxonomy in `work-run-classify.ts` distinguishing user-cancel,
+- [x] Introduce an exit-fact taxonomy in `work-run-classify.ts` distinguishing user-cancel,
       external-kill, clean-exit-with-wedged-stdio, and internal-reap-after-terminal-result; classify
-      on exit-fact + work product, not exit code alone (`work-run-classify.ts:233-248`).
-- [ ] A `reapedAfterTerminalResult` exit fact on a clean, complete branch classifies
+      on exit-fact + work product, not exit code alone (`work-run-classify.ts:233-248`). (Added
+      `ExitFact` + optional `exitFact` on `ExitFacts`; `classifyByExitFact` switches on it, legacy
+      derivation kept when absent.)
+- [x] A `reapedAfterTerminalResult` exit fact on a clean, complete branch classifies
       `branch-complete`; a genuine user-cancel stays `failed`/`cancelled` even if the branch looks
       complete. Keep `parked`/`blocked-on-human` out of the `WorkOutcome` enum (supervision state).
+      (reaped → classify on work product; `cancelled` wins → failed; 2 reaped tests + guards green.)
 
 ### P0.2 — Terminal-result watchdog
 

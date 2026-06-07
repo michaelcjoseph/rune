@@ -37,6 +37,30 @@ const DIFFSTAT_MAX_CHARS = 4000;
  *  2026-05-30 runs. */
 export type WorkOutcome = 'branch-complete' | 'partial' | 'noop' | 'dirty-uncommitted' | 'failed';
 
+/**
+ * Exit-fact taxonomy (project 15, P0.3). The (refactored) `streamProcess` stamps
+ * one of these so the classifier can decide on the MANNER of exit + work product,
+ * not the exit code alone:
+ *  - `clean-exit` — the agent process exited on its own.
+ *  - `clean-exit-wedged-stdio` — exited (code 0) but the stdio stream didn't
+ *    close cleanly; still a self-exit, so classify on work product.
+ *  - `reaped-after-terminal-result` — the agent emitted a terminal `result` and
+ *    then never exited; the watchdog reaped the group (SIGTERM→SIGKILL). The
+ *    agent DECLARED done, so this classifies on work product, NOT on the reap
+ *    signal (the d0679453 incident: a clean+complete branch was mis-stamped
+ *    `failed`).
+ *  - `user-cancel` — the user invoked /cancel (ctx.cancel). ALWAYS terminal-fail,
+ *    even if the branch looks complete (a real cancel must never read as success).
+ *  - `external-kill` — killed by an external signal with NO terminal result seen;
+ *    the agent never declared done, so terminal-fail (with truthful work product).
+ */
+export type ExitFact =
+  | 'clean-exit'
+  | 'clean-exit-wedged-stdio'
+  | 'reaped-after-terminal-result'
+  | 'user-cancel'
+  | 'external-kill';
+
 /** Process exit facts handed back by the (Phase 2) refactored `streamProcess`
  *  instead of a yielded terminal event. */
 export interface ExitFacts {
@@ -45,6 +69,13 @@ export interface ExitFacts {
   /** True when the run was cancelled by the user (SIGTERM via ctx.cancel). */
   cancelled: boolean;
   durationMs: number;
+  /**
+   * P0.3 taxonomy tag set by the refactored `streamProcess` (project 15).
+   * OPTIONAL for back-compat: when absent, `classifyOutcome` falls back to the
+   * legacy signal/cancel/exitCode derivation (preserving pre-P0.3 behavior for
+   * callers that don't stamp one yet).
+   */
+  exitFact?: ExitFact;
 }
 
 /** One parsed tasks.md checkbox line. Markers are normalized so `[x]` and
@@ -220,38 +251,122 @@ export async function computeWorkProduct(opts: ComputeWorkProductOpts): Promise<
 }
 
 /**
- * Pure terminal classifier (spec requirements 3-7):
+ * Classify the exit-0 / declared-done case on the WORK PRODUCT alone (spec
+ * requirements 3-5):
+ *  - commits + no original tasks remain -> `branch-complete`
+ *  - commits + unchecked tasks remain   -> `partial`
+ *  - zero commits + dirty/untracked tree -> `dirty-uncommitted`
+ *  - zero commits + zero transitions + clean tree -> `noop`
+ * Only ever returns a `WorkOutcome` (never `parked`/`blocked-on-human`, which are
+ * supervision state, not a work-product verdict).
+ */
+function classifyWorkProduct(product: WorkProductFacts): ClassifyResult {
+  const { commitCount, dirty, untracked, transitions } = product;
+  if (commitCount > 0) {
+    return transitions.tasksRemaining > 0
+      ? { outcome: 'partial', reason: `${commitCount} commit(s), ${transitions.tasksRemaining} task(s) still unchecked` }
+      : { outcome: 'branch-complete', reason: `${commitCount} commit(s), all original tasks checked` };
+  }
+  if (dirty || untracked) {
+    return { outcome: 'dirty-uncommitted', reason: 'no commits but the working tree is dirty/untracked' };
+  }
+  return { outcome: 'noop', reason: 'no commits, no task transitions, clean tree' };
+}
+
+/** Reason for a non-zero, non-null exit code (a real agent error). The caller
+ *  has already excluded code 0 and null. */
+function nonZeroExitReason(exitCode: number): string {
+  return `exited with code ${String(exitCode)}`;
+}
+
+/** Truthful reason for an external kill: prefer the signal, then the code, then
+ *  an explicit "no exit code" message (never the misleading
+ *  process-disappeared wording, which reads as an internal anomaly). */
+function externalKillReason(exit: ExitFacts): string {
+  if (exit.signal) return `killed (signal ${exit.signal})`;
+  if (exit.exitCode !== null) return `exited with code ${String(exit.exitCode)}`;
+  return 'external kill (no exit code recorded)';
+}
+
+/**
+ * Decide on the P0.3 exit-fact taxonomy (project 15). The KEY rule: an agent
+ * that DECLARED done — `clean-exit`, `clean-exit-wedged-stdio`, or
+ * `reaped-after-terminal-result` — is classified on WORK PRODUCT, ignoring the
+ * reap's signal/exit code (so the d0679453 wedge-then-reap of a clean+complete
+ * branch is `branch-complete`, not `failed`). An agent that did NOT declare done
+ * — `user-cancel` or `external-kill` — is terminal-fail regardless of how the
+ * branch looks (a real cancel must never read as success).
+ *
+ * `fact` is passed narrowed (not read off `exit`) so the switch is
+ * compile-time exhaustive — adding an `ExitFact` variant without a case here is
+ * a type error, not a silent work-product classification.
+ */
+function classifyByExitFact(
+  fact: ExitFact,
+  exit: ExitFacts,
+  product: WorkProductFacts,
+): ClassifyResult {
+  // A genuine user cancel ALWAYS fails — even if the branch looks complete and
+  // even if the stamped fact disagrees (req 8: a real cancel must never read as
+  // success). `cancelled` is set only by ctx.cancel, so it wins over the tag.
+  if (exit.cancelled) return { outcome: 'failed', reason: 'cancelled' };
+
+  switch (fact) {
+    case 'user-cancel':
+      // Reached only if `cancelled` wasn't set (unusual) — still a cancel.
+      return { outcome: 'failed', reason: 'cancelled' };
+    case 'external-kill':
+      return { outcome: 'failed', reason: externalKillReason(exit) };
+    case 'clean-exit':
+    case 'clean-exit-wedged-stdio':
+      // A clean self-exit should carry code 0. A non-zero code is a real agent
+      // error; a null code (signalled — contradictory for a clean exit) lets the
+      // declaration stand and classifies on work product.
+      if (exit.exitCode !== null && exit.exitCode !== 0) {
+        return { outcome: 'failed', reason: nonZeroExitReason(exit.exitCode) };
+      }
+      return classifyWorkProduct(product);
+    case 'reaped-after-terminal-result':
+      // The agent emitted a terminal result before the reap — its work product
+      // is authoritative; the reap signal is NOT a failure signal.
+      return classifyWorkProduct(product);
+    default: {
+      // Compile-time exhaustiveness guard: a new ExitFact variant without a case
+      // above is a type error here. Runtime fallback fails closed.
+      const _exhaustive: never = fact;
+      void _exhaustive;
+      return { outcome: 'failed', reason: 'unknown exit fact' };
+    }
+  }
+}
+
+/**
+ * Pure terminal classifier. When an explicit `exitFact` is present (project 15,
+ * P0.3) it decides on the exit-fact taxonomy + work product; otherwise it falls
+ * back to the legacy signal/cancel/exitCode derivation (back-compat for callers
+ * that don't stamp an exit fact yet):
  *  - non-zero/signal exit -> `failed` (reason: cancelled / killed / exited with code N)
- *  - exit 0 + commits + no original tasks remain -> `branch-complete`
- *  - exit 0 + commits + unchecked tasks remain -> `partial`
- *  - exit 0 + zero commits + zero transitions + clean tree -> `noop`
- *  - exit 0 + zero commits + dirty/untracked tree -> `dirty-uncommitted`
+ *  - exit 0 -> classify on work product (branch-complete / partial / noop / dirty-uncommitted)
  */
 export function classifyOutcome(facts: ClassifyFacts): ClassifyResult {
   const { exit, product } = facts;
 
-  // Rule 7: non-zero / signal-killed → failed (cancelled wins over killed).
+  // P0.3: classify on the manner of exit + work product, not exit code alone.
+  // Pass the narrowed tag so classifyByExitFact's switch is compile-exhaustive.
+  if (exit.exitFact !== undefined) {
+    return classifyByExitFact(exit.exitFact, exit, product);
+  }
+
+  // Legacy derivation (no exit fact): non-zero / signal-killed → failed
+  // (cancelled wins over killed).
   if (exit.cancelled) return { outcome: 'failed', reason: 'cancelled' };
   if (exit.signal) return { outcome: 'failed', reason: `killed (signal ${exit.signal})` };
   if (exit.exitCode === null) return { outcome: 'failed', reason: 'no exit code (process disappeared)' };
   if (exit.exitCode !== 0) {
     return { outcome: 'failed', reason: `exited with code ${String(exit.exitCode)}` };
   }
-
   // Exit 0 — classify on work product.
-  const { commitCount, dirty, untracked, transitions } = product;
-  if (commitCount > 0) {
-    // Rules 3-4: commits present → branch-complete iff no original task remains.
-    return transitions.tasksRemaining > 0
-      ? { outcome: 'partial', reason: `${commitCount} commit(s), ${transitions.tasksRemaining} task(s) still unchecked` }
-      : { outcome: 'branch-complete', reason: `${commitCount} commit(s), all original tasks checked` };
-  }
-  // Zero commits.
-  if (dirty || untracked) {
-    return { outcome: 'dirty-uncommitted', reason: 'no commits but the working tree is dirty/untracked' };
-  }
-  // Rule 5: zero commits, zero transitions, clean tree — did nothing.
-  return { outcome: 'noop', reason: 'no commits, no task transitions, clean tree' };
+  return classifyWorkProduct(product);
 }
 
 export interface FinalizeWorkRunDeps {
