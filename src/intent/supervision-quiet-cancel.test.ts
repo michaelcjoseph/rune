@@ -23,9 +23,10 @@ import {
 
 const NOW = 1_700_000_000_000;
 const QUIET_MS = 5 * 60 * 1000; // first (nudge) threshold
-// The longer escalation threshold — equals config.WORK_RUN_QUIET_CANCEL_AFTER_MS
-// (1_200_000 ms / 20 min). Inlined because the constant isn't exported yet; the
-// impl task should export it and switch this to an import.
+// The longer escalation threshold — matches config.WORK_RUN_QUIET_CANCEL_AFTER_MS
+// (1_200_000 ms / 20 min), which the stall-check-runner actuator reads. Inlined
+// here because this is a pure-core test; the threshold lives in config, not in
+// supervision.ts.
 const CANCEL_AFTER_MS = 20 * 60 * 1000;
 
 function iso(ms: number): string {

@@ -11,7 +11,8 @@
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus } from '../transport/notification-bus.js';
-import { planQuietNudges } from '../intent/supervision.js';
+import { planQuietNudges, planQuietCancel } from '../intent/supervision.js';
+import { cancelMutation } from '../transport/mutations.js';
 import { readAllRuns, upsertRun } from './supervision-store.js';
 import {
   checkStalledRuns,
@@ -85,6 +86,33 @@ export function startStallCheck(bus: NotificationBus): void {
           upsertRun(quietPlan.updated[i]!, config.SUPERVISED_RUNS_FILE);
         } catch (err) {
           log.warn('quiet-nudge persist failed', { id: run.id, error: (err as Error).message });
+        }
+      });
+
+      // Quiet→cancel escalation (project 15, P2.7): a run that stays quiet past
+      // the LONGER cancel threshold after its one-time nudge is escalated —
+      // cancelMutation SIGTERMs the child, and the existing work-runner teardown
+      // reaps + finalizes it. This stops the loop from nudging a never-recovering
+      // run forever. Excludes the just-stalled set (`nudged`) — like the quiet
+      // nudge, this is the alive-but-no-output case, distinct from a child-dead
+      // stall. Per-run isolated.
+      const quietCancelPlan = planQuietCancel(
+        runs.filter((r) => !nudged.has(r.id)),
+        config.WORK_RUN_QUIET_CANCEL_AFTER_MS,
+        now,
+      );
+      quietCancelPlan.toCancel.forEach((run) => {
+        try {
+          const result = cancelMutation(run.id);
+          log.info('quiet→cancel escalation', {
+            id: run.id,
+            product: run.product,
+            project: run.project,
+            cancelled: result.ok,
+            ...(result.ok ? {} : { reason: result.reason }),
+          });
+        } catch (err) {
+          log.warn('quiet→cancel escalation failed', { id: run.id, error: (err as Error).message });
         }
       });
     } catch (err) {

@@ -183,15 +183,20 @@ export interface QuietCancelPlan {
  * first step). Pure — the runner performs the cancel/reap/finalize; never
  * mutates the inputs. Soft-fail on an unparseable `quietNudgedAt` (no
  * escalation), mirroring {@link isQuietRun}.
- *
- * SCAFFOLD — throws until the P2.7 actuator implementation task.
  */
 export function planQuietCancel(
-  _runs: SupervisedRun[],
-  _quietCancelAfterMs: number,
-  _now: number,
+  runs: SupervisedRun[],
+  quietCancelAfterMs: number,
+  now: number,
 ): QuietCancelPlan {
-  throw new Error('supervision: planQuietCancel not implemented (project 15 P2.7 pending)');
+  const toCancel = runs.filter((r) => {
+    if (r.status !== 'running') return false;
+    if (!r.quietNudgedAt) return false; // escalate only AFTER the one-time nudge
+    const parsed = Date.parse(r.quietNudgedAt);
+    if (Number.isNaN(parsed)) return false; // soft-fail: no spurious escalation
+    return now - parsed > quietCancelAfterMs;
+  });
+  return { toCancel };
 }
 
 /** A max-runtime-ceiling kill plan: the runs that have exceeded the hard

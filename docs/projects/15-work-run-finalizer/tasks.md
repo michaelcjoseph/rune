@@ -163,9 +163,12 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Actuator + ceiling + sweep
 
-- [ ] Quiet→cancel actuator: first sustained-quiet notifies; a longer threshold escalates to
+- [x] Quiet→cancel actuator: first sustained-quiet notifies; a longer threshold escalates to
       cancel/reap/finalize through the shared finalizer instead of nagging forever
-      (`stall-check.ts:21-26`, `supervision.ts:124-138`).
+      (`stall-check.ts:21-26`, `supervision.ts:124-138`). (`planQuietCancel` implemented (7 tests
+      green); wired into the stall-check tick — escalation calls `cancelMutation(run.id)` →
+      SIGTERM → existing teardown/finalize; excludes the stalled set; per-run isolated. CLAUDE.md
+      updated.)
 - [ ] Hard max-runtime ceiling that group-kills and finalizes regardless of apparent liveness; the
       keep-alive ticker (`work-runner.ts:673`) must not be able to defeat it.
 - [ ] Worktree-scoped cwd process sweep as a fallback reap for reparented/detached grandchildren the
