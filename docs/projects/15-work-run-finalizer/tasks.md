@@ -322,8 +322,24 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       tsc unchanged. Review: code PASS, security PASS_WITH_WARNINGS — the execFile/no-shell +
       metacharacter-rejection mandate for the EXECUTOR is recorded in `work-run-gate-runtime.ts` and
       deferred to the `runGate` runtime task (no execution here; the spec pins the `string[]` shape).)
-- [ ] Run the gate's checks in an integration worktree (or on the branch) so a red result never
-      leaves local `main` altered (test before mutating main).
+- [x] Run the gate's checks in an integration worktree (or on the branch) so a red result never
+      leaves local `main` altered (test before mutating main). (Implemented `runGate(opts, io?)` in
+      `work-run-gate-runtime.ts`: creates a DETACHED integration worktree at baseBranch
+      (`git worktree add --detach` — avoids "branch already checked out") → conflict-probe merge of
+      the feature branch into it (abort + scrubbed-stderr warn on any failure → fail-closed
+      mergeConflict) → `status --porcelain` treeClean check (before validation, so artifacts can't
+      dirty it) → runs each validationCommand in the integration worktree → assembles GateFacts →
+      `evaluateGate`; the throwaway worktree is ALWAYS torn down in `finally` (guarded by a
+      `worktreeCreated` flag so a failed add still cleans up). The product repo's real `main` checkout
+      is never touched. Default executor `defaultRunValidationCommand`: NO-shell `spawn(bin,args,
+      {detached:true})` (argv split — injection-safe by construction), timeout group-kills the whole
+      process group (SIGTERM→SIGKILL after WORK_RUN_REAP_GRACE_MS via negative-pid), both timers
+      unref'd + cleared, `close`-event settle-guarded, register/unregisterActiveProcess for graceful
+      shutdown. 3 real-temp-repo gate-runtime tests green; tsc unchanged. Review trio
+      PASS_WITH_WARNINGS — fixed the worktree-add-leak (ERROR), unref'd/cleared the reap timers,
+      scrubbed merge + teardown logs, `exit`→`close`, documented the merge-lock @precondition. Deferred
+      (justified): schema stays `string[]` per spec req 16; VALID_SLUG path-guard on the worktree path
+      noted (caller computes it via slug-validated machinery).)
 - [ ] Per-product / per-base-branch lock (not per-project), respecting the single-writer assumption
       (`config.ts:250`, `supervision-store.ts:10-15`).
 - [ ] Push before deleting the branch; record durable resumable phases (`merged-not-pushed`,
