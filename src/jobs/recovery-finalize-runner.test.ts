@@ -51,6 +51,7 @@ const PRODUCT: ProductConfig = {
   baseBranch: 'main',
   credentialsFile: '/tmp/creds',
   egressAllowlist: ['example.com'],
+  validationCommands: [],
 };
 
 /** A git stub matching on a key arg, like the work-runner/classify suites. */

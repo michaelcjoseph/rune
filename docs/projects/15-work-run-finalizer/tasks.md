@@ -311,8 +311,17 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       finalizer's gate-fail path (already implemented in `runGatedMerge`); GATHERING the facts —
       running validationCommands in an integration worktree, the conflict probe, the lock check,
       timeout enforcement — is the gate RUNTIME (`runGate`, next tasks), which feeds `evaluateGate`.)
-- [ ] Add `validationCommands` support to `policies/products.json` / product config parsing; set
-      Jarvis to `["npm run build", "npm test"]`.
+- [x] Add `validationCommands` support to `policies/products.json` / product config parsing; set
+      Jarvis to `["npm run build", "npm test"]`. (`readProductsConfig` now parses `validationCommands`
+      into the ProductConfig literal mirroring `egressAllowlist` — `Array.isArray ? .map(String) : []`,
+      always an array, fail-closed `[]`. Added `"validationCommands": ["npm run build","npm test"]` to
+      the jarvis entry in `policies/products.json`; other products omit it → `[]` → gate fails closed
+      with `missing-validation-command`. Field kept optional on the type so unrelated ProductConfig
+      test literals still compile (the gate-runtime reads it as `?? []`); added `validationCommands: []`
+      to the recovery-finalize test fixture. 5 sandbox-runtime validationCommands tests green (46 total);
+      tsc unchanged. Review: code PASS, security PASS_WITH_WARNINGS — the execFile/no-shell +
+      metacharacter-rejection mandate for the EXECUTOR is recorded in `work-run-gate-runtime.ts` and
+      deferred to the `runGate` runtime task (no execution here; the spec pins the `string[]` shape).)
 - [ ] Run the gate's checks in an integration worktree (or on the branch) so a red result never
       leaves local `main` altered (test before mutating main).
 - [ ] Per-product / per-base-branch lock (not per-project), respecting the single-writer assumption

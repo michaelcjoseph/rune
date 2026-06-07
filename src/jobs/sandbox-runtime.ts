@@ -54,11 +54,11 @@ export interface ProductConfig {
   egressAllowlist: string[];
   /** Shell commands the gated-merge finalizer runs in an integration worktree to
    *  decide whether a `branch-complete` run may land on `main` (project 15,
-   *  P1.5). Always an array once parsed — `[]` (or absent) fails the merge gate
-   *  CLOSED with `missing-validation-command`, never an unverified merge.
-   *  Optional on the type only so the literal in `readProductsConfig` compiles
-   *  before the P1.5 parsing lands; the contract (pinned by tests) is that
-   *  `readProductsConfig` always populates it, defaulting to `[]`.
+   *  P1.5). `readProductsConfig` ALWAYS populates it — `[]` when absent/non-array
+   *  — and an empty list fails the merge gate CLOSED with
+   *  `missing-validation-command`, never an unverified merge. (Kept optional on
+   *  the type so unrelated `ProductConfig` test literals that don't set it still
+   *  compile; the gate-runtime wiring reads it as `?? []`.)
    *  SECURITY-SENSITIVE: editing this authorizes new shell commands to RUN
    *  during automated gated-merge runs — review a change to it like a change to
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
@@ -155,6 +155,12 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       credentialsFile: expandTilde(String(entry['credentialsFile'] ?? '')),
       egressAllowlist: Array.isArray(entry['egressAllowlist'])
         ? (entry['egressAllowlist'] as unknown[]).map(String)
+        : [],
+      // Always an array (fail-closed `[]` when absent/non-array) — mirrors
+      // egressAllowlist. An empty list fails the merge gate with
+      // `missing-validation-command`, never an unverified merge.
+      validationCommands: Array.isArray(entry['validationCommands'])
+        ? (entry['validationCommands'] as unknown[]).map(String)
         : [],
     };
   }
