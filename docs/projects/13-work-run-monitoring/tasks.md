@@ -71,34 +71,52 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write sentinel parser tests for valid `JARVIS_WORK_RUN_SENTINEL` payloads, malformed JSON,
+- [x] Write sentinel parser tests for valid `JARVIS_WORK_RUN_SENTINEL` payloads, malformed JSON,
       unsupported `version`, missing/empty `pendingCheck`, optional `command`, optional `reason`,
-      and consumed-not-rendered output — test-plan.md §2.
-- [ ] Write terminal-path tests proving a parsed sentinel writes the parked record **first**,
+      and consumed-not-rendered output — test-plan.md §2. (`src/jobs/work-run-sentinel.test.ts` →
+      `parseWorkRunSentinel`; `src/jobs/work-run-sentinel.ts` stub returns null. 4 valid-parse RED,
+      reject guards green.)
+- [x] Write terminal-path tests proving a parsed sentinel writes the parked record **first**,
       leaves the mutation terminal, **skips `runFinalizer`** (worktree left live), and preserves
       supervision as `blocked-on-human` — including a test that the `mutations.ts` terminal branch
       detects parked terminal metadata and does NOT clobber the `blocked-on-human` record
-      (Background §7's second writer).
-- [ ] Write the crash-window test: a run that emitted the sentinel but whose parked record was lost
+      (Background §7's second writer). (`work-runner.test.ts` "Phase 1b" block: skip-finalizer +
+      parked-record-first; `mutations.test.ts`: parked terminal never writes completed/failed
+      supervision status. RED.)
+- [x] Write the crash-window test: a run that emitted the sentinel but whose parked record was lost
       (still `running` on disk) is finalized by `recoverAndFinalizeStaleRuns` as an ordinary
       recovered terminal (worktree removed, no park) — no crash; documents the window the
-      first-write ordering minimizes.
-- [ ] Write temp-repo regression tests proving the EXISTING behavior holds for a parked run: GC
+      first-write ordering minimizes. (`supervision-recovery.test.ts` project-13 crash-window test —
+      verify-not-implement, green.)
+- [x] Write temp-repo regression tests proving the EXISTING behavior holds for a parked run: GC
       protects the run dir/branch (non-terminal id + checked-out branch), startup recovery preserves
       `blocked-on-human`, and `cleanupOrphanWorktrees` leaves the registered parked worktree intact.
-      (Verify-not-implement — these assert current code, no carve-out.)
-- [ ] Write per-project cap tests for all three rejection inputs: in-memory running run, durable
+      (Verify-not-implement — these assert current code, no carve-out.) (`work-run-gc.test.ts`
+      project-13 parked-protection + `supervision-recovery.test.ts` parked-survives; orphan-cleanup
+      is covered by the existing `sandbox-runtime.test.ts` "registered worktree → not swept" test —
+      a parked worktree stays registered. All green.)
+- [x] Write per-project cap tests for all three rejection inputs: in-memory running run, durable
       parked supervision record, and `existsSync` deterministic worktree with no parked state.
-- [ ] Write an orchestrated-work scope test: an `orchestrated-work` run that blocks maps to `failed`
+      (`work-runner.test.ts` "Phase 1b": parked supervision record + existsSync backstop both RED;
+      the in-memory running case is covered by the existing validate cap tests.)
+- [x] Write an orchestrated-work scope test: an `orchestrated-work` run that blocks maps to `failed`
       and destroys its worktree (NOT parked) — documents the legacy-only boundary.
-- [ ] Write parked alert tests asserting the alert includes `operatorWorktreePath`,
+      (`orchestrated-work-runner.test.ts` project-13 scope test — verify-not-implement, green.)
+- [x] Write parked alert tests asserting the alert includes `operatorWorktreePath`,
       `pendingCheck`, optional `command`, and optional `reason`; and a `formatWorkRunTerminal`
       parked-branch test (parked doesn't render as its underlying `partial`/`noop`).
-- [ ] Write parked staleness-nudge tests with an injected clock for the default 24-hour threshold
+      (`work-runner.test.ts` parked terminal carries the sentinel payload; `telegram-sender.test.ts`
+      parked-branch test. RED.)
+- [x] Write parked staleness-nudge tests with an injected clock for the default 24-hour threshold
       against a NET-NEW `planParkedNudges` predicate (blocked-on-human + `parkedNudgedAt`), asserting
       the nudge fires once and no auto-release happens — and that `isQuietRun`/`planQuietNudges` do
-      NOT fire on a `blocked-on-human` run.
-- [ ] Confirm red before implementation.
+      NOT fire on a `blocked-on-human` run. (`supervision-parked.test.ts` → `isParkedRun`/
+      `planParkedNudges` (RED) + the quiet-predicates-never-touch-parked cross-checks (green).)
+- [x] Confirm red before implementation. (Full suite: 12 intentional Phase 1b RED across
+      work-run-sentinel/supervision-parked/work-runner/mutations/telegram-sender, all clean
+      assertion failures; verify-not-implement regressions green; 0 new tsc errors (29 pre-existing);
+      only the 2 pre-existing unrelated failures otherwise. Reviewed: security PASS, code-review
+      4 warnings applied.)
 
 ### Sentinel contract
 

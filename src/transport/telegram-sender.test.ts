@@ -451,6 +451,36 @@ describe('TelegramSender', () => {
       await flush();
       expect(mockSendLongMessage).not.toHaveBeenCalled();
     });
+
+    // --- Project 13, Phase 1b: parked terminal rendering (test-plan §2 "Cap") ---
+    // A parked run terminates the mutation normally (subKind completed) but
+    // carries `parked: true` + the sentinel payload. `formatWorkRunTerminal` must
+    // render the PARKED state, NOT the underlying `outcome` (partial/noop) — a
+    // run paused for a human must never read as "did nothing / no-op success".
+    // RED until the parked-aware branch lands in formatWorkRunTerminal.
+    it('renders a parked run via a parked-aware branch, not its underlying outcome', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          parked: true,
+          operatorWorktreePath: '/tmp/worktrees/jarvis/demo',
+          pendingCheck: 'Run the interactive Codex check and confirm the result',
+          command: 'npm run codex-check',
+          reason: 'needs a human at the keyboard',
+          // Underlying classification — must NOT be the headline for a parked run.
+          outcome: 'noop',
+          workProduct: noopWorkProduct,
+        }),
+      );
+      await flush();
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      // Parked branch wins — never the no-op "did nothing" headline.
+      expect(text.toLowerCase()).not.toContain('no-op');
+      expect(text.toLowerCase()).toMatch(/park|paused|needs you|blocked on you|awaiting/);
+      // Carries the pending check + the un-scrubbed operator path so Michael can act.
+      expect(text).toContain('Run the interactive Codex check and confirm the result');
+      expect(text).toContain('/tmp/worktrees/jarvis/demo');
+    });
   });
 
   describe('onOpEvent — classifier filter', () => {

@@ -218,6 +218,41 @@ describe('recoverAndFinalizeStaleRuns (P0.4)', () => {
     });
   });
 
+  // --- Project 13 Phase 1b parked lifecycle (test-plan §2, verify-not-implement) ---
+
+  it('project 13: a PARKED (blocked-on-human) run survives recovery untouched — parked state is durable across restart', async () => {
+    // The happy parked case: the durable blocked-on-human record landed before
+    // the crash. Recovery must leave it exactly as-is (its worktree stays live
+    // for the human, slot held). This guards the load-bearing assumption that
+    // storing parked as `blocked-on-human` keeps it invisible to finalize.
+    writeAllRuns([makeRun('run-parked', { status: 'blocked-on-human' })], filePath);
+    const deps = makeDeps(async () => 'completed');
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    expect(result.finalized).toBe(0);
+    expect(deps.finalizeStaleRun).not.toHaveBeenCalled();
+    expect(readAllRuns(filePath)[0]!.status).toBe('blocked-on-human');
+  });
+
+  it('project 13 crash-window: a sentinel-emitting run whose parked write was LOST (still running) is finalized as an ordinary terminal — no park, no crash', async () => {
+    // The dangerous window (spec Edge Cases): Jarvis dies AFTER the agent emits
+    // the sentinel but BEFORE the durable blocked-on-human write lands, so the
+    // on-disk record is still 'running'. At next boot recovery finalizes it to a
+    // real terminal (hold mode removes the worktree) — the human hand-back is
+    // lost, but there is no crash and the run is never stranded 'running'. The
+    // first-write ordering (Req 3) minimizes this window; this documents the
+    // degraded-but-safe outcome when the race is lost.
+    writeAllRuns([makeRun('run-lost-park', { status: 'running' })], filePath);
+    const deps = makeDeps(async () => 'completed');
+
+    const result = await recoverAndFinalizeStaleRuns(deps);
+
+    expect(result.finalized).toBe(1);
+    // An ordinary recovered terminal — NOT parked, NOT left 'running'.
+    expect(readAllRuns(filePath)[0]!.status).toBe('completed');
+  });
+
   it('awaits the finalizer serially — recovery completes before resolving (so index.ts can order it before the sweep)', async () => {
     // The orphan-worktree sweep (index.ts:84) runs AFTER recovery. Recovery
     // must be awaitable so index.ts can finish finalizing — while the worktree

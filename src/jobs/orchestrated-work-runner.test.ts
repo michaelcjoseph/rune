@@ -167,6 +167,30 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('Phase 1b scope (project 13): a blocked orchestrated run is FAILED + worktree destroyed, never parked', async () => {
+      // Parking is the legacy `work-run` applier's behavior ONLY. The
+      // orchestrated applier never spawns the `/work --auto` process the
+      // JARVIS_WORK_RUN_SENTINEL rides on, and it maps a human-block to `failed`
+      // + unconditional worktree teardown in its finally. This documents the
+      // legacy-only boundary (spec.md Background §6 / Non-Goals) — a
+      // verify-not-implement regression, green today.
+      inject({
+        kind: 'blocked',
+        reason: 'a task needs a human decision',
+        task: { id: 't1', text: 'task one', section: 'Phase 1' },
+      });
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal?.kind).toBe('failed');
+      const data = (terminal?.data ?? {}) as Record<string, unknown>;
+      // NOT parked: no parked metadata, no operator path, no sentinel payload.
+      expect(data['parked']).toBeUndefined();
+      expect(data['pendingCheck']).toBeUndefined();
+      expect(data['operatorWorktreePath']).toBeUndefined();
+      // The worktree is unconditionally torn down (never left live for a human).
+      expect(destroyed).toBe(true);
+    });
+
     it('worktree-create failure → failed terminal event, no destroy of a non-existent tree', async () => {
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {

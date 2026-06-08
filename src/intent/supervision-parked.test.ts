@@ -49,11 +49,28 @@ describe('isParkedRun (RED until impl)', () => {
   it('blocked-on-human + parked past threshold + not yet nudged → due', () => {
     expect(isParkedRun(parked(), PARKED_MS, NOW)).toBe(true);
   });
+
+  it('falls back to startedAt as the park-time baseline when lastHeartbeatAt is absent', () => {
+    // Older on-disk records (or a parked write that didn't stamp lastHeartbeatAt)
+    // must still age from startedAt — not silently never-nudge.
+    expect(
+      isParkedRun(parked({ lastHeartbeatAt: undefined, startedAt: TWENTY_FIVE_H_AGO }), PARKED_MS, NOW),
+    ).toBe(true);
+  });
 });
 
 describe('isParkedRun — guards (green pre-impl)', () => {
   it('parked only recently (< threshold) → not due', () => {
     expect(isParkedRun(parked({ lastHeartbeatAt: ONE_H_AGO, startedAt: ONE_H_AGO }), PARKED_MS, NOW)).toBe(false);
+  });
+
+  it('ages from PARK time (lastHeartbeatAt), not run start — a recently-parked long-running run is not due', () => {
+    // The baseline is when the run PARKED (lastHeartbeatAt, set on the parked
+    // write), not when the run first started. A run that ran for a day then
+    // parked an hour ago is NOT a stale park.
+    expect(
+      isParkedRun(parked({ lastHeartbeatAt: ONE_H_AGO, startedAt: TWENTY_FIVE_H_AGO }), PARKED_MS, NOW),
+    ).toBe(false);
   });
 
   it('already nudged once → not due again (parkedNudgedAt set)', () => {

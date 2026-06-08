@@ -86,6 +86,18 @@ vi.mock('./work-run-gc-runner.js', () => ({
   runWorkRunGc: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Project 13 Phase 1b — supervision-store seam. work-runner does NOT import this
+// today; the parked path (write the durable `blocked-on-human` record first) and
+// the hardened per-project cap (read parked records) WILL. Mock it now so the
+// Phase 1b tests can drive/observe those reads+writes. `readAllRuns` defaults to
+// an empty store (no parked records) so existing validate tests are unaffected.
+const mockUpsertRun = vi.fn();
+const mockReadAllRuns = vi.fn<() => any[]>(() => []);
+vi.mock('./supervision-store.js', () => ({
+  upsertRun: mockUpsertRun,
+  readAllRuns: mockReadAllRuns,
+}));
+
 // Mock sandbox-runtime: createWorktree/destroyWorktree return controllable
 // stubs. Tests assert on call args; production wires the real git worktree
 // lifecycle (`src/jobs/sandbox-runtime.ts`). `defaultRunGit` is exported by the
@@ -285,6 +297,32 @@ function setupValidProject(slug: string = '06-webview', worktree: string = FAKE_
   return { dir: liveDir, worktreeDir, dirName };
 }
 
+/** Drive `apply()` to exhaustion for a 06-webview run, returning the collected
+ *  events + descriptor. Single source for the Phase 1a/1b run helpers:
+ *   - `worktree` is the sandbox path createWorktree returns (default FAKE_WORKTREE).
+ *   - `stdoutLines` seeds the fake child's stream (e.g. a sentinel result envelope).
+ *  The clean exit-0 child + default git stub classify `noop` unless stdout drives
+ *  otherwise. */
+async function runApply(
+  opts: { worktree?: string; stdoutLines?: string[]; id?: string } = {},
+): Promise<{ events: any[]; descriptor: any }> {
+  const { worktree = FAKE_WORKTREE, stdoutLines = [], id = 'mut-run' } = opts;
+  setupValidProject('06-webview', worktree);
+  mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec({ worktree }));
+  mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0, stdoutLines }));
+  const descriptor = {
+    id,
+    kind: 'work-run',
+    payload: { projectSlug: '06-webview', product: 'jarvis' },
+    status: 'running',
+  } as any;
+  const events: any[] = [];
+  for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+    events.push(e);
+  }
+  return { events, descriptor };
+}
+
 // --- Tests ---
 
 describe('workRunApplier', () => {
@@ -303,6 +341,12 @@ describe('workRunApplier', () => {
     // for the wrong reason.
     mockSpawn.mockReset();
     mockActiveRuns.clear();
+    // Reset the Phase 1b supervision-store seam so a parked record set by one
+    // test can't bleed into another's validate() (clearAllMocks keeps the
+    // mockReturnValue otherwise).
+    mockUpsertRun.mockReset();
+    mockReadAllRuns.mockReset();
+    mockReadAllRuns.mockReturnValue([]);
     // Default: createWorktree returns a usable sandbox; destroyWorktree is
     // a no-op. Individual tests override these (e.g. to make createWorktree
     // throw) before invoking apply.
@@ -2036,28 +2080,9 @@ describe('workRunApplier', () => {
     // the "stays un-scrubbed" assertion meaningful (a scrubbed copy differs).
     const OPERATOR_WORKTREE = '/tmp/test-worktrees/jarvis/06-webview';
 
-    /** Drive apply() to exhaustion against a clean exit-0 run rooted at
-     *  `worktree`, returning the collected events + descriptor. Reuses the
-     *  module-level `setupValidProject` (now worktree-parameterized) so the
-     *  fs-mock fixture stays single-sourced. */
-    async function runToCompletion(worktree: string, id = 'mut-path') {
-      setupValidProject('06-webview', worktree);
-      mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec({ worktree }));
-      const fakeChild = makeFakeChild({ exitCode: 0 });
-      mockSpawn.mockReturnValue(fakeChild);
-      const descriptor = {
-        id,
-        kind: 'work-run',
-        payload: { projectSlug: '06-webview', product: 'jarvis' },
-        status: 'running',
-      } as any;
-      const ctx = { bus: null as any, cancel: () => false };
-      const events: any[] = [];
-      for await (const event of workRunApplier.apply(descriptor, ctx)) {
-        events.push(event);
-      }
-      return { events, descriptor };
-    }
+    /** Drive a clean exit-0 run rooted at `worktree` (thin wrapper over the
+     *  module-level `runApply`). */
+    const runToCompletion = (worktree: string, id = 'mut-path') => runApply({ worktree, id });
 
     it('yields a run-start event carrying operatorWorktreePath + run id', async () => {
       const { events, descriptor } = await runToCompletion(OPERATOR_WORKTREE);
@@ -2148,6 +2173,104 @@ describe('workRunApplier', () => {
       expect(terminal).toBeDefined();
       expect(terminal!.kind).toBe('failed');
       expect(JSON.stringify(terminal!.data)).not.toContain('/tmp/test-worktrees/');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1b (project 13) — parked state (test-plan §2)
+  // -------------------------------------------------------------------------
+  //
+  // Written test-first. RED until the parked path lands in work-runner:
+  //  - On a parsed JARVIS_WORK_RUN_SENTINEL, write a durable supervision
+  //    `blocked-on-human` record FIRST, SKIP `runFinalizer` (leave the worktree
+  //    live), and yield a terminal event carrying `parked: true` +
+  //    operatorWorktreePath + pendingCheck.
+  //  - The per-project cap rejects when a parked supervision record exists for
+  //    the slug, OR the deterministic worktree already exists on disk (the
+  //    crash-lost-record backstop).
+  describe('Phase 1b — parked state', () => {
+    /** A `result` envelope whose final line is a valid blocked-on-human sentinel. */
+    const SENTINEL_RESULT = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result:
+        'Worked through tasks 1-3, but task 4 needs an interactive Codex login.\n' +
+        'JARVIS_WORK_RUN_SENTINEL {"version":1,"pendingCheck":"Run the interactive Codex check and confirm","command":"npm run codex-check"}',
+    });
+
+    /** Drive a run whose stream emits a blocked-on-human sentinel (thin wrapper
+     *  over the module-level `runApply`). Worktree defaults to FAKE_WORKTREE. */
+    const runWithSentinel = (id = 'mut-parked') => runApply({ stdoutLines: [SENTINEL_RESULT], id });
+
+    it('a parsed sentinel SKIPS runFinalizer and yields a parked terminal event', async () => {
+      const { events } = await runWithSentinel();
+
+      // The Project 15 finalizer must NOT run on a parked run (its shared tail
+      // would remove the worktree).
+      expect(finalizerHarness.runFinalizerSpy).not.toHaveBeenCalled();
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      const data = (terminal!.data ?? {}) as Record<string, unknown>;
+      expect(data['parked']).toBe(true);
+      expect(data['pendingCheck']).toBe('Run the interactive Codex check and confirm');
+      // The parked terminal's operator path comes from `sandbox.worktree` (the
+      // worktree createWorktree actually returned — `FAKE_WORKTREE` here), the
+      // SAME source the Phase 1a start event uses. NOT recomputed via
+      // worktreePathFor: that is the cap's job (validate has no sandbox). In
+      // production the two coincide (createWorktree builds at worktreePathFor's
+      // path); they differ here only because the mock sandbox uses a fake path.
+      expect(data['operatorWorktreePath']).toBe(FAKE_WORKTREE);
+    });
+
+    it('parking writes a durable blocked-on-human record and leaves the worktree live', async () => {
+      await runWithSentinel();
+
+      // The parked supervision record is written (status blocked-on-human).
+      const parkedUpsert = mockUpsertRun.mock.calls
+        .map((c) => c[0] as { status?: string })
+        .find((r) => r?.status === 'blocked-on-human');
+      expect(parkedUpsert, 'a blocked-on-human supervision record must be written on park').toBeDefined();
+
+      // The worktree is NOT destroyed — it is left live for the human.
+      expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    });
+
+    it('cap rejects a new run when a parked (blocked-on-human) supervision record exists for the slug', () => {
+      setupValidProject('06-webview');
+      const nowIso = new Date().toISOString();
+      // The parked record matches the new run's product+project (the worktree it
+      // protects is per <product>/<project>). The record carries both fields so
+      // the cap can scope by product+project, consistent with the existsSync
+      // backstop's worktreePathFor(product, project, …) check below.
+      mockReadAllRuns.mockReturnValue([
+        { id: 'parked-1', product: 'jarvis', project: '06-webview', status: 'blocked-on-human', startedAt: nowIso, lastHeartbeatAt: nowIso },
+      ]);
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      expect(result.ok).toBe(false);
+    });
+
+    it('cap rejects via the existsSync worktree backstop when the parked record was lost to a crash', () => {
+      // Recovery relabeled the lost record 'unknown' (no blocked-on-human left),
+      // but the worktree still occupies the deterministic path. The synchronous
+      // existsSync backstop must reject before createWorktree is ever reached.
+      const liveDir = join(PROJECTS_DIR, '06-webview');
+      // The cap computes the deterministic path via worktreePathFor(product,
+      // project, WORKTREE_ROOT) = <WORKTREE_ROOT>/<product>/<project> — validate
+      // runs BEFORE createWorktree, so there is no sandbox.worktree to read.
+      // This differs from FAKE_WORKTREE (the mock sandbox's arbitrary path); in
+      // production they coincide.
+      const worktree = '/tmp/test-worktrees/jarvis/06-webview';
+      setupValidProject('06-webview');
+      mockReadAllRuns.mockReturnValue([]); // no parked record survives
+      mockExistsSync.mockImplementation(
+        (p: string) =>
+          p === join(liveDir, 'spec.md') ||
+          p === join(liveDir, 'tasks.md') ||
+          p === worktree,
+      );
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      expect(result.ok).toBe(false);
     });
   });
 });
