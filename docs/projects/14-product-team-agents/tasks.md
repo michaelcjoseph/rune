@@ -352,15 +352,21 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Deferral-ADR test: project closeout cannot pass unless the three deferral ADR files
+- [x] Deferral-ADR test: project closeout cannot pass unless the three deferral ADR files
       named in the spec exist and include status, context, decision, rationale, and trigger to
-      promote.
-- [ ] Agent-lessons test: project closeout writes `agent-lessons.md` with at least one
+      promote. (`project-14-closeout.test.ts` — existence + required-section checks for the
+      three ADRs.)
+- [x] Agent-lessons test: project closeout writes `agent-lessons.md` with at least one
       checklist/skill/instruction propagation pointer, or an explicit "no new lessons"
-      rationale.
-- [ ] Final-completion test: closeout rechecks the Phase 5 trigger-surface dispatch seam and
-      mode-visibility tests before marking Project 14 done.
-- [ ] Confirm red before implementation.
+      rationale. (`project-14-closeout.test.ts` — existence + propagation-pointer/no-lessons
+      content check.)
+- [x] Final-completion test: closeout rechecks the Phase 5 trigger-surface dispatch seam and
+      mode-visibility tests before marking Project 14 done. (`project-14-closeout.test.ts` —
+      re-asserts `resolveWorkDispatch` (orchestrated/legacy/force + fallbackReason) and
+      `buildCockpitView` dispatchMode visibility inline.)
+- [x] Confirm red before implementation. (Confirmed: 8 red — the ADR + agent-lessons
+      existence/section assertions — until the Phase 7 docs land; the 5 Phase-5 re-checks
+      pass already.)
 
 ### Implementation
 
