@@ -10,8 +10,18 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 > Granularity here is the meaningful deliverable — not a granular sub-task. Per-task file
 > layout, schemas, and signatures are settled in `/work`'s Plan phase, against the spec.
 >
-> Scope is Phase 1 only (findability + parked worktree + release). Durable integration branches
-> are explicitly out of scope — see spec.md → Deferred.
+> Scope is Phase 1 only (findability + parked worktree + release/resume), and the **legacy
+> `work-run` applier only** — Project 14's `orchestrated-work` applier never spawns the
+> `/work --auto` process the sentinel rides on and unconditionally destroys its worktree, so it is
+> not parkable (spec.md → Background §6, Non-Goals). Durable integration branches are explicitly out
+> of scope — see spec.md → Deferred. Project 15 now owns normal terminalization and gated merge;
+> Project 13 pauses that finalizer while a run is parked (by **skipping** it in `work-runner`, not
+> by teaching the finalizer about parking) and cold-finalizes on clean release.
+>
+> **Two carve-outs are verify-not-implement.** GC already protects non-terminal
+> (`blocked-on-human`) supervised ids + checked-out branches (`work-run-gc-runner.ts:55`), and
+> `cleanupOrphanWorktrees` only sweeps unregistered dirs — a parked worktree stays registered. Those
+> become regression assertions, not new code (spec.md → Background §4, §5).
 >
 > **Agent-runnable constraint:** required verification must use temp repos/worktrees, injected
 > work-run streams, fake sender/HTTP surfaces, test-scoped stores, and injected clocks. Do not make
@@ -52,18 +62,30 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [ ] Write sentinel parser tests for valid `JARVIS_WORK_RUN_SENTINEL` payloads, malformed JSON,
       unsupported `version`, missing/empty `pendingCheck`, optional `command`, optional `reason`,
       and consumed-not-rendered output — test-plan.md §2.
-- [ ] Write terminal-path tests proving a parsed sentinel emits parked metadata, leaves the
-      mutation terminal, and preserves supervision as `blocked-on-human` instead of letting the
-      terminal mutation write overwrite it with `completed`/`failed`.
-- [ ] Write temp-repo lifecycle tests proving parked teardown skips `destroyWorktree`, GC protects
-      the run dir/branch, startup recovery preserves `blocked-on-human`, and
-      `cleanupOrphanWorktrees` leaves the registered parked worktree intact.
+- [ ] Write terminal-path tests proving a parsed sentinel writes the parked record **first**,
+      leaves the mutation terminal, **skips `runFinalizer`** (worktree left live), and preserves
+      supervision as `blocked-on-human` — including a test that the `mutations.ts` terminal branch
+      detects parked terminal metadata and does NOT clobber the `blocked-on-human` record
+      (Background §7's second writer).
+- [ ] Write the crash-window test: a run that emitted the sentinel but whose parked record was lost
+      (still `running` on disk) is finalized by `recoverAndFinalizeStaleRuns` as an ordinary
+      recovered terminal (worktree removed, no park) — no crash; documents the window the
+      first-write ordering minimizes.
+- [ ] Write temp-repo regression tests proving the EXISTING behavior holds for a parked run: GC
+      protects the run dir/branch (non-terminal id + checked-out branch), startup recovery preserves
+      `blocked-on-human`, and `cleanupOrphanWorktrees` leaves the registered parked worktree intact.
+      (Verify-not-implement — these assert current code, no carve-out.)
 - [ ] Write per-project cap tests for all three rejection inputs: in-memory running run, durable
-      parked supervision record, and registered deterministic worktree with no parked state.
+      parked supervision record, and `existsSync` deterministic worktree with no parked state.
+- [ ] Write an orchestrated-work scope test: an `orchestrated-work` run that blocks maps to `failed`
+      and destroys its worktree (NOT parked) — documents the legacy-only boundary.
 - [ ] Write parked alert tests asserting the alert includes `operatorWorktreePath`,
-      `pendingCheck`, optional `command`, and optional `reason`.
-- [ ] Write parked staleness-nudge tests with an injected clock for the default 24-hour threshold;
-      assert the nudge fires and no auto-release happens.
+      `pendingCheck`, optional `command`, and optional `reason`; and a `formatWorkRunTerminal`
+      parked-branch test (parked doesn't render as its underlying `partial`/`noop`).
+- [ ] Write parked staleness-nudge tests with an injected clock for the default 24-hour threshold
+      against a NET-NEW `planParkedNudges` predicate (blocked-on-human + `parkedNudgedAt`), asserting
+      the nudge fires once and no auto-release happens — and that `isQuietRun`/`planQuietNudges` do
+      NOT fire on a `blocked-on-human` run.
 - [ ] Confirm red before implementation.
 
 ### Sentinel contract
@@ -77,24 +99,32 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Durable parked state + lifecycle carve-outs
 
-- [ ] On a parsed sentinel, record a durable supervision `blocked-on-human` state (mutation still
-      terminates normally; no new `MutationStatus` value). State survives restart via the existing
-      supervision store + recovery.
-- [ ] Ensure the mutation terminal path preserves the parked supervision override instead of
-      overwriting it with `completed`/`failed` after the work-run terminal event.
-- [ ] Make `work-runner`'s teardown skip `destroyWorktree` while the run is parked.
-- [ ] Add parked runs to the protected set in `work-run-gc.ts` and exempt the live worktree from
-      `cleanupOrphanWorktrees`, so neither the run dir nor the worktree is reaped while parked.
-- [ ] Add the parked staleness nudge using `PARKED_RUN_NUDGE_AFTER_MS` (default 24 hours) and an
-      injected clock seam; never auto-release because of age.
+- [ ] On a parsed sentinel, record a durable supervision `blocked-on-human` state **as the first
+      effect, before any terminal/finalize step** (mutation still terminates normally; no new
+      `MutationStatus` value). State survives restart via the existing supervision store + recovery.
+- [ ] Make `work-runner` **skip `runFinalizer` entirely** on a parked run (the finalizer's shared
+      tail removes the worktree — `work-run-finalizer.ts:219`); yield the terminal mutation event
+      directly and leave the worktree live. Do NOT teach the finalizer about parking.
+- [ ] Ensure the `mutations.ts` terminal supervision flip does not clobber the `blocked-on-human`
+      record: parked terminal events carry explicit parked metadata; the mutation descriptor still
+      persists as terminal, while the terminal branch preserves/reasserts supervision as
+      `blocked-on-human` (Background §7).
+- [ ] GC + `cleanupOrphanWorktrees`: **no code change** — confirm via regression test that a parked
+      run's dir/branch/worktree already survive (Background §4, §5).
+- [ ] Add the parked staleness nudge via a NET-NEW `planParkedNudges` predicate (over
+      `blocked-on-human`, keyed on `PARKED_RUN_NUDGE_AFTER_MS`, default 24h) with its own
+      `parkedNudgedAt` marker and an injected clock seam; reuse only the bus-publish + `upsertRun`
+      delivery. Never auto-release because of age.
 
 ### Cap + alert
 
-- [ ] Harden the per-project cap (`work-runner.ts:165` validate) to reject when ANY of: an
-      `activeRuns` run is `running` for the slug; a supervision `blocked-on-human` record exists for
-      the slug; or a worktree is already registered at the deterministic path for the slug.
+- [ ] Harden the per-project cap (`work-runner.ts` validate, ~`:238` post-project-14 — re-locate
+      it) to reject when ANY of: an `activeRuns` run is `running` for the slug; a supervision
+      `blocked-on-human` record exists for the slug; or `existsSync(worktreePathFor(...))` on the
+      deterministic path (synchronous — no async `git worktree list`).
 - [ ] Parked alert (Telegram + cockpit) carries `operatorWorktreePath`, `pendingCheck`, optional
-      `command`, and optional `reason` from the sentinel payload.
+      `command`, and optional `reason` from the sentinel payload; add a parked-aware branch to
+      `formatWorkRunTerminal` (parked is not a `WorkOutcome`).
 
 ## Phase 1c — Release
 
@@ -102,40 +132,60 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write shared release-runtime tests for clean release, dirty release without confirmation,
-      dirty release with `{ confirmDirty: true }`, already-released/not-parked ids, and stale/missing
-      worktree paths — test-plan.md §3.
+- [ ] Write shared release-runtime tests for clean release COLD-finalizing through the Project 15
+      finalizer in **gated-merge** mode (baseSha recomputed via merge-base → classify → gated-merge;
+      reuse `finalizeStaleRun`'s building blocks but assert the release path drives `gated-merge`
+      mode, NOT `finalizeStaleRun`'s fresh-run hold default — a regression test that a clean
+      branch-complete release actually merges, not just holds), dirty release without confirmation,
+      dirty release with `{ confirmDirty: true }` as explicit discard, already-released/not-parked
+      ids, and stale/missing worktree paths — test-plan.md §3.
+- [ ] Write release hold tests proving a clean release keeps the supervision `blocked-on-human`
+      record in place while the cold-finalizer mutation is running, and only frees the project slot
+      after the finalizer terminal write; confirmed dirty discard frees only after destructive
+      cleanup completes.
 - [ ] Write HTTP route tests for `POST /api/work-runs/:id/release`, including dirty-confirm
       response shape, not-parked no-op response, and `202 { mutationId }` clean/confirmed release
       response.
 - [ ] Write Telegram callback tests for `work-run-release:<id>` proving it delegates to the same
       release runtime and returns the same dirty-confirm/mutation-created/not-parked outcomes.
+- [ ] Write existing-inbox-row tests proving `blocked-on-human` Approve/Release routes to release
+      preflight, Reject/dismiss leaves the parked run untouched with a dismissed/no-op response, and
+      dirty confirmation requires the explicit release endpoint/callback with `confirmDirty=true`.
 - [ ] Write mutation tests proving `work-run-release` is a registered auto-approved mutation kind,
-      carries payload `{ runId, confirmDirty }`, rechecks parked/dirty state in the applier, and
-      emits terminal events.
-- [ ] Write post-release cap tests proving a released run no longer blocks the project slot and a
-      subsequent dispatch is accepted.
+      carries payload `{ runId, confirmDirty }`, rechecks parked/dirty state in the applier, invokes
+      the Project 15 finalizer on clean release, and emits terminal events.
+- [ ] Write post-release cap tests proving a clean release keeps the project slot held while the
+      Project 15 finalizer is in progress, then follows the finalizer outcome; a discard release
+      frees the project slot only after the destructive cleanup completes.
 - [ ] Confirm red before implementation.
 
 ### Release action
 
-- [ ] Add an actionable release path (net-new — existing `blocked-on-human` approval rows are
-      non-actionable, `approval-actions.ts:155`) routed through the mutation pipeline and one shared
-      release runtime, available from both Telegram and the cockpit.
+- [ ] Make the EXISTING `blocked-on-human` cockpit inbox row actionable for a parked run
+      (`approval-actions.ts` `blocked-on-human` case returns `not-found` today, ~`:152`), routing to
+      the shared release runtime — not a new surface (consistent with the "no new cockpit screen"
+      non-goal). Approve/Release runs release preflight; Reject/dismiss leaves the parked run
+      untouched with a clear dismissed/no-op response. Available from both Telegram and the cockpit.
 - [ ] Add `work-run-release` to `MutationKind` and register an auto-approved applier with payload
       `{ runId: string, confirmDirty?: boolean }`.
 - [ ] Implement shared release preflight used by both surfaces: not-parked returns a no-op outcome,
       dirty-without-confirmation returns dirty-confirm with the `git status --porcelain` file list,
-      and clean/confirmed release creates the `work-run-release` mutation.
+      clean release creates a cold-finalize `work-run-release` mutation, and confirmed dirty
+      release creates an explicit-discard `work-run-release` mutation.
 - [ ] Add cockpit route `POST /api/work-runs/:id/release` with optional body
       `{ "confirmDirty": true }`; return `409 { "error": "dirty-worktree", "files": [...] }` for
       dirty-confirm without creating a mutation, `200` for not-parked no-op, and
       `202 { "mutationId": "..." }` when a release mutation is created.
 - [ ] Add Telegram callback action `work-run-release:<id>` using the same shared runtime and dirty
       confirmation behavior.
-- [ ] On release of a **clean** worktree: `destroyWorktree`, clear the supervision parked record,
-      free the per-project slot.
+- [ ] On release of a **clean** worktree: keep the supervision parked record and **cold-finalize**
+      through the Project 15 finalizer in **gated-merge** mode (reuse `finalizeStaleRun`'s building
+      blocks — recompute `baseSha` via merge-base → `computeWorkProduct` → classify → real
+      gate/merge/push/delete effects — there is no live process/transcript/`baseSha` at release
+      time; but invoke `runFinalizer` in `gated-merge` mode explicitly, since `finalizeStaleRun`
+      defaults a fresh run to hold/no-merge). Keep the parked hold while finalization is in progress;
+      the finalizer terminal write owns merge/hold/teardown, clearing the hold, and slot release.
 - [ ] On release of a **dirty** worktree (`git status --porcelain` in the parked worktree is
       non-empty): warn with the dirty file list and require explicit confirm before the
       force-removing `destroyWorktree` (`sandbox-runtime.ts:333`); never discard a half-finished
-      human fix silently.
+      human fix silently. Confirmed dirty release is a discard path and must not gated-merge.

@@ -18,7 +18,7 @@ its `spec.md`.
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
-| [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
+| [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 
@@ -190,23 +190,27 @@ The smallest end-to-end test of the "better agentic systems" bet: a role-agent d
 
 Make an automated `/work --auto` run reachable and testable by a human when it needs one.
 
-Today the runner executes in a worktree at a deterministic path that is never surfaced, and always
-destroys it at teardown; the single-model path never reaches main (`branch-complete · not yet on
-main`). So when a run hits a step `--auto` can't do — the interactive Codex check that stalled
-project 10 — there's no signal a human is needed and no live worktree to act in.
+Today the runner executes in a worktree at a deterministic path that is not consistently surfaced as
+an operator-actionable value. Project 15 now owns normal terminalization and gated merge, so this
+project covers the remaining gap: when a run hits a step `--auto` can't do — the interactive Codex
+check that stalled project 10 — Jarvis needs a durable parked state, a live worktree, and a clean
+hand-back to the finalizer after the human acts.
 
 - **Findability:** surface the (already-deterministic) worktree path + run id in notifications, on
   a local-operator field that stays un-scrubbed (the scrubber strips exactly the prefix you'd `cd`
   to).
 - **Parked state:** a run that needs a human emits a durable `blocked-on-human` state, keeps its
-  worktree alive, and holds the per-project slot — surviving a Jarvis restart.
-- **Release:** one explicit action (Telegram + cockpit) tears down the worktree and frees the slot.
-  Net-new, since today's `blocked-on-human` approval rows are intentionally non-actionable.
+  worktree alive, blocks finalizer teardown/merge, and holds the per-project slot — surviving a
+  Jarvis restart.
+- **Release:** one explicit action (Telegram + cockpit) resumes the Project 15 finalizer for a
+  clean parked worktree, or explicitly discards a dirty worktree after confirmation. Net-new, since
+  today's `blocked-on-human` approval rows are intentionally non-actionable.
 - **Provenance:** 2026-06-03 conversation — diagnosed from project 10, where the worktree was
   unreachable for a manual test. Scoped down from an original two-phase plan after a Codex critique
   (verdict RETHINK) found the durable-integration-branch topology invalid; that ambition is recorded
-  as Deferred in the spec. Phase 0 (how work reaches main) is resolved in the spec: nothing
-  auto-promotes a plain work-run — merge-to-main is gen-eval-loop only.
+  as Deferred in the spec. Post-Project-15, Phase 1 needs no promotion plumbing: Project 15 owns
+  gated merge; Project 13 only pauses that finalizer while human work is pending and resumes it on
+  release.
 - **Task breakdown & test plan:** see [tasks.md](13-work-run-monitoring/tasks.md) and [test-plan.md](13-work-run-monitoring/test-plan.md). Test-first per phase.
 
 ## 14-product-team-agents — Done
