@@ -163,6 +163,14 @@ const {
   __resetKillProcessTreeForTest,
 } = await import('./work-runner.js');
 
+// Real scrubber over the MOCKED config (WORKTREE_ROOT='/tmp/test-worktrees'),
+// imported dynamically AFTER the mocks + const declarations so it doesn't force
+// config.js to evaluate before `TEST_PROJECT_ROOT` is initialized (the hoisted
+// vi.mock factory closes over it). Used by the Phase 1a un-scrubbed assertion
+// to prove the operator field is exempt from the path-stripping every other
+// surface goes through.
+const { scrubPathsInText } = await import('../ai/tool-labels.js');
+
 // --- Runtime-deps test doubles (Phase 2: classification + persist seam) ---
 
 /** A controllable GitRunner stub. Default responses classify a clean exit-0
@@ -239,13 +247,13 @@ function makeFakeChild(opts: {
  *  apply after createWorktree). The worktree's `docs/projects` lives under the
  *  fake sandbox path (FAKE_WORKTREE/docs/projects), so the test fixture must
  *  answer for paths under both roots. */
-function setupValidProject(slug: string = '06-webview') {
+function setupValidProject(slug: string = '06-webview', worktree: string = FAKE_WORKTREE) {
   const dirName = slug;
   const liveDir = join(PROJECTS_DIR, dirName);
-  const worktreeDir = join(FAKE_WORKTREE, 'docs', 'projects', dirName);
+  const worktreeDir = join(worktree, 'docs', 'projects', dirName);
 
   mockReaddirSync.mockImplementation((p: string) => {
-    if (p === PROJECTS_DIR || p === join(FAKE_WORKTREE, 'docs', 'projects')) {
+    if (p === PROJECTS_DIR || p === join(worktree, 'docs', 'projects')) {
       return [dirName];
     }
     return [];
@@ -1992,6 +2000,154 @@ describe('workRunApplier', () => {
         vi.useRealTimers();
         __resetKillProcessTreeForTest();
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1a (project 13) — operator worktree path on the run-start notification
+  // -------------------------------------------------------------------------
+  //
+  // Written test-first (these are RED until the "Path on notifications"
+  // implementation task lands — apply() does not yet yield a `start` event).
+  //
+  // Contract under test (spec.md → Requirements 1 & 2, test-plan §1):
+  //  - A run-start notification carries the deterministic worktree path on a
+  //    LOCAL-OPERATOR-ONLY field `operatorWorktreePath` (so Michael can `cd`
+  //    straight in) plus the run id.
+  //  - That path is UN-SCRUBBED (usable as a `cd` target) — distinct from every
+  //    other surface, which stays scrubbed via `scrubPathsInText`.
+  //  - The un-scrubbed path NEVER leaks into a persisted/committed artifact
+  //    (mutations.jsonl descriptor, summary.json, the rolling index, the
+  //    transcript, the terminal event mutations.ts copies onto the descriptor).
+  //  - A run whose worktree was never created omits the field cleanly rather
+  //    than emitting an empty/partial path.
+  //
+  // IMPLEMENTATION NOTE (for the "Path on notifications" task): turning these
+  // green requires apply() to `yield` a new `start` MutationEvent AND widening
+  // the type system — add `'start'` to `MutationEvent.kind` (src/transport/
+  // mutations.ts) and to `BusMutationEvent.subKind` (src/transport/
+  // notification-bus.ts), or strict-mode TS will reject the yield and bus
+  // publish. The `data.operatorWorktreePath` must be the raw `sandbox.worktree`
+  // (un-scrubbed) and must NOT be stamped onto the descriptor / summary / index
+  // / transcript / terminal event.
+  describe('Phase 1a — operator worktree path on run-start notification', () => {
+    // A worktree under the configured WORKTREE_ROOT (`/tmp/test-worktrees`), so
+    // `scrubPathsInText` WOULD strip the `/tmp/test-worktrees/` prefix — making
+    // the "stays un-scrubbed" assertion meaningful (a scrubbed copy differs).
+    const OPERATOR_WORKTREE = '/tmp/test-worktrees/jarvis/06-webview';
+
+    /** Drive apply() to exhaustion against a clean exit-0 run rooted at
+     *  `worktree`, returning the collected events + descriptor. Reuses the
+     *  module-level `setupValidProject` (now worktree-parameterized) so the
+     *  fs-mock fixture stays single-sourced. */
+    async function runToCompletion(worktree: string, id = 'mut-path') {
+      setupValidProject('06-webview', worktree);
+      mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec({ worktree }));
+      const fakeChild = makeFakeChild({ exitCode: 0 });
+      mockSpawn.mockReturnValue(fakeChild);
+      const descriptor = {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview', product: 'jarvis' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+      return { events, descriptor };
+    }
+
+    it('yields a run-start event carrying operatorWorktreePath + run id', async () => {
+      const { events, descriptor } = await runToCompletion(OPERATOR_WORKTREE);
+
+      const start = events.find((e) => e.kind === 'start');
+      expect(start, 'apply() must yield a run-start notification event').toBeDefined();
+      // Deterministic worktree path = <WORKTREE_ROOT>/<product>/<project>.
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+      // Run id present on the bus payload — the mutation id IS the work-run id.
+      expect(start!.mutationId).toBe(descriptor.id);
+
+      // The start notification precedes the terminal event (start already
+      // asserted defined above).
+      const termIdx = events.findIndex((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(events.indexOf(start!)).toBeLessThan(termIdx);
+    });
+
+    it('keeps operatorWorktreePath un-scrubbed (usable as a cd target)', async () => {
+      const { events } = await runToCompletion(OPERATOR_WORKTREE);
+      const start = events.find((e) => e.kind === 'start');
+      expect(start).toBeDefined();
+      // The raw path is preserved verbatim.
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+      // Machine-checkable exemption: the scrubber WOULD strip this path (it
+      // sits under WORKTREE_ROOT), so a scrubbed copy differs — proving the
+      // operator field is genuinely un-scrubbed, not just coincidentally equal.
+      expect(scrubPathsInText(start!.data.operatorWorktreePath)).not.toBe(
+        start!.data.operatorWorktreePath,
+      );
+      expect(start!.data.operatorWorktreePath).toContain('/tmp/test-worktrees/');
+    });
+
+    it('never leaks the un-scrubbed worktree path into persisted/committed artifacts', async () => {
+      const { events, descriptor } = await runToCompletion(OPERATOR_WORKTREE);
+
+      // The operator field carries the raw path (the one surface allowed to).
+      const start = events.find((e) => e.kind === 'start');
+      expect(start).toBeDefined();
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+
+      // summary.json — never the raw path (transcript/forensics paths scrubbed).
+      expect(JSON.stringify(writeSummarySpy.mock.calls)).not.toContain(OPERATOR_WORKTREE);
+
+      // rolling index rows — never the raw path.
+      expect(JSON.stringify(indexRows)).not.toContain(OPERATOR_WORKTREE);
+
+      // durable transcript appends — never the raw path.
+      expect(JSON.stringify(currentSink.appended)).not.toContain(OPERATOR_WORKTREE);
+
+      // The terminal event (which mutations.ts copies onto the descriptor →
+      // mutations.jsonl) must NOT carry the operator path.
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      expect(JSON.stringify(terminal!.data ?? {})).not.toContain(OPERATOR_WORKTREE);
+      expect((terminal!.data ?? {}).operatorWorktreePath).toBeUndefined();
+
+      // The descriptor itself (the object appended to mutations.jsonl) is never
+      // stamped with the operator path.
+      expect(JSON.stringify(descriptor)).not.toContain(OPERATOR_WORKTREE);
+    });
+
+    it('omits the path field when no worktree was created (create failed)', async () => {
+      setupValidProject('06-webview', OPERATOR_WORKTREE);
+      mockCreateWorktree.mockImplementation(async () => {
+        throw new Error(`boom: ${OPERATOR_WORKTREE} locked`);
+      });
+      const descriptor = {
+        id: 'mut-nopath',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview', product: 'jarvis' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      // No worktree => no start notification (no empty/partial path emitted).
+      expect(events.find((e) => e.kind === 'start')).toBeUndefined();
+      // No event anywhere carries an operatorWorktreePath field.
+      expect(
+        events.some((e) => (e.data ?? {}).operatorWorktreePath !== undefined),
+      ).toBe(false);
+      // The run still reaches a clean failed terminal, and the create-error
+      // reason is scrubbed — no raw worktree path leaks via the failure reason.
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      expect(terminal!.kind).toBe('failed');
+      expect(JSON.stringify(terminal!.data)).not.toContain('/tmp/test-worktrees/');
     });
   });
 });

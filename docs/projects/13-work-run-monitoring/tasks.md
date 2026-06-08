@@ -35,15 +35,21 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write run-start notification tests asserting `operatorWorktreePath` contains the exact
+- [x] Write run-start notification tests asserting `operatorWorktreePath` contains the exact
       deterministic path (`<WORKTREE_ROOT>/<product>/<project>`) and the run id is present on the
-      Telegram/cockpit bus payloads — test-plan.md §1.
-- [ ] Write leak-containment tests using a fake absolute worktree prefix; assert that
+      Telegram/cockpit bus payloads — test-plan.md §1. (`work-runner.test.ts` "Phase 1a" describe
+      block, test "yields a run-start event carrying operatorWorktreePath + run id".)
+- [x] Write leak-containment tests using a fake absolute worktree prefix; assert that
       `mutations.jsonl`, work-run summary/index, transcript/forensics payloads, and committed-file
       candidates contain only scrubbed paths, while `operatorWorktreePath` remains un-scrubbed.
-- [ ] Write the create-worktree-failure test: if no worktree exists yet, the notification omits
-      `operatorWorktreePath` instead of emitting an empty or partial value.
-- [ ] Confirm every suite above fails (red) before starting the implementation block.
+      (Tests "keeps operatorWorktreePath un-scrubbed" + "never leaks the un-scrubbed worktree path
+      into persisted/committed artifacts".)
+- [x] Write the create-worktree-failure test: if no worktree exists yet, the notification omits
+      `operatorWorktreePath` instead of emitting an empty or partial value. (Test "omits the path
+      field when no worktree was created (create failed)".)
+- [x] Confirm every suite above fails (red) before starting the implementation block. (3 of 4 fail
+      cleanly — "expected undefined to be defined" — until the `start` event lands; the create-fail
+      guard passes pre-impl. 57 other work-runner tests still green; 0 new tsc errors.)
 
 ### Path on notifications
 

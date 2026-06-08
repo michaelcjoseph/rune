@@ -18,7 +18,7 @@ its `spec.md`.
 | [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
-| [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
+| [13-work-run-monitoring](13-work-run-monitoring/spec.md) | In Progress | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 
@@ -184,7 +184,7 @@ The smallest end-to-end test of the "better agentic systems" bet: a role-agent d
 - **Provenance:** planned 2026-06-02 from the top `ideas.md` bullet ("Better agentic systems"); three Codex critique rounds (over-engineering → adjust → architecture-fit) cut it from a five-role memory-substrate-plus-pipeline build down to this single-role wedge.
 - **Task breakdown & test plan:** see [tasks.md](12-writer-memory/tasks.md) and [test-plan.md](12-writer-memory/test-plan.md). Test-first per phase.
 
-## 13-work-run-monitoring — Not Started
+## 13-work-run-monitoring — In Progress
 
 [Spec](13-work-run-monitoring/spec.md)
 
