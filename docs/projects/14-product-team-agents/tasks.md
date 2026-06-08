@@ -270,19 +270,27 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] No-feedback test: no feedback record means no post-mortem and no memory write.
-- [ ] Feedback-source test: the nightly loop reads valid machine-readable feedback records
+- [x] No-feedback test: no feedback record means no post-mortem and no memory write.
+      (`learning-loop.test.ts` §6.1 — empty reader → attribute/writeLesson never called.)
+- [x] Feedback-source test: the nightly loop reads valid machine-readable feedback records
       through an injected/configured reader with project/run/task/source/evidence fields.
-- [ ] Malformed-feedback test: invalid feedback records are skipped with a durable reason and
-      do not trigger memory writes.
-- [ ] Attribution test: feedback for a known miss is attributed to a stage and writes one
-      atomic, provenance-stamped lesson into that role's `memory.md`.
-- [ ] No-lesson test: a miss judged uncatchable writes nothing.
-- [ ] Compounding test: lesson captured from run N loads into run N+1's role reference
-      context.
-- [ ] Fixture-feedback test: tests use injected/temp feedback records and require no real
-      vault feedback.
-- [ ] Confirm red before implementation.
+      (`feedback-record.test.ts` schema/validation + `learning-loop.test.ts` injected
+      `readFeedback` seam.)
+- [x] Malformed-feedback test: invalid feedback records are skipped with a durable reason and
+      do not trigger memory writes. (`feedback-record.test.ts` durable `FeedbackSkipReason`
+      per field + `learning-loop.test.ts` §6.3 skips without attribute/writeLesson.)
+- [x] Attribution test: feedback for a known miss is attributed to a stage and writes one
+      atomic, provenance-stamped lesson into that role's `memory.md`. (`learning-loop.test.ts`
+      §6.5 attribute→writeLesson + `memory-writer.test.ts` §6.4 single-commit provenance stamp.)
+- [x] No-lesson test: a miss judged uncatchable writes nothing. (`learning-loop.test.ts` §6.6
+      `no-lesson` attribution → writeLesson never called.)
+- [x] Compounding test: lesson captured from run N loads into run N+1's role reference
+      context. (`memory-writer.test.ts` §6.7 — writes into a temp role dir, then
+      `composeRoleContext` shows it in `referenceContext`, absent from `systemInstructions`.)
+- [x] Fixture-feedback test: tests use injected/temp feedback records and require no real
+      vault feedback. (All three suites use injected deps / tmpdir only — no vault/git/LLM.)
+- [x] Confirm red before implementation. (Confirmed: all three suites red on module-not-found
+      for `./feedback-record.js`, `./learning-loop.js`, `./memory-writer.js` — no impl created.)
 
 ### Implementation
 
