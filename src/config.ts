@@ -194,6 +194,23 @@ const config = {
     return join(this.LOGS_DIR, 'dispatch-log.jsonl');
   },
 
+  /** Append-only JSONL of machine-readable feedback records that drive the
+   *  product-team learning loop (project 14, Phase 6). Each line is one record
+   *  ({projectSlug, source, createdAt, issueSummary, evidence, ...}) consumed by
+   *  the nightly post-mortem. Read torn-line-tolerantly; malformed records are
+   *  skipped with a durable reason, never treated as no-feedback. */
+  get FEEDBACK_FILE() {
+    return join(this.LOGS_DIR, 'feedback.jsonl');
+  },
+
+  /** JSON set of content-hash ids for feedback records the learning loop has
+   *  already run a post-mortem on (project 14, Phase 6). Lets the nightly step
+   *  process each record exactly once instead of re-firing the post-mortem LLM
+   *  call every pass — source-agnostic (id is a hash of the record content). */
+  get FEEDBACK_PROCESSED_FILE() {
+    return join(this.LOGS_DIR, 'feedback-processed.json');
+  },
+
   /** Root directory for per-work-run durable artifacts (project 11). Each run
    *  gets a `<id>/` subdir holding `transcript.jsonl`, `summary.json`, and
    *  (Phase 3) forensics. Gitignored runtime state. */

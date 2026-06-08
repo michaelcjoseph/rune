@@ -308,7 +308,19 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       8/8 in `learning-loop.test.ts` green. The live nightly.ts cron composition — wiring
       the production feedback reader + LLM post-mortem + `writeRoleLesson` into this core —
       lands with the downstream seam tasks below.)
-- [ ] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
+- [x] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
+      (`src/intent/postmortem.ts` `runPostMortem` — a NEUTRAL Jarvis-owned `askClaudeOneShot`
+      call, NOT a role: `buildPostMortemPrompt` grounds the attribution in the role roster +
+      ownership table and delimits the untrusted feedback record; `parsePostMortemResult`
+      fail-closes (role∈ROLE_NAMES / stage∈ROLE_STAGES / non-empty), failing safe to
+      `no-lesson` so a broken post-mortem never fabricates a lesson. Wired live as the
+      `attribute` seam in nightly.ts `stepLearningLoop` (after 'Observation loop'), composed
+      with `readFeedbackRecords` + `writeRoleLesson` via `runLearningLoop`; a content-hash
+      processed-marker (`feedbackRecordId` + `logs/feedback-processed.json`) + per-pass cap
+      make each record a once-only post-mortem, fault-isolated per record. 16/16 in
+      `postmortem.test.ts`, 13/13 in `feedback-reader.test.ts`, nightly suites green. NOTE:
+      v1 makes the attribution in one neutral call grounded in role ownership; per-role
+      witness sub-interviews are a deferred elaboration the spec marks optional ("can").)
 - [x] Memory writer appends one privacy-clean, provenance-stamped lesson atomically.
       (`src/roles/memory-writer.ts` `writeRoleLesson` — privacy-filter → dedupe → stamp →
       append → ONE atomic commit via `src/roles/commit.ts` `commitRoleMemory` (pathspec-

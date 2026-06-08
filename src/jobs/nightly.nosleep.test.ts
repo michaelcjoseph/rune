@@ -62,6 +62,11 @@ vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 vi.mock('./registry-rebuild.js', () => ({
   rebuildRegistry: vi.fn(() => ({ products: 0, projects: 0 })),
 }));
+// Same reason: the learning-loop step's writeRoleLesson → roles/commit.js imports
+// execFile from node:child_process, which this suite mocks with spawn only.
+vi.mock('../roles/memory-writer.js', () => ({
+  writeRoleLesson: vi.fn(async () => ({ committed: false })),
+}));
 vi.mock('../utils/time.js', () => ({
   getTodayDate: vi.fn(),
   getTodayFilename: vi.fn(),

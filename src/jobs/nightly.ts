@@ -37,6 +37,15 @@ import {
 import { diarize, triage } from '../intent/observation-callbacks.js';
 import { readFiledIdeas, appendFiledIdeas } from '../intent/observation-ideas-io.js';
 import { createMutation } from '../transport/mutations.js';
+import { runLearningLoop } from '../intent/learning-loop.js';
+import {
+  readFeedbackRecords,
+  feedbackRecordId,
+  readProcessedFeedbackIds,
+  writeProcessedFeedbackIds,
+} from '../intent/feedback-reader.js';
+import { runPostMortem } from '../intent/postmortem.js';
+import { writeRoleLesson } from '../roles/memory-writer.js';
 
 const log = createLogger('nightly');
 
@@ -569,6 +578,82 @@ async function stepObservation(bus?: NotificationBus): Promise<NightlyStepResult
   };
 }
 
+/** Max feedback records the learning loop post-mortems in one nightly pass — bounds
+ *  the step's wall-clock (each record is a serial LLM call) so a large backlog can't
+ *  stall the pipeline. The remainder is picked up on subsequent nights. */
+const LEARNING_LOOP_MAX_PER_PASS = 20;
+/** Per-record post-mortem timeout — the prompt is short and bounded, so it needs far
+ *  less than the default Claude budget; a slow call shouldn't hold up the pass. */
+const POSTMORTEM_TIMEOUT_MS = 60_000;
+
+/** Product-team learning loop (project 14, Phase 6). Reads machine-readable feedback
+ *  records, runs the Jarvis-owned post-mortem on each NOT-yet-processed record (up to
+ *  a per-pass cap), and writes one attributed, privacy-clean lesson into the
+ *  responsible role's memory.md (its own atomic commit in the jarvis repo). Each
+ *  record is processed exactly once via a content-hash marker, so the post-mortem LLM
+ *  call never re-fires for the same record on later nights. No feedback / nothing new
+ *  → skipped. Each malformed record is a durable skip, never silent no-feedback.
+ *
+ *  Note: the marker bounds re-processing source-agnostically; a richer feedback
+ *  source/cursor lands with the Phase 6 discovery-surface wiring. */
+async function stepLearningLoop(): Promise<NightlyStepResult> {
+  const all = readFeedbackRecords(config.FEEDBACK_FILE);
+  const processed = readProcessedFeedbackIds(config.FEEDBACK_PROCESSED_FILE);
+  // Compute each id once; reuse it for both the unprocessed filter and the
+  // post-pass mark so the mark provably covers exactly the records we ran.
+  const freshWithIds = all
+    .map((r) => ({ record: r, id: feedbackRecordId(r) }))
+    .filter(({ id }) => !processed.has(id))
+    .slice(0, LEARNING_LOOP_MAX_PER_PASS);
+  const fresh = freshWithIds.map(({ record }) => record);
+
+  if (fresh.length === 0) {
+    return { step: 'Learning loop', status: 'skipped', detail: 'No new feedback records' };
+  }
+
+  const result = await runLearningLoop({
+    // `fresh` is already filtered (unprocessed) and capped; this seam exists so the
+    // loop core stays I/O-free and unit-testable, not to do further reading.
+    readFeedback: () => fresh,
+    // Fault-isolate the post-mortem at the seam so one bad record never aborts the pass.
+    attribute: async (record) => {
+      try {
+        return await runPostMortem(record, {
+          ask: (prompt) => askClaudeOneShot(prompt, POSTMORTEM_TIMEOUT_MS, 'learning-postmortem'),
+        });
+      } catch (err) {
+        log.warn('Learning loop: post-mortem threw', { error: String(err) });
+        return { kind: 'no-lesson', rationale: `post-mortem threw: ${String(err)}` };
+      }
+    },
+    writeLesson: async (role, lesson, record) => {
+      try {
+        // Provenance slug ties the lesson back to its feedback origin; writeRoleLesson
+        // derives a safe fallback if this fails the slug shape.
+        const sourceSlug = `${record.projectSlug}-fb-${record.createdAt.slice(0, 10)}`;
+        const res = await writeRoleLesson({ role, lesson, sourceSlug, fallbackTopic: record.projectSlug });
+        return { committed: res.committed, captured: res.captured };
+      } catch (err) {
+        log.warn('Learning loop: lesson write threw', { error: String(err) });
+        return { committed: false };
+      }
+    },
+  });
+
+  // Mark every record we READ this pass (incl. malformed) processed, so it is never
+  // re-attempted — a malformed record is a once-only durable skip, not a nightly retry.
+  for (const { id } of freshWithIds) processed.add(id);
+  writeProcessedFeedbackIds(config.FEEDBACK_PROCESSED_FILE, processed);
+
+  const detail =
+    `${result.lessonsWritten} lesson(s), ${result.lessonsFiltered} filtered, ` +
+    `${result.noLessonOutcomes} no-lesson, ${result.skipped.length} malformed`;
+  // A batch where every record was malformed wrote nothing and is worth flagging,
+  // not rendering green.
+  const status = result.processed === 0 && result.skipped.length > 0 ? 'error' : 'success';
+  return { step: 'Learning loop', status, detail };
+}
+
 async function stepLint(): Promise<NightlyStepResult> {
   if (getDayOfWeek() !== 'Sunday') {
     return { step: 'KB lint', status: 'skipped', detail: 'Not Sunday' };
@@ -680,6 +765,7 @@ export async function executeNightly(
   await run('KB queue', stepKBQueue);
   await run('Whoop activity', stepWhoopActivity);
   await run('Observation loop', () => stepObservation(options?.bus));
+  await run('Learning loop', stepLearningLoop);
   await run('KB lint', stepLint);
   await run('Mark processed', () => stepMarkProcessed(todayFilename, todayJournal, todayDate));
 

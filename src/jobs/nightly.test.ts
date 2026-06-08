@@ -127,9 +127,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 14 steps and returns results', async () => {
+    it('runs all 15 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -143,6 +143,7 @@ describe('jobs/nightly', () => {
         'KB queue',
         'Whoop activity',
         'Observation loop',
+        'Learning loop',
         'KB lint',
         'Mark processed',
       ]);
@@ -922,7 +923,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -951,7 +952,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -982,7 +983,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -993,7 +994,7 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       // Registry rebuild (inserted between Playbook extract and Journal-intent
       // producer) shifts KB queue from index 8 → 9. Order ahead of it: Session
       // capture, Daily tags, Birthday alerts, Playbook extract, Registry rebuild,
@@ -1008,7 +1009,7 @@ describe('jobs/nightly', () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(14);
+      expect(result.steps).toHaveLength(15);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -1019,9 +1020,9 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is last (index 13 after the Registry rebuild step was
-      // inserted; it shifts the tail down by one more).
-      expect(result.steps[13]!.step).toBe('Mark processed');
+      // Mark processed is last (index 14 after the Registry rebuild and Learning
+      // loop steps were inserted; they shift the tail down).
+      expect(result.steps[14]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {
