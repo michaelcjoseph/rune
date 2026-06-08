@@ -41,6 +41,21 @@ export interface WorkRunSummary {
   endedAt: string;
   transcriptPath: string;
   forensicsPath: string;
+  /** Gated-merge disposition (Phase 3.5) — present once the finalizer has
+   *  resolved a branch-complete run: `merged` true when the run landed on the
+   *  base branch, `branchDeleted` true when the work branch was then removed.
+   *  Absent on the pre-merge summary write and on every non-branch-complete
+   *  run. */
+  merged?: boolean;
+  branchDeleted?: boolean;
+  /** The base branch a branch-complete run targets (e.g. `main`) — stamped so a
+   *  cockpit/restart reader renders the right "merged to <base>" wording for a
+   *  non-`main` product. */
+  baseBranch?: string;
+  /** Why a branch-complete run was HELD off the base branch (the gate's typed
+   *  refusal reason) — persisted so the hold reason survives a restart and
+   *  reaches the cockpit, not just the live Telegram notification. */
+  gateHeldReason?: string;
 }
 
 /** One row in `logs/work-runs/index.jsonl` — the rolling recent-runs index. */

@@ -459,9 +459,17 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       outer `finally` now runs `if (sandbox && !finalizerOwnedTeardown)` — a removeWorktree that threw
       leaves the flag false so the `finally` retries; early-return/abort paths keep `finally` ownership.
       The Phase 3.5 "tears the worktree down exactly once" test pins no double-destroy.)
-- [ ] Wire the merged-notification surface: success → notify (Telegram + cockpit) `merged`/branch
+- [x] Wire the merged-notification surface: success → notify (Telegram + cockpit) `merged`/branch
       deleted, set `summary.json` `merged`/`branchDeleted`; gate-fail → `alert(reason)` that the run was
-      held at `branch-complete` off `main` (never a silently-dropped alert).
+      held at `branch-complete` off `main` (never a silently-dropped alert). (After `runFinalizer`,
+      `apply()` stamps `merged`/`branchDeleted`/`baseBranch` (+ `gateHeldReason` when held) onto the
+      branch-complete terminal event and re-writes `summary.json` with the resolved disposition (the
+      finalizer's own `writeSummary` ran before the merge). `TelegramSender.formatWorkRunTerminal`
+      renders `✅ merged to <base> · branch deleted/retained` for a merged run and `✅ branch-complete ·
+      held off <base>: <reason>` for a gate-held run — never a silent drop. The webview/cockpit receives
+      the same disposition via the bus terminal event (`webview-sender.onMutationEvent`) and the
+      persisted `summary.json` (read by `readWorkRunProjections`). Tests: telegram-sender merged + held
+      formats, work-runner terminal-event + summary re-write.)
 - [ ] Make `recovery-finalize-runner` resume a run that crashed mid-gated-merge in `gated-merge` mode
       off its phase records (the P1.5 note flagged it currently re-drives `hold` only).
 

@@ -129,7 +129,9 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
 // imports them. Defaults: a GREEN gate + a pass-through lock, so the happy-path
 // wiring test goes green once apply() composes the gate effect as
 // `gate = () => withBaseBranchLock(product, baseBranch, () => runGate(...))`.
-const mockRunGate = vi.fn(async () => ({ ok: true }));
+const mockRunGate = vi.fn(
+  async (): Promise<{ ok: true } | { ok: false; reason: string }> => ({ ok: true }),
+);
 vi.mock('./work-run-gate-runtime.js', () => ({ runGate: mockRunGate }));
 const mockWithBaseBranchLock = vi.fn(
   async (_product: string, _base: string, fn: () => unknown) => fn(),
@@ -1859,6 +1861,44 @@ describe('workRunApplier', () => {
       // durable backup before the local branch ref is removed).
       expect(mergeIdx).toBeLessThan(pushIdx);
       expect(pushIdx).toBeLessThan(deleteIdx);
+    });
+
+    it('stamps the merged disposition onto the terminal event + re-writes summary.json (Phase 3.5 notification)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-notify'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      // The disposition reaches the operator notification surface.
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(true);
+      expect(terminal.data.branchDeleted).toBe(true);
+      // summary.json was re-written post-finalize with the resolved disposition
+      // (the LAST writeSummary call carries merged/branchDeleted).
+      const lastSummary = writeSummarySpy.mock.calls.at(-1)![1];
+      expect(lastSummary.merged).toBe(true);
+      expect(lastSummary.branchDeleted).toBe(true);
+    });
+
+    it('surfaces the gate-held reason on the terminal event when the gate refuses (never a silent drop)', async () => {
+      setupBranchComplete();
+      // Gate refuses → run holds at branch-complete, never merges.
+      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(false);
+      expect(terminal.data.gateHeldReason).toBe('tests-red');
     });
 
     it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {

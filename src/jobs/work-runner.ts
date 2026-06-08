@@ -517,6 +517,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // a branch-complete run is 0 by definition, but capture it rather than
         // assume so a misclassification can't slip a non-zero past the gate.
         let gateTasksRemaining = 0;
+        // Set by the gate-fail `alert` effect so the yielded terminal event can
+        // surface WHY a branch-complete run was held off main (never a silently-
+        // dropped alert) on the Telegram/cockpit notification surface.
+        let gateHeldReason: GateFailReason | null = null;
 
         // Single end timestamp shared by summary.json + the index row. Captured
         // inside the `classify` effect (when classification actually completes)
@@ -702,6 +706,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // Gate refused → the run holds at branch-complete off `main`. Never a
           // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
           alert: (reason: GateFailReason) => {
+            // Record the reason so the yielded terminal event surfaces it on the
+            // operator notification surface (Telegram/cockpit), not just the log.
+            gateHeldReason = reason;
             log.warn('work-run held at branch-complete: gate failed', {
               id: descriptor.id,
               projectSlug,
@@ -762,9 +769,61 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           effects,
         );
 
-        // The finalizer surfaces the classified terminal event on its result
-        // (`classify` always runs first in hold mode). Yield it so mutations.ts
-        // persists the mutation log + drives the terminal supervision write.
+        // Stamp the gated-merge DISPOSITION onto the terminal event so the
+        // operator surfaces (TelegramSender's formatWorkRunTerminal, the cockpit)
+        // render `merged to main` / `held off main: <reason>` rather than a bare
+        // branch-complete — and re-write summary.json with merged/branchDeleted
+        // now that the finalizer has resolved them (the finalizer's own
+        // writeSummary ran BEFORE the merge, so it couldn't carry them). The
+        // disposition keys are only meaningful for a branch-complete run; a held
+        // run carries `merged:false` + the gate reason, never a silent drop.
+        const termData = (result.terminalEvent.data ?? {}) as Record<string, unknown>;
+        if (readOutcome(result.terminalEvent) === 'branch-complete') {
+          termData['merged'] = result.merged;
+          termData['branchDeleted'] = result.branchDeleted;
+          // Stamp the base branch so the formatter renders "merged to <base>"
+          // correctly for a non-`main` product (defaults to `main` if absent).
+          termData['baseBranch'] = baseBranch;
+          if (!result.merged && gateHeldReason) termData['gateHeldReason'] = gateHeldReason;
+          // Reassign covers the `data === null/undefined` case; on the normal
+          // path termData aliases the existing object and the mutations above
+          // already took.
+          result.terminalEvent.data = termData;
+          // Best-effort summary re-write with the resolved disposition (a disk
+          // failure must not deny the terminal — mirrors the finalizer's own
+          // best-effort writeSummary).
+          try {
+            deps.writeSummary(
+              join(deps.workRunsDir, descriptor.id),
+              buildSummary({
+                id: descriptor.id,
+                project: projectSlug,
+                product,
+                branch,
+                baseSha,
+                t0,
+                exit: streamResult.exit,
+                terminalEvent: result.terminalEvent,
+                sink,
+                workRunsDir: deps.workRunsDir,
+                endedAt,
+                merged: result.merged,
+                branchDeleted: result.branchDeleted,
+                baseBranch,
+                gateHeldReason: !result.merged && gateHeldReason ? gateHeldReason : undefined,
+              }),
+            );
+          } catch (err) {
+            log.warn('work-runner: post-finalize summary re-write failed', {
+              id: descriptor.id,
+              error: (err as Error).message,
+            });
+          }
+        }
+
+        // The finalizer surfaces the classified terminal event on its result.
+        // Yield it (disposition-augmented) so mutations.ts persists the mutation
+        // log + drives the terminal supervision write.
         yield result.terminalEvent;
       } finally {
         unregisterActiveProcess(child);
@@ -1229,10 +1288,18 @@ interface BuildSummaryOpts {
   /** Run end time (ISO). Captured once by the caller and shared with the index
    *  row so the two artifacts agree to the millisecond. */
   endedAt: string;
+  /** Gated-merge disposition (Phase 3.5) — only set on the post-finalize
+   *  summary re-write, once the finalizer has resolved merge/delete. */
+  merged?: boolean;
+  branchDeleted?: boolean;
+  /** Base branch the run targets + the gate's hold reason (if held) — persisted
+   *  so the disposition survives a restart and reaches the cockpit. */
+  baseBranch?: string;
+  gateHeldReason?: string;
 }
 
 function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
-  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt } = opts;
+  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt, merged, branchDeleted, baseBranch, gateHeldReason } = opts;
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
   const outcome = readOutcome(terminalEvent);
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
@@ -1256,6 +1323,12 @@ function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
     // recorded strings are repo-relative.
     transcriptPath: scrubPathsInText(sink?.path ?? ''),
     forensicsPath: scrubPathsInText(join(workRunsDir, id)),
+    // Only stamp the gated-merge disposition keys when present (the post-finalize
+    // re-write) so the pre-merge summary stays clean.
+    ...(merged !== undefined ? { merged } : {}),
+    ...(branchDeleted !== undefined ? { branchDeleted } : {}),
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+    ...(gateHeldReason !== undefined ? { gateHeldReason } : {}),
   };
 }
 
