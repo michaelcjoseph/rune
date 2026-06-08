@@ -421,6 +421,10 @@ All timer tests use injected clocks; no test sleeps for these wall-clock duratio
   replay; this is an automated sequencing rule, not a manual attendance requirement.
 - All required verification is automated with temp repos, injected streams, injected clocks, and
   fake sender/HTTP tests; live smoke testing is optional only.
+- **Live gated-merge activation: GO (operator decision 2026-06-07, option #2).** Wire the live
+  work-runner to `gated-merge` mode for branch-complete + the merged-notification surface (Phase 3.5 in
+  tasks.md). Run non-interactively — do not re-ask via `AskUserQuestion` (the auto-deny is the bug under
+  fix). The branch merge → `main` and the jarvis server restart remain a human go-live step.
 
 ---
 

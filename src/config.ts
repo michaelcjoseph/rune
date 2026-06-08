@@ -258,6 +258,25 @@ const config = {
   WORK_RUN_RETENTION_MAX_RUNS: parseNumericEnv('WORK_RUN_RETENTION_MAX_RUNS', 3, { min: 1, integer: true }),
   WORK_RUN_RETENTION_MAX_BYTES: parseNumericEnv('WORK_RUN_RETENTION_MAX_BYTES', 200 * 1024 * 1024, { min: 1, integer: true }),
 
+  /** Work-run finalizer timing constants (project 15). All in ms, positive
+   *  integers; an invalid override falls back to the spec default.
+   *  - TERMINAL_DRAIN: after the agent emits a terminal `result`, how long to
+   *    wait for the child to exit on its own before the watchdog reaps the
+   *    group (P0.2). The child is NOT killed on `result` — only if it wedges.
+   *  - REAP_GRACE: SIGTERM→SIGKILL grace when reaping the process group.
+   *  - QUIET_CANCEL_AFTER: how long a run may stay quiet past the first nudge
+   *    before the backstop actuator escalates to cancel/reap/finalize (P2.7).
+   *  - MAX_RUNTIME: hard ceiling after which a run is group-killed and finalized
+   *    regardless of apparent liveness (P2.7) — the keep-alive ticker can't
+   *    defeat it.
+   *  - GATE_COMMAND_TIMEOUT: per validation-command budget in the merge gate
+   *    (P1.5); a timeout is a red gate result, not a wedge. */
+  WORK_RUN_TERMINAL_DRAIN_MS: parseNumericEnv('WORK_RUN_TERMINAL_DRAIN_MS', 30_000, { min: 1, integer: true }),
+  WORK_RUN_REAP_GRACE_MS: parseNumericEnv('WORK_RUN_REAP_GRACE_MS', 5_000, { min: 1, integer: true }),
+  WORK_RUN_QUIET_CANCEL_AFTER_MS: parseNumericEnv('WORK_RUN_QUIET_CANCEL_AFTER_MS', 1_200_000, { min: 1, integer: true }),
+  WORK_RUN_MAX_RUNTIME_MS: parseNumericEnv('WORK_RUN_MAX_RUNTIME_MS', 7_200_000, { min: 1, integer: true }),
+  WORK_RUN_GATE_COMMAND_TIMEOUT_MS: parseNumericEnv('WORK_RUN_GATE_COMMAND_TIMEOUT_MS', 600_000, { min: 1, integer: true }),
+
   /** True when started with `NODE_ENV=production` — read by surfaces that
    *  want to cache static assets (the webview's index.html template) in
    *  prod and re-read on every request in dev so source edits show up

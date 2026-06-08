@@ -41,12 +41,24 @@ vi.mock('../config.js', () => ({
     PROJECT_ROOT: TEST_PROJECT_ROOT,
     WORK_RUN_PER_PROJECT_CAP: 1,
     WORK_RUN_GLOBAL_CAP: 2,
+    // Project 15 (P0.2) — read at module load into TERMINAL_DRAIN_MS /
+    // REAP_SIGKILL_MS. Spec defaults so the watchdog timing matches the tests.
+    WORK_RUN_TERMINAL_DRAIN_MS: 30_000,
+    WORK_RUN_REAP_GRACE_MS: 5_000,
     WORKSPACE_DIR: undefined,
     TELEGRAM_USER_ID: 42,
     // Used by productionRuntimeDeps() (the seam __resetWorkRunRuntimeForTest
     // restores between tests) so the restored object has a defined dir even
     // though every test re-injects its own via __setWorkRunRuntimeForTest.
     WORK_RUNS_DIR: '/tmp/test-work-runs',
+    WORK_RUNS_INDEX_FILE: '/tmp/test-work-runs/index.jsonl',
+    // Phase 3.5 gated-merge wiring reads these in the common apply() path: the
+    // integration-worktree path (`join(WORKTREE_ROOT, …)`), the product config
+    // path (passed to the mocked getProductConfig), and the per-command gate
+    // timeout (passed to the mocked runGate).
+    WORKTREE_ROOT: '/tmp/test-worktrees',
+    PRODUCTS_CONFIG_FILE: '/tmp/test-products.json',
+    WORK_RUN_GATE_COMMAND_TIMEOUT_MS: 600_000,
   },
 }));
 
@@ -82,10 +94,51 @@ vi.mock('./work-run-gc-runner.js', () => ({
 // their own git runner via the runtime seam regardless).
 const mockCreateWorktree = vi.fn();
 const mockDestroyWorktree = vi.fn();
+// `getProductConfig` is the Phase 3.5 baseBranch source — the gated-merge wiring
+// reads `getProductConfig(product, …).baseBranch` to know what `main` the run
+// would land on. Inert until that wiring imports it (hold mode never reads it).
+const mockGetProductConfig = vi.fn(() => ({
+  product: 'jarvis',
+  repoPath: '/test/repo/jarvis',
+  baseBranch: 'main',
+  egressAllowlist: [],
+  validationCommands: ['npm run build', 'npm test'],
+}));
 vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  getProductConfig: mockGetProductConfig,
+}));
+
+// --- Phase 3.5 (live gated-merge activation) test seams ---
+
+// Spy-wrap the REAL runFinalizer so the existing hold-mode tests keep real
+// behavior (the wrap calls through) while the Phase 3.5 live-wiring tests assert
+// the MODE and the effects apply() constructs. The `vi.hoisted` holder lets the
+// (hoisted) vi.mock factory publish the spy back to the test body.
+const finalizerHarness = vi.hoisted(() => ({ runFinalizerSpy: undefined as any }));
+vi.mock('./work-run-finalizer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./work-run-finalizer.js')>();
+  finalizerHarness.runFinalizerSpy = vi.fn(actual.runFinalizer);
+  return { ...actual, runFinalizer: finalizerHarness.runFinalizerSpy };
+});
+
+// Gate runtime + per-base-branch merge lock. work-runner does NOT import these
+// in `hold` mode, so the mocks sit inert until the Phase 3.5 gated-merge wiring
+// imports them. Defaults: a GREEN gate + a pass-through lock, so the happy-path
+// wiring test goes green once apply() composes the gate effect as
+// `gate = () => withBaseBranchLock(product, baseBranch, () => runGate(...))`.
+const mockRunGate = vi.fn(
+  async (): Promise<{ ok: true } | { ok: false; reason: string }> => ({ ok: true }),
+);
+vi.mock('./work-run-gate-runtime.js', () => ({ runGate: mockRunGate }));
+const mockWithBaseBranchLock = vi.fn(
+  async (_product: string, _base: string, fn: () => unknown) => fn(),
+);
+vi.mock('./work-run-merge-lock.js', () => ({
+  withBaseBranchLock: mockWithBaseBranchLock,
+  baseBranchLockKey: (p: string, b: string) => `${p}:${b}`,
 }));
 
 const FAKE_WORKTREE = '/test/worktrees/jarvis/06-webview';
@@ -701,6 +754,226 @@ describe('workRunApplier', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // -----------------------------------------------------------------------
+    // P0.2 (project 15) — terminal-result watchdog. test-plan §3. WRITE-FIRST.
+    //
+    // The NEW gap (distinct from the wedge test above): the agent emits a
+    // terminal `result` and then the process NEVER exits — `exit` never fires
+    // because backgrounded tasks (a hung `vitest`) keep `claude -p` alive. The
+    // existing reapTree() is triggered only from `on('exit')`, so nothing
+    // finalizes; the run sits `running` for hours (the d0679453 incident).
+    //
+    // The watchdog the impl must add: on the terminal `result` envelope, open a
+    // bounded drain window (WORK_RUN_TERMINAL_DRAIN_MS). If the child exits on
+    // its own within it, teardown proceeds via the existing exit-keyed path with
+    // NO watchdog reap. If it does NOT, the watchdog reaps the process group
+    // (SIGTERM → SIGKILL → force-complete) and stamps the exit fact
+    // `reaped-after-terminal-result` so the classifier can tell an internal
+    // post-result reap apart from an external kill.
+    //
+    // RED cases: "never exits → reap + exit fact" and the incident-shape replay
+    // (no watchdog exists yet → no reap, run never finishes). GREEN guards:
+    // "exits within window → no watchdog reap" and "not killed before the drain
+    // deadline" both hold under current code and protect against a
+    // finalize-immediately-on-result regression (the unsafe early proposal).
+    // -----------------------------------------------------------------------
+    describe('terminal-result watchdog (P0.2)', () => {
+      /** Manual child that emits nothing on its own — the test drives stdout +
+       *  exit/close explicitly so the drain window can be exercised. */
+      function makeManualChild() {
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        const child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        return { child, stdout, stderr };
+      }
+
+      const RESULT_LINE = Buffer.from(
+        JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }) + '\n',
+      );
+
+      it('result emitted then child never exits → drain → group reap → reaped-after-terminal-result', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        let consume: Promise<void> | undefined;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-hang', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => { /* current-code red path: the loop never completes */ });
+
+          await vi.advanceTimersByTimeAsync(0);
+          // Agent reports success but the process never exits (hung background task).
+          m.stdout.emit('data', RESULT_LINE);
+          // No `exit`, no `close`. Advance past the drain window + SIGKILL grace +
+          // force-done ceiling (drain 30s + reap 3s + force 10s, with headroom).
+          await vi.advanceTimersByTimeAsync(60_000);
+
+          // The watchdog must have reaped the group and force-completed the run.
+          expect(killSpy).toHaveBeenCalledWith(child, 'SIGTERM');
+          expect(finished).toBe(true);
+          const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+          expect(terminal).toBeDefined();
+          expect((terminal!.data as any)?.exit?.exitFact).toBe('reaped-after-terminal-result');
+        } finally {
+          // Release any still-hanging consume on the red path, THEN await it so
+          // the generator is fully drained before timers/seams are reset.
+          try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+          await consume;
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('result emitted then child exits within the drain window → no watchdog reap, clean exit fact', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-clean', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          const consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // Child exits on its own well within the drain window, then stdio closes.
+          await vi.advanceTimersByTimeAsync(2_000);
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+          await vi.advanceTimersByTimeAsync(0);
+          await consume;
+
+          expect(finished).toBe(true);
+          const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+          expect(terminal).toBeDefined();
+          // Teardown went through the exit-keyed path — NOT a watchdog reap.
+          expect((terminal!.data as any)?.exit?.exitFact).not.toBe('reaped-after-terminal-result');
+        } finally {
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('does NOT kill the child immediately on result (no signal before the drain deadline)', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        try {
+          setupValidProject('06-webview');
+          const killSpy = vi.fn();
+          __setKillProcessTreeForTest(killSpy);
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-watchdog-nokill', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const consume = (async () => {
+            for await (const _e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              /* drain */
+            }
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // Advance only PART of the drain window — the child must not be killed
+          // yet (guards against the unsafe finalize-immediately-on-result path
+          // that re-introduces the false `failed` the 2026-06-04 fix removed).
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(killSpy).not.toHaveBeenCalled();
+
+          // Release the run for cleanup.
+          child.emit('exit', 0, null);
+          child.emit('close', 0, null);
+          await vi.advanceTimersByTimeAsync(0);
+          await consume;
+        } finally {
+          vi.useRealTimers();
+          __resetKillProcessTreeForTest();
+        }
+      });
+
+      it('incident replay shape: result:success then a never-exiting child reaches a terminal state with no human', async () => {
+        vi.useFakeTimers();
+        let child: any;
+        let consume: Promise<void> | undefined;
+        try {
+          setupValidProject('06-webview');
+          // beforeEach already installs a no-op kill stub; this test doesn't
+          // assert on reaping, so it neither overrides nor resets that seam.
+          const m = makeManualChild();
+          child = m.child;
+          mockSpawn.mockReturnValue(child);
+
+          const descriptor = {
+            id: 'mut-incident-d0679453', kind: 'work-run',
+            payload: { projectSlug: '06-webview' }, status: 'running',
+          } as any;
+
+          const events: any[] = [];
+          let finished = false;
+          consume = (async () => {
+            for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+              events.push(e);
+            }
+            finished = true;
+          })().catch(() => {});
+
+          await vi.advanceTimersByTimeAsync(0);
+          m.stdout.emit('data', RESULT_LINE);
+          // The keep-alive ticker stays fresh forever (the incident: "quiet, not
+          // stalled") — only the watchdog can break the wedge. Inject the clock
+          // past the drain window; no exit, no external kill.
+          await vi.advanceTimersByTimeAsync(60_000);
+
+          expect(finished).toBe(true);
+          expect(events.some((e) => e.kind === 'completed' || e.kind === 'failed')).toBe(true);
+        } finally {
+          try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+          await consume;
+          vi.useRealTimers();
+          // afterEach resets the kill seam; this test installed no override.
+        }
+      });
     });
 
     it('calls createWorktree with product=jarvis, project=slug, branch=jarvis-work/<slug>', async () => {
@@ -1332,6 +1605,393 @@ describe('workRunApplier', () => {
       const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
       expect(terminals).toHaveLength(1);
       expect(terminals[0].data.outcome).toBe('noop');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P1.6 — the live failure/partial/cancelled terminal path flows through the
+  // shared finalizer (`runFinalizer` in `hold` mode). These are §7 guards at
+  // the LIVE surface (test-plan.md §7): a run that classifies `failed` always
+  // reaches a single terminal event (never left `running`), always flushes the
+  // transcript + writes summary + index (forensics durable on the failure
+  // path), never merges/pushes/deletes, and tears down the worktree while
+  // RETAINING the branch (no `git branch -d/-D`). The finalizer-module-level
+  // guarantees are pinned in work-run-finalizer.test.ts §7; these prove the
+  // live apply() path is actually wired through that machine.
+  // -------------------------------------------------------------------------
+  describe('apply — failure path routed through the finalizer (P1.6)', () => {
+    function descriptorFor(id: string) {
+      return {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+    }
+
+    /** Force a `failed` classification: computeWorkProduct's git throws, so
+     *  finalizeWorkRun takes the classification-error → `failed` branch.
+     *  Returns the recorded git-arg list — the replaced mockImplementation
+     *  bypasses makeGitStub's own `calls` array, so the branch-retention test
+     *  asserts against THIS list instead (otherwise the merge/push check would
+     *  be vacuous against an always-empty `gitStub.calls`). */
+    function makeFailingGit(): string[][] {
+      const calls: string[][] = [];
+      gitStub.stub.mockImplementation(async (args: string[]) => {
+        calls.push([...args]);
+        // The commit-poll's `git log` is best-effort (its own try/catch); the
+        // classifier's rev-list/diff/status throwing is what drives the failed
+        // outcome. Throw for everything so computeWorkProduct rejects.
+        throw new Error(`git unavailable: ${args.join(' ')}`);
+      });
+      return calls;
+    }
+
+    it('a failed run yields exactly ONE terminal `failed` event — never left running', async () => {
+      setupValidProject('06-webview');
+      makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-p16-failed'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].kind).toBe('failed');
+      expect(terminals[0].data.outcome).toBe('failed');
+      // The run identity still rides the terminal (finalizer's classify effect
+      // augments it) so downstream surfaces can label the run.
+      expect(terminals[0].data.projectSlug).toBe('06-webview');
+    });
+
+    it('the failure path still flushes the transcript, writes summary.json + the index row', async () => {
+      setupValidProject('06-webview');
+      makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-p16-durable'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Forensics durable on the failure path: transcript flushed, summary +
+      // index written with the failed outcome.
+      expect(currentSink.finish).toHaveBeenCalledOnce();
+      expect(writeSummarySpy).toHaveBeenCalledOnce();
+      expect(writeSummarySpy.mock.calls[0]![1].outcome).toBe('failed');
+      expect(indexRows).toHaveLength(1);
+      expect(indexRows[0]!.row.outcome).toBe('failed');
+    });
+
+    it('the failure path tears down the worktree but RETAINS the branch (never merges/deletes)', async () => {
+      setupValidProject('06-webview');
+      const gitCalls = makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-p16-branch'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Worktree torn down (the outer finally owns teardown).
+      expect(mockDestroyWorktree).toHaveBeenCalledOnce();
+      // git WAS invoked (the classifier's rev-list/diff/status) — but `hold`
+      // mode never merges, pushes, or deletes the branch, so none of those args
+      // ever reached the runner. Asserting against the recorded calls (not the
+      // bypassed gitStub.calls) makes this a real check, not a vacuous one.
+      expect(gitCalls.length).toBeGreaterThan(0);
+      const branchMutations = gitCalls.filter(args =>
+        args.includes('merge') ||
+        args.includes('push') ||
+        (args.includes('branch') && (args.includes('-d') || args.includes('-D'))),
+      );
+      expect(branchMutations).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 3.5 — live gated-merge activation (test-plan.md §6/§8).
+  //
+  // These are WRITE-FIRST tests for the gated-merge wiring (tasks.md Phase 3.5
+  // "Wiring"). They are RED against the current `hold`-mode live path and turn
+  // GREEN once apply() routes a branch-complete terminal through
+  // `runFinalizer({ mode: 'gated-merge', baseBranch })` with the real injected
+  // effects. The finalizer-module-level gated-merge behavior is already pinned
+  // in work-run-finalizer.test.ts; these prove the LIVE work-runner surface is
+  // actually wired through that machine.
+  //
+  // Contract the wiring tasks implement (so these tests author the seam):
+  //   - baseBranch is read from `getProductConfig(product, …).baseBranch`.
+  //   - mode is `gated-merge` for a branch-complete outcome (runGatedMerge holds
+  //     every other outcome, so non-branch-complete runs never merge).
+  //   - gate effect = `() => withBaseBranchLock(product, baseBranch, () =>
+  //     runGate({…}))` — the lock wraps the gate (req 14).
+  //   - merge/push/delete effects = decomposed `realMergeBranch` git steps run
+  //     through `deps.runGit` (so they are observable here), push BEFORE delete.
+  //   - removeWorktree (real) owns teardown and sets a `finalizerOwnedTeardown`
+  //     flag so the outer `finally` does NOT double-destroy the worktree.
+  //   - recordPhase/readLastPhase are backed by the durable per-run phase store
+  //     seam (`deps.recordWorkRunPhase` / `deps.readLastWorkRunPhase`) that P0.4
+  //     recovery reads to resume mid-gated-merge.
+  // -------------------------------------------------------------------------
+  describe('apply — branch-complete routed through the gated-merge finalizer (Phase 3.5)', () => {
+    function descriptorFor(id: string, product?: string) {
+      return {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview', ...(product ? { product } : {}) },
+        status: 'running',
+      } as any;
+    }
+
+    /** Set up a `branch-complete` classification: a commit on the branch
+     *  (rev-list returns a sha), a clean tree (status empty), and all baseline
+     *  tasks checked (tasksRemaining 0). Returns a fresh RECORDING git stub
+     *  injected as the runtime `runGit` — the gated-merge wiring routes
+     *  merge/push/delete through `deps.runGit`, so those land in `gitCalls`
+     *  here — plus phase-store spies injected through the seam.
+     *
+     *  Layering note: must be called AFTER `beforeEach` has injected the base
+     *  runtime deps — it overlays only `runGit` + the phase-store spies onto the
+     *  beforeEach-injected object (the merge-partial seam), leaving
+     *  writeSummary/appendIndexRow/createSink/runForensics in place. */
+    function setupBranchComplete() {
+      setupValidProject('06-webview');
+      // Override tasks.md (baseline read at spawn AND final read post-run) to
+      // all-checked so `tasksRemaining` is 0 → with a commit → branch-complete.
+      const liveTasks = join(PROJECTS_DIR, '06-webview', 'tasks.md');
+      const wtTasks = join(FAKE_WORKTREE, 'docs', 'projects', '06-webview', 'tasks.md');
+      mockReadFileSync.mockImplementation((p: string) => {
+        if (p.endsWith('spec.md')) return '# Spec\n\nDo something.';
+        if (p === liveTasks || p === wtTasks) return '## Phase A\n\n- [x] Task 1\n- [x] Task 2\n';
+        return '';
+      });
+      const gitCalls: string[][] = [];
+      const stub = vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        // A commit on the branch for the classifier; every other git arg
+        // (status/diff/merge/push/branch -d) returns success and is recorded.
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'abc123def456\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const recordWorkRunPhase = vi.fn();
+      const readLastWorkRunPhase = vi.fn(() => null);
+      __setWorkRunRuntimeForTest({
+        runGit: stub as never,
+        recordWorkRunPhase: recordWorkRunPhase as never,
+        readLastWorkRunPhase: readLastWorkRunPhase as never,
+      });
+      return { gitCalls, stub, recordWorkRunPhase, readLastWorkRunPhase };
+    }
+
+    it('routes a branch-complete terminal through runFinalizer({ mode: "gated-merge", baseBranch }) (RED until wiring)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-mode'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(finalizerHarness.runFinalizerSpy).toHaveBeenCalled();
+      const input = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![0];
+      // Currently `hold` → RED; the wiring flips a branch-complete run to gated-merge.
+      expect(input.mode).toBe('gated-merge');
+      // baseBranch sourced from getProductConfig(product).baseBranch.
+      expect(input.baseBranch).toBe('main');
+    });
+
+    it('tears the worktree down exactly once — the finalizer owns teardown, the outer finally does not double-destroy', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-teardown'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // A single teardown via the `finalizerOwnedTeardown` guard: green now (hold
+      // mode: outer-finally-only) and must STAY a single destroy after the wiring
+      // moves teardown ownership into the finalizer's removeWorktree effect.
+      expect(mockDestroyWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(product, baseBranch) (RED until wiring)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-gate'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      const effects = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![1];
+      // Hold mode leaves the gated-merge effects undefined → RED.
+      expect(typeof effects.gate).toBe('function');
+      // The real gated-merge finalizer the wiring routes through invokes the gate
+      // effect, which acquires the per-product/per-base-branch lock and runs the
+      // gate inside it.
+      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('jarvis', 'main', expect.any(Function));
+      expect(mockRunGate).toHaveBeenCalled();
+    });
+
+    it('merges, pushes, then deletes the branch — push BEFORE delete (decomposed realMergeBranch git steps) (RED until wiring)', async () => {
+      const { gitCalls } = setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-merge'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Decomposed effects: merge/push/delete are SEPARATE FinalizerEffects
+      // functions (not one combined step), so push-before-delete crash-resume
+      // holds. Hold mode leaves them undefined → RED.
+      const effects = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![1];
+      expect(typeof effects.mergeBranch).toBe('function');
+      expect(typeof effects.pushBranch).toBe('function');
+      expect(typeof effects.deleteBranch).toBe('function');
+
+      const mergeIdx = gitCalls.findIndex(a => a.includes('merge'));
+      const pushIdx = gitCalls.findIndex(a => a.includes('push'));
+      const deleteIdx = gitCalls.findIndex(
+        a => a.includes('branch') && (a.includes('-d') || a.includes('-D')),
+      );
+      // Hold mode never merges/pushes/deletes → all -1 → RED.
+      expect(mergeIdx).toBeGreaterThanOrEqual(0);
+      expect(pushIdx).toBeGreaterThanOrEqual(0);
+      expect(deleteIdx).toBeGreaterThanOrEqual(0);
+      // Ordering: merge → push → delete (push before delete: origin is the
+      // durable backup before the local branch ref is removed).
+      expect(mergeIdx).toBeLessThan(pushIdx);
+      expect(pushIdx).toBeLessThan(deleteIdx);
+    });
+
+    it('stamps the merged disposition onto the terminal event + re-writes summary.json (Phase 3.5 notification)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-notify'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      // The disposition reaches the operator notification surface.
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(true);
+      expect(terminal.data.branchDeleted).toBe(true);
+      // summary.json was re-written post-finalize with the resolved disposition
+      // (the LAST writeSummary call carries merged/branchDeleted).
+      const lastSummary = writeSummarySpy.mock.calls.at(-1)![1];
+      expect(lastSummary.merged).toBe(true);
+      expect(lastSummary.branchDeleted).toBe(true);
+    });
+
+    it('surfaces the gate-held reason on the terminal event when the gate refuses (never a silent drop)', async () => {
+      setupBranchComplete();
+      // Gate refuses → run holds at branch-complete, never merges.
+      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-held'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(false);
+      expect(terminal.data.gateHeldReason).toBe('tests-red');
+    });
+
+    it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {
+      const { recordWorkRunPhase, readLastWorkRunPhase } = setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-phases'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Live hold path passes a no-op recordPhase/readLastPhase → the durable
+      // store is never touched → RED. After wiring, the effects are backed by the
+      // per-run phase store seam, keyed by the run id so recovery reads the same
+      // run's phases for a mid-gated-merge resume.
+      expect(recordWorkRunPhase).toHaveBeenCalled();
+      expect(recordWorkRunPhase.mock.calls.every(c => c[0] === 'mut-gm-phases')).toBe(true);
+      // The right phases reach the store, not just "something" — `classified`
+      // (prologue) and `merged-not-pushed` (the push-before-delete checkpoint a
+      // mid-merge crash resumes from).
+      const phases = recordWorkRunPhase.mock.calls.map(c => c[1]);
+      expect(phases).toEqual(expect.arrayContaining(['classified', 'merged-not-pushed']));
+      expect(readLastWorkRunPhase).toHaveBeenCalledWith('mut-gm-phases');
+    });
+
+    // -----------------------------------------------------------------------
+    // Phase 4 (P2.8) — full incident replay for d0679453 (test-plan §8): the
+    // 2026-06-06 wedge, now self-healing end-to-end. The agent emits a terminal
+    // `result: success` and then NEVER exits (the hung background-vitest tasks);
+    // the watchdog drains, group-reaps (SIGTERM), stamps
+    // `reaped-after-terminal-result`; the classifier reads the clean+complete
+    // branch as branch-complete (NOT failed-on-signal, the original mis-class);
+    // the gate passes; the run merges to main and reaches a `merged` terminal —
+    // with no human in the loop. A standing guard against the whole six-defect
+    // chain regressing.
+    // -----------------------------------------------------------------------
+    it('d0679453 replay: result → child never exits → reap → branch-complete → gate green → merged, no human', async () => {
+      vi.useFakeTimers();
+      let child: any;
+      let consume: Promise<void> | undefined;
+      try {
+        const { gitCalls } = setupBranchComplete();
+        // Manual child: emits the terminal `result` then NEVER exits/closes
+        // (the incident's hung background tasks held the stdio pipes open).
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        const killSpy = vi.fn();
+        __setKillProcessTreeForTest(killSpy);
+        mockSpawn.mockReturnValue(child);
+
+        const events: any[] = [];
+        let finished = false;
+        consume = (async () => {
+          for await (const e of workRunApplier.apply(descriptorFor('mut-incident-d0679453'), { bus: null as any, cancel: () => false })) {
+            events.push(e);
+          }
+          finished = true;
+        })().catch(() => { /* should not reject; finished stays false if it does */ });
+
+        await vi.advanceTimersByTimeAsync(0);
+        // Agent declares success — then the process wedges (no exit/close).
+        stdout.emit('data', Buffer.from(JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }) + '\n'));
+        // Advance past the drain window + SIGKILL grace + force-done ceiling so
+        // the watchdog reaps and the finalize chain runs to completion.
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // No human acted: the run self-completed.
+        expect(finished).toBe(true);
+        expect(killSpy).toHaveBeenCalledWith(child, 'SIGTERM');
+
+        const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+        expect(terminal).toBeDefined();
+        // The reap is stamped as an internal post-result reap, NOT an external
+        // kill — the original incident's mis-classification fix.
+        expect(terminal!.data.exit?.exitFact).toBe('reaped-after-terminal-result');
+        // Classified on work product as branch-complete (NOT failed exit-143),
+        // and the gate-passing run LANDED on main with no human merge.
+        expect(terminal!.kind).toBe('completed');
+        expect(terminal!.data.outcome).toBe('branch-complete');
+        expect(terminal!.data.merged).toBe(true);
+        // The merge actually ran (merge → push → delete via the product repo).
+        expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(true);
+        expect(gitCalls.some(a => a.includes('push'))).toBe(true);
+      } finally {
+        try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+        await consume;
+        vi.useRealTimers();
+        __resetKillProcessTreeForTest();
+      }
     });
   });
 });

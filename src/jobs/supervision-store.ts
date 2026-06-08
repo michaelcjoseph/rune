@@ -131,16 +131,37 @@ export function writeAllRuns(runs: SupervisedRun[], filePath: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Insert or replace `run` by `run.id`. On replace, the entry stays at its
- * original index (no reordering) so the cockpit / Telegram surfaces don't
- * shuffle on every heartbeat update. A missing file is treated as empty.
+ * Insert or FIELD-MERGE `run` by `run.id`. On an existing id the merge is
+ * `{ ...current, ...run }`: fields present on the incoming `run` win, and any
+ * field the incoming `run` omits is preserved from the stored record. The entry
+ * stays at its original index (no reordering) so the cockpit / Telegram surfaces
+ * don't shuffle on every heartbeat update. A missing file is treated as empty.
+ *
+ * Why merge, not replace (project 15, P0.1): the keep-alive heartbeat rebuilds a
+ * `SupervisedRun` via `buildSupervisedRun` (mutations.ts), which only carries
+ * the lifecycle fields — never `quietNudgedAt`. A replace-by-id would clobber
+ * that once-only quiet-nudge marker on every 30s heartbeat, so the quiet nudge
+ * re-fired forever (the d0679453 incident, defect 3). Merging preserves any
+ * persisted field the rebuild doesn't know about. The supervision fields are
+ * all monotonic-forward (status advances, timestamps advance, the nudge marker
+ * is set once and never cleared), so a forward-merge is the correct semantic —
+ * no field in this store is ever legitimately cleared by an upsert.
+ *
+ * `buildSupervisedRun` omits absent optional fields entirely (it never writes
+ * `key: undefined`), so the spread preserves the stored value rather than
+ * overwriting it with `undefined`.
+ *
+ * Implication: a caller that ever needs to CLEAR a field (set it back to
+ * `undefined`/absent) cannot do so through `upsertRun` — the merge would
+ * preserve the stored value. Such a caller must use `writeAllRuns` directly.
+ * No field in this store needs that today.
  */
 export function upsertRun(run: SupervisedRun, filePath: string): void {
   const existing = readAllRuns(filePath);
   const idx = existing.findIndex((r) => r.id === run.id);
   const next = idx === -1
     ? [...existing, run]
-    : existing.map((r, i) => (i === idx ? run : r));
+    : existing.map((r, i) => (i === idx ? { ...r, ...run } : r));
   writeAllRuns(next, filePath);
 }
 

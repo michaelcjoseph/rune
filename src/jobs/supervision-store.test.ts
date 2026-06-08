@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { SupervisedRun } from '../intent/supervision.js';
+import { isQuietRun, planQuietNudges } from '../intent/supervision.js';
 import {
   readAllRuns,
   writeAllRuns,
@@ -330,5 +331,154 @@ describe('quiet-run fields round-trip through the store', () => {
     expect(read).toHaveLength(1);
     expect(read[0]!.lastOutputAt).toBeUndefined();
     expect(read[0]!.quietNudgedAt).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project 15 — P0.1: supervision-store metadata survival across heartbeats
+// (test-plan.md §1). WRITE-FIRST: these must fail red against the current
+// replace-by-id `upsertRun` and go green once it field-merges.
+//
+// The incident (defect 3): a keep-alive heartbeat rebuilds the SupervisedRun
+// via `buildSupervisedRun` (mutations.ts), which never carries `quietNudgedAt`.
+// Because `upsertRun` REPLACES the record by id rather than merging, every
+// heartbeat clears the once-only quiet marker, so the quiet nudge re-fires
+// every tick (~once per 30s) for the life of the run.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mimic exactly what `buildSupervisedRun` produces for a keep-alive heartbeat
+ * upsert (mutations.ts:305-321): base fields + a fresh `lastChildAliveAt`, the
+ * prior `lastOutputAt` threaded back through (keep-alive does NOT advance
+ * output), and — critically — NO `quietNudgedAt`. This is the rebuild that the
+ * current replace-by-id `upsertRun` uses to clobber the persisted marker.
+ *
+ * `lastOutputAt` is optional and, when omitted, the field is left OFF the
+ * object — faithful to mutations.ts:60-62, where `buildSupervisedRun` only sets
+ * `lastOutputAt` when the threaded value is `!== undefined`. A run that has
+ * produced zero output events (the most common quiet-run shape) therefore
+ * yields a keep-alive rebuild with no `lastOutputAt` at all.
+ */
+function rebuiltKeepAlive(id: string, nowMs: number, lastOutputAt?: string): SupervisedRun {
+  const iso = new Date(nowMs).toISOString();
+  const run: SupervisedRun = {
+    id,
+    product: 'aura',
+    project: '01-test',
+    status: 'running',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    lastHeartbeatAt: iso,
+    lastChildAliveAt: iso,
+  };
+  // Unchanged — a keep-alive tick is not LLM output, so the run stays quiet.
+  if (lastOutputAt !== undefined) run.lastOutputAt = lastOutputAt;
+  return run;
+}
+
+describe('upsertRun — field-merge across heartbeats (P0.1)', () => {
+  const QUIET_MS = 5 * 60_000; // matches stall-check QUIET_THRESHOLD_MS
+  const TICK_MS = 30_000;
+  const START = Date.parse('2026-01-01T00:00:00.000Z');
+
+  it('field-merges by id: an upsert that omits a persisted field preserves it', () => {
+    // Seed a record carrying every optional field plus a forward-compatible
+    // "unknown" field the rebuild doesn't know about.
+    const seeded = {
+      ...makeRun('run-merge', {
+        lastChildAliveAt: '2026-01-01T00:05:00.000Z',
+        lastOutputAt: '2026-01-01T00:04:00.000Z',
+        quietNudgedAt: '2026-01-01T00:08:00.000Z',
+      }),
+      futureField: 'keep-me',
+    } as SupervisedRun & { futureField: string };
+    writeAllRuns([seeded], filePath);
+
+    // A keep-alive rebuild that carries fresh liveness but NOT quietNudgedAt
+    // and NOT futureField — replace-by-id drops them; field-merge keeps them.
+    const rebuilt: SupervisedRun = {
+      id: 'run-merge',
+      product: 'aura',
+      project: '01-test',
+      status: 'running',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      lastHeartbeatAt: '2026-01-01T00:09:00.000Z',
+      lastChildAliveAt: '2026-01-01T00:09:00.000Z',
+      lastOutputAt: '2026-01-01T00:04:00.000Z',
+    };
+    upsertRun(rebuilt, filePath);
+
+    const result = readAllRuns(filePath);
+    expect(result).toHaveLength(1);
+    // Incoming fields win where present.
+    expect(result[0]!.lastHeartbeatAt).toBe('2026-01-01T00:09:00.000Z');
+    expect(result[0]!.lastChildAliveAt).toBe('2026-01-01T00:09:00.000Z');
+    // Persisted-but-omitted fields survive the merge.
+    expect(result[0]!.quietNudgedAt).toBe('2026-01-01T00:08:00.000Z');
+    expect((result[0] as { futureField?: string }).futureField).toBe('keep-me');
+  });
+
+  it('a once-stamped quietNudgedAt survives a keep-alive rebuild so the nudge does not re-fire', () => {
+    const run = makeRun('run-quiet', { lastOutputAt: '2026-01-01T00:00:00.000Z' });
+    writeAllRuns([run], filePath);
+
+    // Tick 1, past the quiet threshold: it's quiet → plan + persist the stamp.
+    const t1 = START + QUIET_MS + TICK_MS;
+    const plan1 = planQuietNudges(readAllRuns(filePath), QUIET_MS, t1);
+    expect(plan1.toNudge).toHaveLength(1);
+    upsertRun(plan1.updated[0]!, filePath);
+    expect(readAllRuns(filePath)[0]!.quietNudgedAt).toBeTruthy();
+
+    // Keep-alive heartbeat rebuild — the defect-3 clobber path.
+    const tHeartbeat = t1 + 1_000;
+    upsertRun(rebuiltKeepAlive('run-quiet', tHeartbeat, '2026-01-01T00:00:00.000Z'), filePath);
+
+    // The persisted marker must survive so isQuietRun stays false.
+    const after = readAllRuns(filePath)[0]!;
+    expect(after.quietNudgedAt).toBeTruthy();
+    expect(isQuietRun(after, QUIET_MS, tHeartbeat + 60_000)).toBe(false);
+
+    // Tick 2, still quiet: no second nudge.
+    const plan2 = planQuietNudges(readAllRuns(filePath), QUIET_MS, tHeartbeat + 60_000);
+    expect(plan2.toNudge).toHaveLength(0);
+  });
+
+  it('a 30s heartbeat loop over a long quiet run produces exactly one quiet nudge', () => {
+    writeAllRuns([makeRun('run-quiet', { lastOutputAt: '2026-01-01T00:00:00.000Z' })], filePath);
+
+    let nudges = 0;
+    // 40 ticks = 20 simulated minutes, well past the 5-minute quiet threshold.
+    for (let i = 1; i <= 40; i++) {
+      const now = START + i * TICK_MS;
+      const plan = planQuietNudges(readAllRuns(filePath), QUIET_MS, now);
+      for (const updated of plan.updated) {
+        nudges++;
+        upsertRun(updated, filePath);
+      }
+      // Each tick also fires a keep-alive heartbeat rebuild (the clobber path).
+      upsertRun(rebuiltKeepAlive('run-quiet', now, '2026-01-01T00:00:00.000Z'), filePath);
+    }
+
+    expect(nudges).toBe(1);
+  });
+
+  it('a zero-output run (keep-alive rebuild omits lastOutputAt) still nudges exactly once', () => {
+    // The more common quiet-run shape: no output events yet, so the keep-alive
+    // rebuild carries no `lastOutputAt` (mutations.ts:60-62 guard). isQuietRun
+    // then measures quiet from `startedAt`. The clobber must still be prevented.
+    writeAllRuns([makeRun('run-silent')], filePath); // no lastOutputAt seeded
+
+    let nudges = 0;
+    for (let i = 1; i <= 40; i++) {
+      const now = START + i * TICK_MS;
+      const plan = planQuietNudges(readAllRuns(filePath), QUIET_MS, now);
+      for (const updated of plan.updated) {
+        nudges++;
+        upsertRun(updated, filePath);
+      }
+      // Rebuild WITHOUT lastOutputAt — the zero-output shape.
+      upsertRun(rebuiltKeepAlive('run-silent', now), filePath);
+    }
+
+    expect(nudges).toBe(1);
   });
 });

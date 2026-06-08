@@ -165,6 +165,79 @@ export function planQuietNudges(
   return { toNudge, updated };
 }
 
+/** A quiet→cancel escalation plan: the runs the actuator should cancel/reap/
+ *  finalize because their quiet persisted past the longer cancel threshold
+ *  after a one-time nudge (project 15, P2.7). */
+export interface QuietCancelPlan {
+  toCancel: SupervisedRun[];
+}
+
+/**
+ * Plan the quiet→cancel escalations (project 15, P2.7): select the `running`
+ * runs that have ALREADY been quiet-nudged ({@link SupervisedRun.quietNudgedAt}
+ * set) and whose quiet has persisted longer than `quietCancelAfterMs` measured
+ * from that nudge. This is the backstop that stops the loop from nudging a
+ * never-recovering run forever — once a run stays quiet this long past its
+ * one-time nudge, the actuator escalates to cancel/reap/finalize instead of
+ * nudging again. Escalation requires a prior nudge (the nudge is the gentler
+ * first step). Pure — the runner performs the cancel/reap/finalize; never
+ * mutates the inputs. Soft-fail on an unparseable `quietNudgedAt` (no
+ * escalation), mirroring {@link isQuietRun}.
+ */
+export function planQuietCancel(
+  runs: SupervisedRun[],
+  quietCancelAfterMs: number,
+  now: number,
+): QuietCancelPlan {
+  const toCancel = runs.filter((r) => {
+    if (r.status !== 'running') return false;
+    if (!r.quietNudgedAt) return false; // escalate only AFTER the one-time nudge
+    const parsed = Date.parse(r.quietNudgedAt);
+    if (Number.isNaN(parsed)) return false; // soft-fail: no spurious escalation
+    return now - parsed > quietCancelAfterMs;
+  });
+  return { toCancel };
+}
+
+/** A max-runtime-ceiling kill plan: the runs that have exceeded the hard
+ *  runtime ceiling and must be group-killed + finalized regardless of apparent
+ *  liveness (project 15, P2.7). */
+export interface MaxRuntimeKillPlan {
+  toKill: SupervisedRun[];
+}
+
+/**
+ * Plan the max-runtime-ceiling kills (project 15, P2.7): select the `running`
+ * runs whose total wall-clock age (now − {@link SupervisedRun.startedAt})
+ * exceeds `maxRuntimeMs`. This is the HARD backstop — it keys on `startedAt`,
+ * NOT on any liveness signal, so a run with a fresh keep-alive ticker
+ * (`lastChildAliveAt` kept current) cannot defeat the ceiling. The actuator
+ * group-kills and finalizes the selected runs. Pure — never mutates inputs.
+ *
+ * Unlike the quiet→cancel predicate (which soft-fails), this FAILS TOWARD KILL
+ * on an unparseable `startedAt`: the ceiling is the LAST backstop against a
+ * run that keeps its keep-alive ticker fresh, so a corrupt-timestamp record
+ * must not be allowed to evade it forever. The finalizer classifies on work
+ * product, so a killed run's committed branch is preserved (branch-complete /
+ * partial), not lost — making fail-toward-kill safe.
+ */
+export function planMaxRuntimeKills(
+  runs: SupervisedRun[],
+  maxRuntimeMs: number,
+  now: number,
+): MaxRuntimeKillPlan {
+  const toKill = runs.filter((r) => {
+    if (r.status !== 'running') return false;
+    const parsed = Date.parse(r.startedAt);
+    // Fail-toward-kill on a corrupt startedAt: the ceiling is the last backstop
+    // against a fresh-keep-alive run, so a record we can't age must not evade it
+    // (the finalizer preserves the branch's committed work).
+    if (Number.isNaN(parsed)) return true;
+    return now - parsed > maxRuntimeMs;
+  });
+  return { toKill };
+}
+
 /**
  * Build the visibility surface from the tracked runs: `active` (running or blocked),
  * `blocked` (blocked-on-human only), and `stalled` (running but quiet past the heartbeat

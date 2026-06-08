@@ -4,11 +4,15 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
-import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
-import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
+import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
-import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import { writeSummary, appendIndexRow, recordWorkRunPhase, readLastWorkRunPhase, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase } from './work-run-finalizer.js';
+import { runGate } from './work-run-gate-runtime.js';
+import { withBaseBranchLock } from './work-run-merge-lock.js';
+import type { GateFailReason } from './work-run-gate.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
@@ -66,6 +70,14 @@ export interface WorkRunRuntimeDeps {
   /** Export the forensic evidence bundle into the per-run dir (best-effort,
    *  before the terminal event, while the worktree still exists). */
   runForensics: (opts: ExportForensicsOpts) => Promise<ForensicsResult>;
+  /** P1.5 / Phase 3.5 (project 15) — gated-merge durable per-run finalize-phase
+   *  store. The live gated-merge wiring records each finalizer phase here so a
+   *  crash mid-merge is resumable; `recovery-finalize-runner` reads the last
+   *  phase to resume in `gated-merge` mode off the SAME store. OPTIONAL until the
+   *  gated-merge wiring lands — `hold` mode records no phase, so the live path
+   *  leaves these unset today. */
+  recordWorkRunPhase?: (runId: string, phase: FinalizerPhase) => void;
+  readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
 }
 
 /** Production defaults — real git, real config dir, real sink + store. */
@@ -78,6 +90,11 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
     writeSummary,
     appendIndexRow,
     runForensics: exportForensics,
+    // Durable per-run finalize-phase store (Phase 3.5) — gated-merge records its
+    // resume checkpoint here; recovery reads the last phase to resume a crashed
+    // merge. Best-effort: recordWorkRunPhase logs + swallows on disk failure.
+    recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
+    readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
   };
 }
 
@@ -256,6 +273,12 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // during the stream, flushed before the terminal event, destroyed in the
     // outer finally (idempotent) so the fd never leaks on an abort.
     let sink: TranscriptSink | null = null;
+    // Set true once the finalizer's `removeWorktree` effect tears the run
+    // worktree down (gated-merge moves teardown ownership into the finalizer),
+    // so the outer `finally` does NOT double-destroy it. Declared at this scope
+    // so that `finally` can read it; the early-return setup-failure paths leave
+    // it false, so the outer `finally` still owns teardown there.
+    let finalizerOwnedTeardown = false;
     try {
       try {
         // createWorktree resolves HEAD atomically and returns it on
@@ -446,109 +469,362 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         const worktreeDir = sandbox.worktree;
         const baseSha = sandbox.baseSha ?? '';
 
-        const terminalEvent = await finalizeWorkRun({
-          mutationId: descriptor.id,
-          computeFacts: async () => ({
-            exit: streamResult.exit,
-            product: await computeWorkProduct({
-              runGit: deps.runGit,
-              cwd: worktreeDir,
-              baseSha,
+        // --- Gated-merge facts (Phase 3.5) ---
+        // The product config carries the base branch a clean run lands on, the
+        // repo whose `main` the merge mutates, and the validation commands the
+        // gate runs. `createWorktree` already resolved the same product config
+        // above, so this read normally cannot fail — but products.json could be
+        // deleted/corrupted in the interim, and an unhandled throw here would
+        // bypass the finalizer (no summary/index/teardown). Degrade instead: a
+        // fail-closed fallback (no validationCommands → gate returns
+        // `missing-validation-command` → the run HOLDS at branch-complete, never
+        // a stray merge).
+        let baseBranch = 'main';
+        let repoPath = '';
+        let validationCommands: string[] = [];
+        try {
+          const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+          baseBranch = productConfig.baseBranch;
+          repoPath = productConfig.repoPath;
+          validationCommands = productConfig.validationCommands ?? [];
+        } catch (err) {
+          log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
+            id: descriptor.id,
+            product,
+            error: scrubPathsInText((err as Error).message),
+          });
+        }
+        // Pre-gathered concurrency fact for the gate: another work-run owns the
+        // same product right now (its branch could be based on a `main` this
+        // merge is about to move). Read LIVE inside the gate closure (below) so
+        // it reflects the moment the gate runs, not a stale finalize-setup
+        // snapshot. The per-base-branch lock serializes the gate; this fact is
+        // the separate ownership signal (gate req 14) and fails toward HOLD.
+        const hasConcurrentRun = (): boolean =>
+          [...activeRuns.values()].some(
+            h =>
+              h.descriptor.kind === 'work-run' &&
+              h.descriptor.id !== descriptor.id &&
+              ((h.descriptor.payload as WorkRunPayload).product ?? 'jarvis') === product &&
+              h.descriptor.status === 'running',
+          );
+        // Throwaway integration worktree the gate creates + tears down to test
+        // `main` BEFORE it is mutated (never the product's real checkout). The
+        // run id is a randomUUID (VALID_SLUG-shaped), safe as a path segment.
+        const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${product}-${descriptor.id}`);
+        // Original tasks still unchecked, captured from the classified work
+        // product so the gate (which runs after classify) sees the real value;
+        // a branch-complete run is 0 by definition, but capture it rather than
+        // assume so a misclassification can't slip a non-zero past the gate.
+        let gateTasksRemaining = 0;
+        // Set by the gate-fail `alert` effect so the yielded terminal event can
+        // surface WHY a branch-complete run was held off main (never a silently-
+        // dropped alert) on the Telegram/cockpit notification surface.
+        let gateHeldReason: GateFailReason | null = null;
+
+        // Single end timestamp shared by summary.json + the index row. Captured
+        // inside the `classify` effect (when classification actually completes)
+        // rather than here, so it reflects the run's true end — not the instant
+        // BEFORE the multi-second git classification.
+        let endedAt = '';
+
+        // Route the terminal sequence through the shared, idempotent finalizer
+        // (project 15) in `gated-merge` mode (Phase 3.5 — live activation):
+        // classify on work product → flush transcript → write summary + index →
+        // [branch-complete + gate green: merge → push → remove worktree → delete
+        // branch] → terminal write. This is the SINGLE live terminal owner; the
+        // failure/partial/cancelled paths flow through the SAME machine that
+        // recovery uses, keeping the §7 guarantees (always flush + summary,
+        // never merge, branch retained, never left `running`) because
+        // `runGatedMerge` merges ONLY a branch-complete run behind the hard gate
+        // and holds every other outcome through the non-merge tail.
+        //
+        // `writeSupervisionTerminal` stays inert: mutations.ts owns the terminal
+        // supervision write, driven by the terminal event apply() yields below —
+        // the finalizer must not double-write it in the live path (recovery,
+        // which has no generator to yield, uses a real write).
+        const effects: FinalizerEffects = {
+          classify: async () => {
+            const ev = await finalizeWorkRun({
+              mutationId: descriptor.id,
+              computeFacts: async () => ({
+                exit: streamResult.exit,
+                product: await computeWorkProduct({
+                  runGit: deps.runGit,
+                  cwd: worktreeDir,
+                  baseSha,
+                  branch,
+                  baselineTasks: tasksContent,
+                  finalTasks,
+                }),
+              }),
+              // Export the forensic evidence bundle into the per-run dir while
+              // the worktree still exists (the outer `finally` destroys it only
+              // after the terminal event yields). `facts` is null on the
+              // classification-error path — capture everything best-effort
+              // (treat as non-clean). finalizeWorkRun wraps this call in its own
+              // try/catch, so a forensics failure never denies the terminal event.
+              exportForensics: async (facts) => {
+                await deps.runForensics({
+                  runGit: deps.runGit,
+                  worktree: worktreeDir,
+                  outDir: join(deps.workRunsDir, descriptor.id),
+                  baseSha,
+                  branch,
+                  nonClean: facts ? facts.product.dirty || facts.product.untracked : true,
+                });
+              },
+            });
+            // Augment the classified terminal event with the run's identity so
+            // downstream surfaces (TelegramSender's work-run formatter, the
+            // cockpit bus frame) can label it by project — finalizeWorkRun only
+            // knows the mutation id, not the slug.
+            const augmentedData = (ev.data ?? {}) as Record<string, unknown>;
+            augmentedData['projectSlug'] = projectSlug;
+            augmentedData['product'] = product;
+            ev.data = augmentedData;
+            // Capture the real tasks-remaining count for the gate (which runs
+            // after classify). Branch-complete is 0 by definition; reading the
+            // computed value rather than assuming keeps the gate honest.
+            const wp = augmentedData['workProduct'] as WorkProductFacts | undefined;
+            gateTasksRemaining = wp?.transitions.tasksRemaining ?? 0;
+            // Classification is done — stamp the shared end timestamp now (the
+            // summary + index effects below close over it).
+            endedAt = new Date().toISOString();
+            return ev;
+          },
+          // Flush + await the durable transcript's `finish` so every buffered
+          // event is on disk before summary.json. A flush failure is logged (and
+          // surfaced via the stderr tail upstream) but never denies the terminal.
+          flushTranscript: async () => {
+            if (!sink) return;
+            try {
+              await sink.finish();
+            } catch (err) {
+              log.warn('work-runner: transcript flush failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Persist summary.json atomically (best-effort): a disk failure must
+          // not deny the terminal event, which is the classification's source of
+          // truth.
+          writeSummary: (ev) => {
+            const summary = buildSummary({
+              id: descriptor.id,
+              project: projectSlug,
+              product,
               branch,
-              baselineTasks: tasksContent,
-              finalTasks,
-            }),
-          }),
-          // Export the forensic evidence bundle into the per-run dir while the
-          // worktree still exists (the outer `finally` destroys it only after
-          // the terminal event yields). `facts` is null on the classification-
-          // error path — capture everything best-effort (treat as non-clean).
-          // finalizeWorkRun wraps this call in its own try/catch, so a
-          // forensics failure never denies the terminal event.
-          exportForensics: async (facts) => {
-            await deps.runForensics({
-              runGit: deps.runGit,
-              worktree: worktreeDir,
-              outDir: join(deps.workRunsDir, descriptor.id),
               baseSha,
+              t0,
+              exit: streamResult.exit,
+              terminalEvent: ev,
+              sink,
+              workRunsDir: deps.workRunsDir,
+              endedAt,
+            });
+            try {
+              deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
+            } catch (err) {
+              log.warn('work-runner: writeSummary failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Append the rolling index row (best-effort — a failure here must not
+          // deny the terminal event). The reader (readRecentIndex) tolerates a
+          // torn trailing line, so a crash mid-append is recoverable. The
+          // outcome is read off the classified terminal event (mirrors
+          // buildSummary's read).
+          appendIndexRow: (ev) => {
+            try {
+              deps.appendIndexRow(deps.workRunsIndexFile, {
+                id: descriptor.id,
+                project: projectSlug,
+                outcome: readOutcome(ev),
+                durationMs: streamResult.exit.durationMs,
+                startedAt: new Date(t0).toISOString(),
+                endedAt,
+              });
+            } catch (err) {
+              log.warn('work-runner: appendIndexRow failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Real teardown (Phase 3.5): the finalizer owns worktree removal in
+          // gated-merge mode — it removes the run worktree AFTER merge+push and
+          // BEFORE branch delete (`git branch -d` refuses a checked-out branch).
+          // Setting the flag AFTER a successful destroy lets the outer `finally`
+          // retry if this throws, and skip if it succeeds (no double-destroy).
+          removeWorktree: async () => {
+            // `sandbox` is non-null here by construction — the createWorktree
+            // early-return path yields a terminal and returns before `effects`
+            // is built — but narrow it for TS and as a defensive guard. Set the
+            // ownership flag only AFTER a successful destroy so a throw leaves it
+            // false and the outer `finally` retries (no leak, no double-destroy).
+            if (!sandbox) return;
+            await destroyWorktree(sandbox, {
+              productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+              worktreeRoot: config.WORKTREE_ROOT,
+            });
+            finalizerOwnedTeardown = true;
+          },
+          // Supervision is still owned by mutations.ts on the yielded terminal
+          // event (apply() yields it below) — the finalizer must not double-write
+          // it in the live path. Inert here; recovery uses a real write.
+          writeSupervisionTerminal: () => {},
+          // Durable resume checkpoints (Phase 3.5): best-effort per-run phase
+          // store so a crash mid-gated-merge resumes at the right step. A fresh
+          // live run has no prior phase, so readLastPhase returns null today —
+          // the value matters when recovery re-drives a crashed run.
+          recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
+          readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
+          // --- gated-merge effects (Phase 3.5) ---
+          // The hard gate runs INSIDE the per-product/per-base-branch lock so two
+          // projects sharing one `main` serialize (req 14); the gate itself tests
+          // `main` in a throwaway integration worktree, never the real checkout.
+          gate: () =>
+            withBaseBranchLock(product, baseBranch, () =>
+              runGate({
+                product,
+                repoPath,
+                baseBranch,
+                branch,
+                integrationWorktree,
+                validationCommands,
+                tasksRemaining: gateTasksRemaining,
+                // Live read inside the lock — accurate at gate time, not a stale
+                // finalize-setup snapshot.
+                concurrentRun: hasConcurrentRun(),
+                commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+              }),
+            ),
+          // Gate refused → the run holds at branch-complete off `main`. Never a
+          // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
+          alert: (reason: GateFailReason) => {
+            // Record the reason so the yielded terminal event surfaces it on the
+            // operator notification surface (Telegram/cockpit), not just the log.
+            gateHeldReason = reason;
+            log.warn('work-run held at branch-complete: gate failed', {
+              id: descriptor.id,
+              projectSlug,
+              product,
               branch,
-              nonClean: facts ? facts.product.dirty || facts.product.untracked : true,
+              reason,
             });
           },
-        });
+          // Decomposed merge/push/delete (reusing gen-eval-loop's realMergeBranch
+          // git logic) through the injected runGit seam so they are observable in
+          // tests. Push BEFORE delete (the finalizer records the durable
+          // checkpoints between them); delete is best-effort.
+          mergeBranch: async () => {
+            const message = `jarvis(${product}): merge work-run branch ${branch}`;
+            try {
+              await deps.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
+            } catch (err) {
+              throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
+            }
+          },
+          pushBranch: async () => {
+            try {
+              // Explicit remote + refspec so the push target is independent of
+              // the repo's `push.default` / upstream-tracking config (a bare
+              // `git push` can silently no-op on a repo without a tracking ref).
+              await deps.runGit(['push', 'origin', baseBranch], { cwd: repoPath });
+            } catch (err) {
+              // Half-merged state: local base branch has the merge but origin is
+              // behind. The finalizer has recorded `merged-not-pushed`, so a
+              // recovery resume completes the push. Surface (redacted) which repo
+              // needs attention; the credential URL in a push error never logs raw.
+              log.warn('work-runner: git push failed after local merge — repo is half-merged', {
+                product,
+                branch,
+                error: redactSecrets((err as Error).message),
+              });
+              throw new Error(redactSecrets(`git push failed: ${(err as Error).message}`));
+            }
+          },
+          deleteBranch: async () => {
+            // Let a git failure throw: the finalizer's `onBranchDelete` guard
+            // (resolveWorktreeAndFinalize) is the single canonical safety net —
+            // it logs the failure and leaves `branchDeleted` false (accurate:
+            // the branch is a redundant tracking ref the GC prunes later) WITHOUT
+            // denying the terminal (the merge + push already landed).
+            await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
+          },
+        };
 
-        // Augment the classified terminal event with the run's identity so
-        // downstream surfaces (TelegramSender's work-run formatter, the cockpit
-        // bus frame) can label it by project — finalizeWorkRun only knows the
-        // mutation id, not the slug.
-        const augmentedData = (terminalEvent.data ?? {}) as Record<string, unknown>;
-        augmentedData['projectSlug'] = projectSlug;
-        augmentedData['product'] = product;
-        terminalEvent.data = augmentedData;
+        // Always route through `gated-merge` mode: `runGatedMerge` merges ONLY a
+        // branch-complete run (behind the hard gate) and HOLDS every other
+        // outcome (partial/noop/dirty/failed) through the same non-merge tail —
+        // so failure/partial/cancelled runs keep the §7 guarantees (flush +
+        // summary, never merge, branch retained, never left `running`) while a
+        // clean, complete, gate-passing run lands on `main`.
+        const result = await runFinalizer(
+          { mode: 'gated-merge', runId: descriptor.id, project: projectSlug, product, branch, baseBranch },
+          effects,
+        );
 
-        // Flush + await the durable transcript's `finish` so every buffered
-        // event is on disk before summary.json / the terminal event. A flush
-        // failure is logged (and surfaced via the stderr tail upstream) but
-        // never denies the terminal event.
-        if (sink) {
+        // Stamp the gated-merge DISPOSITION onto the terminal event so the
+        // operator surfaces (TelegramSender's formatWorkRunTerminal, the cockpit)
+        // render `merged to main` / `held off main: <reason>` rather than a bare
+        // branch-complete — and re-write summary.json with merged/branchDeleted
+        // now that the finalizer has resolved them (the finalizer's own
+        // writeSummary ran BEFORE the merge, so it couldn't carry them). The
+        // disposition keys are only meaningful for a branch-complete run; a held
+        // run carries `merged:false` + the gate reason, never a silent drop.
+        const termData = (result.terminalEvent.data ?? {}) as Record<string, unknown>;
+        if (readOutcome(result.terminalEvent) === 'branch-complete') {
+          termData['merged'] = result.merged;
+          termData['branchDeleted'] = result.branchDeleted;
+          // Stamp the base branch so the formatter renders "merged to <base>"
+          // correctly for a non-`main` product (defaults to `main` if absent).
+          termData['baseBranch'] = baseBranch;
+          if (!result.merged && gateHeldReason) termData['gateHeldReason'] = gateHeldReason;
+          // Reassign covers the `data === null/undefined` case; on the normal
+          // path termData aliases the existing object and the mutations above
+          // already took.
+          result.terminalEvent.data = termData;
+          // Best-effort summary re-write with the resolved disposition (a disk
+          // failure must not deny the terminal — mirrors the finalizer's own
+          // best-effort writeSummary).
           try {
-            await sink.finish();
+            deps.writeSummary(
+              join(deps.workRunsDir, descriptor.id),
+              buildSummary({
+                id: descriptor.id,
+                project: projectSlug,
+                product,
+                branch,
+                baseSha,
+                t0,
+                exit: streamResult.exit,
+                terminalEvent: result.terminalEvent,
+                sink,
+                workRunsDir: deps.workRunsDir,
+                endedAt,
+                merged: result.merged,
+                branchDeleted: result.branchDeleted,
+                baseBranch,
+                gateHeldReason: !result.merged && gateHeldReason ? gateHeldReason : undefined,
+              }),
+            );
           } catch (err) {
-            log.warn('work-runner: transcript flush failed', {
+            log.warn('work-runner: post-finalize summary re-write failed', {
               id: descriptor.id,
               error: (err as Error).message,
             });
           }
         }
 
-        // Single end timestamp shared by summary.json + the index row.
-        const endedAt = new Date().toISOString();
-        const summary = buildSummary({
-          id: descriptor.id,
-          project: projectSlug,
-          product,
-          branch,
-          baseSha,
-          t0,
-          exit: streamResult.exit,
-          terminalEvent,
-          sink,
-          workRunsDir: deps.workRunsDir,
-          endedAt,
-        });
-
-        // Persist summary.json atomically (best-effort): a disk failure must not
-        // deny the terminal event, which is the classification's source of truth.
-        try {
-          deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
-        } catch (err) {
-          log.warn('work-runner: writeSummary failed', {
-            id: descriptor.id,
-            error: (err as Error).message,
-          });
-        }
-
-        // Append the rolling index row (best-effort — a failure here must not
-        // deny the terminal event). The reader (readRecentIndex) tolerates a
-        // torn trailing line, so a crash mid-append is recoverable. Reuses the
-        // already-classified `summary.outcome` rather than re-parsing the event.
-        try {
-          deps.appendIndexRow(deps.workRunsIndexFile, {
-            id: descriptor.id,
-            project: projectSlug,
-            outcome: summary.outcome,
-            durationMs: streamResult.exit.durationMs,
-            startedAt: new Date(t0).toISOString(),
-            endedAt,
-          });
-        } catch (err) {
-          log.warn('work-runner: appendIndexRow failed', {
-            id: descriptor.id,
-            error: (err as Error).message,
-          });
-        }
-
-        yield terminalEvent;
+        // The finalizer surfaces the classified terminal event on its result.
+        // Yield it (disposition-augmented) so mutations.ts persists the mutation
+        // log + drives the terminal supervision write.
+        yield result.terminalEvent;
       } finally {
         unregisterActiveProcess(child);
         log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
@@ -559,11 +835,17 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // on an abort path (run died before finalize) it frees the fd that
       // finish() never reached.
       sink?.destroy();
-      // Always tear down the worktree if we created one — success, failure,
-      // cancel, generator-consumer-abort all flow through here. Mirrors
-      // gen-eval-loop-runner's finally cleanup at the same spot in the
-      // generator body.
-      if (sandbox) {
+      // Tear down the worktree if we created one AND the finalizer didn't
+      // already own its teardown. Success, failure, cancel, and
+      // generator-consumer-abort all flow through here. In `gated-merge` mode
+      // the finalizer's `removeWorktree` effect removes the worktree (AFTER
+      // merge/push, BEFORE branch delete) and sets `finalizerOwnedTeardown`, so
+      // this `finally` must skip it or it would double-destroy. The flag stays
+      // false on every path where the finalizer never reached removeWorktree —
+      // early-return setup failures, consumer aborts, a crash mid-merge — so the
+      // outer `finally` still owns teardown there (and a removeWorktree that
+      // threw leaves the flag false too, letting this retry).
+      if (sandbox && !finalizerOwnedTeardown) {
         try {
           await destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -605,9 +887,17 @@ const RING_CAPACITY = 50;
  *  before escalating SIGTERM→SIGKILL to the (possibly orphaned) process group,
  *  and a hard ceiling after which the run force-completes even if `close` never
  *  fires — so a grandchild holding the pipes open can no longer wedge the run
- *  open for hours (docs/projects/bugs.md). */
-const REAP_SIGKILL_MS = 3_000;
+ *  open for hours (docs/projects/bugs.md). The SIGTERM→SIGKILL grace is the
+ *  project-15 `WORK_RUN_REAP_GRACE_MS` config constant. */
+const REAP_SIGKILL_MS = config.WORK_RUN_REAP_GRACE_MS;
 const REAP_FORCE_DONE_MS = 10_000;
+
+/** Terminal-result watchdog window (project 15, P0.2): after the agent emits a
+ *  terminal `result` envelope, wait this long for the child to exit on its own
+ *  before reaping the process group. The child is NEVER killed on `result`
+ *  itself (that would re-introduce the false `failed` the 2026-06-04 fix
+ *  removed) — only if it wedges past the drain window. */
+const TERMINAL_DRAIN_MS = config.WORK_RUN_TERMINAL_DRAIN_MS;
 
 /** Inputs for the parent-side commit poll that runs during the stream
  *  (requirement 22). Null disables the poll (e.g. no captured baseSha, or a
@@ -641,6 +931,20 @@ async function* streamProcess(
   let reapStarted = false;
   let reapSigkillTimer: ReturnType<typeof setTimeout> | null = null;
   let reapForceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Terminal-result watchdog (P0.2). `terminalResultSeen` flips when the agent
+  // emits a `result` envelope; `drainTimer` is the bounded grace before the
+  // watchdog reaps a wedged (never-exiting) child; `reapedAfterTerminalResult`
+  // records that the reap was the watchdog's (an internal post-result reap),
+  // distinct from a user-cancel or an external kill, so the classifier reads a
+  // clean+complete branch as `branch-complete` rather than `failed`.
+  // `exitFired` / `closeFired` let the final exit-fact derivation tell a clean
+  // self-exit from a stdio-wedged one.
+  let terminalResultSeen = false;
+  let reapedAfterTerminalResult = false;
+  let exitFired = false;
+  let closeFired = false;
+  let drainTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Last-N stdout display lines + stderr tail, retained for the terminal
   // classification/forensics (independent of what the drawer consumed).
@@ -764,6 +1068,27 @@ async function* streamProcess(
     void sink?.append(envelope).catch((err: Error) => {
       stderrTail.push(`[transcript] append failed: ${err.message}`);
     });
+    // Terminal-result watchdog (P0.2): the agent's `result` envelope means it
+    // declared done — but `claude -p` won't exit while a backgrounded task is
+    // still alive (the d0679453 wedge). Open a bounded drain window; if the
+    // child exits on its own first, the `exit` handler clears this timer and the
+    // normal teardown runs (no watchdog reap). If it never exits, reap the
+    // group and mark `reapedAfterTerminalResult` so the classifier treats a
+    // clean+complete branch as branch-complete, not failed. Do NOT kill on
+    // `result` — that re-introduces the false `failed` the 2026-06-04 fix removed.
+    if (envelope.type === 'result' && !terminalResultSeen) {
+      terminalResultSeen = true;
+      drainTimer = setTimeout(() => {
+        // Skip if the child already exited, a reap already started, or the user
+        // cancelled — a cancelled run must classify as a cancel, never as a
+        // watchdog reap (makes the precedence explicit, not order-dependent).
+        if (!done && !exitFired && !reapStarted && !cancelSent) {
+          reapedAfterTerminalResult = true;
+          reapTree();
+        }
+      }, TERMINAL_DRAIN_MS);
+      drainTimer.unref?.();
+    }
     const display = streamJsonToDisplay(envelope);
     if (display === null) return;
     // Redact secrets on the display/bus path too. `streamJsonToDisplay` only
@@ -804,6 +1129,27 @@ async function* streamProcess(
   function clearReapTimers() {
     if (reapSigkillTimer) { clearTimeout(reapSigkillTimer); reapSigkillTimer = null; }
     if (reapForceTimer) { clearTimeout(reapForceTimer); reapForceTimer = null; }
+    if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+  }
+
+  /**
+   * Derive the P0.3 exit fact (project 15) from what was observed, so the
+   * classifier decides on the MANNER of exit + work product. Order matters:
+   *  - user cancel and watchdog reap are the two facts we set ourselves;
+   *  - a signalled termination we did NOT initiate (no clean code) is external;
+   *  - `close` firing means stdio drained → a clean self-exit; `exit` without
+   *    `close` (we force-completed) is a stdio-wedged clean exit;
+   *  - nothing observed (e.g. a spawn `error`) returns undefined so the
+   *    classifier falls back to the legacy derivation (which fails closed on a
+   *    null exit code).
+   */
+  function deriveExitFact(): ExitFact | undefined {
+    if (cancelSent) return 'user-cancel';
+    if (reapedAfterTerminalResult) return 'reaped-after-terminal-result';
+    if (exitSignal !== null && exitCode === null) return 'external-kill';
+    if (closeFired) return 'clean-exit';
+    if (exitFired) return 'clean-exit-wedged-stdio';
+    return undefined;
   }
 
   // Reap the agent's process group and guarantee the run completes. Called once
@@ -836,14 +1182,20 @@ async function* streamProcess(
   // on their still-open pipes. The runner previously keyed completion only on
   // `close`, which is exactly why a wedged grandchild stranded the run.
   child.on('exit', (code, signal) => {
+    exitFired = true;
     if (exitCode === null && exitSignal === null) {
       exitCode = code;
       exitSignal = signal;
     }
+    // The child exited on its own — cancel the terminal-result watchdog so it
+    // can't reap an already-exited process; teardown proceeds via the existing
+    // exit-keyed path (reapTree reaps any orphaned grandchildren).
+    if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
     reapTree();
   });
 
   child.on('close', (code, signal) => {
+    closeFired = true;
     clearReapTimers();
     clearInterval(keepAliveTicker);
     if (commitTicker) clearInterval(commitTicker);
@@ -852,8 +1204,15 @@ async function* streamProcess(
       stderrTail.push(stderrBuf);
       enqueue(evt('log', { line: stderrBuf, stream: 'stderr' }));
     }
-    exitCode = code;
-    exitSignal = signal;
+    // Preserve the first-seen exit facts (the `exit` handler captures the real
+    // code/signal): a reap's SIGKILL must not stomp a clean exit code captured
+    // earlier, or the external-kill reason string would change. `exit` always
+    // fires before `close`; this only assigns on the error-less close-without-
+    // prior-exit path (where both are still null).
+    if (exitCode === null && exitSignal === null) {
+      exitCode = code;
+      exitSignal = signal;
+    }
     done = true;
     resolveWaiter?.();
     resolveWaiter = null;
@@ -885,12 +1244,14 @@ async function* streamProcess(
 
     // Return exit facts instead of yielding a terminal event — apply() owns
     // the single terminal (and, in a later Phase 2 task, classification).
+    const exitFact = deriveExitFact();
     return {
       exit: {
         exitCode,
         signal: exitSignal,
         cancelled: cancelSent,
         durationMs: Date.now() - t0,
+        ...(exitFact !== undefined ? { exitFact } : {}),
       },
       ringBuffer: stdoutRing.items(),
       stderrTail: stderrTail.items(),
@@ -927,12 +1288,20 @@ interface BuildSummaryOpts {
   /** Run end time (ISO). Captured once by the caller and shared with the index
    *  row so the two artifacts agree to the millisecond. */
   endedAt: string;
+  /** Gated-merge disposition (Phase 3.5) — only set on the post-finalize
+   *  summary re-write, once the finalizer has resolved merge/delete. */
+  merged?: boolean;
+  branchDeleted?: boolean;
+  /** Base branch the run targets + the gate's hold reason (if held) — persisted
+   *  so the disposition survives a restart and reaches the cockpit. */
+  baseBranch?: string;
+  gateHeldReason?: string;
 }
 
 function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
-  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt } = opts;
+  const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt, merged, branchDeleted, baseBranch, gateHeldReason } = opts;
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
-  const outcome = (typeof data['outcome'] === 'string' ? data['outcome'] : 'failed') as WorkOutcome;
+  const outcome = readOutcome(terminalEvent);
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
   const workProduct = (data['workProduct'] as WorkProductFacts | undefined) ?? EMPTY_WORK_PRODUCT;
   return {
@@ -954,6 +1323,12 @@ function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
     // recorded strings are repo-relative.
     transcriptPath: scrubPathsInText(sink?.path ?? ''),
     forensicsPath: scrubPathsInText(join(workRunsDir, id)),
+    // Only stamp the gated-merge disposition keys when present (the post-finalize
+    // re-write) so the pre-merge summary stays clean.
+    ...(merged !== undefined ? { merged } : {}),
+    ...(branchDeleted !== undefined ? { branchDeleted } : {}),
+    ...(baseBranch !== undefined ? { baseBranch } : {}),
+    ...(gateHeldReason !== undefined ? { gateHeldReason } : {}),
   };
 }
 

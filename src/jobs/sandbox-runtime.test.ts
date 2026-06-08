@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Test suite for `src/jobs/sandbox-runtime.ts` — the runtime complement to
@@ -185,6 +186,91 @@ describe('readProductsConfig', () => {
       },
     });
     expect(() => readProductsConfig(configPath)).toThrow(/repoPath/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readProductsConfig — validationCommands (project 15, P1.5)
+//
+// The gated-merge finalizer reads each product's `validationCommands` from
+// policies/products.json and runs them in an integration worktree as the hard
+// merge gate. WRITE-FIRST: `readProductsConfig` does not yet parse the field, so
+// these assert against fixtures and are RED (undefined ≠ the expected array)
+// until the P1.5 parsing lands. The contract: ALWAYS an array — `[]` (or absent)
+// fails the gate CLOSED (`missing-validation-command`, see work-run-gate.ts),
+// never an unverified merge.
+// ---------------------------------------------------------------------------
+
+describe('readProductsConfig — validationCommands (P1.5)', () => {
+  it('parses a product\'s validationCommands array from the file', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+        validationCommands: ['npm run build', 'npm test'],
+      },
+    });
+    const result = readProductsConfig(configPath);
+    expect(result['aura']!.validationCommands).toEqual(['npm run build', 'npm test']);
+  });
+
+  it('fails CLOSED: a product with NO validationCommands defaults to an empty array', () => {
+    // Absent → `[]` (never undefined), so the gate reads hasValidationCommands
+    // = false and stops at branch-complete rather than merging unverified.
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+      },
+    });
+    const result = readProductsConfig(configPath);
+    expect(result['aura']!.validationCommands).toEqual([]);
+  });
+
+  it('coerces a non-array validationCommands to an empty array (fail-closed, mirrors egressAllowlist)', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+        validationCommands: 'npm test',
+      },
+    });
+    const result = readProductsConfig(configPath);
+    expect(result['aura']!.validationCommands).toEqual([]);
+  });
+
+  it('stringifies non-string validationCommands entries (mirrors egressAllowlist .map(String))', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+        validationCommands: ['npm test', 42],
+      },
+    });
+    const result = readProductsConfig(configPath);
+    expect(result['aura']!.validationCommands).toEqual(['npm test', '42']);
+  });
+
+  it('the REAL Jarvis product config declares validationCommands ["npm run build", "npm test"]', () => {
+    // Read-only against the committed policies/products.json (test-plan §6:
+    // "Jarvis product config includes validationCommands"). RED until the P1.5
+    // impl task adds the field to the real file — this test never mutates it.
+    // The exact list is a spec-pinned policy choice (spec req 16); if Jarvis's
+    // build/test commands ever change, update the spec + this assertion together
+    // (deliberately) rather than treating a drift as a silent false alarm.
+    const realConfigPath = fileURLToPath(
+      new URL('../../policies/products.json', import.meta.url),
+    );
+    const result = readProductsConfig(realConfigPath);
+    expect(result['jarvis']!.validationCommands).toEqual(['npm run build', 'npm test']);
   });
 });
 

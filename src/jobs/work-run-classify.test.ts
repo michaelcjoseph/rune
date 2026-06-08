@@ -46,6 +46,7 @@ import type {
   WorkProductFacts,
   ClassifyFacts,
   TaskTransitions,
+  WorkOutcome,
 } from './work-run-classify.js';
 import type { MutationDescriptor, MutationEvent } from '../transport/mutations.js';
 
@@ -241,6 +242,185 @@ describe('classifyOutcome — pure rules (spec requirements 3-7)', () => {
       expect(result.reason).toMatch(/kill/i);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// P0.3 (project 15) — classifyOutcome exit-fact taxonomy. test-plan §2.
+//
+// WRITE-FIRST: the `reaped-after-terminal-result` cases are RED against the
+// current classifier (which returns `failed` on ANY signal/cancel before it
+// ever looks at work product — the incident's exact mis-classification). The
+// user-cancel / external-kill / clean-exit cases are regression guards that a
+// naive "check branch-complete first" reorder must NOT break.
+//
+// Intended taxonomy (settled here, implemented by the P0.3 impl task):
+//   ExitFacts gains an `exitFact` discriminator:
+//     'clean-exit' | 'clean-exit-wedged-stdio' | 'reaped-after-terminal-result'
+//     | 'user-cancel' | 'external-kill'
+//   classifyOutcome decides on (exitFact + work product) — spec req 6-8:
+//     - user-cancel  → failed/cancelled ALWAYS, even if the branch looks
+//       complete (req 8: a real cancel must never read as success).
+//     - external-kill → failed (the agent never declared done; the truthful
+//       work-product fields are still attached, NOT the null-field
+//       classify-error path).
+//     - clean-exit / clean-exit-wedged-stdio / reaped-after-terminal-result are
+//       the "agent declared done" bucket → classify on WORK PRODUCT, ignoring
+//       the reap's signal/exit code (req 7). A non-zero clean-exit is still
+//       failed.
+//   When `exitFact` is ABSENT (legacy on-disk facts / older callers), the
+//   classifier falls back to the pre-P0.3 signal/cancel/exitCode rules, so the
+//   existing suite above stays green.
+// ---------------------------------------------------------------------------
+
+type ExitFactTag =
+  | 'clean-exit'
+  | 'clean-exit-wedged-stdio'
+  | 'reaped-after-terminal-result'
+  | 'user-cancel'
+  | 'external-kill';
+
+/**
+ * Build ExitFacts carrying the P0.3 `exitFact` discriminator. The field is not
+ * on the ExitFacts interface yet, so cast through — this keeps the suite
+ * `tsc --noEmit` clean before the field lands and reads verbatim once it does.
+ */
+function exitWith(tag: ExitFactTag, over: Partial<ExitFacts> = {}): ExitFacts {
+  return {
+    exitCode: 0,
+    signal: null,
+    cancelled: false,
+    durationMs: 1000,
+    exitFact: tag,
+    ...over,
+  } as ExitFacts;
+}
+
+describe('classifyOutcome — exit-fact taxonomy (P0.3)', () => {
+  // --- reaped-after-terminal-result: the incident's mis-classified case. ---
+
+  it('reapedAfterTerminalResult + clean, complete branch → branch-complete (NOT failed)', () => {
+    // Watchdog reaped a wedged-but-finished agent: SIGKILL, no exit code — yet
+    // result:success was already emitted and the branch is complete.
+    const facts: ClassifyFacts = {
+      exit: exitWith('reaped-after-terminal-result', { signal: 'SIGKILL', exitCode: null }),
+      product: branchCompleteProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('branch-complete');
+  });
+
+  it('reapedAfterTerminalResult + incomplete branch → partial (classify on work product)', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('reaped-after-terminal-result', { signal: 'SIGKILL', exitCode: null }),
+      product: partialProduct(),
+    };
+    const result = classifyOutcome(facts);
+    expect(result.outcome).toBe('partial');
+    // The reaped signal must not leak into a work-product verdict's reason.
+    expect(result.reason).not.toMatch(/signal|kill/i);
+  });
+
+  // --- user-cancel: stays failed even when the branch looks complete (req 8). ---
+
+  it('user-cancel + complete-looking branch → failed/cancelled (must not read a real cancel as success)', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('user-cancel', { cancelled: true, signal: 'SIGTERM', exitCode: null }),
+      product: branchCompleteProduct(),
+    };
+    const result = classifyOutcome(facts);
+    expect(result.outcome).toBe('failed');
+    expect(result.reason).toMatch(/cancel/i);
+  });
+
+  it('user-cancel + incomplete branch → failed/cancelled', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('user-cancel', { cancelled: true, signal: 'SIGTERM', exitCode: null }),
+      product: partialProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('failed');
+  });
+
+  // --- external-kill: operator SIGTERM, no terminal result seen → failed. ---
+
+  it('external-kill (operator SIGTERM, exit 143) + incomplete branch → failed', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('external-kill', { signal: 'SIGTERM', exitCode: 143 }),
+      product: partialProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('failed');
+  });
+
+  it('external-kill + complete-looking branch → failed (no terminal result was seen)', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('external-kill', { signal: 'SIGTERM', exitCode: 143 }),
+      product: branchCompleteProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('failed');
+  });
+
+  // --- clean-exit-with-wedged-stdio: exited 0 → classify on product. ---
+
+  it('clean-exit-with-wedged-stdio + complete branch → branch-complete', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('clean-exit-wedged-stdio', { exitCode: 0 }),
+      product: branchCompleteProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('branch-complete');
+  });
+
+  it('clean-exit-with-wedged-stdio + incomplete branch → partial', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('clean-exit-wedged-stdio', { exitCode: 0 }),
+      product: partialProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('partial');
+  });
+
+  // --- parked / blocked-on-human is supervision state, never a WorkOutcome. ---
+
+  it('never emits parked/blocked-on-human as a WorkOutcome across the taxonomy', () => {
+    // Typed as WorkOutcome[] so adding a new outcome to the union forces this
+    // guard to be revisited at compile time — `parked`/`blocked-on-human` can
+    // never be silently admitted.
+    const VALID: ReadonlyArray<WorkOutcome> = [
+      'branch-complete',
+      'partial',
+      'noop',
+      'dirty-uncommitted',
+      'failed',
+    ];
+    const fixtures: ClassifyFacts[] = [
+      { exit: exitWith('reaped-after-terminal-result', { signal: 'SIGKILL', exitCode: null }), product: branchCompleteProduct() },
+      { exit: exitWith('user-cancel', { cancelled: true, signal: 'SIGTERM', exitCode: null }), product: branchCompleteProduct() },
+      { exit: exitWith('external-kill', { signal: 'SIGTERM', exitCode: 143 }), product: partialProduct() },
+      { exit: exitWith('clean-exit-wedged-stdio'), product: noopProduct() },
+    ];
+    for (const f of fixtures) {
+      expect(VALID).toContain(classifyOutcome(f).outcome);
+    }
+  });
+});
+
+describe('finalizeWorkRun — external-kill carries truthful work product (P0.3)', () => {
+  it('a failed external-kill emits the real work-product facts, not the null-field classify-error path', async () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('external-kill', { signal: 'SIGTERM', exitCode: 143 }),
+      product: partialProduct(),
+    };
+    const event = await finalizeWorkRun({
+      mutationId: 'mut-extkill',
+      computeFacts: async () => facts,
+      exportForensics: async () => {},
+    });
+    expect(event.kind).toBe('failed');
+    const data = eventData(event);
+    expect(data['outcome']).toBe('failed');
+    // Truthful product attached — NOT the catch-path (which omits workProduct).
+    expect(data['workProduct']).toBeDefined();
+    expect((data['workProduct'] as WorkProductFacts).commitCount).toBe(1);
+    expect(String(data['reason'])).not.toMatch(/classification-error/);
+    // The reason should name the external kill (signal/code), not be empty.
+    expect(String(data['reason'])).toMatch(/143|signal|kill|external/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

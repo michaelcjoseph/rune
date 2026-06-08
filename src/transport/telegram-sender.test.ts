@@ -273,6 +273,42 @@ describe('TelegramSender', () => {
       expect(text.toLowerCase()).toMatch(/branch|not yet|main/);
     });
 
+    it('a branch-complete run MERGED to main reads as merged, not "not yet on main" (Phase 3.5)', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'branch-complete',
+          reason: '2 commit(s), all original tasks checked',
+          workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+          merged: true,
+          branchDeleted: true,
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('✅');
+      expect(text.toLowerCase()).toContain('merged to main');
+      // A merged run must NOT read as "not yet on main".
+      expect(text.toLowerCase()).not.toContain('not yet');
+    });
+
+    it('a branch-complete run HELD at the gate surfaces the held reason (never a silent drop) (Phase 3.5)', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          outcome: 'branch-complete',
+          reason: '2 commit(s), all original tasks checked',
+          workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+          merged: false,
+          gateHeldReason: 'tests-red',
+        }),
+      );
+      await flush();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      // The operator sees the run held off main AND why.
+      expect(text.toLowerCase()).toMatch(/held|not yet|off main/);
+      expect(text).toContain('tests-red');
+      expect(text.toLowerCase()).not.toContain('merged to main');
+    });
+
     it('a partial outcome carries the commits + tasks X/Y summary', async () => {
       sender.onMutationEvent(
         workRunEvent('completed', {

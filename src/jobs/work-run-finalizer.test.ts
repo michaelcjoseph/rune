@@ -1,0 +1,630 @@
+/**
+ * Test suite for `src/jobs/work-run-finalizer.ts` — the shared finalizer state
+ * machine (project 15). test-plan.md §4 (hold mode). §6/§7 (gated-merge,
+ * failure path) land with their phases.
+ *
+ * Written TEST-FIRST: the scaffold's `runFinalizer` throws `notImplemented(...)`,
+ * so every test here is RED until the P0.4a impl task fills in `hold` mode. The
+ * expected failure is the thrown notImplemented (or a clean assertion once the
+ * body lands) — never a module-resolution / syntax error.
+ *
+ * Hold-mode contract pinned here (spec req 11, 17):
+ *   classify → flush transcript → write summary/index → resolve worktree
+ *   (remove, branch left intact) → terminal supervision write. NEVER merges,
+ *   pushes, or deletes the branch; supervision ends terminal, never `running`.
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+
+// work-run-finalizer.ts is type-only at the scaffold stage, but the P0.4a impl
+// will import config-bearing modules (mutations/classify/store). Mock config so
+// the suite keeps loading cleanly once those imports land.
+vi.mock('../config.js', () => ({
+  default: {
+    LOGS_DIR: '/tmp',
+    VAULT_DIR: '/test/vault',
+    WORKSPACE_DIR: '/test/workspace',
+    PROJECT_ROOT: '/test/project',
+    SUPERVISED_RUNS_FILE: '/tmp/supervised-runs.json',
+    MUTATIONS_LOG_FILE: '/tmp/mutations.jsonl',
+    WORK_RUNS_DIR: '/tmp/work-runs',
+    WORK_RUNS_INDEX_FILE: '/tmp/work-runs/index.jsonl',
+    TELEGRAM_BOT_TOKEN: 'test-token',
+    TELEGRAM_USER_ID: 42,
+  },
+  PROJECT_ROOT: '/test/project',
+}));
+
+import type { MutationEvent } from '../transport/mutations.js';
+import {
+  runFinalizer,
+  type FinalizerEffects,
+  type FinalizerInput,
+  type FinalizerPhase,
+  type GateFailReason,
+  type GateResult,
+} from './work-run-finalizer.js';
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/** Shared so the input's runId and the fixture events' mutationId can't drift. */
+const DEFAULT_RUN_ID = 'mut-final-hold';
+
+function holdInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
+  return {
+    mode: 'hold',
+    runId: DEFAULT_RUN_ID,
+    project: '15-work-run-finalizer',
+    product: 'jarvis',
+    branch: 'jarvis-work/15-work-run-finalizer',
+    baseBranch: 'main',
+    ...over,
+  };
+}
+
+/** A classified terminal event: clean branch-complete (5 commits, no tasks left). */
+function branchCompleteEvent(): MutationEvent {
+  return {
+    mutationId: DEFAULT_RUN_ID,
+    ts: '2026-06-07T00:00:00.000Z',
+    kind: 'completed',
+    data: {
+      outcome: 'branch-complete',
+      reason: '5 commit(s), all original tasks checked',
+      workProduct: {
+        commitCount: 5,
+        commitShas: ['a1', 'b2', 'c3', 'd4', 'e5'],
+        filesChanged: ['src/foo.ts'],
+        diffstat: '1 file changed',
+        dirty: false,
+        untracked: false,
+        transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+      },
+      exit: { exitCode: 0, signal: null, cancelled: false, durationMs: 5000 },
+    },
+  };
+}
+
+/** A classified terminal event for a failed run. */
+function failedEvent(): MutationEvent {
+  return {
+    mutationId: DEFAULT_RUN_ID,
+    ts: '2026-06-07T00:00:00.000Z',
+    kind: 'failed',
+    data: {
+      outcome: 'failed',
+      reason: 'exited with code 1',
+      exit: { exitCode: 1, signal: null, cancelled: false, durationMs: 3000 },
+    },
+  };
+}
+
+/** A classified terminal event for an arbitrary non-merge outcome. `failed`
+ *  carries event kind `'failed'`; every other WorkOutcome carries `'completed'`
+ *  (mirrors `finalizeWorkRun`: kind = outcome === 'failed' ? 'failed' :
+ *  'completed'). `cancelled` is a `failed` outcome whose reason is "cancelled". */
+function outcomeEvent(
+  outcome: 'partial' | 'noop' | 'dirty-uncommitted' | 'failed',
+  reason: string = outcome,
+): MutationEvent {
+  return {
+    mutationId: DEFAULT_RUN_ID,
+    ts: '2026-06-07T00:00:00.000Z',
+    kind: outcome === 'failed' ? 'failed' : 'completed',
+    data: {
+      outcome,
+      reason,
+      exit: {
+        exitCode: outcome === 'failed' ? 1 : 0,
+        signal: null,
+        cancelled: reason === 'cancelled',
+        durationMs: 3000,
+      },
+    },
+  };
+}
+
+/** Effects bag: every seam a spy, the durable phase store an array. */
+function makeEffects(terminalEvent: MutationEvent, over: Partial<FinalizerEffects> = {}) {
+  const phases: FinalizerPhase[] = [];
+  const effects: FinalizerEffects = {
+    classify: vi.fn(async () => terminalEvent),
+    flushTranscript: vi.fn(async () => {}),
+    writeSummary: vi.fn(),
+    appendIndexRow: vi.fn(),
+    writeSupervisionTerminal: vi.fn(),
+    removeWorktree: vi.fn(async () => {}),
+    recordPhase: vi.fn((p: FinalizerPhase) => { phases.push(p); }),
+    // Fresh run by default — recovery resume tests (P0.4) override this.
+    readLastPhase: vi.fn((): FinalizerPhase | null => null),
+    gate: vi.fn(async (): Promise<GateResult> => ({ ok: true })),
+    alert: vi.fn(),
+    mergeBranch: vi.fn(async () => {}),
+    pushBranch: vi.fn(async () => {}),
+    deleteBranch: vi.fn(async () => {}),
+    ...over,
+  };
+  return { effects, phases };
+}
+
+function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
+  return holdInput({ mode: 'gated-merge', ...over });
+}
+
+// ---------------------------------------------------------------------------
+// §4 — Finalizer hold mode
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — hold mode (P0.4a)', () => {
+  it('writes summary + index + terminal supervision for a branch-complete run, and NEVER merges/pushes/deletes', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    expect(effects.writeSummary).toHaveBeenCalledWith(ev);
+    expect(effects.appendIndexRow).toHaveBeenCalledWith(ev);
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    // The whole point of hold mode: never touches `main`.
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+  });
+
+  it('removes the worktree, records the decision, and never leaves supervision running', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+    expect(result.worktreeRemoved).toBe(true);
+    // Terminal supervision — never a quiet-pinging `running`.
+    expect(result.supervisionStatus).toBe('completed');
+  });
+
+  it('flushes the transcript before writing summary/index (terminal-write ordering)', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+
+    await runFinalizer(holdInput(), effects);
+
+    const flushOrder = vi.mocked(effects.flushTranscript).mock.invocationCallOrder[0]!;
+    const summaryOrder = vi.mocked(effects.writeSummary).mock.invocationCallOrder[0]!;
+    const indexOrder = vi.mocked(effects.appendIndexRow).mock.invocationCallOrder[0]!;
+    expect(flushOrder).toBeLessThan(summaryOrder);
+    expect(flushOrder).toBeLessThan(indexOrder);
+  });
+
+  it('records the exact ordered hold-mode phase sequence (durable resume checkpoints), with no gated-merge phases', async () => {
+    const ev = branchCompleteEvent();
+    const { effects, phases } = makeEffects(ev);
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    // A phase is recorded after EACH mutating step so a crash-resume (P0.4) can
+    // skip exactly the steps already committed — the gated-merge-only
+    // checkpoints (`merged-not-pushed`/`pushed-not-deleted`) never appear.
+    expect(phases).toEqual([
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'worktree-resolved',
+      'finalized',
+    ]);
+    expect(result.phases).toEqual(phases);
+  });
+
+  it('a worktree-removal failure does NOT block the terminal supervision write (never left running)', async () => {
+    // req 17: a cleanup failure must never strand the run as a quiet-pinging
+    // `running`. Worktree removal is best-effort inside hold mode.
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev, {
+      removeWorktree: vi.fn(async () => { throw new Error('worktree busy'); }),
+    });
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    // The run still reaches a real terminal supervision status.
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    expect(result.supervisionStatus).toBe('completed');
+    // The decision is recorded truthfully: the worktree was NOT removed.
+    expect(result.worktreeRemoved).toBe(false);
+  });
+
+  it('on a failed run writes failed supervision, never merges, and still resolves the worktree', async () => {
+    const ev = failedEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    expect(result.outcome).toBe('failed');
+    expect(result.supervisionStatus).toBe('failed');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('failed', ev);
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    // Failure path still reaps/tears down — never left quiet-pinging running.
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 — Gated-merge mode state machine (P1.5). WRITE-FIRST: gated-merge throws
+// notImplemented, so these are RED until the P1.5 impl. The per-gate-condition
+// matrix + lock + resume are separate Phase 3 test tasks.
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge mode (P1.5)', () => {
+  it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    // Gate consulted; all merge steps fired; no operator alert.
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+    expect(effects.alert).not.toHaveBeenCalled();
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    // Result reflects the landed merge. `outcome` stays the work-product
+    // classification (branch-complete); the merge DISPOSITION is signalled by
+    // `result.merged` (no `merged` value is added to the WorkOutcome enum — that
+    // would ripple across the cockpit/projection/formatters).
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.supervisionStatus).toBe('completed');
+  });
+
+  it('records the exact ordered gated-merge phase sequence (push-before-delete durable checkpoints)', async () => {
+    const { effects, phases } = makeEffects(branchCompleteEvent());
+    await runFinalizer(gatedMergeInput(), effects);
+    expect(phases).toEqual([
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'merged-not-pushed',
+      'pushed-not-deleted',
+      'worktree-resolved',
+      'finalized',
+    ]);
+  });
+
+  it('push failure → branch is NOT deleted (origin lacks the work; recovery resumes from merged-not-pushed) (P2.8)', async () => {
+    // The don't-delete-prematurely guard: if the push fails after a successful
+    // merge, the local branch MUST survive (it's the only copy not on origin) so
+    // the P0.4 recovery path can resume the push. The merge recorded
+    // `merged-not-pushed`; the push throws BEFORE `pushed-not-deleted`, so the
+    // delete (in the shared tail, gated on a reached push) never runs.
+    const { effects, phases } = makeEffects(branchCompleteEvent(), {
+      pushBranch: vi.fn(async () => { throw new Error('git push failed: network down'); }),
+    });
+
+    await expect(runFinalizer(gatedMergeInput(), effects)).rejects.toThrow(/push failed/);
+
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    // Crucially: the branch is NOT deleted — its work isn't on origin yet.
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    // The durable phase stops at `merged-not-pushed` (never `pushed-not-deleted`)
+    // so a recovery resume retries the push, never skips to delete.
+    expect(phases).toContain('merged-not-pushed');
+    expect(phases).not.toContain('pushed-not-deleted');
+  });
+
+  it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {
+    const { effects } = makeEffects(branchCompleteEvent());
+    await runFinalizer(gatedMergeInput(), effects);
+    // Legible failure if a step never fired (vs a confusing NaN comparison).
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    const mergeOrder = vi.mocked(effects.mergeBranch!).mock.invocationCallOrder[0]!;
+    const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
+    const deleteOrder = vi.mocked(effects.deleteBranch!).mock.invocationCallOrder[0]!;
+    expect(mergeOrder).toBeLessThan(pushOrder);
+    expect(pushOrder).toBeLessThan(deleteOrder);
+  });
+
+  it('gated-merge requires the gate/merge/push/delete effects — rejects if a caller omits them', async () => {
+    // The optional-on-the-interface effects MUST be present in gated-merge mode;
+    // the impl guards so a missing `gate` can never silently skip verification.
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev);
+    const withoutGate: FinalizerEffects = { ...effects, gate: undefined };
+    await expect(runFinalizer(gatedMergeInput(), withoutGate)).rejects.toThrow(/gated-merge.*require|require.*gate/i);
+  });
+
+  it('a failed gate STOPS at branch-complete: alert, no merge/push/delete, main untouched', async () => {
+    const ev = branchCompleteEvent();
+    const { effects } = makeEffects(ev, {
+      gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason: 'tests-red' })),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.alert).toHaveBeenCalledWith('tests-red');
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+    // Still reaches a terminal supervision status (branch-complete held on a branch).
+    expect(result.outcome).toBe('branch-complete');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    // The worktree is removed (the branch ref persists for inspection/retry),
+    // matching the hold-mode non-merge policy — never left orphaned.
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+    expect(result.worktreeRemoved).toBe(true);
+  });
+
+  it('never merges a non-branch-complete run (partial/failed): the gate is not even consulted', async () => {
+    const ev = failedEvent();
+    const { effects } = makeEffects(ev);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    expect(result.supervisionStatus).toBe('failed');
+    expect(effects.removeWorktree).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 — Gate: EACH failing condition stops at branch-complete, main unchanged
+// (P1.5, this Phase-3 test task). WRITE-FIRST: gated-merge throws
+// notImplemented, so every case is RED until the P1.5 impl. The PURE per-reason
+// gate DECISION (`evaluateGate(facts) → reason`) is pinned separately in
+// work-run-gate.test.ts; this block pins the FINALIZER-LEVEL contract — that for
+// EVERY gate-fail reason the gated-merge finalizer stops at `branch-complete`,
+// alerts with that exact reason, and never mutates the base branch (no
+// merge/push/delete), so a red gate can never land broken work on `main`.
+//
+// At the spy level "main unchanged" == merge/push/delete never fire; the
+// byte-for-byte temp-repo `main`-unchanged proof is a separate Phase-3 task
+// (test-plan §6 "Gate checks run in an integration worktree").
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge gate: each condition stops at branch-complete (P1.5)', () => {
+  // Every typed GateFailReason — if a new reason is added to the union without a
+  // case here, this list (and the alert/no-merge contract) must be updated too.
+  const FAIL_REASONS: GateFailReason[] = [
+    'tests-red',
+    'dirty-tree',
+    'tasks-remaining',
+    'merge-conflict',
+    'concurrent-run',
+    'missing-validation-command',
+    'validation-timeout',
+  ];
+
+  it.each(FAIL_REASONS)(
+    'gate fails with %s → stop at branch-complete, alert(reason), no merge/push/delete, main untouched',
+    async (reason) => {
+      const ev = branchCompleteEvent();
+      const { effects } = makeEffects(ev, {
+        gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason })),
+      });
+
+      const result = await runFinalizer(gatedMergeInput(), effects);
+
+      // The gate WAS consulted (the run is branch-complete) and refused.
+      expect(effects.gate).toHaveBeenCalledOnce();
+      // Operator is alerted with the precise reason — never a silent hold.
+      expect(effects.alert).toHaveBeenCalledWith(reason);
+      // `main` is byte-for-byte untouched: not one ref-mutating step fired.
+      expect(effects.mergeBranch).not.toHaveBeenCalled();
+      expect(effects.pushBranch).not.toHaveBeenCalled();
+      expect(effects.deleteBranch).not.toHaveBeenCalled();
+      // The run holds on its branch: outcome stays the work-product
+      // classification, nothing merged or deleted.
+      expect(result.outcome).toBe('branch-complete');
+      expect(result.merged).toBe(false);
+      expect(result.branchDeleted).toBe(false);
+      // Still reaches a real terminal supervision status — never quiet-pinging.
+      expect(result.supervisionStatus).toBe('completed');
+      expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+      // The worktree is reaped (branch ref persists for inspection/retry),
+      // matching the hold-mode non-merge policy — never left orphaned.
+      expect(effects.removeWorktree).toHaveBeenCalledOnce();
+      expect(result.worktreeRemoved).toBe(true);
+    },
+  );
+
+  it('a failed gate records exactly the hold-mode phase sequence — no gated-merge-only checkpoints', async () => {
+    // A run that stops at the gate must record the SAME phases as hold mode and
+    // never the push-before-delete checkpoints — otherwise a crash-resume would
+    // wrongly believe a merge landed and skip straight to push/delete on a
+    // branch that never merged. Pinning the full sequence (not just the absent
+    // ones) also catches a regression that drops an earlier phase like
+    // `index-appended` on the gate-fail path.
+    const ev = branchCompleteEvent();
+    const { effects, phases } = makeEffects(ev, {
+      gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason: 'tasks-remaining' })),
+    });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    // Exact equality pins both the order AND the absence of the gated-merge-only
+    // checkpoints (`merged-not-pushed`/`pushed-not-deleted`) — if either leaked
+    // onto the gate-fail path this fails first with a clear diff.
+    expect(phases).toEqual([
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'worktree-resolved',
+      'finalized',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 — Gated-merge crash-resume matrix (P1.5). WRITE-FIRST: gated-merge throws
+// notImplemented, so these are RED until the P1.5 impl consults
+// `readLastPhase()` at the top of `runFinalizer` and skips already-committed
+// steps. The contract (spec req 15, test-plan §6 "Concurrency + durability"):
+// a crash mid-finalize resumes at the RIGHT step — the merge is applied
+// EXACTLY ONCE and push always happens before branch delete, so a resume can
+// never re-merge an already-merged branch or delete a branch whose work isn't
+// yet on origin.
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
+  it('resume from `merged-not-pushed`: does NOT re-merge — completes push then delete (exactly-once merge)', async () => {
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'merged-not-pushed'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    // The merge already landed before the crash — never re-merge.
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    // The append-only index row was already written — never duplicate it.
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    // Resume completes the remaining mutating steps, push BEFORE delete.
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
+    const deleteOrder = vi.mocked(effects.deleteBranch!).mock.invocationCallOrder[0]!;
+    expect(pushOrder).toBeLessThan(deleteOrder);
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+  });
+
+  it('resume from `pushed-not-deleted`: does NOT re-merge OR re-push — only completes the branch delete', async () => {
+    // The push already put the work on origin (the durable backup); a resume
+    // must finish the delete WITHOUT re-merging or re-pushing.
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'pushed-not-deleted'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+  });
+
+  it('resume from `index-appended` (pre-merge): re-evaluates the gate and merges exactly once', async () => {
+    // The crash happened AFTER the index row but BEFORE the merge, so the merge
+    // never landed — resume must run gate → merge → push → delete, merging once,
+    // and must NOT re-append the index row (already written).
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase => 'index-appended'),
+    });
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+  });
+
+  it('fresh run (no prior phase) merges EXACTLY once — the resume guard never double-applies a fresh merge', async () => {
+    const { effects } = makeEffects(branchCompleteEvent(), {
+      readLastPhase: vi.fn((): FinalizerPhase | null => null),
+    });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §7 — Failure / partial / cancelled path (P1.6). These outcomes NEVER merge,
+// so they finalize through `hold` mode (already implemented in P0.4a) — the
+// finalizer guarantees: always flush transcript + write summary, always reap the
+// worktree, NEVER merge/push/delete, and ALWAYS reach a terminal supervision
+// status (never a quiet-pinging `running`), with the branch retained for
+// inspection. These are the regression guards for the §7 invariant; the P1.6
+// impl task wires the LIVE work-runner failure/cancelled paths through this same
+// finalizer (a runtime concern). The "OR mark explicit blocked-on-human" option
+// reuses the EXISTING persisted supervision status — no new status enum (§7 🟢).
+// ---------------------------------------------------------------------------
+
+describe('runFinalizer — failure / partial / cancelled path (P1.6)', () => {
+  // Every non-merge outcome, including a cancelled run (failed + reason
+  // "cancelled"), routed through hold mode.
+  const NON_MERGE_CASES: Array<{ label: string; ev: () => MutationEvent; supervision: 'completed' | 'failed' }> = [
+    { label: 'failed', ev: () => outcomeEvent('failed'), supervision: 'failed' },
+    { label: 'cancelled (failed + reason cancelled)', ev: () => outcomeEvent('failed', 'cancelled'), supervision: 'failed' },
+    { label: 'partial', ev: () => outcomeEvent('partial'), supervision: 'completed' },
+    { label: 'noop', ev: () => outcomeEvent('noop'), supervision: 'completed' },
+    { label: 'dirty-uncommitted', ev: () => outcomeEvent('dirty-uncommitted'), supervision: 'completed' },
+  ];
+
+  it.each(NON_MERGE_CASES)(
+    '$label: always reaps + flushes, NEVER merges, ends terminal (never running), branch retained',
+    async ({ ev, supervision }) => {
+      const event = ev();
+      const { effects } = makeEffects(event);
+
+      const result = await runFinalizer(holdInput(), effects);
+
+      // Never merges — no path to `main` for a non-branch-complete run.
+      expect(effects.mergeBranch).not.toHaveBeenCalled();
+      expect(effects.pushBranch).not.toHaveBeenCalled();
+      expect(effects.deleteBranch).not.toHaveBeenCalled();
+      // Always flushes the transcript and writes the summary + index row
+      // (forensics durable — the index row must not be dropped on the failure path).
+      expect(effects.flushTranscript).toHaveBeenCalledOnce();
+      expect(effects.writeSummary).toHaveBeenCalledWith(event);
+      expect(effects.appendIndexRow).toHaveBeenCalledWith(event);
+      // Always reaps the worktree.
+      expect(effects.removeWorktree).toHaveBeenCalledOnce();
+      // ALWAYS terminal — never left a quiet-pinging `running`.
+      expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith(supervision, event);
+      expect(result.supervisionStatus).toBe(supervision);
+      // The merge never happened and the branch is retained for inspection.
+      expect(result.merged).toBe(false);
+      expect(result.branchDeleted).toBe(false);
+    },
+  );
+
+  it('flushes the transcript BEFORE writing the summary on the failure path too', async () => {
+    const { effects } = makeEffects(outcomeEvent('failed'));
+
+    await runFinalizer(holdInput(), effects);
+
+    const flushOrder = vi.mocked(effects.flushTranscript).mock.invocationCallOrder[0]!;
+    const summaryOrder = vi.mocked(effects.writeSummary).mock.invocationCallOrder[0]!;
+    expect(flushOrder).toBeLessThan(summaryOrder);
+  });
+
+  it('a worktree-reap failure on the failure path still reaches a terminal supervision status (never left running)', async () => {
+    // req 17 again, for the failure path: a cleanup hiccup must not strand the
+    // run as a quiet-pinging `running`.
+    const { effects } = makeEffects(outcomeEvent('failed'), {
+      removeWorktree: vi.fn(async () => { throw new Error('worktree busy'); }),
+    });
+
+    const result = await runFinalizer(holdInput(), effects);
+
+    expect(result.supervisionStatus).toBe('failed');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalled();
+    expect(result.worktreeRemoved).toBe(false);
+  });
+});

@@ -20,7 +20,7 @@ its `spec.md`.
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Not Started | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. |
-| [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Not Started | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
+| [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 
 ---
 
@@ -247,7 +247,7 @@ explicit context handoff.
   owner rather than a launcher for one long `/work --auto` process.
 - **Task breakdown & test plan:** see [tasks.md](14-product-team-agents/tasks.md) and [test-plan.md](14-product-team-agents/test-plan.md). Test-first per phase.
 
-## 15-work-run-finalizer — Not Started
+## 15-work-run-finalizer — Done
 
 [Spec](15-work-run-finalizer/spec.md)
 

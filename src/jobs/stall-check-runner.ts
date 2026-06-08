@@ -11,7 +11,8 @@
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus } from '../transport/notification-bus.js';
-import { planQuietNudges } from '../intent/supervision.js';
+import { planQuietNudges, planQuietCancel, planMaxRuntimeKills } from '../intent/supervision.js';
+import { cancelMutation } from '../transport/mutations.js';
 import { readAllRuns, upsertRun } from './supervision-store.js';
 import {
   checkStalledRuns,
@@ -85,6 +86,54 @@ export function startStallCheck(bus: NotificationBus): void {
           upsertRun(quietPlan.updated[i]!, config.SUPERVISED_RUNS_FILE);
         } catch (err) {
           log.warn('quiet-nudge persist failed', { id: run.id, error: (err as Error).message });
+        }
+      });
+
+      // Quiet→cancel escalation (project 15, P2.7): a run that stays quiet past
+      // the LONGER cancel threshold after its one-time nudge is escalated —
+      // cancelMutation SIGTERMs the child, and the existing work-runner teardown
+      // reaps + finalizes it. This stops the loop from nudging a never-recovering
+      // run forever. Excludes the just-stalled set (`nudged`) — like the quiet
+      // nudge, this is the alive-but-no-output case, distinct from a child-dead
+      // stall. Per-run isolated.
+      const quietCancelPlan = planQuietCancel(
+        runs.filter((r) => !nudged.has(r.id)),
+        config.WORK_RUN_QUIET_CANCEL_AFTER_MS,
+        now,
+      );
+      quietCancelPlan.toCancel.forEach((run) => {
+        try {
+          const result = cancelMutation(run.id);
+          log.info('quiet→cancel escalation', {
+            id: run.id,
+            product: run.product,
+            project: run.project,
+            cancelled: result.ok,
+            ...(result.ok ? {} : { reason: result.reason }),
+          });
+        } catch (err) {
+          log.warn('quiet→cancel escalation failed', { id: run.id, error: (err as Error).message });
+        }
+      });
+
+      // Hard max-runtime ceiling (project 15, P2.7): group-kill + finalize ANY
+      // running run past WORK_RUN_MAX_RUNTIME_MS, regardless of apparent liveness
+      // — a fresh keep-alive ticker cannot defeat it (planMaxRuntimeKills keys on
+      // startedAt). Runs over the full snapshot (the ceiling is the backstop for
+      // every run, including stalled/quiet ones); cancelMutation is idempotent,
+      // so a run also selected above is harmlessly re-cancelled. Per-run isolated.
+      planMaxRuntimeKills(runs, config.WORK_RUN_MAX_RUNTIME_MS, now).toKill.forEach((run) => {
+        try {
+          const result = cancelMutation(run.id);
+          log.info('max-runtime ceiling kill', {
+            id: run.id,
+            product: run.product,
+            project: run.project,
+            cancelled: result.ok,
+            ...(result.ok ? {} : { reason: result.reason }),
+          });
+        } catch (err) {
+          log.warn('max-runtime ceiling kill failed', { id: run.id, error: (err as Error).message });
         }
       });
     } catch (err) {

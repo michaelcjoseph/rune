@@ -33,6 +33,10 @@
       "codeload.github.com",
       "objects.githubusercontent.com",
       "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build",
+      "npm test"
     ]
   },
   "relay": {

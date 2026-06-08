@@ -90,8 +90,23 @@ function formatWorkRunTerminal(event: BusMutationEvent): string {
   const total = checked + remaining;
 
   switch (outcome) {
-    case 'branch-complete':
-      return `✅ ${slug} branch-complete · ${commits} commit(s), all tasks checked (not yet on main) · id=${id}`;
+    case 'branch-complete': {
+      // Phase 3.5 — gated-merge activation: a branch-complete run that landed on
+      // the base branch reads as merged; one the gate HELD off it surfaces the
+      // reason (never a silently-dropped alert); one not run through gated-merge
+      // (or a disposition not stamped) keeps the legacy "not yet on <base>"
+      // wording. The base branch is stamped on the event (defaults to `main`).
+      const base = typeof data['baseBranch'] === 'string' ? (data['baseBranch'] as string) : 'main';
+      if (data['merged'] === true) {
+        const branchNote = data['branchDeleted'] === true ? 'branch deleted' : 'branch retained';
+        return `✅ ${slug} merged to ${base} · ${commits} commit(s) · ${branchNote} · id=${id}`;
+      }
+      const held = typeof data['gateHeldReason'] === 'string' ? (data['gateHeldReason'] as string) : '';
+      if (held) {
+        return `✅ ${slug} branch-complete · held off ${base}: ${held} · ${commits} commit(s) · id=${id}`;
+      }
+      return `✅ ${slug} branch-complete · ${commits} commit(s), all tasks checked (not yet on ${base}) · id=${id}`;
+    }
     case 'partial':
       return `📊 ${slug} partial · ${commits} commit(s), ${checked}/${total} tasks done · id=${id}`;
     case 'noop':
