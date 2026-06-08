@@ -91,21 +91,22 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Context update test: post-task update preserves required sections and rejects
-      transcript-style dumps.
-- [ ] Context validation test: technical contract changes require tech-lead validation;
-      product-intent changes require PM validation when flagged.
-- [ ] Task-selection test: Jarvis selects the first unchecked task from `tasks.md` before
-      invoking any executor.
-- [ ] Fresh-context test: task N+1 receives bounded handoff input, not task N's transcript or
-      accumulated conversation.
-- [ ] Run-record test: task records include task id/text, attempt id, roles invoked,
+- [x] Context update test: post-task update preserves required sections and rejects
+      transcript-style dumps. (`context-curator.test.ts`)
+- [x] Context validation test: technical contract changes require tech-lead validation;
+      product-intent changes require PM validation when flagged. (`context-curator.test.ts`)
+- [x] Task-selection test: Jarvis selects the first unchecked task from `tasks.md` before
+      invoking any executor. (`orch-task.test.ts`)
+- [x] Fresh-context test: task N+1 receives bounded handoff input, not task N's transcript or
+      accumulated conversation. (`orch-execution.test.ts`)
+- [x] Run-record test: task records include task id/text, attempt id, roles invoked,
       transcript ids, model/provider choices, commit sha, verdicts, context outcome, and gates.
-- [ ] Attempt-cap test: repeated task failure stops at configured cap and routes to PM wrap-up
-      or blocked-on-human; it never retries indefinitely.
-- [ ] Restart reconstruction test: partial project run reconstructs from durable task records,
-      commits, `tasks.md`, and `context.md`.
-- [ ] Confirm red before implementation.
+      (`orch-execution.test.ts`)
+- [x] Attempt-cap test: repeated task failure stops at configured cap and routes to PM wrap-up
+      or blocked-on-human; it never retries indefinitely. (`orch-execution.test.ts`)
+- [x] Restart reconstruction test: partial project run reconstructs from durable task records,
+      commits, `tasks.md`, and `context.md`. (`orch-task.test.ts`)
+- [x] Confirm red before implementation. (Confirmed: 3 suites red on module-not-found.)
 
 ### Implementation
 
