@@ -22,11 +22,27 @@ deferred propagation, add it here so it can't rot silently. When you
 fold a queued lesson into the checklist, remove it here in the same
 commit.
 
-*Currently empty.* Lesson 7 from
+Lesson 7 from
 [`08-intent-layer/agent-lessons.md`](../08-intent-layer/agent-lessons.md)
 ("Every new user-facing command needs a discovery-surface task") landed
 here as the convention's first entry and was simultaneously propagated
 into §1 below — the same commit demonstrates the loop closing.
+
+- **From [`14-product-team-agents/agent-lessons.md`](../14-product-team-agents/agent-lessons.md)
+  Lesson 1:** a "wire X into the nightly job" (or any orchestrator with a
+  snapshot test) task is a multi-file change, not one line — it touches the
+  step-count + ordered step-name snapshot, any positional index assertion,
+  and any test that *narrowly mocks* a shared builtin (e.g. `node:child_process`
+  with `spawn` only). Decompose it as "step + snapshot-test updates +
+  narrow-mock check." *To fold into §1's decomposition guidance.*
+- **From [`14-product-team-agents/agent-lessons.md`](../14-product-team-agents/agent-lessons.md)
+  Lesson 2:** for a capability that ingests external/untrusted records, calls
+  an LLM, and commits to a tracked file, enumerate trust-boundary/scale items
+  **as test-plan rows up front** — input length caps, exactly-once consumption
+  (idempotent + per-pass bounded), prompt-injection delimiting, per-item fault
+  isolation. These are the gaps a happy-path contract test-plan misses and a
+  security/code review later finds. *To fold into the test-plan-completeness
+  guidance.*
 
 ---
 

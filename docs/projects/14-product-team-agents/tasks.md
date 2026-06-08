@@ -379,8 +379,13 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `08-intent-layer/egress-deferral.md` template — Status / Context / Decision / Rationale /
       Trigger-to-promote, grounded in what shipped; the 6 deferral-ADR closeout assertions
       pass.)
-- [ ] Write `agent-lessons.md` per the planning checklist, propagating lessons or recording an
-      explicit no-new-lessons rationale.
+- [x] Write `agent-lessons.md` per the planning checklist, propagating lessons or recording an
+      explicit no-new-lessons rationale. (Three lessons, each with an `Applied at:` pointer:
+      L1 nightly-step cross-cutting test change → folded a caveat into this repo's `CLAUDE.md`
+      + queued in the checklist `TODO(propagation)`; L2 trust-boundary review budget for
+      untrusted→LLM→commit paths → queued in `TODO(propagation)`; L3 don't background a
+      state-restoring command → already propagated to the `git-stash-pop…` auto-memory. The 2
+      agent-lessons closeout assertions pass.)
 - [ ] Run and record the final completion check that includes the Phase 5 user-triggerable
       dispatch and mode-visibility tests.
 
