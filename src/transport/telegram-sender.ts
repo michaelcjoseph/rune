@@ -58,6 +58,25 @@ function formatGenEvalLoopTerminal(event: BusMutationEvent): string {
   return `💥 ${target} failed · ${reason} · id=${id}`;
 }
 
+/** Project 13: run-start notification for a `work-run` mutation. Surfaces the
+ *  UN-SCRUBBED operator worktree path so Michael can `cd` straight into a live
+ *  (or later parked) run in one step — Telegram (to TELEGRAM_USER_ID) is a
+ *  local-operator surface, so the raw `cd`-able path is delivered verbatim. The
+ *  cockpit WebSocket (localhost-bound, auth-gated) is the OTHER scrub-exempt
+ *  local-operator surface that carries this field; every PERSISTED/COMMITTED
+ *  surface (mutations.jsonl, summary/index, transcript, forensics) stays
+ *  scrubbed. NOTE: both exemptions assume the cockpit stays local — broadening
+ *  `JARVIS_ALLOWED_HOSTS` to a remote origin must revisit this field. Returns
+ *  null when no path is present so the caller never surfaces an empty alert. */
+function formatWorkRunStart(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const worktree = typeof data['operatorWorktreePath'] === 'string' ? data['operatorWorktreePath'].trim() : '';
+  if (!worktree) return null;
+  const slug = String(data['projectSlug'] ?? event.mutationId.slice(0, 8));
+  const runId = String(data['runId'] ?? event.mutationId);
+  return `🚀 work-run started · ${slug} · id=${runId}\n📂 ${worktree}`;
+}
+
 /** Project 11: outcome-aware terminal message for a `work-run` mutation. Keyed
  *  on the typed `outcome` (carried on the terminal event's `data`), so a run
  *  that exited 0 while doing nothing renders as `⚠️ no-op`, never `✅ finished`.
@@ -194,6 +213,23 @@ export class TelegramSender implements MessageSender {
    *  commit-poll ping) as a lightweight message. Other kinds keep the generic
    *  `/work --auto` format. */
   onMutationEvent(event: BusMutationEvent): void {
+    // Project 13 run-start notification: a work-run `start` event carries the
+    // un-scrubbed `operatorWorktreePath` so Michael can `cd` straight into a
+    // live (or later parked) run. Telegram (to TELEGRAM_USER_ID) is a local-
+    // operator surface, so the raw path is delivered verbatim — this is the one
+    // surface allowed to carry it un-scrubbed. A start event with no path is a
+    // defensive no-op (never surface an empty alert).
+    if (event.mutationKind === 'work-run' && event.subKind === 'start') {
+      const start = formatWorkRunStart(event);
+      if (start) {
+        void this.send(event.userId, start).catch((err: unknown) => {
+          log.error('TelegramSender.onMutationEvent start send failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return;
+    }
     // Project 11 commit-poll progress ping: a throttled work-run `progress`
     // event carries a short "📊 <commit subject> · X/Y tasks" line. Deliver it
     // as a lightweight Telegram message so the user sees mid-run progress; the

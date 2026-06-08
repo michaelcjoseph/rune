@@ -116,14 +116,19 @@ export interface MutationEvent {
   mutationId: string;
   ts: string;
   /**
-   * `keep-alive` is a process-liveness signal emitted by the applier on a
-   * periodic ticker while the child is alive — distinct from `output`
-   * (which reflects LLM activity). The two signals back two SupervisedRun
-   * timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
+   * `start` is a one-shot run-start notification emitted by the work-run
+   * applier once its worktree exists (project 13). It carries the local-operator
+   * `operatorWorktreePath` so Michael can reach a live run in one step; the
+   * mutations pipeline only publishes it to the bus (no supervision side effect)
+   * and never copies its data onto the descriptor — the un-scrubbed path must
+   * not reach mutations.jsonl. `keep-alive` is a process-liveness signal emitted
+   * by the applier on a periodic ticker while the child is alive — distinct from
+   * `output` (which reflects LLM activity). The two signals back two
+   * SupervisedRun timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
    * `lastChildAliveAt`. Stall-check prefers `lastChildAliveAt` so a long
    * quiet LLM call no longer trips a false stall nudge.
    */
-  kind: 'log' | 'progress' | 'output' | 'keep-alive' | 'completed' | 'failed';
+  kind: 'start' | 'log' | 'progress' | 'output' | 'keep-alive' | 'completed' | 'failed';
   data?: unknown;
 }
 

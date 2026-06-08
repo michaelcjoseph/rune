@@ -315,6 +315,23 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         return;
       }
 
+      // Run-start notification (project 13, Phase 1a): now that the worktree
+      // exists, surface its deterministic path + run id so the operator can
+      // reach a live (or later parked) run in one step. `operatorWorktreePath`
+      // is the RAW, UN-SCRUBBED worktree path on a LOCAL-OPERATOR-ONLY field —
+      // it rides the bus to Telegram/cockpit (both local surfaces) but is never
+      // copied onto the descriptor, so it can't leak into mutations.jsonl,
+      // summaries/index, the transcript, forensics, or any committed artifact
+      // (those stay scrubbed). Emitted only on the success path: the
+      // createWorktree-failure branch above returns BEFORE this, so a run with
+      // no worktree omits the field cleanly rather than emitting an empty path.
+      yield startEvent(descriptor.id, {
+        operatorWorktreePath: sandbox.worktree,
+        runId: descriptor.id,
+        projectSlug,
+        product,
+      });
+
       const dir = findProjectDir(projectSlug, sandbox.worktree);
       if (!dir) {
         yield term(descriptor.id, 'failed', { reason: `project not found in worktree: ${projectSlug}`, projectSlug });
@@ -1346,4 +1363,13 @@ function term(
   data: Record<string, unknown>,
 ): MutationEvent {
   return { mutationId, ts: new Date().toISOString(), kind, data };
+}
+
+/** Build the one-shot run-start notification event (project 13, Phase 1a). The
+ *  `data.operatorWorktreePath` it carries is intentionally UN-SCRUBBED — it is a
+ *  local-operator field, distinct from every persisted/committed surface, which
+ *  stays scrubbed via `scrubPathsInText`. The mutations pipeline publishes this
+ *  to the bus without copying its data onto the descriptor. */
+function startEvent(mutationId: string, data: Record<string, unknown>): MutationEvent {
+  return { mutationId, ts: new Date().toISOString(), kind: 'start', data };
 }

@@ -53,11 +53,17 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Path on notifications
 
-- [ ] Thread the deterministic worktree path + run id onto the run-start notification (Telegram +
+- [x] Thread the deterministic worktree path + run id onto the run-start notification (Telegram +
       cockpit bus), on a local-operator-only field named `operatorWorktreePath` carrying the
-      **un-scrubbed** path.
-- [ ] Guarantee the un-scrubbed path never reaches `mutations.jsonl`, the forensics bundle, or any
+      **un-scrubbed** path. (`apply()` yields a `start` MutationEvent after `createWorktree` succeeds;
+      `MutationEvent.kind`/`BusMutationEvent.subKind` widened with `'start'`; `formatWorkRunStart`
+      renders it on Telegram; WebviewSender broadcasts the frame to the localhost cockpit. Both are
+      local-operator surfaces.)
+- [x] Guarantee the un-scrubbed path never reaches `mutations.jsonl`, the forensics bundle, or any
       committed/remote artifact — those continue through `scrubPathsInText` (`tool-labels.ts:32`).
+      (Leak-containment tests assert the path stays off the descriptor/summary/index/transcript/
+      terminal event; the `startApply` loop publishes the `start` event with no descriptor copy. All
+      three reviewers confirmed the invariant holds.)
 
 ## Phase 1b — Parked state
 

@@ -402,6 +402,55 @@ describe('TelegramSender', () => {
       await flush();
       expect(mockSendLongMessage).not.toHaveBeenCalled();
     });
+
+    // --- Project 13, Phase 1a: run-start notification delivery ---
+    /** Build a work-run `start` BusMutationEvent (project 13). */
+    function workRunStart(data: Record<string, unknown>) {
+      return {
+        kind: 'mutation-event' as const,
+        mutationId: 'run-1234',
+        mutationKind: 'work-run',
+        subKind: 'start',
+        ts: new Date().toISOString(),
+        data,
+        userId: 123,
+      } as any;
+    }
+
+    it('sends a start message carrying the un-scrubbed worktree path + run id', async () => {
+      // The operator path is a LOCAL-OPERATOR field — Telegram (to TELEGRAM_USER_ID)
+      // is a local surface, so the raw `cd`-able path is delivered verbatim. Use a
+      // synthetic `/tmp` fixture (never a real `/Users/<name>` host path) so this
+      // committed test leaks no OS username.
+      const worktree = '/tmp/worktrees/jarvis/06-webview';
+      sender.onMutationEvent(
+        workRunStart({ operatorWorktreePath: worktree, runId: 'run-1234', projectSlug: '06-webview', product: 'jarvis' }),
+      );
+      await flush();
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      // Michael can copy the path straight out of the alert (un-scrubbed).
+      expect(text).toContain(worktree);
+      expect(text).toContain('06-webview');
+      expect(text).toContain('run-1234');
+    });
+
+    it('ignores a start event for a non-work-run mutation kind', async () => {
+      sender.onMutationEvent({
+        ...workRunStart({ operatorWorktreePath: '/x', runId: 'r' }),
+        mutationKind: 'gen-eval-loop',
+      });
+      await flush();
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not send an empty start alert when the worktree path is absent', async () => {
+      // Defensive: a work-run start always carries the path, but never surface a
+      // pathless alert if one ever arrives malformed.
+      sender.onMutationEvent(workRunStart({ runId: 'run-1234', projectSlug: '06-webview' }));
+      await flush();
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+    });
   });
 
   describe('onOpEvent — classifier filter', () => {
