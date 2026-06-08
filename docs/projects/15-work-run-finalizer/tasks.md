@@ -493,18 +493,46 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the full incident replay for `d0679453`: `result: success` → child never exits → drain →
+- [x] Write the full incident replay for `d0679453`: `result: success` → child never exits → drain →
       group reap → `reapedAfterTerminalResult` → classify `branch-complete` → gate green → merge →
       push → terminal `merged`, asserting no quiet ping re-fires and no human acts — test-plan.md §8.
-- [ ] Write the per-mode regression matrix: result-before-exit; result-then-reap classifies
+      (Added the `d0679453 replay` end-to-end test to `work-runner.test.ts` (fake-timer driven, manual
+      child that emits `result` then never closes): asserts the watchdog SIGTERM-reaps, the terminal
+      carries `exitFact: 'reaped-after-terminal-result'` (not external-kill), classifies
+      `branch-complete` (not failed-on-signal), the gate passes and the run reaches a `completed`/
+      `merged: true` terminal with merge+push git calls — and `finished === true` (the run self-completes,
+      no human). The "no quiet ping re-fires" half is the supervision-store P0.1 guard, below.)
+- [x] Write the per-mode regression matrix: result-before-exit; result-then-reap classifies
       branch-complete; quiet marker survives keep-alive; supervision-store divergence; and
       resume/branch-reuse cleaning ALL of a project's run records (cross-listed with the adjacent
-      re-fork bug) — test-plan.md §8.
-- [ ] Write finalizer-resume-at-each-phase and merge-conflict / push-failure
-      don't-delete-prematurely integration tests — test-plan.md §8.
-- [ ] Confirm red before implementation.
+      re-fork bug) — test-plan.md §8. (Covered as a standing matrix across the suite, all green against
+      the completed Phases 1–3.5 — no duplication: **result-before-exit reaches terminal** =
+      work-runner.test.ts watchdog "exits within window → no reap, clean exit fact"; **result-then-reap
+      → branch-complete** = the d0679453 replay above + work-run-classify.test.ts exit-fact taxonomy;
+      **quiet marker survives keep-alive / supervision-store divergence cannot clear the guard** =
+      supervision-store.test.ts "upsertRun — field-merge across heartbeats (P0.1)"; **resume/branch-reuse
+      cleaning ALL run records** is the adjacent re-fork bug, tracked separately per spec — 🟡 out of
+      scope here.)
+- [x] Write finalizer-resume-at-each-phase and merge-conflict / push-failure
+      don't-delete-prematurely integration tests — test-plan.md §8. (**Resume-at-each-phase** =
+      work-run-finalizer.test.ts "gated-merge crash-resume matrix" (resume from `merged-not-pushed` →
+      push+delete no re-merge; from `pushed-not-deleted` → delete only) + recovery-finalize-runner.test.ts
+      live resume tests; **merge-conflict stops at branch-complete, main untouched** =
+      work-run-gate.test.ts `merge-conflict` + work-run-finalizer.test.ts per-gate-fail-reason block;
+      **push-failure don't-delete-prematurely** = NEW work-run-finalizer.test.ts test — a push throw after
+      a successful merge leaves `deleteBranch` UNCALLED and stops at `merged-not-pushed` (never
+      `pushed-not-deleted`), so the branch survives for a recovery push-retry.)
+- [x] Confirm red before implementation. (N/A by construction — Phase 4 depends on Phases 1–3.5 being
+      COMPLETE, so the regression suite verifies finished behavior and is GREEN, not red. The
+      write-first/confirm-red discipline applied within each earlier phase; this phase is the standing
+      guard that the completed cross-mode behavior does not regress.)
 
 ### Suite
 
-- [ ] Land the cross-mode regression suite covering every observed failure mode above as a standing
-      guard against recurrence; wire it into the project's test run.
+- [x] Land the cross-mode regression suite covering every observed failure mode above as a standing
+      guard against recurrence; wire it into the project's test run. (The suite is the union of the
+      named tests across `work-runner.test.ts`, `work-run-finalizer.test.ts`, `work-run-classify.test.ts`,
+      `supervision-store.test.ts`, `work-run-gate.test.ts`, and `recovery-finalize-runner.test.ts` —
+      every one auto-discovered and run by `npm test` (vitest), so the guard is wired with no extra
+      config. The two NET-NEW Phase 4 tests (the d0679453 end-to-end replay + the push-failure
+      don't-delete guard) close the only gaps the per-phase unit suites didn't already cover.)

@@ -1922,5 +1922,76 @@ describe('workRunApplier', () => {
       expect(phases).toEqual(expect.arrayContaining(['classified', 'merged-not-pushed']));
       expect(readLastWorkRunPhase).toHaveBeenCalledWith('mut-gm-phases');
     });
+
+    // -----------------------------------------------------------------------
+    // Phase 4 (P2.8) — full incident replay for d0679453 (test-plan §8): the
+    // 2026-06-06 wedge, now self-healing end-to-end. The agent emits a terminal
+    // `result: success` and then NEVER exits (the hung background-vitest tasks);
+    // the watchdog drains, group-reaps (SIGTERM), stamps
+    // `reaped-after-terminal-result`; the classifier reads the clean+complete
+    // branch as branch-complete (NOT failed-on-signal, the original mis-class);
+    // the gate passes; the run merges to main and reaches a `merged` terminal —
+    // with no human in the loop. A standing guard against the whole six-defect
+    // chain regressing.
+    // -----------------------------------------------------------------------
+    it('d0679453 replay: result → child never exits → reap → branch-complete → gate green → merged, no human', async () => {
+      vi.useFakeTimers();
+      let child: any;
+      let consume: Promise<void> | undefined;
+      try {
+        const { gitCalls } = setupBranchComplete();
+        // Manual child: emits the terminal `result` then NEVER exits/closes
+        // (the incident's hung background tasks held the stdio pipes open).
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        child = new EventEmitter() as any;
+        child.stdout = stdout;
+        child.stderr = stderr;
+        child.kill = vi.fn();
+        child.pid = 12345;
+        const killSpy = vi.fn();
+        __setKillProcessTreeForTest(killSpy);
+        mockSpawn.mockReturnValue(child);
+
+        const events: any[] = [];
+        let finished = false;
+        consume = (async () => {
+          for await (const e of workRunApplier.apply(descriptorFor('mut-incident-d0679453'), { bus: null as any, cancel: () => false })) {
+            events.push(e);
+          }
+          finished = true;
+        })().catch(() => { /* should not reject; finished stays false if it does */ });
+
+        await vi.advanceTimersByTimeAsync(0);
+        // Agent declares success — then the process wedges (no exit/close).
+        stdout.emit('data', Buffer.from(JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }) + '\n'));
+        // Advance past the drain window + SIGKILL grace + force-done ceiling so
+        // the watchdog reaps and the finalize chain runs to completion.
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // No human acted: the run self-completed.
+        expect(finished).toBe(true);
+        expect(killSpy).toHaveBeenCalledWith(child, 'SIGTERM');
+
+        const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+        expect(terminal).toBeDefined();
+        // The reap is stamped as an internal post-result reap, NOT an external
+        // kill — the original incident's mis-classification fix.
+        expect(terminal!.data.exit?.exitFact).toBe('reaped-after-terminal-result');
+        // Classified on work product as branch-complete (NOT failed exit-143),
+        // and the gate-passing run LANDED on main with no human merge.
+        expect(terminal!.kind).toBe('completed');
+        expect(terminal!.data.outcome).toBe('branch-complete');
+        expect(terminal!.data.merged).toBe(true);
+        // The merge actually ran (merge → push → delete via the product repo).
+        expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(true);
+        expect(gitCalls.some(a => a.includes('push'))).toBe(true);
+      } finally {
+        try { child?.emit('close', null, 'SIGKILL'); } catch { /* already closed */ }
+        await consume;
+        vi.useRealTimers();
+        __resetKillProcessTreeForTest();
+      }
+    });
   });
 });

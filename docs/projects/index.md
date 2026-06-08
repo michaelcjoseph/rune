@@ -20,7 +20,7 @@ its `spec.md`.
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Not Started | Make automated `/work --auto` runs findable and testable: surface the worktree path and keep a parked run's worktree alive (with an explicit release) when a task needs a human. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Not Started | A simulated product team of role-agents (PM, tech lead, QA, coder, reviewer, designer), each a SOUL.md charter + compounding memory.md, that takes a spec to autonomous merge via `plan` + `work` on the existing gen-eval-loop, and compounds from vault feedback through a nightly post-mortem. |
-| [15-work-run-finalizer](15-work-run-finalizer/spec.md) | In Progress | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
+| [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 
 ---
 
@@ -226,7 +226,7 @@ Generalizes the project-12 role-agent pattern (`SOUL.md` charter + compounding `
 - **Provenance:** 2026-06-05 Jarvis conversation extending projects 08 (intent-layer) and 12 (writer memory). The PM-interviews-when-underspecified rule resolves the oracle question; the neutral post-mortem and objection-class gates came out of the design discussion.
 - **Task breakdown & test plan:** see [tasks.md](14-product-team-agents/tasks.md) and [test-plan.md](14-product-team-agents/test-plan.md). Test-first per phase.
 
-## 15-work-run-finalizer — In Progress
+## 15-work-run-finalizer — Done
 
 [Spec](15-work-run-finalizer/spec.md)
 

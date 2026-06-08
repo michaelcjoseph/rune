@@ -301,6 +301,28 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     ]);
   });
 
+  it('push failure → branch is NOT deleted (origin lacks the work; recovery resumes from merged-not-pushed) (P2.8)', async () => {
+    // The don't-delete-prematurely guard: if the push fails after a successful
+    // merge, the local branch MUST survive (it's the only copy not on origin) so
+    // the P0.4 recovery path can resume the push. The merge recorded
+    // `merged-not-pushed`; the push throws BEFORE `pushed-not-deleted`, so the
+    // delete (in the shared tail, gated on a reached push) never runs.
+    const { effects, phases } = makeEffects(branchCompleteEvent(), {
+      pushBranch: vi.fn(async () => { throw new Error('git push failed: network down'); }),
+    });
+
+    await expect(runFinalizer(gatedMergeInput(), effects)).rejects.toThrow(/push failed/);
+
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    // Crucially: the branch is NOT deleted — its work isn't on origin yet.
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    // The durable phase stops at `merged-not-pushed` (never `pushed-not-deleted`)
+    // so a recovery resume retries the push, never skips to delete.
+    expect(phases).toContain('merged-not-pushed');
+    expect(phases).not.toContain('pushed-not-deleted');
+  });
+
   it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {
     const { effects } = makeEffects(branchCompleteEvent());
     await runFinalizer(gatedMergeInput(), effects);
