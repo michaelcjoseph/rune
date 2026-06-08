@@ -23,7 +23,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { WRITER_DIR, MEMORY_FILENAME } from './memory.js';
-import { stampSeedLesson, PROVENANCE_RE } from './seed.js';
+import { stampSeedLesson, PROVENANCE_RE, extractLessonBody } from './seed.js';
 import { commitWriterMemory, type CommitWriterMemoryResult } from './commit.js';
 
 /** The fence language tag for the writer's candidate block. */
@@ -257,7 +257,7 @@ function existingLessonBodies(memory: string): Set<string> {
   const bodies = new Set<string>();
   for (const line of memory.split('\n')) {
     if (!PROVENANCE_RE.test(line)) continue;
-    const body = line.replace(/^- \[\d{4}-\d{2}-\d{2} · source: [^\]]+\]\s+/, '').trim();
+    const body = extractLessonBody(line);
     if (body) bodies.add(body.toLowerCase());
   }
   return bodies;

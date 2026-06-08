@@ -228,6 +228,45 @@ describe('memory-writer — writeRoleLesson (dedup)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-role serialization — concurrent same-role writes don't interleave
+// ---------------------------------------------------------------------------
+
+describe('memory-writer — writeRoleLesson (concurrency)', () => {
+  it('serializes concurrent same-role writes so the second dedups against the first', async () => {
+    // Shared in-memory memory.md — readMemory must observe appendLine's writes.
+    let buf = '';
+    const readMemory = () => buf;
+    const appendLine = (line: string) => {
+      buf += line + '\n';
+    };
+    const commit = vi.fn().mockResolvedValue({ committed: true, sha: 'abc1234' });
+
+    const lesson = 'Serialize the read-modify-commit so it never races.';
+    const fire = () =>
+      writeRoleLesson({
+        role: 'coder',
+        lesson,
+        sourceSlug: 'project-14-concurrency',
+        date: '2026-06-08',
+        privateNames: [],
+        readMemory,
+        appendLine,
+        commit,
+      });
+
+    const [r1, r2] = await Promise.all([fire(), fire()]);
+
+    // Serialized: exactly one write lands; the second reads the updated buffer and
+    // dedups. Un-serialized, both would read an empty buffer and both append.
+    const writes = [r1, r2].filter((r) => r.captured).length;
+    const dupes = [r1, r2].filter((r) => r.skipReason === 'duplicate').length;
+    expect(writes).toBe(1);
+    expect(dupes).toBe(1);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Provenance slug fallback
 // ---------------------------------------------------------------------------
 

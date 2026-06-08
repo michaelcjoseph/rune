@@ -309,9 +309,18 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the production feedback reader + LLM post-mortem + `writeRoleLesson` into this core —
       lands with the downstream seam tasks below.)
 - [ ] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
-- [ ] Memory writer appends one privacy-clean, provenance-stamped lesson atomically.
-- [ ] Allow "no lesson warranted".
-- [ ] Confirm compounding from one run into the next.
+- [x] Memory writer appends one privacy-clean, provenance-stamped lesson atomically.
+      (`src/roles/memory-writer.ts` `writeRoleLesson` — privacy-filter → dedupe → stamp →
+      append → ONE atomic commit via `src/roles/commit.ts` `commitRoleMemory` (pathspec-
+      scoped to `agents/<role>/memory.md`, on-main guard, no push); reuses the shared
+      `isLessonPrivacySafe`/`stampSeedLesson`/`extractLessonBody` primitives so the role
+      and writer loops can't drift; per-role serialization mirrors writer `captureChain`.
+      11/11 in `memory-writer.test.ts` green.)
+- [x] Allow "no lesson warranted". (`runLearningLoop`'s `no-lesson` attribution branch
+      writes nothing and counts `noLessonOutcomes`; `learning-loop.test.ts` §6.6 green.)
+- [x] Confirm compounding from one run into the next. (`memory-writer.test.ts` §6.7 green —
+      a lesson written into a role dir loads into the next run's `composeRoleContext`
+      `referenceContext`, absent from `systemInstructions`.)
 - [ ] **Discovery surface:** document the nightly post-mortem step and the feedback-record
       format in `CLAUDE.md` (which nightly slot, where feedback records live, lesson shape).
 

@@ -115,6 +115,16 @@ export function stampSeedLesson(lesson: string, sourceSlug: string, date: string
   return `- [${date} · source: ${sourceSlug}] ${lesson}`;
 }
 
+/** Strips the canonical provenance prefix off a stamped line, leaving the trimmed
+ *  lesson body. The inverse of `stampSeedLesson`. Co-located with `PROVENANCE_RE`
+ *  so the parse and the format stay in one place — both learning loops (writer
+ *  capture + role memory writer) dedup through this single extractor rather than
+ *  carrying a private copy of the strip regex that could drift from the stamp. */
+const LESSON_BODY_STRIP_RE = /^- \[\d{4}-\d{2}-\d{2} · source: [^\]]+\]\s+/;
+export function extractLessonBody(line: string): string {
+  return line.replace(LESSON_BODY_STRIP_RE, '').trim();
+}
+
 /** Split links into fetchable (toMine) and unfetchable (skipped-with-note).
  *  Decisions key off `outcomes`; a link with no matching outcome is treated as
  *  unfetchable (skipped) so a missing fetch result never silently mines nothing. */
