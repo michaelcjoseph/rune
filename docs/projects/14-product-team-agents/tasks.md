@@ -17,27 +17,30 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Loader authority test: each role's `SOUL.md` is system-prompt authority and
+- [x] Loader authority test: each role's `SOUL.md` is system-prompt authority and
       `memory.md` is low-authority reference; memory text is absent from the system prompt.
-- [ ] Cold-start test: empty `memory.md` yields a valid SOUL-only prompt, no error.
-- [ ] Budget test: over-budget `memory.md` truncates loaded reference context with a visible
+- [x] Cold-start test: empty `memory.md` yields a valid SOUL-only prompt, no error.
+- [x] Budget test: over-budget `memory.md` truncates loaded reference context with a visible
       marker without deleting entries from disk.
-- [ ] Path test: loader reads `SOUL.md` and `memory.md` from `PROJECT_ROOT/agents/<role>/`,
+- [x] Path test: loader reads `SOUL.md` and `memory.md` from `PROJECT_ROOT/agents/<role>/`,
       not the vault.
-- [ ] Charter test: PM, tech lead, QA, coder, reviewer, and designer each have a charter and
+- [x] Charter test: PM, tech lead, QA, coder, reviewer, and designer each have a charter and
       memory file matching the spec's ownership table.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed: suite red on module-not-found before
+      `src/roles/loader.ts` existed.)
 
 ### Implementation
 
 > Sub-tasks below are coupled — ship them together in a single `/work` pass (the loader, the
 > charters it loads, and the registration the loop depends on land as one unit).
 
-- [ ] Generalize the Project 12 writer loader into a role loader keyed by role name.
-- [ ] Draft `agents/<role>/SOUL.md` (PROJECT_ROOT-relative, mirroring `agents/writer/`) for
+- [x] Generalize the Project 12 writer loader into a role loader keyed by role name.
+      (`src/roles/loader.ts`)
+- [x] Draft `agents/<role>/SOUL.md` (PROJECT_ROOT-relative, mirroring `agents/writer/`) for
       PM, tech lead, QA, coder, reviewer, and designer.
-- [ ] Create empty-or-seeded `memory.md` for each role.
-- [ ] Confirm Jarvis is registered as a product the loop can target; add only if absent.
+- [x] Create empty-or-seeded `memory.md` for each role. (Empty = cold start.)
+- [x] Confirm Jarvis is registered as a product the loop can target; add only if absent.
+      (Already present in `policies/products.json` with `validationCommands`.)
 
 > **User-reachability:** no user surface this phase — substrate consumed by Phases 2–5.
 > Surfaced to the user only once the orchestrated trigger lands in Phase 5.
