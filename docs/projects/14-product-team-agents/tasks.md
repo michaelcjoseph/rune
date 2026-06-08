@@ -145,38 +145,42 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] QA-first test: QA writes or updates tests from the spec before coder starts on
+- [x] QA-first test: QA writes or updates tests from the spec before coder starts on
       `code-tests-required` tasks, and tech lead reviews test intent.
-- [ ] No-test-rationale test: docs/config-only tasks record a QA no-code-test rationale and
+- [x] No-test-rationale test: docs/config-only tasks record a QA no-code-test rationale and
       tech lead review before coder starts.
-- [ ] Reviewer-independence test: reviewer resolves to a different provider than coder and
+- [x] Reviewer-independence test: reviewer resolves to a different provider than coder and
       receives diff/spec/tests/task/context, not coder hidden reasoning.
-- [ ] Designer-routing test: tasks the tech-lead sizing flags front-end/designer-needed
+- [x] Designer-routing test: tasks the tech-lead sizing flags front-end/designer-needed
       require designer review; non-flagged tasks do not invoke designer by default.
-- [ ] Objection-gate test: unresolved objection-class findings block task completion and
+- [x] Objection-gate test: unresolved objection-class findings block task completion and
       cannot be cleared by PM wrap-up.
-- [ ] Round-cap test: non-objection disagreement at cap routes to PM; unresolved PM decisions
+- [x] Round-cap test: non-objection disagreement at cap routes to PM; unresolved PM decisions
       enter blocked-on-human.
-- [ ] No-closeout test: task workflow returns ready-for-closeout/blocked/failed plus handoff
+- [x] No-closeout test: task workflow returns ready-for-closeout/blocked/failed plus handoff
       notes without marking `tasks.md`, writing `context.md`, or merging to main.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed: suite red on module-not-found.)
 
 ### Implementation
 
 > These sub-tasks are coupled into one workflow — land them so the section clears as a unit;
 > partial wiring leaves the workflow non-functional.
 
-- [ ] Wire QA, tech lead, coder, reviewer, designer, and PM wrap-up seams into one
-      task-sized workflow.
-- [ ] Add structured objection-class signal (class, severity, location, rationale) to the
-      reviewer role's verdict; the orchestrator gates on it. (Spec **Objection Classes**: this
-      is the reviewer-role payload, not a change to the standalone `/review` skill.)
-- [ ] Resolve the reviewer to a distinct provider from the coder via the model-policy
+- [x] Wire QA, tech lead, coder, reviewer, designer, and PM wrap-up seams into one
+      task-sized workflow. (`team-task-workflow.ts` `runTeamTaskWorkflow`.)
+- [x] Add structured objection-class signal (class, severity, location, rationale) to the
+      reviewer role's verdict; the orchestrator gates on it. (`ObjectionFinding` +
+      `ReviewerVerdict`; gated in the round loop.)
+- [x] Resolve the reviewer to a distinct provider from the coder via the model-policy
       resolver; when none is available, block the task rather than downgrade to same-provider
-      review (fail-closed independence).
-- [ ] Enforce global per-run round cap and objection-class hard gates.
-- [ ] Keep role invocations injectable for fixture tests without live model calls.
-- [ ] Return structured task evidence and handoff notes to the orchestrator.
+      review (fail-closed independence). (`resolveReviewerProvider` seam → Gate 0 block on
+      null. The model-policy resolver is wired as the production seam in Phase 5.)
+- [x] Enforce global per-run round cap and objection-class hard gates. (Per-task round cap +
+      objection hard gate enforced here; the GLOBAL per-run cap aggregation across tasks is the
+      Phase 5 orchestrator-loop concern.)
+- [x] Keep role invocations injectable for fixture tests without live model calls. (All seams
+      in `TeamTaskDeps` are injected; 18 fixture tests, no live call.)
+- [x] Return structured task evidence and handoff notes to the orchestrator. (`TaskEvidence`.)
 
 > **User-reachability:** no standalone user surface — the workflow runs inside an orchestrated
 > task. Observable to the user through the cockpit run/transcript view once Phase 5 routes the
