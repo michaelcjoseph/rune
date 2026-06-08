@@ -373,8 +373,12 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > These sub-tasks are coupled as the project closeout gate — Project 14 is not done until all
 > three are complete.
 
-- [ ] Write the deferral ADRs named in the spec (`autonomous-dispatch-deferral.md`,
+- [x] Write the deferral ADRs named in the spec (`autonomous-dispatch-deferral.md`,
       `legacy-work-removal-deferral.md`, `quality-eval-deferral.md`) with promotion triggers.
+      (All three written under `docs/projects/14-product-team-agents/`, following the
+      `08-intent-layer/egress-deferral.md` template — Status / Context / Decision / Rationale /
+      Trigger-to-promote, grounded in what shipped; the 6 deferral-ADR closeout assertions
+      pass.)
 - [ ] Write `agent-lessons.md` per the planning checklist, propagating lessons or recording an
       explicit no-new-lessons rationale.
 - [ ] Run and record the final completion check that includes the Phase 5 user-triggerable
