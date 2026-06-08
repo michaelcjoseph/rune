@@ -386,9 +386,58 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       new `MutationStatus`/supervision value added. The "OR mark explicit `blocked-on-human`" option
       in the requirement reuses the EXISTING persisted `blocked-on-human` status — no enum widening.)
 
+## Phase 3.5 — Live gated-merge activation (DECISION: option #2, [[2026_06_07]])
+
+> Depends on: Phase 3. Precedes Phase 4 (Phase 4's incident replay exercises THIS live wiring).
+>
+> **Operator decision (2026-06-07):** option #2 — *activate gated-merge live now*. The P1.6 note and
+> P1.5 note both deferred this as "the live work-runner gated-merge wiring"; it is no longer deferred.
+> This turns on autonomous merges to jarvis's real `main` behind the hard gate.
+>
+> **Run non-interactively.** The run that surfaced this decision (`5808d5cd`) died because its
+> `AskUserQuestion` auto-denied in an unattended run — the exact terminal-correctness bug this project
+> fixes. Do NOT gate activation on an interactive question; the decision is recorded here. If a genuine
+> blocker appears, stop at `blocked-on-human` and alert, do not silently re-ask.
+>
+> **Go-live (merge this branch → `main` + restart the jarvis server) stays a human step**, performed by
+> the operator after this phase is green and Phase 4 proves the chain. Do not self-merge this branch.
+
+### Tests (write first)
+
+- [ ] Write a live-wiring test in `work-runner.test.ts`: a branch-complete terminal routes through
+      `runFinalizer({ mode: 'gated-merge' })` with the real injected effects, and the outer `finally`
+      does NOT double-destroy the worktree once the finalizer owns teardown (assert a single teardown
+      via the `finalizerOwnedTeardown` guard) — test-plan.md §6/§8.
+- [ ] Write effect-construction tests proving the gate effect is `runGate` wrapped in
+      `withBaseBranchLock(product, baseBranch)`, merge/push/delete are the decomposed `realMergeBranch`
+      git steps (push BEFORE delete), and `recordPhase`/`readLastPhase` persist to a durable per-run
+      phase store that P0.4 recovery can resume from in `gated-merge` mode.
+- [ ] Confirm red before implementation.
+
+### Wiring
+
+- [ ] Flip the live terminal path (`work-runner.ts:594-595`) from `{ mode: 'hold' }` to
+      `{ mode: 'gated-merge', baseBranch }` for a branch-complete outcome; everything else still resolves
+      through the hold tail (`runGatedMerge` already merges only branch-complete and holds the rest).
+- [ ] Construct the real injected effects the live call site currently passes as no-ops: `gate` =
+      `runGate({ baseBranch, validationCommands from products.json, commandTimeoutMs:
+      WORK_RUN_GATE_COMMAND_TIMEOUT_MS })` inside `withBaseBranchLock`; `mergeBranch`/`pushBranch`/
+      `deleteBranch` = the decomposed `realMergeBranch` (`gen-eval-loop-runner.ts:254-302`) git steps
+      honoring its half-merged push-failure warning; real `removeWorktree` (finalizer removes AFTER
+      merge/push, BEFORE delete); real `writeSupervisionTerminal`; real `recordPhase`/`readLastPhase`
+      against a durable per-run phase store.
+- [ ] Guard the outer `finally` `destroyWorktree` (`work-runner.ts:621-636`) with a
+      `finalizerOwnedTeardown` flag set inside the real `removeWorktree` effect, so gated-merge teardown
+      is not double-destroyed (the inline TODO at `:621` calls for exactly this).
+- [ ] Wire the merged-notification surface: success → notify (Telegram + cockpit) `merged`/branch
+      deleted, set `summary.json` `merged`/`branchDeleted`; gate-fail → `alert(reason)` that the run was
+      held at `branch-complete` off `main` (never a silently-dropped alert).
+- [ ] Make `recovery-finalize-runner` resume a run that crashed mid-gated-merge in `gated-merge` mode
+      off its phase records (the P1.5 note flagged it currently re-drives `hold` only).
+
 ## Phase 4 — Cross-mode regression suite (P2.8)
 
-> Depends on: Phase 3.
+> Depends on: Phase 3, Phase 3.5 (the incident replay exercises the live gated-merge wiring).
 
 ### Tests (write first)
 
