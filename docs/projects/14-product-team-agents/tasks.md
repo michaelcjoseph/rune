@@ -1,175 +1,296 @@
-# Product-Team Role-Agents — Tasks
+# Product-Team Orchestrated Work - Tasks
 
 See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
 > **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
 > Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
-> before any implementation task in the phase begins. A phase's implementation is done when its
-> test-plan sections pass.
+> before any implementation task in the phase begins. A phase's implementation is done when
+> its test-plan sections pass.
 >
-> Granularity here is the meaningful deliverable, not a granular sub-task. Per-task file layout,
-> schemas, and signatures are settled in `/work`'s Plan phase, against the spec. Much of the
-> substrate (worktree, gen-eval-loop, cross-model adjudication, round cap, autonomous merge)
-> **already exists** — see spec.md "Built on what exists". These tasks are the team-and-memory
-> layer on top.
->
-> **Agent-runnable gate.** The project completion gate uses deterministic fixtures, injected
-> spawners/readers, and controlled repo paths. Real PM interviews, real user feedback, and a
-> live merge of an arbitrary jarvis task are production usage/smoke checks, not blockers for an
-> implementation agent.
+> This is the merged project formerly split between product-team role agents and
+> Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
+> planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
 
-## Phase 1 — Role substrate
+## Phase 1 - Role substrate
 
 > Depends on: nothing.
 
 ### Tests (write first)
 
-- [ ] Loader authority test: the composed call puts a role's `SOUL.md` in
-      `--append-system-prompt` and its `memory.md` in the first user message; memory text is
-      absent from the appended system prompt — test-plan.md §1.
+- [ ] Loader authority test: each role's `SOUL.md` is system-prompt authority and
+      `memory.md` is low-authority reference; memory text is absent from the system prompt.
 - [ ] Cold-start test: empty `memory.md` yields a valid SOUL-only prompt, no error.
-- [ ] Budget test: a `memory.md` over the per-role char budget truncates the loaded
-      `referenceContext` with a visible marker without deleting entries from disk.
-- [ ] Path test: the loader reads `SOUL.md`/`memory.md` from `PROJECT_ROOT/agents/<role>/` for
-      each of the six roles, not via `readVaultFile`.
-- [ ] Charter test: each role has a `SOUL.md` and empty-or-seeded `memory.md`; each charter
-      states its mandate and review edges from the team table.
-- [ ] Confirm all suites above are red before implementation.
+- [ ] Budget test: over-budget `memory.md` truncates loaded reference context with a visible
+      marker without deleting entries from disk.
+- [ ] Path test: loader reads `SOUL.md` and `memory.md` from `PROJECT_ROOT/agents/<role>/`,
+      not the vault.
+- [ ] Charter test: PM, tech lead, QA, coder, reviewer, and designer each have a charter and
+      memory file matching the spec's ownership table.
+- [ ] Confirm red before implementation.
 
 ### Implementation
 
-- [ ] Generalize the writer loader (project 12) into a role loader keyed by role name; per-role
-      load-time char budget + truncation marker; returns `{ systemInstructions,
-      referenceContext }`.
-- [ ] Draft `jarvis/agents/<role>/SOUL.md` from this spec for PM, tech lead, QA, coder,
-      reviewer, designer — each charter states the role's mandate, standards, and review edges.
-      Create empty `memory.md` for each.
-- [ ] Confirm jarvis is registered as a product the loop can target (`policies/products.json`);
-      add it only if absent.
+> Sub-tasks below are coupled — ship them together in a single `/work` pass (the loader, the
+> charters it loads, and the registration the loop depends on land as one unit).
 
-## Phase 2 — `plan` (PM + tech lead)
+- [ ] Generalize the Project 12 writer loader into a role loader keyed by role name.
+- [ ] Draft `agents/<role>/SOUL.md` (PROJECT_ROOT-relative, mirroring `agents/writer/`) for
+      PM, tech lead, QA, coder, reviewer, and designer.
+- [ ] Create empty-or-seeded `memory.md` for each role.
+- [ ] Confirm Jarvis is registered as a product the loop can target; add only if absent.
+
+> **User-reachability:** no user surface this phase — substrate consumed by Phases 2–5.
+> Surfaced to the user only once the orchestrated trigger lands in Phase 5.
+
+## Phase 2 - Planner roles
 
 > Depends on: Phase 1.
 
 ### Tests (write first)
 
-- [ ] Assumptions test: when the PM judges a brief specified-enough, the produced `spec.md`
-      contains an **Assumptions** section enumerating the unspecified calls it resolved —
-      test-plan.md §2.
-- [ ] Interview-gate test: an underspecified brief enters an explicit PM-interview /
-      blocked-on-human state rather than a silent spec; the test uses a fixture and requires no
-      real Michael response.
-- [ ] Spec-match test: the tech lead's tech spec is reviewed by the PM; a mismatch is flagged,
-      not passed.
-- [ ] Fixture-plan test: a specified-enough fixture brief completes `plan` without human input
-      and produces spec/tasks artifacts plus a sizing decision.
+- [ ] Assumptions test: when PM judges a brief specified-enough, generated `spec.md` contains
+      an **Assumptions** section enumerating calls PM resolved.
+- [ ] Interview-gate test: underspecified brief enters explicit PM-interview /
+      blocked-on-human state rather than silent spec fabrication.
+- [ ] Spec-match test: PM reviews tech lead's tech spec against the product spec; mismatch is
+      flagged, not passed.
+- [ ] Sizing test: tech lead emits task breakdown plus role-sizing and test-strategy metadata
+      for later work, including an explicit front-end / designer-needed flag per task.
+- [ ] Context-seed test: completed planning creates initial `context.md` with required
+      sections.
 - [ ] Confirm red before implementation.
 
 ### Implementation
 
-- [ ] Wire the PM and tech-lead role identities into the planner behind `plan`.
-- [ ] PM: judge specified-enough → write spec (with Assumptions section) or enter an explicit
-      interview-needed blocked state; own the "done" definition for the task.
-- [ ] Tech lead: produce tech spec + task breakdown + sizing (which roles convene for `work`).
-- [ ] PM reviews the tech spec against the product spec (match check) before `plan` completes.
-- [ ] Add fixture seams/test doubles for specified-enough and underspecified plan paths so the
-      full project run does not depend on live user input.
+> Sub-tasks below are coupled — ship them together in a single `/work` pass; planning is one
+> flow (PM → tech lead → PM review → context seed).
 
-## Phase 3 — `work` (QA + coder + reviewer + designer) on the existing loop
+- [ ] Wire PM and tech-lead role identities into the planner.
+- [ ] PM writes spec, emits assumptions, or blocks for interview.
+- [ ] Tech lead writes tech spec, task breakdown, role sizing, per-task test strategy, and
+      the explicit front-end/designer-needed flag.
+- [ ] PM reviews spec/tech-spec match before planning completes.
+- [ ] Seed `docs/projects/<project>/context.md` from spec, tasks, assumptions, and tech-lead
+      sizing.
+
+> **User-reachability:** the existing `/plan <product>` trigger (Telegram + cockpit Plan
+> button) now runs the role-enriched planner — a user can plan a project and observe the
+> seeded `spec.md` / `tasks.md` / `context.md`. No new trigger; entry point unchanged.
+
+## Phase 3 - Context and orchestrator substrate
 
 > Depends on: Phase 1, 2.
 
 ### Tests (write first)
 
-- [ ] QA-first test: the QA tests exist and are tech-lead-reviewed **before** the first coder
-      round runs — test-plan.md §3.
-- [ ] Objection-gate test: an open objection-class finding (security / data / concurrency /
-      irreversibility / cost) holds the merge and the loop keeps iterating; the PM's round-cap
-      wrap-up does not clear it.
-- [ ] Global-cap test: a single `work` run is bounded by a global round cap across review edges;
-      at the cap with non-objection disagreement, the PM decides; unresolved PM decisions enter
-      blocked-on-human.
-- [ ] Independence test: the reviewer resolves to a different provider than the coder and is
-      given the diff + spec + tests, not the coder's reasoning.
-- [ ] Fixture-work test: injected spawners drive a full `work` run with QA-first, one
-      diff-changing review round, merge contract clear, and no real model call or human input.
+- [ ] Context update test: post-task update preserves required sections and rejects
+      transcript-style dumps.
+- [ ] Context validation test: technical contract changes require tech-lead validation;
+      product-intent changes require PM validation when flagged.
+- [ ] Task-selection test: Jarvis selects the first unchecked task from `tasks.md` before
+      invoking any executor.
+- [ ] Fresh-context test: task N+1 receives bounded handoff input, not task N's transcript or
+      accumulated conversation.
+- [ ] Run-record test: task records include task id/text, attempt id, roles invoked,
+      transcript ids, model/provider choices, commit sha, verdicts, context outcome, and gates.
+- [ ] Attempt-cap test: repeated task failure stops at configured cap and routes to PM wrap-up
+      or blocked-on-human; it never retries indefinitely.
+- [ ] Restart reconstruction test: partial project run reconstructs from durable task records,
+      commits, `tasks.md`, and `context.md`.
 - [ ] Confirm red before implementation.
 
 ### Implementation
 
-- [ ] Wire QA, coder, reviewer, designer role identities into `gen-eval-loop-runner.ts`
-      (coder = Generator, reviewer = cross-model Evaluator).
-- [ ] QA round writes tests from the spec before the coder round; tech-lead review of the tests.
-- [ ] Extend `evaluateMergeContract` with the objection-class dimension: an open finding blocks
-      merge; PM wrap-up authority excludes objection classes.
-- [ ] Add a structured objection-class signal to the `/review` verdict (beyond `VERDICT:
-      PASS/FAIL`).
-- [ ] Add the global per-run round cap; on cap reached, route non-objection disagreement to PM
-      decide and unresolved/objection-class cases to blocked-on-human.
-- [ ] Designer reviews front-end diffs when the task is sized as having FE work.
-- [ ] Keep orchestration injectable so tests can drive QA/coder/reviewer/designer behavior
-      deterministically without real subprocess/model calls.
+> These sub-tasks are independent modules but the phase is one unit: **all** must clear before
+> Phase 3 is done — the `/work` first-unchecked rule must not treat the section as complete
+> after ticking one line. Land them across as many passes as needed; none may be left behind.
 
-## Phase 4 — Loop-closure gate
+- [ ] Define `context.md` schema, budget, read/create/update helpers, and validation hooks.
+- [ ] Implement bounded context assembly for a selected task.
+- [ ] Add orchestrated task-run records and persistence.
+- [ ] Define task closeout semantics: selected-task checkbox update, context update,
+      closeout checks, closeout commit, clean-worktree verification, and durable block on
+      failure.
+- [ ] Define per-task attempt caps and escalation behavior at the cap.
+- [ ] Define finalizer handoff payload shape and injectable finalizer adapter for tests.
+- [ ] Implement Jarvis-owned task selection.
+- [ ] Implement restart reconstruction for partial orchestrated runs.
+- [ ] Add explicit rollout/fallback configuration for orchestrated mode vs legacy `/work
+      --auto`.
+
+> **User-reachability:** no user surface this phase — substrate consumed by Phases 4–5. The
+> orchestrated run becomes user-triggerable in Phase 5 when the cockpit start action routes
+> to the orchestrated applier.
+
+## Phase 4 - Team-task workflow
 
 > Depends on: Phase 1, 2, 3.
 
 ### Tests (write first)
 
-- [ ] Gate assertion: a deterministic jarvis fixture task driven `plan` → `work` reaches
-      autonomous merge in a controlled repo path with ≥1 review round that changed the diff and
-      no human at the merge — test-plan.md §4.
-- [ ] No-manual-gate assertion: the loop-closure gate can run with a fixture repo and injected
-      spawners/readers; no real Telegram interaction, arbitrary task selection, or production
-      push is required.
-
-### Implementation
-
-- [ ] Create/use a deterministic jarvis fixture task and controlled repo path; run it end to end
-      through `plan` then `work` using the same runtime seams as production.
-- [ ] Confirm the fixture merge landed autonomously, ≥1 review round changed the code, no human
-      touched the merge. Record the outcome in the index row.
-- [ ] Optionally run a live real-task smoke check after the automated gate; failures there are
-      follow-up bugs, not blockers for the project completion gate.
-
-## Phase 5 — The learning loop
-
-> Depends on: Phase 4.
-
-### Tests (write first)
-
-- [ ] Attribution test: given a feedback record for a known miss, the nightly post-mortem
-      attributes it to a stage and writes one atomic, provenance-stamped lesson into that role's
-      `memory.md` — test-plan.md §5.
-- [ ] No-feedback test: no feedback record → no post-mortem → no memory write.
-- [ ] No-lesson test: a miss the retro judges uncatchable produces a "no lesson warranted"
-      outcome and writes nothing.
-- [ ] Compounding test: a lesson captured from run-N feedback loads into run N+1's role
-      reference context.
-- [ ] Fixture-feedback test: the learning-loop tests use an injected/temp feedback record and
-      do not require Michael to leave real vault feedback.
+- [ ] QA-first test: QA writes or updates tests from the spec before coder starts on
+      `code-tests-required` tasks, and tech lead reviews test intent.
+- [ ] No-test-rationale test: docs/config-only tasks record a QA no-code-test rationale and
+      tech lead review before coder starts.
+- [ ] Reviewer-independence test: reviewer resolves to a different provider than coder and
+      receives diff/spec/tests/task/context, not coder hidden reasoning.
+- [ ] Designer-routing test: tasks the tech-lead sizing flags front-end/designer-needed
+      require designer review; non-flagged tasks do not invoke designer by default.
+- [ ] Objection-gate test: unresolved objection-class findings block task completion and
+      cannot be cleared by PM wrap-up.
+- [ ] Round-cap test: non-objection disagreement at cap routes to PM; unresolved PM decisions
+      enter blocked-on-human.
+- [ ] No-closeout test: task workflow returns ready-for-closeout/blocked/failed plus handoff
+      notes without marking `tasks.md`, writing `context.md`, or merging to main.
 - [ ] Confirm red before implementation.
 
 ### Implementation
 
-- [ ] Nightly job: detect machine-readable feedback records (real vault tags may feed them;
-      tests inject them), run a Jarvis-owned (not team-role) post-mortem that interviews each
-      role as a witness and makes the attribution call.
-- [ ] Capture: write one atomic, provenance-stamped, privacy-clean lesson into the attributed
-      role's `memory.md` via a memory-scoped commit helper; allow "no lesson warranted".
-- [ ] Confirm the compounding gate (run N → N+1) and record the outcome in the index row.
+> These sub-tasks are coupled into one workflow — land them so the section clears as a unit;
+> partial wiring leaves the workflow non-functional.
+
+- [ ] Wire QA, tech lead, coder, reviewer, designer, and PM wrap-up seams into one
+      task-sized workflow.
+- [ ] Add structured objection-class signal (class, severity, location, rationale) to the
+      reviewer role's verdict; the orchestrator gates on it. (Spec **Objection Classes**: this
+      is the reviewer-role payload, not a change to the standalone `/review` skill.)
+- [ ] Resolve the reviewer to a distinct provider from the coder via the model-policy
+      resolver; when none is available, block the task rather than downgrade to same-provider
+      review (fail-closed independence).
+- [ ] Enforce global per-run round cap and objection-class hard gates.
+- [ ] Keep role invocations injectable for fixture tests without live model calls.
+- [ ] Return structured task evidence and handoff notes to the orchestrator.
+
+> **User-reachability:** no standalone user surface — the workflow runs inside an orchestrated
+> task. Observable to the user through the cockpit run/transcript view once Phase 5 routes the
+> trigger.
+
+## Phase 5 - Multi-task orchestration and finalizer handoff
+
+> Depends on: Phase 1, 2, 3, 4.
+
+### Tests (write first)
+
+- [ ] Closeout test: after task N passes gates, Jarvis marks exactly that task complete,
+      updates context, runs closeout checks, records a closeout commit, verifies clean
+      worktree, then advances.
+- [ ] Block test: blocked/failed/objection-open task stops or retries durably and is not
+      skipped.
+- [ ] Context-influence test: fixture includes a context update from task N that affects task
+      N+1's input.
+- [ ] Finalizer handoff test: when all tasks are checked, orchestrator calls Project 15
+      finalizer with branch/run facts rather than self-merging.
+- [ ] Finalizer-unavailable test: if the real finalizer is unavailable, Jarvis records the
+      handoff payload and stops branch-complete/blocked rather than self-merging.
+- [ ] Legacy fallback test: when orchestrated mode is disabled, legacy `/work --auto` dispatch
+      still works and records fallback.
+- [ ] Start-mode visibility test: cockpit Start/confirmation copy shows whether the selected
+      dispatch mode is orchestrated or legacy fallback, and fallback runs expose the reason.
+- [ ] End-to-end fixture test: deterministic fixture project runs through at least two tasks,
+      context update, finalizer handoff, and terminal outcome with injected spawners/readers.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] Implement the multi-task orchestrator loop.
+- [ ] Wire ready-for-closeout, blocked, failed, and objection-open outcomes to closeout/
+      retry/block.
+- [ ] Implement Jarvis-owned task closeout and clean-worktree verification.
+- [ ] Enforce per-task attempt caps and escalation at the cap.
+- [ ] Wire completed project runs into the Project 15 finalizer.
+- [ ] Register the orchestrated loop as a mutation applier (new kind or a toggle on
+      `work-run`) so it dispatches through the existing pipeline.
+- [ ] **Trigger surface:** route the cockpit per-project start action (`app.js` confirm-modal
+      → `POST /api/mutations`) and the Phase-3 rollout/fallback toggle to the orchestrated
+      applier; legacy `/work --auto` stays reachable as recorded fallback. No new button.
+- [ ] **Discovery surface:** expose the selected dispatch mode on the existing cockpit project
+      card or Start confirmation, and show fallback reason on fallback runs.
+- [ ] **Agent/operator docs:** document the orchestrated-vs-legacy toggle and the selected
+      mutation contract in `CLAUDE.md` (run via docs-sync) so future agents know the path
+      exists and how to select it.
+- [ ] Create deterministic fixture spawners/readers for the complete lifecycle.
+- [ ] Optionally run a live real-task smoke check after automated suites pass.
+
+> **User-reachability:** YES — after this phase a user clicks Start on a cockpit project card
+> (or the chosen toggle path), the orchestrated loop runs, and they observe run status /
+> outcome / transcript on the same card. This is the phase that satisfies the
+> definition-of-done = user-reachability bar for the whole project.
+
+## Phase 6 - Learning loop
+
+> Depends on: Phase 5.
+
+### Tests (write first)
+
+- [ ] No-feedback test: no feedback record means no post-mortem and no memory write.
+- [ ] Feedback-source test: the nightly loop reads valid machine-readable feedback records
+      through an injected/configured reader with project/run/task/source/evidence fields.
+- [ ] Malformed-feedback test: invalid feedback records are skipped with a durable reason and
+      do not trigger memory writes.
+- [ ] Attribution test: feedback for a known miss is attributed to a stage and writes one
+      atomic, provenance-stamped lesson into that role's `memory.md`.
+- [ ] No-lesson test: a miss judged uncatchable writes nothing.
+- [ ] Compounding test: lesson captured from run N loads into run N+1's role reference
+      context.
+- [ ] Fixture-feedback test: tests use injected/temp feedback records and require no real
+      vault feedback.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] Define the feedback record schema and injected/configured reader seam.
+- [ ] Nightly job detects valid machine-readable feedback records and records malformed
+      entries as skipped with reason.
+- [ ] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
+- [ ] Memory writer appends one privacy-clean, provenance-stamped lesson atomically.
+- [ ] Allow "no lesson warranted".
+- [ ] Confirm compounding from one run into the next.
+- [ ] **Discovery surface:** document the nightly post-mortem step and the feedback-record
+      format in `CLAUDE.md` (which nightly slot, where feedback records live, lesson shape).
+
+> **User-reachability:** the learning loop runs as a nightly cron (no interactive trigger by
+> design); the user observes it through the committed `memory.md` diffs and the documented
+> nightly step. Feedback records are the user's input surface.
+
+## Phase 7 - Project closeout and checklist compliance
+
+> Depends on: Phase 1, 2, 3, 4, 5, 6.
+
+### Tests (write first)
+
+- [ ] Deferral-ADR test: project closeout cannot pass unless the three deferral ADR files
+      named in the spec exist and include status, context, decision, rationale, and trigger to
+      promote.
+- [ ] Agent-lessons test: project closeout writes `agent-lessons.md` with at least one
+      checklist/skill/instruction propagation pointer, or an explicit "no new lessons"
+      rationale.
+- [ ] Final-completion test: closeout rechecks the Phase 5 trigger-surface dispatch seam and
+      mode-visibility tests before marking Project 14 done.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> These sub-tasks are coupled as the project closeout gate — Project 14 is not done until all
+> three are complete.
+
+- [ ] Write the deferral ADRs named in the spec (`autonomous-dispatch-deferral.md`,
+      `legacy-work-removal-deferral.md`, `quality-eval-deferral.md`) with promotion triggers.
+- [ ] Write `agent-lessons.md` per the planning checklist, propagating lessons or recording an
+      explicit no-new-lessons rationale.
+- [ ] Run and record the final completion check that includes the Phase 5 user-triggerable
+      dispatch and mode-visibility tests.
+
+> **User-reachability:** no new runtime surface; this is the closeout guard that proves the
+> user-reachable Phase 5 path stayed green before the project is marked done.
 
 ---
 
-## Out of scope (recorded)
+## Out of scope
 
-- Automating dispatch — `plan`/`work` stay manual in v1; the autonomous scheduler is deferred.
-- Reimplementing the worktree / gen-eval-loop / cross-model adjudication / round cap /
-  autonomous merge — these exist (project 08 Phase 6, project 11).
-- Roles beyond the six; a general org-config runtime.
-- A quality / engagement eval (deferred the project-12 way).
-- A merge approval gate (merge is autonomous; revert by hand from usage).
-- New model-dispatch machinery (model assignment goes through the existing model-policy).
-- Requiring a real PM interview, real vault feedback, or a production merge of an arbitrary
-  jarvis task for project completion; those are live smoke/usage checks outside the automated
-  gate.
+- Roles beyond PM, tech lead, QA, coder, reviewer, and designer.
+- A quality/engagement eval.
+- Replacing Project 15's finalizer.
+- Requiring live model calls, real Telegram interaction, real vault feedback, or production
+  merge for automated acceptance.
+- Fully autonomous scheduler dispatch.
+- Removing legacy `/work --auto` before the orchestrated path is proven.
