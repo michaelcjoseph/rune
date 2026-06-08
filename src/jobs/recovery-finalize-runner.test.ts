@@ -88,6 +88,9 @@ function makeIO(over: Partial<RecoveryFinalizeIO> = {}): { io: RecoveryFinalizeI
     appendIndex: (filePath, row) => { captured.indexRows.push({ filePath, row }); },
     upsertSupervision: (run) => { captured.upserts.push(run); },
     removeWorktree: async (run) => { captured.removed.push(run); },
+    // Default: no durable phase recorded → hold-mode re-drive (no merge).
+    readLastPhase: () => null,
+    recordPhase: () => {},
     now: () => Date.parse('2026-06-07T01:00:00.000Z'),
     ...over,
   };
@@ -113,6 +116,92 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(captured.upserts).toHaveLength(1);
     expect(captured.upserts[0]!.status).toBe('completed');
     expect(captured.removed).toHaveLength(1);
+  });
+
+  it('resumes a crashed gated-merge run from `merged-not-pushed`: completes push then delete, never re-merges (Phase 3.5)', async () => {
+    const run = makeRun();
+    const gitCalls: string[][] = [];
+    const recordedPhases: string[] = [];
+    const { io, captured } = makeIO({
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+      // The project has later-phase unchecked boxes — recovery's absolute count
+      // would call this `partial`, but the recorded merge phase is authoritative.
+      readTasks: () => '## Phase A\n- [x] Task 1\n## Phase B\n- [ ] Future task\n',
+      readLastPhase: () => 'merged-not-pushed',
+      recordPhase: (_id, phase) => { recordedPhases.push(phase); },
+    });
+
+    const status = await __finalizeStaleRunForTest(run, io);
+
+    expect(status).toBe('completed');
+    // The interrupted merge is COMPLETED: push (explicit origin <base>) then
+    // branch delete — push BEFORE delete, no re-merge (merge args never appear).
+    const pushIdx = gitCalls.findIndex(a => a.includes('push'));
+    const deleteIdx = gitCalls.findIndex(a => a.includes('branch') && a.includes('-d'));
+    expect(pushIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeGreaterThanOrEqual(0);
+    expect(pushIdx).toBeLessThan(deleteIdx);
+    expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(false);
+    // The push targets the explicit refspec.
+    expect(gitCalls[pushIdx]).toEqual(['push', 'origin', 'main']);
+    // Forced branch-complete despite the later-phase unchecked box (the merge
+    // already landed) so the push wasn't stranded.
+    expect(captured.removed).toHaveLength(1);
+    expect(recordedPhases).toContain('pushed-not-deleted');
+    // The summary is re-stamped post-resume so the cockpit shows merged, not a
+    // gate-held branch-complete (the pre-merge summary write was skipped).
+    const lastSummary = captured.summaries.at(-1)!.summary;
+    expect(lastSummary.merged).toBe(true);
+    expect(lastSummary.baseBranch).toBe('main');
+  });
+
+  it('resumes from `pushed-not-deleted`: only deletes the branch, never re-merges or re-pushes (Phase 3.5)', async () => {
+    const run = makeRun();
+    const gitCalls: string[][] = [];
+    const { io } = makeIO({
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+      readLastPhase: () => 'pushed-not-deleted',
+    });
+
+    await __finalizeStaleRunForTest(run, io);
+
+    // Push already landed before the crash → never re-push or re-merge; only the
+    // branch delete completes.
+    expect(gitCalls.some(a => a.includes('push'))).toBe(false);
+    expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(false);
+    expect(gitCalls.some(a => a.includes('branch') && a.includes('-d'))).toBe(true);
+  });
+
+  it('a run with NO recorded merge phase re-drives in hold mode — never initiates a merge at boot (Phase 3.5)', async () => {
+    const run = makeRun();
+    const gitCalls: string[][] = [];
+    const { io } = makeIO({
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+      readLastPhase: () => 'index-appended', // crashed BEFORE the merge
+    });
+
+    await __finalizeStaleRunForTest(run, io);
+
+    // Recovery only COMPLETES an interrupted merge; it never INITIATES one — no
+    // merge/push/delete for a run that hadn't started merging.
+    expect(gitCalls.some(a => a.includes('push'))).toBe(false);
+    expect(gitCalls.some(a => a.includes('merge') && !a.includes('merge-base'))).toBe(false);
+    expect(gitCalls.some(a => a.includes('branch') && a.includes('-d'))).toBe(false);
   });
 
   it('a branch with commits but unchecked tasks → partial (still a terminal completed status)', async () => {

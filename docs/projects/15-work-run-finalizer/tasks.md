@@ -470,8 +470,22 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       the same disposition via the bus terminal event (`webview-sender.onMutationEvent`) and the
       persisted `summary.json` (read by `readWorkRunProjections`). Tests: telegram-sender merged + held
       formats, work-runner terminal-event + summary re-write.)
-- [ ] Make `recovery-finalize-runner` resume a run that crashed mid-gated-merge in `gated-merge` mode
-      off its phase records (the P1.5 note flagged it currently re-drives `hold` only).
+- [x] Make `recovery-finalize-runner` resume a run that crashed mid-gated-merge in `gated-merge` mode
+      off its phase records (the P1.5 note flagged it currently re-drives `hold` only). (`finalizeStaleRun`
+      reads `io.readLastPhase(run.id)`; when it shows the merge already landed (`merged-not-pushed`/
+      `pushed-not-deleted`) it re-drives in `gated-merge` mode to complete the interrupted push/branch-
+      delete — `runGatedMerge`'s `readLastPhase`/`reached()` skip the already-committed merge (gate +
+      `mergeBranch` are throwing stubs that are never reached), real `pushBranch`/`deleteBranch` run in
+      the product repo (push errors `redactSecrets`-scrubbed), and the run's outcome is FORCED
+      `branch-complete` since the recorded phase is authoritative over recovery's absolute-task-count
+      re-classification (else the push would be stranded). Crucial safety: recovery NEVER INITIATES a
+      merge at boot — a run with no merge phase (or a pre-merge phase) stays in `hold` mode. Post-resume
+      it re-stamps `summary.json` with `merged` so the cockpit shows merged, not gate-held. New
+      `RecoveryFinalizeIO` seams `readLastPhase`/`recordPhase`. Tests: resume-from-merged-not-pushed
+      (push→delete, no re-merge, forced branch-complete past later-phase unchecked boxes, summary
+      re-stamped), resume-from-pushed-not-deleted (delete only), and pre-merge-phase-stays-hold-mode.
+      Review (code + architecture): PASS_WITH_WARNINGS — applied the summary re-stamp + timeout-comment
+      fixes; boot-push-latency + throwing-stub-diagnostics noted as acceptable.)
 
 ## Phase 4 — Cross-mode regression suite (P2.8)
 

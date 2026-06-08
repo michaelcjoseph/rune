@@ -40,9 +40,21 @@ import {
   computeWorkProduct,
   type ExitFacts,
 } from './work-run-classify.js';
-import { runFinalizer, type FinalizerSupervisionStatus } from './work-run-finalizer.js';
+import {
+  runFinalizer,
+  type FinalizerEffects,
+  type FinalizerPhase,
+  type FinalizerSupervisionStatus,
+} from './work-run-finalizer.js';
+import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
-import { writeSummary, appendIndexRow, type WorkRunSummary } from './work-run-store.js';
+import {
+  writeSummary,
+  appendIndexRow,
+  recordWorkRunPhase,
+  readLastWorkRunPhase,
+  type WorkRunSummary,
+} from './work-run-store.js';
 import { upsertRun, readAllRuns, writeAllRuns } from './supervision-store.js';
 import {
   recoverAndFinalizeStaleRuns,
@@ -54,8 +66,11 @@ const log = createLogger('recovery-finalize-runner');
 
 /** Per-run wall-clock ceiling at boot. defaultRunGit caps each git call at 30s,
  *  but a stale run makes ~5 serial git calls (merge-base + work-product +
- *  worktree-remove); this bounds a pathologically slow/contended run so boot
- *  isn't blocked, and a timeout leaves the run for the unknown-relabel fallback. */
+ *  worktree-remove); a gated-merge RESUME adds a network-bound `git push` +
+ *  `branch -d` on top. This bounds a pathologically slow/contended run so boot
+ *  isn't blocked; a timeout (e.g. a slow remote during the resume push) leaves
+ *  the run for the unknown-relabel fallback — safe, because the durable
+ *  `merged-not-pushed` phase means the NEXT boot retries the push exactly-once. */
 const RECOVERY_PER_RUN_TIMEOUT_MS = 60_000;
 
 /** Reject `p` if it doesn't settle within `ms`. The timer is unref'd + cleared
@@ -90,6 +105,11 @@ export interface RecoveryFinalizeIO {
   appendIndex: (filePath: string, row: import('./work-run-store.js').WorkRunIndexRow) => void;
   upsertSupervision: (run: SupervisedRun) => void;
   removeWorktree: (run: SupervisedRun, worktreePath: string, baseSha: string, egressAllowlist: string[]) => Promise<void>;
+  /** Read the last durable finalize phase a crashed run reached, or null. Drives
+   *  the gated-merge crash-resume decision (Phase 3.5). */
+  readLastPhase: (runId: string) => FinalizerPhase | null;
+  /** Persist a finalize phase as recovery advances a resumed gated-merge. */
+  recordPhase: (runId: string, phase: FinalizerPhase) => void;
   /** Wall clock — injected so the test is deterministic. */
   now: () => number;
 }
@@ -120,6 +140,8 @@ function defaultIO(): RecoveryFinalizeIO {
         { productsConfigPath: config.PRODUCTS_CONFIG_FILE, worktreeRoot: config.WORKTREE_ROOT, runGit: defaultRunGit },
       );
     },
+    readLastPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
+    recordPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     now: () => Date.now(),
   };
 }
@@ -180,7 +202,29 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     durationMs: 0,
     exitFact: 'reaped-after-terminal-result',
   };
-  const { outcome, reason } = classifyOutcome({ exit, product: productFacts });
+  // Gated-merge crash-resume decision (read the durable phase BEFORE classifying
+  // so a resume can override the verdict): a run whose phase shows the merge
+  // already landed (`merged-not-pushed`/`pushed-not-deleted`) is re-driven in
+  // `gated-merge` mode to COMPLETE the interrupted push/branch-delete — never to
+  // initiate a merge at boot (a run with no merge phase re-drives in hold mode).
+  const lastPhase = io.readLastPhase(run.id);
+  const resumeGatedMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
+
+  const classified = classifyOutcome({ exit, product: productFacts });
+  // On a gated-merge RESUME the recorded phase is authoritative: the merge landed,
+  // so the run WAS branch-complete. Recovery's absolute unchecked-task count
+  // would otherwise mis-read it as `partial` (the project's later-phase boxes are
+  // unchecked) and the finalizer would skip the push, stranding origin behind.
+  // Force branch-complete so `runGatedMerge` completes the push/delete.
+  const outcome =
+    resumeGatedMerge && classified.outcome !== 'branch-complete' ? 'branch-complete' : classified.outcome;
+  const reason =
+    outcome === classified.outcome
+      ? classified.reason
+      : `gated-merge resume from ${lastPhase} (merge already landed)`;
+  if (resumeGatedMerge) {
+    log.info('recovery: resuming a crashed gated-merge run', { id: run.id, lastPhase, outcome });
+  }
   const scrubbedReason = scrubPathsInText(`recovered: ${reason}`);
   const endedAtMs = io.now();
   const endedAt = new Date(endedAtMs).toISOString();
@@ -200,16 +244,17 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     },
   };
 
-  const result = await runFinalizer(
-    { mode: 'hold', runId: run.id, project: run.project, product: run.product, branch, baseBranch: product.baseBranch },
-    {
-      classify: async () => terminalEvent,
-      flushTranscript: async () => {}, // no live transcript for a recovered run
-      // `_ev` is the classified event the finalizer passes; the recovery path
-      // builds the summary/index row from the surrounding scope (which carries
-      // the recovery-only fields baseSha/branch/timing the event lacks), so the
-      // argument is intentionally unused.
-      writeSummary: (_ev) => {
+  // The finalizer COMPLETES an interrupted gated-merge (push/branch-delete),
+  // skipping the already-committed merge via `readLastPhase` — never re-merges or
+  // re-runs the gate. A run with no merge phase re-drives in `hold` mode below.
+  const baseEffects: FinalizerEffects = {
+    classify: async () => terminalEvent,
+    flushTranscript: async () => {}, // no live transcript for a recovered run
+    // `_ev` is the classified event the finalizer passes; the recovery path
+    // builds the summary/index row from the surrounding scope (which carries
+    // the recovery-only fields baseSha/branch/timing the event lacks), so the
+    // argument is intentionally unused.
+    writeSummary: (_ev) => {
         const summary: WorkRunSummary = {
           id: run.id,
           project: run.project,
@@ -240,14 +285,92 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
           endedAt,
         });
       },
-      writeSupervisionTerminal: (status) => {
-        io.upsertSupervision({ ...run, status });
-      },
-      removeWorktree: () => io.removeWorktree(run, worktree, baseSha, product.egressAllowlist),
-      recordPhase: () => {}, // recovery doesn't persist phases yet (Phase 3 resume matrix)
-      readLastPhase: () => null,
+    writeSupervisionTerminal: (status) => {
+      io.upsertSupervision({ ...run, status });
     },
+    removeWorktree: () => io.removeWorktree(run, worktree, baseSha, product.egressAllowlist),
+    // Durable phases drive the gated-merge resume; harmless in hold mode (which
+    // never consults readLastPhase and runs straight through).
+    recordPhase: (phase) => io.recordPhase(run.id, phase),
+    readLastPhase: () => lastPhase,
+  };
+
+  // In `gated-merge` resume mode, supply the merge effects. On resume from
+  // `merged-not-pushed`/`pushed-not-deleted` the finalizer SKIPS the gate +
+  // merge (via `readLastPhase`), so `gate`/`mergeBranch` are never invoked —
+  // they throw defensively so a contract violation fails loudly (caught per-run
+  // → unknown-relabel fallback) rather than silently re-gating/re-merging at
+  // boot. Only `pushBranch`/`deleteBranch` actually run, completing the
+  // interrupted merge; `deleteBranch` is best-effort (the finalizer's
+  // onBranchDelete guard swallows it).
+  const effects: FinalizerEffects = resumeGatedMerge
+    ? {
+        ...baseEffects,
+        gate: async () => {
+          throw new Error('recovery resume must not re-run the gate (merge already landed)');
+        },
+        mergeBranch: async () => {
+          throw new Error('recovery resume must not re-merge (merge already landed)');
+        },
+        alert: () => {},
+        pushBranch: async () => {
+          try {
+            await io.runGit(['push', 'origin', product.baseBranch], { cwd: product.repoPath });
+          } catch (err) {
+            throw new Error(redactSecrets(`git push failed: ${(err as Error).message}`));
+          }
+        },
+        deleteBranch: async () => {
+          await io.runGit(['branch', '-d', branch], { cwd: product.repoPath });
+        },
+      }
+    : baseEffects;
+
+  const result = await runFinalizer(
+    {
+      mode: resumeGatedMerge ? 'gated-merge' : 'hold',
+      runId: run.id,
+      project: run.project,
+      product: run.product,
+      branch,
+      baseBranch: product.baseBranch,
+    },
+    effects,
   );
+
+  // On a completed gated-merge resume the finalizer SKIPPED `writeSummary` (the
+  // pre-merge summary was already on disk, phase `summary-written` reached), so
+  // the persisted summary still lacks the merge disposition. Re-stamp it now so
+  // the cockpit/restart reader shows a resumed-completed run as merged, not as a
+  // gate-held branch-complete. Best-effort — a disk failure never changes the
+  // already-resolved terminal status.
+  if (resumeGatedMerge && result.merged) {
+    try {
+      io.writeSummaryFile(join(config.WORK_RUNS_DIR, run.id), {
+        id: run.id,
+        project: run.project,
+        product: run.product,
+        outcome,
+        reason: scrubbedReason,
+        exit,
+        workProduct: productFacts,
+        baseSha,
+        branch,
+        startedAt: run.startedAt,
+        endedAt,
+        transcriptPath: '',
+        forensicsPath: '',
+        merged: true,
+        branchDeleted: result.branchDeleted,
+        baseBranch: product.baseBranch,
+      });
+    } catch (err) {
+      log.warn('recovery: post-resume summary re-write failed (best-effort)', {
+        id: run.id,
+        error: scrubPathsInText((err as Error).message),
+      });
+    }
+  }
   return result.supervisionStatus;
 }
 
