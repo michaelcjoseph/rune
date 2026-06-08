@@ -333,8 +333,14 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Confirm compounding from one run into the next. (`memory-writer.test.ts` §6.7 green —
       a lesson written into a role dir loads into the next run's `composeRoleContext`
       `referenceContext`, absent from `systemInstructions`.)
-- [ ] **Discovery surface:** document the nightly post-mortem step and the feedback-record
+- [x] **Discovery surface:** document the nightly post-mortem step and the feedback-record
       format in `CLAUDE.md` (which nightly slot, where feedback records live, lesson shape).
+      (docs-sync: nightly orchestrator now lists 15 steps incl. `stepLearningLoop` after
+      'Observation loop'; new `src/intent/{feedback-record,feedback-reader,learning-loop,
+      postmortem}.ts` + `src/roles/{memory-writer,commit}.ts` tree entries; a "Product-team
+      learning loop" subsection documents the `logs/feedback.jsonl` record format, the
+      once-only marker, the fenced ```postmortem block, and the `memory.md` lesson shape;
+      `logs/feedback.jsonl` + `logs/feedback-processed.json` added to the LOGS_DIR paragraph.)
 
 > **User-reachability:** the learning loop runs as a nightly cron (no interactive trigger by
 > design); the user observes it through the committed `memory.md` diffs and the documented
