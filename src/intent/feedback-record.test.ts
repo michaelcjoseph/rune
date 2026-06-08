@@ -268,6 +268,15 @@ describe('feedback-record — parseFeedbackRecord (length caps)', () => {
     expect(result.reason).toBe('field-too-long');
   });
 
+  it('rejects an over-long createdAt (unbounded ISO fractional group) with field-too-long', () => {
+    // A syntactically-ISO timestamp with a pathologically long fractional-seconds run.
+    const bloated = '2026-06-08T10:00:00.' + '0'.repeat(600) + 'Z';
+    const result = parseFeedbackRecord({ ...fullRaw(), createdAt: bloated });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('field-too-long');
+  });
+
   it('rejects an over-long optional field (runId) with field-too-long', () => {
     const result = parseFeedbackRecord({ ...fullRaw(), runId: 'r'.repeat(501) });
     expect(result.ok).toBe(false);

@@ -127,6 +127,7 @@ export function parseFeedbackRecord(raw: unknown): FeedbackValidation {
   // optionals checked at their assignment guards below.
   if (
     r['source'].length > MAX_IDENT_CHARS ||
+    r['createdAt'].length > MAX_IDENT_CHARS || // the ISO regex's `\.\d+` group is unbounded
     r['issueSummary'].length > MAX_TEXT_CHARS ||
     r['evidence'].length > MAX_TEXT_CHARS
   ) {

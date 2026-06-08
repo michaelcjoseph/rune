@@ -299,8 +299,15 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       fail-closed validator with durable `FeedbackSkipReason` per field, `VALID_SLUG`
       + ISO-8601 + trust-boundary length-cap guards, and the injected `FeedbackReader`
       seam. 29/29 in `feedback-record.test.ts` green.)
-- [ ] Nightly job detects valid machine-readable feedback records and records malformed
-      entries as skipped with reason.
+- [x] Nightly job detects valid machine-readable feedback records and records malformed
+      entries as skipped with reason. (`src/intent/learning-loop.ts` `runLearningLoop` —
+      reads via the injected `FeedbackReader`, validates each through `parseFeedbackRecord`,
+      skips malformed with its durable `FeedbackSkipReason`, and dispatches valid records
+      through the injected `attribute`/`writeLesson` seams; per-pass counters keep the
+      `processed === lessonsWritten + lessonsFiltered + noLessonOutcomes` invariant honest.
+      8/8 in `learning-loop.test.ts` green. The live nightly.ts cron composition — wiring
+      the production feedback reader + LLM post-mortem + `writeRoleLesson` into this core —
+      lands with the downstream seam tasks below.)
 - [ ] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
 - [ ] Memory writer appends one privacy-clean, provenance-stamped lesson atomically.
 - [ ] Allow "no lesson warranted".

@@ -231,6 +231,46 @@ describe('learning-loop — no-lesson attribution (§6.6)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Lesson attributed but declined at the write boundary (privacy-filter / dedup)
+// — counts as lessonsFiltered, never silently dropped from the invariant.
+// ---------------------------------------------------------------------------
+
+describe('learning-loop — lesson attributed but write declined', () => {
+  it('counts lessonsFiltered (not lessonsWritten / noLessonOutcomes) when writeLesson does not commit', async () => {
+    const record = validRecord();
+
+    const lessonAttribution: PostMortemLesson = {
+      kind: 'lesson',
+      stage: 'review',
+      role: 'reviewer',
+      lesson: 'A lesson the memory writer will reject as a duplicate.',
+    };
+
+    const attribute = vi.fn().mockResolvedValue(lessonAttribution);
+    // The memory writer declined the write (privacy-filtered / duplicate / empty).
+    const writeLesson = vi.fn().mockResolvedValue({ committed: false });
+
+    const result = await runLearningLoop({
+      readFeedback: () => [record],
+      attribute,
+      writeLesson,
+    });
+
+    expect(result.processed).toBe(1);
+    expect(result.lessonsWritten).toBe(0);
+    expect(result.lessonsFiltered).toBe(1);
+    expect(result.noLessonOutcomes).toBe(0);
+
+    expect(writeLesson).toHaveBeenCalledTimes(1);
+
+    // The per-pass invariant holds: every processed record lands in exactly one bucket.
+    expect(result.lessonsWritten + result.lessonsFiltered + result.noLessonOutcomes).toBe(
+      result.processed,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // §6.8 — Fixture-only; multiple records each produce attribution + write
 // ---------------------------------------------------------------------------
 
