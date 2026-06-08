@@ -71,6 +71,14 @@ export interface SupervisedRun {
    * the nudge to at most once per run (project 11, requirement 23).
    */
   quietNudgedAt?: string;
+  /**
+   * ISO-8601 timestamp the PARKED-run staleness nudge was sent, or absent if
+   * never (project 13, Phase 1b). Distinct from {@link quietNudgedAt}: the quiet
+   * nudge fires on a `running` run gone quiet; this fires on a `blocked-on-human`
+   * (parked) run left unreleased past `PARKED_RUN_NUDGE_AFTER_MS`. Bounds the
+   * parked nudge to at most once per run — the run is NEVER auto-released.
+   */
+  parkedNudgedAt?: string;
 }
 
 /** The visibility surface — the picture the cockpit and Telegram report from. */
@@ -163,6 +171,56 @@ export function planQuietNudges(
   // marker.
   const updated = toNudge.map((r) => ({ ...r, quietNudgedAt: stamp }));
   return { toNudge, updated };
+}
+
+/**
+ * Whether a PARKED run (project 13, Phase 1b) is due a staleness nudge.
+ *
+ * NET-NEW predicate — it deliberately cannot reuse {@link isQuietRun}, which
+ * early-returns on any non-`running` status. A parked run is `blocked-on-human`,
+ * so the quiet predicate never fires on it. This one fires only on a parked run
+ * left unreleased past `parkedThresholdMs`, at most once (its own
+ * {@link SupervisedRun.parkedNudgedAt} marker, NOT `quietNudgedAt`). It NEVER
+ * auto-releases — it only prods the operator. Baseline is the park time
+ * ({@link SupervisedRun.lastHeartbeatAt}, set when the parked record is written),
+ * falling back to {@link SupervisedRun.startedAt}. Soft-fail on an unparseable
+ * baseline (no nudge), mirroring {@link isQuietRun}.
+ *
+ * STUB (Phase 1b "Tests write first"): returns false until the implementation
+ * task lands.
+ */
+export function isParkedRun(
+  _run: SupervisedRun,
+  _parkedThresholdMs: number,
+  _now: number,
+): boolean {
+  return false;
+}
+
+/** A parked-nudge plan: the parked runs to nudge, plus those same runs with
+ *  `parkedNudgedAt` stamped to `now` so the persistence layer can write the
+ *  once-only marker (project 13, Phase 1b). */
+export interface ParkedNudgePlan {
+  toNudge: SupervisedRun[];
+  /** Each `toNudge` run with `parkedNudgedAt` set to `now`. */
+  updated: SupervisedRun[];
+}
+
+/**
+ * Plan the parked-run staleness nudges: the subset {@link isParkedRun} flags,
+ * plus stamped copies (`parkedNudgedAt = now`) for the persistence layer. Pure —
+ * the runner sends the nudges and persists `updated`; `toNudge[i]`/`updated[i]`
+ * are the same run (1:1, stamped), paired by index. Never auto-releases.
+ *
+ * STUB (Phase 1b "Tests write first"): returns an empty plan until the
+ * implementation task lands.
+ */
+export function planParkedNudges(
+  _runs: SupervisedRun[],
+  _parkedThresholdMs: number,
+  _now: number,
+): ParkedNudgePlan {
+  return { toNudge: [], updated: [] };
 }
 
 /** A quiet→cancel escalation plan: the runs the actuator should cancel/reap/
