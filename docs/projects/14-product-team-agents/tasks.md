@@ -192,33 +192,43 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Closeout test: after task N passes gates, Jarvis marks exactly that task complete,
+- [x] Closeout test: after task N passes gates, Jarvis marks exactly that task complete,
       updates context, runs closeout checks, records a closeout commit, verifies clean
-      worktree, then advances.
-- [ ] Block test: blocked/failed/objection-open task stops or retries durably and is not
-      skipped.
-- [ ] Context-influence test: fixture includes a context update from task N that affects task
-      N+1's input.
-- [ ] Finalizer handoff test: when all tasks are checked, orchestrator calls Project 15
-      finalizer with branch/run facts rather than self-merging.
-- [ ] Finalizer-unavailable test: if the real finalizer is unavailable, Jarvis records the
+      worktree, then advances. (`project-orchestrator.test.ts`)
+- [x] Block test: blocked/failed/objection-open task stops or retries durably and is not
+      skipped. (`project-orchestrator.test.ts`)
+- [x] Context-influence test: fixture includes a context update from task N that affects task
+      N+1's input. (`project-orchestrator.test.ts`)
+- [x] Finalizer handoff test: when all tasks are checked, orchestrator calls Project 15
+      finalizer with branch/run facts rather than self-merging. (`project-orchestrator.test.ts`)
+- [x] Finalizer-unavailable test: if the real finalizer is unavailable, Jarvis records the
       handoff payload and stops branch-complete/blocked rather than self-merging.
+      (`project-orchestrator.test.ts`)
 - [ ] Legacy fallback test: when orchestrated mode is disabled, legacy `/work --auto` dispatch
-      still works and records fallback.
+      still works and records fallback. (Written with the mutation-applier dispatch seam below.)
 - [ ] Start-mode visibility test: cockpit Start/confirmation copy shows whether the selected
       dispatch mode is orchestrated or legacy fallback, and fallback runs expose the reason.
-- [ ] End-to-end fixture test: deterministic fixture project runs through at least two tasks,
+      (Written with the cockpit trigger-surface wiring below.)
+- [x] End-to-end fixture test: deterministic fixture project runs through at least two tasks,
       context update, finalizer handoff, and terminal outcome with injected spawners/readers.
-- [ ] Confirm red before implementation.
+      (`project-orchestrator.test.ts`)
+- [x] Confirm red before implementation. (Confirmed: orchestrator-loop suite red on
+      module-not-found.)
 
 ### Implementation
 
-- [ ] Implement the multi-task orchestrator loop.
-- [ ] Wire ready-for-closeout, blocked, failed, and objection-open outcomes to closeout/
-      retry/block.
-- [ ] Implement Jarvis-owned task closeout and clean-worktree verification.
-- [ ] Enforce per-task attempt caps and escalation at the cap.
-- [ ] Wire completed project runs into the Project 15 finalizer.
+- [x] Implement the multi-task orchestrator loop. (`project-orchestrator.ts`
+      `runProjectOrchestration`.)
+- [x] Wire ready-for-closeout, blocked, failed, and objection-open outcomes to closeout/
+      retry/block. (`runTaskWithRetries` + the outcome gate in the loop.)
+- [x] Implement Jarvis-owned task closeout and clean-worktree verification. (`performCloseout`
+      — pure sequence over injected effects: context update → tick → checks → commit →
+      clean-verify, blocks durably on any failure. The real git/fs effects are bound by the
+      mutation applier below.)
+- [x] Enforce per-task attempt caps and escalation at the cap. (`runTaskWithRetries` over
+      `decideAttemptOutcome`.)
+- [x] Wire completed project runs into the Project 15 finalizer. (`finalize` adapter →
+      `runFinalizerHandoff`; held when unavailable, never self-merges.)
 - [ ] Register the orchestrated loop as a mutation applier (new kind or a toggle on
       `work-run`) so it dispatches through the existing pipeline.
 - [ ] **Trigger surface:** route the cockpit per-project start action (`app.js` confirm-modal
@@ -229,7 +239,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] **Agent/operator docs:** document the orchestrated-vs-legacy toggle and the selected
       mutation contract in `CLAUDE.md` (run via docs-sync) so future agents know the path
       exists and how to select it.
-- [ ] Create deterministic fixture spawners/readers for the complete lifecycle.
+- [x] Create deterministic fixture spawners/readers for the complete lifecycle. (In-memory
+      `Harness` in `project-orchestrator.test.ts` injects all reads/workflow/closeout/finalize
+      effects — the loop runs end-to-end with no git, disk, or live model call.)
 - [ ] Optionally run a live real-task smoke check after automated suites pass.
 
 > **User-reachability:** YES — after this phase a user clicks Start on a cockpit project card
