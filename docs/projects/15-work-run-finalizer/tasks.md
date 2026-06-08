@@ -428,19 +428,37 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Wiring
 
-- [ ] Flip the live terminal path (`work-runner.ts:594-595`) from `{ mode: 'hold' }` to
+- [x] Flip the live terminal path (`work-runner.ts:594-595`) from `{ mode: 'hold' }` to
       `{ mode: 'gated-merge', baseBranch }` for a branch-complete outcome; everything else still resolves
       through the hold tail (`runGatedMerge` already merges only branch-complete and holds the rest).
-- [ ] Construct the real injected effects the live call site currently passes as no-ops: `gate` =
+      (`apply()` now always calls `runFinalizer({ mode: 'gated-merge', …, baseBranch })`; baseBranch is
+      sourced from `getProductConfig(product).baseBranch`, fail-closed if the config is unreadable at
+      finalize.)
+- [x] Construct the real injected effects the live call site currently passes as no-ops: `gate` =
       `runGate({ baseBranch, validationCommands from products.json, commandTimeoutMs:
       WORK_RUN_GATE_COMMAND_TIMEOUT_MS })` inside `withBaseBranchLock`; `mergeBranch`/`pushBranch`/
       `deleteBranch` = the decomposed `realMergeBranch` (`gen-eval-loop-runner.ts:254-302`) git steps
       honoring its half-merged push-failure warning; real `removeWorktree` (finalizer removes AFTER
       merge/push, BEFORE delete); real `writeSupervisionTerminal`; real `recordPhase`/`readLastPhase`
-      against a durable per-run phase store.
-- [ ] Guard the outer `finally` `destroyWorktree` (`work-runner.ts:621-636`) with a
+      against a durable per-run phase store. (Done: `gate` = `withBaseBranchLock(product, baseBranch,
+      () => runGate({…, concurrentRun: live read, tasksRemaining: captured from classify}))`;
+      `mergeBranch`/`pushBranch`/`deleteBranch` run through `deps.runGit` in the product repo — push
+      uses explicit `origin <baseBranch>`, errors are `redactSecrets`-scrubbed, the half-merged
+      push-failure logs+rethrows so recovery resumes from `merged-not-pushed`; `removeWorktree` =
+      `destroyWorktree` + `finalizerOwnedTeardown` flag. `writeSupervisionTerminal` stays INERT in the
+      live path by design — mutations.ts owns the supervision write on the yielded terminal (recovery,
+      which has no generator, uses a real write); `recordPhase`/`readLastPhase` back onto the new
+      durable per-run phase store (`recordWorkRunPhase`/`readLastWorkRunPhase` in `work-run-store.ts`,
+      `logs/work-runs/<id>/phase`). The finalizer's `runGatedMerge` was reordered to delete the branch
+      AFTER worktree removal (a checked-out branch can't be `git branch -d`'d) via an `onBranchDelete`
+      callback in `resolveWorktreeAndFinalize`.)
+- [x] Guard the outer `finally` `destroyWorktree` (`work-runner.ts:621-636`) with a
       `finalizerOwnedTeardown` flag set inside the real `removeWorktree` effect, so gated-merge teardown
-      is not double-destroyed (the inline TODO at `:621` calls for exactly this).
+      is not double-destroyed (the inline TODO at `:621` calls for exactly this). (Flag declared at the
+      apply() outer scope, set true only AFTER a successful `destroyWorktree` inside the effect; the
+      outer `finally` now runs `if (sandbox && !finalizerOwnedTeardown)` — a removeWorktree that threw
+      leaves the flag false so the `finally` retries; early-return/abort paths keep `finally` ownership.
+      The Phase 3.5 "tears the worktree down exactly once" test pins no double-destroy.)
 - [ ] Wire the merged-notification surface: success → notify (Telegram + cockpit) `merged`/branch
       deleted, set `summary.json` `merged`/`branchDeleted`; gate-fail → `alert(reason)` that the run was
       held at `branch-complete` off `main` (never a silently-dropped alert).

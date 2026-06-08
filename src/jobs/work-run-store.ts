@@ -17,6 +17,11 @@ import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import type { WorkOutcome, WorkProductFacts, ExitFacts } from './work-run-classify.js';
+// `PHASE_ORDER` is a runtime value, `FinalizerPhase` a type — both from the
+// finalizer, which does NOT import this module, so there is no cycle. Deriving
+// `KNOWN_PHASES` from `PHASE_ORDER` keeps the two in lockstep (a phase added to
+// the finalizer can't silently fall out of the store's validation).
+import { PHASE_ORDER, type FinalizerPhase } from './work-run-finalizer.js';
 
 const log = createLogger('work-run-store');
 
@@ -155,4 +160,70 @@ export function readRecentIndex(filePath: string, n: number): WorkRunIndexRow[] 
   }
   // Newest-first, capped at n.
   return rows.slice(-n).reverse();
+}
+
+// ---------------------------------------------------------------------------
+// Durable per-run finalize-phase store (project 15, Phase 3.5).
+//
+// The gated-merge finalizer records its resume checkpoint after EACH mutating
+// step into `logs/work-runs/<id>/phase`; `recovery-finalize-runner` reads the
+// last recorded phase to resume a run that crashed mid-gated-merge at the RIGHT
+// step (skipping an already-committed merge/push) instead of re-merging or
+// orphaning. One file, last-write-wins — only the latest phase matters for
+// resume. Best-effort: a write failure logs and is swallowed (a phase-store
+// hiccup must never deny the terminal event, the same contract summary/index
+// hold). `recordWorkRunPhase`/`readLastWorkRunPhase` take the PARENT
+// `work-runs` dir + a VALID_SLUG run id (mirrors `readWorkRunSummary`).
+// ---------------------------------------------------------------------------
+
+const PHASE_FILE = 'phase';
+
+/** The valid `FinalizerPhase` strings (derived from the finalizer's
+ *  `PHASE_ORDER` so the two never drift) — a read of an unknown/corrupt value
+ *  returns null (treat as "no resumable phase", i.e. re-drive from the top)
+ *  rather than handing back an off-contract phase. */
+const KNOWN_PHASES: ReadonlySet<string> = new Set<FinalizerPhase>(PHASE_ORDER);
+
+/**
+ * Record the latest finalize phase for `id` (overwrites — last-write-wins).
+ * Atomic temp-then-rename so a crash never leaves a torn phase file. Best-effort
+ * (logs + swallows on failure): the durable phase is an optimization for
+ * crash-resume, never a gate on terminalization. `baseDir` is the parent
+ * `work-runs` dir; `id` MUST be VALID_SLUG (joined into the path verbatim).
+ */
+export function recordWorkRunPhase(baseDir: string, id: string, phase: FinalizerPhase): void {
+  if (!VALID_SLUG.test(id)) {
+    log.warn('recordWorkRunPhase: invalid run id (no-op)', { id });
+    return;
+  }
+  const dir = join(baseDir, id);
+  const target = join(dir, PHASE_FILE);
+  const tmp = join(dir, `.${PHASE_FILE}.${process.pid}.tmp`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(tmp, phase, 'utf8');
+    renameSync(tmp, target);
+  } catch (err) {
+    log.warn('recordWorkRunPhase: failed to persist phase (best-effort)', {
+      id,
+      phase,
+      error: (err as Error).message,
+    });
+  }
+}
+
+/**
+ * Read the last durable finalize phase for `id`, or `null` when absent/corrupt/
+ * off-contract (recovery then re-drives from the top). `id` MUST be VALID_SLUG.
+ */
+export function readLastWorkRunPhase(baseDir: string, id: string): FinalizerPhase | null {
+  if (!VALID_SLUG.test(id)) return null;
+  let raw: string;
+  try {
+    raw = readFileSync(join(baseDir, id, PHASE_FILE), 'utf8');
+  } catch {
+    return null; // no prior phase recorded
+  }
+  const phase = raw.trim();
+  return KNOWN_PHASES.has(phase) ? (phase as FinalizerPhase) : null;
 }

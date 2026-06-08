@@ -51,6 +51,14 @@ vi.mock('../config.js', () => ({
     // restores between tests) so the restored object has a defined dir even
     // though every test re-injects its own via __setWorkRunRuntimeForTest.
     WORK_RUNS_DIR: '/tmp/test-work-runs',
+    WORK_RUNS_INDEX_FILE: '/tmp/test-work-runs/index.jsonl',
+    // Phase 3.5 gated-merge wiring reads these in the common apply() path: the
+    // integration-worktree path (`join(WORKTREE_ROOT, …)`), the product config
+    // path (passed to the mocked getProductConfig), and the per-command gate
+    // timeout (passed to the mocked runGate).
+    WORKTREE_ROOT: '/tmp/test-worktrees',
+    PRODUCTS_CONFIG_FILE: '/tmp/test-products.json',
+    WORK_RUN_GATE_COMMAND_TIMEOUT_MS: 600_000,
   },
 }));
 

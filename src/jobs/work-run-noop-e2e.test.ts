@@ -64,6 +64,11 @@ vi.mock('../config.js', () => ({
     WORK_RUN_GLOBAL_CAP: 2,
     WORKSPACE_DIR: undefined,
     WORK_RUNS_DIR: '/tmp/test-work-runs',
+    WORK_RUNS_INDEX_FILE: '/tmp/test-work-runs/index.jsonl',
+    // Phase 3.5 gated-merge wiring reads these in the common apply() path.
+    WORKTREE_ROOT: '/tmp/test-worktrees',
+    PRODUCTS_CONFIG_FILE: '/tmp/test-products.json',
+    WORK_RUN_GATE_COMMAND_TIMEOUT_MS: 600_000,
     TG_MAX_MESSAGE_LENGTH: 4096,
     TELEGRAM_BOT_TOKEN: 'test-token',
     TELEGRAM_USER_ID: 42,
@@ -88,6 +93,16 @@ vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  // Phase 3.5: the gated-merge wiring reads the product config (baseBranch /
+  // repoPath / validationCommands) in the common apply() path. A noop run never
+  // reaches the gate/merge, so this just needs to resolve.
+  getProductConfig: vi.fn(() => ({
+    product: 'jarvis',
+    repoPath: '/test/repo/jarvis',
+    baseBranch: 'main',
+    egressAllowlist: [],
+    validationCommands: ['npm run build', 'npm test'],
+  })),
 }));
 
 // Telegram client — inspect the emitted message text without real I/O.

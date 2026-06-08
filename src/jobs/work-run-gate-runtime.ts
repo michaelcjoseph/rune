@@ -40,6 +40,7 @@ import { evaluateGate, type GateFacts, type GateResult } from './work-run-gate.j
 import { registerActiveProcess, unregisterActiveProcess } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+import { redactSecrets } from './work-run-transcript.js';
 import config from '../config.js';
 
 const log = createLogger('work-run-gate-runtime');
@@ -239,7 +240,7 @@ export async function runGate(
       log.warn('gate merge probe failed; treating as merge-conflict (fail-closed)', {
         product: opts.product,
         branch: opts.branch,
-        error: scrubAbsolutePaths((err as Error).message),
+        error: redactSecrets(scrubAbsolutePaths((err as Error).message)),
       });
       await runGit(['merge', '--abort'], { cwd: opts.integrationWorktree }).catch(() => {
         /* nothing to abort / already clean */
@@ -281,7 +282,7 @@ export async function runGate(
       }).catch((err) => {
         log.warn('integration worktree teardown failed', {
           product: opts.product,
-          error: scrubAbsolutePaths((err as Error).message),
+          error: redactSecrets(scrubAbsolutePaths((err as Error).message)),
         });
       });
     }

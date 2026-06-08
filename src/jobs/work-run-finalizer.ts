@@ -164,7 +164,7 @@ export interface FinalizerResult {
 /** Durable phases in their committed order — the resume axis. `reached(phase)`
  *  (in `gated-merge`) compares the last persisted phase against this list to
  *  skip steps a prior attempt already committed. */
-const PHASE_ORDER: FinalizerPhase[] = [
+export const PHASE_ORDER: FinalizerPhase[] = [
   'classified',
   'transcript-flushed',
   'summary-written',
@@ -194,9 +194,16 @@ function makeRecorder(effects: FinalizerEffects): {
 
 /**
  * The shared finalize tail used by BOTH modes: resolve the worktree (best-effort
- * removal — a failure must never block the terminal write, req 17) then write a
- * terminal supervision status (never a quiet-pinging `running`). Records
+ * removal — a failure must never block the terminal write, req 17), then — in
+ * `gated-merge` mode only — delete the now-free branch, then write a terminal
+ * supervision status (never a quiet-pinging `running`). Records
  * `worktree-resolved` then `finalized`.
+ *
+ * `onBranchDelete` (gated-merge, merge landed) runs AFTER `removeWorktree`
+ * because `git branch -d` refuses a branch still checked out in the run's
+ * worktree; the push already put the work on origin, so deleting last is safe
+ * (req: removeWorktree before delete). Omitted in `hold` mode and on the
+ * gate-fail / non-branch-complete paths → `branchDeleted` stays false.
  */
 async function resolveWorktreeAndFinalize(
   input: FinalizerInput,
@@ -205,7 +212,7 @@ async function resolveWorktreeAndFinalize(
   record: (phase: FinalizerPhase) => void,
   phases: FinalizerPhase[],
   merged: boolean,
-  branchDeleted: boolean,
+  onBranchDelete?: () => Promise<void>,
 ): Promise<FinalizerResult> {
   let worktreeRemoved = false;
   try {
@@ -221,6 +228,24 @@ async function resolveWorktreeAndFinalize(
     });
   }
   record('worktree-resolved');
+
+  // Branch delete happens here — after the worktree is gone, so `git branch -d`
+  // no longer sees the branch checked out. A delete failure must NOT deny the
+  // terminal (the merge + push already landed): the try/catch here is the safety
+  // net, independent of whether the injected `deleteBranch` self-swallows.
+  // branchDeleted reflects a clean delete; a thrown delete leaves it false.
+  let branchDeleted = false;
+  if (onBranchDelete) {
+    try {
+      await onBranchDelete();
+      branchDeleted = true;
+    } catch (err) {
+      log.warn('branch delete failed after push; finalizing anyway', {
+        runId: input.runId,
+        error: scrubAbsolutePaths((err as Error).message),
+      });
+    }
+  }
 
   const supervisionStatus: FinalizerSupervisionStatus =
     terminalEvent.kind === 'completed' ? 'completed' : 'failed';
@@ -282,8 +307,9 @@ export async function runFinalizer(
 
   // Hold mode: remove the worktree per the existing non-merge policy (branch ref
   // left intact — no merge → no delete) and write the terminal supervision
-  // status through the shared tail. `merged`/`branchDeleted` are always false.
-  return resolveWorktreeAndFinalize(input, effects, terminalEvent, record, phases, false, false);
+  // status through the shared tail. `merged`/`branchDeleted` are always false
+  // (no `onBranchDelete` callback).
+  return resolveWorktreeAndFinalize(input, effects, terminalEvent, record, phases, false);
 }
 
 /**
@@ -343,7 +369,6 @@ async function runGatedMerge(
 
   const outcome = readOutcome(terminalEvent);
   let merged = false;
-  let branchDeleted = false;
 
   // Only a branch-complete run is eligible to land on the base branch; anything
   // else (partial/noop/dirty/failed) never merges and never consults the gate.
@@ -363,17 +388,25 @@ async function runGatedMerge(
       }
     }
 
-    if (merged) {
-      // Push BEFORE delete: origin is the durable backup before the local
-      // branch ref is removed. Skip the push on resume if it already landed.
-      if (!reached('pushed-not-deleted')) {
-        await pushBranch();
-        record('pushed-not-deleted');
-      }
-      await deleteBranch();
-      branchDeleted = true;
+    // Push BEFORE delete: origin is the durable backup before the local branch
+    // ref is removed. Skip the push on resume if it already landed. The branch
+    // DELETE itself is deferred to the shared tail (after worktree removal) so
+    // `git branch -d` doesn't trip on the still-checked-out run worktree.
+    if (merged && !reached('pushed-not-deleted')) {
+      await pushBranch();
+      record('pushed-not-deleted');
     }
   }
 
-  return resolveWorktreeAndFinalize(input, effects, terminalEvent, record, phases, merged, branchDeleted);
+  // The shared tail removes the worktree, THEN deletes the branch (only when the
+  // merge landed), then writes the terminal. `deleteBranch` is best-effort.
+  return resolveWorktreeAndFinalize(
+    input,
+    effects,
+    terminalEvent,
+    record,
+    phases,
+    merged,
+    merged ? deleteBranch : undefined,
+  );
 }

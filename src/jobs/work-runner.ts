@@ -4,12 +4,15 @@ import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
-import { createWorktree, destroyWorktree, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
-import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import { writeSummary, appendIndexRow, recordWorkRunPhase, readLastWorkRunPhase, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
 import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase } from './work-run-finalizer.js';
+import { runGate } from './work-run-gate-runtime.js';
+import { withBaseBranchLock } from './work-run-merge-lock.js';
+import type { GateFailReason } from './work-run-gate.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
@@ -87,6 +90,11 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
     writeSummary,
     appendIndexRow,
     runForensics: exportForensics,
+    // Durable per-run finalize-phase store (Phase 3.5) — gated-merge records its
+    // resume checkpoint here; recovery reads the last phase to resume a crashed
+    // merge. Best-effort: recordWorkRunPhase logs + swallows on disk failure.
+    recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
+    readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
   };
 }
 
@@ -265,6 +273,12 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // during the stream, flushed before the terminal event, destroyed in the
     // outer finally (idempotent) so the fd never leaks on an abort.
     let sink: TranscriptSink | null = null;
+    // Set true once the finalizer's `removeWorktree` effect tears the run
+    // worktree down (gated-merge moves teardown ownership into the finalizer),
+    // so the outer `finally` does NOT double-destroy it. Declared at this scope
+    // so that `finally` can read it; the early-return setup-failure paths leave
+    // it false, so the outer `finally` still owns teardown there.
+    let finalizerOwnedTeardown = false;
     try {
       try {
         // createWorktree resolves HEAD atomically and returns it on
@@ -455,6 +469,55 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         const worktreeDir = sandbox.worktree;
         const baseSha = sandbox.baseSha ?? '';
 
+        // --- Gated-merge facts (Phase 3.5) ---
+        // The product config carries the base branch a clean run lands on, the
+        // repo whose `main` the merge mutates, and the validation commands the
+        // gate runs. `createWorktree` already resolved the same product config
+        // above, so this read normally cannot fail — but products.json could be
+        // deleted/corrupted in the interim, and an unhandled throw here would
+        // bypass the finalizer (no summary/index/teardown). Degrade instead: a
+        // fail-closed fallback (no validationCommands → gate returns
+        // `missing-validation-command` → the run HOLDS at branch-complete, never
+        // a stray merge).
+        let baseBranch = 'main';
+        let repoPath = '';
+        let validationCommands: string[] = [];
+        try {
+          const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+          baseBranch = productConfig.baseBranch;
+          repoPath = productConfig.repoPath;
+          validationCommands = productConfig.validationCommands ?? [];
+        } catch (err) {
+          log.warn('work-runner: product config unreadable at finalize; gate will fail closed', {
+            id: descriptor.id,
+            product,
+            error: scrubPathsInText((err as Error).message),
+          });
+        }
+        // Pre-gathered concurrency fact for the gate: another work-run owns the
+        // same product right now (its branch could be based on a `main` this
+        // merge is about to move). Read LIVE inside the gate closure (below) so
+        // it reflects the moment the gate runs, not a stale finalize-setup
+        // snapshot. The per-base-branch lock serializes the gate; this fact is
+        // the separate ownership signal (gate req 14) and fails toward HOLD.
+        const hasConcurrentRun = (): boolean =>
+          [...activeRuns.values()].some(
+            h =>
+              h.descriptor.kind === 'work-run' &&
+              h.descriptor.id !== descriptor.id &&
+              ((h.descriptor.payload as WorkRunPayload).product ?? 'jarvis') === product &&
+              h.descriptor.status === 'running',
+          );
+        // Throwaway integration worktree the gate creates + tears down to test
+        // `main` BEFORE it is mutated (never the product's real checkout). The
+        // run id is a randomUUID (VALID_SLUG-shaped), safe as a path segment.
+        const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${product}-${descriptor.id}`);
+        // Original tasks still unchecked, captured from the classified work
+        // product so the gate (which runs after classify) sees the real value;
+        // a branch-complete run is 0 by definition, but capture it rather than
+        // assume so a misclassification can't slip a non-zero past the gate.
+        let gateTasksRemaining = 0;
+
         // Single end timestamp shared by summary.json + the index row. Captured
         // inside the `classify` effect (when classification actually completes)
         // rather than here, so it reflects the run's true end — not the instant
@@ -462,28 +525,20 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         let endedAt = '';
 
         // Route the terminal sequence through the shared, idempotent finalizer
-        // (project 15, P1.6) in `hold` mode: classify on work product → flush
-        // the durable transcript → write summary + index → resolve the worktree
-        // → terminal write. This is the SINGLE live terminal owner; the
-        // failure/partial/cancelled paths thereby flow through the same machine
-        // that recovery uses, with the §7 guarantees (always flush + summary,
-        // never merge, branch retained, never left `running`). `hold` mode never
-        // merges/pushes/deletes — a plain work-run stays "branch-complete, not
-        // yet on main", unchanged from before this refactor. The gated-merge
-        // policy path is a deliberate, separately-activated mode.
+        // (project 15) in `gated-merge` mode (Phase 3.5 — live activation):
+        // classify on work product → flush transcript → write summary + index →
+        // [branch-complete + gate green: merge → push → remove worktree → delete
+        // branch] → terminal write. This is the SINGLE live terminal owner; the
+        // failure/partial/cancelled paths flow through the SAME machine that
+        // recovery uses, keeping the §7 guarantees (always flush + summary,
+        // never merge, branch retained, never left `running`) because
+        // `runGatedMerge` merges ONLY a branch-complete run behind the hard gate
+        // and holds every other outcome through the non-merge tail.
         //
-        // Three effects are intentionally inert in the live apply() path:
-        //  - `removeWorktree`: the outer `finally` already owns worktree
-        //    teardown for ALL paths (early-return setup failures, consumer
-        //    aborts, and the normal terminal), so the finalizer does not also
-        //    remove it (avoids a double-destroy); classification + forensics run
-        //    inside `classify` while the worktree still exists.
-        //  - `writeSupervisionTerminal`: mutations.ts owns the terminal
-        //    supervision write, driven by the terminal event apply() yields
-        //    below — the finalizer must not double-write it here.
-        //  - `recordPhase` / `readLastPhase`: a fresh live run has no prior
-        //    attempt to resume from; durable-phase crash-resume is the recovery
-        //    path's concern (P0.4).
+        // `writeSupervisionTerminal` stays inert: mutations.ts owns the terminal
+        // supervision write, driven by the terminal event apply() yields below —
+        // the finalizer must not double-write it in the live path (recovery,
+        // which has no generator to yield, uses a real write).
         const effects: FinalizerEffects = {
           classify: async () => {
             const ev = await finalizeWorkRun({
@@ -524,6 +579,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
             augmentedData['projectSlug'] = projectSlug;
             augmentedData['product'] = product;
             ev.data = augmentedData;
+            // Capture the real tasks-remaining count for the gate (which runs
+            // after classify). Branch-complete is 0 by definition; reading the
+            // computed value rather than assuming keeps the gate honest.
+            const wp = augmentedData['workProduct'] as WorkProductFacts | undefined;
+            gateTasksRemaining = wp?.transitions.tasksRemaining ?? 0;
             // Classification is done — stamp the shared end timestamp now (the
             // summary + index effects below close over it).
             endedAt = new Date().toISOString();
@@ -591,16 +651,114 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               });
             }
           },
-          // Teardown owned by the outer `finally` (see note above).
-          removeWorktree: async () => {},
-          // Supervision owned by mutations.ts on the yielded terminal (see note).
+          // Real teardown (Phase 3.5): the finalizer owns worktree removal in
+          // gated-merge mode — it removes the run worktree AFTER merge+push and
+          // BEFORE branch delete (`git branch -d` refuses a checked-out branch).
+          // Setting the flag AFTER a successful destroy lets the outer `finally`
+          // retry if this throws, and skip if it succeeds (no double-destroy).
+          removeWorktree: async () => {
+            // `sandbox` is non-null here by construction — the createWorktree
+            // early-return path yields a terminal and returns before `effects`
+            // is built — but narrow it for TS and as a defensive guard. Set the
+            // ownership flag only AFTER a successful destroy so a throw leaves it
+            // false and the outer `finally` retries (no leak, no double-destroy).
+            if (!sandbox) return;
+            await destroyWorktree(sandbox, {
+              productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+              worktreeRoot: config.WORKTREE_ROOT,
+            });
+            finalizerOwnedTeardown = true;
+          },
+          // Supervision is still owned by mutations.ts on the yielded terminal
+          // event (apply() yields it below) — the finalizer must not double-write
+          // it in the live path. Inert here; recovery uses a real write.
           writeSupervisionTerminal: () => {},
-          recordPhase: () => {},
-          readLastPhase: () => null,
+          // Durable resume checkpoints (Phase 3.5): best-effort per-run phase
+          // store so a crash mid-gated-merge resumes at the right step. A fresh
+          // live run has no prior phase, so readLastPhase returns null today —
+          // the value matters when recovery re-drives a crashed run.
+          recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
+          readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
+          // --- gated-merge effects (Phase 3.5) ---
+          // The hard gate runs INSIDE the per-product/per-base-branch lock so two
+          // projects sharing one `main` serialize (req 14); the gate itself tests
+          // `main` in a throwaway integration worktree, never the real checkout.
+          gate: () =>
+            withBaseBranchLock(product, baseBranch, () =>
+              runGate({
+                product,
+                repoPath,
+                baseBranch,
+                branch,
+                integrationWorktree,
+                validationCommands,
+                tasksRemaining: gateTasksRemaining,
+                // Live read inside the lock — accurate at gate time, not a stale
+                // finalize-setup snapshot.
+                concurrentRun: hasConcurrentRun(),
+                commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+              }),
+            ),
+          // Gate refused → the run holds at branch-complete off `main`. Never a
+          // silent drop. (Task 4 enriches this into a Telegram/cockpit alert.)
+          alert: (reason: GateFailReason) => {
+            log.warn('work-run held at branch-complete: gate failed', {
+              id: descriptor.id,
+              projectSlug,
+              product,
+              branch,
+              reason,
+            });
+          },
+          // Decomposed merge/push/delete (reusing gen-eval-loop's realMergeBranch
+          // git logic) through the injected runGit seam so they are observable in
+          // tests. Push BEFORE delete (the finalizer records the durable
+          // checkpoints between them); delete is best-effort.
+          mergeBranch: async () => {
+            const message = `jarvis(${product}): merge work-run branch ${branch}`;
+            try {
+              await deps.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
+            } catch (err) {
+              throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
+            }
+          },
+          pushBranch: async () => {
+            try {
+              // Explicit remote + refspec so the push target is independent of
+              // the repo's `push.default` / upstream-tracking config (a bare
+              // `git push` can silently no-op on a repo without a tracking ref).
+              await deps.runGit(['push', 'origin', baseBranch], { cwd: repoPath });
+            } catch (err) {
+              // Half-merged state: local base branch has the merge but origin is
+              // behind. The finalizer has recorded `merged-not-pushed`, so a
+              // recovery resume completes the push. Surface (redacted) which repo
+              // needs attention; the credential URL in a push error never logs raw.
+              log.warn('work-runner: git push failed after local merge — repo is half-merged', {
+                product,
+                branch,
+                error: redactSecrets((err as Error).message),
+              });
+              throw new Error(redactSecrets(`git push failed: ${(err as Error).message}`));
+            }
+          },
+          deleteBranch: async () => {
+            // Let a git failure throw: the finalizer's `onBranchDelete` guard
+            // (resolveWorktreeAndFinalize) is the single canonical safety net —
+            // it logs the failure and leaves `branchDeleted` false (accurate:
+            // the branch is a redundant tracking ref the GC prunes later) WITHOUT
+            // denying the terminal (the merge + push already landed).
+            await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
+          },
         };
 
+        // Always route through `gated-merge` mode: `runGatedMerge` merges ONLY a
+        // branch-complete run (behind the hard gate) and HOLDS every other
+        // outcome (partial/noop/dirty/failed) through the same non-merge tail —
+        // so failure/partial/cancelled runs keep the §7 guarantees (flush +
+        // summary, never merge, branch retained, never left `running`) while a
+        // clean, complete, gate-passing run lands on `main`.
         const result = await runFinalizer(
-          { mode: 'hold', runId: descriptor.id, project: projectSlug, product, branch },
+          { mode: 'gated-merge', runId: descriptor.id, project: projectSlug, product, branch, baseBranch },
           effects,
         );
 
@@ -618,20 +776,17 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // on an abort path (run died before finalize) it frees the fd that
       // finish() never reached.
       sink?.destroy();
-      // Always tear down the worktree if we created one — success, failure,
-      // cancel, generator-consumer-abort all flow through here. Mirrors
-      // gen-eval-loop-runner's finally cleanup at the same spot in the
-      // generator body.
-      //
-      // The finalizer's `removeWorktree` effect is intentionally inert in the
-      // live `hold`-mode path (this `finally` owns teardown for ALL paths,
-      // including the early-return setup failures where `runFinalizer` never
-      // ran). When `gated-merge` mode is activated, the finalizer will own
-      // teardown (it removes the worktree AFTER the merge/push, before deleting
-      // the branch) — at that point this unconditional `destroyWorktree` must be
-      // guarded by a `finalizerOwnedTeardown` flag set inside the real
-      // `removeWorktree` effect, or it will double-destroy the same worktree.
-      if (sandbox) {
+      // Tear down the worktree if we created one AND the finalizer didn't
+      // already own its teardown. Success, failure, cancel, and
+      // generator-consumer-abort all flow through here. In `gated-merge` mode
+      // the finalizer's `removeWorktree` effect removes the worktree (AFTER
+      // merge/push, BEFORE branch delete) and sets `finalizerOwnedTeardown`, so
+      // this `finally` must skip it or it would double-destroy. The flag stays
+      // false on every path where the finalizer never reached removeWorktree —
+      // early-return setup failures, consumer aborts, a crash mid-merge — so the
+      // outer `finally` still owns teardown there (and a removeWorktree that
+      // threw leaves the flag false too, letting this retry).
+      if (sandbox && !finalizerOwnedTeardown) {
         try {
           await destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
