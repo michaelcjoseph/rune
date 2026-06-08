@@ -51,30 +51,35 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Assumptions test: when PM judges a brief specified-enough, generated `spec.md` contains
+- [x] Assumptions test: when PM judges a brief specified-enough, generated `spec.md` contains
       an **Assumptions** section enumerating calls PM resolved.
-- [ ] Interview-gate test: underspecified brief enters explicit PM-interview /
+- [x] Interview-gate test: underspecified brief enters explicit PM-interview /
       blocked-on-human state rather than silent spec fabrication.
-- [ ] Spec-match test: PM reviews tech lead's tech spec against the product spec; mismatch is
+- [x] Spec-match test: PM reviews tech lead's tech spec against the product spec; mismatch is
       flagged, not passed.
-- [ ] Sizing test: tech lead emits task breakdown plus role-sizing and test-strategy metadata
+- [x] Sizing test: tech lead emits task breakdown plus role-sizing and test-strategy metadata
       for later work, including an explicit front-end / designer-needed flag per task.
-- [ ] Context-seed test: completed planning creates initial `context.md` with required
+- [x] Context-seed test: completed planning creates initial `context.md` with required
       sections.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed: both suites red on module-not-found.)
 
 ### Implementation
 
 > Sub-tasks below are coupled — ship them together in a single `/work` pass; planning is one
 > flow (PM → tech lead → PM review → context seed).
 
-- [ ] Wire PM and tech-lead role identities into the planner.
-- [ ] PM writes spec, emits assumptions, or blocks for interview.
-- [ ] Tech lead writes tech spec, task breakdown, role sizing, per-task test strategy, and
-      the explicit front-end/designer-needed flag.
-- [ ] PM reviews spec/tech-spec match before planning completes.
-- [ ] Seed `docs/projects/<project>/context.md` from spec, tasks, assumptions, and tech-lead
-      sizing.
+- [x] Wire PM and tech-lead role identities into the planner. (`planning-roles.ts` orchestration
+      + `planning-roles-wiring.ts` bridge to the Phase 1 charters. NOTE: the live Socratic
+      `planning-handler.ts` dispatch of these role prompts is staged for the Phase 3+ runtime
+      wiring — mirrors Phase 1 substrate → Phase 5 user-reachability. Test-plan §2 acceptance
+      (fixture decisions) is green.)
+- [x] PM writes spec, emits assumptions, or blocks for interview. (`runPlannerRoles` gate 1 +
+      `withAssumptionsSection`.)
+- [x] Tech lead writes tech spec, task breakdown, role sizing, per-task test strategy, and
+      the explicit front-end/designer-needed flag. (`SizedTask.testStrategy` + `designerNeeded`.)
+- [x] PM reviews spec/tech-spec match before planning completes. (`runPlannerRoles` gate 2.)
+- [x] Seed `docs/projects/<project>/context.md` from spec, tasks, assumptions, and tech-lead
+      sizing. (`seedProjectContext` / `project-context.ts`.)
 
 > **User-reachability:** the existing `/plan <product>` trigger (Telegram + cockpit Plan
 > button) now runs the role-enriched planner — a user can plan a project and observe the
