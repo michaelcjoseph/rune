@@ -360,13 +360,31 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### P1.6 — Failure / partial / cancelled path
 
-- [ ] Route failure/partial/cancelled runs through the finalizer: always reap the tree + flush
+- [x] Route failure/partial/cancelled runs through the finalizer: always reap the tree + flush
       transcript/summary, never merge, remove the worktree after preserving forensics OR mark
       explicit `blocked-on-human`; supervision ends terminal or intentionally blocked, never
-      quiet-pinging `running`; branch retention/deletion recorded.
-- [ ] If a transient "wrapping-up" state is needed, model it without widening the persisted status
+      quiet-pinging `running`; branch retention/deletion recorded. (Live `workRunApplier.apply()`
+      terminal sequence now routes through `runFinalizer` in `hold` mode — work-runner is the second
+      live finalizer consumer alongside recovery. Effects wrap the existing classify/flush/summary/
+      index logic; `removeWorktree`/`writeSupervisionTerminal`/`recordPhase` are inert in the live
+      path (the outer `finally` owns teardown for ALL paths incl. early-return setup failures;
+      mutations.ts owns the supervision write on the yielded terminal — no double-destroy, no
+      double-write). So every failure/partial/cancelled run flows through the shared machine that
+      guarantees flush+summary+index, never-merge, branch-retained, never-left-`running`. Reaping is
+      already owned by `streamProcess` (P0.2 watchdog + reapTree) upstream of the terminal. The
+      terminal event is read off `FinalizerResult.terminalEvent` (simplifier: removes the mutable
+      closure capture). Behavior-preserving — no merge-policy change; gated-merge ACTIVATION
+      (branch-complete → `gated-merge` mode + the merged-notification surface) is a deliberate,
+      separately-activated step, NOT enabled in this autonomous run since it turns on autonomous
+      merges to a real `main`. 3 live-surface §7 guard tests added to `work-runner.test.ts`; 79
+      work-runner+finalizer tests green, tsc unchanged, full suite no new regressions.)
+- [x] If a transient "wrapping-up" state is needed, model it without widening the persisted status
       union; only add a `MutationStatus`/supervision enum value if shown unavoidable, and then as a
-      deliberate cross-surface change (`supervision.ts`, `supervision-store.ts:25`).
+      deliberate cross-surface change (`supervision.ts`, `supervision-store.ts:25`). (No transient
+      state needed: `hold` mode reaches a terminal supervision status (`completed`/`failed`) directly
+      via the existing enum — mutations.ts flips status on the yielded terminal exactly as before. No
+      new `MutationStatus`/supervision value added. The "OR mark explicit `blocked-on-human`" option
+      in the requirement reuses the EXISTING persisted `blocked-on-human` status — no enum widening.)
 
 ## Phase 4 — Cross-mode regression suite (P2.8)
 

@@ -1558,4 +1558,105 @@ describe('workRunApplier', () => {
       expect(terminals[0].data.outcome).toBe('noop');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // P1.6 — the live failure/partial/cancelled terminal path flows through the
+  // shared finalizer (`runFinalizer` in `hold` mode). These are §7 guards at
+  // the LIVE surface (test-plan.md §7): a run that classifies `failed` always
+  // reaches a single terminal event (never left `running`), always flushes the
+  // transcript + writes summary + index (forensics durable on the failure
+  // path), never merges/pushes/deletes, and tears down the worktree while
+  // RETAINING the branch (no `git branch -d/-D`). The finalizer-module-level
+  // guarantees are pinned in work-run-finalizer.test.ts §7; these prove the
+  // live apply() path is actually wired through that machine.
+  // -------------------------------------------------------------------------
+  describe('apply — failure path routed through the finalizer (P1.6)', () => {
+    function descriptorFor(id: string) {
+      return {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+    }
+
+    /** Force a `failed` classification: computeWorkProduct's git throws, so
+     *  finalizeWorkRun takes the classification-error → `failed` branch.
+     *  Returns the recorded git-arg list — the replaced mockImplementation
+     *  bypasses makeGitStub's own `calls` array, so the branch-retention test
+     *  asserts against THIS list instead (otherwise the merge/push check would
+     *  be vacuous against an always-empty `gitStub.calls`). */
+    function makeFailingGit(): string[][] {
+      const calls: string[][] = [];
+      gitStub.stub.mockImplementation(async (args: string[]) => {
+        calls.push([...args]);
+        // The commit-poll's `git log` is best-effort (its own try/catch); the
+        // classifier's rev-list/diff/status throwing is what drives the failed
+        // outcome. Throw for everything so computeWorkProduct rejects.
+        throw new Error(`git unavailable: ${args.join(' ')}`);
+      });
+      return calls;
+    }
+
+    it('a failed run yields exactly ONE terminal `failed` event — never left running', async () => {
+      setupValidProject('06-webview');
+      makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-p16-failed'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminals = events.filter(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].kind).toBe('failed');
+      expect(terminals[0].data.outcome).toBe('failed');
+      // The run identity still rides the terminal (finalizer's classify effect
+      // augments it) so downstream surfaces can label the run.
+      expect(terminals[0].data.projectSlug).toBe('06-webview');
+    });
+
+    it('the failure path still flushes the transcript, writes summary.json + the index row', async () => {
+      setupValidProject('06-webview');
+      makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-p16-durable'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Forensics durable on the failure path: transcript flushed, summary +
+      // index written with the failed outcome.
+      expect(currentSink.finish).toHaveBeenCalledOnce();
+      expect(writeSummarySpy).toHaveBeenCalledOnce();
+      expect(writeSummarySpy.mock.calls[0]![1].outcome).toBe('failed');
+      expect(indexRows).toHaveLength(1);
+      expect(indexRows[0]!.row.outcome).toBe('failed');
+    });
+
+    it('the failure path tears down the worktree but RETAINS the branch (never merges/deletes)', async () => {
+      setupValidProject('06-webview');
+      const gitCalls = makeFailingGit();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-p16-branch'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Worktree torn down (the outer finally owns teardown).
+      expect(mockDestroyWorktree).toHaveBeenCalledOnce();
+      // git WAS invoked (the classifier's rev-list/diff/status) — but `hold`
+      // mode never merges, pushes, or deletes the branch, so none of those args
+      // ever reached the runner. Asserting against the recorded calls (not the
+      // bypassed gitStub.calls) makes this a real check, not a vacuous one.
+      expect(gitCalls.length).toBeGreaterThan(0);
+      const branchMutations = gitCalls.filter(args =>
+        args.includes('merge') ||
+        args.includes('push') ||
+        (args.includes('branch') && (args.includes('-d') || args.includes('-D'))),
+      );
+      expect(branchMutations).toHaveLength(0);
+    });
+  });
 });

@@ -42,8 +42,9 @@ const log = createLogger('work-run-finalizer');
 
 /** Read the typed `outcome` off a classified terminal event (mirrors
  *  applyOutcomeToDescriptor / buildSummary). Falls back to `failed` if absent
- *  (the classification-error path omits it). */
-function readOutcome(terminalEvent: MutationEvent): WorkOutcome {
+ *  (the classification-error path omits it). Exported so the live work-runner
+ *  reuses the single extraction instead of re-implementing the ternary. */
+export function readOutcome(terminalEvent: MutationEvent): WorkOutcome {
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
   return typeof data['outcome'] === 'string' ? (data['outcome'] as WorkOutcome) : 'failed';
 }
@@ -146,6 +147,11 @@ export type { GateFailReason, GateResult };
 
 export interface FinalizerResult {
   outcome: WorkOutcome;
+  /** The classified terminal MutationEvent (carrying outcome + workProduct +
+   *  exit on `data`). Surfaced so a caller that drives the finalizer — e.g. the
+   *  live work-runner generator — can yield it without a mutable
+   *  capture-via-closure of the `classify` effect's return. */
+  terminalEvent: MutationEvent;
   /** Terminal supervision status written (never `running`). */
   supervisionStatus: FinalizerSupervisionStatus;
   worktreeRemoved: boolean;
@@ -223,6 +229,7 @@ async function resolveWorktreeAndFinalize(
 
   return {
     outcome: readOutcome(terminalEvent),
+    terminalEvent,
     supervisionStatus,
     worktreeRemoved,
     merged,

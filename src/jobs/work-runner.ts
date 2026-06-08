@@ -9,6 +9,7 @@ import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTrans
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
+import { runFinalizer, readOutcome, type FinalizerEffects } from './work-run-finalizer.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
@@ -446,109 +447,159 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         const worktreeDir = sandbox.worktree;
         const baseSha = sandbox.baseSha ?? '';
 
-        const terminalEvent = await finalizeWorkRun({
-          mutationId: descriptor.id,
-          computeFacts: async () => ({
-            exit: streamResult.exit,
-            product: await computeWorkProduct({
-              runGit: deps.runGit,
-              cwd: worktreeDir,
-              baseSha,
-              branch,
-              baselineTasks: tasksContent,
-              finalTasks,
-            }),
-          }),
-          // Export the forensic evidence bundle into the per-run dir while the
-          // worktree still exists (the outer `finally` destroys it only after
-          // the terminal event yields). `facts` is null on the classification-
-          // error path — capture everything best-effort (treat as non-clean).
-          // finalizeWorkRun wraps this call in its own try/catch, so a
-          // forensics failure never denies the terminal event.
-          exportForensics: async (facts) => {
-            await deps.runForensics({
-              runGit: deps.runGit,
-              worktree: worktreeDir,
-              outDir: join(deps.workRunsDir, descriptor.id),
-              baseSha,
-              branch,
-              nonClean: facts ? facts.product.dirty || facts.product.untracked : true,
+        // Single end timestamp shared by summary.json + the index row. Captured
+        // inside the `classify` effect (when classification actually completes)
+        // rather than here, so it reflects the run's true end — not the instant
+        // BEFORE the multi-second git classification.
+        let endedAt = '';
+
+        // Route the terminal sequence through the shared, idempotent finalizer
+        // (project 15, P1.6) in `hold` mode: classify on work product → flush
+        // the durable transcript → write summary + index → resolve the worktree
+        // → terminal write. This is the SINGLE live terminal owner; the
+        // failure/partial/cancelled paths thereby flow through the same machine
+        // that recovery uses, with the §7 guarantees (always flush + summary,
+        // never merge, branch retained, never left `running`). `hold` mode never
+        // merges/pushes/deletes — a plain work-run stays "branch-complete, not
+        // yet on main", unchanged from before this refactor. The gated-merge
+        // policy path is a deliberate, separately-activated mode.
+        //
+        // Three effects are intentionally inert in the live apply() path:
+        //  - `removeWorktree`: the outer `finally` already owns worktree
+        //    teardown for ALL paths (early-return setup failures, consumer
+        //    aborts, and the normal terminal), so the finalizer does not also
+        //    remove it (avoids a double-destroy); classification + forensics run
+        //    inside `classify` while the worktree still exists.
+        //  - `writeSupervisionTerminal`: mutations.ts owns the terminal
+        //    supervision write, driven by the terminal event apply() yields
+        //    below — the finalizer must not double-write it here.
+        //  - `recordPhase` / `readLastPhase`: a fresh live run has no prior
+        //    attempt to resume from; durable-phase crash-resume is the recovery
+        //    path's concern (P0.4).
+        const effects: FinalizerEffects = {
+          classify: async () => {
+            const ev = await finalizeWorkRun({
+              mutationId: descriptor.id,
+              computeFacts: async () => ({
+                exit: streamResult.exit,
+                product: await computeWorkProduct({
+                  runGit: deps.runGit,
+                  cwd: worktreeDir,
+                  baseSha,
+                  branch,
+                  baselineTasks: tasksContent,
+                  finalTasks,
+                }),
+              }),
+              // Export the forensic evidence bundle into the per-run dir while
+              // the worktree still exists (the outer `finally` destroys it only
+              // after the terminal event yields). `facts` is null on the
+              // classification-error path — capture everything best-effort
+              // (treat as non-clean). finalizeWorkRun wraps this call in its own
+              // try/catch, so a forensics failure never denies the terminal event.
+              exportForensics: async (facts) => {
+                await deps.runForensics({
+                  runGit: deps.runGit,
+                  worktree: worktreeDir,
+                  outDir: join(deps.workRunsDir, descriptor.id),
+                  baseSha,
+                  branch,
+                  nonClean: facts ? facts.product.dirty || facts.product.untracked : true,
+                });
+              },
             });
+            // Augment the classified terminal event with the run's identity so
+            // downstream surfaces (TelegramSender's work-run formatter, the
+            // cockpit bus frame) can label it by project — finalizeWorkRun only
+            // knows the mutation id, not the slug.
+            const augmentedData = (ev.data ?? {}) as Record<string, unknown>;
+            augmentedData['projectSlug'] = projectSlug;
+            augmentedData['product'] = product;
+            ev.data = augmentedData;
+            // Classification is done — stamp the shared end timestamp now (the
+            // summary + index effects below close over it).
+            endedAt = new Date().toISOString();
+            return ev;
           },
-        });
-
-        // Augment the classified terminal event with the run's identity so
-        // downstream surfaces (TelegramSender's work-run formatter, the cockpit
-        // bus frame) can label it by project — finalizeWorkRun only knows the
-        // mutation id, not the slug.
-        const augmentedData = (terminalEvent.data ?? {}) as Record<string, unknown>;
-        augmentedData['projectSlug'] = projectSlug;
-        augmentedData['product'] = product;
-        terminalEvent.data = augmentedData;
-
-        // Flush + await the durable transcript's `finish` so every buffered
-        // event is on disk before summary.json / the terminal event. A flush
-        // failure is logged (and surfaced via the stderr tail upstream) but
-        // never denies the terminal event.
-        if (sink) {
-          try {
-            await sink.finish();
-          } catch (err) {
-            log.warn('work-runner: transcript flush failed', {
+          // Flush + await the durable transcript's `finish` so every buffered
+          // event is on disk before summary.json. A flush failure is logged (and
+          // surfaced via the stderr tail upstream) but never denies the terminal.
+          flushTranscript: async () => {
+            if (!sink) return;
+            try {
+              await sink.finish();
+            } catch (err) {
+              log.warn('work-runner: transcript flush failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Persist summary.json atomically (best-effort): a disk failure must
+          // not deny the terminal event, which is the classification's source of
+          // truth.
+          writeSummary: (ev) => {
+            const summary = buildSummary({
               id: descriptor.id,
-              error: (err as Error).message,
+              project: projectSlug,
+              product,
+              branch,
+              baseSha,
+              t0,
+              exit: streamResult.exit,
+              terminalEvent: ev,
+              sink,
+              workRunsDir: deps.workRunsDir,
+              endedAt,
             });
-          }
-        }
+            try {
+              deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
+            } catch (err) {
+              log.warn('work-runner: writeSummary failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Append the rolling index row (best-effort — a failure here must not
+          // deny the terminal event). The reader (readRecentIndex) tolerates a
+          // torn trailing line, so a crash mid-append is recoverable. The
+          // outcome is read off the classified terminal event (mirrors
+          // buildSummary's read).
+          appendIndexRow: (ev) => {
+            try {
+              deps.appendIndexRow(deps.workRunsIndexFile, {
+                id: descriptor.id,
+                project: projectSlug,
+                outcome: readOutcome(ev),
+                durationMs: streamResult.exit.durationMs,
+                startedAt: new Date(t0).toISOString(),
+                endedAt,
+              });
+            } catch (err) {
+              log.warn('work-runner: appendIndexRow failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          },
+          // Teardown owned by the outer `finally` (see note above).
+          removeWorktree: async () => {},
+          // Supervision owned by mutations.ts on the yielded terminal (see note).
+          writeSupervisionTerminal: () => {},
+          recordPhase: () => {},
+          readLastPhase: () => null,
+        };
 
-        // Single end timestamp shared by summary.json + the index row.
-        const endedAt = new Date().toISOString();
-        const summary = buildSummary({
-          id: descriptor.id,
-          project: projectSlug,
-          product,
-          branch,
-          baseSha,
-          t0,
-          exit: streamResult.exit,
-          terminalEvent,
-          sink,
-          workRunsDir: deps.workRunsDir,
-          endedAt,
-        });
+        const result = await runFinalizer(
+          { mode: 'hold', runId: descriptor.id, project: projectSlug, product, branch },
+          effects,
+        );
 
-        // Persist summary.json atomically (best-effort): a disk failure must not
-        // deny the terminal event, which is the classification's source of truth.
-        try {
-          deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
-        } catch (err) {
-          log.warn('work-runner: writeSummary failed', {
-            id: descriptor.id,
-            error: (err as Error).message,
-          });
-        }
-
-        // Append the rolling index row (best-effort — a failure here must not
-        // deny the terminal event). The reader (readRecentIndex) tolerates a
-        // torn trailing line, so a crash mid-append is recoverable. Reuses the
-        // already-classified `summary.outcome` rather than re-parsing the event.
-        try {
-          deps.appendIndexRow(deps.workRunsIndexFile, {
-            id: descriptor.id,
-            project: projectSlug,
-            outcome: summary.outcome,
-            durationMs: streamResult.exit.durationMs,
-            startedAt: new Date(t0).toISOString(),
-            endedAt,
-          });
-        } catch (err) {
-          log.warn('work-runner: appendIndexRow failed', {
-            id: descriptor.id,
-            error: (err as Error).message,
-          });
-        }
-
-        yield terminalEvent;
+        // The finalizer surfaces the classified terminal event on its result
+        // (`classify` always runs first in hold mode). Yield it so mutations.ts
+        // persists the mutation log + drives the terminal supervision write.
+        yield result.terminalEvent;
       } finally {
         unregisterActiveProcess(child);
         log.info('work-run finished', { projectSlug, durationMs: Date.now() - t0 });
@@ -563,6 +614,15 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // cancel, generator-consumer-abort all flow through here. Mirrors
       // gen-eval-loop-runner's finally cleanup at the same spot in the
       // generator body.
+      //
+      // The finalizer's `removeWorktree` effect is intentionally inert in the
+      // live `hold`-mode path (this `finally` owns teardown for ALL paths,
+      // including the early-return setup failures where `runFinalizer` never
+      // ran). When `gated-merge` mode is activated, the finalizer will own
+      // teardown (it removes the worktree AFTER the merge/push, before deleting
+      // the branch) — at that point this unconditional `destroyWorktree` must be
+      // guarded by a `finalizerOwnedTeardown` flag set inside the real
+      // `removeWorktree` effect, or it will double-destroy the same worktree.
       if (sandbox) {
         try {
           await destroyWorktree(sandbox, {
@@ -1011,7 +1071,7 @@ interface BuildSummaryOpts {
 function buildSummary(opts: BuildSummaryOpts): WorkRunSummary {
   const { id, project, product, branch, baseSha, t0, exit, terminalEvent, sink, workRunsDir, endedAt } = opts;
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
-  const outcome = (typeof data['outcome'] === 'string' ? data['outcome'] : 'failed') as WorkOutcome;
+  const outcome = readOutcome(terminalEvent);
   const reason = typeof data['reason'] === 'string' ? data['reason'] : '';
   const workProduct = (data['workProduct'] as WorkProductFacts | undefined) ?? EMPTY_WORK_PRODUCT;
   return {
