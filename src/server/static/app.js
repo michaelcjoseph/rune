@@ -679,11 +679,26 @@
             // action ride in data-* attributes (not inline onclick) so a registry-derived
             // slug never lands in a JS-in-HTML-attribute context; a delegated listener on
             // #cockpit-content dispatches the click.
+            // Carry the dispatch mode + fallback reason (project 14 Phase 5) on
+            // every action button so the Start confirmation can show whether
+            // Start will run orchestrated work or legacy `/work --auto`.
+            const dispatchMode = proj.dispatchMode || '';
+            const fallbackReason = proj.fallbackReason || '';
             const actions = (proj.actions || []).map(action =>
               `<button class="cockpit-action-btn" data-slug="${escHtml(proj.slug)}" ` +
                 `data-product="${escHtml(product.name)}" ` +
+                `data-dispatch-mode="${escHtml(dispatchMode)}" ` +
+                `data-fallback-reason="${escHtml(fallbackReason)}" ` +
                 `data-action="${escHtml(action)}">${escHtml(cockpitActionLabel(action))}</button>`,
             ).join('');
+            // A small mode chip on the card so the selected dispatch path is
+            // visible at a glance (not only inside the modal). Orchestrated →
+            // neutral; legacy fallback → amber with its reason as a tooltip.
+            const modeChip = dispatchMode
+              ? `<span class="cockpit-dispatch-mode ${dispatchMode === 'legacy' ? 'dispatch-legacy' : 'dispatch-orchestrated'}"` +
+                (fallbackReason ? ` title="${escHtml(fallbackReason)}"` : '') +
+                `>${dispatchMode === 'legacy' ? 'legacy /work' : 'orchestrated'}</span>`
+              : '';
             // C3.2: render the in-flight gen-eval-loop progress block when
             // proj.progress is present (round / failed evaluator / heartbeat /
             // models + Cancel). A non-parseable lastHeartbeatAt is treated as
@@ -702,6 +717,7 @@
                 `<span class="project-slug">${escHtml(proj.slug)}</span>` +
                 `<span class="status-pill ${statusPillClass(proj.lifecycleStatus)}">${escHtml(proj.lifecycleStatus)}</span>` +
                 run +
+                modeChip +
               `</div>` +
               taskProgressHtml +
               liveProgressHtml +
@@ -861,7 +877,7 @@
   // confirmation modal); enter-planning-mode dispatches `/plan <product>` through the chat
   // surface — the Planner conversation (Layer 1) runs in the chat panel until the dedicated
   // planning panel (Track C1) lands.
-  function cockpitAction(slug, action, product) {
+  function cockpitAction(slug, action, product, dispatchMode, fallbackReason) {
     if (action === 'enter-planning-mode') {
       // C1.3: open the dedicated planning panel rather than dispatching
       // `/plan <product>` through the chat plumbing. The panel is the user
@@ -879,10 +895,11 @@
       return;
     }
     if (action === 'start' || action === 'continue') {
-      // start / continue both dispatch /work --auto — explicit per-action confirmation first.
+      // start / continue dispatch a work run — explicit per-action confirmation first.
       // Carry the product through to the modal so the POST can name it
-      // (work-runner uses it to create the worktree against the right repo).
-      showConfirmModal(slug, product);
+      // (the runner uses it to create the worktree against the right repo), plus
+      // the resolved dispatch mode so the modal shows orchestrated vs legacy.
+      showConfirmModal(slug, product, dispatchMode, fallbackReason);
       return;
     }
     // Unknown future action — do nothing rather than mis-dispatching a work run.
@@ -914,7 +931,7 @@
     }
     const btn = e.target.closest('.cockpit-action-btn');
     if (!btn) return;
-    cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product);
+    cockpitAction(btn.dataset.slug, btn.dataset.action, btn.dataset.product, btn.dataset.dispatchMode, btn.dataset.fallbackReason);
   }
 
   // ---- Backlog drawer (09-expand-cockpit) ----
@@ -1263,11 +1280,27 @@
   let modalSlug = null;
   let modalProduct = null;
 
-  function showConfirmModal(slug, product) {
+  function showConfirmModal(slug, product, dispatchMode, fallbackReason) {
     modalSlug = slug;
     modalProduct = product || null;
     const modal = document.getElementById('confirm-modal');
     const slugEl = document.getElementById('modal-slug');
+    // Show the resolved dispatch mode (project 14 Phase 5) so the operator sees
+    // whether Start runs orchestrated work or legacy `/work --auto` — and a
+    // legacy fallback's reason — BEFORE confirming. Never a silent path.
+    const modeEl = document.getElementById('modal-dispatch-mode');
+    if (modeEl) {
+      if (dispatchMode === 'orchestrated') {
+        modeEl.textContent = 'Mode: orchestrated (product-team loop)';
+        modeEl.className = 'modal-dispatch-mode dispatch-orchestrated';
+      } else if (dispatchMode === 'legacy') {
+        modeEl.textContent = `Mode: legacy /work --auto · fallback: ${fallbackReason || 'unspecified'}`;
+        modeEl.className = 'modal-dispatch-mode dispatch-legacy';
+      } else {
+        modeEl.textContent = '';
+        modeEl.className = 'modal-dispatch-mode';
+      }
+    }
     if (modal && slugEl) {
       slugEl.textContent = slug;
       modal.classList.remove('hidden');
@@ -1301,7 +1334,7 @@
       if (data.error) {
         appendMessage('assistant', `<p>Error: ${escHtml(data.error)}</p>`);
       } else {
-        appendMessage('assistant', `<p>Started /work --auto for <strong>${escHtml(slug)}</strong> (id: ${escHtml(data.id)})</p>`);
+        appendMessage('assistant', `<p>Started work run for <strong>${escHtml(slug)}</strong> (id: ${escHtml(data.id)})</p>`);
         lastStateJson = ''; // bust poll cache
       }
     }).catch(() => {

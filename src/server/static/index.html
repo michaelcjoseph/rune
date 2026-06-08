@@ -81,10 +81,11 @@
     </main>
   </div>
 
-  <!-- Confirmation modal for /work --auto -->
+  <!-- Confirmation modal for a work run (orchestrated or legacy /work --auto) -->
   <div id="confirm-modal" class="modal-overlay hidden">
     <div class="modal-box">
-      <p>Run <strong>/work --auto</strong> on <strong id="modal-slug"></strong>?</p>
+      <p>Start a work run on <strong id="modal-slug"></strong>?</p>
+      <p id="modal-dispatch-mode" class="modal-dispatch-mode"></p>
       <p class="modal-warning">Edits and commits without further confirmation.</p>
       <div class="modal-actions">
         <button id="modal-run" class="modal-run-btn">Run</button>

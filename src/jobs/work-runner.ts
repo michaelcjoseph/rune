@@ -237,7 +237,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // cap=1 also keeps two runs from colliding on the same on-disk path.
     const runningForSlug = [...activeRuns.values()].filter(
       h =>
-        h.descriptor.kind === 'work-run' &&
+        // Count orchestrated-work too (project 14): both appliers use the SAME
+        // deterministic per-project worktree path, so a legacy run must not
+        // start while an orchestrated run owns that project's worktree.
+        (h.descriptor.kind === 'work-run' || h.descriptor.kind === 'orchestrated-work') &&
         (h.descriptor.payload as WorkRunPayload).projectSlug === projectSlug &&
         h.descriptor.status === 'running',
     );
@@ -245,8 +248,13 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       return { ok: false, reason: `already running for ${projectSlug}` };
     }
 
-    // Global cap
-    const globalRunning = [...activeRuns.values()].filter(h => h.descriptor.kind === 'work-run');
+    // Global cap. Count BOTH work-run and orchestrated-work runs (project 14):
+    // the two appliers share one global budget, and the orchestrated applier
+    // already counts both kinds — counting only 'work-run' here would let a
+    // legacy run slip past the cap while orchestrated runs fill it.
+    const globalRunning = [...activeRuns.values()].filter(
+      h => h.descriptor.kind === 'work-run' || h.descriptor.kind === 'orchestrated-work',
+    );
     if (globalRunning.length >= config.WORK_RUN_GLOBAL_CAP) {
       return { ok: false, reason: 'global work-run cap reached' };
     }

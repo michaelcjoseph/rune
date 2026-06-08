@@ -64,6 +64,13 @@ export interface ProductConfig {
    *  escalation-policy.json, and see `work-run-gate-runtime.ts` for the
    *  execFile/no-shell spawn requirement the P1.5 runtime MUST honor. */
   validationCommands?: string[];
+  /** Per-product orchestrated-work toggle (project 14, Phase 5). When set, it
+   *  OVERRIDES the global `ORCHESTRATED_WORK_ENABLED` default for this product's
+   *  work-run dispatch: `true` routes Start to the orchestrated applier, `false`
+   *  forces the legacy `/work --auto` applier. Absent ⇒ fall back to the global
+   *  default. Optional on the type so existing `ProductConfig` literals (and
+   *  products without the key) still compile / read cleanly. */
+  orchestratedMode?: boolean;
 }
 
 /** Pluggable git runner — production wraps `execFile('git', …)`, tests inject
@@ -162,6 +169,12 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       validationCommands: Array.isArray(entry['validationCommands'])
         ? (entry['validationCommands'] as unknown[]).map(String)
         : [],
+      // Per-product orchestrated-work toggle (project 14). Only a real boolean
+      // overrides the global default; anything else leaves it absent so the
+      // dispatch seam falls back to the global ORCHESTRATED_WORK_ENABLED.
+      ...(typeof entry['orchestratedMode'] === 'boolean'
+        ? { orchestratedMode: entry['orchestratedMode'] }
+        : {}),
     };
   }
   return out;

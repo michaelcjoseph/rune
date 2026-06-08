@@ -114,7 +114,27 @@ export interface CockpitProject {
    *  work-run store. Absent when the project has no recent work run. Distinct
    *  from `progress` (gen-eval-loop run state). */
   workRun?: WorkRunProjection;
+  /** Which applier the Start action will dispatch (project 14, Phase 5) —
+   *  `orchestrated` (the product-team loop) or `legacy` (`/work --auto`). The
+   *  cockpit Start surface shows this BEFORE launch so the mode is never a
+   *  surprise. Absent when the caller didn't supply a dispatch-mode map. */
+  dispatchMode?: DispatchMode;
+  /** On a `legacy` fallback, the recorded reason (e.g. "orchestrated mode
+   *  disabled") so a fallback run is truthful, never silently legacy. */
+  fallbackReason?: string;
 }
+
+/** A per-project dispatch-mode entry for the cockpit Start surface (project 14).
+ *  Sourced from the work-dispatch seam (`resolveWorkDispatch`). */
+export interface DispatchModeView {
+  mode: DispatchMode;
+  fallbackReason?: string;
+}
+
+/** The applier-selection mode — mirrors `DispatchMode` in src/intent/orch-config.ts.
+ *  Kept as a LOCAL union so the cockpit data model stays free of a runtime
+ *  import; the server bridge that feeds it imports the real type. */
+export type DispatchMode = 'orchestrated' | 'legacy';
 
 /** Open/done tallies for a product's backlog (09-expand-cockpit). Surfaced on the product
  *  card so the sidebar can render a `Bugs N · Ideas N · ⚠ N` one-liner without fetching the
@@ -207,6 +227,10 @@ export function buildCockpitView(
   // NOTE: keyed by product NAME (product-level), unlike the slug-keyed (project-level)
   // taskProgress/workRuns above — products have no slug, so name is the only product key.
   backlogCounts?: Record<string, BacklogCounts>,
+  // Project 14 Phase 5: slug-keyed dispatch-mode overlay (which applier Start
+  // will use) for the cockpit Start surface. Mirrors the taskProgress/workRuns
+  // slug-keyed pattern; absent slugs leave `dispatchMode` unset on the project.
+  dispatchModes?: Record<string, DispatchModeView>,
 ): CockpitView {
   if (registry === null) {
     return {
@@ -237,6 +261,14 @@ export function buildCockpitView(
       // Phase 5: work-run projection from the store when the caller supplied it.
       const wr = workRuns?.[project.slug];
       if (wr !== undefined) out.workRun = wr;
+      // Project 14 Phase 5: dispatch mode for the Start surface. A legacy entry
+      // carries its fallback reason so the card never reads as orchestrated by
+      // omission.
+      const dm = dispatchModes?.[project.slug];
+      if (dm !== undefined) {
+        out.dispatchMode = dm.mode;
+        if (dm.fallbackReason !== undefined) out.fallbackReason = dm.fallbackReason;
+      }
       return out;
     });
     const prod: CockpitProduct = {

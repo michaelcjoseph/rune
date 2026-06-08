@@ -30,6 +30,8 @@ import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
 import { createMutation, cancelMutation } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
+import { resolveWorkDispatch, readDispatchModeInput } from '../jobs/work-dispatch.js';
+import type { DispatchModeView } from '../intent/cockpit.js';
 import { cancelOp } from '../transport/in-flight.js';
 import { restartServer } from './restart.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
@@ -293,7 +295,34 @@ function handleApiCockpit(res: ServerResponse): void {
     }
   }
 
-  const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts);
+  // Per-project dispatch mode (project 14 Phase 5) so the Start surface shows
+  // whether Start will run orchestrated work or legacy `/work --auto` BEFORE
+  // launch (and a legacy fallback's reason). The toggle is per-PRODUCT, so every
+  // project under a product shares its resolution. Fail-soft: a read failure
+  // leaves the map empty and the card simply omits the mode chip.
+  let dispatchModes: Record<string, DispatchModeView> = {};
+  if (registry) {
+    try {
+      for (const product of registry.products) {
+        const resolution = resolveWorkDispatch(
+          readDispatchModeInput({
+            product: product.name,
+            productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+            globalEnabled: config.ORCHESTRATED_WORK_ENABLED,
+          }),
+        );
+        const entry: DispatchModeView = {
+          mode: resolution.mode,
+          ...(resolution.fallbackReason !== undefined ? { fallbackReason: resolution.fallbackReason } : {}),
+        };
+        for (const project of product.projects) dispatchModes[project.slug] = entry;
+      }
+    } catch (err) {
+      log.warn('handleApiCockpit: dispatch-mode resolution failed', { error: (err as Error).message });
+    }
+  }
+
+  const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts, dispatchModes);
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }
@@ -860,6 +889,7 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
  *  client strings leak into the loop's sensor signal. */
 const KNOWN_MUTATION_KINDS: ReadonlySet<MutationKind> = new Set([
   'work-run',
+  'orchestrated-work',
   'gen-eval-loop',
   'project-edit',
   'proposal-action',
@@ -905,8 +935,33 @@ async function handleApiMutationsCreate(req: IncomingMessage, res: ServerRespons
     logWebviewAction('mutation-create', 'failure', 'reason=missing-kind');
     return;
   }
-  const safeKind = safeMutationKind(body.kind);
-  const result = await createMutation(body.kind as MutationKind, body.payload ?? {}, 'webview');
+  // Project 14 Phase 5 dispatch seam: a `work-run` Start goes through the
+  // orchestrated-vs-legacy toggle. When orchestrated mode is selected the
+  // request is re-routed to the `orchestrated-work` applier; otherwise it stays
+  // on the legacy `/work --auto` applier as the RECORDED fallback. The resolved
+  // mode + any fallback reason is stamped onto the payload so the run record and
+  // cockpit expose which path ran (never a silent legacy masquerade).
+  let dispatchKind = body.kind as MutationKind;
+  let dispatchPayload: Record<string, unknown> = body.payload ?? {};
+  if (dispatchKind === 'work-run') {
+    const product = typeof dispatchPayload['product'] === 'string' ? dispatchPayload['product'] : 'jarvis';
+    const resolution = resolveWorkDispatch(
+      readDispatchModeInput({
+        product,
+        productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+        globalEnabled: config.ORCHESTRATED_WORK_ENABLED,
+      }),
+    );
+    dispatchKind = resolution.kind;
+    dispatchPayload = {
+      ...dispatchPayload,
+      dispatchMode: resolution.mode,
+      ...(resolution.fallbackReason !== undefined ? { fallbackReason: resolution.fallbackReason } : {}),
+    };
+  }
+
+  const safeKind = safeMutationKind(dispatchKind);
+  const result = await createMutation(dispatchKind, dispatchPayload, 'webview');
   if (!result.ok) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: result.reason }));

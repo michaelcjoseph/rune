@@ -204,11 +204,13 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Finalizer-unavailable test: if the real finalizer is unavailable, Jarvis records the
       handoff payload and stops branch-complete/blocked rather than self-merging.
       (`project-orchestrator.test.ts`)
-- [ ] Legacy fallback test: when orchestrated mode is disabled, legacy `/work --auto` dispatch
-      still works and records fallback. (Written with the mutation-applier dispatch seam below.)
-- [ ] Start-mode visibility test: cockpit Start/confirmation copy shows whether the selected
+- [x] Legacy fallback test: when orchestrated mode is disabled, legacy `/work --auto` dispatch
+      still works and records fallback. (`work-dispatch.test.ts` resolveWorkDispatch legacy +
+      `webview.test.ts` "routes a work-run Start to the LEGACY applier and records the fallback".)
+- [x] Start-mode visibility test: cockpit Start/confirmation copy shows whether the selected
       dispatch mode is orchestrated or legacy fallback, and fallback runs expose the reason.
-      (Written with the cockpit trigger-surface wiring below.)
+      (`cockpit-dispatch-mode.test.ts` surfaces dispatchMode/fallbackReason on the project card;
+      `webview.test.ts` asserts the resolved mode is stamped on the payload.)
 - [x] End-to-end fixture test: deterministic fixture project runs through at least two tasks,
       context update, finalizer handoff, and terminal outcome with injected spawners/readers.
       (`project-orchestrator.test.ts`)
@@ -229,20 +231,33 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `decideAttemptOutcome`.)
 - [x] Wire completed project runs into the Project 15 finalizer. (`finalize` adapter →
       `runFinalizerHandoff`; held when unavailable, never self-merges.)
-- [ ] Register the orchestrated loop as a mutation applier (new kind or a toggle on
-      `work-run`) so it dispatches through the existing pipeline.
-- [ ] **Trigger surface:** route the cockpit per-project start action (`app.js` confirm-modal
+- [x] Register the orchestrated loop as a mutation applier (new kind or a toggle on
+      `work-run`) so it dispatches through the existing pipeline. (New `orchestrated-work` kind
+      + `orchestratedWorkApplier` in `src/jobs/orchestrated-work-runner.ts`, registered in
+      `src/index.ts`; drives `runProjectOrchestration` over real fs/git/finalizer-held effects.)
+- [x] **Trigger surface:** route the cockpit per-project start action (`app.js` confirm-modal
       → `POST /api/mutations`) and the Phase-3 rollout/fallback toggle to the orchestrated
       applier; legacy `/work --auto` stays reachable as recorded fallback. No new button.
-- [ ] **Discovery surface:** expose the selected dispatch mode on the existing cockpit project
-      card or Start confirmation, and show fallback reason on fallback runs.
-- [ ] **Agent/operator docs:** document the orchestrated-vs-legacy toggle and the selected
+      (`src/jobs/work-dispatch.ts` seam + `handleApiMutationsCreate` substitutes the kind by the
+      `ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode` toggle; fallback reason
+      stamped on the payload. No new button — same Start action.)
+- [x] **Discovery surface:** expose the selected dispatch mode on the existing cockpit project
+      card or Start confirmation, and show fallback reason on fallback runs. (`CockpitProject`
+      `dispatchMode`/`fallbackReason` via `buildCockpitView`'s 6th arg, fed by `handleApiCockpit`;
+      app.js renders a card chip + a mode line in the Start confirmation modal.)
+- [x] **Agent/operator docs:** document the orchestrated-vs-legacy toggle and the selected
       mutation contract in `CLAUDE.md` (run via docs-sync) so future agents know the path
-      exists and how to select it.
+      exists and how to select it. (docs-sync: mutation-pipeline bullet, jobs tree, env vars.)
 - [x] Create deterministic fixture spawners/readers for the complete lifecycle. (In-memory
       `Harness` in `project-orchestrator.test.ts` injects all reads/workflow/closeout/finalize
       effects — the loop runs end-to-end with no git, disk, or live model call.)
-- [ ] Optionally run a live real-task smoke check after automated suites pass.
+- [ ] Optionally run a live real-task smoke check after automated suites pass. (OPTIONAL —
+      not required acceptance per spec §"What's shipping" and test-plan §5 "Low (smoke)". A
+      meaningful live smoke depends on the production `runTaskWorkflow` role-spawn binding,
+      which is deferred: today the production default returns a durable `blocked` with a
+      truthful reason, so an orchestrated run is explicit/recorded but does not yet drive live
+      role models. The required user-reachability proof — dispatch seam + mode visibility — is
+      green above. Promote when the live role-spawn binding lands.)
 
 > **User-reachability:** YES — after this phase a user clicks Start on a cockpit project card
 > (or the chosen toggle path), the orchestrated loop runs, and they observe run status /

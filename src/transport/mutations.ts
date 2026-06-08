@@ -79,6 +79,11 @@ function safeUpsertRun(run: SupervisedRun): void {
 
 export type MutationKind =
   | 'work-run'
+  // Project 14 Phase 5: the Jarvis-owned multi-task orchestration loop. The
+  // cockpit Start action dispatches this kind when the orchestrated-work toggle
+  // selects orchestrated mode (see src/jobs/work-dispatch.ts); otherwise it
+  // dispatches the legacy `work-run` applier as the recorded fallback.
+  | 'orchestrated-work'
   | 'gen-eval-loop'
   | 'project-edit'
   | 'proposal-action'

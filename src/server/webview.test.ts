@@ -44,6 +44,11 @@ const mockConfig = {
   JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   IS_PRODUCTION: false as boolean,
   LAUNCHD_LABEL: 'com.jarvis.daemon',
+  // Project 14 Phase 5 dispatch seam. PRODUCTS_CONFIG_FILE points at a path that
+  // doesn't exist so readDispatchModeInput's per-product read fails and falls
+  // back to the global toggle — which the dispatch tests below flip per-case.
+  PRODUCTS_CONFIG_FILE: '/test/products.json',
+  ORCHESTRATED_WORK_ENABLED: false as boolean,
 };
 
 // restartServer is spawned via setTimeout by the restart endpoint; mock it so
@@ -725,6 +730,47 @@ describe('server/webview', () => {
         body: JSON.stringify({ kind: 'work-run', payload: {} }),
       });
       expect(res.status).toBe(401);
+    });
+
+    // --- Project 14 Phase 5 dispatch seam (verified without a live run) ---
+
+    it('routes a work-run Start to the LEGACY applier and records the fallback when orchestrated mode is off', async () => {
+      mockConfig.ORCHESTRATED_WORK_ENABLED = false;
+      mockCreateMutation.mockResolvedValue({ ok: true, descriptor: { id: 'm1', kind: 'work-run', status: 'pending' } });
+
+      await makeRequest(port, '/api/mutations', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'jarvis' } }),
+      });
+
+      expect(mockCreateMutation).toHaveBeenCalledTimes(1);
+      const [kind, payload] = mockCreateMutation.mock.calls[0]!;
+      expect(kind).toBe('work-run'); // legacy applier
+      expect(payload.dispatchMode).toBe('legacy');
+      expect(payload.fallbackReason).toBeTruthy(); // never a silent fallback
+    });
+
+    it('routes a work-run Start to the ORCHESTRATED applier when orchestrated mode is on', async () => {
+      mockConfig.ORCHESTRATED_WORK_ENABLED = true;
+      // try/finally so a failed assertion can't strand the global toggle `true`
+      // for every subsequent test (vi.clearAllMocks doesn't reset mockConfig).
+      try {
+        mockCreateMutation.mockResolvedValue({ ok: true, descriptor: { id: 'm2', kind: 'orchestrated-work', status: 'pending' } });
+
+        await makeRequest(port, '/api/mutations', {
+          method: 'POST',
+          headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'jarvis' } }),
+        });
+
+        const [kind, payload] = mockCreateMutation.mock.calls[0]!;
+        expect(kind).toBe('orchestrated-work');
+        expect(payload.dispatchMode).toBe('orchestrated');
+        expect(payload.fallbackReason).toBeUndefined();
+      } finally {
+        mockConfig.ORCHESTRATED_WORK_ENABLED = false; // restore for other tests
+      }
     });
   });
 

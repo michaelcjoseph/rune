@@ -250,6 +250,16 @@ const config = {
   WORK_RUN_PER_PROJECT_CAP: parseNumericEnv('WORK_RUN_PER_PROJECT_CAP', 1, { min: 1, integer: true }),
   WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 2, { min: 1, integer: true }),
 
+  /** Global default for the orchestrated-work dispatch toggle (project 14,
+   *  Phase 5). When true, the cockpit Start action dispatches the Jarvis-owned
+   *  orchestrated loop (`orchestrated-work` applier); when false (the default),
+   *  it dispatches the legacy `/work --auto` (`work-run`) applier. A per-product
+   *  `orchestratedMode` in `policies/products.json` overrides this default for
+   *  that product. Default OFF so existing Start behavior is unchanged until an
+   *  operator opts in — the orchestrated path stays the recorded, explicit
+   *  choice rather than a silent rollout. */
+  ORCHESTRATED_WORK_ENABLED: process.env['ORCHESTRATED_WORK_ENABLED'] === 'true',
+
   /** Retention caps for per-run work-run artifacts (transcripts + forensics +
    *  branch refs), enforced by `gcWorkRuns` (project 11 Phase 3). The prunable
    *  (terminal, unprotected) set is GC'd oldest-first to stay within BOTH a run

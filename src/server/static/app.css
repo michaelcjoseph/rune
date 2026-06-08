@@ -353,6 +353,12 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   display: flex; flex-direction: column; gap: .75rem;
 }
 .modal-warning { font-size: .8rem; color: var(--text2); }
+/* Project 14 Phase 5: dispatch-mode visibility (modal line + card chip). */
+.modal-dispatch-mode { font-size: .8rem; font-weight: 600; margin: 0 0 .3rem; }
+.modal-dispatch-mode:empty { display: none; }
+.cockpit-dispatch-mode { font-size: .62rem; padding: .06rem .3rem; border-radius: 3px; font-weight: 600; white-space: nowrap; margin-left: .25rem; }
+.dispatch-orchestrated { background: #1a2a3a; color: #79b8ff; }
+.dispatch-legacy { background: #2a2418; color: #e0a040; }
 .modal-actions { display: flex; gap: .5rem; justify-content: flex-end; }
 .modal-run-btn {
   background: var(--accent); color: #fff; border: none;
