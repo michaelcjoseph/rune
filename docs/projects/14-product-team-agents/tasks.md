@@ -386,8 +386,14 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       untrusted→LLM→commit paths → queued in `TODO(propagation)`; L3 don't background a
       state-restoring command → already propagated to the `git-stash-pop…` auto-memory. The 2
       agent-lessons closeout assertions pass.)
-- [ ] Run and record the final completion check that includes the Phase 5 user-triggerable
-      dispatch and mode-visibility tests.
+- [x] Run and record the final completion check that includes the Phase 5 user-triggerable
+      dispatch and mode-visibility tests. (Recorded 2026-06-08: the Phase 5 dispatch seam +
+      cockpit mode-visibility + the closeout suite pass — `work-dispatch.test.ts`,
+      `cockpit-dispatch-mode.test.ts`, `webview.test.ts`, `project-14-closeout.test.ts` =
+      71/71 green; full suite 3608 passed, only 2 pre-existing/unrelated failures
+      (`claude.test.ts` WORKSPACE_DIR env-passthrough, `ideas-promoted.test.ts` vault content)
+      that predate this project and touch none of its files. The Phase 5 user-reachable
+      orchestrated dispatch path stayed green through closeout.)
 
 > **User-reachability:** no new runtime surface; this is the closeout guard that proves the
 > user-reachable Phase 5 path stayed green before the project is marked done.
