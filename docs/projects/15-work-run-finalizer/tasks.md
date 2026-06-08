@@ -404,15 +404,27 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write a live-wiring test in `work-runner.test.ts`: a branch-complete terminal routes through
+- [x] Write a live-wiring test in `work-runner.test.ts`: a branch-complete terminal routes through
       `runFinalizer({ mode: 'gated-merge' })` with the real injected effects, and the outer `finally`
       does NOT double-destroy the worktree once the finalizer owns teardown (assert a single teardown
-      via the `finalizerOwnedTeardown` guard) — test-plan.md §6/§8.
-- [ ] Write effect-construction tests proving the gate effect is `runGate` wrapped in
+      via the `finalizerOwnedTeardown` guard) — test-plan.md §6/§8. (Added the "apply — branch-complete
+      routed through the gated-merge finalizer (Phase 3.5)" describe to `work-runner.test.ts`: the
+      mode-`gated-merge`+baseBranch test is RED, the single-teardown test is a green regression guard.
+      Spy-wraps the real `runFinalizer` via a partial module mock so the existing hold-mode tests keep
+      real behavior.)
+- [x] Write effect-construction tests proving the gate effect is `runGate` wrapped in
       `withBaseBranchLock(product, baseBranch)`, merge/push/delete are the decomposed `realMergeBranch`
       git steps (push BEFORE delete), and `recordPhase`/`readLastPhase` persist to a durable per-run
-      phase store that P0.4 recovery can resume from in `gated-merge` mode.
-- [ ] Confirm red before implementation.
+      phase store that P0.4 recovery can resume from in `gated-merge` mode. (3 RED tests: gate wrapped
+      in withBaseBranchLock (mocks `work-run-gate-runtime`/`work-run-merge-lock`), merge→push→delete
+      ordering via the recording `deps.runGit` stub with the decomposed effects pinned as separate
+      functions, and phases recorded/read through the new optional `recordWorkRunPhase`/
+      `readLastWorkRunPhase` seam on `WorkRunRuntimeDeps` keyed by run id. Added the seam scaffold +
+      `getProductConfig` baseBranch source.)
+- [x] Confirm red before implementation. (4 Phase 3.5 tests RED for the right reason — clean
+      assertion failures: `'hold' ≠ 'gated-merge'`, `effects.gate undefined`, `mergeIdx -1`,
+      `recordWorkRunPhase not called` — no syntax/import/crash errors; 49 existing + green-guard tests
+      pass, my files typecheck clean, full suite shows no new regressions.)
 
 ### Wiring
 

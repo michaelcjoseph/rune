@@ -86,10 +86,49 @@ vi.mock('./work-run-gc-runner.js', () => ({
 // their own git runner via the runtime seam regardless).
 const mockCreateWorktree = vi.fn();
 const mockDestroyWorktree = vi.fn();
+// `getProductConfig` is the Phase 3.5 baseBranch source — the gated-merge wiring
+// reads `getProductConfig(product, …).baseBranch` to know what `main` the run
+// would land on. Inert until that wiring imports it (hold mode never reads it).
+const mockGetProductConfig = vi.fn(() => ({
+  product: 'jarvis',
+  repoPath: '/test/repo/jarvis',
+  baseBranch: 'main',
+  egressAllowlist: [],
+  validationCommands: ['npm run build', 'npm test'],
+}));
 vi.mock('./sandbox-runtime.js', () => ({
   createWorktree: mockCreateWorktree,
   destroyWorktree: mockDestroyWorktree,
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
+  getProductConfig: mockGetProductConfig,
+}));
+
+// --- Phase 3.5 (live gated-merge activation) test seams ---
+
+// Spy-wrap the REAL runFinalizer so the existing hold-mode tests keep real
+// behavior (the wrap calls through) while the Phase 3.5 live-wiring tests assert
+// the MODE and the effects apply() constructs. The `vi.hoisted` holder lets the
+// (hoisted) vi.mock factory publish the spy back to the test body.
+const finalizerHarness = vi.hoisted(() => ({ runFinalizerSpy: undefined as any }));
+vi.mock('./work-run-finalizer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./work-run-finalizer.js')>();
+  finalizerHarness.runFinalizerSpy = vi.fn(actual.runFinalizer);
+  return { ...actual, runFinalizer: finalizerHarness.runFinalizerSpy };
+});
+
+// Gate runtime + per-base-branch merge lock. work-runner does NOT import these
+// in `hold` mode, so the mocks sit inert until the Phase 3.5 gated-merge wiring
+// imports them. Defaults: a GREEN gate + a pass-through lock, so the happy-path
+// wiring test goes green once apply() composes the gate effect as
+// `gate = () => withBaseBranchLock(product, baseBranch, () => runGate(...))`.
+const mockRunGate = vi.fn(async () => ({ ok: true }));
+vi.mock('./work-run-gate-runtime.js', () => ({ runGate: mockRunGate }));
+const mockWithBaseBranchLock = vi.fn(
+  async (_product: string, _base: string, fn: () => unknown) => fn(),
+);
+vi.mock('./work-run-merge-lock.js', () => ({
+  withBaseBranchLock: mockWithBaseBranchLock,
+  baseBranchLockKey: (p: string, b: string) => `${p}:${b}`,
 }));
 
 const FAKE_WORKTREE = '/test/worktrees/jarvis/06-webview';
@@ -1657,6 +1696,183 @@ describe('workRunApplier', () => {
         (args.includes('branch') && (args.includes('-d') || args.includes('-D'))),
       );
       expect(branchMutations).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 3.5 — live gated-merge activation (test-plan.md §6/§8).
+  //
+  // These are WRITE-FIRST tests for the gated-merge wiring (tasks.md Phase 3.5
+  // "Wiring"). They are RED against the current `hold`-mode live path and turn
+  // GREEN once apply() routes a branch-complete terminal through
+  // `runFinalizer({ mode: 'gated-merge', baseBranch })` with the real injected
+  // effects. The finalizer-module-level gated-merge behavior is already pinned
+  // in work-run-finalizer.test.ts; these prove the LIVE work-runner surface is
+  // actually wired through that machine.
+  //
+  // Contract the wiring tasks implement (so these tests author the seam):
+  //   - baseBranch is read from `getProductConfig(product, …).baseBranch`.
+  //   - mode is `gated-merge` for a branch-complete outcome (runGatedMerge holds
+  //     every other outcome, so non-branch-complete runs never merge).
+  //   - gate effect = `() => withBaseBranchLock(product, baseBranch, () =>
+  //     runGate({…}))` — the lock wraps the gate (req 14).
+  //   - merge/push/delete effects = decomposed `realMergeBranch` git steps run
+  //     through `deps.runGit` (so they are observable here), push BEFORE delete.
+  //   - removeWorktree (real) owns teardown and sets a `finalizerOwnedTeardown`
+  //     flag so the outer `finally` does NOT double-destroy the worktree.
+  //   - recordPhase/readLastPhase are backed by the durable per-run phase store
+  //     seam (`deps.recordWorkRunPhase` / `deps.readLastWorkRunPhase`) that P0.4
+  //     recovery reads to resume mid-gated-merge.
+  // -------------------------------------------------------------------------
+  describe('apply — branch-complete routed through the gated-merge finalizer (Phase 3.5)', () => {
+    function descriptorFor(id: string, product?: string) {
+      return {
+        id,
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview', ...(product ? { product } : {}) },
+        status: 'running',
+      } as any;
+    }
+
+    /** Set up a `branch-complete` classification: a commit on the branch
+     *  (rev-list returns a sha), a clean tree (status empty), and all baseline
+     *  tasks checked (tasksRemaining 0). Returns a fresh RECORDING git stub
+     *  injected as the runtime `runGit` — the gated-merge wiring routes
+     *  merge/push/delete through `deps.runGit`, so those land in `gitCalls`
+     *  here — plus phase-store spies injected through the seam.
+     *
+     *  Layering note: must be called AFTER `beforeEach` has injected the base
+     *  runtime deps — it overlays only `runGit` + the phase-store spies onto the
+     *  beforeEach-injected object (the merge-partial seam), leaving
+     *  writeSummary/appendIndexRow/createSink/runForensics in place. */
+    function setupBranchComplete() {
+      setupValidProject('06-webview');
+      // Override tasks.md (baseline read at spawn AND final read post-run) to
+      // all-checked so `tasksRemaining` is 0 → with a commit → branch-complete.
+      const liveTasks = join(PROJECTS_DIR, '06-webview', 'tasks.md');
+      const wtTasks = join(FAKE_WORKTREE, 'docs', 'projects', '06-webview', 'tasks.md');
+      mockReadFileSync.mockImplementation((p: string) => {
+        if (p.endsWith('spec.md')) return '# Spec\n\nDo something.';
+        if (p === liveTasks || p === wtTasks) return '## Phase A\n\n- [x] Task 1\n- [x] Task 2\n';
+        return '';
+      });
+      const gitCalls: string[][] = [];
+      const stub = vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        // A commit on the branch for the classifier; every other git arg
+        // (status/diff/merge/push/branch -d) returns success and is recorded.
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'abc123def456\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+      const recordWorkRunPhase = vi.fn();
+      const readLastWorkRunPhase = vi.fn(() => null);
+      __setWorkRunRuntimeForTest({
+        runGit: stub as never,
+        recordWorkRunPhase: recordWorkRunPhase as never,
+        readLastWorkRunPhase: readLastWorkRunPhase as never,
+      });
+      return { gitCalls, stub, recordWorkRunPhase, readLastWorkRunPhase };
+    }
+
+    it('routes a branch-complete terminal through runFinalizer({ mode: "gated-merge", baseBranch }) (RED until wiring)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-mode'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      expect(finalizerHarness.runFinalizerSpy).toHaveBeenCalled();
+      const input = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![0];
+      // Currently `hold` → RED; the wiring flips a branch-complete run to gated-merge.
+      expect(input.mode).toBe('gated-merge');
+      // baseBranch sourced from getProductConfig(product).baseBranch.
+      expect(input.baseBranch).toBe('main');
+    });
+
+    it('tears the worktree down exactly once — the finalizer owns teardown, the outer finally does not double-destroy', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-teardown'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // A single teardown via the `finalizerOwnedTeardown` guard: green now (hold
+      // mode: outer-finally-only) and must STAY a single destroy after the wiring
+      // moves teardown ownership into the finalizer's removeWorktree effect.
+      expect(mockDestroyWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it('constructs the gate effect as runGate wrapped in withBaseBranchLock(product, baseBranch) (RED until wiring)', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-gate'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      const effects = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![1];
+      // Hold mode leaves the gated-merge effects undefined → RED.
+      expect(typeof effects.gate).toBe('function');
+      // The real gated-merge finalizer the wiring routes through invokes the gate
+      // effect, which acquires the per-product/per-base-branch lock and runs the
+      // gate inside it.
+      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('jarvis', 'main', expect.any(Function));
+      expect(mockRunGate).toHaveBeenCalled();
+    });
+
+    it('merges, pushes, then deletes the branch — push BEFORE delete (decomposed realMergeBranch git steps) (RED until wiring)', async () => {
+      const { gitCalls } = setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-merge'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Decomposed effects: merge/push/delete are SEPARATE FinalizerEffects
+      // functions (not one combined step), so push-before-delete crash-resume
+      // holds. Hold mode leaves them undefined → RED.
+      const effects = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![1];
+      expect(typeof effects.mergeBranch).toBe('function');
+      expect(typeof effects.pushBranch).toBe('function');
+      expect(typeof effects.deleteBranch).toBe('function');
+
+      const mergeIdx = gitCalls.findIndex(a => a.includes('merge'));
+      const pushIdx = gitCalls.findIndex(a => a.includes('push'));
+      const deleteIdx = gitCalls.findIndex(
+        a => a.includes('branch') && (a.includes('-d') || a.includes('-D')),
+      );
+      // Hold mode never merges/pushes/deletes → all -1 → RED.
+      expect(mergeIdx).toBeGreaterThanOrEqual(0);
+      expect(pushIdx).toBeGreaterThanOrEqual(0);
+      expect(deleteIdx).toBeGreaterThanOrEqual(0);
+      // Ordering: merge → push → delete (push before delete: origin is the
+      // durable backup before the local branch ref is removed).
+      expect(mergeIdx).toBeLessThan(pushIdx);
+      expect(pushIdx).toBeLessThan(deleteIdx);
+    });
+
+    it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {
+      const { recordWorkRunPhase, readLastWorkRunPhase } = setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-phases'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      // Live hold path passes a no-op recordPhase/readLastPhase → the durable
+      // store is never touched → RED. After wiring, the effects are backed by the
+      // per-run phase store seam, keyed by the run id so recovery reads the same
+      // run's phases for a mid-gated-merge resume.
+      expect(recordWorkRunPhase).toHaveBeenCalled();
+      expect(recordWorkRunPhase.mock.calls.every(c => c[0] === 'mut-gm-phases')).toBe(true);
+      // The right phases reach the store, not just "something" — `classified`
+      // (prologue) and `merged-not-pushed` (the push-before-delete checkpoint a
+      // mid-merge crash resumes from).
+      const phases = recordWorkRunPhase.mock.calls.map(c => c[1]);
+      expect(phases).toEqual(expect.arrayContaining(['classified', 'merged-not-pushed']));
+      expect(readLastWorkRunPhase).toHaveBeenCalledWith('mut-gm-phases');
     });
   });
 });

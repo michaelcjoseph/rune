@@ -9,7 +9,7 @@ import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTrans
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
-import { runFinalizer, readOutcome, type FinalizerEffects } from './work-run-finalizer.js';
+import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase } from './work-run-finalizer.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
@@ -67,6 +67,14 @@ export interface WorkRunRuntimeDeps {
   /** Export the forensic evidence bundle into the per-run dir (best-effort,
    *  before the terminal event, while the worktree still exists). */
   runForensics: (opts: ExportForensicsOpts) => Promise<ForensicsResult>;
+  /** P1.5 / Phase 3.5 (project 15) — gated-merge durable per-run finalize-phase
+   *  store. The live gated-merge wiring records each finalizer phase here so a
+   *  crash mid-merge is resumable; `recovery-finalize-runner` reads the last
+   *  phase to resume in `gated-merge` mode off the SAME store. OPTIONAL until the
+   *  gated-merge wiring lands — `hold` mode records no phase, so the live path
+   *  leaves these unset today. */
+  recordWorkRunPhase?: (runId: string, phase: FinalizerPhase) => void;
+  readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
 }
 
 /** Production defaults — real git, real config dir, real sink + store. */
