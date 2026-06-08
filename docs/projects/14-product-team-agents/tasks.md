@@ -294,7 +294,11 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Implementation
 
-- [ ] Define the feedback record schema and injected/configured reader seam.
+- [x] Define the feedback record schema and injected/configured reader seam.
+      (`src/intent/feedback-record.ts`: `FeedbackRecord` type, `parseFeedbackRecord`
+      fail-closed validator with durable `FeedbackSkipReason` per field, `VALID_SLUG`
+      + ISO-8601 + trust-boundary length-cap guards, and the injected `FeedbackReader`
+      seam. 29/29 in `feedback-record.test.ts` green.)
 - [ ] Nightly job detects valid machine-readable feedback records and records malformed
       entries as skipped with reason.
 - [ ] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.

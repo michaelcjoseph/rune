@@ -182,6 +182,22 @@ describe('feedback-record — parseFeedbackRecord (missing required fields)', ()
     expect(result.reason).toBe('missing-created-at');
   });
 
+  it.each([
+    ['a non-date string', 'banana'],
+    ['an impossible date', '2099-99-99T99:99:99Z'],
+    ['a free-form phrase', 'last tuesday'],
+  ])('non-ISO createdAt (%s) → invalid-created-at', (_label, value) => {
+    const result = parseFeedbackRecord({ ...fullRaw(), createdAt: value });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('invalid-created-at');
+  });
+
+  it('accepts a date-only ISO createdAt (YYYY-MM-DD)', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), createdAt: '2026-06-08' });
+    expect(result.ok).toBe(true);
+  });
+
   it('missing issueSummary → missing-issue-summary', () => {
     const { issueSummary: _omit, ...rest } = fullRaw();
     const result = parseFeedbackRecord(rest);
@@ -217,9 +233,50 @@ describe('feedback-record — parseFeedbackRecord (missing required fields)', ()
       'invalid-project-slug',
       'missing-source',
       'missing-created-at',
+      'invalid-created-at',
       'missing-issue-summary',
       'missing-evidence',
+      'field-too-long',
     ];
     expect(VALID_REASONS).toContain(result.reason);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseFeedbackRecord — trust-boundary length caps → 'field-too-long'
+// ---------------------------------------------------------------------------
+
+describe('feedback-record — parseFeedbackRecord (length caps)', () => {
+  it('rejects an over-long evidence field with field-too-long', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), evidence: 'x'.repeat(4001) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('field-too-long');
+  });
+
+  it('rejects an over-long issueSummary with field-too-long', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), issueSummary: 'x'.repeat(4001) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('field-too-long');
+  });
+
+  it('rejects an over-long source identifier with field-too-long', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), source: 's'.repeat(501) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('field-too-long');
+  });
+
+  it('rejects an over-long optional field (runId) with field-too-long', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), runId: 'r'.repeat(501) });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('field-too-long');
+  });
+
+  it('accepts a long-but-within-cap evidence field (real stack traces are large)', () => {
+    const result = parseFeedbackRecord({ ...fullRaw(), evidence: 'x'.repeat(4000) });
+    expect(result.ok).toBe(true);
   });
 });
