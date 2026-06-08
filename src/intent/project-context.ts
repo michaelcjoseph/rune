@@ -125,6 +125,8 @@ export function hasRequiredSections(content: string): boolean {
   );
 }
 
-function escapeRegExp(s: string): string {
+/** Escape a literal string for use inside a `RegExp`. Exported so the context
+ *  curator reuses the one copy rather than duplicating it. */
+export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

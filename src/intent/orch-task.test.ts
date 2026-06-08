@@ -92,6 +92,20 @@ describe('orch-closeout — selected checkbox', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe('stale-task');
   });
+
+  it('refuses (ambiguous) when two unchecked tasks share the same text', () => {
+    const dup = '# T\n- [ ] Same text\n- [ ] Same text\n';
+    const res = markSelectedTaskComplete(dup, { id: 'same-text', text: 'Same text' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('ambiguous');
+  });
+
+  it('preserves leading indentation when flipping a nested task', () => {
+    const nested = '# T\n  - [ ] Indented task\n';
+    const res = markSelectedTaskComplete(nested, { id: 'indented-task', text: 'Indented task' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toContain('  - [x] Indented task');
+  });
 });
 
 // ---------------------------------------------------------------------------

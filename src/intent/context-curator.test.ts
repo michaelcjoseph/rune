@@ -84,6 +84,15 @@ describe('context-curator — transcript-dump rejection', () => {
     );
     expect(res.ok).toBe(true);
   });
+
+  it('rejects a body that embeds a required-section header (would fork the doc)', () => {
+    const res = applyContextUpdate(
+      SEED,
+      neutralUpdate({ sections: { 'Current State': 'Done.\n\n## Known Risks\n\ninjected' } }),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('embedded-section-header');
+  });
 });
 
 describe('context-curator — validation gates', () => {

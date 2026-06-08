@@ -117,6 +117,26 @@ describe('orch-attempt-cap — bounded retry', () => {
     const d = decideAttemptOutcome({ attempts: 5, cap: 3, outcome: 'failed', objectionOpen: false });
     expect(d.action).not.toBe('retry');
   });
+
+  it('proceeds on a successful attempt, even on the final allowed attempt', () => {
+    const d = decideAttemptOutcome({
+      attempts: 3,
+      cap: 3,
+      outcome: 'ready-for-closeout',
+      objectionOpen: false,
+    });
+    expect(d.action).toBe('proceed');
+  });
+
+  it('an open objection blocks even a successful attempt', () => {
+    const d = decideAttemptOutcome({
+      attempts: 1,
+      cap: 3,
+      outcome: 'ready-for-closeout',
+      objectionOpen: true,
+    });
+    expect(d.action).toBe('blocked-on-human');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -114,18 +114,26 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > Phase 3 is done — the `/work` first-unchecked rule must not treat the section as complete
 > after ticking one line. Land them across as many passes as needed; none may be left behind.
 
-- [ ] Define `context.md` schema, budget, read/create/update helpers, and validation hooks.
-- [ ] Implement bounded context assembly for a selected task.
-- [ ] Add orchestrated task-run records and persistence.
-- [ ] Define task closeout semantics: selected-task checkbox update, context update,
+- [x] Define `context.md` schema, budget, read/create/update helpers, and validation hooks.
+      (`project-context.ts` schema/seed + `context-curator.ts` `applyContextUpdate` /
+      validation gates / budget. The fs read/write wrapper lands with the Phase 5 runtime
+      closeout — no pure test surface.)
+- [x] Implement bounded context assembly for a selected task. (`orch-context-assembly.ts`)
+- [x] Add orchestrated task-run records and persistence. (`orch-run-record.ts` `TaskRunRecord`
+      + builder; the JSONL store is wired with the Phase 5 runtime loop.)
+- [x] Define task closeout semantics: selected-task checkbox update, context update,
       closeout checks, closeout commit, clean-worktree verification, and durable block on
-      failure.
-- [ ] Define per-task attempt caps and escalation behavior at the cap.
-- [ ] Define finalizer handoff payload shape and injectable finalizer adapter for tests.
-- [ ] Implement Jarvis-owned task selection.
-- [ ] Implement restart reconstruction for partial orchestrated runs.
-- [ ] Add explicit rollout/fallback configuration for orchestrated mode vs legacy `/work
-      --auto`.
+      failure. (`orch-closeout.ts` pure semantics — tick exactly one box / stale-refuse. The
+      effectful half — commit, clean-worktree verify, durable block — is Phase 5 "Implement
+      Jarvis-owned task closeout".)
+- [x] Define per-task attempt caps and escalation behavior at the cap. (`orch-attempt-cap.ts`)
+- [x] Define finalizer handoff payload shape and injectable finalizer adapter for tests.
+      (`finalizer-handoff.ts`)
+- [x] Implement Jarvis-owned task selection. (`orch-task-select.ts`)
+- [x] Implement restart reconstruction for partial orchestrated runs. (`orch-reconstruct.ts`)
+- [x] Add explicit rollout/fallback configuration for orchestrated mode vs legacy `/work
+      --auto`. (`orch-config.ts` `resolveDispatchMode`; the env/config toggle read is wired in
+      Phase 5.)
 
 > **User-reachability:** no user surface this phase — substrate consumed by Phases 4–5. The
 > orchestrated run becomes user-triggerable in Phase 5 when the cockpit start action routes
