@@ -38,6 +38,16 @@ export interface SpecArtifact {
   tasks: string;
   /** The test plan — scaffolded into `test-plan.md`. */
   testPlan: string;
+  /** The tech lead's technical spec (project 14 role flow) — scaffolded into
+   *  `tech-spec.md`. Optional: legacy single-shot proposals omit it. */
+  techSpec?: string;
+  /** Jarvis-seeded orchestration `context.md` (project 14). Written
+   *  DETERMINISTICALLY by the scaffolder, not authored by the setup-writer agent,
+   *  so the spec invariant "roles/agents never author context.md" holds. Optional
+   *  for legacy proposals. */
+  context?: string;
+  /** PM assumptions surfaced during role planning. Optional. */
+  assumptions?: string[];
 }
 
 /** A planning conversation in progress — the unit the Planner state machine transitions. */
