@@ -38,6 +38,7 @@ import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
 import { readWorkRunSummary } from '../jobs/work-run-store.js';
+import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
@@ -833,6 +834,53 @@ async function handleApiWorkRunTranscript(res: ServerResponse, id: string): Prom
   }
 }
 
+/**
+ * POST /api/work-runs/:id/release (project 13, Phase 1c). Release a PARKED
+ * (`blocked-on-human`) run through the ONE shared release runtime. Optional body
+ * `{ confirmDirty: true }` confirms discarding a dirty worktree. Maps the
+ * surface-agnostic outcome to HTTP:
+ *   - created      → 202 { mutationId } (the release mutation owns final success/failure)
+ *   - dirty-confirm → 409 { error: 'dirty-worktree', files } (no mutation created)
+ *   - not-parked   → 200 { released: false } (clean no-op)
+ *   - error        → 500 { error }
+ * The run id is VALID_SLUG-guarded before any store/worktree access.
+ */
+async function handleApiWorkRunRelease(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
+  let body: { confirmDirty?: boolean } = {};
+  try {
+    const raw = await readBody(req);
+    if (raw.trim()) body = JSON.parse(raw);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'invalid JSON body' }));
+    return;
+  }
+  const opts = body.confirmDirty === true ? { confirmDirty: true } : {};
+  const outcome = await requestWorkRunRelease(id, opts, defaultReleaseRequestDeps('webview'));
+  switch (outcome.kind) {
+    case 'created':
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ mutationId: outcome.mutationId }));
+      // `id` passed VALID_SLUG above, so it's safe to log verbatim.
+      logWebviewAction('work-run-release', 'success', `runId=${id}`);
+      return;
+    case 'dirty-confirm':
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'dirty-worktree', files: outcome.files }));
+      return;
+    case 'not-parked':
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ released: false, reason: 'not-parked' }));
+      return;
+    case 'error':
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: outcome.reason }));
+      logWebviewAction('work-run-release', 'failure', 'reason=release-error');
+      return;
+  }
+}
+
 async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
   if (!isReady()) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -1499,6 +1547,12 @@ export function mountWebviewRoutes(
       const workRunRecordMatch = pathname.match(/^\/api\/work-runs\/([^/]+)$/);
       if (req.method === 'GET' && workRunRecordMatch) {
         handleApiWorkRunRecord(res, decodeURIComponent(workRunRecordMatch[1]!));
+        return true;
+      }
+      // Release a parked work-run (project 13, Phase 1c).
+      const workRunReleaseMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/release$/);
+      if (req.method === 'POST' && workRunReleaseMatch) {
+        await handleApiWorkRunRelease(req, res, decodeURIComponent(workRunReleaseMatch[1]!));
         return true;
       }
 

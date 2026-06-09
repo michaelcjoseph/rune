@@ -136,7 +136,6 @@ describe('runWorkRunRelease (applier core)', () => {
       worktreeFor: vi.fn(() => WORKTREE),
       worktreeExists: vi.fn(() => true),
       gitStatusPorcelain: vi.fn(async () => []),
-      runGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
       // `as never` on the spy seams mirrors work-runner.test.ts: a bare
       // `vi.fn()` types as the generic `Mock`, which TS won't assign to the
       // specific dep-field signature (the same friction memory-writer.test.ts

@@ -457,8 +457,10 @@ describe('TelegramSender', () => {
     // carries `parked: true` + the sentinel payload. `formatWorkRunTerminal` must
     // render the PARKED state, NOT the underlying `outcome` (partial/noop) — a
     // run paused for a human must never read as "did nothing / no-op success".
-    // RED until the parked-aware branch lands in formatWorkRunTerminal.
-    it('renders a parked run via a parked-aware branch, not its underlying outcome', async () => {
+    // Project 13 Phase 1c: a parked terminal also gets a one-tap Release button,
+    // so it goes through the inline-keyboard (`bot.sendMessage`) path, not the
+    // plain `sendLongMessage` path.
+    it('renders a parked run via a parked-aware branch, with a one-tap Release button', async () => {
       sender.onMutationEvent(
         workRunEvent('completed', {
           parked: true,
@@ -472,14 +474,19 @@ describe('TelegramSender', () => {
         }),
       );
       await flush();
-      expect(mockSendLongMessage).toHaveBeenCalledOnce();
-      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      // Parked terminal routes through the approval-keyboard path, not sendLongMessage.
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      const [, text, opts] = bot.sendMessage.mock.calls[0]! as [number, string, { reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } }];
       // Parked branch wins — never the no-op "did nothing" headline.
       expect(text.toLowerCase()).not.toContain('no-op');
       expect(text.toLowerCase()).toMatch(/park|paused|needs you|blocked on you|awaiting/);
       // Carries the pending check + the un-scrubbed operator path so Michael can act.
       expect(text).toContain('Run the interactive Codex check and confirm the result');
       expect(text).toContain('/tmp/worktrees/jarvis/demo');
+      // The Release button's callback id routes through the shared release runtime.
+      const button = opts.reply_markup!.inline_keyboard[0]![0]!;
+      expect(button.callback_data).toMatch(/^work-run-release:/);
     });
   });
 

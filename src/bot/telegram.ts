@@ -5,6 +5,7 @@ import { createLogger } from '../utils/logger.js';
 import { handleTextMessage, dispatchText } from './handlers/text.js';
 import { handlePhotoMessage } from './handlers/photo.js';
 import { dispatchApprovalStatus, parseApprovalId } from '../transport/approval-actions.js';
+import { parseWorkRunReleaseCallback, dispatchTelegramWorkRunRelease } from './work-run-release-callback.js';
 
 const log = createLogger('telegram');
 
@@ -65,6 +66,19 @@ export function wireHandlers(bot: TelegramBot, sender: MessageSender): void {
       log.warn('answerCallbackQuery failed', { error: (err as Error).message });
     });
 
+    // Work-run release route (project 13, Phase 1c) — `work-run-release:<id>` /
+    // `work-run-release-confirm:<id>`. Delegates to the ONE shared release
+    // runtime so this surface can't drift from the cockpit route / inbox row.
+    if (parseWorkRunReleaseCallback(data)) {
+      void dispatchTelegramWorkRunRelease((uid, text) => sender.send(uid, text), userId, data).catch(
+        (err: unknown) => {
+          log.error('work-run-release callback failed', { error: (err as Error).message });
+          void sender.send(userId, 'Failed to action release — internal error.').catch(() => { /* swallow */ });
+        },
+      );
+      return;
+    }
+
     // Composite-id route (cockpit-inbox-shared path).
     const { status, idCandidate } = parseCallbackData(data);
     const parsed = parseApprovalId(idCandidate);
@@ -114,46 +128,6 @@ export function wireHandlers(bot: TelegramBot, sender: MessageSender): void {
   });
 
   log.info('Telegram bot started (polling mode)');
-}
-
-/**
- * Parse a `work-run-release:<id>` / `work-run-release-confirm:<id>` callback
- * payload (project 13, Phase 1c). The `-confirm` variant carries the operator's
- * explicit dirty-discard confirmation. Returns null for any other payload so
- * the caller falls through to the existing approval/conversational routing.
- */
-export function parseWorkRunReleaseCallback(
-  data: string,
-): { runId: string; confirmDirty: boolean } | null {
-  const CONFIRM = 'work-run-release-confirm:';
-  const PLAIN = 'work-run-release:';
-  if (data.startsWith(CONFIRM)) {
-    const runId = data.slice(CONFIRM.length);
-    return runId ? { runId, confirmDirty: true } : null;
-  }
-  if (data.startsWith(PLAIN)) {
-    const runId = data.slice(PLAIN.length);
-    return runId ? { runId, confirmDirty: false } : null;
-  }
-  return null;
-}
-
-/**
- * Handle a Telegram `work-run-release:<id>` callback by routing through the ONE
- * shared release runtime (`requestWorkRunRelease`) and replying with the mapped
- * outcome — the same runtime the cockpit route and inbox row use, so the two
- * surfaces can't drift. Injectable for the unit test.
- *
- * STUB (Phase 1c "tests write first") — replaced by the real delegation when the
- * implementation lands.
- */
-export async function dispatchTelegramWorkRunRelease(
-  _send: (userId: number, text: string) => Promise<unknown>,
-  _userId: number,
-  _data: string,
-  _deps?: unknown,
-): Promise<void> {
-  /* no-op stub */
 }
 
 /** Parse a callback_data payload into (status, idCandidate). Supports:

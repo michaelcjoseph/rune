@@ -11,15 +11,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// node-telegram-bot-api is a heavy transport dep telegram.ts imports at module
-// load; stub it so the unit test never opens a real bot.
-vi.mock('node-telegram-bot-api', () => ({ default: class {} }));
-
-// config is read at module load for TELEGRAM_USER_ID / token.
-vi.mock('../config.js', () => ({
-  default: { TELEGRAM_BOT_TOKEN: 'x', TELEGRAM_USER_ID: 42 },
-}));
-
+// The shared release runtime is the surface the callback delegates to; mock it
+// so the test asserts delegation without the real supervision/mutation chain.
 const mockRequestWorkRunRelease = vi.fn();
 const mockFormatReply = vi.fn((o: { kind: string }) => `reply:${o.kind}`);
 vi.mock('../jobs/work-run-release.js', () => ({
@@ -28,7 +21,7 @@ vi.mock('../jobs/work-run-release.js', () => ({
   defaultReleaseRequestDeps: vi.fn(() => ({})),
 }));
 
-const { parseWorkRunReleaseCallback, dispatchTelegramWorkRunRelease } = await import('./telegram.js');
+const { parseWorkRunReleaseCallback, dispatchTelegramWorkRunRelease } = await import('./work-run-release-callback.js');
 
 describe('parseWorkRunReleaseCallback', () => {
   it('parses a plain release callback as confirmDirty:false', () => {

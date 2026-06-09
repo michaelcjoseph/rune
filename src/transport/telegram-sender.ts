@@ -269,10 +269,23 @@ export class TelegramSender implements MessageSender {
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
     const text = event.mutationKind === 'gen-eval-loop'
       ? formatGenEvalLoopTerminal(event)
-      : event.mutationKind === 'work-run'
+      // A `work-run-release` terminal carries the cold-finalize work-run outcome
+      // (+ projectSlug), so render it through the same work-run formatter rather
+      // than the generic "/work --auto on <uuid>" fallback (project 13 Phase 1c).
+      : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release'
         ? formatWorkRunTerminal(event)
         : formatGenericTerminal(event);
-    void this.send(event.userId, text).catch((err: unknown) => {
+    // Project 13 Phase 1c: a PARKED work-run terminal gets a one-tap Release
+    // button whose callback id (`work-run-release:<id>`) routes through the same
+    // shared release runtime the cockpit uses. The id is the parked run's id
+    // (== this mutation id). A dirty worktree is gated by the release preflight,
+    // so this clean-release tap is safe.
+    const data = (event.data ?? {}) as Record<string, unknown>;
+    const releaseApproval =
+      event.mutationKind === 'work-run' && data['parked'] === true
+        ? { approval: { prompt: 'Release this parked run?', options: [{ label: '🔓 Release', value: `work-run-release:${event.mutationId}` }] } }
+        : undefined;
+    void this.send(event.userId, text, releaseApproval).catch((err: unknown) => {
       log.error('TelegramSender.onMutationEvent send failed', { error: err instanceof Error ? err.message : String(err) });
     });
   }

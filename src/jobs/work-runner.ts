@@ -18,7 +18,7 @@ import type { GateFailReason } from './work-run-gate.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { VALID_SLUG, worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor, workBranchName, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
@@ -26,21 +26,11 @@ const log = createLogger('work-runner');
 
 const PROJECTS_SUBDIR = join('docs', 'projects');
 
-/**
- * Stable per-PROJECT work-run branch name (not per-run-id).
- *
- * A per-run-id branch (`jarvis-work/<short-id>`) gave every run a fresh target,
- * so `createWorktree` always forked off `main` and the agent restarted the
- * project from Phase 1, stranding the prior run's commits (docs/projects/bugs.md).
- * A per-project name is the deterministic resume target: `createWorktree` checks
- * the branch out when it already exists, carrying committed progress forward.
- * Safe to embed `projectSlug` directly — it is git-ref-safe (validated by
- * `worktreePathFor`/`VALID_SLUG`), and branches are per-repo so two products
- * sharing a slug never collide.
- */
-export function workBranchName(projectSlug: string): string {
-  return `jarvis-work/${projectSlug}`;
-}
+// `workBranchName` moved to `src/intent/sandbox.ts` (the light sandbox-policy
+// module) so consumers like `work-run-release.ts` can reuse it without importing
+// this heavy Claude-CLI-spawn module. Re-exported here for back-compat with
+// existing `from './work-runner.js'` importers (e.g. recovery-finalize-runner).
+export { workBranchName } from '../intent/sandbox.js';
 
 // ---------------------------------------------------------------------------
 // Classification + persist runtime seam

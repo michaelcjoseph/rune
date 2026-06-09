@@ -1,7 +1,7 @@
 # Work-Run Monitoring (Phase 1) — Tasks
 
-In progress — Phase 1a (surface the path) and Phase 1b (parked state) complete; Phase 1c (release)
-remains. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+Complete — Phase 1a (surface the path), Phase 1b (parked state), and Phase 1c (release) all done.
+See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
 > **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
 > Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
@@ -224,31 +224,46 @@ remains. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md
 
 ### Release action
 
-- [ ] Make the EXISTING `blocked-on-human` cockpit inbox row actionable for a parked run
+- [x] Make the EXISTING `blocked-on-human` cockpit inbox row actionable for a parked run
       (`approval-actions.ts` `blocked-on-human` case returns `not-found` today, ~`:152`), routing to
       the shared release runtime — not a new surface (consistent with the "no new cockpit screen"
       non-goal). Approve/Release runs release preflight; Reject/dismiss leaves the parked run
       untouched with a clear dismissed/no-op response. Available from both Telegram and the cockpit.
-- [ ] Add `work-run-release` to `MutationKind` and register an auto-approved applier with payload
-      `{ runId: string, confirmDirty?: boolean }`.
-- [ ] Implement shared release preflight used by both surfaces: not-parked returns a no-op outcome,
+      (`dispatchApprovalStatus` `blocked-on-human` branch → `requestWorkRunRelease` (created→'ok',
+      error→'error', else 'not-found'); rejected/non-approved → untouched 'not-found'; VALID_SLUG-
+      guarded. Telegram via the parked-alert "🔓 Release" inline button + `work-run-release:<id>`
+      callback.)
+- [x] Add `work-run-release` to `MutationKind` and register an auto-approved applier with payload
+      `{ runId: string, confirmDirty?: boolean }`. (Added to `MutationKind`; `workRunReleaseApplier`
+      (autoApprove, `supervised:false`) registered in `src/index.ts`.)
+- [x] Implement shared release preflight used by both surfaces: not-parked returns a no-op outcome,
       dirty-without-confirmation returns dirty-confirm with the `git status --porcelain` file list,
       clean release creates a cold-finalize `work-run-release` mutation, and confirmed dirty
-      release creates an explicit-discard `work-run-release` mutation.
-- [ ] Add cockpit route `POST /api/work-runs/:id/release` with optional body
+      release creates an explicit-discard `work-run-release` mutation. (`releasePreflight` +
+      `requestWorkRunRelease` in `work-run-release.ts`.)
+- [x] Add cockpit route `POST /api/work-runs/:id/release` with optional body
       `{ "confirmDirty": true }`; return `409 { "error": "dirty-worktree", "files": [...] }` for
       dirty-confirm without creating a mutation, `200` for not-parked no-op, and
-      `202 { "mutationId": "..." }` when a release mutation is created.
-- [ ] Add Telegram callback action `work-run-release:<id>` using the same shared runtime and dirty
-      confirmation behavior.
-- [ ] On release of a **clean** worktree: keep the supervision parked record and **cold-finalize**
+      `202 { "mutationId": "..." }` when a release mutation is created. (`handleApiWorkRunRelease`;
+      VALID_SLUG-guards the id → 400.)
+- [x] Add Telegram callback action `work-run-release:<id>` using the same shared runtime and dirty
+      confirmation behavior. (`work-run-release-callback.ts` `parseWorkRunReleaseCallback` +
+      `dispatchTelegramWorkRunRelease`; `work-run-release-confirm:<id>` carries the dirty confirm;
+      wired into the `callback_query` handler.)
+- [x] On release of a **clean** worktree: keep the supervision parked record and **cold-finalize**
       through the Project 15 finalizer in **gated-merge** mode (reuse `finalizeStaleRun`'s building
       blocks — recompute `baseSha` via merge-base → `computeWorkProduct` → classify → real
       gate/merge/push/delete effects — there is no live process/transcript/`baseSha` at release
       time; but invoke `runFinalizer` in `gated-merge` mode explicitly, since `finalizeStaleRun`
       defaults a fresh run to hold/no-merge). Keep the parked hold while finalization is in progress;
       the finalizer terminal write owns merge/hold/teardown, clearing the hold, and slot release.
-- [ ] On release of a **dirty** worktree (`git status --porcelain` in the parked worktree is
+      (`coldFinalizeGatedMergeProd` drives `runFinalizer({mode:'gated-merge'})` with real
+      gate/merge/push/delete; `clearParkedHold` flips supervision terminal AFTER the finalizer
+      resolves, so the slot stays held for the whole finalization.)
+- [x] On release of a **dirty** worktree (`git status --porcelain` in the parked worktree is
       non-empty): warn with the dirty file list and require explicit confirm before the
       force-removing `destroyWorktree` (`sandbox-runtime.ts:333`); never discard a half-finished
       human fix silently. Confirmed dirty release is a discard path and must not gated-merge.
+      (Preflight returns `dirty-confirm` without a mutation until `confirmDirty:true`; the applier
+      core rechecks dirty + `confirmDirty` and routes to `discardDirtyWorktree`, never gated-merge;
+      `clearParkedHold` fires only after the destructive cleanup.)
