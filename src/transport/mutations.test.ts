@@ -529,6 +529,55 @@ describe('mutations', () => {
       }
     });
 
+    it('an activity event past the throttle window advances lastOutputAt (subagent/tool-liveness fix)', async () => {
+      // Bug fix: a parsed stream-json envelope that renders nothing (a subagent/
+      // Task `system` frame or a successful tool_result) is emitted as a
+      // non-rendered `activity` event. It must advance the same activity
+      // heartbeat as `output` (lastHeartbeatAt + lastOutputAt) so a run busy in
+      // a long tool call or subagent isn't seen as quiet. Mirrors the `output`
+      // test above.
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+
+        let release: () => void = () => {};
+        const gate = new Promise<void>((r) => { release = r; });
+
+        async function* gen(): AsyncIterable<any> {
+          await gate;
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'activity', data: {} };
+          yield { mutationId: 'x', ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }
+
+        const applier = makeApplier({
+          kind: 'work-run',
+          autoApprove: true,
+          validateResult: { ok: true },
+          applyGen: gen(),
+        });
+        registerApplier(applier);
+
+        await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+        await vi.advanceTimersByTimeAsync(1); // settle seed + running upserts
+
+        vi.setSystemTime(new Date('2026-01-01T00:00:31.000Z')); // past the 30s throttle
+        release();
+        await vi.advanceTimersByTimeAsync(10);
+
+        const activityCall = mockUpsertRun.mock.calls.find((c) => {
+          const run = c[0] as { lastOutputAt?: string };
+          return run.lastOutputAt === '2026-01-01T00:00:31.000Z';
+        });
+        expect(activityCall, 'expected an activity upsert carrying lastOutputAt at t=31s').toBeDefined();
+        const run = activityCall![0] as { lastOutputAt?: string; lastHeartbeatAt: string; status: string };
+        expect(run.lastOutputAt).toBe('2026-01-01T00:00:31.000Z');
+        expect(run.lastHeartbeatAt).toBe('2026-01-01T00:00:31.000Z');
+        expect(run.status).toBe('running');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('copies outcome + workProduct from a work-run terminal event onto the descriptor before persist', async () => {
       // Project 11 Phase 2: the work-product classification rides on the
       // terminal event's `data.outcome` / `data.workProduct`. startApply must

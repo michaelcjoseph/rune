@@ -1098,7 +1098,19 @@ async function* streamProcess(
       drainTimer.unref?.();
     }
     const display = streamJsonToDisplay(envelope);
-    if (display === null) return;
+    if (display === null) {
+      // A parsed envelope that renders nothing — a `system` task_progress /
+      // task_started / task_notification / thinking frame, or a successful
+      // tool_result — is still evidence the run is actively working. Subagent
+      // (Task) lifecycle frames are ALL type:'system', so without this a run
+      // grinding through a subagent or a long single tool call emits no
+      // `output` event for minutes, `lastOutputAt` goes stale, and the run
+      // reads as quiet — tripping the quiet nudge and the P2.7 quiet→cancel
+      // backstop on a healthy run. Emit a non-rendered `activity` event so the
+      // supervision heartbeat advances (see docs/projects/bugs.md).
+      enqueue(evt('activity', {}));
+      return;
+    }
     // Redact secrets on the display/bus path too. `streamJsonToDisplay` only
     // scrubs host paths; an error tool_result can echo a credential-bearing URL
     // or command. The durable sink redacts independently at append time (so the

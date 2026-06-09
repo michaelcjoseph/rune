@@ -122,8 +122,18 @@ export interface MutationEvent {
    * timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
    * `lastChildAliveAt`. Stall-check prefers `lastChildAliveAt` so a long
    * quiet LLM call no longer trips a false stall nudge.
+   *
+   * `activity` is a non-rendered work-liveness signal: a parsed stream-json
+   * envelope that renders nothing in the drawer (a `system` task_progress /
+   * task_started / thinking frame, or a successful tool_result) is still
+   * evidence the run is actively working. It advances the SAME timestamps as
+   * `output` (`lastHeartbeatAt` + `lastOutputAt`) so a run busy in a long tool
+   * call or subagent isn't mistaken for quiet — subagent/Task lifecycle frames
+   * are all type:'system', which never render. It is NOT forwarded to the bus
+   * (never reaches Telegram/the drawer); it exists only to keep supervision's
+   * activity heartbeat fresh.
    */
-  kind: 'log' | 'progress' | 'output' | 'keep-alive' | 'completed' | 'failed';
+  kind: 'log' | 'progress' | 'output' | 'keep-alive' | 'activity' | 'completed' | 'failed';
   data?: unknown;
 }
 
@@ -271,7 +281,11 @@ async function startApply(
 
   try {
     for await (const event of applier.apply(descriptor, ctx)) {
-      (_bus ?? noopBus).publish({
+      // `activity` is an internal work-liveness signal only — it advances the
+      // supervision heartbeat below but is never forwarded to the bus, so a
+      // run can emit one per stdout envelope without spamming Telegram/the
+      // drawer with thousands of empty frames.
+      if (event.kind !== 'activity') (_bus ?? noopBus).publish({
         kind: 'mutation-event',
         mutationId: event.mutationId,
         // Phase 6 C5: surface the descriptor kind on every event so
@@ -288,11 +302,17 @@ async function startApply(
       // run gets flagged stalled while a chatty run does not. Throttled —
       // per HEARTBEAT_THROTTLE_MS above — so a per-line stdout stream
       // doesn't blow up the event loop with per-line read-modify-write.
-      if (event.kind === 'output') {
+      //
+      // `activity` rides the SAME advance: a non-rendering envelope (subagent/
+      // Task lifecycle `system` frame, successful tool_result) is real work, so
+      // it must keep `lastOutputAt` fresh too — otherwise a run busy in a long
+      // tool call or subagent reads as quiet and the P2.7 quiet→cancel backstop
+      // can reap a healthy run (docs/projects/bugs.md).
+      if (event.kind === 'output' || event.kind === 'activity') {
         const now = Date.now();
         if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
           const nowIso = new Date(now).toISOString();
-          // An output event is the LLM-output signal — advance lastOutputAt too.
+          // An output/activity event is a work signal — advance lastOutputAt too.
           currentOutputAt = nowIso;
           safeUpsertRun(
             buildSupervisedRun(descriptor, 'running', nowIso, currentChildAliveAt, currentOutputAt),
