@@ -84,6 +84,12 @@ export type MutationKind =
   // selects orchestrated mode (see src/jobs/work-dispatch.ts); otherwise it
   // dispatches the legacy `work-run` applier as the recorded fallback.
   | 'orchestrated-work'
+  // Project 13 Phase 1c: release a PARKED (`blocked-on-human`) work-run — the
+  // applier cold-finalizes a clean parked worktree through the Project 15
+  // finalizer (gated-merge), or discards a confirmed-dirty one. Auto-approved
+  // (the human already decided to release via the preflight). Payload:
+  // `{ runId, confirmDirty }` (see src/jobs/work-run-release.ts).
+  | 'work-run-release'
   | 'gen-eval-loop'
   | 'project-edit'
   | 'proposal-action'
