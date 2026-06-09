@@ -974,7 +974,10 @@ async function handleApiMutationsCreate(req: IncomingMessage, res: ServerRespons
 }
 
 function handleApiMutationsCancel(res: ServerResponse, id: string): void {
-  const result = cancelMutation(id);
+  // The cockpit Cancel button is an explicit human action → 'user' (the
+  // default, passed explicitly to distinguish it from the system backstop
+  // reaps in stall-check-runner, which pass 'system').
+  const result = cancelMutation(id, 'user');
   if (!result.ok) {
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: result.reason }));

@@ -277,6 +277,7 @@ type ExitFactTag =
   | 'clean-exit-wedged-stdio'
   | 'reaped-after-terminal-result'
   | 'user-cancel'
+  | 'system-cancel'
   | 'external-kill';
 
 /**
@@ -335,6 +336,51 @@ describe('classifyOutcome — exit-fact taxonomy (P0.3)', () => {
     const facts: ClassifyFacts = {
       exit: exitWith('user-cancel', { cancelled: true, signal: 'SIGTERM', exitCode: null }),
       product: partialProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('failed');
+  });
+
+  // --- system-cancel: a Jarvis backstop reap (quiet→cancel / max-runtime) is
+  //     NOT a user cancel — classify on work product, never as failed/cancelled. ---
+
+  it('system-cancel + complete branch → branch-complete (a backstop reap must not read as a cancel)', () => {
+    // The bug: quiet→cancel / max-runtime reaped via cancelMutation, which set
+    // the same `cancelled` flag as /cancel, so a healthy complete branch was
+    // mislabeled failed/cancelled. A system-cancel sets cancelled:false and
+    // classifies on the work product.
+    const facts: ClassifyFacts = {
+      exit: exitWith('system-cancel', { signal: 'SIGTERM', exitCode: null }),
+      product: branchCompleteProduct(),
+    };
+    const result = classifyOutcome(facts);
+    expect(result.outcome).toBe('branch-complete');
+    // Truthful: the manner of stop stays visible, but it is NOT a user cancel.
+    expect(result.reason).toMatch(/system-cancel/i);
+    expect(result.reason).not.toMatch(/^cancelled$/i);
+  });
+
+  it('system-cancel + partial branch → partial (work product, not failed)', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('system-cancel', { signal: 'SIGTERM', exitCode: null }),
+      product: partialProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('partial');
+  });
+
+  it('system-cancel + no-progress run → noop (not failed)', () => {
+    const facts: ClassifyFacts = {
+      exit: exitWith('system-cancel', { signal: 'SIGTERM', exitCode: null }),
+      product: noopProduct(),
+    };
+    expect(classifyOutcome(facts).outcome).toBe('noop');
+  });
+
+  it('system-cancel that ALSO set cancelled:true still fails (a real user cancel wins)', () => {
+    // Defense-in-depth: if a caller wrongly stamps both, the cancelled
+    // short-circuit (a real user cancel) takes precedence over the tag.
+    const facts: ClassifyFacts = {
+      exit: exitWith('system-cancel', { cancelled: true, signal: 'SIGTERM', exitCode: null }),
+      product: branchCompleteProduct(),
     };
     expect(classifyOutcome(facts).outcome).toBe('failed');
   });

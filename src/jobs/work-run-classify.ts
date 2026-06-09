@@ -51,6 +51,12 @@ export type WorkOutcome = 'branch-complete' | 'partial' | 'noop' | 'dirty-uncomm
  *    `failed`).
  *  - `user-cancel` — the user invoked /cancel (ctx.cancel). ALWAYS terminal-fail,
  *    even if the branch looks complete (a real cancel must never read as success).
+ *  - `system-cancel` — a Jarvis backstop reaped the run on its own (the P2.7
+ *    quiet→cancel escalation or the max-runtime ceiling), NOT the user. The agent
+ *    didn't declare done, but the run wasn't a failure either — it was killed for
+ *    taking too long / going quiet. Classify on WORK PRODUCT (a backstop kill of a
+ *    complete branch reads branch-complete; a no-progress kill reads noop), so it
+ *    never masquerades as a user cancel the user never made.
  *  - `external-kill` — killed by an external signal with NO terminal result seen;
  *    the agent never declared done, so terminal-fail (with truthful work product).
  */
@@ -59,6 +65,7 @@ export type ExitFact =
   | 'clean-exit-wedged-stdio'
   | 'reaped-after-terminal-result'
   | 'user-cancel'
+  | 'system-cancel'
   | 'external-kill';
 
 /** Process exit facts handed back by the (Phase 2) refactored `streamProcess`
@@ -315,6 +322,14 @@ function classifyByExitFact(
     case 'user-cancel':
       // Reached only if `cancelled` wasn't set (unusual) — still a cancel.
       return { outcome: 'failed', reason: 'cancelled' };
+    case 'system-cancel': {
+      // A Jarvis backstop reap (quiet→cancel / max-runtime ceiling), not a user
+      // cancel and not an agent failure. Classify on the WORK PRODUCT so a
+      // complete branch reads branch-complete (never a cancel the user never
+      // made); annotate the reason so the manner of stop stays visible.
+      const result = classifyWorkProduct(product);
+      return { outcome: result.outcome, reason: `system-cancelled (backstop); ${result.reason}` };
+    }
     case 'external-kill':
       return { outcome: 'failed', reason: externalKillReason(exit) };
     case 'clean-exit':

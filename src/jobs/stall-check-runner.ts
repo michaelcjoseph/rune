@@ -103,7 +103,9 @@ export function startStallCheck(bus: NotificationBus): void {
       );
       quietCancelPlan.toCancel.forEach((run) => {
         try {
-          const result = cancelMutation(run.id);
+          // 'system': a backstop reap, NOT a user cancel — so the classifier
+          // reads the run on its work product, not as a cancel the user made.
+          const result = cancelMutation(run.id, 'system');
           log.info('quiet→cancel escalation', {
             id: run.id,
             product: run.product,
@@ -124,7 +126,8 @@ export function startStallCheck(bus: NotificationBus): void {
       // so a run also selected above is harmlessly re-cancelled. Per-run isolated.
       planMaxRuntimeKills(runs, config.WORK_RUN_MAX_RUNTIME_MS, now).toKill.forEach((run) => {
         try {
-          const result = cancelMutation(run.id);
+          // 'system': a backstop reap, NOT a user cancel (see quiet→cancel above).
+          const result = cancelMutation(run.id, 'system');
           log.info('max-runtime ceiling kill', {
             id: run.id,
             product: run.product,

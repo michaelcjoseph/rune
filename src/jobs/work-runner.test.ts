@@ -1152,6 +1152,44 @@ describe('workRunApplier', () => {
       expect(mockDestroyWorktree).toHaveBeenCalledOnce();
     });
 
+    it('a USER cancel stamps exitFact:user-cancel + cancelled:true (terminal-fail)', async () => {
+      // The cockpit/`/cancel` surface. cancelReason defaults to 'user'.
+      setupValidProject('06-webview');
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 143, exitSignal: 'SIGTERM' }));
+      const descriptor = {
+        id: 'mut-user-cancel', kind: 'work-run',
+        payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => true } as any; // no cancelReason → 'user'
+
+      const events: any[] = [];
+      for await (const e of workRunApplier.apply(descriptor, ctx)) events.push(e);
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal!.data as any)?.exit?.exitFact).toBe('user-cancel');
+      expect((terminal!.data as any)?.exit?.cancelled).toBe(true);
+    });
+
+    it('a SYSTEM backstop reap stamps exitFact:system-cancel + cancelled:false (classify on work product)', async () => {
+      // The quiet→cancel / max-runtime backstops pass cancelReason:'system'. The
+      // run must NOT read as a user cancel — cancelled:false so the classifier
+      // decides on the work product instead of short-circuiting to failed.
+      setupValidProject('06-webview');
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 143, exitSignal: 'SIGTERM' }));
+      const descriptor = {
+        id: 'mut-system-cancel', kind: 'work-run',
+        payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => true, cancelReason: () => 'system' } as any;
+
+      const events: any[] = [];
+      for await (const e of workRunApplier.apply(descriptor, ctx)) events.push(e);
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal!.data as any)?.exit?.exitFact).toBe('system-cancel');
+      expect((terminal!.data as any)?.exit?.cancelled).toBe(false);
+    });
+
     it('calls destroyWorktree in finally when streamProcess throws mid-run', async () => {
       // Pathological case: spawn throws (e.g., binary not found, EACCES).
       // The worktree was already created — finally must still tear it down

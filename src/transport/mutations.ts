@@ -137,14 +137,28 @@ export interface MutationEvent {
   data?: unknown;
 }
 
+/**
+ * Who initiated a cancel. `user` is an explicit human action (the /cancel
+ * surface, the cockpit Cancel button). `system` is a Jarvis backstop reaping a
+ * run on its own (the P2.7 quiet→cancel escalation, the max-runtime ceiling).
+ * The two share the cancel mechanics (SIGTERM the tree) but MUST classify
+ * differently: a user cancel is terminal-fail regardless of work product, while
+ * a system reap classifies on the work product (a backstop kill of a complete
+ * branch must read branch-complete, never as a cancel the user never made).
+ */
+export type CancelReason = 'user' | 'system';
+
 export interface ApplyContext {
   bus: NotificationBus;
   cancel: () => boolean;
+  /** Why the run was cancelled, once it has been. `null` until a cancel fires.
+   *  Optional for back-compat with appliers/tests that don't consult it. */
+  cancelReason?: () => CancelReason | null;
 }
 
 export interface RunHandle {
   descriptor: MutationDescriptor;
-  cancel: () => void;
+  cancel: (reason?: CancelReason) => void;
 }
 
 export interface MutationApplier<P = Record<string, unknown>> {
@@ -223,13 +237,18 @@ export async function createMutation(
   return { ok: true, descriptor };
 }
 
-/** Cancel a running mutation by calling its cancel hook. */
-export function cancelMutation(id: string): { ok: true } | { ok: false; reason: string } {
+/** Cancel a running mutation by calling its cancel hook. `reason` records
+ *  WHO initiated it (default `user`) so the classifier can tell an explicit
+ *  human cancel from a Jarvis backstop reap — see {@link CancelReason}. */
+export function cancelMutation(
+  id: string,
+  reason: CancelReason = 'user',
+): { ok: true } | { ok: false; reason: string } {
   const handle = activeRuns.get(id);
   if (!handle) {
     return { ok: false, reason: 'not found or already terminal' };
   }
-  handle.cancel();
+  handle.cancel(reason);
   return { ok: true };
 }
 
@@ -238,10 +257,11 @@ async function startApply(
   descriptor: MutationDescriptor,
 ): Promise<void> {
   let cancelled = false;
+  let cancelReason: CancelReason | null = null;
 
   const handle: RunHandle = {
     descriptor,
-    cancel: () => { cancelled = true; },
+    cancel: (reason: CancelReason = 'user') => { cancelled = true; cancelReason = reason; },
   };
   activeRuns.set(descriptor.id, handle);
 
@@ -277,6 +297,7 @@ async function startApply(
   const ctx: ApplyContext = {
     bus: _bus ?? noopBus,
     cancel: () => cancelled,
+    cancelReason: () => cancelReason,
   };
 
   try {
