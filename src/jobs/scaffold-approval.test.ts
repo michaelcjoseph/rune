@@ -44,12 +44,14 @@ interface Harness {
   promotions: Map<string, Promotion>;
   appended: Promotion[];
   writes: Array<{ path: string; content: string }>;
+  projectWrites: Array<{ path: string; content: string }>;
 }
 
 function makeHarness(over: Partial<ScaffoldApprovalDeps> = {}, backlogContent = '- idea\n'): Harness {
   const promotions = new Map<string, Promotion>();
   const appended: Promotion[] = [];
   const writes: Array<{ path: string; content: string }> = [];
+  const projectWrites: Array<{ path: string; content: string }> = [];
   let scaffolded = false;
   const registry: Registry = {
     version: 1,
@@ -75,12 +77,13 @@ function makeHarness(over: Partial<ScaffoldApprovalDeps> = {}, backlogContent = 
     fileExists: () => true,
     readBacklogFile: () => backlogContent,
     writeBacklogFile: (_repo, abs, content) => { writes.push({ path: abs, content }); },
+    writeProjectFile: (abs, content) => { projectWrites.push({ path: abs, content }); },
     auditBacklogWrite: () => {},
     git: async () => ({ stdout: '', stderr: '' }),
     now: () => 'NOW',
     ...over,
   };
-  return { deps, promotions, appended, writes };
+  return { deps, promotions, appended, writes, projectWrites };
 }
 
 describe('runScaffoldApproval — plain session (no promotion)', () => {
@@ -93,6 +96,29 @@ describe('runScaffoldApproval — plain session (no promotion)', () => {
       expect(out.promotion).toBe('none');
     }
     expect(h.writes).toHaveLength(0);
+  });
+
+  it('writes tech-spec.md and context.md when the artifact carries them (role flow)', async () => {
+    const h = makeHarness();
+    const session = makeSession();
+    session.planning.artifact = {
+      ...session.planning.artifact!,
+      techSpec: 'The tech spec body.',
+      context: '# Project Context\n\n## Current State\n\nSeeded.',
+    };
+    const out = await runScaffoldApproval(session, h.deps);
+    expect(out.ok).toBe(true);
+    const paths = h.projectWrites.map((w) => w.path);
+    expect(paths).toContain(`/ws/jarvis/docs/projects/${SLUG}/tech-spec.md`);
+    expect(paths).toContain(`/ws/jarvis/docs/projects/${SLUG}/context.md`);
+    expect(h.projectWrites.find((w) => w.path.endsWith('tech-spec.md'))?.content).toBe('The tech spec body.');
+  });
+
+  it('writes no role artifacts for a legacy artifact carrying neither', async () => {
+    const h = makeHarness();
+    const out = await runScaffoldApproval(makeSession(), h.deps);
+    expect(out.ok).toBe(true);
+    expect(h.projectWrites).toHaveLength(0);
   });
 });
 

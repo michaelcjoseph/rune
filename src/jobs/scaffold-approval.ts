@@ -34,7 +34,7 @@ import { join } from 'node:path';
 import { runAgent as realRunAgent } from '../ai/claude.js';
 import config from '../config.js';
 import { isContainedIn } from '../intent/sandbox.js';
-import { buildSetupWriterBrief } from '../intent/planner.js';
+import { buildSetupWriterBrief, type SpecArtifact } from '../intent/planner.js';
 import { resolveScaffoldTarget, scaffoldWriteScope } from '../intent/scaffold-target.js';
 import { parseScaffoldResult, crossCheckScaffold } from '../intent/scaffold-result.js';
 import { markBacklogItemDone } from '../intent/backlog-mark-done.js';
@@ -109,6 +109,10 @@ export interface ScaffoldApprovalDeps {
   readBacklogFile: (p: string) => string;
   /** Atomically write a backlog file (temp-then-rename), after the allow-list guard. */
   writeBacklogFile: (repoPath: string, absPath: string, content: string) => void;
+  /** Atomically write a project artifact file (tech-spec.md / context.md) into the
+   *  freshly-scaffolded slug dir. The path is deterministically constructed from the
+   *  verified slug dir, so no allow-list guard is needed (project 14). */
+  writeProjectFile: (absPath: string, content: string) => void;
   /** Append a backlog-mutation audit entry (best-effort). */
   auditBacklogWrite: (entry: {
     product: string;
@@ -165,6 +169,7 @@ export function defaultScaffoldApprovalDeps(): ScaffoldApprovalDeps {
       mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
       writeFileAtomic(absPath, content);
     },
+    writeProjectFile: (absPath, content) => writeFileAtomic(absPath, content),
     auditBacklogWrite: (entry) => {
       try {
         appendBacklogMutationLog(config.BACKLOG_MUTATIONS_FILE, entry);
@@ -175,6 +180,27 @@ export function defaultScaffoldApprovalDeps(): ScaffoldApprovalDeps {
     git: defaultRunGit,
     now: () => new Date().toISOString(),
   };
+}
+
+/**
+ * Write the role-flow artifacts (tech spec + seeded context) into the scaffolded
+ * project dir (project 14). Each is optional — legacy single-shot proposals carry
+ * neither, so this is a no-op for them. `context.md` is Jarvis-owned orchestration
+ * state seeded at planning time; writing it here (not via the setup-writer agent)
+ * keeps the spec's "roles/agents never author context.md" invariant intact.
+ */
+function writeRoleArtifacts(
+  artifact: SpecArtifact | undefined,
+  projectDir: string,
+  deps: ScaffoldApprovalDeps,
+): void {
+  if (!artifact) return;
+  if (artifact.techSpec) {
+    deps.writeProjectFile(join(projectDir, 'tech-spec.md'), artifact.techSpec);
+  }
+  if (artifact.context) {
+    deps.writeProjectFile(join(projectDir, 'context.md'), artifact.context);
+  }
 }
 
 /** Infer the backlog kind from a snapshot line: a leading `- [ ]`/`- [x]` checkbox is a bug;
@@ -272,6 +298,12 @@ export async function runScaffoldApproval(
     failPromotion(session, deps, message);
     return { ok: false, reason: 'verify', message, agentText: agent.text };
   }
+
+  // Project 14: when planning ran the PM/tech-lead role flow, the artifact carries
+  // a tech spec and a Jarvis-seeded context.md. Write them DETERMINISTICALLY here —
+  // never via the setup-writer agent — so the "roles/agents never author context.md"
+  // invariant holds. No-op for legacy artifacts that carry neither.
+  writeRoleArtifacts(session.planning.artifact, join(projectsDir, slug), deps);
 
   // No linked promotion — a plain /plan session. Scaffold succeeded; nothing else to drive.
   if (!session.promotionId) {
