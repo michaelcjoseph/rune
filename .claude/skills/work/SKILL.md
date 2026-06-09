@@ -26,6 +26,24 @@ Because `--auto` commits everything in the working tree at the end of each task,
 
 **No discretionary pauses in `--auto`.** The hard stops listed above are the *only* valid reasons to stop or ask the user something mid-run. Do not invent additional checkpoints — do not pause to offer a commit, confirm direction, summarize progress, checkpoint a subsystem boundary, or ask whether to proceed between tasks. If a general instruction elsewhere (e.g., "only commit when the user asks" or "confirm risky actions") seems to conflict with `--auto`, resolve it by *not performing the action*, not by pausing. The user authorized an unattended sweep by passing `--auto`; interrupting that sweep for any reason outside the hard-stop list violates the contract.
 
+### Blocked-on-human sentinel (`--auto` only)
+
+When running under `--auto`, you have no human at the keyboard. If you reach a step you genuinely cannot complete headless — an **interactive** check that needs a person (e.g. an interactive Codex/login flow), a credential prompt only a human can answer, or a decision that is the user's to make — you cannot pause and wait. Instead, **park the run for a human**: do as much as you safely can, leave the work committed on the branch, then end your **final** message with exactly one sentinel line so Jarvis can detect the block, keep this worktree alive, and hand it to the operator.
+
+The sentinel is a single line whose final form is:
+
+```
+JARVIS_WORK_RUN_SENTINEL { "version": 1, "pendingCheck": "<what a human must do>", "command": "<optional shell command for the operator>", "reason": "<optional short reason --auto could not proceed>" }
+```
+
+Rules:
+- It MUST be the **last line** of your final result, on its own line, opening with the exact marker `JARVIS_WORK_RUN_SENTINEL` followed by a single JSON object.
+- `version` MUST be `1`. `pendingCheck` MUST be a non-empty string describing the exact thing a human needs to do. `command` and `reason` are optional strings.
+- Emit it ONLY for a genuine human-required block — not for an ordinary test failure, a review BLOCK you can address, or a task you can still finish. A run that simply finishes (or fails for a reason `--auto` can act on) must NOT emit a sentinel.
+- A malformed, partial, or absent sentinel is ignored — the run falls through to its ordinary terminal outcome (no park). So if you mean to park, emit the line exactly.
+
+Parking is the `--auto` analogue of "stop and report to the user": it is the machine-readable signal that a human must take over in the live worktree before the run can be finalized.
+
 ## Instructions
 
 ### 1. Find the Project

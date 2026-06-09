@@ -302,6 +302,11 @@ const config = {
   WORK_RUN_REAP_GRACE_MS: parseNumericEnv('WORK_RUN_REAP_GRACE_MS', 5_000, { min: 1, integer: true }),
   WORK_RUN_QUIET_CANCEL_AFTER_MS: parseNumericEnv('WORK_RUN_QUIET_CANCEL_AFTER_MS', 1_200_000, { min: 1, integer: true }),
   WORK_RUN_MAX_RUNTIME_MS: parseNumericEnv('WORK_RUN_MAX_RUNTIME_MS', 7_200_000, { min: 1, integer: true }),
+  /** Project 13, Phase 1b — how long (ms) a parked (`blocked-on-human`) run may
+   *  stay unreleased before the stall-check runner sends a ONE-TIME staleness
+   *  nudge (never an auto-release; the worktree holds until a human releases it).
+   *  Default 24h. */
+  PARKED_RUN_NUDGE_AFTER_MS: parseNumericEnv('PARKED_RUN_NUDGE_AFTER_MS', 86_400_000, { min: 1, integer: true }),
   WORK_RUN_GATE_COMMAND_TIMEOUT_MS: parseNumericEnv('WORK_RUN_GATE_COMMAND_TIMEOUT_MS', 600_000, { min: 1, integer: true }),
 
   /** True when started with `NODE_ENV=production` — read by surfaces that

@@ -86,6 +86,18 @@ vi.mock('./work-run-gc-runner.js', () => ({
   runWorkRunGc: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Project 13 Phase 1b — supervision-store seam. work-runner does NOT import this
+// today; the parked path (write the durable `blocked-on-human` record first) and
+// the hardened per-project cap (read parked records) WILL. Mock it now so the
+// Phase 1b tests can drive/observe those reads+writes. `readAllRuns` defaults to
+// an empty store (no parked records) so existing validate tests are unaffected.
+const mockUpsertRun = vi.fn();
+const mockReadAllRuns = vi.fn<() => any[]>(() => []);
+vi.mock('./supervision-store.js', () => ({
+  upsertRun: mockUpsertRun,
+  readAllRuns: mockReadAllRuns,
+}));
+
 // Mock sandbox-runtime: createWorktree/destroyWorktree return controllable
 // stubs. Tests assert on call args; production wires the real git worktree
 // lifecycle (`src/jobs/sandbox-runtime.ts`). `defaultRunGit` is exported by the
@@ -163,6 +175,14 @@ const {
   __resetKillProcessTreeForTest,
 } = await import('./work-runner.js');
 
+// Real scrubber over the MOCKED config (WORKTREE_ROOT='/tmp/test-worktrees'),
+// imported dynamically AFTER the mocks + const declarations so it doesn't force
+// config.js to evaluate before `TEST_PROJECT_ROOT` is initialized (the hoisted
+// vi.mock factory closes over it). Used by the Phase 1a un-scrubbed assertion
+// to prove the operator field is exempt from the path-stripping every other
+// surface goes through.
+const { scrubPathsInText } = await import('../ai/tool-labels.js');
+
 // --- Runtime-deps test doubles (Phase 2: classification + persist seam) ---
 
 /** A controllable GitRunner stub. Default responses classify a clean exit-0
@@ -239,13 +259,13 @@ function makeFakeChild(opts: {
  *  apply after createWorktree). The worktree's `docs/projects` lives under the
  *  fake sandbox path (FAKE_WORKTREE/docs/projects), so the test fixture must
  *  answer for paths under both roots. */
-function setupValidProject(slug: string = '06-webview') {
+function setupValidProject(slug: string = '06-webview', worktree: string = FAKE_WORKTREE) {
   const dirName = slug;
   const liveDir = join(PROJECTS_DIR, dirName);
-  const worktreeDir = join(FAKE_WORKTREE, 'docs', 'projects', dirName);
+  const worktreeDir = join(worktree, 'docs', 'projects', dirName);
 
   mockReaddirSync.mockImplementation((p: string) => {
-    if (p === PROJECTS_DIR || p === join(FAKE_WORKTREE, 'docs', 'projects')) {
+    if (p === PROJECTS_DIR || p === join(worktree, 'docs', 'projects')) {
       return [dirName];
     }
     return [];
@@ -277,6 +297,32 @@ function setupValidProject(slug: string = '06-webview') {
   return { dir: liveDir, worktreeDir, dirName };
 }
 
+/** Drive `apply()` to exhaustion for a 06-webview run, returning the collected
+ *  events + descriptor. Single source for the Phase 1a/1b run helpers:
+ *   - `worktree` is the sandbox path createWorktree returns (default FAKE_WORKTREE).
+ *   - `stdoutLines` seeds the fake child's stream (e.g. a sentinel result envelope).
+ *  The clean exit-0 child + default git stub classify `noop` unless stdout drives
+ *  otherwise. */
+async function runApply(
+  opts: { worktree?: string; stdoutLines?: string[]; id?: string } = {},
+): Promise<{ events: any[]; descriptor: any }> {
+  const { worktree = FAKE_WORKTREE, stdoutLines = [], id = 'mut-run' } = opts;
+  setupValidProject('06-webview', worktree);
+  mockCreateWorktree.mockImplementation(async () => fakeSandboxSpec({ worktree }));
+  mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0, stdoutLines }));
+  const descriptor = {
+    id,
+    kind: 'work-run',
+    payload: { projectSlug: '06-webview', product: 'jarvis' },
+    status: 'running',
+  } as any;
+  const events: any[] = [];
+  for await (const e of workRunApplier.apply(descriptor, { bus: null as any, cancel: () => false })) {
+    events.push(e);
+  }
+  return { events, descriptor };
+}
+
 // --- Tests ---
 
 describe('workRunApplier', () => {
@@ -295,6 +341,12 @@ describe('workRunApplier', () => {
     // for the wrong reason.
     mockSpawn.mockReset();
     mockActiveRuns.clear();
+    // Reset the Phase 1b supervision-store seam so a parked record set by one
+    // test can't bleed into another's validate() (clearAllMocks keeps the
+    // mockReturnValue otherwise).
+    mockUpsertRun.mockReset();
+    mockReadAllRuns.mockReset();
+    mockReadAllRuns.mockReturnValue([]);
     // Default: createWorktree returns a usable sandbox; destroyWorktree is
     // a no-op. Individual tests override these (e.g. to make createWorktree
     // throw) before invoking apply.
@@ -2070,6 +2122,233 @@ describe('workRunApplier', () => {
         vi.useRealTimers();
         __resetKillProcessTreeForTest();
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1a (project 13) — operator worktree path on the run-start notification
+  // -------------------------------------------------------------------------
+  //
+  // Written test-first (these are RED until the "Path on notifications"
+  // implementation task lands — apply() does not yet yield a `start` event).
+  //
+  // Contract under test (spec.md → Requirements 1 & 2, test-plan §1):
+  //  - A run-start notification carries the deterministic worktree path on a
+  //    LOCAL-OPERATOR-ONLY field `operatorWorktreePath` (so Michael can `cd`
+  //    straight in) plus the run id.
+  //  - That path is UN-SCRUBBED (usable as a `cd` target) — distinct from every
+  //    other surface, which stays scrubbed via `scrubPathsInText`.
+  //  - The un-scrubbed path NEVER leaks into a persisted/committed artifact
+  //    (mutations.jsonl descriptor, summary.json, the rolling index, the
+  //    transcript, the terminal event mutations.ts copies onto the descriptor).
+  //  - A run whose worktree was never created omits the field cleanly rather
+  //    than emitting an empty/partial path.
+  //
+  // IMPLEMENTATION NOTE (for the "Path on notifications" task): turning these
+  // green requires apply() to `yield` a new `start` MutationEvent AND widening
+  // the type system — add `'start'` to `MutationEvent.kind` (src/transport/
+  // mutations.ts) and to `BusMutationEvent.subKind` (src/transport/
+  // notification-bus.ts), or strict-mode TS will reject the yield and bus
+  // publish. The `data.operatorWorktreePath` must be the raw `sandbox.worktree`
+  // (un-scrubbed) and must NOT be stamped onto the descriptor / summary / index
+  // / transcript / terminal event.
+  describe('Phase 1a — operator worktree path on run-start notification', () => {
+    // A worktree under the configured WORKTREE_ROOT (`/tmp/test-worktrees`), so
+    // `scrubPathsInText` WOULD strip the `/tmp/test-worktrees/` prefix — making
+    // the "stays un-scrubbed" assertion meaningful (a scrubbed copy differs).
+    const OPERATOR_WORKTREE = '/tmp/test-worktrees/jarvis/06-webview';
+
+    /** Drive a clean exit-0 run rooted at `worktree` (thin wrapper over the
+     *  module-level `runApply`). */
+    const runToCompletion = (worktree: string, id = 'mut-path') => runApply({ worktree, id });
+
+    it('yields a run-start event carrying operatorWorktreePath + run id', async () => {
+      const { events, descriptor } = await runToCompletion(OPERATOR_WORKTREE);
+
+      const start = events.find((e) => e.kind === 'start');
+      expect(start, 'apply() must yield a run-start notification event').toBeDefined();
+      // Deterministic worktree path = <WORKTREE_ROOT>/<product>/<project>.
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+      // Run id present on the bus payload — the mutation id IS the work-run id.
+      expect(start!.mutationId).toBe(descriptor.id);
+
+      // The start notification precedes the terminal event (start already
+      // asserted defined above).
+      const termIdx = events.findIndex((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(events.indexOf(start!)).toBeLessThan(termIdx);
+    });
+
+    it('keeps operatorWorktreePath un-scrubbed (usable as a cd target)', async () => {
+      const { events } = await runToCompletion(OPERATOR_WORKTREE);
+      const start = events.find((e) => e.kind === 'start');
+      expect(start).toBeDefined();
+      // The raw path is preserved verbatim.
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+      // Machine-checkable exemption: the scrubber WOULD strip this path (it
+      // sits under WORKTREE_ROOT), so a scrubbed copy differs — proving the
+      // operator field is genuinely un-scrubbed, not just coincidentally equal.
+      expect(scrubPathsInText(start!.data.operatorWorktreePath)).not.toBe(
+        start!.data.operatorWorktreePath,
+      );
+      expect(start!.data.operatorWorktreePath).toContain('/tmp/test-worktrees/');
+    });
+
+    it('never leaks the un-scrubbed worktree path into persisted/committed artifacts', async () => {
+      const { events, descriptor } = await runToCompletion(OPERATOR_WORKTREE);
+
+      // The operator field carries the raw path (the one surface allowed to).
+      const start = events.find((e) => e.kind === 'start');
+      expect(start).toBeDefined();
+      expect(start!.data.operatorWorktreePath).toBe(OPERATOR_WORKTREE);
+
+      // summary.json — never the raw path (transcript/forensics paths scrubbed).
+      expect(JSON.stringify(writeSummarySpy.mock.calls)).not.toContain(OPERATOR_WORKTREE);
+
+      // rolling index rows — never the raw path.
+      expect(JSON.stringify(indexRows)).not.toContain(OPERATOR_WORKTREE);
+
+      // durable transcript appends — never the raw path.
+      expect(JSON.stringify(currentSink.appended)).not.toContain(OPERATOR_WORKTREE);
+
+      // The terminal event (which mutations.ts copies onto the descriptor →
+      // mutations.jsonl) must NOT carry the operator path.
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      expect(JSON.stringify(terminal!.data ?? {})).not.toContain(OPERATOR_WORKTREE);
+      expect((terminal!.data ?? {}).operatorWorktreePath).toBeUndefined();
+
+      // The descriptor itself (the object appended to mutations.jsonl) is never
+      // stamped with the operator path.
+      expect(JSON.stringify(descriptor)).not.toContain(OPERATOR_WORKTREE);
+    });
+
+    it('omits the path field when no worktree was created (create failed)', async () => {
+      setupValidProject('06-webview', OPERATOR_WORKTREE);
+      mockCreateWorktree.mockImplementation(async () => {
+        throw new Error(`boom: ${OPERATOR_WORKTREE} locked`);
+      });
+      const descriptor = {
+        id: 'mut-nopath',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview', product: 'jarvis' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      // No worktree => no start notification (no empty/partial path emitted).
+      expect(events.find((e) => e.kind === 'start')).toBeUndefined();
+      // No event anywhere carries an operatorWorktreePath field.
+      expect(
+        events.some((e) => (e.data ?? {}).operatorWorktreePath !== undefined),
+      ).toBe(false);
+      // The run still reaches a clean failed terminal, and the create-error
+      // reason is scrubbed — no raw worktree path leaks via the failure reason.
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      expect(terminal!.kind).toBe('failed');
+      expect(JSON.stringify(terminal!.data)).not.toContain('/tmp/test-worktrees/');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1b (project 13) — parked state (test-plan §2)
+  // -------------------------------------------------------------------------
+  //
+  // Written test-first. RED until the parked path lands in work-runner:
+  //  - On a parsed JARVIS_WORK_RUN_SENTINEL, write a durable supervision
+  //    `blocked-on-human` record FIRST, SKIP `runFinalizer` (leave the worktree
+  //    live), and yield a terminal event carrying `parked: true` +
+  //    operatorWorktreePath + pendingCheck.
+  //  - The per-project cap rejects when a parked supervision record exists for
+  //    the slug, OR the deterministic worktree already exists on disk (the
+  //    crash-lost-record backstop).
+  describe('Phase 1b — parked state', () => {
+    /** A `result` envelope whose final line is a valid blocked-on-human sentinel. */
+    const SENTINEL_RESULT = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result:
+        'Worked through tasks 1-3, but task 4 needs an interactive Codex login.\n' +
+        'JARVIS_WORK_RUN_SENTINEL {"version":1,"pendingCheck":"Run the interactive Codex check and confirm","command":"npm run codex-check"}',
+    });
+
+    /** Drive a run whose stream emits a blocked-on-human sentinel (thin wrapper
+     *  over the module-level `runApply`). Worktree defaults to FAKE_WORKTREE. */
+    const runWithSentinel = (id = 'mut-parked') => runApply({ stdoutLines: [SENTINEL_RESULT], id });
+
+    it('a parsed sentinel SKIPS runFinalizer and yields a parked terminal event', async () => {
+      const { events } = await runWithSentinel();
+
+      // The Project 15 finalizer must NOT run on a parked run (its shared tail
+      // would remove the worktree).
+      expect(finalizerHarness.runFinalizerSpy).not.toHaveBeenCalled();
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal).toBeDefined();
+      const data = (terminal!.data ?? {}) as Record<string, unknown>;
+      expect(data['parked']).toBe(true);
+      expect(data['pendingCheck']).toBe('Run the interactive Codex check and confirm');
+      // The parked terminal's operator path comes from `sandbox.worktree` (the
+      // worktree createWorktree actually returned — `FAKE_WORKTREE` here), the
+      // SAME source the Phase 1a start event uses. NOT recomputed via
+      // worktreePathFor: that is the cap's job (validate has no sandbox). In
+      // production the two coincide (createWorktree builds at worktreePathFor's
+      // path); they differ here only because the mock sandbox uses a fake path.
+      expect(data['operatorWorktreePath']).toBe(FAKE_WORKTREE);
+    });
+
+    it('parking writes a durable blocked-on-human record and leaves the worktree live', async () => {
+      await runWithSentinel();
+
+      // The parked supervision record is written (status blocked-on-human).
+      const parkedUpsert = mockUpsertRun.mock.calls
+        .map((c) => c[0] as { status?: string })
+        .find((r) => r?.status === 'blocked-on-human');
+      expect(parkedUpsert, 'a blocked-on-human supervision record must be written on park').toBeDefined();
+
+      // The worktree is NOT destroyed — it is left live for the human.
+      expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    });
+
+    it('cap rejects a new run when a parked (blocked-on-human) supervision record exists for the slug', () => {
+      setupValidProject('06-webview');
+      const nowIso = new Date().toISOString();
+      // The parked record matches the new run's product+project (the worktree it
+      // protects is per <product>/<project>). The record carries both fields so
+      // the cap can scope by product+project, consistent with the existsSync
+      // backstop's worktreePathFor(product, project, …) check below.
+      mockReadAllRuns.mockReturnValue([
+        { id: 'parked-1', product: 'jarvis', project: '06-webview', status: 'blocked-on-human', startedAt: nowIso, lastHeartbeatAt: nowIso },
+      ]);
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      expect(result.ok).toBe(false);
+    });
+
+    it('cap rejects via the existsSync worktree backstop when the parked record was lost to a crash', () => {
+      // Recovery relabeled the lost record 'unknown' (no blocked-on-human left),
+      // but the worktree still occupies the deterministic path. The synchronous
+      // existsSync backstop must reject before createWorktree is ever reached.
+      const liveDir = join(PROJECTS_DIR, '06-webview');
+      // The cap computes the deterministic path via worktreePathFor(product,
+      // project, WORKTREE_ROOT) = <WORKTREE_ROOT>/<product>/<project> — validate
+      // runs BEFORE createWorktree, so there is no sandbox.worktree to read.
+      // This differs from FAKE_WORKTREE (the mock sandbox's arbitrary path); in
+      // production they coincide.
+      const worktree = '/tmp/test-worktrees/jarvis/06-webview';
+      setupValidProject('06-webview');
+      mockReadAllRuns.mockReturnValue([]); // no parked record survives
+      mockExistsSync.mockImplementation(
+        (p: string) =>
+          p === join(liveDir, 'spec.md') ||
+          p === join(liveDir, 'tasks.md') ||
+          p === worktree,
+      );
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      expect(result.ok).toBe(false);
     });
   });
 });

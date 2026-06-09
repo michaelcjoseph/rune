@@ -127,3 +127,19 @@ export function formatQuietNudge(run: SupervisedRun, now: number): string {
     `id=${run.id.slice(0, 8)}`
   );
 }
+
+/**
+ * Format a PARKED-run staleness nudge (project 13, Phase 1b) — a run paused for
+ * a human that has gone unreleased past `PARKED_RUN_NUDGE_AFTER_MS`. Distinct
+ * wording ("parked … awaiting you") from the stall/quiet nudges: the run is
+ * neither dead nor quietly working — it is deliberately held for the operator,
+ * and the nudge is a reminder, NOT a cancel. Ages from the park time
+ * (`lastHeartbeatAt`, stamped when the parked record was written).
+ */
+export function formatParkedNudge(run: SupervisedRun, now: number): string {
+  return (
+    `⏸️ Run parked, awaiting you: ${run.product}/${run.project} ` +
+    `(blocked on a human for ${ageMinLabel(run.lastHeartbeatAt, now)}). ` +
+    `id=${run.id.slice(0, 8)}`
+  );
+}

@@ -23,6 +23,8 @@ import { readProposalQueue, writeProposalQueue } from '../jobs/proposal-queue.js
 import { readPlaybookQueue, writePlaybookQueue } from '../jobs/playbook-extract.js';
 import { actionApprovedIntentProposal } from '../intent/journal-intent-consumer.js';
 import { realConsumerDeps } from '../intent/journal-intent-actions.js';
+import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
+import { VALID_SLUG } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('approval-actions');
@@ -153,12 +155,33 @@ export async function dispatchApprovalStatus(id: string, status: ApprovalStatus)
     case 'playbook':        return setPlaybookStatus(idx, status);
     case 'ask-twice':       return setAskTwiceStatus(idx, status);
     case 'blocked-on-human':
-      // Blocked-on-human runs aren't queue entries the cockpit can flip;
-      // the user must take the underlying action (a cancel, a re-dispatch,
-      // a /work --auto retry). The inbox surfaces them so the user sees
-      // them, but approve/reject from here is a no-op — return
-      // not-found so the row stays put until the underlying run terminates.
-      return 'not-found';
+      // Project 13 Phase 1c: a `blocked-on-human` row is a PARKED work-run, made
+      // actionable here. Approve/Release routes to the shared release runtime (a
+      // clean parked run → creates the cold-finalize mutation → 'ok'); Reject
+      // (or a not-parked / dirty / failed release) leaves the parked run
+      // untouched and returns 'not-found' so the row stays put. A dirty worktree
+      // is NOT confirm-discarded from the inbox — that requires the explicit
+      // release endpoint/callback carrying confirmDirty=true (the inbox Approve
+      // is a clean-release quick-action only).
+      if (status !== 'approved') return 'not-found';
+      // Guard the id at the trust boundary (consistent with the HTTP route),
+      // even though readParkedRun does a pure store lookup with no path join.
+      if (!VALID_SLUG.test(parsed.payload)) return 'not-found';
+      try {
+        const outcome = await requestWorkRunRelease(parsed.payload, {}, defaultReleaseRequestDeps('webview'));
+        // 'created' → 'ok'; an internal release error surfaces honestly as
+        // 'error' (HTTP 500) rather than masquerading as 'not-found' (404); a
+        // not-parked / dirty-confirm result leaves the row put ('not-found').
+        if (outcome.kind === 'created') return 'ok';
+        if (outcome.kind === 'error') return 'error';
+        return 'not-found';
+      } catch (err: unknown) {
+        log.error('blocked-on-human release failed', {
+          runId: parsed.payload,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return 'error';
+      }
     default:
       return 'not-found';
   }

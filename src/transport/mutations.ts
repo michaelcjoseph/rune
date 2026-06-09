@@ -84,6 +84,12 @@ export type MutationKind =
   // selects orchestrated mode (see src/jobs/work-dispatch.ts); otherwise it
   // dispatches the legacy `work-run` applier as the recorded fallback.
   | 'orchestrated-work'
+  // Project 13 Phase 1c: release a PARKED (`blocked-on-human`) work-run — the
+  // applier cold-finalizes a clean parked worktree through the Project 15
+  // finalizer (gated-merge), or discards a confirmed-dirty one. Auto-approved
+  // (the human already decided to release via the preflight). Payload:
+  // `{ runId, confirmDirty }` (see src/jobs/work-run-release.ts).
+  | 'work-run-release'
   | 'gen-eval-loop'
   | 'project-edit'
   | 'proposal-action'
@@ -116,10 +122,15 @@ export interface MutationEvent {
   mutationId: string;
   ts: string;
   /**
-   * `keep-alive` is a process-liveness signal emitted by the applier on a
-   * periodic ticker while the child is alive — distinct from `output`
-   * (which reflects LLM activity). The two signals back two SupervisedRun
-   * timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
+   * `start` is a one-shot run-start notification emitted by the work-run
+   * applier once its worktree exists (project 13). It carries the local-operator
+   * `operatorWorktreePath` so Michael can reach a live run in one step; the
+   * mutations pipeline only publishes it to the bus (no supervision side effect)
+   * and never copies its data onto the descriptor — the un-scrubbed path must
+   * not reach mutations.jsonl. `keep-alive` is a process-liveness signal emitted
+   * by the applier on a periodic ticker while the child is alive — distinct from
+   * `output` (which reflects LLM activity). The two signals back two
+   * SupervisedRun timestamps: `output` → `lastHeartbeatAt`, `keep-alive` →
    * `lastChildAliveAt`. Stall-check prefers `lastChildAliveAt` so a long
    * quiet LLM call no longer trips a false stall nudge.
    *
@@ -133,7 +144,7 @@ export interface MutationEvent {
    * (never reaches Telegram/the drawer); it exists only to keep supervision's
    * activity heartbeat fresh.
    */
-  kind: 'log' | 'progress' | 'output' | 'keep-alive' | 'activity' | 'completed' | 'failed';
+  kind: 'start' | 'log' | 'progress' | 'output' | 'keep-alive' | 'activity' | 'completed' | 'failed';
   data?: unknown;
 }
 
@@ -164,6 +175,17 @@ export interface RunHandle {
 export interface MutationApplier<P = Record<string, unknown>> {
   kind: MutationKind;
   autoApprove: boolean;
+  /**
+   * Whether this applier's runs are tracked in the supervision visibility
+   * surface (`supervised-runs.json`). Defaults to `true`. A short-lived CONTROL
+   * mutation that acts ON another run — e.g. `work-run-release`, whose subject
+   * (the parked run) already has its own supervised record it transitions —
+   * sets this `false` so the pipeline does NOT seed a redundant record keyed by
+   * the control mutation's own UUID (which would otherwise show as a bare-UUID
+   * `running` entry, trip the 5-min stall nudge on a slow finalize, and produce
+   * a spurious crash-recovery warning).
+   */
+  supervised?: boolean;
   validate(payload: P): { ok: true } | { ok: false; reason: string };
   apply(descriptor: MutationDescriptor<P>, ctx: ApplyContext): AsyncIterable<MutationEvent>;
 }
@@ -228,7 +250,11 @@ export async function createMutation(
   // via getVisibility's `blocked` bucket. (Validation-rejected mutations
   // never reach this line, so no stray supervision entries get written.)
   const seedStatus: SupervisedRun['status'] = applier.autoApprove ? 'running' : 'blocked-on-human';
-  safeUpsertRun(buildSupervisedRun(descriptor, seedStatus, descriptor.createdAt));
+  // Opt-out for control mutations (e.g. work-run-release) that don't represent a
+  // long-running supervised run of their own.
+  if (applier.supervised !== false) {
+    safeUpsertRun(buildSupervisedRun(descriptor, seedStatus, descriptor.createdAt));
+  }
 
   if (applier.autoApprove) {
     void startApply(applier, descriptor);
@@ -265,12 +291,18 @@ async function startApply(
   };
   activeRuns.set(descriptor.id, handle);
 
+  // Control mutations (e.g. work-run-release) opt out of supervision tracking —
+  // they act ON a run that already has its own supervised record. `supervise`
+  // gates every supervision write below; the mutation log (appendMutationLine)
+  // is unconditional so audit is never skipped.
+  const supervise = applier.supervised !== false;
+
   descriptor.status = 'running';
   appendMutationLine(descriptor);
   // Flip supervision to 'running' — for an autoApprove mutation this confirms
   // the seed; for a manual-approval mutation it transitions out of the
   // 'blocked-on-human' seed once the human approved and dispatch started.
-  safeUpsertRun(buildSupervisedRun(descriptor, 'running', new Date().toISOString()));
+  if (supervise) safeUpsertRun(buildSupervisedRun(descriptor, 'running', new Date().toISOString()));
 
   // Heartbeat upserts are throttled — a busy run that streams thousands of
   // output lines must not block the event loop with a read-modify-write per
@@ -329,7 +361,7 @@ async function startApply(
       // it must keep `lastOutputAt` fresh too — otherwise a run busy in a long
       // tool call or subagent reads as quiet and the P2.7 quiet→cancel backstop
       // can reap a healthy run (docs/projects/bugs.md).
-      if (event.kind === 'output' || event.kind === 'activity') {
+      if (supervise && (event.kind === 'output' || event.kind === 'activity')) {
         const now = Date.now();
         if (now - lastHeartbeatUpsertAt >= HEARTBEAT_THROTTLE_MS) {
           const nowIso = new Date(now).toISOString();
@@ -348,7 +380,7 @@ async function startApply(
       // gated by a chatty output stream (and vice versa). The upsert
       // preserves the prior lastHeartbeatAt by passing it back through
       // buildSupervisedRun.
-      if (event.kind === 'keep-alive') {
+      if (supervise && event.kind === 'keep-alive') {
         const now = Date.now();
         if (now - lastKeepAliveUpsertAt >= HEARTBEAT_THROTTLE_MS) {
           const nowIso = new Date(now).toISOString();
@@ -381,24 +413,46 @@ async function startApply(
           applyOutcomeToDescriptor(descriptor, event);
         }
         appendMutationLine(descriptor);
-        safeUpsertRun(
-          buildSupervisedRun(
-            descriptor,
-            descriptor.status,
-            new Date().toISOString(),
-            currentChildAliveAt,
-            currentOutputAt,
-          ),
-        );
+        // Project 13 (Background §7): a PARKED work-run terminates the MUTATION
+        // normally (the child exited to report a human-block), but the SUPERVISED
+        // run must stay `blocked-on-human` until a human releases it. The parked
+        // terminal event carries explicit `parked: true`; treat it as a
+        // supervision OVERRIDE — persist the descriptor as terminal (above), but
+        // reassert supervision as `blocked-on-human` rather than the terminal
+        // status. This is the second of the two terminal supervision writers
+        // (the applier wrote the parked record first); without the override this
+        // writer would clobber it back to completed/failed. Gated on
+        // `kind === 'work-run'` (parking is a work-run concept — Project 13
+        // Background §6) so the stringly-typed `parked` flag can only divert
+        // supervision for the applier that actually emits it.
+        const parked =
+          descriptor.kind === 'work-run' &&
+          (event.data as Record<string, unknown> | undefined)?.['parked'] === true;
+        const supervisionStatus: SupervisedRun['status'] = parked
+          ? 'blocked-on-human'
+          : descriptor.status;
+        if (supervise) {
+          safeUpsertRun(
+            buildSupervisedRun(
+              descriptor,
+              supervisionStatus,
+              new Date().toISOString(),
+              currentChildAliveAt,
+              currentOutputAt,
+            ),
+          );
+        }
         return;
       }
     }
     // Applier exhausted without terminal event — treat as completed
     descriptor.status = 'completed';
     appendMutationLine(descriptor);
-    safeUpsertRun(
-      buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
-    );
+    if (supervise) {
+      safeUpsertRun(
+        buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
+      );
+    }
   } catch (err) {
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
     descriptor.status = 'failed';
@@ -407,9 +461,11 @@ async function startApply(
     // Persist directly as 'failed' — the terminal-event branch above exits
     // via `return`, so this catch is only reachable when the run is still
     // 'running' and a markCrashed() wrap would be a no-op composition.
-    safeUpsertRun(
-      buildSupervisedRun(descriptor, 'failed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
-    );
+    if (supervise) {
+      safeUpsertRun(
+        buildSupervisedRun(descriptor, 'failed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
+      );
+    }
   } finally {
     activeRuns.delete(descriptor.id);
   }

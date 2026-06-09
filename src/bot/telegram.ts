@@ -5,6 +5,7 @@ import { createLogger } from '../utils/logger.js';
 import { handleTextMessage, dispatchText } from './handlers/text.js';
 import { handlePhotoMessage } from './handlers/photo.js';
 import { dispatchApprovalStatus, parseApprovalId } from '../transport/approval-actions.js';
+import { parseWorkRunReleaseCallback, dispatchTelegramWorkRunRelease } from './work-run-release-callback.js';
 
 const log = createLogger('telegram');
 
@@ -64,6 +65,19 @@ export function wireHandlers(bot: TelegramBot, sender: MessageSender): void {
     void bot.answerCallbackQuery(query.id).catch((err: unknown) => {
       log.warn('answerCallbackQuery failed', { error: (err as Error).message });
     });
+
+    // Work-run release route (project 13, Phase 1c) — `work-run-release:<id>` /
+    // `work-run-release-confirm:<id>`. Delegates to the ONE shared release
+    // runtime so this surface can't drift from the cockpit route / inbox row.
+    if (parseWorkRunReleaseCallback(data)) {
+      void dispatchTelegramWorkRunRelease((uid, text) => sender.send(uid, text), userId, data).catch(
+        (err: unknown) => {
+          log.error('work-run-release callback failed', { error: (err as Error).message });
+          void sender.send(userId, 'Failed to action release — internal error.').catch(() => { /* swallow */ });
+        },
+      );
+      return;
+    }
 
     // Composite-id route (cockpit-inbox-shared path).
     const { status, idCandidate } = parseCallbackData(data);

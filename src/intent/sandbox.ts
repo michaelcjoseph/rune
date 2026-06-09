@@ -56,6 +56,23 @@ export interface SandboxSpec {
 export const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
+ * Stable per-PROJECT work-run branch name (not per-run-id) — the deterministic
+ * resume target a run's worktree is checked out on. A per-project name lets
+ * `createWorktree` check out an existing branch (carrying committed progress
+ * forward) instead of re-forking off the base branch and restarting from Phase
+ * 1. `projectSlug` is git-ref-safe (VALID_SLUG-validated by callers), and
+ * branches are per-repo so two products sharing a slug never collide.
+ *
+ * Lives here (the light sandbox-policy module) rather than in the heavy
+ * `work-runner.ts` so consumers like `work-run-release.ts` can reuse it without
+ * pulling in the Claude-CLI spawn chain. `work-runner.ts` re-exports it for
+ * back-compat with existing importers.
+ */
+export function workBranchName(projectSlug: string): string {
+  return `jarvis-work/${projectSlug}`;
+}
+
+/**
  * The deterministic worktree path for a (product, project) under `worktreeRoot`. Distinct
  * projects always get distinct paths, so two concurrent runs never share a working tree.
  *

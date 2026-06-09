@@ -47,12 +47,14 @@ const {
 function makeApplier(overrides: Partial<{
   kind: string;
   autoApprove: boolean;
+  supervised: boolean;
   validateResult: { ok: true } | { ok: false; reason: string };
   applyGen: AsyncIterable<any>;
 }> = {}) {
   const {
     kind = 'work-run',
     autoApprove = false,
+    supervised,
     validateResult = { ok: true },
     applyGen,
   } = overrides;
@@ -60,6 +62,7 @@ function makeApplier(overrides: Partial<{
   return {
     kind,
     autoApprove,
+    ...(supervised !== undefined ? { supervised } : {}),
     validate: vi.fn(() => validateResult),
     apply: vi.fn(applyGen !== undefined ? () => applyGen : async function* () {
       // default: no-op async generator
@@ -301,6 +304,27 @@ describe('mutations', () => {
       expect(run.status).toBe('running');
     });
 
+    it('a supervised:false applier (e.g. work-run-release) seeds NO supervised record', async () => {
+      // A control mutation that acts ON another run opts out of supervision
+      // tracking — the pipeline must not seed a redundant bare-UUID record (which
+      // would trip the stall nudge on a slow finalize or a spurious recovery warn).
+      const applier = makeApplier({
+        kind: 'work-run-release',
+        autoApprove: true,
+        supervised: false,
+        validateResult: { ok: true },
+        applyGen: completedGen('parked-run-1'),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('work-run-release', { runId: 'parked-run-1' }, 'webview');
+      expect(result.ok).toBe(true);
+
+      // Give startApply a tick to run to terminal; assert ZERO supervision writes.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(mockUpsertRun).not.toHaveBeenCalled();
+    });
+
     it('output events do NOT spam upsertRun — heartbeat is throttled at 30s', async () => {
       // A run that streams many output lines must not block the event loop
       // with per-line read-modify-write. The throttle skips heartbeat
@@ -344,6 +368,56 @@ describe('mutations', () => {
       const calls = await waitForUpserts(3);
       const final = calls[calls.length - 1]![0] as { status: string };
       expect(final.status).toBe('completed');
+    });
+
+    it('a PARKED terminal event does NOT clobber blocked-on-human (project 13, Background §7)', async () => {
+      // A parked work-run terminates the MUTATION normally (the child exited),
+      // but the SUPERVISED run must stay 'blocked-on-human' until a human
+      // releases it. The parked terminal event carries explicit `parked: true`
+      // metadata, and the terminal branch treats it as a supervision OVERRIDE:
+      // persist the descriptor as terminal, but reassert supervision as
+      // blocked-on-human rather than completed/failed (the second of the two
+      // terminal supervision writers must not clobber the parked record).
+      // RED until the mutations.ts parked-aware terminal branch lands.
+      async function* parkedGen(): AsyncIterable<any> {
+        yield {
+          mutationId: 'x',
+          ts: new Date().toISOString(),
+          kind: 'completed',
+          data: {
+            parked: true,
+            outcome: 'noop',
+            operatorWorktreePath: '/tmp/worktrees/jarvis/demo',
+            pendingCheck: 'Run the interactive check',
+          },
+        };
+      }
+      const applier = makeApplier({
+        kind: 'work-run',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: parkedGen(),
+      });
+      registerApplier(applier);
+
+      await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+
+      // Expected upsert sequence: [running (seed), running (startApply),
+      // blocked-on-human (terminal override)]. The parked override replaces the
+      // terminal write IN PLACE — it must NOT first write completed/failed and
+      // then re-override (that would make `calls[last]` a fragile proxy).
+      const calls = await waitForUpserts(3);
+      // Let any (incorrect) extra terminal upsert settle so the assertions below
+      // would catch a completed/failed write rather than racing past it.
+      await new Promise((r) => setTimeout(r, 20));
+      const statuses = (mockUpsertRun.mock.calls as unknown[][]).map(
+        (c) => (c[0] as { status: string }).status,
+      );
+      // The supervised run is NEVER written as completed/failed for a parked run.
+      expect(statuses).not.toContain('completed');
+      expect(statuses).not.toContain('failed');
+      // The settled supervision state is blocked-on-human.
+      expect(statuses[statuses.length - 1]).toBe('blocked-on-human');
     });
 
     it('a failed event flips the SupervisedRun status to "failed"', async () => {

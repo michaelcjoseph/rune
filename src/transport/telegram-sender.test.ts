@@ -402,6 +402,92 @@ describe('TelegramSender', () => {
       await flush();
       expect(mockSendLongMessage).not.toHaveBeenCalled();
     });
+
+    // --- Project 13, Phase 1a: run-start notification delivery ---
+    /** Build a work-run `start` BusMutationEvent (project 13). */
+    function workRunStart(data: Record<string, unknown>) {
+      return {
+        kind: 'mutation-event' as const,
+        mutationId: 'run-1234',
+        mutationKind: 'work-run',
+        subKind: 'start',
+        ts: new Date().toISOString(),
+        data,
+        userId: 123,
+      } as any;
+    }
+
+    it('sends a start message carrying the un-scrubbed worktree path + run id', async () => {
+      // The operator path is a LOCAL-OPERATOR field — Telegram (to TELEGRAM_USER_ID)
+      // is a local surface, so the raw `cd`-able path is delivered verbatim. Use a
+      // synthetic `/tmp` fixture (never a real `/Users/<name>` host path) so this
+      // committed test leaks no OS username.
+      const worktree = '/tmp/worktrees/jarvis/06-webview';
+      sender.onMutationEvent(
+        workRunStart({ operatorWorktreePath: worktree, runId: 'run-1234', projectSlug: '06-webview', product: 'jarvis' }),
+      );
+      await flush();
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      // Michael can copy the path straight out of the alert (un-scrubbed).
+      expect(text).toContain(worktree);
+      expect(text).toContain('06-webview');
+      expect(text).toContain('run-1234');
+    });
+
+    it('ignores a start event for a non-work-run mutation kind', async () => {
+      sender.onMutationEvent({
+        ...workRunStart({ operatorWorktreePath: '/x', runId: 'r' }),
+        mutationKind: 'gen-eval-loop',
+      });
+      await flush();
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not send an empty start alert when the worktree path is absent', async () => {
+      // Defensive: a work-run start always carries the path, but never surface a
+      // pathless alert if one ever arrives malformed.
+      sender.onMutationEvent(workRunStart({ runId: 'run-1234', projectSlug: '06-webview' }));
+      await flush();
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+    });
+
+    // --- Project 13, Phase 1b: parked terminal rendering (test-plan §2 "Cap") ---
+    // A parked run terminates the mutation normally (subKind completed) but
+    // carries `parked: true` + the sentinel payload. `formatWorkRunTerminal` must
+    // render the PARKED state, NOT the underlying `outcome` (partial/noop) — a
+    // run paused for a human must never read as "did nothing / no-op success".
+    // Project 13 Phase 1c: a parked terminal also gets a one-tap Release button,
+    // so it goes through the inline-keyboard (`bot.sendMessage`) path, not the
+    // plain `sendLongMessage` path.
+    it('renders a parked run via a parked-aware branch, with a one-tap Release button', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          parked: true,
+          operatorWorktreePath: '/tmp/worktrees/jarvis/demo',
+          pendingCheck: 'Run the interactive Codex check and confirm the result',
+          command: 'npm run codex-check',
+          reason: 'needs a human at the keyboard',
+          // Underlying classification — must NOT be the headline for a parked run.
+          outcome: 'noop',
+          workProduct: noopWorkProduct,
+        }),
+      );
+      await flush();
+      // Parked terminal routes through the approval-keyboard path, not sendLongMessage.
+      expect(mockSendLongMessage).not.toHaveBeenCalled();
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      const [, text, opts] = bot.sendMessage.mock.calls[0]! as [number, string, { reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+      // Parked branch wins — never the no-op "did nothing" headline.
+      expect(text.toLowerCase()).not.toContain('no-op');
+      expect(text.toLowerCase()).toMatch(/park|paused|needs you|blocked on you|awaiting/);
+      // Carries the pending check + the un-scrubbed operator path so Michael can act.
+      expect(text).toContain('Run the interactive Codex check and confirm the result');
+      expect(text).toContain('/tmp/worktrees/jarvis/demo');
+      // The Release button's callback id routes through the shared release runtime.
+      const button = opts.reply_markup!.inline_keyboard[0]![0]!;
+      expect(button.callback_data).toMatch(/^work-run-release:/);
+    });
   });
 
   describe('onOpEvent — classifier filter', () => {

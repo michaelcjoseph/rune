@@ -166,6 +166,34 @@ describe('gcWorkRuns', () => {
     expect(result.deletedIds).toContain('run-1');
   });
 
+  it('project 13: a parked run (blocked-on-human id in nonTerminalIds) is never pruned — dir + branch protected, even over cap', async () => {
+    // The gc-runner builds nonTerminalIds from supervised runs filtered by
+    // `!TERMINAL_STATUSES.has(status)` — and TERMINAL_STATUSES = {completed,
+    // failed}, so 'blocked-on-human' (parked) is non-terminal and lands in the
+    // protected set. This asserts gcWorkRuns honors that protection: a parked
+    // run's dir and branch ref survive a GC pass that is over the count cap.
+    // Verify-not-implement (spec Background §4) — current behavior, no carve-out.
+    for (let i = 0; i < 4; i++) seedRun(`run-${i}`, i);
+    const { stub, calls } = makeGitStub();
+
+    const result = await gcWorkRuns({
+      workRunsDir,
+      runGit: stub,
+      productRepos: { jarvis: '/fake/repo' },
+      activeIds: new Set(),
+      nonTerminalIds: new Set(['run-0']), // run-0 is parked (blocked-on-human)
+      maxRuns: 1,
+      maxBytes: 100_000,
+    });
+
+    // The parked run (oldest) is protected despite being over the count cap…
+    expect(result.deletedIds).not.toContain('run-0');
+    // …and its branch ref is never pruned.
+    expect(calls.some((c) => c.includes('branch') && c.some((a) => a.includes('jarvis-work/run-0')))).toBe(false);
+    // The other over-cap unprotected runs ARE pruned.
+    expect(result.deletedIds.length).toBeGreaterThan(0);
+  });
+
   it('prunes the deleted run\'s branch ref (git branch -d)', async () => {
     for (let i = 0; i < 3; i++) seedRun(`run-${i}`, i);
     const { stub, calls } = makeGitStub();
