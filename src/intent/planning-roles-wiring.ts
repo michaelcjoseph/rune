@@ -164,14 +164,19 @@ const TECH_LEAD_INSTRUCTION = [
   'The product spec below is approved. As the tech lead, write the technical spec',
   'and break the work into tasks sized so each fits one fresh execution context.',
   '',
+  'Group the tasks into phases / milestones: give every task a `phase` label (e.g.',
+  '"Phase 1 - Core", "Phase 2 - UI"). Tasks that share a phase are one milestone.',
+  'Emit the tasks in execution order — earlier phases and dependency-prerequisite',
+  'tasks first — so the build loop runs them top to bottom.',
+  '',
   'Respond with EXACTLY ONE fenced ```tech-breakdown block containing a JSON object,',
   'and nothing after the fence:',
   '```tech-breakdown',
-  '{"techSpec": "<markdown technical spec: interfaces, contracts, data shapes, sequencing>", "tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}]}',
+  '{"techSpec": "<markdown technical spec: interfaces, contracts, data shapes, sequencing>", "tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}]}',
   '```',
   '',
   'Set designerNeeded true ONLY for front-end / UX tasks. Every task needs a',
-  'testStrategy from the three allowed values.',
+  'testStrategy from the three allowed values and a phase label.',
 ].join('\n');
 
 const TEST_STRATEGIES: readonly TestStrategy[] = [
@@ -211,12 +216,14 @@ function parseSizedTask(raw: unknown, index: number): SizedTask {
   const testStrategy = TEST_STRATEGIES.includes(t['testStrategy'] as TestStrategy)
     ? (t['testStrategy'] as TestStrategy)
     : 'code-tests-required';
+  const phase = typeof t['phase'] === 'string' && t['phase'].trim() ? t['phase'].trim() : undefined;
   return {
     id,
     text: t['text'],
     testStrategy,
     designerNeeded: t['designerNeeded'] === true,
     roles: isStringArray(t['roles']) ? t['roles'] : [],
+    ...(phase ? { phase } : {}),
   };
 }
 

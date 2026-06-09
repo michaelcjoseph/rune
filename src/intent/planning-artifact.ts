@@ -8,11 +8,10 @@
  * a `SpecArtifact` with markdown `tasks` + `testPlan` strings. This module is the
  * pure, testable serialization between the two.
  *
- * KNOWN GAP (v1): `SizedTask[]` is FLAT — the tech-lead role does not yet emit
- * phase grouping, so `sizedTasksToMarkdown` renders a single-phase checklist with
- * a "Tests (write first)" block, not the multi-phase `tasks.md` the legacy
- * single-shot planner produced. Phasing is a tech-lead-output extension, tracked
- * for a follow-up.
+ * Tasks carry an optional `phase` label from the tech lead; `sizedTasksToMarkdown`
+ * groups them into milestone sections (first-seen order), each with its own
+ * "Tests (write first)" block — the multi-phase `tasks.md` shape the legacy
+ * single-shot planner produced. Unlabeled tasks collapse into a default phase.
  */
 
 import type { SpecArtifact } from './planner.js';
@@ -28,33 +27,58 @@ const STRATEGY_LABEL: Record<TestStrategy, string> = {
   'tests-as-deliverable': 'Tests as deliverable',
 };
 
+/** Phase label for tasks the tech lead left unlabeled. */
+const DEFAULT_PHASE = 'Phase 1';
+
+/** Group tasks by their `phase` label, preserving first-seen phase order and
+ *  task order within each phase. Unlabeled tasks collapse into {@link DEFAULT_PHASE}. */
+function groupByPhase(tasks: readonly SizedTask[]): Array<{ phase: string; tasks: SizedTask[] }> {
+  const order: string[] = [];
+  const byPhase = new Map<string, SizedTask[]>();
+  for (const t of tasks) {
+    const phase = t.phase?.trim() || DEFAULT_PHASE;
+    if (!byPhase.has(phase)) {
+      byPhase.set(phase, []);
+      order.push(phase);
+    }
+    byPhase.get(phase)!.push(t);
+  }
+  return order.map((phase) => ({ phase, tasks: byPhase.get(phase)! }));
+}
+
 /**
- * Render the sized tasks into a `tasks.md` body. v1 is a single phase whose
- * "Tests (write first)" block lists the `code-tests-required` tasks, followed by
- * the task checklist annotated with each task's test strategy and designer flag —
- * the metadata the orchestrator's QA-first and designer-routing gates read.
+ * Render the sized tasks into a phased `tasks.md` body. Tasks are grouped by
+ * their tech-lead `phase` label into milestone sections (first-seen order), each
+ * opening with a "Tests (write first)" block listing that phase's
+ * `code-tests-required` tasks, then an Implementation checklist annotated with
+ * each task's test strategy and designer flag — the metadata the orchestrator's
+ * QA-first and designer-routing gates read. The orchestration loop walks the
+ * checklist linearly, so phase headings are organizational, not load-bearing.
  */
 export function sizedTasksToMarkdown(tasks: readonly SizedTask[]): string {
   const lines: string[] = ['# Tasks', ''];
 
-  const testFirst = tasks.filter((t) => t.testStrategy === 'code-tests-required');
-  lines.push('## Phase 1', '', '### Tests (write first)', '');
-  if (testFirst.length > 0) {
-    for (const t of testFirst) {
-      lines.push(`- [ ] Tests for **${t.id}**: ${t.text}`);
+  for (const { phase, tasks: phaseTasks } of groupByPhase(tasks)) {
+    lines.push(`## ${phase}`, '', '### Tests (write first)', '');
+    const testFirst = phaseTasks.filter((t) => t.testStrategy === 'code-tests-required');
+    if (testFirst.length > 0) {
+      for (const t of testFirst) {
+        lines.push(`- [ ] Tests for **${t.id}**: ${t.text}`);
+      }
+    } else {
+      lines.push('- [ ] _No code-test-required tasks — see per-task strategy below._');
     }
-  } else {
-    lines.push('- [ ] _No code-test-required tasks — see per-task strategy below._');
-  }
-  lines.push('', '### Implementation', '');
+    lines.push('', '### Implementation', '');
 
-  for (const t of tasks) {
-    const designer = t.designerNeeded ? ' _(designer review)_' : '';
-    lines.push(`- [ ] **${t.id}** — ${t.text}${designer}`);
-    lines.push(`  - Test strategy: \`${t.testStrategy}\``);
-    if (t.roles.length > 0) {
-      lines.push(`  - Roles: ${t.roles.join(', ')}`);
+    for (const t of phaseTasks) {
+      const designer = t.designerNeeded ? ' _(designer review)_' : '';
+      lines.push(`- [ ] **${t.id}** — ${t.text}${designer}`);
+      lines.push(`  - Test strategy: \`${t.testStrategy}\``);
+      if (t.roles.length > 0) {
+        lines.push(`  - Roles: ${t.roles.join(', ')}`);
+      }
     }
+    lines.push('');
   }
 
   return lines.join('\n').trimEnd() + '\n';

@@ -44,6 +44,11 @@ export interface SizedTask {
   designerNeeded: boolean;
   /** Roles the tech lead sized into this task. */
   roles: string[];
+  /** Phase / milestone label this task belongs to (e.g. "Phase 1 - Core").
+   *  Tasks sharing a phase render together under one heading with their own
+   *  Tests-write-first block. Optional: tasks without one fall under a default
+   *  phase, so the orchestration core (which walks tasks linearly) is unaffected. */
+  phase?: string;
 }
 
 /** The PM's assessment of a brief — a discriminated union so the type enforces

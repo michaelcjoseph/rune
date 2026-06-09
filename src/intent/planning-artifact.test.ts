@@ -13,9 +13,9 @@ import {
 import type { PlanningRolesOutcome, SizedTask } from './planning-roles.js';
 
 const TASKS: SizedTask[] = [
-  { id: 'p1-core', text: 'Streak core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
-  { id: 'p2-card', text: 'Home card', testStrategy: 'code-tests-required', designerNeeded: true, roles: ['designer'] },
-  { id: 'p3-docs', text: 'README', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: ['coder'] },
+  { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
+  { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'code-tests-required', designerNeeded: true, roles: ['designer'] },
+  { id: 'p3-docs', text: 'README', phase: 'Phase 2 - UI', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: ['coder'] },
 ];
 
 const PLANNED: Extract<PlanningRolesOutcome, { kind: 'planned' }> = {
@@ -43,6 +43,29 @@ describe('sizedTasksToMarkdown', () => {
     expect(md).toContain('**p1-core** — Streak core');
     expect(md).toContain('Test strategy: `docs-or-config-only`');
     expect(md).toContain('**p2-card** — Home card _(designer review)_');
+  });
+
+  it('groups tasks into milestone sections by phase, in first-seen order', () => {
+    const md = sizedTasksToMarkdown(TASKS);
+    expect(md).toContain('## Phase 1 - Core');
+    expect(md).toContain('## Phase 2 - UI');
+    // Phase 1 heading comes before Phase 2.
+    expect(md.indexOf('## Phase 1 - Core')).toBeLessThan(md.indexOf('## Phase 2 - UI'));
+    // Each phase carries its own Tests (write first) block.
+    expect((md.match(/### Tests \(write first\)/g) ?? []).length).toBe(2);
+    // p2-card and p3-docs live under Phase 2, after the Phase 2 heading.
+    expect(md.indexOf('**p2-card**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
+    expect(md.indexOf('**p3-docs**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
+  });
+
+  it('collapses unlabeled tasks into a single default phase', () => {
+    const flat: SizedTask[] = [
+      { id: 'a', text: 'A', testStrategy: 'code-tests-required', designerNeeded: false, roles: [] },
+      { id: 'b', text: 'B', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: [] },
+    ];
+    const md = sizedTasksToMarkdown(flat);
+    expect((md.match(/^## /gm) ?? []).length).toBe(1);
+    expect(md).toContain('## Phase 1');
   });
 });
 

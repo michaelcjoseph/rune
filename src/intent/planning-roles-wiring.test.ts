@@ -79,8 +79,8 @@ const BREAKDOWN_REPLY = [
   JSON.stringify({
     techSpec: 'Pure core + REST route + card.',
     tasks: [
-      { id: 'p1-core', text: 'Streak core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
-      { id: 'p2-card', text: 'Home card', testStrategy: 'bogus-strategy', designerNeeded: true, roles: ['designer'] },
+      { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
+      { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'bogus-strategy', designerNeeded: true, roles: ['designer'] },
     ],
   }),
   '```',
@@ -123,11 +123,13 @@ describe('planning-roles-wiring — PM assessment seam', () => {
 });
 
 describe('planning-roles-wiring — tech-lead breakdown seam', () => {
-  it('parses tasks with test strategy + designer flag', async () => {
+  it('parses tasks with test strategy + designer flag + phase', async () => {
     const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'aura', spec: 's' });
     expect(result.tasks).toHaveLength(2);
     expect(result.tasks.find((t) => t.id === 'p2-card')?.designerNeeded).toBe(true);
+    expect(result.tasks.find((t) => t.id === 'p1-core')?.phase).toBe('Phase 1 - Core');
+    expect(result.tasks.find((t) => t.id === 'p2-card')?.phase).toBe('Phase 2 - UI');
   });
 
   it('defaults an invalid testStrategy to code-tests-required', async () => {
