@@ -14,6 +14,14 @@ vi.mock('../transport/mutations.js', () => ({
   activeRuns: mockActiveRunsMap,
 }));
 
+// Shared release-runtime mock (project 13, Phase 1c). The release route
+// delegates to `requestWorkRunRelease`; tests drive its outcome per-case.
+const mockRequestWorkRunRelease = vi.fn();
+vi.mock('../jobs/work-run-release.js', () => ({
+  requestWorkRunRelease: mockRequestWorkRunRelease,
+  defaultReleaseRequestDeps: vi.fn(() => ({})),
+}));
+
 // In-flight op mocks for POST /api/ops/:id/cancel
 const mockCancelOp = vi.fn();
 vi.mock('../transport/in-flight.js', () => ({
@@ -826,6 +834,82 @@ describe('server/webview', () => {
       });
       // GET doesn't match the POST route — falls through to the unknown /api/* 404
       expect(res.status).toBe(404);
+    });
+  });
+
+  // ---- POST /api/work-runs/:id/release (project 13, Phase 1c) ----
+
+  describe('POST /api/work-runs/:id/release', () => {
+    beforeEach(() => {
+      mockRequestWorkRunRelease.mockReset();
+    });
+
+    it('returns 202 { mutationId } when the shared runtime creates a release mutation', async () => {
+      mockRequestWorkRunRelease.mockResolvedValue({ kind: 'created', runId: 'parked-1', mutationId: 'rel-99' });
+      const res = await makeRequest(port, '/api/work-runs/parked-1/release', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(202);
+      expect(res.body.mutationId).toBe('rel-99');
+      // The run id from the path is the one released.
+      expect(mockRequestWorkRunRelease.mock.calls[0]![0]).toBe('parked-1');
+    });
+
+    it('returns 409 { error: dirty-worktree, files } on a dirty-confirm outcome and creates no mutation', async () => {
+      mockRequestWorkRunRelease.mockResolvedValue({
+        kind: 'dirty-confirm',
+        runId: 'parked-1',
+        files: ['M src/foo.ts', '?? scratch.md'],
+      });
+      const res = await makeRequest(port, '/api/work-runs/parked-1/release', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('dirty-worktree');
+      expect(res.body.files).toEqual(['M src/foo.ts', '?? scratch.md']);
+    });
+
+    it('returns 200 (no-op) on a not-parked outcome', async () => {
+      mockRequestWorkRunRelease.mockResolvedValue({ kind: 'not-parked', runId: 'gone-1' });
+      const res = await makeRequest(port, '/api/work-runs/gone-1/release', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('forwards confirmDirty:true from the body to the shared runtime', async () => {
+      mockRequestWorkRunRelease.mockResolvedValue({ kind: 'created', runId: 'parked-1', mutationId: 'rel-1' });
+      await makeRequest(port, '/api/work-runs/parked-1/release', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmDirty: true }),
+      });
+      expect(mockRequestWorkRunRelease.mock.calls[0]![1]).toEqual({ confirmDirty: true });
+    });
+
+    it('rejects an invalid run id with 400 (VALID_SLUG guard)', async () => {
+      const res = await makeRequest(port, '/api/work-runs/..%2Fetc/release', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(400);
+      expect(mockRequestWorkRunRelease).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await makeRequest(port, '/api/work-runs/parked-1/release', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(401);
     });
   });
 

@@ -23,8 +23,11 @@ import {
   releasePreflight,
   runWorkRunRelease,
   workRunReleaseApplier,
+  requestWorkRunRelease,
+  formatReleaseRequestReply,
   type ReleasePreflightDeps,
   type ReleaseRuntimeDeps,
+  type ReleaseRequestDeps,
   type WorkRunReleasePayload,
 } from './work-run-release.js';
 import type { SupervisedRun } from '../intent/supervision.js';
@@ -223,5 +226,162 @@ describe('workRunReleaseApplier — mutation-kind contract', () => {
   it('validate rejects a payload with no runId (green pre-impl — guard)', () => {
     const result = workRunReleaseApplier.validate({ runId: '' });
     expect(result.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requestWorkRunRelease — the ONE shared entry both the cockpit route and the
+// Telegram callback call (test-plan §3: "routed through ... one shared release
+// runtime"). Runs the preflight, then on a `release` decision creates the
+// auto-approved work-run-release mutation.
+// ---------------------------------------------------------------------------
+
+describe('requestWorkRunRelease (shared entry)', () => {
+  function makeRequestDeps(over: Partial<ReleaseRequestDeps> = {}): ReleaseRequestDeps {
+    const preflight: ReleasePreflightDeps = {
+      readParkedRun: vi.fn(() => parkedRun()),
+      worktreeFor: vi.fn(() => WORKTREE),
+      worktreeExists: vi.fn(() => true),
+      gitStatusPorcelain: vi.fn(async () => []),
+    };
+    return {
+      preflight,
+      createReleaseMutation: vi.fn(async () => ({ ok: true as const, id: 'release-mut-1' })),
+      ...over,
+    };
+  }
+
+  it('a clean parked run → creates the release mutation and returns its id', async () => {
+    const createReleaseMutation = vi.fn(async () => ({ ok: true as const, id: 'release-mut-1' }));
+    const out = await requestWorkRunRelease('mut-parked-1', {}, makeRequestDeps({ createReleaseMutation }));
+    expect(out.kind).toBe('created');
+    if (out.kind === 'created') expect(out.mutationId).toBe('release-mut-1');
+    // The created mutation carries the parked run's id + a clean (false) confirm.
+    expect(createReleaseMutation).toHaveBeenCalledWith({ runId: 'mut-parked-1', confirmDirty: false });
+  });
+
+  it('a dirty parked run with no confirm → dirty-confirm + file list, creates NO mutation', async () => {
+    const createReleaseMutation = vi.fn(async () => ({ ok: true as const, id: 'x' }));
+    const files = ['M src/foo.ts', '?? scratch.md'];
+    const out = await requestWorkRunRelease(
+      'mut-parked-1',
+      {},
+      makeRequestDeps({
+        preflight: {
+          readParkedRun: vi.fn(() => parkedRun()),
+          worktreeFor: vi.fn(() => WORKTREE),
+          worktreeExists: vi.fn(() => true),
+          gitStatusPorcelain: vi.fn(async () => files),
+        },
+        createReleaseMutation,
+      }),
+    );
+    expect(out.kind).toBe('dirty-confirm');
+    if (out.kind === 'dirty-confirm') expect(out.files).toEqual(files);
+    expect(createReleaseMutation).not.toHaveBeenCalled();
+  });
+
+  it('a confirmed-dirty release → creates a confirmDirty:true mutation', async () => {
+    const createReleaseMutation = vi.fn(async () => ({ ok: true as const, id: 'release-mut-2' }));
+    const out = await requestWorkRunRelease(
+      'mut-parked-1',
+      { confirmDirty: true },
+      makeRequestDeps({
+        preflight: {
+          readParkedRun: vi.fn(() => parkedRun()),
+          worktreeFor: vi.fn(() => WORKTREE),
+          worktreeExists: vi.fn(() => true),
+          gitStatusPorcelain: vi.fn(async () => ['M src/foo.ts']),
+        },
+        createReleaseMutation,
+      }),
+    );
+    expect(out.kind).toBe('created');
+    expect(createReleaseMutation).toHaveBeenCalledWith({ runId: 'mut-parked-1', confirmDirty: true });
+  });
+
+  it('an unknown / never-parked run → not-parked, creates NO mutation', async () => {
+    const createReleaseMutation = vi.fn(async () => ({ ok: true as const, id: 'x' }));
+    const out = await requestWorkRunRelease(
+      'mut-unknown',
+      {},
+      makeRequestDeps({
+        preflight: {
+          readParkedRun: vi.fn(() => null),
+          worktreeFor: vi.fn(() => WORKTREE),
+          worktreeExists: vi.fn(() => true),
+          gitStatusPorcelain: vi.fn(async () => []),
+        },
+        createReleaseMutation,
+      }),
+    );
+    expect(out.kind).toBe('not-parked');
+    expect(createReleaseMutation).not.toHaveBeenCalled();
+  });
+
+  it('a failed createMutation surfaces as an `error` outcome', async () => {
+    const out = await requestWorkRunRelease(
+      'mut-parked-1',
+      {},
+      makeRequestDeps({ createReleaseMutation: vi.fn(async () => ({ ok: false as const, reason: 'cap reached' })) }),
+    );
+    expect(out.kind).toBe('error');
+    if (out.kind === 'error') expect(out.reason).toContain('cap reached');
+  });
+});
+
+describe('formatReleaseRequestReply', () => {
+  it('renders each outcome distinctly (created surfaces the mutation id, dirty surfaces the file count)', () => {
+    const created = formatReleaseRequestReply({ kind: 'created', runId: 'r1', mutationId: 'm1' });
+    const dirty = formatReleaseRequestReply({ kind: 'dirty-confirm', runId: 'r1', files: ['M a', 'M b'] });
+    const notParked = formatReleaseRequestReply({ kind: 'not-parked', runId: 'r1' });
+    expect(created).toContain('m1');
+    // The dirty reply must communicate that confirmation is required (it must
+    // not read as a success).
+    expect(dirty.toLowerCase()).toContain('dirty');
+    expect(created).not.toEqual(notParked);
+    expect(dirty).not.toEqual(created);
+  });
+});
+
+describe('workRunReleaseApplier.apply (injected runtime)', () => {
+  it('drives runWorkRunRelease — a clean parked run cold-finalizes via the injected deps', async () => {
+    const coldFinalize = vi.fn(async (): Promise<MutationEvent> => branchCompleteTerminal());
+    const clearHold = vi.fn();
+    // The applier reads its runtime deps from the module holder; inject test
+    // doubles so apply() exercises the real runWorkRunRelease orchestration with
+    // no git/worktree/finalizer.
+    const { __setReleaseRuntimeForTest, __resetReleaseRuntimeForTest } = await import('./work-run-release.js');
+    __setReleaseRuntimeForTest({
+      readParkedRun: () => parkedRun(),
+      worktreeFor: () => WORKTREE,
+      worktreeExists: () => true,
+      gitStatusPorcelain: async () => [],
+      coldFinalizeGatedMerge: coldFinalize as never,
+      clearParkedHold: clearHold as never,
+    });
+    try {
+      const events: MutationEvent[] = [];
+      for await (const e of workRunReleaseApplier.apply(
+        {
+          id: 'release-mut-1',
+          kind: 'work-run-release',
+          source: 'webview',
+          target: { type: 'work-run-release', ref: 'mut-parked-1' },
+          preview: { summary: 'release' },
+          payload: { runId: 'mut-parked-1', confirmDirty: false },
+          createdAt: NOW_ISO,
+          status: 'running',
+        },
+        { bus: { publish: () => {} } as never, cancel: () => false },
+      )) {
+        events.push(e);
+      }
+      expect(coldFinalize).toHaveBeenCalledOnce();
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal?.kind).toBe('completed');
+    } finally {
+      __resetReleaseRuntimeForTest();
+    }
   });
 });

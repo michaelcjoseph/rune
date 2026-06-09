@@ -179,32 +179,48 @@ remains. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md
 
 ### Tests (write first)
 
-- [ ] Write shared release-runtime tests for clean release COLD-finalizing through the Project 15
+- [x] Write shared release-runtime tests for clean release COLD-finalizing through the Project 15
       finalizer in **gated-merge** mode (baseSha recomputed via merge-base → classify → gated-merge;
       reuse `finalizeStaleRun`'s building blocks but assert the release path drives `gated-merge`
       mode, NOT `finalizeStaleRun`'s fresh-run hold default — a regression test that a clean
       branch-complete release actually merges, not just holds), dirty release without confirmation,
       dirty release with `{ confirmDirty: true }` as explicit discard, already-released/not-parked
-      ids, and stale/missing worktree paths — test-plan.md §3.
-- [ ] Write release hold tests proving a clean release keeps the supervision `blocked-on-human`
+      ids, and stale/missing worktree paths — test-plan.md §3. (`work-run-release.test.ts` — the
+      `runWorkRunRelease` applier-core suite (scaffolded earlier) + the new `requestWorkRunRelease`
+      shared-entry suite.)
+- [x] Write release hold tests proving a clean release keeps the supervision `blocked-on-human`
       record in place while the cold-finalizer mutation is running, and only frees the project slot
       after the finalizer terminal write; confirmed dirty discard frees only after destructive
-      cleanup completes.
-- [ ] Write HTTP route tests for `POST /api/work-runs/:id/release`, including dirty-confirm
+      cleanup completes. (`work-run-release.test.ts`: "clearParkedHold fires AFTER cold-finalize" +
+      "discard clears the parked hold only AFTER destructive cleanup" — clearParkedHold is the
+      slot-free signal.)
+- [x] Write HTTP route tests for `POST /api/work-runs/:id/release`, including dirty-confirm
       response shape, not-parked no-op response, and `202 { mutationId }` clean/confirmed release
-      response.
-- [ ] Write Telegram callback tests for `work-run-release:<id>` proving it delegates to the same
+      response. (`webview.test.ts` "POST /api/work-runs/:id/release" describe — 202/409/200 +
+      confirmDirty forwarding + VALID_SLUG 400 + 401.)
+- [x] Write Telegram callback tests for `work-run-release:<id>` proving it delegates to the same
       release runtime and returns the same dirty-confirm/mutation-created/not-parked outcomes.
-- [ ] Write existing-inbox-row tests proving `blocked-on-human` Approve/Release routes to release
+      (`telegram-release.test.ts` — `parseWorkRunReleaseCallback` + `dispatchTelegramWorkRunRelease`
+      delegation.)
+- [x] Write existing-inbox-row tests proving `blocked-on-human` Approve/Release routes to release
       preflight, Reject/dismiss leaves the parked run untouched with a dismissed/no-op response, and
       dirty confirmation requires the explicit release endpoint/callback with `confirmDirty=true`.
-- [ ] Write mutation tests proving `work-run-release` is a registered auto-approved mutation kind,
+      (`approval-actions.test.ts` — approve→release, reject→untouched, dirty-from-inbox→not-found.)
+- [x] Write mutation tests proving `work-run-release` is a registered auto-approved mutation kind,
       carries payload `{ runId, confirmDirty }`, rechecks parked/dirty state in the applier, invokes
-      the Project 15 finalizer on clean release, and emits terminal events.
-- [ ] Write post-release cap tests proving a clean release keeps the project slot held while the
+      the Project 15 finalizer on clean release, and emits terminal events. (`work-run-release.test.ts`
+      "workRunReleaseApplier — mutation-kind contract" + "workRunReleaseApplier.apply (injected
+      runtime)" — kind/autoApprove/validate + apply drives the injected cold-finalizer.)
+- [x] Write post-release cap tests proving a clean release keeps the project slot held while the
       Project 15 finalizer is in progress, then follows the finalizer outcome; a discard release
-      frees the project slot only after the destructive cleanup completes.
-- [ ] Confirm red before implementation.
+      frees the project slot only after the destructive cleanup completes. (Covered by the
+      release-hold ordering tests above — the per-project cap's `blocked-on-human`/`existsSync`
+      rejection is the existing Phase 1b `work-runner.test.ts` cap suite; the hold persists until
+      clearParkedHold fires after cold-finalize/discard.)
+- [x] Confirm red before implementation. (16 intentional Phase 1c RED across
+      work-run-release/approval-actions/telegram-release/webview, all clean assertion failures; the
+      `parseWorkRunReleaseCallback` + not-parked guards are green; 0 new tsc errors (29 pre-existing
+      baseline).)
 
 ### Release action
 
