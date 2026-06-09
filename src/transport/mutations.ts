@@ -345,10 +345,28 @@ async function startApply(
           applyOutcomeToDescriptor(descriptor, event);
         }
         appendMutationLine(descriptor);
+        // Project 13 (Background §7): a PARKED work-run terminates the MUTATION
+        // normally (the child exited to report a human-block), but the SUPERVISED
+        // run must stay `blocked-on-human` until a human releases it. The parked
+        // terminal event carries explicit `parked: true`; treat it as a
+        // supervision OVERRIDE — persist the descriptor as terminal (above), but
+        // reassert supervision as `blocked-on-human` rather than the terminal
+        // status. This is the second of the two terminal supervision writers
+        // (the applier wrote the parked record first); without the override this
+        // writer would clobber it back to completed/failed. Gated on
+        // `kind === 'work-run'` (parking is a work-run concept — Project 13
+        // Background §6) so the stringly-typed `parked` flag can only divert
+        // supervision for the applier that actually emits it.
+        const parked =
+          descriptor.kind === 'work-run' &&
+          (event.data as Record<string, unknown> | undefined)?.['parked'] === true;
+        const supervisionStatus: SupervisedRun['status'] = parked
+          ? 'blocked-on-human'
+          : descriptor.status;
         safeUpsertRun(
           buildSupervisedRun(
             descriptor,
-            descriptor.status,
+            supervisionStatus,
             new Date().toISOString(),
             currentChildAliveAt,
             currentOutputAt,

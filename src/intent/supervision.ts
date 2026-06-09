@@ -186,15 +186,22 @@ export function planQuietNudges(
  * falling back to {@link SupervisedRun.startedAt}. Soft-fail on an unparseable
  * baseline (no nudge), mirroring {@link isQuietRun}.
  *
- * STUB (Phase 1b "Tests write first"): returns false until the implementation
- * task lands.
  */
 export function isParkedRun(
-  _run: SupervisedRun,
-  _parkedThresholdMs: number,
-  _now: number,
+  run: SupervisedRun,
+  parkedThresholdMs: number,
+  now: number,
 ): boolean {
-  return false;
+  if (run.status !== 'blocked-on-human') return false;
+  if (run.parkedNudgedAt) return false; // already nudged once — never auto-release
+  // Baseline is the PARK time (lastHeartbeatAt, written when the parked record
+  // lands), falling back to startedAt for older records that didn't stamp it.
+  const baseline = run.lastHeartbeatAt ?? run.startedAt;
+  const parsed = Date.parse(baseline);
+  // Soft signal: an unparseable baseline does NOT fire a nudge (mirrors
+  // isQuietRun — a parked nudge is a prod, not a fail-toward-visibility alert).
+  if (Number.isNaN(parsed)) return false;
+  return now - parsed > parkedThresholdMs;
 }
 
 /** A parked-nudge plan: the parked runs to nudge, plus those same runs with
@@ -212,15 +219,18 @@ export interface ParkedNudgePlan {
  * the runner sends the nudges and persists `updated`; `toNudge[i]`/`updated[i]`
  * are the same run (1:1, stamped), paired by index. Never auto-releases.
  *
- * STUB (Phase 1b "Tests write first"): returns an empty plan until the
- * implementation task lands.
  */
 export function planParkedNudges(
-  _runs: SupervisedRun[],
-  _parkedThresholdMs: number,
-  _now: number,
+  runs: SupervisedRun[],
+  parkedThresholdMs: number,
+  now: number,
 ): ParkedNudgePlan {
-  return { toNudge: [], updated: [] };
+  const toNudge = runs.filter((r) => isParkedRun(r, parkedThresholdMs, now));
+  const stamp = new Date(now).toISOString();
+  // Stamp copies (never mutate the inputs) so the runner persists the once-only
+  // marker via upsertRun.
+  const updated = toNudge.map((r) => ({ ...r, parkedNudgedAt: stamp }));
+  return { toNudge, updated };
 }
 
 /** A quiet→cancel escalation plan: the runs the actuator should cancel/reap/

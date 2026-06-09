@@ -11,13 +11,14 @@
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus } from '../transport/notification-bus.js';
-import { planQuietNudges, planQuietCancel, planMaxRuntimeKills } from '../intent/supervision.js';
+import { planQuietNudges, planQuietCancel, planMaxRuntimeKills, planParkedNudges } from '../intent/supervision.js';
 import { cancelMutation } from '../transport/mutations.js';
 import { readAllRuns, upsertRun } from './supervision-store.js';
 import {
   checkStalledRuns,
   formatStallNudge,
   formatQuietNudge,
+  formatParkedNudge,
   QUIET_THRESHOLD_MS,
   STALL_THRESHOLD_MS,
   TICK_INTERVAL_MS,
@@ -86,6 +87,33 @@ export function startStallCheck(bus: NotificationBus): void {
           upsertRun(quietPlan.updated[i]!, config.SUPERVISED_RUNS_FILE);
         } catch (err) {
           log.warn('quiet-nudge persist failed', { id: run.id, error: (err as Error).message });
+        }
+      });
+
+      // Parked-run staleness nudge (project 13, Phase 1b): a run paused for a
+      // human (`blocked-on-human`) that has gone unreleased past
+      // PARKED_RUN_NUDGE_AFTER_MS gets a ONE-TIME reminder — never an
+      // auto-release (the worktree holds until a human acts). A net-new
+      // predicate (`planParkedNudges`) over `blocked-on-human` with its own
+      // once-only `parkedNudgedAt` marker — the quiet/stall predicates never
+      // fire on a parked run (they early-return on non-`running` status). Only
+      // the bus-publish + persist DELIVERY is shared. Per-run isolated.
+      //
+      // Runs over the FULL snapshot (unlike the quiet/quiet-cancel plans, which
+      // exclude the just-stalled `nudged` set): a parked run is
+      // `blocked-on-human`, never `running`, so it can never be in `nudged`
+      // (the stall check only marks `running` runs) — no filter is needed.
+      const parkedPlan = planParkedNudges(runs, config.PARKED_RUN_NUDGE_AFTER_MS, now);
+      parkedPlan.toNudge.forEach((run, i) => {
+        try {
+          bus.publish({ kind: 'message', userId: config.TELEGRAM_USER_ID, text: formatParkedNudge(run, now) });
+        } catch (err) {
+          log.warn('parked-nudge send failed', { id: run.id, error: (err as Error).message });
+        }
+        try {
+          upsertRun(parkedPlan.updated[i]!, config.SUPERVISED_RUNS_FILE);
+        } catch (err) {
+          log.warn('parked-nudge persist failed', { id: run.id, error: (err as Error).message });
         }
       });
 

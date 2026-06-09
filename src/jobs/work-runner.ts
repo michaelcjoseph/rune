@@ -5,7 +5,9 @@ import config, { PROJECT_ROOT } from '../config.js';
 import { CLAUDE_BIN, registerActiveProcess, unregisterActiveProcess, getProjectMcpArgs } from '../ai/claude.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, type GitRunner } from './sandbox-runtime.js';
-import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
+import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type StreamJsonEnvelope, type TranscriptSink } from './work-run-transcript.js';
+import { parseWorkRunSentinel, type WorkRunSentinel } from './work-run-sentinel.js';
+import { upsertRun, readAllRuns } from './supervision-store.js';
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
 import { writeSummary, appendIndexRow, recordWorkRunPhase, readLastWorkRunPhase, type WorkRunSummary, type WorkRunIndexRow } from './work-run-store.js';
@@ -16,7 +18,7 @@ import type { GateFailReason } from './work-run-gate.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
@@ -232,6 +234,33 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       return { ok: false, reason: `spec.md missing for project: ${projectSlug}` };
     }
 
+    // Parked-run backstops (project 13, Phase 1b). A run that parked for a human
+    // keeps its worktree live and holds the project slot — a new run for the
+    // same slug must be rejected before it forks a second worktree on the
+    // occupied deterministic path. Two independent checks:
+    //   (a) a durable supervision `blocked-on-human` record for this
+    //       product+project — the source of truth while a record survives, and
+    //   (b) a synchronous existsSync on the deterministic worktree path — the
+    //       crash-lost-record backstop (recovery relabels a lost record
+    //       'unknown', so (a) misses it, but the worktree still occupies disk).
+    // (b) is sync (no async `git worktree list`) so it fits this sync validate().
+    const product = payload.product ?? 'jarvis';
+    let parkedForSlug = false;
+    try {
+      parkedForSlug = readAllRuns(config.SUPERVISED_RUNS_FILE).some(
+        (r) => r.status === 'blocked-on-human' && r.product === product && r.project === projectSlug,
+      );
+    } catch {
+      // A supervision-store read failure must not block a legitimate run — the
+      // existsSync backstop below still guards the occupied-path case.
+    }
+    if (parkedForSlug) {
+      return { ok: false, reason: `parked (blocked-on-human) run exists for ${projectSlug}` };
+    }
+    if (existsSync(worktreePathFor(product, projectSlug, config.WORKTREE_ROOT))) {
+      return { ok: false, reason: `worktree already exists for ${projectSlug}` };
+    }
+
     // Per-project concurrency cap. The deterministic worktree path
     // (`<WORKTREE_ROOT>/<product>/<projectSlug>`) is single-occupant, so
     // cap=1 also keeps two runs from colliding on the same on-disk path.
@@ -287,6 +316,11 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     // so that `finally` can read it; the early-return setup-failure paths leave
     // it false, so the outer `finally` still owns teardown there.
     let finalizerOwnedTeardown = false;
+    // Set true on a parsed blocked-on-human sentinel (project 13, Phase 1b). A
+    // parked run keeps its worktree LIVE for a human, so the outer `finally`
+    // must NOT destroy it (the release path later hands it to the finalizer or
+    // discards it explicitly).
+    let parked = false;
     try {
       try {
         // createWorktree resolves HEAD atomically and returns it on
@@ -469,6 +503,82 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // the finally above); the guard also narrows step.value to StreamResult.
         if (!step.done) throw new Error('work-runner: stream ended without exit facts');
         const streamResult = step.value;
+
+        // --- Parked branch (project 13, Phase 1b) ---
+        // The run emitted a valid JARVIS_WORK_RUN_SENTINEL — it hit a step
+        // `--auto` can't take and needs a human. PARK it: write the durable
+        // supervision `blocked-on-human` record FIRST (before any terminal step,
+        // so a crash can't strand a `running` record that recovery would
+        // finalize and reap), then SKIP `runFinalizer` entirely (its shared tail
+        // would remove the worktree) and yield a terminal mutation event. The
+        // worktree is left LIVE; the outer `finally` skips teardown via `parked`.
+        // The mutation still terminates normally (no new MutationStatus); the
+        // parked terminal event carries `parked: true` so mutations.ts reasserts
+        // supervision as `blocked-on-human` rather than completed/failed.
+        //
+        // A user/actuator cancel OVERRIDES a park: if the run was cancelled
+        // (ctx.cancel — the cockpit/Telegram `/cancel`, the quiet→cancel and
+        // max-runtime backstops all route through it), the human's explicit
+        // "stop this" wins over a sentinel the agent happened to print on its
+        // way down. That run flows through the ordinary classifier/finalizer
+        // (which tears the worktree down) instead of parking.
+        if (streamResult.sentinel && !streamResult.exit.cancelled) {
+          parked = true;
+          // 1. Durable parked record FIRST. Best-effort (a disk failure logs but
+          //    never denies the park) — mutations.ts's terminal override is the
+          //    second writer that re-asserts blocked-on-human regardless.
+          try {
+            upsertRun(
+              {
+                id: descriptor.id,
+                product,
+                project: projectSlug,
+                status: 'blocked-on-human',
+                startedAt: new Date(t0).toISOString(),
+                // Park time = the nudge baseline isParkedRun ages from.
+                lastHeartbeatAt: new Date().toISOString(),
+              },
+              config.SUPERVISED_RUNS_FILE,
+            );
+          } catch (err) {
+            log.warn('work-runner: parked supervision write failed', {
+              id: descriptor.id,
+              error: (err as Error).message,
+            });
+          }
+          // 2. Flush the durable transcript best-effort so the human can read the
+          //    run that led to the park (the finalizer normally owns this flush;
+          //    we skip the finalizer here).
+          if (sink) {
+            try {
+              await sink.finish();
+            } catch (err) {
+              log.warn('work-runner: parked transcript flush failed', {
+                id: descriptor.id,
+                error: (err as Error).message,
+              });
+            }
+          }
+          // 3. Yield the parked terminal. `operatorWorktreePath` is the
+          //    UN-SCRUBBED live worktree (same local-operator field as the
+          //    Phase 1a start event) — never copied onto the descriptor, so it
+          //    can't reach mutations.jsonl. `pendingCheck`/`command`/`reason`
+          //    come from the sentinel; the parked-aware Telegram/cockpit branch
+          //    renders them. The mutation terminates `completed` (the child
+          //    exited cleanly to report the block); `parked: true` is what keeps
+          //    supervision at blocked-on-human.
+          const parkedData: Record<string, unknown> = {
+            parked: true,
+            operatorWorktreePath: sandbox.worktree,
+            pendingCheck: streamResult.sentinel.pendingCheck,
+            projectSlug,
+            product,
+          };
+          if (streamResult.sentinel.command) parkedData['command'] = streamResult.sentinel.command;
+          if (streamResult.sentinel.reason) parkedData['reason'] = streamResult.sentinel.reason;
+          yield term(descriptor.id, 'completed', parkedData);
+          return;
+        }
 
         // Classify on the WORK PRODUCT (commits + tasks.md delta + tree state),
         // not the exit code, and persist the run's artifacts BEFORE emitting the
@@ -870,7 +980,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       // early-return setup failures, consumer aborts, a crash mid-merge — so the
       // outer `finally` still owns teardown there (and a removeWorktree that
       // threw leaves the flag false too, letting this retry).
-      if (sandbox && !finalizerOwnedTeardown) {
+      // `parked` (project 13, Phase 1b): a parked run keeps its worktree LIVE
+      // for a human, so teardown is skipped here entirely — the release path
+      // (Phase 1c) is the only thing that later removes or discards it.
+      if (sandbox && !finalizerOwnedTeardown && !parked) {
         try {
           await destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -903,6 +1016,37 @@ interface StreamResult {
   exit: ExitFacts;
   ringBuffer: string[];
   stderrTail: string[];
+  /** Project 13, Phase 1b — the blocked-on-human sentinel parsed from the raw
+   *  `result`/`assistant` envelope text (before display scrubbing), or null if
+   *  the run emitted none. The LAST valid sentinel wins. apply() reads this to
+   *  decide whether to PARK the run. */
+  sentinel: WorkRunSentinel | null;
+}
+
+/** Extract the raw (un-scrubbed) text a sentinel could ride on from a stream
+ *  envelope: a `result` envelope's `result` string, or an `assistant`
+ *  envelope's concatenated text blocks. Other envelope types carry no
+ *  agent-final text. Raw on purpose — the sentinel must be matched BEFORE
+ *  `scrubPathsInText` rewrites a `command` path. */
+function envelopeSentinelText(envelope: StreamJsonEnvelope): string | null {
+  if (envelope.type === 'result') {
+    return typeof envelope['result'] === 'string' ? envelope['result'] : null;
+  }
+  if (envelope.type === 'assistant') {
+    const message = envelope['message'];
+    if (!message || typeof message !== 'object') return null;
+    const content = (message as Record<string, unknown>)['content'];
+    if (!Array.isArray(content)) return null;
+    const parts: string[] = [];
+    for (const block of content) {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (b['type'] === 'text' && typeof b['text'] === 'string') parts.push(b['text']);
+      }
+    }
+    return parts.length > 0 ? parts.join('\n') : null;
+  }
+  return null;
 }
 
 /** Bound on the retained last-N stdout display lines and stderr tail. */
@@ -975,6 +1119,18 @@ async function* streamProcess(
   // classification/forensics (independent of what the drawer consumed).
   const stdoutRing = createRingBuffer<string>(RING_CAPACITY);
   const stderrTail = createRingBuffer<string>(RING_CAPACITY);
+
+  // Project 13, Phase 1b — the blocked-on-human sentinel, parsed from the raw
+  // result/assistant envelope text as the stream flows. The terminal `result`
+  // envelope is AUTHORITATIVE (the SKILL.md contract pins the sentinel to the
+  // agent's final message): once a `result` envelope is seen, its parse result
+  // (sentinel OR null) wins and overwrites any earlier `assistant`-turn match —
+  // so an intermediate turn that merely QUOTES the sentinel format in its
+  // reasoning can't force a false park when the run actually finished clean.
+  // `assistant`-turn matches are a FALLBACK only for a run that dies before a
+  // `result` envelope ever arrives.
+  let sentinel: WorkRunSentinel | null = null;
+  let resultSentinelDecided = false;
 
   function enqueue(event: MutationEvent) {
     queue.push(event);
@@ -1093,6 +1249,22 @@ async function* streamProcess(
     void sink?.append(envelope).catch((err: Error) => {
       stderrTail.push(`[transcript] append failed: ${err.message}`);
     });
+    // Project 13, Phase 1b — scan the RAW envelope text for the blocked-on-human
+    // sentinel BEFORE display scrubbing (a `command` path in the sentinel must
+    // survive intact for the operator). apply() reads `streamResult.sentinel` to
+    // decide whether to park. The terminal `result` envelope is authoritative:
+    // its parse (sentinel or null) is final and ignores later input; an
+    // `assistant`-turn match is a fallback recorded only until a `result` lands.
+    if (envelope.type === 'result') {
+      sentinel = parseWorkRunSentinel(envelopeSentinelText(envelope) ?? '');
+      resultSentinelDecided = true;
+    } else if (!resultSentinelDecided) {
+      const sentinelText = envelopeSentinelText(envelope);
+      if (sentinelText) {
+        const parsed = parseWorkRunSentinel(sentinelText);
+        if (parsed) sentinel = parsed;
+      }
+    }
     // Terminal-result watchdog (P0.2): the agent's `result` envelope means it
     // declared done — but `claude -p` won't exit while a backgrounded task is
     // still alive (the d0679453 wedge). Open a bounded drain window; if the
@@ -1280,6 +1452,7 @@ async function* streamProcess(
       },
       ringBuffer: stdoutRing.items(),
       stderrTail: stderrTail.items(),
+      sentinel,
     };
   } finally {
     // Belt-and-suspenders: the close/error handlers above also clear the

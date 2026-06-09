@@ -1,6 +1,7 @@
 # Work-Run Monitoring (Phase 1) — Tasks
 
-Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+In progress — Phase 1a (surface the path) and Phase 1b (parked state) complete; Phase 1c (release)
+remains. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
 > **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
 > Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
@@ -120,41 +121,57 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Sentinel contract
 
-- [ ] Define the `JARVIS_WORK_RUN_SENTINEL { … }` line contract in `.claude/skills/work/SKILL.md`:
+- [x] Define the `JARVIS_WORK_RUN_SENTINEL { … }` line contract in `.claude/skills/work/SKILL.md`:
       a blocked-on-human hard stop ends its final result with exactly this line, JSON carrying:
       `version: 1`, non-empty `pendingCheck`, optional `command`, and optional `reason`.
-- [ ] Parse the sentinel in `work-runner` from the **raw `assistant`/`result` envelope before
+      (Added "Blocked-on-human sentinel (`--auto` only)" subsection to SKILL.md.)
+- [x] Parse the sentinel in `work-runner` from the **raw `assistant`/`result` envelope before
       display scrubbing** (`work-runner.ts:661` region); a malformed/absent/unsupported sentinel
-      falls through to an ordinary terminal outcome (no park).
+      falls through to an ordinary terminal outcome (no park). (`parseWorkRunSentinel` in
+      `work-run-sentinel.ts`; `envelopeSentinelText` in work-runner scans the raw envelope —
+      the terminal `result` envelope is authoritative so an intermediate assistant-turn quote
+      can't force a false park.)
 
 ### Durable parked state + lifecycle carve-outs
 
-- [ ] On a parsed sentinel, record a durable supervision `blocked-on-human` state **as the first
+- [x] On a parsed sentinel, record a durable supervision `blocked-on-human` state **as the first
       effect, before any terminal/finalize step** (mutation still terminates normally; no new
       `MutationStatus` value). State survives restart via the existing supervision store + recovery.
-- [ ] Make `work-runner` **skip `runFinalizer` entirely** on a parked run (the finalizer's shared
+      (`apply()` parked branch calls `upsertRun` FIRST — before the transcript flush and the yielded
+      terminal — only when the run was not user-cancelled.)
+- [x] Make `work-runner` **skip `runFinalizer` entirely** on a parked run (the finalizer's shared
       tail removes the worktree — `work-run-finalizer.ts:219`); yield the terminal mutation event
-      directly and leave the worktree live. Do NOT teach the finalizer about parking.
-- [ ] Ensure the `mutations.ts` terminal supervision flip does not clobber the `blocked-on-human`
+      directly and leave the worktree live. Do NOT teach the finalizer about parking. (`parked` flag
+      `return`s before the `runFinalizer` call; the outer `finally` skips `destroyWorktree` when
+      `parked`.)
+- [x] Ensure the `mutations.ts` terminal supervision flip does not clobber the `blocked-on-human`
       record: parked terminal events carry explicit parked metadata; the mutation descriptor still
       persists as terminal, while the terminal branch preserves/reasserts supervision as
-      `blocked-on-human` (Background §7).
-- [ ] GC + `cleanupOrphanWorktrees`: **no code change** — confirm via regression test that a parked
-      run's dir/branch/worktree already survive (Background §4, §5).
-- [ ] Add the parked staleness nudge via a NET-NEW `planParkedNudges` predicate (over
+      `blocked-on-human` (Background §7). (Gated on `kind === 'work-run' && data.parked === true`.)
+- [x] GC + `cleanupOrphanWorktrees`: **no code change** — confirm via regression test that a parked
+      run's dir/branch/worktree already survive (Background §4, §5). (Verify-not-implement
+      regression tests green: `work-run-gc.test.ts` + `supervision-recovery.test.ts` +
+      `sandbox-runtime.test.ts`.)
+- [x] Add the parked staleness nudge via a NET-NEW `planParkedNudges` predicate (over
       `blocked-on-human`, keyed on `PARKED_RUN_NUDGE_AFTER_MS`, default 24h) with its own
       `parkedNudgedAt` marker and an injected clock seam; reuse only the bus-publish + `upsertRun`
-      delivery. Never auto-release because of age.
+      delivery. Never auto-release because of age. (`isParkedRun`/`planParkedNudges` in
+      `supervision.ts`; `formatParkedNudge` + the runner pass in stall-check; config var
+      `PARKED_RUN_NUDGE_AFTER_MS`.)
 
 ### Cap + alert
 
-- [ ] Harden the per-project cap (`work-runner.ts` validate, ~`:238` post-project-14 — re-locate
+- [x] Harden the per-project cap (`work-runner.ts` validate, ~`:238` post-project-14 — re-locate
       it) to reject when ANY of: an `activeRuns` run is `running` for the slug; a supervision
       `blocked-on-human` record exists for the slug; or `existsSync(worktreePathFor(...))` on the
-      deterministic path (synchronous — no async `git worktree list`).
-- [ ] Parked alert (Telegram + cockpit) carries `operatorWorktreePath`, `pendingCheck`, optional
+      deterministic path (synchronous — no async `git worktree list`). (Both backstops added before
+      the existing running/global caps; `readAllRuns` read is try/caught so a store failure never
+      blocks a legitimate run.)
+- [x] Parked alert (Telegram + cockpit) carries `operatorWorktreePath`, `pendingCheck`, optional
       `command`, and optional `reason` from the sentinel payload; add a parked-aware branch to
-      `formatWorkRunTerminal` (parked is not a `WorkOutcome`).
+      `formatWorkRunTerminal` (parked is not a `WorkOutcome`). (Parked terminal event carries the
+      sentinel payload; `formatWorkRunTerminal` branches on `data.parked === true` before the
+      outcome switch — renders ⏸ "parked · needs you" with the pending check + un-scrubbed path.)
 
 ## Phase 1c — Release
 

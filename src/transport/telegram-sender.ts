@@ -90,6 +90,26 @@ function formatWorkRunTerminal(event: BusMutationEvent): string {
   const reason = String(data['reason'] ?? '');
   const id = shortMutationId(event.mutationId);
 
+  // Project 13, Phase 1b — parked-aware branch. A parked run terminates the
+  // mutation normally (subKind completed) but is paused for a human; it must
+  // NOT render as its underlying classification ("no-op", "did nothing"). Park
+  // is deliberately not a WorkOutcome, so it's branched here before the
+  // outcome switch. Surfaces the pending check + the UN-SCRUBBED operator
+  // worktree path (Telegram is a local-operator surface) so Michael can act in
+  // one step.
+  if (data['parked'] === true) {
+    const pendingCheck = typeof data['pendingCheck'] === 'string' ? data['pendingCheck'] : '';
+    const worktree = typeof data['operatorWorktreePath'] === 'string' ? data['operatorWorktreePath'] : '';
+    const command = typeof data['command'] === 'string' ? data['command'] : '';
+    const parkedReason = typeof data['reason'] === 'string' ? data['reason'] : '';
+    const lines = [`⏸️ ${slug} parked · needs you · id=${id}`];
+    if (pendingCheck) lines.push(`📋 ${pendingCheck}`);
+    if (worktree) lines.push(`📂 ${worktree}`);
+    if (command) lines.push(`▶️ ${command}`);
+    if (parkedReason) lines.push(`↳ ${parkedReason}`);
+    return lines.join('\n');
+  }
+
   const outcome = typeof data['outcome'] === 'string' ? (data['outcome'] as string) : '';
   if (!outcome) {
     // An early-exit work-run terminal (worktree-create / project-not-found /
