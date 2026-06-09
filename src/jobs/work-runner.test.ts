@@ -551,6 +551,46 @@ describe('workRunApplier', () => {
       expect(lines.some(l => l.includes('"type":"assistant"'))).toBe(false);
     });
 
+    it('emits a non-rendered activity event for envelopes that render nothing (subagent/tool-liveness fix)', async () => {
+      // Bug fix: subagent (Task) lifecycle frames are all type:'system'
+      // (task_started/task_progress/task_notification) and successful
+      // tool_results are type:'user' with no is_error — none render an `output`
+      // line, so without this the supervision heartbeat (lastOutputAt) goes
+      // stale during a long subagent/tool call and the run reads as quiet. Each
+      // such parsed envelope must emit an `activity` event (no display line) so
+      // the heartbeat advances. An assistant text frame still emits `output`,
+      // never `activity`.
+      setupValidProject('06-webview');
+      const envelopes = [
+        JSON.stringify({ type: 'system', subtype: 'task_progress', parent_tool_use_id: 'toolu_sub' }),
+        JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ok', tool_use_id: 'toolu_x' }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'visible' }] } }),
+      ];
+      const fakeChild = makeFakeChild({ exitCode: 0, stdoutLines: envelopes });
+      mockSpawn.mockReturnValue(fakeChild);
+
+      const descriptor = {
+        id: 'mut-activity',
+        kind: 'work-run',
+        payload: { projectSlug: '06-webview' },
+        status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => false };
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptor, ctx)) {
+        events.push(event);
+      }
+
+      // The system frame + the successful tool_result render nothing → two activity events.
+      expect(events.filter(e => e.kind === 'activity').length).toBe(2);
+      // The assistant text frame still renders as output, not activity.
+      const outputLines = events.filter(e => e.kind === 'output').map(e => e.data.line as string);
+      expect(outputLines).toContain('visible');
+      // activity events carry no display line.
+      expect(events.filter(e => e.kind === 'activity').every(e => e.data.line === undefined)).toBe(true);
+    });
+
     it('surfaces an error tool_result (is_error:true) as a ⨯-marked output event (Fix #1)', async () => {
       // Phase 6 follow-on Fix #1: a permission-gate denial arrives as a
       // `user`/`tool_result` `is_error:true` frame. Previously it rendered
@@ -1110,6 +1150,44 @@ describe('workRunApplier', () => {
       }
 
       expect(mockDestroyWorktree).toHaveBeenCalledOnce();
+    });
+
+    it('a USER cancel stamps exitFact:user-cancel + cancelled:true (terminal-fail)', async () => {
+      // The cockpit/`/cancel` surface. cancelReason defaults to 'user'.
+      setupValidProject('06-webview');
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 143, exitSignal: 'SIGTERM' }));
+      const descriptor = {
+        id: 'mut-user-cancel', kind: 'work-run',
+        payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => true } as any; // no cancelReason → 'user'
+
+      const events: any[] = [];
+      for await (const e of workRunApplier.apply(descriptor, ctx)) events.push(e);
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal!.data as any)?.exit?.exitFact).toBe('user-cancel');
+      expect((terminal!.data as any)?.exit?.cancelled).toBe(true);
+    });
+
+    it('a SYSTEM backstop reap stamps exitFact:system-cancel + cancelled:false (classify on work product)', async () => {
+      // The quiet→cancel / max-runtime backstops pass cancelReason:'system'. The
+      // run must NOT read as a user cancel — cancelled:false so the classifier
+      // decides on the work product instead of short-circuiting to failed.
+      setupValidProject('06-webview');
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 143, exitSignal: 'SIGTERM' }));
+      const descriptor = {
+        id: 'mut-system-cancel', kind: 'work-run',
+        payload: { projectSlug: '06-webview' }, status: 'running',
+      } as any;
+      const ctx = { bus: null as any, cancel: () => true, cancelReason: () => 'system' } as any;
+
+      const events: any[] = [];
+      for await (const e of workRunApplier.apply(descriptor, ctx)) events.push(e);
+
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal!.data as any)?.exit?.exitFact).toBe('system-cancel');
+      expect((terminal!.data as any)?.exit?.cancelled).toBe(false);
     });
 
     it('calls destroyWorktree in finally when streamProcess throws mid-run', async () => {

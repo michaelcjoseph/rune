@@ -18,7 +18,7 @@ import { runWorkRunGc } from './work-run-gc-runner.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
-import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
+import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
 
 const log = createLogger('work-runner');
 
@@ -934,6 +934,11 @@ async function* streamProcess(
   let done = false;
   let resolveWaiter: (() => void) | null = null;
   let cancelSent = false;
+  // Who initiated the cancel, captured when the SIGTERM is sent. A user cancel
+  // is terminal-fail; a system backstop reap (quiet→cancel / max-runtime) is
+  // classified on work product. Defaults to 'user' (the cockpit/`/cancel`
+  // surface) so a context without `cancelReason` keeps the old behavior.
+  let cancelKind: CancelReason = 'user';
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
   let reapStarted = false;
@@ -1098,7 +1103,19 @@ async function* streamProcess(
       drainTimer.unref?.();
     }
     const display = streamJsonToDisplay(envelope);
-    if (display === null) return;
+    if (display === null) {
+      // A parsed envelope that renders nothing — a `system` task_progress /
+      // task_started / task_notification / thinking frame, or a successful
+      // tool_result — is still evidence the run is actively working. Subagent
+      // (Task) lifecycle frames are ALL type:'system', so without this a run
+      // grinding through a subagent or a long single tool call emits no
+      // `output` event for minutes, `lastOutputAt` goes stale, and the run
+      // reads as quiet — tripping the quiet nudge and the P2.7 quiet→cancel
+      // backstop on a healthy run. Emit a non-rendered `activity` event so the
+      // supervision heartbeat advances (see docs/projects/bugs.md).
+      enqueue(evt('activity', {}));
+      return;
+    }
     // Redact secrets on the display/bus path too. `streamJsonToDisplay` only
     // scrubs host paths; an error tool_result can echo a credential-bearing URL
     // or command. The durable sink redacts independently at append time (so the
@@ -1152,7 +1169,7 @@ async function* streamProcess(
    *    null exit code).
    */
   function deriveExitFact(): ExitFact | undefined {
-    if (cancelSent) return 'user-cancel';
+    if (cancelSent) return cancelKind === 'system' ? 'system-cancel' : 'user-cancel';
     if (reapedAfterTerminalResult) return 'reaped-after-terminal-result';
     if (exitSignal !== null && exitCode === null) return 'external-kill';
     if (closeFired) return 'clean-exit';
@@ -1241,6 +1258,10 @@ async function* streamProcess(
     while (!done || queue.length > 0) {
       if (ctx.cancel() && !cancelSent) {
         cancelSent = true;
+        // Capture WHO cancelled so the classifier can tell a user cancel
+        // (terminal-fail) from a system backstop reap (classify on work
+        // product). Default 'user' when the context predates `cancelReason`.
+        cancelKind = ctx.cancelReason?.() ?? 'user';
         // Group kill, not just the direct child — otherwise a cancel leaves the
         // agent's grandchildren (vitest, etc.) orphaned and still holding the
         // pipes open (docs/projects/bugs.md).
@@ -1257,7 +1278,10 @@ async function* streamProcess(
       exit: {
         exitCode,
         signal: exitSignal,
-        cancelled: cancelSent,
+        // `cancelled` means a USER cancel — it short-circuits the classifier to
+        // terminal-fail. A system backstop reap sets `exitFact: 'system-cancel'`
+        // instead and classifies on work product, so it must NOT set this.
+        cancelled: cancelSent && cancelKind === 'user',
         durationMs: Date.now() - t0,
         ...(exitFact !== undefined ? { exitFact } : {}),
       },
