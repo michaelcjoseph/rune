@@ -42,8 +42,13 @@ import {
   getPlanningSession,
   restorePlanningSessions,
 } from './planning.js';
-import { handlePlanningTurn, type ScopingTurn } from './planning-handler.js';
+import {
+  handlePlanningTurn,
+  type RunPlannerRolesFn,
+  type ScopingTurn,
+} from './planning-handler.js';
 import type { SpecArtifact } from '../intent/planner.js';
+import type { PlanningRolesOutcome, SizedTask } from '../intent/planning-roles.js';
 
 let tmpDir: string;
 
@@ -134,6 +139,79 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     await expect(
       handlePlanningTurn({ scopingTurn: turn2 }, 3, 'msg2'),
     ).rejects.toThrow(/proposeSpec|scoping/i);
+  });
+});
+
+describe('handlePlanningTurn — ready turn (role flow authors the spec)', () => {
+  const SIZED: SizedTask[] = [
+    { id: 't1', text: 'Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['coder'] },
+  ];
+  const PLANNED: PlanningRolesOutcome = {
+    kind: 'planned',
+    title: 'Role-planned project',
+    spec: 'Spec body.\n\n## Assumptions\n\n- a',
+    assumptions: ['a'],
+    techSpec: 'Tech spec body.',
+    tasks: SIZED,
+    context: '# Project Context: Role-planned project\n\n## Current State\n\nSeeded.',
+  };
+
+  it('runs the role flow on a ready brief and transitions to spec-proposed', async () => {
+    createPlanningSession(10, 'idea', 'chat', 'aura');
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'ready' as const, text: 'Handing off to the team.', brief: 'BRIEF TEXT',
+    }));
+    const runRoles = vi.fn<RunPlannerRolesFn>(async () => PLANNED);
+
+    const result = await handlePlanningTurn({ scopingTurn, runRoles }, 10, 'go');
+    expect(result.status).toBe('spec-proposed');
+    expect(result.reply).toContain('Role-planned project');
+
+    // The role flow received the consolidated brief + the session product.
+    expect(runRoles).toHaveBeenCalledWith({ brief: 'BRIEF TEXT', product: 'aura' });
+
+    // The stored artifact carries the serialized tasks/test-plan + tech spec + context.
+    const stored = getPlanningSession(10)!;
+    expect(stored.planning.status).toBe('spec-proposed');
+    const artifact = stored.planning.artifact!;
+    expect(artifact.title).toBe('Role-planned project');
+    expect(artifact.tasks).toContain('**t1**');
+    expect(artifact.testPlan).toContain('Test Plan');
+    expect(artifact.techSpec).toBe('Tech spec body.');
+    expect(artifact.context).toContain('# Project Context');
+  });
+
+  it('stays scoping and surfaces the PM questions when the brief is underspecified', async () => {
+    createPlanningSession(11, 'idea', 'chat', 'aura');
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'ready' as const, text: 'ready', brief: 'thin brief',
+    }));
+    const runRoles = vi.fn<RunPlannerRolesFn>(async () => ({
+      kind: 'blocked-for-interview',
+      interviewNeeds: ['What platform?'],
+    }));
+
+    const result = await handlePlanningTurn({ scopingTurn, runRoles }, 11, 'go');
+    expect(result.status).toBe('scoping');
+    expect(result.reply).toContain('What platform?');
+    expect(getPlanningSession(11)!.planning.artifact).toBeUndefined();
+  });
+
+  it('stays scoping and surfaces the drift when PM flags a spec/tech-spec mismatch', async () => {
+    createPlanningSession(12, 'idea', 'chat', 'aura');
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'ready' as const, text: 'ready', brief: 'brief',
+    }));
+    const runRoles = vi.fn<RunPlannerRolesFn>(async () => ({
+      kind: 'spec-mismatch',
+      spec: 's', assumptions: [], techSpec: 't', tasks: SIZED,
+      mismatches: ['Tech plan drops the card surface'],
+    }));
+
+    const result = await handlePlanningTurn({ scopingTurn, runRoles }, 12, 'go');
+    expect(result.status).toBe('scoping');
+    expect(result.reply).toContain('card surface');
+    expect(getPlanningSession(12)!.planning.artifact).toBeUndefined();
   });
 });
 
