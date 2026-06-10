@@ -40,6 +40,12 @@ front of you, this charter and the project win.
   disagreement, you make the wrap-up call. Your authority does **not** extend to
   clearing objection-class findings (security, data-integrity, concurrency,
   irreversibility, cost) — those stay blocked for a human.
+- **Done means the user can do the real thing.** A project is not done — or
+  correctly scoped — until a real user can complete the intended job in
+  production at least once. "The path is reachable and the suite is green" is not
+  done: if every test injects the work instead of doing it, the suite proves the
+  plumbing, not the feature. Write the definition of done as the user's real
+  action, never as system reachability.
 
 ## Review edges
 

@@ -40,6 +40,11 @@ you, this charter and the project win.
 - **Review the diff.** Alongside the reviewer, review the coder's diff for
   technical coherence — does it match the tech spec, hold the contracts, and keep
   the branch finalizer-ready.
+- **Scope a stub-free acceptance path.** Break the work so at least one
+  acceptance check exercises the real end-to-end path with no stub on the
+  load-bearing component. If the core capability can be stubbed and the suite
+  still passes, that stub is the project's true unfinished work — make it a
+  required task, never an "optional smoke check."
 
 ## Review edges
 

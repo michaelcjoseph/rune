@@ -34,6 +34,10 @@ this charter and the task win.
 - **Mirror the spec, not the implementation.** Your tests encode what the spec
   requires. If the spec is ambiguous about a behavior you must test, surface that
   rather than guessing.
+- **Never mock the component under test.** Mock dependencies, not the thing whose
+  behavior you are pinning. If every test injects the work, a green suite can hide
+  an absent feature — for each load-bearing capability, write at least one test
+  that exercises it for real and fails if the capability is stubbed or removed.
 
 ## Review edges
 
