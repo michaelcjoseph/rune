@@ -20,7 +20,7 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] Write the test suite for **product-routing-fn** — test-plan.md §2. (src/intent/product-routing.test.ts: 13 red resolveProductTarget/product-field tests + 6 green legacy pins)
 - [x] Write the test suite for **log-idea-tool** — test-plan.md §3. (src/mcp/tools/log-idea.test.ts: 10 red logIdea handler-contract tests, input shape per tech-spec.md)
 - [x] Write the test suite for **log-conversation-tool** — test-plan.md §4. (src/mcp/tools/log-conversation.test.ts: 9 red logConversation handler-contract tests; missing-journal init delegated to journal.test.ts pin)
-- [ ] Write the test suite for **read-tools-trio** — test-plan.md §5.
+- [x] Write the test suite for **read-tools-trio** — test-plan.md §5. (src/mcp/tools/read-tools.test.ts: 14 red tests for vaultSearch/crmLookup/getPriorities + shared MCP-shape pin)
 - [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Implementation

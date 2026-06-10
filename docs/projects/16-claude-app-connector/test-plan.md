@@ -61,7 +61,7 @@ test-plan sections pass.
 
 - [ ] 🔴 `vault_search` returns matches across journals/pages/projects in the standard MCP text-content shape.
 - [ ] 🔴 `crm_lookup` resolves a person/company from `pages/crm.json`.
-- [ ] 🔴 `get_priorities` parses `#priorities` and returns today's/this-week's priorities mirroring `/priorities`.
+- [ ] 🔴 `get_priorities` parses `#priorities` and returns today's/this-week's priorities mirroring `/priorities`. (Settled in the §5 suite: "mirroring" = reuse the `parseTag` `#priorities` parsing; day resolution deliberately departs from the command's yesterday default — the tool tries today first, then falls back to yesterday.)
 - [ ] 🟡 A missing/empty source file (no `crm.json`, no `#priorities`) returns an empty result gracefully, not an error.
 - [ ] 🟢 All three conform to the standard MCP text-content return shape (shared-shape assertion).
 
