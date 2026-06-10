@@ -17,7 +17,7 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Tests (write first)
 
 - [x] Write the test suite for **mcp-server-shared-factory** — test-plan.md §1. (src/mcp/server.test.ts: 8 red factory-contract tests + 3 green admin no-behavior-change pins)
-- [ ] Write the test suite for **product-routing-fn** — test-plan.md §2.
+- [x] Write the test suite for **product-routing-fn** — test-plan.md §2. (src/intent/product-routing.test.ts: 13 red resolveProductTarget/product-field tests + 6 green legacy pins)
 - [ ] Write the test suite for **log-idea-tool** — test-plan.md §3.
 - [ ] Write the test suite for **log-conversation-tool** — test-plan.md §4.
 - [ ] Write the test suite for **read-tools-trio** — test-plan.md §5.
