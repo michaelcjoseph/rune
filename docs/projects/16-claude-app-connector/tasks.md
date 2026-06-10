@@ -43,7 +43,7 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **streamable-http-transport** — Mount `StreamableHTTPServerTransport` at a new `/mcp` route on the existing daemon HTTP server (`src/server/http.ts`), backed by the shared `createJarvisMcpServer` instance exposing only the six App-surface tools. Handle session/stream setup and conform to existing host-allowlisting.
+- [x] **streamable-http-transport** — Mount `StreamableHTTPServerTransport` at a new `/mcp` route on the existing daemon HTTP server (`src/server/http.ts`), backed by the shared `createJarvisMcpServer` instance exposing only the six App-surface tools. Handle session/stream setup and conform to existing host-allowlisting. (src/server/mcp-transport.ts; mcp-transport.test.ts 6/6 green; fail-closed bearer default, idle eviction + closeAll teardown)
 - [ ] **mcp-oauth-single-user** — Implement single-user OAuth 2.1 for the `/mcp` endpoint using the SDK auth helpers (DCR + authorization-code flow), gating authorization on `JARVIS_HTTP_SECRET` and binding issued access tokens to the one known user id. Validate the bearer token on every `/mcp` request before the transport handles it.
 - [ ] **remote-tunnel-exposure** (docs/config only) — Stand up a named tunnel (Cloudflare Tunnel) exposing only the daemon `/mcp` route at a stable HTTPS hostname, with TLS at the edge and no inbound ports on the host. Document the tunnel config, secret handling, and recovery/runbook.
 

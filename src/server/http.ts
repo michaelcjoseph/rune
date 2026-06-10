@@ -6,6 +6,7 @@ import { captureSessions } from '../jobs/capture.js';
 import { isConfigured, exchangeCode, verifyOAuthState } from '../integrations/whoop/client.js';
 import { createLogger } from '../utils/logger.js';
 import { mountWebviewRoutes, type WebviewDeps } from './webview.js';
+import { mountMcpRoute, type McpTransportOpts } from './mcp-transport.js';
 
 const log = createLogger('http');
 
@@ -81,8 +82,12 @@ async function handleWhoopOAuth(req: IncomingMessage, res: ServerResponse): Prom
 
 export { WHOOP_REDIRECT_URI };
 
-export function startHttpServer(webviewDeps?: WebviewDeps): Server {
+export function startHttpServer(webviewDeps?: WebviewDeps, mcpOpts?: McpTransportOpts): Server {
   let webviewHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null = null;
+  // /mcp is opt-in: without mcpOpts the route is not mounted and /mcp 404s.
+  // It must run BEFORE the webview handler: /mcp is not under /api/, so the
+  // webview host-guard never pre-screens it — the MCP handler gates itself.
+  const mcpHandler = mcpOpts ? mountMcpRoute(mcpOpts) : null;
 
   const server = createServer(async (req, res) => {
     try {
@@ -95,6 +100,7 @@ export function startHttpServer(webviewDeps?: WebviewDeps): Server {
       if (req.method === 'GET' && req.url?.startsWith('/oauth/whoop')) {
         return await handleWhoopOAuth(req, res);
       }
+      if (mcpHandler && await mcpHandler(req, res)) return;
       if (webviewHandler && await webviewHandler(req, res)) return;
       res.writeHead(404);
       res.end('Not found');
@@ -107,6 +113,16 @@ export function startHttpServer(webviewDeps?: WebviewDeps): Server {
 
   if (webviewDeps) {
     webviewHandler = mountWebviewRoutes(server, webviewDeps);
+  }
+
+  if (mcpHandler) {
+    // Best-effort session teardown when the server closes. The §7 daemon
+    // wiring must additionally call mcpHandler.closeAll() BEFORE
+    // server.close() in the SIGTERM path — open SSE streams otherwise keep
+    // connections from draining.
+    server.on('close', () => {
+      void mcpHandler.closeAll();
+    });
   }
 
   server.listen(config.HTTP_PORT, config.HTTP_HOST, () => {
