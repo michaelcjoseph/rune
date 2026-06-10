@@ -38,7 +38,7 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Tests (write first)
 
 - [x] Write the test suite for **streamable-http-transport** — test-plan.md §6. (src/server/mcp-transport.test.ts: 6 red tests — six-tools-only via real SDK client, session persistence, 403 host-gate, route coexistence, opt-in 404, closed-bearer-gate 401)
-- [ ] Write the test suite for **mcp-oauth-single-user** — test-plan.md §7.
+- [x] Write the test suite for **mcp-oauth-single-user** — test-plan.md §7. (src/server/mcp-oauth.test.ts: 11 red tests — DCR, consent-form POST gate with secret NEVER in a URL, PKCE S256-only, single-use codes, redirect_uri binding, expiry, user binding, RFC 8414 metadata)
 - [ ] Confirm red before implementation.
 
 ### Implementation
