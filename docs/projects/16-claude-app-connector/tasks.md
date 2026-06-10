@@ -1,6 +1,6 @@
 # Jarvis Conversation Surface on the Claude App — Tasks
 
-Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
 > **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
 > Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
@@ -16,7 +16,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **mcp-server-shared-factory** — test-plan.md §1.
+- [x] Write the test suite for **mcp-server-shared-factory** — test-plan.md §1. (src/mcp/server.test.ts: 8 red factory-contract tests + 3 green admin no-behavior-change pins)
 - [ ] Write the test suite for **product-routing-fn** — test-plan.md §2.
 - [ ] Write the test suite for **log-idea-tool** — test-plan.md §3.
 - [ ] Write the test suite for **log-conversation-tool** — test-plan.md §4.

@@ -21,7 +21,7 @@ its `spec.md`.
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
-| [16-claude-app-connector](16-claude-app-connector/spec.md) | Not Started | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
+| [16-claude-app-connector](16-claude-app-connector/spec.md) | In Progress | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
 
 ---
 
@@ -290,7 +290,7 @@ exits).
   an unsafe "finalize on `result`" proposal into the watchdog and flagged gated auto-merge as policy.
 - **Task breakdown & test plan:** see [tasks.md](15-work-run-finalizer/tasks.md) and [test-plan.md](15-work-run-finalizer/test-plan.md). Test-first per phase.
 
-## 16-claude-app-connector — Not Started
+## 16-claude-app-connector — In Progress
 
 [Spec](16-claude-app-connector/spec.md)
 
