@@ -20,6 +20,7 @@ below it.
   - **Scope (MCP server updates):**
     - New `log_conversation(mode, content, kb_worthy?)` MCP tool. Writes directly to today's journal — no new pipeline stage, because the journal is already a nightly-ingestion input. Reuses existing vault primitives (`vault/journal.ts`, `vault/git.ts`, `vault/files.ts`, `kb/queue.ts`). `mode: full` appends a reconstructed transcript; `mode: summary` appends a one-bullet summary and, if kb_worthy, writes to `knowledge/raw/conversations/` + enqueues to the KB. Maps to `/fresh-full` and `/fresh`.
     - Expose ~6 mid-thread data tools to the App: `kb_query` (exists), `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, plus `log_conversation`. Keep the set lean to avoid tool sprawl. Ambient/health commands (`/diet`, `/workout`) stay Telegram-only.
+    - Need an task function to route ideas/bugs to be added to the appropriate product
     - Wire the MCP server into the Claude App as a connector.
   - **Key technical notes for planning:**
     - `/fresh` and `/fresh-full` are Jarvis-server TS bot commands (`src/bot/commands/`), not Claude skills. They depend on the server holding the Telegram session.

@@ -1,0 +1,73 @@
+# Jarvis Conversation Surface on the Claude App — Tasks
+
+Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
+
+> **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
+> Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
+> before any implementation task in the phase begins. A phase's implementation is done when
+> its test-plan sections pass.
+>
+> Granularity here is the meaningful deliverable — not a granular sub-task. Per-task file
+> layout, schemas, and signatures are settled in `/work`'s Plan phase, against the spec.
+
+## Phase 1 — Core tool surface
+
+> Depends on: nothing.
+
+### Tests (write first)
+
+- [ ] Write the test suite for **mcp-server-shared-factory** — test-plan.md §1.
+- [ ] Write the test suite for **product-routing-fn** — test-plan.md §2.
+- [ ] Write the test suite for **log-idea-tool** — test-plan.md §3.
+- [ ] Write the test suite for **log-conversation-tool** — test-plan.md §4.
+- [ ] Write the test suite for **read-tools-trio** — test-plan.md §5.
+- [ ] Confirm every suite above fails (red) before starting the implementation blocks.
+
+### Implementation
+
+- [ ] **mcp-server-shared-factory** — Refactor `createKBServer()` into a shared `createJarvisMcpServer(opts)` factory that registers a configurable tool set on one `McpServer` instance. Keep the stdio entry (`mcp/index.ts`) working unchanged and split App-surface tools from `kb_*` admin tools. No behavior change to existing tools.
+- [ ] **product-routing-fn** — Implement `resolveProductTarget()` over the `policies/products.json` known list with explicit-target validation and an explicit inbox/unrouted fallback (never drop, never guess). Extend `ProjectIdea` and the `ideas.md` bullet writer with a `product` field so loop-filed and App-filed ideas share one attribution schema.
+- [ ] **log-idea-tool** — Implement the `log_idea` MCP tool (ideas + bugs via `kind`) reusing `resolveProductTarget`, `deriveIdeaId` dedupe, `appendFiledIdeas`, and `gitCommitAndPush`. Returns the filed bullet and resolved product target.
+- [ ] **log-conversation-tool** — Implement the `log_conversation` MCP tool (R1): `mode:full` appends the reconstructed transcript to today's journal; `mode:summary` appends one bullet and, when `kb_worthy`, writes to `knowledge/raw/conversations/` and enqueues to the KB. Reuses journal/git/queue/`saveConversationSource` primitives; takes `content` and `kb_worthy` as inputs (no server-side summarization). Returns journal path and KB queue id.
+- [ ] **read-tools-trio** — Implement the three read tools: `vault_search` (over journals/pages/projects), `crm_lookup` (`pages/crm.json`), and `get_priorities` (parse `#priorities` mirroring `/priorities`). All conform to the standard MCP text-content return shape.
+
+## Phase 2 — Remote transport + auth
+
+> Depends on: Phase 1.
+
+### Tests (write first)
+
+- [ ] Write the test suite for **streamable-http-transport** — test-plan.md §6.
+- [ ] Write the test suite for **mcp-oauth-single-user** — test-plan.md §7.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] **streamable-http-transport** — Mount `StreamableHTTPServerTransport` at a new `/mcp` route on the existing daemon HTTP server (`src/server/http.ts`), backed by the shared `createJarvisMcpServer` instance exposing only the six App-surface tools. Handle session/stream setup and conform to existing host-allowlisting.
+- [ ] **mcp-oauth-single-user** — Implement single-user OAuth 2.1 for the `/mcp` endpoint using the SDK auth helpers (DCR + authorization-code flow), gating authorization on `JARVIS_HTTP_SECRET` and binding issued access tokens to the one known user id. Validate the bearer token on every `/mcp` request before the transport handles it.
+- [ ] **remote-tunnel-exposure** (docs/config only) — Stand up a named tunnel (Cloudflare Tunnel) exposing only the daemon `/mcp` route at a stable HTTPS hostname, with TLS at the edge and no inbound ports on the host. Document the tunnel config, secret handling, and recovery/runbook.
+
+## Phase 3 — App wiring + prompt port
+
+> Depends on: Phase 2.
+
+### Tests (write first)
+
+- [ ] _No code-test-required tasks — see per-task strategy in test-plan.md (docs/config only)._
+
+### Implementation
+
+- [ ] **app-connector-config** (docs/config only) — Register the remote MCP server as a Claude App custom connector, complete the OAuth handshake, and verify exactly the six tools are discoverable and callable from a thread against the live vault/KB.
+- [ ] **port-summarization-prompt** (docs/config only) — Port the `summarizeSession` prompt and kb-worthy heuristic verbatim into the Claude App project instructions so the App produces equivalent summary text and a `kb_worthy` boolean, then passes them to `log_conversation`. Document that the session lifecycle drops for the App path (server is stateless to the App).
+
+## Phase 4 — E2E validation
+
+> Depends on: Phase 3.
+
+### Tests (write first)
+
+- [ ] _The deliverable itself is a documented, repeatable acceptance test (tests-as-deliverable)._
+
+### Implementation
+
+- [ ] **e2e-funnel-validation** — End-to-end validation (DoD #5): from a Claude App thread, run read tools against the live vault, capture an idea routed to the correct product target, then `log_conversation` (summary + kb_worthy) and confirm the journal/KB raw-source write lands in the same git history and is picked up by the next nightly KB distillation with no new pipeline stage. Deliver as a documented, repeatable acceptance test.
