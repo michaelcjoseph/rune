@@ -1,5 +1,13 @@
 # Product-Team Orchestrated Work Specification
 
+> **Status: INCOMPLETE — reopened 2026-06-10.** Phases 1-7 shipped the
+> orchestration scaffolding and a reachable dispatch path, but the live role-spawn
+> execution binding was left stubbed: the orchestrated applier returns a hardcoded
+> `blocked` for every task (`orchestrated-work-runner.ts:169`) and reports the
+> finalizer `unavailable` (`:215`). So an orchestrated run does no real work. The
+> closeout treated live execution as an "optional smoke check" — it is the engine.
+> Remaining scope is **Phase 8** below.
+
 ## What's shipping (working-backwards)
 
 You work the way you do today: discuss an idea into a spec, then let it build. What changes
@@ -22,8 +30,11 @@ state and multi-model role separation, not delegated wholesale to one model proc
 v1 proves the loop closes mechanically, not that quality is already better. A deterministic
 fixture project goes from `plan` to multi-task orchestrated `work`, exercises at least one
 review round that changes the diff, updates `context.md` between tasks, and hands the final
-branch/run facts to the finalizer without a human merge button. Live real-task smoke checks
-are useful evidence, but they are not required for project completion.
+branch/run facts to the finalizer without a human merge button. **Correction
+(2026-06-10):** the original spec treated a live real-task run as an optional smoke
+check, not required for completion. That was the defect — it deferred the
+load-bearing execution binding under an "optional" label. Completion now requires
+at least one non-fixture run that drives a real task to a real diff (see Phase 8).
 
 ### Core value
 
@@ -471,6 +482,48 @@ invocation.
 
 Write the deferral ADRs, write `agent-lessons.md`, and run the final completion gate that
 rechecks the Phase 5 user-triggerable dispatch path before the project can be marked done.
+
+### Phase 8: Live execution binding (reopened 2026-06-10)
+
+Phases 1-7 closed with the per-task workflow's production seams stubbed: the orchestrated
+applier returns a hardcoded `blocked` for every task (`orchestrated-work-runner.ts:169`) and
+reports the finalizer `unavailable` (`:215`). The orchestration logic, dispatch path, and mode
+visibility are real and fixture-proven; live execution is not wired. This phase makes
+orchestrated `/work` actually do work.
+
+**Definition of done (corrected).** At least one non-fixture run drives a real task to a real
+diff through the gated workflow and lands (or durably holds) — no stub on the load-bearing
+component. Per the new PM/tech-lead/QA charter lessons, a fixture-green suite is not sufficient
+evidence of completion.
+
+**Model assignment.** Each role binds to a model through `policies/model-policy.json`
+`roleDefaults`. Coder and reviewer resolve to different providers (independence is fail-closed).
+
+| Role | Provider | Model |
+| --- | --- | --- |
+| PM | anthropic | Fable 5 |
+| Tech Lead | anthropic | Fable 5 |
+| QA | openai | GPT-5.5 (codex) |
+| Coder | openai | GPT-5.5 (codex) |
+| Reviewer | anthropic | Fable 5 |
+| Designer | anthropic | Fable 5 |
+
+**Work items.**
+
+1. Build the production execution-agent primitive: a tool-using, worktree-scoped session
+   (reuse the legacy work-runner spawn machinery) that takes a selected task plus the resolved
+   model and returns a captured `git diff`. This backs the artifact roles (coder, QA test
+   authoring).
+2. Wire the text-judgment seams (tech-lead test/diff review, reviewer verdict, designer, PM
+   wrap-up) on the existing `defaultRoleModelCall` text round-trip pattern from `/plan`.
+3. Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call the real
+   `runTeamTaskWorkflow` with a production `TeamTaskDeps`.
+4. Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex) and
+   populate `roleDefaults` for all six roles per the table above.
+5. Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the durable
+   branch-complete hold if Project 15 is still unwired.
+6. Add an acceptance test that exercises the real end-to-end path on a non-fixture task — the
+   stub-free proof that this gap cannot recur.
 
 ---
 

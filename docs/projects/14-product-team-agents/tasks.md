@@ -251,13 +251,11 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Create deterministic fixture spawners/readers for the complete lifecycle. (In-memory
       `Harness` in `project-orchestrator.test.ts` injects all reads/workflow/closeout/finalize
       effects — the loop runs end-to-end with no git, disk, or live model call.)
-- [ ] Optionally run a live real-task smoke check after automated suites pass. (OPTIONAL —
-      not required acceptance per spec §"What's shipping" and test-plan §5 "Low (smoke)". A
-      meaningful live smoke depends on the production `runTaskWorkflow` role-spawn binding,
-      which is deferred: today the production default returns a durable `blocked` with a
-      truthful reason, so an orchestrated run is explicit/recorded but does not yet drive live
-      role models. The required user-reachability proof — dispatch seam + mode visibility — is
-      green above. Promote when the live role-spawn binding lands.)
+- [ ] ~~Optionally run a live real-task smoke check after automated suites pass.~~ **PROMOTED
+      to Phase 8 (reopened 2026-06-10).** This was the load-bearing gap, not an optional extra:
+      the production `runTaskWorkflow` binding was stubbed to a durable `blocked`, so no
+      orchestrated run does real work. Live execution is no longer optional — it is required
+      for completion. See Phase 8.
 
 > **User-reachability:** YES — after this phase a user clicks Start on a cockpit project card
 > (or the chosen toggle path), the orchestrated loop runs, and they observe run status /
@@ -398,6 +396,63 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > **User-reachability:** no new runtime surface; this is the closeout guard that proves the
 > user-reachable Phase 5 path stayed green before the project is marked done.
 
+## Phase 8 - Live execution binding (reopened 2026-06-10)
+
+> Depends on: Phase 1, 2, 3, 4, 5. Reopens the project — Phases 1-7 shipped the scaffolding
+> and a reachable dispatch path, but the per-task workflow's production seams were stubbed
+> (`orchestrated-work-runner.ts:169` returns a hardcoded `blocked`; `:215` reports the
+> finalizer `unavailable`). This phase makes orchestrated `/work` do real work.
+
+### Tests (write first)
+
+- [ ] Production `TeamTaskDeps` factory test: the production factory binds all eight role
+      seams — none left as the `blocked` stub — and coder/reviewer resolve to different
+      providers through the model-policy resolver (fail-closed when only a same-provider model
+      is available). Model call injected; asserts wiring, not live output.
+- [ ] Execution-agent diff-capture test: given a controlled temp git worktree, the execution
+      primitive applies the agent's edits and returns the exact `git diff`; a no-op task yields
+      an empty diff; a tool/agent error yields structured `failed` evidence, never an unhandled
+      throw.
+- [ ] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
+      (anthropic) and qa/coder → `gpt-5.5` (openai); the registry contains both aliases; the
+      coder and reviewer providers differ.
+- [ ] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
+      through to `runTeamTaskWorkflow` — the hardcoded "orchestrated role execution not yet
+      wired" `blocked` path is gone and cannot reappear without failing this test.
+- [ ] **Live acceptance (required, non-fixture).** A real orchestrated run on a small real
+      task drives QA → coder → review to a real `git diff` and lands or durably holds. This
+      makes live model calls by design and is REQUIRED for phase completion — it is the
+      stub-free proof the original closeout lacked, and the test that would have caught the
+      gap. Per the PM/tech-lead/QA charter lessons, a fixture-green suite is not sufficient.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> The artifact-role execution primitive (sub-task 1) is the unlock; the rest is wiring and
+> config around it. The phase is not done until the live acceptance above is green.
+
+- [ ] Build the production execution-agent primitive: a tool-using, worktree-scoped session
+      (reuse the legacy `/work` work-runner spawn machinery) that takes a selected task plus
+      the resolved model and returns a captured `git diff`. Backs the artifact roles (coder,
+      QA test authoring).
+- [ ] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
+      execution-agent primitive; bind the judgment seams (tech-lead test/diff review, reviewer
+      verdict, designer, PM wrap-up) to the `defaultRoleModelCall` text round-trip from
+      `/plan`; bind `resolveReviewerProvider` to the model-policy resolver.
+- [ ] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
+      in `policies/model-policy.json`, and populate `roleDefaults` for all six roles per the
+      spec Phase 8 table.
+- [ ] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
+      `runTeamTaskWorkflow` with the production `TeamTaskDeps`.
+- [ ] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
+      durable branch-complete hold if Project 15 remains unwired — record which, and why.
+- [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
+      and run the live acceptance on a real task; record the run id, diff, and terminal outcome.
+
+> **User-reachability:** YES — after this phase, clicking Start with orchestrated mode on drives
+> a real task to a real diff that lands or durably holds, observable on the cockpit card. This
+> is the corrected definition of done: a non-fixture run does real work, not a durable `blocked`.
+
 ---
 
 ## Out of scope
@@ -406,6 +461,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - A quality/engagement eval.
 - Replacing Project 15's finalizer.
 - Requiring live model calls, real Telegram interaction, real vault feedback, or production
-  merge for automated acceptance.
+  merge for automated acceptance of Phases 1-7. (Phase 8 is the deliberate exception: its
+  acceptance requires one live, non-fixture run that drives a real task to a real diff — the
+  stub-free proof the original closeout lacked.)
 - Fully autonomous scheduler dispatch.
 - Removing legacy `/work --auto` before the orchestrated path is proven.
