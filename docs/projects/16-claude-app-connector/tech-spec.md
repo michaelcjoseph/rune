@@ -10,7 +10,7 @@
 - Daemon HTTP server: `jarvis/src/server/http.ts` `startHttpServer()` on `127.0.0.1:3847`, runs inside the daemon process that already holds the live `VAULT_DIR` working tree. Auth `jarvis/src/server/auth.ts` `verifyAuth()` (Bearer/cookie, timing-safe) + `JARVIS_ALLOWED_HOSTS`. No remote MCP transport today.
 
 ## Architecture decision (R4): extend, don't fork
-**Decision: one server, one process.** Refactor `createKBServer()` into a shared `createJarvisMcpServer(opts)` factory that registers the full tool set, then expose it two ways from the SAME `McpServer` instance:
+**Decision: one server, one process.** Refactor `createKBServer()` into a shared `createJarvisMcpServer(opts)` factory that registers the requested tool set, then expose it two ways — one process, one factory, but two INDEPENDENT `McpServer` instances (the SDK binds one transport per `Server` instance; a second `connect()` on the same instance silently replaces the first transport, so the stdio entry and the `/mcp` mount each call the factory separately):
 1. **stdio** (`mcp/index.ts`) — unchanged, for the daemon's CLI spawns.
 2. **Streamable HTTP** — a new `/mcp` route mounted on the existing daemon HTTP server using the SDK's `StreamableHTTPServerTransport`.
 
