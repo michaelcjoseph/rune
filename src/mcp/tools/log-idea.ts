@@ -47,15 +47,7 @@ export interface LogIdeaDeps {
   sanitizeError?: (message: string) => string;
 }
 
-import { errText, type McpTextResult } from './types.js';
-
-function ok(text: string): McpTextResult {
-  return { content: [{ type: 'text', text }] };
-}
-
-function err(text: string): McpTextResult {
-  return { content: [{ type: 'text', text }], isError: true };
-}
+import { errText, ok, err, type McpTextResult } from './types.js';
 
 /** Trust-boundary length caps on LLM-supplied free text (mirrors the
  *  feedback-record convention). Exceeding input is rejected, not truncated —

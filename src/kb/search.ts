@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import config from '../config.js';
 
 interface SearchResult {
@@ -33,6 +33,16 @@ export function searchVault(
   const searchDir = options?.directory
     ? join(config.VAULT_DIR, options.directory)
     : config.VAULT_DIR;
+
+  // Containment guard: `directory` must stay inside the vault. Production
+  // callers pass fixed literals (and the MCP vault_search schema is
+  // enum-locked), but this function is now reachable from a remote surface —
+  // it must be safe regardless of caller.
+  const resolvedRoot = resolve(config.VAULT_DIR);
+  const resolvedDir = resolve(searchDir);
+  if (resolvedDir !== resolvedRoot && !resolvedDir.startsWith(resolvedRoot + sep)) {
+    return [];
+  }
 
   const maxResults = options?.maxResults ?? 20;
 

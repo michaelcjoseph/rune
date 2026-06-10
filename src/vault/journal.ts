@@ -54,35 +54,9 @@ export function writeMorningPrep(sections: string): { written: boolean; filepath
   return { written: true, filepath };
 }
 
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/** Extract lines after a #tag marker until the next line-leading tag, heading, or EOF. */
-export function parseTag(content: string, tag: string): string | null {
-  const lines = content.split('\n');
-  const tagPattern = new RegExp(`(?:^|\\s)#${escapeRegex(tag)}(?:\\s|$)`);
-
-  let startIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (tagPattern.test(lines[i]!)) {
-      startIdx = i + 1;
-      break;
-    }
-  }
-
-  if (startIdx === -1) return null;
-
-  const collected: string[] = [];
-  for (let i = startIdx; i < lines.length; i++) {
-    const line = lines[i]!;
-    // Stop at line-leading #tag (section divider) or markdown heading
-    if (/^#\w/.test(line) || /^#{1,6}\s/.test(line)) break;
-    collected.push(line);
-  }
-
-  return collected.join('\n').trim();
-}
+// parseTag moved to journal-parse.ts (config-free) so pure modules — e.g.
+// the read-tools MCP handlers — can reuse it; re-exported for existing callers.
+export { parseTag } from './journal-parse.js';
 
 /**
  * Extract the **Next Week's Goals:** numbered list from a weekly-review journal.

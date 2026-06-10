@@ -15,7 +15,7 @@
  * loaded lazily by src/mcp/server.ts.
  */
 
-import { errText, type McpTextResult } from './types.js';
+import { errText, ok, err, type McpTextResult } from './types.js';
 
 export interface LogConversationInput {
   /** 'full' = reconstructed transcript; 'summary' = one-line bullet. */
@@ -41,14 +41,6 @@ export interface LogConversationDeps {
   /** Optional error-text sanitizer applied before failure messages surface
    *  to the (eventually remote) caller. */
   sanitizeError?: (message: string) => string;
-}
-
-function ok(text: string): McpTextResult {
-  return { content: [{ type: 'text', text }] };
-}
-
-function err(text: string): McpTextResult {
-  return { content: [{ type: 'text', text }], isError: true };
 }
 
 /** Trust-boundary size cap on the LLM-supplied content. Deliberately large —

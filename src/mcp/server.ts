@@ -45,15 +45,10 @@ export const ADMIN_TOOLS = [
 /** Union of every tool name the factory can register. */
 export type ToolName = (typeof APP_SURFACE_TOOLS)[number] | (typeof ADMIN_TOOLS)[number];
 
-/** Placeholder result for App-surface tools whose handler implementation
- *  task has not landed yet. Registration (name + schema) is real; behavior
- *  arrives with each tool's own task. */
-function notImplemented(tool: string) {
-  return {
-    content: [{ type: 'text' as const, text: `${tool} is not implemented yet.` }],
-    isError: true as const,
-  };
-}
+/** Lazy loader for the read-tools trio handler + deps modules (shared by
+ *  three registrations; Node's module cache makes repeat calls free). */
+const lazyReadTools = () =>
+  Promise.all([import('./tools/read-tools.js'), import('./tools/read-tools-deps.js')]);
 
 /** Every tool the factory knows how to register, keyed by tool name. */
 const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
@@ -161,10 +156,12 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
           .describe('Restrict search to these vault areas (default: all three)'),
         maxResults: z.number().optional().describe('Max results to return'),
       },
-      // TODO(read-tools-trio): replace with the vaultSearch handler from
-      // ./tools/read-tools.js — swap THIS closure in TOOL_REGISTRY; do not
-      // add a second server.tool() registration elsewhere.
-      async () => notImplemented('vault_search'),
+      // Lazy import: the deps module pulls config.ts (env-var-required at
+      // import), so it must not load before the tool is actually called.
+      async (input) => {
+        const [{ vaultSearch }, { buildProductionVaultSearchDeps }] = await lazyReadTools();
+        return vaultSearch(input, buildProductionVaultSearchDeps());
+      },
     );
   },
 
@@ -195,8 +192,10 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
       'crm_lookup',
       'Look up a person or company from the CRM.',
       { name: z.string().describe('Name (or substring) to look up') },
-      // TODO(read-tools-trio): replace with the crmLookup handler.
-      async () => notImplemented('crm_lookup'),
+      async (input) => {
+        const [{ crmLookup }, { buildProductionCrmLookupDeps }] = await lazyReadTools();
+        return crmLookup(input, buildProductionCrmLookupDeps());
+      },
     );
   },
 
@@ -205,8 +204,10 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
       'get_priorities',
       "Get current priorities from the journal's #priorities block (today, falling back to yesterday).",
       {},
-      // TODO(read-tools-trio): replace with the getPriorities handler.
-      async () => notImplemented('get_priorities'),
+      async () => {
+        const [{ getPriorities }, { buildProductionGetPrioritiesDeps }] = await lazyReadTools();
+        return getPriorities(buildProductionGetPrioritiesDeps());
+      },
     );
   },
 
