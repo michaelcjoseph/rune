@@ -14,6 +14,13 @@
 
 import type { LoopOutcome } from './observation-loop.js';
 
+/** Slug shape a product attribution must have to be written (mirrors the
+ *  reader's PRODUCT_SUFFIX_RE in observation-ideas-io.ts and VALID_SLUG in
+ *  sandbox.ts). Gate at the WRITE boundary: `product` originates from LLM
+ *  output (triage agent / App Claude), and docs/projects/ideas.md is a
+ *  repo-tracked file — arbitrary text must not ride the suffix. */
+const PRODUCT_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
 /**
  * Turn the loop's outcomes into markdown bullets ready to append to
  * `docs/projects/ideas.md`. Each filed outcome becomes one bullet line carrying the
@@ -24,7 +31,13 @@ export function formatIdeasMarkdown(outcomes: LoopOutcome[]): string {
   const lines: string[] = [];
   for (const outcome of outcomes) {
     if (outcome.kind === 'filed') {
-      lines.push(`- **${outcome.idea.title}** — ${outcome.idea.friction}`);
+      // Product attribution (project 16 R3.13): a ` → <product>` suffix,
+      // matching the repo's existing `→ <slug>` promotion-suffix convention.
+      // Legacy ideas without a product keep the bare bullet form. A product
+      // that is not a valid slug is dropped (never written verbatim).
+      const product = outcome.idea.product;
+      const suffix = product && PRODUCT_SLUG_RE.test(product) ? ` → ${product}` : '';
+      lines.push(`- **${outcome.idea.title}** — ${outcome.idea.friction}${suffix}`);
     }
   }
   if (lines.length === 0) return '';

@@ -44,6 +44,10 @@ export interface ProjectIdea {
   friction: string;
   /** Stable id derived from the friction — same friction → same id (for de-dupe). */
   id: string;
+  /** Product attribution (project 16 R3.13) — shared schema between loop-filed
+   *  and App-filed ideas. Rendered as a ` → <product>` bullet suffix; absent on
+   *  legacy bullets. Never part of the id derivation. */
+  product?: string;
 }
 
 /** The triage decision for one signal — file a project or discard. */

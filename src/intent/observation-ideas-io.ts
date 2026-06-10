@@ -39,6 +39,21 @@ const LOOP_FILED_SECTION_RE = /^## Loop-filed\b/;
  *  loop-filed entries even if they slipped under the section header. */
 const LOOP_BULLET_RE = /^-\s+\*\*(.+?)\*\*\s+—\s+(.+?)\s*$/;
 
+/** Matches the optional trailing ` → <product>` attribution suffix the
+ *  writer emits for ideas carrying a `product` (project 16 R3.13). The
+ *  product is a slug (no leading/trailing hyphen — mirrors VALID_SLUG in
+ *  sandbox.ts); the suffix is stripped BEFORE the id is derived so
+ *  attribution never perturbs dedupe.
+ *
+ *  KNOWN AMBIGUITY: a friction whose own text ends in ` → <slug>` is
+ *  indistinguishable from an attributed bullet and will be parsed as one
+ *  (truncated friction + product). The writer constrains what it emits
+ *  (formatIdeasMarkdown only writes slug-valid suffixes) but a legacy or
+ *  hand-typed bullet ending in the arrow pattern is misread — accepted
+ *  tradeoff of the inline format; do not "fix" the regex without checking
+ *  the round-trip tests in product-routing.test.ts. */
+const PRODUCT_SUFFIX_RE = /^(.*\S)\s+→\s+([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)$/;
+
 /** Maximum id length — matches the observation-triage agent's
  *  construction rule. Two passes on the same friction must produce the
  *  same id, so the truncation length here and in the agent prompt must
@@ -92,9 +107,22 @@ export function readFiledIdeas(ideasPath: string): ProjectIdea[] {
     const m = LOOP_BULLET_RE.exec(line);
     if (!m) continue;
     const title = m[1]!.trim();
-    const friction = m[2]!.trim();
+    let friction = m[2]!.trim();
     if (!title || !friction) continue;
-    ideas.push({ title, friction, id: deriveIdeaId(friction) });
+    // Split off a trailing ` → <product>` attribution suffix; the friction
+    // (and therefore the id) excludes it. Legacy bullets have no suffix.
+    const suffixMatch = PRODUCT_SUFFIX_RE.exec(friction);
+    let product: string | undefined;
+    if (suffixMatch) {
+      friction = suffixMatch[1]!; // group ends on \S — no trim needed
+      product = suffixMatch[2]!;
+    }
+    ideas.push({
+      title,
+      friction,
+      id: deriveIdeaId(friction),
+      ...(product !== undefined ? { product } : {}),
+    });
   }
   return ideas;
 }
