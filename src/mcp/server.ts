@@ -178,9 +178,15 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
         product: z.string().optional().describe('Product target inferred from thread context'),
         kind: z.enum(['idea', 'bug']).optional().describe("Item kind (default 'idea')"),
       },
-      // TODO(log-idea-tool): replace with the logIdea handler from
-      // ./tools/log-idea.js (same swap-in-registry pattern).
-      async () => notImplemented('log_idea'),
+      // Lazy import: the deps module pulls config.ts (env-var-required at
+      // import), so it must not load before the tool is actually called.
+      async (input) => {
+        const [{ logIdea }, { buildProductionLogIdeaDeps }] = await Promise.all([
+          import('./tools/log-idea.js'),
+          import('./tools/log-idea-deps.js'),
+        ]);
+        return logIdea(input, buildProductionLogIdeaDeps());
+      },
     );
   },
 

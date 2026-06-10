@@ -54,23 +54,39 @@ async function ensureOnMain(): Promise<boolean> {
   }
 }
 
-export async function gitCommitAndPush(message: string): Promise<void> {
-  if (!(await ensureOnMain())) return;
+/** Strict commit+push: THROWS on any failure (not-on-main, commit, push).
+ *  For callers that must surface a non-durable write to the user instead of
+ *  reporting a phantom success — e.g. the log_idea / log_conversation MCP
+ *  tools (project 16). Returns 'nothing-to-commit' as a benign outcome (no
+ *  push attempted — matches the long-standing gitCommitAndPush behavior). */
+export async function gitCommitAndPushOrThrow(message: string): Promise<'pushed' | 'nothing-to-commit'> {
+  if (!(await ensureOnMain())) {
+    throw new Error('vault is not on main; refusing to commit');
+  }
 
   try {
     await execFile('git', ['add', '-A'], execOpts);
     await execFile('git', ['commit', '-m', message], execOpts);
   } catch (err) {
     const stderr = (err as { stderr?: string })?.stderr || '';
-    if (!stderr.includes('nothing to commit')) {
-      log.error('Git commit error', { error: (err as Error).message });
-    }
-    return;
+    if (stderr.includes('nothing to commit')) return 'nothing-to-commit';
+    throw new Error(`git commit failed: ${(err as Error).message}`);
   }
 
   try {
     await execFile('git', ['push'], execOpts);
   } catch (err) {
-    log.error('Git push error', { error: (err as Error).message });
+    throw new Error(`git push failed: ${(err as Error).message}`);
+  }
+  return 'pushed';
+}
+
+/** Best-effort commit+push: failures are logged, never thrown. The default
+ *  for background jobs where a git hiccup must not break the pipeline. */
+export async function gitCommitAndPush(message: string): Promise<void> {
+  try {
+    await gitCommitAndPushOrThrow(message);
+  } catch (err) {
+    log.error('Git commit/push error', { error: (err as Error).message });
   }
 }

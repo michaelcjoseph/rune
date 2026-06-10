@@ -14,7 +14,7 @@ vi.mock('node:util', () => ({
   promisify: (fn: any) => fn,
 }));
 
-const { gitCommitAndPush } = await import('./git.js');
+const { gitCommitAndPush, gitCommitAndPushOrThrow } = await import('./git.js');
 
 // The first git call in gitCommitAndPush is the branch guard (rev-parse). By
 // default return 'main' so the happy path proceeds; individual tests override.
@@ -86,7 +86,7 @@ describe('vault/git', () => {
     expect(mockExecFile).toHaveBeenCalledTimes(3); // rev-parse + add + commit, no push
   });
 
-  it('skips push on unexpected commit error', async () => {
+  it('swallows unexpected commit error without pushing', async () => {
     mockExecFile.mockImplementation(async (_cmd: string, args: string[]) => {
       if (args[0] === 'rev-parse') return { stdout: 'main\n', stderr: '' };
       if (args[0] === 'commit') {
@@ -110,5 +110,63 @@ describe('vault/git', () => {
 
     await expect(gitCommitAndPush('test')).resolves.toBeUndefined();
     expect(mockExecFile).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('vault/git — gitCommitAndPushOrThrow (strict variant)', () => {
+  beforeEach(() => {
+    mockExecFile.mockReset();
+    onBranch('main');
+  });
+
+  it('resolves on the happy path (add, commit, push)', async () => {
+    await expect(gitCommitAndPushOrThrow('strict commit')).resolves.toBe('pushed');
+    expect(mockExecFile).toHaveBeenCalledTimes(4);
+  });
+
+  it('throws when not on main and checkout fails', async () => {
+    mockExecFile.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse') return { stdout: 'feat/stray\n', stderr: '' };
+      if (args[0] === 'checkout') throw new Error('checkout conflict');
+      return { stdout: '', stderr: '' };
+    });
+    await expect(gitCommitAndPushOrThrow('strict')).rejects.toThrow(/not on main/);
+    expect(mockExecFile).not.toHaveBeenCalledWith('git', ['add', '-A'], expect.any(Object));
+  });
+
+  it('throws on an unexpected commit error', async () => {
+    mockExecFile.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse') return { stdout: 'main\n', stderr: '' };
+      if (args[0] === 'commit') {
+        const err = new Error('lock') as any;
+        err.stderr = 'fatal: lock file exists';
+        throw err;
+      }
+      return { stdout: '', stderr: '' };
+    });
+    await expect(gitCommitAndPushOrThrow('strict')).rejects.toThrow(/git commit failed/);
+  });
+
+  it('throws on push failure', async () => {
+    mockExecFile.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse') return { stdout: 'main\n', stderr: '' };
+      if (args[0] === 'push') throw new Error('remote rejected');
+      return { stdout: '', stderr: '' };
+    });
+    await expect(gitCommitAndPushOrThrow('strict')).rejects.toThrow(/git push failed/);
+  });
+
+  it('resolves benignly on nothing-to-commit (no push attempted)', async () => {
+    mockExecFile.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === 'rev-parse') return { stdout: 'main\n', stderr: '' };
+      if (args[0] === 'commit') {
+        const err = new Error('nothing to commit') as any;
+        err.stderr = 'nothing to commit, working tree clean';
+        throw err;
+      }
+      return { stdout: '', stderr: '' };
+    });
+    await expect(gitCommitAndPushOrThrow('strict')).resolves.toBe('nothing-to-commit');
+    expect(mockExecFile).toHaveBeenCalledTimes(3); // rev-parse + add + commit, no push
   });
 });

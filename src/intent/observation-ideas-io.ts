@@ -27,9 +27,14 @@ import type { ProjectIdea } from './observation-loop.js';
 
 const log = createLogger('observation-ideas-io');
 
+/** The Loop-filed section header literal — single source of truth shared
+ *  with callers that initialize the section (e.g. the log_idea production
+ *  deps' ensureLoopFiledSection). */
+export const LOOP_FILED_HEADER = '## Loop-filed';
+
 /** Matches the Loop-filed section header — case-sensitive on the word
  *  because the writer always emits the literal `## Loop-filed`. */
-const LOOP_FILED_SECTION_RE = /^## Loop-filed\b/;
+export const LOOP_FILED_SECTION_RE = /^## Loop-filed\b/;
 
 /** Matches a structured bullet of the shape `- **Title** — friction`.
  *  Captures title and friction separately. Uses the em-dash specifically
