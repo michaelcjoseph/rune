@@ -16,7 +16,7 @@
 
 Rationale: the daemon process already runs on the machine with the live vault working tree and git history the nightly pipeline reads (satisfies R4(b) for free). Standing up a separate server would duplicate vault access, config, and git-safety. Mounting on `http.ts` reuses `verifyAuth`, host-allowlisting, and the running event loop.
 
-**Remote reachability:** the daemon binds `127.0.0.1`. Expose `/mcp` at a stable HTTPS hostname via a named tunnel (Cloudflare Tunnel preferred — stable hostname, no inbound ports, TLS terminated at edge). The tunnel is the only public surface; it forwards only `/mcp`.
+**Remote reachability:** the daemon binds `127.0.0.1`. Expose `/mcp` at a stable HTTPS hostname via a tunnel — the only public surface, forwarding only the MCP + OAuth-discovery paths. *Decision revised 2026-06-10:* Tailscale Funnel first (already on Tailscale: $0, no domain, no extra daemon, TLS terminates on-host; long-lived beta is the accepted tradeoff), with Cloudflare Tunnel as the documented fallback (GA-grade, but requires a domain on Cloudflare DNS and edge-terminated TLS). See [tunnel-runbook.md](tunnel-runbook.md).
 
 **Auth (R4(a), single-user):** Claude App custom connectors require OAuth 2.1 for remote MCP. Implement a minimal single-user authorization server on the daemon using the SDK auth helpers (`mcpAuthRouter` + a single-tenant `OAuthServerProvider`): support Dynamic Client Registration + authorization-code flow, but the authorize step gates on the existing `JARVIS_HTTP_SECRET` (only Michael possesses it) and issues access tokens bound to the single known user id. Every `/mcp` request validates the bearer token before the transport handles it. No multi-user/account model — tokens map to the one user.
 
