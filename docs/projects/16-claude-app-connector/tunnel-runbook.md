@@ -42,13 +42,27 @@ ACLs do not protect these paths; the OAuth gate is the access control.
 1. Tailnet admin console — two toggles:
    - Enable **HTTPS certificates** (DNS → HTTPS Certificates → Enable).
      MagicDNS must be on (it is by default).
-   - Grant the **funnel node attribute** in the tailnet policy file (Access
-     Controls), e.g.:
-     ```json
-     "nodeAttrs": [
-       { "target": ["autogroup:member"], "attr": ["funnel"] }
-     ]
-     ```
+   - Grant the **funnel node attribute** in the tailnet policy file:
+     1. Open https://login.tailscale.com/admin/acls (Access Controls) — the
+        editor shows the whole-tailnet policy file (HuJSON: comments and
+        trailing commas allowed).
+     2. Get this machine's Tailscale IP: `tailscale ip -4` on the Mac mini
+        (a `100.x.y.z` address). Scoping the grant to the one machine is
+        tighter than `autogroup:member` (all owned devices) — Funnel is
+        public-internet exposure.
+     3. ADD a `nodeAttrs` key alongside the existing sections (or append an
+        entry if a `nodeAttrs` array already exists — never a second key):
+        ```jsonc
+        "nodeAttrs": [
+          // Allow the Mac mini (Jarvis daemon) to use Tailscale Funnel
+          { "target": ["100.x.y.z"], "attr": ["funnel"] },
+        ],
+        ```
+     4. Save — the console validates syntax before accepting. The grant
+        takes effect within seconds, no tailscaled restart needed.
+     5. If the attribute is missing/wiped (e.g. the policy file is later
+        reset to defaults), the mount command in step 3 fails loudly with
+        `Funnel not available; "funnel" node attribute not set`.
 2. Confirm the machine's public name: `tailscale status` →
    `<machine>.<tailnet>.ts.net`. This is the stable HTTPS hostname.
 3. Mount the three paths and expose them (persisted across reboots by
