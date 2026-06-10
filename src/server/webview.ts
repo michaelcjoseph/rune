@@ -6,6 +6,7 @@ import { join, extname, resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 import { WebSocketServer } from 'ws';
+import { readBody } from './read-body.js';
 import config from '../config.js';
 import { verifyAuth, isAllowedHost, safeCompare } from './auth.js';
 import { getStateSnapshot } from './state-snapshot.js';
@@ -93,20 +94,9 @@ function reject403(res: ServerResponse): void {
   res.end(JSON.stringify({ error: 'forbidden' }));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const MAX = 1 * 1024 * 1024; // 1 MB cap
-    req.on('data', (c: Buffer) => {
-      total += c.length;
-      if (total > MAX) { reject(new Error('request body too large')); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
+// Bounded body reads use the shared reader (1 MB default) — see
+// src/server/read-body.ts. The shared version also destroys the socket on
+// overflow, which the old local copy did not.
 
 /** Load and template-substitute index.html. Called at mount time (prod
  *  pre-load) and on every `GET /` request in dev mode. */

@@ -35,6 +35,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createJarvisMcpServer, APP_SURFACE_TOOLS } from '../mcp/server.js';
 import { isAllowedHost } from './auth.js';
+import { readBody, BodyTooLargeError } from './read-body.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('mcp-transport');
@@ -56,35 +57,8 @@ export type McpRouteHandler = ((req: IncomingMessage, res: ServerResponse) => Pr
 
 const MCP_PATH = '/mcp';
 
-/** Initialize bodies carry protocol metadata only — cap them hard. */
-const MAX_INIT_BODY_BYTES = 1 * 1024 * 1024;
-
 /** Idle sessions are force-closed after this long with no requests. */
 const SESSION_IDLE_MS = 30 * 60_000;
-
-function readBody(req: IncomingMessage, maxBytes = MAX_INIT_BODY_BYTES): Promise<string> {
-  return new Promise((resolve, rejectP) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    req.on('data', (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        rejectP(new BodyTooLargeError());
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', rejectP);
-  });
-}
-
-class BodyTooLargeError extends Error {
-  constructor() {
-    super('request body too large');
-  }
-}
 
 /** JSON-RPC-shaped rejection — one consistent error shape for every gate. */
 function reject(res: ServerResponse, status: number, message: string): void {
@@ -144,7 +118,9 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
 
     // Gate 2: bearer — rejected BEFORE the transport sees the request.
     if (!(await verifyBearer(req))) {
-      res.setHeader('WWW-Authenticate', 'Bearer resource_metadata="/.well-known/oauth-authorization-server"');
+      // RFC 9728: the challenge points at the PROTECTED RESOURCE metadata
+      // (which names the authorization server), not the AS metadata itself.
+      res.setHeader('WWW-Authenticate', 'Bearer resource_metadata="/.well-known/oauth-protected-resource"');
       reject(res, 401, 'Unauthorized: valid bearer token required');
       return true;
     }

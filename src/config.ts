@@ -49,6 +49,11 @@ const config = {
 
   JARVIS_HTTP_SECRET: process.env['JARVIS_HTTP_SECRET'] || '',
 
+  /** Pinned issuer base URL for the /mcp OAuth metadata (e.g. the public
+   *  tunnel hostname, https://jarvis-mcp.example.com). Empty = fall back to
+   *  the request Host header (local use only — the header is caller-controlled). */
+  MCP_ISSUER_URL: process.env['MCP_ISSUER_URL'] || '',
+
   get OBSIDIAN_VAULT_NAME() {
     return process.env['OBSIDIAN_VAULT_NAME'] || basename(this.VAULT_DIR);
   },

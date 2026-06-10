@@ -18,7 +18,8 @@ import { workRunReleaseApplier } from './jobs/work-run-release.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSessions } from './reviews/planning.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
-import { startHttpServer } from './server/http.js';
+import { startHttpServer, closeMcpSessions } from './server/http.js';
+import { createMcpOAuth } from './server/mcp-oauth.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
 import { startPlanningExpiry, stopPlanningExpiry } from './jobs/planning-expiry-runner.js';
@@ -141,7 +142,25 @@ registerApplier(workRunReleaseApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;
-const server = startHttpServer({ webview, isReady: () => ready });
+// /mcp Claude App connector (project 16): mounted only when the gate secret
+// exists — the OAuth consent flow is gated on JARVIS_HTTP_SECRET, and tokens
+// bind to the one known user id. Without the secret the route stays absent.
+const mcpOauth = config.JARVIS_HTTP_SECRET
+  ? createMcpOAuth({
+      gateSecret: config.JARVIS_HTTP_SECRET,
+      userId: String(config.TELEGRAM_USER_ID),
+      issuerBaseUrl: config.MCP_ISSUER_URL || undefined,
+    })
+  : null;
+if (!mcpOauth) {
+  log.warn('JARVIS_HTTP_SECRET not set — /mcp (Claude App connector) not mounted');
+}
+const server = startHttpServer(
+  { webview, isReady: () => ready },
+  mcpOauth
+    ? { verifyBearer: mcpOauth.verifyBearer, handleOAuthRoute: mcpOauth.handleOAuthRoute }
+    : undefined,
+);
 startScheduler({ bus });
 startStallCheck(bus);
 startPlanningExpiry();
@@ -168,6 +187,9 @@ async function shutdown() {
   stopWatcher();
   destroy();
   stopInFlightTicker();
+  // Tear down /mcp sessions FIRST so no new MCP work arrives while child
+  // processes drain (no-op when /mcp is not mounted).
+  await closeMcpSessions(server);
   killActiveProcesses();
   await waitForActiveProcesses();
   persistSessions();
