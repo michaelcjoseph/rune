@@ -20,8 +20,7 @@ import {
 } from '../../intent/observation-ideas-io.js';
 import { withFileLock } from '../../intent/backlog-write-lock.js';
 import { gitCommitAndPushOrThrow } from '../../vault/git.js';
-import { redactSecrets } from '../../jobs/work-run-transcript.js';
-import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
+import { sanitizeMcpError } from './sanitize.js';
 import type { LogIdeaDeps } from './log-idea.js';
 
 /** Ensure `ideasPath` exists and contains the `## Loop-filed` section that
@@ -38,13 +37,6 @@ export function ensureLoopFiledSection(ideasPath: string): void {
     const sep = raw.endsWith('\n') ? '\n' : '\n\n';
     appendFileSync(ideasPath, `${sep}${LOOP_FILED_HEADER}\n`, 'utf8');
   }
-}
-
-/** Error-text sanitizer for messages that surface to the (eventually
- *  remote) App caller: strip vault/project absolute paths, redact secrets
- *  (git push stderr can carry credential URLs). */
-function sanitizeError(message: string): string {
-  return redactSecrets(scrubAbsolutePaths(message));
 }
 
 /** Build the live deps bag: vault projects/ideas.md (tech-spec R3 — the
@@ -70,6 +62,6 @@ export function buildProductionLogIdeaDeps(): LogIdeaDeps {
     commitAndPush: async (message) => {
       await gitCommitAndPushOrThrow(message);
     },
-    sanitizeError,
+    sanitizeError: sanitizeMcpError,
   };
 }

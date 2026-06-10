@@ -47,8 +47,7 @@ export interface LogIdeaDeps {
   sanitizeError?: (message: string) => string;
 }
 
-export type { McpTextResult } from './types.js';
-import type { McpTextResult } from './types.js';
+import { errText, type McpTextResult } from './types.js';
 
 function ok(text: string): McpTextResult {
   return { content: [{ type: 'text', text }] };
@@ -122,12 +121,12 @@ export async function logIdea(input: LogIdeaInput, deps: LogIdeaDeps): Promise<M
       await deps.commitAndPush(`log_idea: ${bulletTitle} → ${route.product}`);
     } catch (commitErr) {
       return err(
-        `Bullet was written to the ideas file but the git commit/push FAILED — the capture is NOT durable yet: ${clean((commitErr as Error).message)}`,
+        `Bullet was written to the ideas file but the git commit/push FAILED — the capture is NOT durable yet: ${clean(errText(commitErr))}`,
       );
     }
 
     return ok(`Filed ${kind} to ${route.product}:\n${bullet}`);
   } catch (unexpected) {
-    return err(`log_idea failed: ${clean((unexpected as Error).message)}`);
+    return err(`log_idea failed: ${clean(errText(unexpected))}`);
   }
 }

@@ -216,12 +216,18 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
       "Write a finished conversation into today's journal (summary or full reconstruction), optionally into the KB queue.",
       {
         mode: z.enum(['full', 'summary']).describe('full = reconstructed transcript; summary = one-line bullet'),
-        content: z.string().describe('The transcript or summary text to write'),
+        content: z.string().max(200_000).describe('The transcript or summary text to write'),
         kb_worthy: z.boolean().optional().describe('Also write to the KB raw-source queue (summary mode only)'),
       },
-      // TODO(log-conversation-tool): replace with the logConversation handler
-      // from ./tools/log-conversation.js.
-      async () => notImplemented('log_conversation'),
+      // Lazy import: the deps module pulls config.ts (env-var-required at
+      // import), so it must not load before the tool is actually called.
+      async (input) => {
+        const [{ logConversation }, { buildProductionLogConversationDeps }] = await Promise.all([
+          import('./tools/log-conversation.js'),
+          import('./tools/log-conversation-deps.js'),
+        ]);
+        return logConversation(input, buildProductionLogConversationDeps());
+      },
     );
   },
 };

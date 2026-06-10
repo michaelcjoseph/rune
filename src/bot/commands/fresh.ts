@@ -1,9 +1,8 @@
 import { getSession, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
 import { summarizeSession } from '../../ai/claude.js';
-import { appendToJournal } from '../../vault/journal.js';
-import { getTimestamp, getTodayDate } from '../../utils/time.js';
+import { appendToJournal, saveConversationSource } from '../../vault/journal.js';
+import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
-import { writeVaultFile } from '../../vault/files.js';
 import { enqueue } from '../../kb/queue.js';
 import { abandonActivePlanningSession, getActivePlanningSession } from '../../reviews/planning.js';
 import { createLogger } from '../../utils/logger.js';
@@ -11,16 +10,9 @@ import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('cmd-fresh');
 
-export function saveConversationSource(summary: string): string {
-  const date = getTodayDate();
-  const time = getTimestamp().replace(':', '');
-  const secs = String(new Date().getSeconds()).padStart(2, '0');
-  const filename = `conversation-${date}-${time}${secs}.md`;
-  const path = `knowledge/raw/conversations/${filename}`;
-  writeVaultFile(path, summary);
-  log.info('Saved conversation source', { path });
-  return path;
-}
+// Relocated to src/vault/journal.ts (project 16) so non-bot surfaces can
+// reuse it; re-exported here for existing callers/tests.
+export { saveConversationSource } from '../../vault/journal.js';
 
 export function parseKBWorthy(summary: string): { isKBWorthy: boolean; journalSummary: string } {
   const lines = summary.split('\n');

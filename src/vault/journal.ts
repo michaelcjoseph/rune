@@ -1,8 +1,11 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config from '../config.js';
-import { getTodayFilename } from '../utils/time.js';
-import { readVaultFile, appendVaultFile } from './files.js';
+import { getTodayFilename, getTodayDate, getTimestamp } from '../utils/time.js';
+import { readVaultFile, appendVaultFile, writeVaultFile } from './files.js';
+import { createLogger } from '../utils/logger.js';
+
+const log = createLogger('journal');
 
 function getTodayPath(): string {
   return join(config.VAULT_DIR, 'journals', getTodayFilename());
@@ -14,6 +17,22 @@ export function appendToJournal(text: string): string {
   const prefix = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
   appendVaultFile(relPath, `${prefix}${text}\n`);
   return join(config.VAULT_DIR, relPath);
+}
+
+/** Write a conversation summary as a KB raw source under
+ *  knowledge/raw/conversations/ and return its vault-relative path.
+ *  Moved here from bot/commands/fresh.ts (which re-exports it) so non-bot
+ *  surfaces — e.g. the log_conversation MCP tool — can reuse it without
+ *  pulling the bot/ai import chain. */
+export function saveConversationSource(summary: string): string {
+  const date = getTodayDate();
+  const time = getTimestamp().replace(':', '');
+  const secs = String(new Date().getSeconds()).padStart(2, '0');
+  const filename = `conversation-${date}-${time}${secs}.md`;
+  const path = `knowledge/raw/conversations/${filename}`;
+  writeVaultFile(path, summary);
+  log.info('Saved conversation source', { path });
+  return path;
 }
 
 const MORNING_PREP_MARKER = '## Morning Prep';

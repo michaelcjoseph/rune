@@ -11,7 +11,13 @@ vi.mock('../../vault/sessions.js', () => ({
   transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
-vi.mock('../../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
+// saveConversationSource now LIVES in vault/journal.ts (relocated, project 16)
+// and is re-exported by fresh.ts — pass the real implementation through so the
+// behavior tests below keep exercising it; only appendToJournal stays mocked.
+vi.mock('../../vault/journal.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../vault/journal.js')>();
+  return { ...actual, appendToJournal: vi.fn() };
+});
 vi.mock('../../utils/time.js', () => ({
   getTimestamp: vi.fn(() => '14:30'),
   getTodayDate: vi.fn(() => '2026-04-14'),
