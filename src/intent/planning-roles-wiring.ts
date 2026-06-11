@@ -96,6 +96,30 @@ function extractFencedJson(text: string, tag: string): unknown | null {
   }
 }
 
+/**
+ * Extract the RAW markdown body of a ```<tag> fenced block, or null.
+ *
+ * Used for the spec / tech-spec payloads, which carry multi-line markdown with
+ * their own quotes and nested ``` code fences. Round-tripping that through a
+ * JSON string is the escaping hazard that made the PM seam fail closed on long
+ * specs (a single unescaped quote corrupts the whole object). Keeping the
+ * markdown in its own fence means it never has to survive JSON-escaping.
+ *
+ * The body is captured to the LAST closing fence (greedy), so nested ``` code
+ * fences inside the markdown survive — the contract is that this block is the
+ * final thing in the reply with nothing after it. Returns null if the block is
+ * absent or empty.
+ */
+function extractFencedText(text: string, tag: string): string | null {
+  const open = new RegExp('```' + tag + '[^\\n]*\\n').exec(text);
+  if (!open) return null;
+  const rest = text.slice(open.index + open[0].length);
+  const close = rest.lastIndexOf('\n```');
+  if (close < 0) return null;
+  const body = rest.slice(0, close).trim();
+  return body.length > 0 ? body : null;
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
 }
@@ -108,16 +132,22 @@ const PM_ASSESS_INSTRUCTION = [
   'A raw project brief follows. As the product manager, judge honestly whether it',
   'is specified enough to write a product spec a builder could execute.',
   '',
-  'Respond with EXACTLY ONE fenced ```pm-assessment block containing a JSON object,',
-  'and nothing after the fence.',
+  'Put ONLY the small structured fields in the ```pm-assessment JSON block. The',
+  'spec markdown goes in a SEPARATE ```pm-spec block after it — NEVER inline the',
+  'spec inside the JSON. A multi-line spec carries quotes and ``` code fences that',
+  'corrupt a JSON string; keeping it in its own fence means it needs no escaping.',
   '',
-  'If it is specified enough:',
+  'If it is specified enough, emit BOTH blocks — the JSON first, the spec last,',
+  'and nothing after the spec block:',
   '```pm-assessment',
-  '{"specifiedEnough": true, "title": "<one-line project title>", "spec": "<full markdown product spec: value, goals, non-goals, requirements, definition of done>", "assumptions": ["<each gap you filled>"]}',
+  '{"specifiedEnough": true, "title": "<one-line project title>", "assumptions": ["<each gap you filled>"]}',
+  '```',
+  '```pm-spec',
+  '<full markdown product spec: value, goals, non-goals, requirements, definition of done>',
   '```',
   '',
-  'If it is NOT specified enough, do NOT invent the missing intent — block and name',
-  'exactly what you need:',
+  'If it is NOT specified enough, do NOT invent the missing intent — emit only the',
+  'JSON block and name exactly what you need:',
   '```pm-assessment',
   '{"specifiedEnough": false, "interviewNeeds": ["<each open question that must be answered first>"]}',
   '```',
@@ -133,11 +163,16 @@ function parsePmAssessment(text: string): PmSpecResult {
   const v = parsed as Record<string, unknown>;
 
   if (v['specifiedEnough'] === true) {
-    if (typeof v['title'] === 'string' && typeof v['spec'] === 'string') {
+    // The spec markdown rides its own ```pm-spec fence so it never has to survive
+    // JSON-escaping; fall back to a legacy inline `spec` field for older replies.
+    const spec =
+      extractFencedText(text, 'pm-spec') ??
+      (typeof v['spec'] === 'string' ? v['spec'].trim() : '');
+    if (typeof v['title'] === 'string' && v['title'].trim() && spec) {
       const assumptions = isStringArray(v['assumptions']) ? v['assumptions'] : [];
-      return { specifiedEnough: true, title: v['title'], spec: v['spec'], assumptions };
+      return { specifiedEnough: true, title: v['title'], spec, assumptions };
     }
-    // Claimed specified-enough but the spec body is missing — fail closed.
+    // Claimed specified-enough but the title or spec body is missing — fail closed.
     return blockedAssessment('The PM claimed specified-enough but omitted a title or spec body.');
   }
 
@@ -169,10 +204,16 @@ const TECH_LEAD_INSTRUCTION = [
   'Emit the tasks in execution order — earlier phases and dependency-prerequisite',
   'tasks first — so the build loop runs them top to bottom.',
   '',
-  'Respond with EXACTLY ONE fenced ```tech-breakdown block containing a JSON object,',
-  'and nothing after the fence:',
+  'Put ONLY the tasks array in the ```tech-breakdown JSON block. The tech-spec',
+  'markdown goes in a SEPARATE ```tech-spec block after it — NEVER inline the tech',
+  'spec inside the JSON. Its quotes and ``` code fences corrupt a JSON string;',
+  'keeping it in its own fence means it needs no escaping. Emit the JSON first,',
+  'the tech spec last, and nothing after it:',
   '```tech-breakdown',
-  '{"techSpec": "<markdown technical spec: interfaces, contracts, data shapes, sequencing>", "tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}]}',
+  '{"tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}]}',
+  '```',
+  '```tech-spec',
+  '<markdown technical spec: interfaces, contracts, data shapes, sequencing>',
   '```',
   '',
   'Set designerNeeded true ONLY for front-end / UX tasks. Every task needs a',
@@ -194,14 +235,19 @@ function parseTechLeadBreakdown(text: string): TechLeadResult {
     throw new Error('tech-lead breakdown: no parseable tech-breakdown block in the reply');
   }
   const v = parsed as Record<string, unknown>;
-  if (typeof v['techSpec'] !== 'string' || !Array.isArray(v['tasks'])) {
+  // The tech spec rides its own ```tech-spec fence so its markdown never has to
+  // survive JSON-escaping; fall back to a legacy inline `techSpec` field.
+  const techSpec =
+    extractFencedText(text, 'tech-spec') ??
+    (typeof v['techSpec'] === 'string' ? v['techSpec'].trim() : '');
+  if (!techSpec || !Array.isArray(v['tasks'])) {
     throw new Error('tech-lead breakdown: missing techSpec or tasks array');
   }
   const tasks = v['tasks'].map(parseSizedTask);
   if (tasks.length === 0) {
     throw new Error('tech-lead breakdown: produced zero tasks');
   }
-  return { techSpec: v['techSpec'], tasks };
+  return { techSpec, tasks };
 }
 
 function parseSizedTask(raw: unknown, index: number): SizedTask {

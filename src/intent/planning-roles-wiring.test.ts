@@ -86,6 +86,59 @@ const BREAKDOWN_REPLY = [
   '```',
 ].join('\n');
 
+// A spec body carrying the two things that corrupt inline JSON: unescaped
+// double-quotes and a nested ``` code fence. In the split format these ride a
+// ```pm-spec sibling fence, so they never have to survive JSON-escaping — the
+// exact failure mode that made long cockpit specs block-loop the PM seam.
+const HAZARDOUS_SPEC = [
+  '# Cockpit Redesign',
+  '',
+  'Today the view is ~90% chat. Success is "felt, not shipped".',
+  '',
+  '```ts',
+  'type Run = { id: string; status: "active" | "done" };',
+  '```',
+  '',
+  '## Definition of done',
+  '- Per-product views exist.',
+].join('\n');
+
+const SPLIT_SPECIFIED_REPLY = [
+  '```pm-assessment',
+  JSON.stringify({
+    specifiedEnough: true,
+    title: 'Cockpit redesign',
+    assumptions: ['Chat moves to the Claude App'],
+  }),
+  '```',
+  '```pm-spec',
+  HAZARDOUS_SPEC,
+  '```',
+].join('\n');
+
+const HAZARDOUS_TECH_SPEC = [
+  '# Tech spec',
+  '',
+  'Reuse the existing run shape — note the "active" literal:',
+  '',
+  '```ts',
+  'interface Run { id: string; label: "active" | "idle"; }',
+  '```',
+].join('\n');
+
+const SPLIT_BREAKDOWN_REPLY = [
+  '```tech-breakdown',
+  JSON.stringify({
+    tasks: [
+      { id: 'p1-core', text: 'Run model', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['coder'] },
+    ],
+  }),
+  '```',
+  '```tech-spec',
+  HAZARDOUS_TECH_SPEC,
+  '```',
+].join('\n');
+
 describe('planning-roles-wiring — PM assessment seam', () => {
   it('parses a specified-enough reply into title/spec/assumptions', async () => {
     const { call, seenSystem } = stubModelCall({ pm: [SPECIFIED_REPLY] });
@@ -98,6 +151,21 @@ describe('planning-roles-wiring — PM assessment seam', () => {
     }
     // SOUL (system-prompt authority) carried the PM charter — role independence.
     expect(seenSystem['pm']?.toLowerCase()).toContain('product manager');
+  });
+
+  it('split format: spec markdown with unescaped quotes + a nested code fence survives verbatim', async () => {
+    const { call } = stubModelCall({ pm: [SPLIT_SPECIFIED_REPLY] });
+    const result = await defaultPlanningRoleDeps(call).pmAssessAndSpec({ brief: 'cockpit', product: 'jarvis' });
+    expect(result.specifiedEnough).toBe(true);
+    if (result.specifiedEnough) {
+      expect(result.title).toBe('Cockpit redesign');
+      // The exact characters that corrupt inline JSON are preserved.
+      expect(result.spec).toContain('"felt, not shipped"');
+      expect(result.spec).toContain('```ts');
+      expect(result.spec).toContain('status: "active" | "done"');
+      expect(result.spec).toContain('## Definition of done');
+      expect(result.assumptions).toContain('Chat moves to the Claude App');
+    }
   });
 
   it('parses an underspecified reply into interview needs', async () => {
@@ -130,6 +198,16 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     expect(result.tasks.find((t) => t.id === 'p2-card')?.designerNeeded).toBe(true);
     expect(result.tasks.find((t) => t.id === 'p1-core')?.phase).toBe('Phase 1 - Core');
     expect(result.tasks.find((t) => t.id === 'p2-card')?.phase).toBe('Phase 2 - UI');
+  });
+
+  it('split format: tech spec markdown with a nested code fence survives, tasks still parse', async () => {
+    const { call } = stubModelCall({ 'tech-lead': SPLIT_BREAKDOWN_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'jarvis', spec: 's' });
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.id).toBe('p1-core');
+    expect(result.techSpec).toContain('```ts');
+    expect(result.techSpec).toContain('interface Run');
+    expect(result.techSpec).toContain('"active" | "idle"');
   });
 
   it('defaults an invalid testStrategy to code-tests-required', async () => {
