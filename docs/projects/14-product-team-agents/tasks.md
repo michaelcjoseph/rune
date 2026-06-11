@@ -437,10 +437,13 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > The artifact-role execution primitive (sub-task 1) is the unlock; the rest is wiring and
 > config around it. The phase is not done until the live acceptance above is green.
 
-- [ ] Build the production execution-agent primitive: a tool-using, worktree-scoped session
+- [x] Build the production execution-agent primitive: a tool-using, worktree-scoped session
       (reuse the legacy `/work` work-runner spawn machinery) that takes a selected task plus
       the resolved model and returns a captured `git diff`. Backs the artifact roles (coder,
-      QA test authoring).
+      QA test authoring). (`src/jobs/execution-agent.ts` — `runExecutionAgent` with injected
+      `{spawnAgent, runGit, buildEnv}` IO; codex → `runCodex` workspace-write, claude →
+      CLAUDE_BIN worktree spawn w/ MCP isolation + SIGTERM→SIGKILL escalation; stage-then-diff
+      capture; secrets/paths scrubbed; `execution-agent.test.ts` 5/5 green.)
 - [ ] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
       execution-agent primitive; bind the judgment seams (tech-lead test/diff review, reviewer
       verdict, designer, PM wrap-up) to the `defaultRoleModelCall` text round-trip from
