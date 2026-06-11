@@ -384,6 +384,11 @@ export function buildProductionTeamTaskDeps(
   const { sandbox, productsConfigPath, models } = args;
   const judge = makeJudge(seams);
 
+  // The QA work product, retained so the tech-lead reviews actual test
+  // content rather than bare file paths (QaResult carries only testIds).
+  // Deps are built per task invocation, so this never leaks across tasks.
+  let lastQaDiff = '';
+
   // Two-channel split for artifact roles too: the role framing (SOUL + static
   // instruction) rides the executor's system channel; memory reference + task
   // body ride the prompt. (codex degrades to prepend — see ExecutionAgentOpts.)
@@ -419,6 +424,7 @@ export function buildProductionTeamTaskDeps(
           'QA made no changes and reported no rationale';
         return { kind: 'no-code-test-rationale', rationale } satisfies QaResult;
       }
+      lastQaDiff = result.diff;
       return { kind: 'tests-written', testIds: filesFromDiff(result.diff) } satisfies QaResult;
     },
 
@@ -427,7 +433,7 @@ export function buildProductionTeamTaskDeps(
         `## Task\n\n${task.text}`,
         '',
         qa.kind === 'tests-written'
-          ? `## QA tests\n\n${qa.testIds.join('\n')}`
+          ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
           : `## QA no-code-test rationale\n\n${qa.rationale}`,
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body);
