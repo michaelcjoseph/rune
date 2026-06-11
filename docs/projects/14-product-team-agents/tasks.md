@@ -459,8 +459,15 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `runTeamTaskWorkflow` with the production `TeamTaskDeps`. (Stub gone —
       `createTaskWorkflowRunner` runtime seam, production = `createProductionTaskWorkflowRunner`;
       identity-pinned by the no-stub regression test.)
-- [ ] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
+- [x] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
       durable branch-complete hold if Project 15 remains unwired — record which, and why.
+      (DECISION 2026-06-10: keep the durable hold. Project 15's `runFinalizer` is live for
+      `work-run` mutations but its gated-merge pipeline requires the work-run artifact
+      substrate — transcript sink, summary.json, work-product classification, gate runtime +
+      merge lock — which orchestrated runs do not produce yet. The adapter reports
+      `unavailable` with that reason recorded; the run holds branch-complete with the handoff
+      payload for operator merge, never a self-merge (spec req 17). Wiring the finalizer for
+      orchestrated runs needs that substrate first — a follow-on, not a stub.)
 - [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
       and run the live acceptance on a real task; record the run id, diff, and terminal outcome.
 

@@ -223,12 +223,20 @@ function buildOrchestrationDeps(args: {
       return stdout.trim() === '';
     },
 
-    // The Project 15 finalizer is not wired into this seam yet, so the adapter
-    // reports `unavailable`: the run HOLDS branch-complete with the handoff
-    // recorded — it NEVER self-merges (spec req 17).
+    // DELIBERATE HOLD (Phase 8 decision, recorded 2026-06-10): the Project 15
+    // finalizer is live for `work-run` mutations, but its gated-merge pipeline
+    // is bound to the work-run artifact substrate (transcript sink,
+    // summary.json, work-product classification, gate runtime + per-base
+    // merge lock) — none of which exists for orchestrated runs yet. Until an
+    // orchestrated run produces those inputs, the adapter reports
+    // `unavailable` and the run HOLDS branch-complete with the handoff
+    // payload recorded for the operator — it NEVER self-merges (spec req 17).
     finalize: async (): Promise<FinalizerAdapterResult> => ({
       kind: 'unavailable',
-      reason: 'Project 15 finalizer not wired into the orchestrated applier yet',
+      reason:
+        'deliberate hold: the Project 15 gated-merge finalizer is bound to work-run ' +
+        'artifacts (transcript/summary/classification) that orchestrated runs do not ' +
+        'produce yet — branch-complete, awaiting operator merge',
     }),
   };
 }
