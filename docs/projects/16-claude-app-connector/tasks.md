@@ -53,12 +53,12 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] _No code-test-required tasks — see per-task strategy in test-plan.md (docs/config only)._
+- [x] _No code-test-required tasks — see per-task strategy in test-plan.md (docs/config only)._
 
 ### Implementation
 
-- [ ] **app-connector-config** (docs/config only) — Register the remote MCP server as a Claude App custom connector, complete the OAuth handshake, and verify exactly the six tools are discoverable and callable from a thread against the live vault/KB.
-- [ ] **port-summarization-prompt** (docs/config only) — Port the `summarizeSession` prompt and kb-worthy heuristic verbatim into the Claude App project instructions so the App produces equivalent summary text and a `kb_worthy` boolean, then passes them to `log_conversation`. Document that the session lifecycle drops for the App path (server is stateless to the App).
+- [x] **app-connector-config** (docs/config only) — Register the remote MCP server as a Claude App custom connector, complete the OAuth handshake, and verify exactly the six tools are discoverable and callable from a thread against the live vault/KB.
+- [x] **port-summarization-prompt** (docs/config only) — Port the `summarizeSession` prompt and kb-worthy heuristic verbatim into the Claude App project instructions so the App produces equivalent summary text and a `kb_worthy` boolean, then passes them to `log_conversation`. Document that the session lifecycle drops for the App path (server is stateless to the App). (Copy-paste deliverable: [app-project-instructions.md](app-project-instructions.md) — verbatim prompt + heuristic, mapped to `mode:summary`+`kb_worthy` as the funnel-preserving default with `mode:full` for verbatim capture; documents the stateless/no-session-lifecycle split and the equivalent-not-identical journal-shape tradeoff. Operator pastes it into the App project instructions.)
 
 ## Phase 4 — E2E validation
 
