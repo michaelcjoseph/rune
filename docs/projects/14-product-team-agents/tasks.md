@@ -444,15 +444,21 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `{spawnAgent, runGit, buildEnv}` IO; codex → `runCodex` workspace-write, claude →
       CLAUDE_BIN worktree spawn w/ MCP isolation + SIGTERM→SIGKILL escalation; stage-then-diff
       capture; secrets/paths scrubbed; `execution-agent.test.ts` 5/5 green.)
-- [ ] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
+- [x] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
       execution-agent primitive; bind the judgment seams (tech-lead test/diff review, reviewer
       verdict, designer, PM wrap-up) to the `defaultRoleModelCall` text round-trip from
       `/plan`; bind `resolveReviewerProvider` to the model-policy resolver.
-- [ ] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
+      (`src/jobs/team-task-deps.ts` — `resolveTeamRoleModels` fail-closed null reviewer on
+      same-provider; charter-composed two-channel prompts for judgment AND artifact roles;
+      fenced-JSON fail-closed verdict parsers; `createProductionTaskWorkflowRunner` blocks
+      durably on missing policy/failed resolution.)
+- [x] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
       in `policies/model-policy.json`, and populate `roleDefaults` for all six roles per the
-      spec Phase 8 table.
-- [ ] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
-      `runTeamTaskWorkflow` with the production `TeamTaskDeps`.
+      spec Phase 8 table. (Done — model-map tests in `team-task-deps.test.ts` pin it.)
+- [x] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
+      `runTeamTaskWorkflow` with the production `TeamTaskDeps`. (Stub gone —
+      `createTaskWorkflowRunner` runtime seam, production = `createProductionTaskWorkflowRunner`;
+      identity-pinned by the no-stub regression test.)
 - [ ] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
       durable branch-complete hold if Project 15 remains unwired — record which, and why.
 - [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)

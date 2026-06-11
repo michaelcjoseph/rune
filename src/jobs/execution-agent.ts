@@ -74,6 +74,7 @@ export interface SpawnAgentResult {
 export interface ExecutionAgentIO {
   spawnAgent: (args: {
     prompt: string;
+    systemPrompt?: string;
     model: RoleModelBinding;
     cwd: string;
     env: NodeJS.ProcessEnv;
@@ -86,6 +87,11 @@ export interface ExecutionAgentIO {
 export interface ExecutionAgentOpts {
   /** The role/task instruction for the executor. */
   prompt: string;
+  /** System-channel authority text (the role's SOUL charter + framing). For
+   *  the claude executor this rides `--append-system-prompt` so it carries
+   *  real system authority; the codex CLI has no system channel, so there it
+   *  is prepended above the prompt (documented degradation). */
+  systemPrompt?: string;
   /** The run's sandbox — `worktree` is the session's cwd and only writable area. */
   sandbox: SandboxSpec;
   /** The policy-resolved model binding for the invoking role. */
@@ -124,6 +130,7 @@ export async function runExecutionAgent(
     const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
     const { output, error } = await spawnAgent({
       prompt: opts.prompt,
+      ...(opts.systemPrompt !== undefined ? { systemPrompt: opts.systemPrompt } : {}),
       model: opts.model,
       cwd,
       env,
@@ -136,9 +143,10 @@ export async function runExecutionAgent(
     await runGit(['add', '-A'], { cwd });
     const { stdout } = await runGit(['diff', 'HEAD'], { cwd });
     // Defense-in-depth: a credential a misbehaving tool call wrote into the
-    // worktree must not propagate upstream through TaskEvidence — mirror the
-    // work-run pipeline's diffstat scrubbing.
-    return { ok: true, diff: redactSecrets(stdout), output };
+    // worktree must not propagate upstream through TaskEvidence, and host-
+    // absolute paths must not leave the process toward external providers —
+    // mirror the work-run pipeline's diffstat scrubbing.
+    return { ok: true, diff: redactSecrets(scrubPathsInText(stdout)), output };
   } catch (err) {
     return { ok: false, error: sanitize((err as Error).message) };
   }
@@ -157,6 +165,7 @@ function sanitize(text: string): string {
 
 async function defaultSpawnAgent(args: {
   prompt: string;
+  systemPrompt?: string;
   model: RoleModelBinding;
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -164,7 +173,12 @@ async function defaultSpawnAgent(args: {
 }): Promise<SpawnAgentResult> {
   const { format } = args.model;
   if (format === 'codex') {
-    const result = await runCodex(args.prompt, {
+    // The codex CLI takes a single prompt — no system channel. The SOUL text
+    // is prepended so the role charter still leads the context.
+    const codexPrompt = args.systemPrompt
+      ? `${args.systemPrompt}\n\n${args.prompt}`
+      : args.prompt;
+    const result = await runCodex(codexPrompt, {
       cwd: args.cwd,
       model: args.model.alias,
       sandboxMode: 'workspace-write',
@@ -183,6 +197,7 @@ async function defaultSpawnAgent(args: {
  *  `--model` pin from the policy resolution and a hard timeout. */
 function spawnClaudeAgent(args: {
   prompt: string;
+  systemPrompt?: string;
   model: RoleModelBinding;
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -206,6 +221,9 @@ function spawnClaudeAgent(args: {
           '--dangerously-skip-permissions',
           '--model',
           args.model.alias,
+          // Two-channel authority boundary: the role SOUL rides the system
+          // channel, not the user turn.
+          ...(args.systemPrompt ? ['--append-system-prompt', args.systemPrompt] : []),
           '-p',
           args.prompt,
         ],

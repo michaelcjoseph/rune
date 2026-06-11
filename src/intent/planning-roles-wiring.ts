@@ -81,8 +81,10 @@ function roleMessage(ctx: RoleContext, instruction: string): string {
   return ctx.referenceContext ? `${ctx.referenceContext}\n\n${instruction}` : instruction;
 }
 
-/** Extract the JSON body of the first ```<tag> fenced block, or null. */
-function extractFencedJson(text: string, tag: string): unknown | null {
+/** Extract the JSON body of the first ```<tag> fenced block, or null.
+ *  Exported for reuse by the team-task judgment-seam parsers (Phase 8),
+ *  which follow the same fenced-JSON verdict convention. */
+export function extractFencedJson(text: string, tag: string): unknown | null {
   const fence = new RegExp('```' + tag + '\\s*\\n([\\s\\S]*?)\\n```').exec(text);
   if (!fence) return null;
   try {
