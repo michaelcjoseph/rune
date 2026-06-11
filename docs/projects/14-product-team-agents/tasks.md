@@ -405,26 +405,32 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Production `TeamTaskDeps` factory test: the production factory binds all eight role
+- [x] Production `TeamTaskDeps` factory test: the production factory binds all eight role
       seams — none left as the `blocked` stub — and coder/reviewer resolve to different
       providers through the model-policy resolver (fail-closed when only a same-provider model
       is available). Model call injected; asserts wiring, not live output.
-- [ ] Execution-agent diff-capture test: given a controlled temp git worktree, the execution
+      (`team-task-deps.test.ts`)
+- [x] Execution-agent diff-capture test: given a controlled temp git worktree, the execution
       primitive applies the agent's edits and returns the exact `git diff`; a no-op task yields
       an empty diff; a tool/agent error yields structured `failed` evidence, never an unhandled
-      throw.
-- [ ] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
+      throw. (`execution-agent.test.ts`)
+- [x] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
       (anthropic) and qa/coder → `gpt-5.5` (openai); the registry contains both aliases; the
-      coder and reviewer providers differ.
-- [ ] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
+      coder and reviewer providers differ. (`team-task-deps.test.ts` model-map describe.)
+- [x] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
       through to `runTeamTaskWorkflow` — the hardcoded "orchestrated role execution not yet
       wired" `blocked` path is gone and cannot reappear without failing this test.
+      (`team-task-deps.test.ts` no-stub describe: identity-asserts the runtime seam binding +
+      drives the production runner to ready-for-closeout on injected seams.)
 - [ ] **Live acceptance (required, non-fixture).** A real orchestrated run on a small real
       task drives QA → coder → review to a real `git diff` and lands or durably holds. This
       makes live model calls by design and is REQUIRED for phase completion — it is the
       stub-free proof the original closeout lacked, and the test that would have caught the
       gap. Per the PM/tech-lead/QA charter lessons, a fixture-green suite is not sufficient.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed 2026-06-10: both suites red on
+      module-not-found for `./execution-agent.js` / `./team-task-deps.js` — no implementation
+      created; the model-policy entries and the runner's `createTaskWorkflowRunner` seam are
+      likewise still absent, which the suites also pin.)
 
 ### Implementation
 
