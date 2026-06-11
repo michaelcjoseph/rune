@@ -93,8 +93,10 @@ ACLs do not protect these paths; the OAuth gate is the access control.
 - `JARVIS_HTTP_SECRET` stays in `.env.local` (gitignored). The human types
   it into the consent form over HTTPS — it never appears in a URL, and the
   OAuth module never echoes it into a redirect.
-- Access tokens are in-memory only; a daemon restart revokes everything and
-  the App silently re-runs the OAuth handshake.
+- Access tokens are **persisted and never-expire** (`logs/mcp-oauth-store.json`,
+  0600): the App authenticates ONCE and survives every restart. To revoke all
+  access, delete that file and restart the daemon — the next request 401s and
+  the App re-runs the handshake.
 
 ## Verifying the exposure (after standing up)
 
@@ -123,7 +125,8 @@ curl -s -o /dev/null -w '%{http_code}' $HOST/health       # → 404
 | 401 loop in the App after a Jarvis restart | Expected: tokens are in-memory. The App re-runs the OAuth handshake; approve via the consent form. |
 | Issuer in metadata shows the wrong host | `MCP_ISSUER_URL` unset or stale — fix env, restart Jarvis. |
 | Funnel CLI syntax changed after a Tailscale upgrade (beta caveat) | `tailscale funnel status` / `tailscale serve status` to inspect; re-create the mounts per the current `tailscale funnel --help`. The surface definition above (three mounts, nothing else) is the contract. |
-| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), rotate `JARVIS_HTTP_SECRET`, restart Jarvis (revokes all tokens). |
+| Revoke all App tokens | `rm logs/mcp-oauth-store.json` then restart the daemon — every issued token dies; the App re-runs the OAuth handshake on its next call. |
+| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), `rm logs/mcp-oauth-store.json`, rotate `JARVIS_HTTP_SECRET`, restart Jarvis (revokes all tokens). |
 | Take the surface offline NOW | `tailscale serve reset` — kills all mounts immediately. The daemon keeps running locally; nothing else exposes it. |
 
 ---

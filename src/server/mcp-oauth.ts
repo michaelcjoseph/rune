@@ -37,12 +37,28 @@ export interface McpOAuthDeps {
   userId: string;
   /** Injectable clock (ms epoch). */
   now?: () => number;
-  /** Access-token TTL in ms (default 1h, floored at 1ms). */
-  tokenTtlMs?: number;
+  /** Access-token lifetime: `null` = never expire (authenticate once, revoke
+   *  by clearing the store); `undefined` = default 1h; a positive number =
+   *  that TTL in ms (floored at 1ms). */
+  tokenTtlMs?: number | null;
   /** Pinned issuer base URL (e.g. the public tunnel hostname). When absent,
    *  metadata falls back to the request Host header — fine locally, but a
    *  public deployment should pin it (the Host header is caller-controlled). */
   issuerBaseUrl?: string;
+  /** Persistence seam — loaded once at construction, saved on every state
+   *  mutation (client registered / token issued). Bound to a 0600 file in
+   *  production so clients + tokens survive a daemon restart. Omitted = the
+   *  legacy in-memory-only behavior (a restart revokes everything). */
+  loadState?: () => PersistedOAuthState | null;
+  saveState?: (state: PersistedOAuthState) => void;
+}
+
+/** Serializable snapshot of the OAuth state worth persisting. Authorization
+ *  codes are deliberately NOT included — they are short-lived and mid-flow, so
+ *  a restart simply re-runs the handshake. */
+export interface PersistedOAuthState {
+  clients: ClientRecord[];
+  tokens: Array<{ token: string; userId: string; expiresAt: number | null }>;
 }
 
 export interface McpOAuth {
@@ -72,7 +88,7 @@ const MAX_BODY_BYTES = 64 * 1024;
  *  legitimate App install registers once. */
 const MAX_CLIENTS = 20;
 
-interface ClientRecord {
+export interface ClientRecord {
   clientId: string;
   redirectUris: string[];
 }
@@ -87,7 +103,8 @@ interface CodeRecord {
 
 interface TokenRecord {
   userId: string;
-  expiresAt: number;
+  /** ms epoch, or null = never expires. */
+  expiresAt: number | null;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -110,12 +127,39 @@ function escapeHtml(s: string): string {
 
 export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
   const now = deps.now ?? Date.now;
-  const tokenTtlMs = Math.max(1, deps.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS);
+  // null = never expire; undefined = default 1h; positive = that TTL.
+  const tokenTtlMs: number | null =
+    deps.tokenTtlMs === null ? null : Math.max(1, deps.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS);
 
-  // Instance-scoped state — never module-level (a daemon restart revokes all).
+  // Instance-scoped maps; seeded from the persistence seam (if any) so a
+  // restart keeps clients + still-valid tokens. Codes are never persisted.
   const clients = new Map<string, ClientRecord>();
   const codes = new Map<string, CodeRecord>();
   const tokens = new Map<string, TokenRecord>();
+
+  const loaded = deps.loadState?.() ?? null;
+  if (loaded) {
+    for (const c of loaded.clients) clients.set(c.clientId, c);
+    for (const t of loaded.tokens) {
+      // Drop already-expired tokens at load so the store self-prunes.
+      if (t.expiresAt !== null && t.expiresAt <= now()) continue;
+      tokens.set(t.token, { userId: t.userId, expiresAt: t.expiresAt });
+    }
+  }
+
+  /** Persist the current clients + tokens. Best-effort: the saveState binding
+   *  swallows disk errors, so a write failure degrades to in-memory-only
+   *  (works until the next restart) rather than breaking the request. */
+  function persist(): void {
+    deps.saveState?.({
+      clients: [...clients.values()],
+      tokens: [...tokens.entries()].map(([token, rec]) => ({
+        token,
+        userId: rec.userId,
+        expiresAt: rec.expiresAt,
+      })),
+    });
+  }
 
   function issuerFor(req: IncomingMessage): string {
     // Prefer the pinned issuer; the Host header is caller-controlled and only
@@ -180,6 +224,7 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
 
     const clientId = randomBytes(16).toString('base64url');
     clients.set(clientId, { clientId, redirectUris: redirectUris as string[] });
+    persist();
     log.info('Registered OAuth client', { clientId });
     sendJson(res, 201, {
       client_id: clientId,
@@ -346,18 +391,23 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
     record.used = true;
     codes.delete(params.code!);
 
-    // Opportunistic sweep so tokens never presented again don't accumulate.
+    // Opportunistic sweep so finite-TTL tokens never presented again don't
+    // accumulate. Never-expire tokens (expiresAt null) are kept.
     for (const [t, rec] of tokens) {
-      if (rec.expiresAt <= now()) tokens.delete(t);
+      if (rec.expiresAt !== null && rec.expiresAt <= now()) tokens.delete(t);
     }
 
     const accessToken = randomBytes(32).toString('base64url');
-    tokens.set(accessToken, { userId: deps.userId, expiresAt: now() + tokenTtlMs });
-    log.info('OAuth access token issued', { userId: deps.userId });
+    const expiresAt = tokenTtlMs === null ? null : now() + tokenTtlMs;
+    tokens.set(accessToken, { userId: deps.userId, expiresAt });
+    persist();
+    log.info('OAuth access token issued', { userId: deps.userId, neverExpires: expiresAt === null });
     sendJson(res, 200, {
       access_token: accessToken,
       token_type: 'Bearer',
-      expires_in: Math.floor(tokenTtlMs / 1000),
+      // Omit expires_in for never-expire tokens (clients treat absent as
+      // "no known expiry" and keep using the token).
+      ...(tokenTtlMs === null ? {} : { expires_in: Math.floor(tokenTtlMs / 1000) }),
     });
   }
 
@@ -409,7 +459,7 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
         if (token === '') return false;
         const record = tokens.get(token);
         if (!record) return false;
-        if (record.expiresAt <= now()) {
+        if (record.expiresAt !== null && record.expiresAt <= now()) {
           tokens.delete(token);
           return false;
         }

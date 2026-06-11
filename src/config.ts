@@ -128,6 +128,13 @@ const config = {
     return join(this.LOGS_DIR, 'registry.json');
   },
 
+  /** Persisted /mcp OAuth state (clients + tokens) so the Claude App
+   *  connector survives a daemon restart (project 16). Holds bearer tokens —
+   *  written 0600, gitignored. Revoke all access = delete this file + restart. */
+  get MCP_OAUTH_STORE_FILE() {
+    return join(this.LOGS_DIR, 'mcp-oauth-store.json');
+  },
+
   /** Append-only audit log of backlog `+` add writes (09-expand-cockpit). */
   get BACKLOG_MUTATIONS_FILE() {
     return join(this.LOGS_DIR, 'backlog-mutations.jsonl');

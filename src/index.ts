@@ -20,6 +20,7 @@ import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSession
 import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer, closeMcpSessions } from './server/http.js';
 import { createMcpOAuth } from './server/mcp-oauth.js';
+import { readOAuthStore, writeOAuthStore } from './server/mcp-oauth-store.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
 import { startPlanningExpiry, stopPlanningExpiry } from './jobs/planning-expiry-runner.js';
@@ -150,6 +151,11 @@ const mcpOauth = config.JARVIS_HTTP_SECRET
       gateSecret: config.JARVIS_HTTP_SECRET,
       userId: String(config.TELEGRAM_USER_ID),
       issuerBaseUrl: config.MCP_ISSUER_URL || undefined,
+      // Never-expire, persisted: the App authenticates once and survives
+      // every restart; revoke by deleting MCP_OAUTH_STORE_FILE + restarting.
+      tokenTtlMs: null,
+      loadState: () => readOAuthStore(config.MCP_OAUTH_STORE_FILE),
+      saveState: (s) => writeOAuthStore(config.MCP_OAUTH_STORE_FILE, s),
     })
   : null;
 if (!mcpOauth) {

@@ -88,7 +88,11 @@ interface McpOAuthDeps {
   gateSecret: string;
   userId: string;
   now?: () => number;
-  tokenTtlMs?: number;
+  /** null = never-expire; undefined = default 1h; else the given ms. */
+  tokenTtlMs?: number | null;
+  /** Persistence seam: load on create, save on every state mutation. */
+  loadState?: () => unknown;
+  saveState?: (state: unknown) => void;
 }
 
 interface McpOAuth {
@@ -747,5 +751,83 @@ describe('server/mcp-oauth (§7 MCP single-user OAuth)', () => {
     expect((metadata['token_endpoint'] as string).length).toBeGreaterThan(0);
 
     expect(metadata['code_challenge_methods_supported']).toContain('S256');
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 12 🔴 — persisted tokens survive a "restart"
+  //
+  // saveState captures the store; a SECOND instance loading it (the restart)
+  // must verify a token the FIRST instance issued. Round-tripped through JSON
+  // to pin serializability (no Map/Infinity leaking into the store).
+  // -------------------------------------------------------------------------
+  it('12: a token issued before a restart verifies after, via the persistence seam', async () => {
+    const factory = await requireMcpOAuth();
+    const gateSecret = 'gate';
+    let saved: unknown = null;
+
+    const before = factory({
+      gateSecret,
+      userId: 'alice',
+      tokenTtlMs: null,
+      saveState: (s) => { saved = JSON.parse(JSON.stringify(s)); },
+      loadState: () => saved,
+    });
+    const { server, port } = await startTestServer(before);
+    openServers.push(server);
+
+    const { access_token } = await happyFlow(port, gateSecret);
+    expect(saved, 'saveState must be called when a token is issued').not.toBeNull();
+
+    // "Restart": a fresh instance loads the persisted store (no server needed).
+    const after = factory({ gateSecret, userId: 'alice', tokenTtlMs: null, loadState: () => saved });
+    const req = { headers: { authorization: `Bearer ${access_token}` } } as unknown as IncomingMessage;
+    await expect(after.verifyBearer(req)).resolves.toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 13 🔴 — tokenTtlMs:null tokens never expire
+  // -------------------------------------------------------------------------
+  it('13: tokenTtlMs:null → token stays valid arbitrarily far in the future', async () => {
+    const factory = await requireMcpOAuth();
+    let clock = 1_000_000;
+    const gateSecret = 'gate';
+    const oauth = factory({ gateSecret, userId: 'alice', now: () => clock, tokenTtlMs: null });
+    const { server, port } = await startTestServer(oauth);
+    openServers.push(server);
+
+    const { access_token } = await happyFlow(port, gateSecret);
+    const req = { headers: { authorization: `Bearer ${access_token}` } } as unknown as IncomingMessage;
+    await expect(oauth.verifyBearer(req)).resolves.toBe(true);
+
+    clock += 1000 * 60 * 60 * 24 * 365 * 5; // +5 years
+    await expect(oauth.verifyBearer(req)).resolves.toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 14 🟢 — revocation: a restart with a wiped store rejects the old token
+  //
+  // "Delete the store file + restart" → loadState returns null → the token
+  // is unknown to the new instance.
+  // -------------------------------------------------------------------------
+  it('14: a restart with an empty store (revoked) rejects the previously-issued token', async () => {
+    const factory = await requireMcpOAuth();
+    const gateSecret = 'gate';
+    let saved: unknown = null;
+
+    const before = factory({
+      gateSecret,
+      userId: 'alice',
+      tokenTtlMs: null,
+      saveState: (s) => { saved = JSON.parse(JSON.stringify(s)); },
+      loadState: () => saved,
+    });
+    const { server, port } = await startTestServer(before);
+    openServers.push(server);
+    const { access_token } = await happyFlow(port, gateSecret);
+
+    // Store wiped (revocation): the post-restart instance loads nothing.
+    const after = factory({ gateSecret, userId: 'alice', tokenTtlMs: null, loadState: () => null });
+    const req = { headers: { authorization: `Bearer ${access_token}` } } as unknown as IncomingMessage;
+    await expect(after.verifyBearer(req)).resolves.toBe(false);
   });
 });
