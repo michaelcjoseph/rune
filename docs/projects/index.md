@@ -21,7 +21,7 @@ its `spec.md`.
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
 | [14-product-team-agents](14-product-team-agents/spec.md) | Incomplete | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. **Reopened 2026-06-10:** live role-spawn execution binding stubbed (Phase 8). |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
-| [16-claude-app-connector](16-claude-app-connector/spec.md) | In Progress | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
+| [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
 
 ---
 
@@ -290,15 +290,17 @@ exits).
   an unsafe "finalize on `result`" proposal into the watchdog and flagged gated auto-merge as policy.
 - **Task breakdown & test plan:** see [tasks.md](15-work-run-finalizer/tasks.md) and [test-plan.md](15-work-run-finalizer/test-plan.md). Test-first per phase.
 
-## 16-claude-app-connector — In Progress
+## 16-claude-app-connector — Done
 
 [Spec](16-claude-app-connector/spec.md)
 
-Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns.
+Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. **Shipped 2026-06-10/11: live in the Claude App over a Tailscale Funnel; general/dev chat no longer requires Telegram.**
 
 - **The bet:** the conversation surface was never the moat. Claude is the brain; the funnel (vault → pipeline → KB) is the asset. Port the surface into the Claude App, keep the funnel unchanged and Jarvis-owned. Dual-surface end state, not a Telegram retirement.
-- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Ambient/health commands and Jarvis-pushed updates stay Telegram-only.
-- **Write-back, no new stage:** `log_conversation` writes a finished thread into today's journal (summary or full reconstruction) and, when kb-worthy, into the KB raw-source queue. The nightly pipeline ingests it unchanged.
-- **Routing:** `resolveProductTarget()` attributes captured ideas/bugs to the right product with an explicit inbox fallback — never dropped, never mis-attributed.
-- **Transport + auth:** a shared `createJarvisMcpServer` factory, `StreamableHTTPServerTransport` at `/mcp`, single-user OAuth gated on `JARVIS_HTTP_SECRET`, and a Cloudflare Tunnel — single-user secure access into the live vault working tree.
+- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Built behind a shared `createJarvisMcpServer` factory that splits the App-surface tools from the `kb_*` admin set (the admin tools are never remotely reachable). Ambient/health commands and Jarvis-pushed updates stay Telegram-only.
+- **Write-back, no new stage:** `log_conversation` writes a finished thread into today's journal (summary or full reconstruction) and, when kb-worthy, into the KB raw-source queue; the nightly pipeline ingests it unchanged. The `summarizeSession` prompt + kb-worthy heuristic were ported verbatim into the App project instructions (the server is stateless to the App — no session lifecycle).
+- **Routing:** `resolveProductTarget()` attributes captured ideas/bugs to the right product with an explicit inbox fallback — never dropped, never mis-attributed; loop-filed and App-filed ideas share one `product` attribution schema.
+- **Transport + auth:** `StreamableHTTPServerTransport` at `/mcp` on the daemon HTTP server (host-allowlist → fail-closed bearer → SDK transport), and hand-rolled single-user OAuth 2.1 — DCR, a consent-form gate on `JARVIS_HTTP_SECRET` (secret only ever in the POST body), PKCE S256-only, single-use codes, tokens bound to the one user id. Tokens are **persisted + never-expire** (`logs/mcp-oauth-store.json`, 0600) so the App authenticates once and survives daemon restarts; revoke by deleting the store + restarting.
+- **Remote reachability:** a Tailscale Funnel exposes only `/mcp` + the OAuth-discovery paths at a stable `ts.net` hostname (TLS on-host, no inbound ports, the webview stays localhost-only). Chosen over Cloudflare Tunnel — no domain, no extra daemon, $0 — with the Cloudflare procedure kept as a documented fallback. See [tunnel-runbook.md](16-claude-app-connector/tunnel-runbook.md).
+- **Provenance:** built test-first per phase (factory/routing/tool suites red → green; transport + OAuth suites red → green). Tunnel exposure, App connector registration, and the funnel-intact e2e acceptance test were operator-completed live; the repeatable acceptance procedure is [e2e-acceptance-test.md](16-claude-app-connector/e2e-acceptance-test.md). App project instructions: [app-project-instructions.md](16-claude-app-connector/app-project-instructions.md).
 - **Task breakdown & test plan:** see [tasks.md](16-claude-app-connector/tasks.md) and [test-plan.md](16-claude-app-connector/test-plan.md). Test-first per phase.

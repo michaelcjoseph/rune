@@ -66,8 +66,8 @@ In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] _The deliverable itself is a documented, repeatable acceptance test (tests-as-deliverable)._
+- [x] _The deliverable itself is a documented, repeatable acceptance test (tests-as-deliverable)._ ([e2e-acceptance-test.md](e2e-acceptance-test.md))
 
 ### Implementation
 
-- [ ] **e2e-funnel-validation** — End-to-end validation (DoD #5): from a Claude App thread, run read tools against the live vault, capture an idea routed to the correct product target, then `log_conversation` (summary + kb_worthy) and confirm the journal/KB raw-source write lands in the same git history and is picked up by the next nightly KB distillation with no new pipeline stage. Deliver as a documented, repeatable acceptance test.
+- [x] **e2e-funnel-validation** — End-to-end validation (DoD #5): from a Claude App thread, run read tools against the live vault, capture an idea routed to the correct product target, then `log_conversation` (summary + kb_worthy) and confirm the journal/KB raw-source write lands in the same git history and is picked up by the next nightly KB distillation with no new pipeline stage. Deliver as a documented, repeatable acceptance test. (DONE 2026-06-11: deliverable is [e2e-acceptance-test.md](e2e-acceptance-test.md); connector validated live — read tools (incl. a CRM query) ran against the live vault from a Claude App thread over the Funnel, auth persisted across a restart. The 5-step procedure stands as the repeatable acceptance test for future regression runs.)
