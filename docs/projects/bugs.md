@@ -1,3 +1,4 @@
+- Nightly processing error. Observation loop — TypeError: readers.interactions is not a function or its return value is not iterable
 - [ ] Review sessions stay "active" in the cockpit forever when the outline marker isn't detected (phase never reaches `done`).
   - **Issue**
     - The interview engine advances phases by string-matching the model's free-text reply: `detectOutline(responseText, config.outlineMarker)` in `src/reviews/interview.ts:238`. The weekly marker is the literal lowercase string `'week in review outline:'` (`src/reviews/weekly.ts:25`).

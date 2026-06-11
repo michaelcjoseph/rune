@@ -6,7 +6,7 @@ below it.
 
 ## User-authored
 
-- Symlink mirror agents between .claude and .agents
+
 - Cockpit redesign — web view focused entirely on products/projects/bugs/ideas, with one-click **Fix** on cockpit bugs as a core surface. Rethink the web view once chat moves to the Claude App (see the conversation-surface idea above). Two workstreams under one roof: (A) the product-design rethink of the cockpit surface, and (B) the cross-repo autorun plumbing that powers the Fix button (the follow-on cut from [09-expand-cockpit](09-expand-cockpit/spec.md) v1). Separate from the MCP plumbing.
   - **Premise:** Today the web view is ~90% chat, ~10% cockpit. Once the conversation surface moves to the Claude App, 100% of the visual real estate frees up. A chance to rethink the whole interaction model, not just resize panels.
   - **Scope:** Redesign how products, projects, bugs, and ideas are presented and how I interact with them — the dev-side cockpit of my world without a chat box eating half the screen. A one-click **Fix** button on cockpit bugs generalizes `/work --auto` across product repos (aura, assay, relay); it's the highest-value action the redesigned surface exposes. Needs its own scoping session.
@@ -19,6 +19,13 @@ below it.
       - *Layer C — self-generated ideas carry no product (the design question).* `ProjectIdea` is `{ title, friction, id }`. Nothing attributes a detected friction to "this belongs in aura's repo." Auto-dispatch cross-repo needs product attribution — the sensor tagging its source product, a `product` field set at triage, or a registry lookup for friction that already maps to a known project (the registry maps slug→product; a brand-new self-generated project does not). A new project also needs scaffolding **in the target repo** (the scaffold-approval/promotion machinery), its own surface.
     - **The Fix button itself is the small part.** The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
     - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
+- Install tools to improve agent performance
+  - https://colbymchenry.github.io/codegraph/ (for each product repo)
+  - https://github.com/cursor/plugins/blob/683cdbda983ea8be4b766ac3fe94b7b88e7f75ad/cursor-team-kit/agents/thermo-nuclear-code-quality-review.md (code review skill)
+  - https://smartcommit.labrun.app/ (better commits)
+  - code mode https://blog.cloudflare.com/code-mode-mcp/
+  - https://www.rtk-ai.app/#install
+- Symlink mirror agents between .claude and .agents
 - As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
 - Engagement-driven writing lessons (extends project 12)
   - Set up email, X, blog, and website for Jarvis
