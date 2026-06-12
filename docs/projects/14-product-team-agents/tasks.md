@@ -453,6 +453,54 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > a real task to a real diff that lands or durably holds, observable on the cockpit card. This
 > is the corrected definition of done: a non-fixture run does real work, not a durable `blocked`.
 
+## Phase 9 - Planning critique pass
+
+> Depends on: Phase 2. Net-new enhancement to the planner: a cross-model critique that hardens
+> the assembled plan (goal↔scope coherence, task-list completeness for done-and-usable, then a
+> spec/tasks critique) before the human approval gate. Sequential Claude→Codex, single pass
+> each, degrades to Claude alone when Codex is unavailable. See spec.md §"Planning critique
+> pass" and requirements 8a–8c.
+
+### Tests (write first)
+
+- [ ] Sequential-order test: the critique runs Claude (Fable 5) first over the assembled
+      spec/tech-spec/tasks, then Codex (GPT-5.5) over Claude's revised output; the Codex seam
+      receives the Claude-revised artifacts, not the originals. Model calls injected.
+- [ ] Single-pass test: each model is invoked exactly once — the pass does not loop to
+      convergence.
+- [ ] Codex-degrade test: when `probeCodexProvider` reports unavailable, the critique runs the
+      Claude pass alone, records that the Codex pass was skipped, and returns the Claude-revised
+      plan; planning does not block.
+- [ ] Order-in-flow test: the critique runs after the PM spec/tech-spec match gate and before
+      `context.md` is seeded, over the same in-memory artifacts.
+- [ ] No-op / fail-closed test: a critique that yields no change returns the assembled plan
+      unchanged and still seeds context; an unparseable critic reply falls back to the
+      pre-critique plan rather than dropping content.
+- [ ] Approval-gate test: critique-introduced changes are present in the artifact the human
+      approval surface renders, so every change is human-gated before scaffold.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] Add a `critiquePlan({spec, techSpec, tasks})` seam to the planner-role deps returning
+      revised `{spec, techSpec, tasks}`, injected like the other role seams so the flow stays
+      fixture-testable with no live model call.
+- [ ] Wire the sequential two-model run: Claude (Fable 5) critique+revise, then Codex
+      (GPT-5.5) critique+revise over Claude's output, reusing the `defaultRoleModelCall` text
+      round-trip and the `runCodex` / `probeCodexProvider` availability gate from `src/ai/codex.ts`.
+- [ ] Author the critique instruction prompt (restate goal → scope-achieves-goal + fix →
+      task-list-comprehensive-for-done-and-usable + add → critique spec/tasks + fix), parsed
+      into revised artifacts and fail-closed to the pre-critique plan on an unparseable reply.
+- [ ] Insert the pass into `runPlannerRoles` after the PM spec/tech-spec match gate (gate 2)
+      and before the context seed; the revised artifacts feed both the seed and the approval
+      surface.
+- [ ] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
+      pass on the planning record.
+
+> **User-reachability:** the existing `/plan <product>` trigger now runs the critique before
+> surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval
+> gate, no new trigger.
+
 ---
 
 ## Out of scope

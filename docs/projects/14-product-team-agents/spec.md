@@ -6,7 +6,8 @@
 > `blocked` for every task (`orchestrated-work-runner.ts:169`) and reports the
 > finalizer `unavailable` (`:215`). So an orchestrated run does no real work. The
 > closeout treated live execution as an "optional smoke check" — it is the engine.
-> Remaining scope is **Phase 8** below.
+> Remaining scope is **Phase 8** (live execution binding) and **Phase 9** (planning
+> critique pass) below.
 
 ## What's shipping (working-backwards)
 
@@ -134,6 +135,7 @@ brief -> PM judges "specified enough?"
           no  -> PM enters interview-needed / blocked-on-human state
         -> tech lead writes tech spec, task breakdown, role sizing, and test strategy
         -> PM reviews tech spec against product spec
+        -> cross-model critique pass refines the assembled plan (Claude, then Codex)
         -> Jarvis seeds context.md
 ```
 
@@ -144,6 +146,49 @@ assumptions section turns it into a cheap scan surface.
 **Human interview is explicit.** In production, an underspecified brief can block for a PM
 interview. Automated tests use fixtures: one specified-enough path for loop closure and one
 underspecified path that asserts Jarvis blocks rather than fabricating a spec.
+
+### Planning critique pass
+
+Planning closes with a cross-model critique that hardens the assembled plan before it
+reaches the human approval gate. The PM/tech-lead flow answers "is this internally
+coherent?" The critique answers the harder question: does the defined scope actually achieve
+the stated goal, and does completing every task leave a project a real user can use? Both are
+easy to pass with a plausible-looking spec and a task list that stops short of done — which
+is exactly the failure the PM/tech-lead self-review does not catch, because no role critiques
+its own write-up.
+
+The pass is **sequential and cross-model**, one pass per model:
+
+1. **Claude (Fable 5)** reads the assembled spec, tech spec, and tasks and runs the critique:
+   restate the goal the spec and tasks define; check whether the scope achieves it and fix
+   the scope if not; check whether the task list is comprehensive enough that completing
+   every task makes the project done and user-usable, and add tasks if not; then critique
+   spec and tasks and fix what it finds. It returns the revised artifacts.
+2. **Codex (GPT-5.5)** reads Claude's revised artifacts and runs the same critique on them,
+   returning the final revised artifacts.
+
+Sequential, not parallel: the second model sees the first's work, so the two critiques
+compound instead of colliding as two independent rewrites. One pass each — the pass does not
+loop to convergence; the human approval gate catches residue.
+
+**Degrade to Claude alone.** Codex is the optional second executor (gated by
+`probeCodexProvider` — binary present and logged in). When it is unavailable, the critique
+runs the Claude pass alone and records that the Codex pass was skipped. Planning never blocks
+on the second model.
+
+**Scope and gate position.** The critique operates on the in-memory spec / tech spec / tasks
+the planner assembled, after the PM spec/tech-spec match gate and before `context.md` is
+seeded. It runs before the human planning-approval gate, so every change it introduces is
+still gated by the human approving the plan — the critique sharpens what the human approves,
+it does not bypass approval. `test-plan.md` is authored by the setup-writer at scaffold time
+and is out of this pass's scope; the critique covers spec, tech spec, and tasks. A critique
+that yields no change returns the assembled plan unchanged (the no-op path is not an error),
+and a critic reply that cannot be parsed falls back to the pre-critique plan rather than
+dropping content.
+
+This is a Jarvis-owned neutral step, not a seventh role — like the learning-loop post-mortem,
+Jarvis runs it over the role artifacts rather than assigning it to one role, because the
+question spans the whole plan (PM-owned spec and tech-lead-owned tasks together).
 
 ---
 
@@ -368,6 +413,17 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
    routing (req 24) is deterministic rather than inferred at runtime.
 8. WHEN tech lead produces task breakdown THEN PM reviews the tech spec against the product
    spec before planning completes.
+8a. WHEN the PM spec/tech-spec match gate passes THEN a cross-model critique pass refines the
+    assembled spec/tech-spec/tasks before `context.md` is seeded: Claude (Fable 5) critiques
+    and revises first, then Codex (GPT-5.5) critiques and revises Claude's output — one pass
+    per model, no looping.
+8b. WHEN Codex is unavailable (binary missing or not logged in) THEN the critique degrades to
+    the Claude pass alone and records that the Codex pass was skipped; planning never blocks
+    on the second model.
+8c. WHEN the critique pass completes THEN its revised artifacts feed both the context seed and
+    the human approval surface, so every critique-introduced change is still human-gated before
+    scaffold; a no-op critique returns the plan unchanged and an unparseable critic reply falls
+    back to the pre-critique plan.
 9. WHEN planning completes THEN Jarvis seeds `context.md`.
 
 ### Orchestration
