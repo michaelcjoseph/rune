@@ -405,47 +405,69 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Production `TeamTaskDeps` factory test: the production factory binds all eight role
+- [x] Production `TeamTaskDeps` factory test: the production factory binds all eight role
       seams — none left as the `blocked` stub — and coder/reviewer resolve to different
       providers through the model-policy resolver (fail-closed when only a same-provider model
       is available). Model call injected; asserts wiring, not live output.
-- [ ] Execution-agent diff-capture test: given a controlled temp git worktree, the execution
+      (`team-task-deps.test.ts`)
+- [x] Execution-agent diff-capture test: given a controlled temp git worktree, the execution
       primitive applies the agent's edits and returns the exact `git diff`; a no-op task yields
       an empty diff; a tool/agent error yields structured `failed` evidence, never an unhandled
-      throw.
-- [ ] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
+      throw. (`execution-agent.test.ts`)
+- [x] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
       (anthropic) and qa/coder → `gpt-5.5` (openai); the registry contains both aliases; the
-      coder and reviewer providers differ.
-- [ ] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
+      coder and reviewer providers differ. (`team-task-deps.test.ts` model-map describe.)
+- [x] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
       through to `runTeamTaskWorkflow` — the hardcoded "orchestrated role execution not yet
       wired" `blocked` path is gone and cannot reappear without failing this test.
+      (`team-task-deps.test.ts` no-stub describe: identity-asserts the runtime seam binding +
+      drives the production runner to ready-for-closeout on injected seams.)
 - [ ] **Live acceptance (required, non-fixture).** A real orchestrated run on a small real
       task drives QA → coder → review to a real `git diff` and lands or durably holds. This
       makes live model calls by design and is REQUIRED for phase completion — it is the
       stub-free proof the original closeout lacked, and the test that would have caught the
       gap. Per the PM/tech-lead/QA charter lessons, a fixture-green suite is not sufficient.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed 2026-06-10: both suites red on
+      module-not-found for `./execution-agent.js` / `./team-task-deps.js` — no implementation
+      created; the model-policy entries and the runner's `createTaskWorkflowRunner` seam are
+      likewise still absent, which the suites also pin.)
 
 ### Implementation
 
 > The artifact-role execution primitive (sub-task 1) is the unlock; the rest is wiring and
 > config around it. The phase is not done until the live acceptance above is green.
 
-- [ ] Build the production execution-agent primitive: a tool-using, worktree-scoped session
+- [x] Build the production execution-agent primitive: a tool-using, worktree-scoped session
       (reuse the legacy `/work` work-runner spawn machinery) that takes a selected task plus
       the resolved model and returns a captured `git diff`. Backs the artifact roles (coder,
-      QA test authoring).
-- [ ] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
+      QA test authoring). (`src/jobs/execution-agent.ts` — `runExecutionAgent` with injected
+      `{spawnAgent, runGit, buildEnv}` IO; codex → `runCodex` workspace-write, claude →
+      CLAUDE_BIN worktree spawn w/ MCP isolation + SIGTERM→SIGKILL escalation; stage-then-diff
+      capture; secrets/paths scrubbed; `execution-agent.test.ts` 5/5 green.)
+- [x] Build the production `TeamTaskDeps` factory: bind coder + QA-write-tests to the
       execution-agent primitive; bind the judgment seams (tech-lead test/diff review, reviewer
       verdict, designer, PM wrap-up) to the `defaultRoleModelCall` text round-trip from
       `/plan`; bind `resolveReviewerProvider` to the model-policy resolver.
-- [ ] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
+      (`src/jobs/team-task-deps.ts` — `resolveTeamRoleModels` fail-closed null reviewer on
+      same-provider; charter-composed two-channel prompts for judgment AND artifact roles;
+      fenced-JSON fail-closed verdict parsers; `createProductionTaskWorkflowRunner` blocks
+      durably on missing policy/failed resolution.)
+- [x] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
       in `policies/model-policy.json`, and populate `roleDefaults` for all six roles per the
-      spec Phase 8 table.
-- [ ] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
-      `runTeamTaskWorkflow` with the production `TeamTaskDeps`.
-- [ ] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
+      spec Phase 8 table. (Done — model-map tests in `team-task-deps.test.ts` pin it.)
+- [x] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
+      `runTeamTaskWorkflow` with the production `TeamTaskDeps`. (Stub gone —
+      `createTaskWorkflowRunner` runtime seam, production = `createProductionTaskWorkflowRunner`;
+      identity-pinned by the no-stub regression test.)
+- [x] Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the
       durable branch-complete hold if Project 15 remains unwired — record which, and why.
+      (DECISION 2026-06-10: keep the durable hold. Project 15's `runFinalizer` is live for
+      `work-run` mutations but its gated-merge pipeline requires the work-run artifact
+      substrate — transcript sink, summary.json, work-product classification, gate runtime +
+      merge lock — which orchestrated runs do not produce yet. The adapter reports
+      `unavailable` with that reason recorded; the run holds branch-complete with the handoff
+      payload for operator merge, never a self-merge (spec req 17). Wiring the finalizer for
+      orchestrated runs needs that substrate first — a follow-on, not a stub.)
 - [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
       and run the live acceptance on a real task; record the run id, diff, and terminal outcome.
 

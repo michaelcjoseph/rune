@@ -21,14 +21,13 @@
  * call. The orchestration loop itself is already fixture-proven in
  * `project-orchestrator.test.ts`.
  *
- * NOTE: the production per-task workflow (`runTaskWorkflow`) is the live
- * role-spawn binding — the optional real-task smoke task (tasks.md Phase 5 final
- * item). Until it lands, the production default returns a durable `blocked`
- * evidence with a truthful reason rather than fabricating work, so an
- * orchestrated run dispatched in production is explicit and recorded, never a
- * silent legacy fallback or fake success. Orchestrated mode is OFF by default
- * (global `ORCHESTRATED_WORK_ENABLED` + no product opt-in), so production Start
- * keeps using the legacy applier until an operator flips the toggle.
+ * Phase 8 (live execution binding): the production per-task workflow is LIVE —
+ * `createProductionTaskWorkflowRunner` (src/jobs/team-task-deps.ts) drives
+ * `runTeamTaskWorkflow` with the real role seams (execution-agent artifact
+ * sessions + charter-composed judgment calls, models resolved through the
+ * model policy with fail-closed reviewer independence). The runner factory is
+ * part of the injected runtime seam so fixtures can swap it; the no-stub
+ * regression in team-task-deps.test.ts pins the production binding.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -46,6 +45,7 @@ import {
   type OrchestrationDeps,
   type OrchestrationResult,
 } from '../intent/project-orchestrator.js';
+import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
@@ -66,6 +66,11 @@ const PROJECTS_SUBDIR = join('docs', 'projects');
  *  its own internal round cap). 3 mirrors gen-eval-loop's default round cap. */
 const ORCHESTRATED_ATTEMPT_CAP = 3;
 
+/** INNER per-task round cap (coder → review rounds inside one workflow run) —
+ *  distinct from the outer attempt cap so tuning one never silently moves the
+ *  other. */
+const ORCHESTRATED_ROUND_CAP = 3;
+
 type OrchestratedWorkPayload = {
   projectSlug: string;
   product?: string;
@@ -82,6 +87,10 @@ export interface OrchestratedRuntimeDeps {
    *  inject a canned result so the loop's deps are never exercised. */
   runOrchestration: (deps: OrchestrationDeps) => Promise<OrchestrationResult>;
   runGit: GitRunner;
+  /** Build the per-task workflow runner (Phase 8). Production is the LIVE
+   *  role-spawn binding from team-task-deps.ts — the no-stub regression test
+   *  identity-asserts this default. */
+  createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -90,6 +99,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     destroyWorktree: defaultDestroyWorktree,
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
+    createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
   };
 }
 
@@ -103,6 +113,12 @@ export function __setOrchestratedRuntimeForTest(partial: Partial<OrchestratedRun
 /** Test-only: restore the production seam. */
 export function __resetOrchestratedRuntimeForTest(): void {
   runtimeDeps = productionRuntimeDeps();
+}
+
+/** Test-only: read the current runtime seam (the no-stub regression test
+ *  asserts the production `createTaskWorkflowRunner` binding). */
+export function __getRuntimeDepsForTest(): OrchestratedRuntimeDeps {
+  return runtimeDeps;
 }
 
 /** Find a project dir by slug under `<base>/docs/projects` (exact or
@@ -141,6 +157,7 @@ function buildOrchestrationDeps(args: {
   branch: string;
   baseBranch: string;
   runGit: GitRunner;
+  createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
 }): OrchestrationDeps {
   const { descriptor, sandbox, projectDir, product, projectSlug, branch, baseBranch, runGit } = args;
   const specPath = join(projectDir, 'spec.md');
@@ -163,18 +180,15 @@ function buildOrchestrationDeps(args: {
     readContextMd: async () => readFileSafe(contextPath),
     readSpec: async () => readFileSafe(specPath),
 
-    // The per-task workflow is the live role-spawn binding (the optional smoke
-    // task). Until it lands, block durably with a truthful reason — never fake
-    // a closeout.
-    runTaskWorkflow: async (task: SelectedTask): Promise<TaskEvidence> => ({
-      taskId: task.id,
-      outcome: 'blocked',
-      rolesInvoked: [],
-      objectionOpen: false,
-      handoffNotes: [],
-      blockedReason:
-        'orchestrated role execution not yet wired — the live role-spawn binding ' +
-        'is the optional real-task smoke (project 14, tasks.md Phase 5 final item)',
+    // Phase 8: the LIVE per-task role-spawn binding — runTeamTaskWorkflow over
+    // the production TeamTaskDeps (execution-agent artifact sessions, charter
+    // judgment calls, policy-resolved models, fail-closed reviewer
+    // independence). Resolution failures surface as durable blocked evidence.
+    runTaskWorkflow: args.createTaskWorkflowRunner({
+      sandbox,
+      productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+      modelPolicyPath: config.MODEL_POLICY_FILE,
+      cap: ORCHESTRATED_ROUND_CAP,
     }),
 
     // Derive a neutral context update from the task evidence. Real role-authored
@@ -209,12 +223,20 @@ function buildOrchestrationDeps(args: {
       return stdout.trim() === '';
     },
 
-    // The Project 15 finalizer is not wired into this seam yet, so the adapter
-    // reports `unavailable`: the run HOLDS branch-complete with the handoff
-    // recorded — it NEVER self-merges (spec req 17).
+    // DELIBERATE HOLD (Phase 8 decision, recorded 2026-06-10): the Project 15
+    // finalizer is live for `work-run` mutations, but its gated-merge pipeline
+    // is bound to the work-run artifact substrate (transcript sink,
+    // summary.json, work-product classification, gate runtime + per-base
+    // merge lock) — none of which exists for orchestrated runs yet. Until an
+    // orchestrated run produces those inputs, the adapter reports
+    // `unavailable` and the run HOLDS branch-complete with the handoff
+    // payload recorded for the operator — it NEVER self-merges (spec req 17).
     finalize: async (): Promise<FinalizerAdapterResult> => ({
       kind: 'unavailable',
-      reason: 'Project 15 finalizer not wired into the orchestrated applier yet',
+      reason:
+        'deliberate hold: the Project 15 gated-merge finalizer is bound to work-run ' +
+        'artifacts (transcript/summary/classification) that orchestrated runs do not ' +
+        'produce yet — branch-complete, awaiting operator merge',
     }),
   };
 }
@@ -333,6 +355,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         branch,
         baseBranch,
         runGit: deps.runGit,
+        createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
       });
 
       let result: OrchestrationResult;
