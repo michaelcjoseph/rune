@@ -23,6 +23,7 @@ its `spec.md`.
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Not Started | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
+| [18-agent-activity-label](18-agent-activity-label/spec.md) | In Progress | Rename the cockpit "Claude Activity" panel heading to "Agent Activity" (backlog bug). Also the Project 14 Phase 8 live-acceptance target: the first non-fixture orchestrated run drives it. |
 
 ---
 
@@ -320,3 +321,15 @@ Reframes the web view from ~90% chat into a development cockpit, now that KB res
 - **Chat & sessions:** per-product dev/planning chat is the only web-view chat; session scoping moves to per product + Telegram; search broadens to repo + vault; `/fresh`, `/fresh-full`, `/clear` preserved.
 - **Scope boundary:** surface redesign only — the cross-repo autorun plumbing behind Fix and the bug-to-bug sweep are separate deferred ideas; `/work` execution, finalization, and the backlog parser/promotion mechanics are unchanged.
 - **Task breakdown & test plan:** see [tasks.md](17-cockpit-redesign/tasks.md) and [test-plan.md](17-cockpit-redesign/test-plan.md). Test-first per phase.
+
+## 18-agent-activity-label — In Progress
+
+[Spec](18-agent-activity-label/spec.md)
+
+Rename the cockpit sidebar "Claude Activity" panel heading to "Agent Activity" — the
+panel traces every agent/executor Jarvis spawns, not just Claude. Promoted from the
+`docs/projects/bugs.md` backlog.
+
+Doubles as the Project 14 Phase 8 **live-acceptance target**: the first non-fixture
+orchestrated run (QA → coder → reviewer on live models) executes this project's single
+task and holds branch-complete on `jarvis-work/agent-activity-label` for operator merge.

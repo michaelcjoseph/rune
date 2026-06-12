@@ -11,7 +11,7 @@
     - B. Resolve the dual orchestration — pick one writeup owner. Either the daemon owns `runWriteupAndUpdates` and `SKILL.md` must NOT instruct the model to write the journal / run updaters, or the model owns it end-to-end and the engine just needs a completion signal to flip `phase: 'done'`.
     - C. Add a stuck-session watchdog: mirror `src/jobs/planning-expiry.ts` for review sessions, auto-closing any session left in a non-terminal phase past some age so the cockpit self-heals.
     - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
-- [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity"
+- [ ] "Claude activity" in the cockpit nav should be updated to "Agent activity" → 18-agent-activity-label
 - [ ] Daily journal is not showing weekly goals (May 25, 2026) when there were goals set on the previous Friday (May 22, 2026)
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.
 - [ ] Remove study from the morning prep and add the "## Notes" section at the end
