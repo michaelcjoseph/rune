@@ -7,18 +7,16 @@ below it.
 ## User-authored
 
 
-- Cockpit redesign — web view focused entirely on products/projects/bugs/ideas, with one-click **Fix** on cockpit bugs as a core surface. Rethink the web view once chat moves to the Claude App (see the conversation-surface idea above). Two workstreams under one roof: (A) the product-design rethink of the cockpit surface, and (B) the cross-repo autorun plumbing that powers the Fix button (the follow-on cut from [09-expand-cockpit](09-expand-cockpit/spec.md) v1). Separate from the MCP plumbing.
+- Cockpit redesign — web view focused entirely on products/projects/bugs/ideas, with one-click **Fix** on cockpit bugs as a core surface. Rethink the web view once chat moves to the Claude App (see the conversation-surface idea above).
   - **Premise:** Today the web view is ~90% chat, ~10% cockpit. Once the conversation surface moves to the Claude App, 100% of the visual real estate frees up. A chance to rethink the whole interaction model, not just resize panels.
   - **Scope:** Redesign how products, projects, bugs, and ideas are presented and how I interact with them — the dev-side cockpit of my world without a chat box eating half the screen. A one-click **Fix** button on cockpit bugs generalizes `/work --auto` across product repos (aura, assay, relay); it's the highest-value action the redesigned surface exposes. Needs its own scoping session.
+  - **Some ideas**
+    - See project tasks update in realtime during a work run even when the edits are only happening in a separate worktree
+    - Chat box is contained per product and better scoped to searching the products repo + vault (and not just the vault)
+    - Logs from most recent run (project, planning or bug fixes) are easily readable
+    - Be able to see which agents are working on an active project work run
+    - Open to other ideas. The goal is to make it easier for me to work with Jarvis to make progress on all products
   - **Open questions for planning:** What are the primary objects and their states? How do bugs and ideas flow into projects? What actions do I take most often, and what should be one-click vs. delegated to Jarvis? How does the cockpit relate to the Claude App threads (deep-link out to a thread? surface logged conversations back in?).
-  - **Workstream B — Fix-button / cross-repo autorun plumbing:**
-    - **What already works (2026-06-04).** The execution substrate is cross-repo-ready. `policies/products.json` configures aura/assay/relay/jarvis (repo path, base branch, scoped credentials, egress allowlist); `work-runner` takes a `product` and `createWorktree` spins the worktree in that repo with that repo's egress; the manual cockpit trigger already passes `product` end-to-end (`app.js` → `webview.ts` `createMutation` → runner). So a cockpit-triggered run in another repo works today, modulo validation. GC was generalized to sweep all products the same day (dir retention global, branch prune per-repo). The resume + wedge bugs (see [bugs.md](bugs.md)) were also fixed — prerequisites for trusting unattended cross-repo runs.
-    - **The actual gap — automated dispatch is jarvis-only and partly unwired.** Three layers, only the top one done:
-      - *Layer A — manual trigger:* works (above).
-      - *Layer B — the automated work-run dispatch isn't wired for any repo.* The nightly observation loop creates `gen-eval-loop` mutations hardcoded to `product: 'jarvis'` (`nightly.ts`), not `work-run`. `observation-dispatch.ts` documents routing self-generated dispatches through `work-run`, but that path is designed, not wired.
-      - *Layer C — self-generated ideas carry no product (the design question).* `ProjectIdea` is `{ title, friction, id }`. Nothing attributes a detected friction to "this belongs in aura's repo." Auto-dispatch cross-repo needs product attribution — the sensor tagging its source product, a `product` field set at triage, or a registry lookup for friction that already maps to a known project (the registry maps slug→product; a brand-new self-generated project does not). A new project also needs scaffolding **in the target repo** (the scaffold-approval/promotion machinery), its own surface.
-    - **The Fix button itself is the small part.** The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
-    - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
 - Install tools to improve agent performance
   - https://colbymchenry.github.io/codegraph/ (for each product repo)
   - https://github.com/cursor/plugins/blob/683cdbda983ea8be4b766ac3fe94b7b88e7f75ad/cursor-team-kit/agents/thermo-nuclear-code-quality-review.md (code review skill)
@@ -40,7 +38,13 @@ below it.
   - Relationship to project 10: sibling, not child. Project 10 = "compile category 1." Project 11 = "compile/cascade categories 2-4." Keep 10 clean and shipping; do not expand it. Project 11 should reuse 10's compiler architecture (canonical source → model-specific renderers → CI drift check) where the surface is file-based config; categories that live in spawn code (parts of 2 and 5) need a different mechanism than a markdown compiler — design question for the spec.
   - Dependency: best started after project 10 ships, so the compiler/IR/renderer pattern exists to extend rather than reinvent.
 - Per product loop where if Jarvis isn't working on something, it picks up the next scoped bug or project
-- Use ampcode.com with Jarvis instead of Claude/Codex CLI
+  - **The actual gap — automated dispatch is jarvis-only and partly unwired.** Three layers, only the top one done:
+      - *Layer A — manual trigger:* works (above).
+      - *Layer B — the automated work-run dispatch isn't wired for any repo.* The nightly observation loop creates `gen-eval-loop` mutations hardcoded to `product: 'jarvis'` (`nightly.ts`), not `work-run`. `observation-dispatch.ts` documents routing self-generated dispatches through `work-run`, but that path is designed, not wired.
+      - *Layer C — self-generated ideas carry no product (the design question).* `ProjectIdea` is `{ title, friction, id }`. Nothing attributes a detected friction to "this belongs in aura's repo." Auto-dispatch cross-repo needs product attribution — the sensor tagging its source product, a `product` field set at triage, or a registry lookup for friction that already maps to a known project (the registry maps slug→product; a brand-new self-generated project does not). A new project also needs scaffolding **in the target repo** (the scaffold-approval/promotion machinery), its own surface.
+    - The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
+    - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
+- Easily add new products to Jarvis
 - quarterly and annual SEC reports ingestion of companies I'm following
 - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
 - Monitor and ingest X posts for relevant topics and report them to me daily

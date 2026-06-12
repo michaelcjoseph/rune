@@ -22,6 +22,7 @@ its `spec.md`.
 | [14-product-team-agents](14-product-team-agents/spec.md) | Incomplete | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. **Reopened 2026-06-10:** live role-spawn execution binding stubbed (Phase 8). |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
+| [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Not Started | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
 
 ---
 
@@ -304,3 +305,18 @@ Make the Jarvis chat surface portable into the Claude App via a lean six-tool MC
 - **Remote reachability:** a Tailscale Funnel exposes only `/mcp` + the OAuth-discovery paths at a stable `ts.net` hostname (TLS on-host, no inbound ports, the webview stays localhost-only). Chosen over Cloudflare Tunnel — no domain, no extra daemon, $0 — with the Cloudflare procedure kept as a documented fallback. See [tunnel-runbook.md](16-claude-app-connector/tunnel-runbook.md).
 - **Provenance:** built test-first per phase (factory/routing/tool suites red → green; transport + OAuth suites red → green). Tunnel exposure, App connector registration, and the funnel-intact e2e acceptance test were operator-completed live; the repeatable acceptance procedure is [e2e-acceptance-test.md](16-claude-app-connector/e2e-acceptance-test.md). App project instructions: [app-project-instructions.md](16-claude-app-connector/app-project-instructions.md).
 - **Task breakdown & test plan:** see [tasks.md](16-claude-app-connector/tasks.md) and [test-plan.md](16-claude-app-connector/test-plan.md). Test-first per phase.
+
+## 17-cockpit-redesign — Not Started
+
+[Spec](17-cockpit-redesign/spec.md)
+
+A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action.
+
+Reframes the web view from ~90% chat into a development cockpit, now that KB research and idea exploration move to the Claude App ([16-claude-app-connector](16-claude-app-connector/spec.md)). Builds on the v1 product card, backlog drawer, and Plan promotion from [09-expand-cockpit](09-expand-cockpit/spec.md), and reads off the existing work-run observability/finalizer instrumentation (projects 11/13/14/15).
+
+- **Two-tier IA:** a cross-product Home view (read-mostly pulse + router) and a non-negotiable per-product deep view that holds projects, backlog, runs, and per-product chat.
+- **Realtime run visibility:** tasks updating in realtime (even with edits in a separate worktree), which agents are working a run, elapsed/live output/worktree path, and the most-recent run's logs readable from the persisted transcript.
+- **Fix as the headline bug action:** clicking Fix triggers a PM + Tech-Lead scoping gate that returns a real decision — declined-with-reason or proceeding — and on a pass hands off to the deferred cross-repo autorun fix-run path through one clean seam.
+- **Chat & sessions:** per-product dev/planning chat is the only web-view chat; session scoping moves to per product + Telegram; search broadens to repo + vault; `/fresh`, `/fresh-full`, `/clear` preserved.
+- **Scope boundary:** surface redesign only — the cross-repo autorun plumbing behind Fix and the bug-to-bug sweep are separate deferred ideas; `/work` execution, finalization, and the backlog parser/promotion mechanics are unchanged.
+- **Task breakdown & test plan:** see [tasks.md](17-cockpit-redesign/tasks.md) and [test-plan.md](17-cockpit-redesign/test-plan.md). Test-first per phase.
