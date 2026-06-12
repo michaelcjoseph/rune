@@ -468,8 +468,6 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `unavailable` with that reason recorded; the run holds branch-complete with the handoff
       payload for operator merge, never a self-merge (spec req 17). Wiring the finalizer for
       orchestrated runs needs that substrate first — a follow-on, not a stub.)
-- [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
-      and run the live acceptance on a real task; record the run id, diff, and terminal outcome.
 
 > **User-reachability:** YES — after this phase, clicking Start with orchestrated mode on drives
 > a real task to a real diff that lands or durably holds, observable on the cockpit card. This
@@ -518,6 +516,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       surface.
 - [ ] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
       pass on the planning record.
+- [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
 
 > **User-reachability:** the existing `/plan <product>` trigger now runs the critique before
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval
