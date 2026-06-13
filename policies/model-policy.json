@@ -2,6 +2,7 @@
   "_comment": "Declarative model selection policy for the intent layer (project 08). Data, not code — editing this file is not a deploy. Models are referenced by stable alias, never a pinned version ID. See docs/projects/08-intent-layer/spec.md (the 'Model selection policy' section) and src/intent/model-policy.ts.",
   "models": [
     {
+      "_comment": "Anthropic Opus 4.8 via the Claude CLI alias. Also the judgment-role model for the product-team workflow (project 14) — PM, tech lead, reviewer, designer — replacing the earlier Fable 5 binding.",
       "alias": "opus",
       "provider": "anthropic",
       "format": "claude",
@@ -35,16 +36,7 @@
       "status": "preferred"
     },
     {
-      "_comment": "Project 14 Phase 8 (live execution binding): the judgment-role model for the product-team workflow — PM, tech lead, reviewer, designer. Anthropic's Fable 5 via the Claude CLI alias.",
-      "alias": "fable",
-      "provider": "anthropic",
-      "format": "claude",
-      "capabilities": ["coding", "long-context", "deep-reasoning", "classify"],
-      "costTier": "high",
-      "status": "preferred"
-    },
-    {
-      "_comment": "Project 14 Phase 8: the artifact-role executor for the product-team workflow — QA test authoring and coder. OpenAI GPT-5.5 via the Codex CLI (`codex exec -m gpt-5.5`). Distinct provider from the reviewer's `fable` by construction (independence gate).",
+      "_comment": "Project 14 Phase 8: the artifact-role executor for the product-team workflow — QA test authoring and coder. OpenAI GPT-5.5 via the Codex CLI (`codex exec -m gpt-5.5`). Distinct provider from the reviewer's `opus` by construction (independence gate).",
       "alias": "gpt-5.5",
       "provider": "openai",
       "format": "codex",
@@ -54,13 +46,13 @@
     }
   ],
   "globalFallback": "opus",
-  "_roleDefaults_comment": "Per-role default model alias. `evaluator: codex` (project 08, A6.2) makes the autonomous Evaluator pick a cross-provider model by default so cross-model adjudication is the policy-driven shape. The six product-team roles (project 14, Phase 8) bind per the spec's model table: judgment roles → fable (anthropic), artifact roles → gpt-5.5 (openai); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed).",
+  "_roleDefaults_comment": "Per-role default model alias. `evaluator: codex` (project 08, A6.2) makes the autonomous Evaluator pick a cross-provider model by default so cross-model adjudication is the policy-driven shape. The six product-team roles (project 14, Phase 8) bind per the spec's model table: judgment roles → opus (anthropic, Opus 4.8), artifact roles → gpt-5.5 (openai); the resolver enforces reviewer-vs-coder provider distinctness at resolution time (fail-closed).",
   "roleDefaults": {
     "evaluator": "codex",
-    "pm": "fable",
-    "tech-lead": "fable",
-    "reviewer": "fable",
-    "designer": "fable",
+    "pm": "opus",
+    "tech-lead": "opus",
+    "reviewer": "opus",
+    "designer": "opus",
     "qa": "gpt-5.5",
     "coder": "gpt-5.5"
   },

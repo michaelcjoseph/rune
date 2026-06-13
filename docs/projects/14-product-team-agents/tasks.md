@@ -414,19 +414,58 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       primitive applies the agent's edits and returns the exact `git diff`; a no-op task yields
       an empty diff; a tool/agent error yields structured `failed` evidence, never an unhandled
       throw. (`execution-agent.test.ts`)
-- [x] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `fable`
-      (anthropic) and qa/coder → `gpt-5.5` (openai); the registry contains both aliases; the
+- [x] Model-map test: `roleDefaults` resolves pm/tech-lead/reviewer/designer → `opus`
+      (anthropic, Opus 4.8) and qa/coder → `gpt-5.5` (openai); the registry contains both aliases; the
       coder and reviewer providers differ. (`team-task-deps.test.ts` model-map describe.)
 - [x] No-stub regression test: the orchestrated applier's production `runTaskWorkflow` calls
       through to `runTeamTaskWorkflow` — the hardcoded "orchestrated role execution not yet
       wired" `blocked` path is gone and cannot reappear without failing this test.
       (`team-task-deps.test.ts` no-stub describe: identity-asserts the runtime seam binding +
       drives the production runner to ready-for-closeout on injected seams.)
-- [ ] **Live acceptance (required, non-fixture).** A real orchestrated run on a small real
-      task drives QA → coder → review to a real `git diff` and lands or durably holds. This
-      makes live model calls by design and is REQUIRED for phase completion — it is the
-      stub-free proof the original closeout lacked, and the test that would have caught the
-      gap. Per the PM/tech-lead/QA charter lessons, a fixture-green suite is not sufficient.
+- [ ] **Live acceptance (required, non-fixture, fully agent-run).** A real orchestrated run on
+      a small real task drives QA → coder → review to a real `git diff`. This makes live model
+      calls by design and is REQUIRED for phase completion — the stub-free proof the original
+      closeout lacked. Per the PM/tech-lead/QA charter lessons, a fixture-green suite is not
+      sufficient. It must run end-to-end with **zero human intervention**: no operator merge,
+      no manual repo setup, no interactive approval. Build it as a checked-in, self-verifying
+      acceptance harness (`src/jobs/__acceptance__/orchestrated-live.acceptance.ts` + a thin
+      `acceptance:orchestrated` npm script) that an agent `/work` run invokes and reads a
+      pass/fail exit code from. Land the sub-tasks below as one unit:
+
+  - [ ] **Provider preflight (fail-loud, not fail-silent).** Before any orchestrated call, probe
+        both executors and assert reachability: `claude --model opus` (Opus 4.8) returns a
+        completion, and `probeCodexProvider` reports `codex exec -m gpt-5.5` available. If
+        either is unreachable, the harness exits non-zero with the resolved model id and the
+        executor error — never the silent stall that killed the 2026-06-10 `run2.log` (it
+        resolved all six roles then died at the first live call with no diagnostic). This step
+        is the regression guard for that exact failure.
+  - [ ] **Ephemeral fixture repo + product, no shared state.** The harness creates a throwaway
+        git repo in an OS temp dir seeded with one small real task (an absent function plus a
+        spec/README describing it and an intentionally failing or missing test), `git init`s it,
+        and registers an ephemeral orchestrated-mode product entry pointed at it via the
+        `WORKTREE_ROOT` / products-config env redirection the `/tmp/p14-accept/driver.mts`
+        spike already proved. No `policies/products.json` edit, no `.worktrees` of the real repo
+        touched. Teardown removes the temp repo, its worktrees, and the temp product entry in a
+        `finally` so a failed run leaves no residue.
+  - [ ] **Drive the production applier end-to-end.** Resolve dispatch with the global default
+        OFF and the per-product opt-in ON (asserting it routes `mode: orchestrated`), then run
+        `orchestratedWorkApplier.apply()` to completion, capturing the streamed events. Real
+        worktree, real task selection, real role model calls (opus judgment, gpt-5.5 artifact),
+        real closeout — no injected seams anywhere in this path.
+  - [ ] **Assert real work, self-verified (this replaces operator merge).** The harness itself
+        checks, and exits non-zero on any miss: (a) the captured `git diff` is non-empty and
+        touches the seeded task's target file; (b) the QA-authored test now exists and, applied
+        to the worktree, **passes against the coder's diff** (run the temp repo's test command in
+        the worktree); (c) the reviewer verdict is a structured pass; (d) the run reaches its
+        terminal orchestrated outcome — `branch-complete` with a well-formed handoff payload
+        (per spec req 17 orchestrated runs never self-merge) — and the harness validates the
+        payload shape and the branch's diff directly rather than waiting for a human to merge.
+        Success is these assertions passing on the throwaway repo, which is then discarded.
+  - [ ] **Emit a durable proof artifact.** On success, write the run transcript + diffstat +
+        asserted-outcome summary to `docs/projects/14-product-team-agents/live-acceptance-<run-id>.md`
+        so the stub-free proof is recorded in-repo, not only in `/tmp`. Retire the
+        `/tmp/p14-accept/` spike and the `accept-demo` placeholder in `policies/products.json`
+        (currently marked `TEMPORARY ... REMOVE before commit`) once the checked-in harness lands.
 - [x] Confirm red before implementation. (Confirmed 2026-06-10: both suites red on
       module-not-found for `./execution-agent.js` / `./team-task-deps.js` — no implementation
       created; the model-policy entries and the runner's `createTaskWorkflowRunner` seam are
@@ -452,9 +491,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       same-provider; charter-composed two-channel prompts for judgment AND artifact roles;
       fenced-JSON fail-closed verdict parsers; `createProductionTaskWorkflowRunner` blocks
       durably on missing policy/failed resolution.)
-- [x] Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex)
-      in `policies/model-policy.json`, and populate `roleDefaults` for all six roles per the
-      spec Phase 8 table. (Done — model-map tests in `team-task-deps.test.ts` pin it.)
+- [x] Bind judgment roles to `opus` (anthropic/claude, Opus 4.8) and add the `gpt-5.5`
+      (openai/codex) artifact-role entry in `policies/model-policy.json`, and populate
+      `roleDefaults` for all six roles per the spec Phase 8 table. (Done — model-map tests in
+      `team-task-deps.test.ts` pin it.)
 - [x] Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call
       `runTeamTaskWorkflow` with the production `TeamTaskDeps`. (Stub gone —
       `createTaskWorkflowRunner` runtime seam, production = `createProductionTaskWorkflowRunner`;
@@ -483,7 +523,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Sequential-order test: the critique runs Claude (Fable 5) first over the assembled
+- [ ] Sequential-order test: the critique runs Claude (Opus 4.8) first over the assembled
       spec/tech-spec/tasks, then Codex (GPT-5.5) over Claude's revised output; the Codex seam
       receives the Claude-revised artifacts, not the originals. Model calls injected.
 - [ ] Single-pass test: each model is invoked exactly once — the pass does not loop to
@@ -505,7 +545,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Add a `critiquePlan({spec, techSpec, tasks})` seam to the planner-role deps returning
       revised `{spec, techSpec, tasks}`, injected like the other role seams so the flow stays
       fixture-testable with no live model call.
-- [ ] Wire the sequential two-model run: Claude (Fable 5) critique+revise, then Codex
+- [ ] Wire the sequential two-model run: Claude (Opus 4.8) critique+revise, then Codex
       (GPT-5.5) critique+revise over Claude's output, reusing the `defaultRoleModelCall` text
       round-trip and the `runCodex` / `probeCodexProvider` availability gate from `src/ai/codex.ts`.
 - [ ] Author the critique instruction prompt (restate goal → scope-achieves-goal + fix →
@@ -517,6 +557,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
       pass on the planning record.
 - [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
+      **only after the Phase 8 live-acceptance harness exits green** — the green gate is the
+      precondition, so the sequence is autonomous: live gate passes → flip the flag → the
+      acceptance harness re-runs against the real `jarvis` product as the final confirmation.
+      Reverses the 2026-06-11 `e8424bd` revert to legacy `/work`.
 
 > **User-reachability:** the existing `/plan <product>` trigger now runs the critique before
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval

@@ -53,7 +53,7 @@ const log = createLogger('execution-agent');
  *  the narrow `DispatchProvider` union — the reviewer-independence gate
  *  compares these values, so they must be the same type the workflow uses. */
 export interface RoleModelBinding {
-  /** Stable model alias from the policy registry (e.g. `fable`, `gpt-5.5`). */
+  /** Stable model alias from the policy registry (e.g. `opus`, `gpt-5.5`). */
   alias: string;
   /** Provider family — what reviewer independence is measured on. */
   provider: DispatchProvider;

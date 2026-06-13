@@ -159,7 +159,7 @@ its own write-up.
 
 The pass is **sequential and cross-model**, one pass per model:
 
-1. **Claude (Fable 5)** reads the assembled spec, tech spec, and tasks and runs the critique:
+1. **Claude (Opus 4.8)** reads the assembled spec, tech spec, and tasks and runs the critique:
    restate the goal the spec and tasks define; check whether the scope achieves it and fix
    the scope if not; check whether the task list is comprehensive enough that completing
    every task makes the project done and user-usable, and add tasks if not; then critique
@@ -414,7 +414,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 8. WHEN tech lead produces task breakdown THEN PM reviews the tech spec against the product
    spec before planning completes.
 8a. WHEN the PM spec/tech-spec match gate passes THEN a cross-model critique pass refines the
-    assembled spec/tech-spec/tasks before `context.md` is seeded: Claude (Fable 5) critiques
+    assembled spec/tech-spec/tasks before `context.md` is seeded: Claude (Opus 4.8) critiques
     and revises first, then Codex (GPT-5.5) critiques and revises Claude's output — one pass
     per model, no looping.
 8b. WHEN Codex is unavailable (binary missing or not logged in) THEN the critique degrades to
@@ -557,12 +557,12 @@ evidence of completion.
 
 | Role | Provider | Model |
 | --- | --- | --- |
-| PM | anthropic | Fable 5 |
-| Tech Lead | anthropic | Fable 5 |
+| PM | anthropic | Opus 4.8 |
+| Tech Lead | anthropic | Opus 4.8 |
 | QA | openai | GPT-5.5 (codex) |
 | Coder | openai | GPT-5.5 (codex) |
-| Reviewer | anthropic | Fable 5 |
-| Designer | anthropic | Fable 5 |
+| Reviewer | anthropic | Opus 4.8 |
+| Designer | anthropic | Opus 4.8 |
 
 **Work items.**
 
@@ -574,8 +574,9 @@ evidence of completion.
    wrap-up) on the existing `defaultRoleModelCall` text round-trip pattern from `/plan`.
 3. Replace the `runTaskWorkflow` stub (`orchestrated-work-runner.ts:169`) to call the real
    `runTeamTaskWorkflow` with a production `TeamTaskDeps`.
-4. Add model-registry entries for `fable` (anthropic/claude) and `gpt-5.5` (openai/codex) and
-   populate `roleDefaults` for all six roles per the table above.
+4. Bind `roleDefaults` judgment roles to `opus` (anthropic/claude, Opus 4.8) and add the
+   `gpt-5.5` (openai/codex) artifact-role entry; populate `roleDefaults` for all six roles per
+   the table above.
 5. Wire the Project 15 finalizer in place of the `finalize` stub (`:215`), or keep the durable
    branch-complete hold if Project 15 is still unwired.
 6. Add an acceptance test that exercises the real end-to-end path on a non-fixture task — the

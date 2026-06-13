@@ -9,7 +9,7 @@
  *     model-policy resolver — fail-closed to a block when only a
  *     same-provider model is available
  *   - `policies/model-policy.json` carries the Phase 8 model map:
- *     pm/tech-lead/reviewer/designer → `fable` (anthropic), qa/coder →
+ *     pm/tech-lead/reviewer/designer → `opus` (anthropic), qa/coder →
  *     `gpt-5.5` (openai)
  *   - the orchestrated applier's production `runTaskWorkflow` calls through
  *     to `runTeamTaskWorkflow` — the "orchestrated role execution not yet
@@ -123,27 +123,27 @@ function buildDeps(
 // ---------------------------------------------------------------------------
 
 describe('model map — policies/model-policy.json (Phase 8)', () => {
-  it('registers both Phase 8 aliases: fable (anthropic/claude) and gpt-5.5 (openai/codex)', () => {
+  it('registers both Phase 8 aliases: opus (anthropic/claude) and gpt-5.5 (openai/codex)', () => {
     const policy = loadRealPolicy();
-    const fable = policy.models.find((m) => m.alias === 'fable');
+    const opus = policy.models.find((m) => m.alias === 'opus');
     const gpt = policy.models.find((m) => m.alias === 'gpt-5.5');
 
-    expect(fable).toBeDefined();
-    expect(fable?.provider).toBe('anthropic');
-    expect(fable?.format).toBe('claude');
+    expect(opus).toBeDefined();
+    expect(opus?.provider).toBe('anthropic');
+    expect(opus?.format).toBe('claude');
 
     expect(gpt).toBeDefined();
     expect(gpt?.provider).toBe('openai');
     expect(gpt?.format).toBe('codex');
   });
 
-  it('resolves pm/tech-lead/reviewer/designer → fable and qa/coder → gpt-5.5 via roleDefaults', () => {
+  it('resolves pm/tech-lead/reviewer/designer → opus and qa/coder → gpt-5.5 via roleDefaults', () => {
     const models = resolveTeamRoleModels(loadRealPolicy());
 
-    expect(models.pm).toMatchObject({ alias: 'fable', provider: 'anthropic' });
-    expect(models.techLead).toMatchObject({ alias: 'fable', provider: 'anthropic' });
-    expect(models.designer).toMatchObject({ alias: 'fable', provider: 'anthropic' });
-    expect(models.reviewer).toMatchObject({ alias: 'fable', provider: 'anthropic' });
+    expect(models.pm).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+    expect(models.techLead).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+    expect(models.designer).toMatchObject({ alias: 'opus', provider: 'anthropic' });
+    expect(models.reviewer).toMatchObject({ alias: 'opus', provider: 'anthropic' });
 
     expect(models.qa).toMatchObject({ alias: 'gpt-5.5', provider: 'openai' });
     expect(models.coder).toMatchObject({ alias: 'gpt-5.5', provider: 'openai' });
@@ -249,8 +249,8 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(tl.approved).toBe(true);
 
     expect(calls.map((c) => c.role)).toEqual(['reviewer', 'tech-lead']);
-    // Judgment roles run on the policy-resolved fable binding.
-    expect(calls.every((c) => c.model === 'fable')).toBe(true);
+    // Judgment roles run on the policy-resolved opus binding.
+    expect(calls.every((c) => c.model === 'opus')).toBe(true);
   });
 
   it('judgment seams fail closed on an unparseable reply', async () => {
