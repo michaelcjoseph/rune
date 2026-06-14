@@ -530,6 +530,26 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 46. WHEN the orchestrated finalizer wiring lands THEN the Phase 8 `unavailable` hold stub is
     gone and cannot reappear without failing a regression test.
 
+### Orchestration resilience (Phase 11)
+
+47. WHEN a role gate rejects (tech-lead test intent, reviewer, tech-lead diff, designer) THEN
+    the rejection's structured feedback is threaded into that role's next attempt; no retry
+    re-runs a role with identical inputs and no feedback.
+48. WHEN the tech lead rejects QA's test intent THEN QA revises against the feedback in a
+    bounded rewrite loop before the task escalates, rather than the run blocking on the first
+    rejection.
+49. WHEN a task cannot pass after its feedback-retry cap THEN it parks blocked-on-human with the
+    worktree and branch preserved; the committed work is not discarded and the project run holds
+    at that task rather than ending destructively.
+50. WHEN the server restarts mid-run THEN a still-`running` orchestrated mutation resumes from
+    durable state (persisted records + branch commits + `tasks.md`) rather than being orphaned.
+51. WHEN orchestrated run state is persisted THEN `TaskRunRecord`s and a run cursor are written
+    to disk so a partial run is reconstructable via `reconstructRun`.
+52. WHEN crash recovery runs THEN it never writes a terminal for a run that will resume, and the
+    pipeline never lands two terminal records for one mutation id.
+53. WHEN a run is marked for resume THEN the orphan-worktree sweep preserves its worktree (or the
+    branch-resume path rebuilds it on re-dispatch).
+
 ---
 
 ## Implementation Phases
@@ -753,6 +773,83 @@ orchestrated runs is binding effects, not new merge logic.
     to a merged base branch (gated), and a deliberately-gate-failing run to a recorded hold —
     proving both terminals. This supersedes the Phase 8 "branch-complete held" acceptance.
 
+### Phase 11: Orchestration resilience (reopened 2026-06-14)
+
+The overnight project-17 orchestrated run exposed two failure modes that make orchestrated runs
+brittle in ways the task content didn't cause. Both are structural in the loop. Forensics:
+`mutations.jsonl` shows the run as `pending → failed/orphaned → failed/orchestration-blocked`,
+and the identical pattern repeats on the 2026-06-10 run — so both are systemic, not one-offs.
+
+**A. Retries discard the feedback that would fix them.** The run blocked because QA fed
+*already-redacted* placeholder strings (`sk-<redacted>`, `Bearer <redacted>`) as test inputs,
+producing self-contradictory and vacuous redaction assertions. The tech-lead rejected with
+precise, actionable feedback ("use real secret-shaped tokens; assert the raw token is absent
+while the redacted placeholder is present"). That feedback was recorded in `blockedReason` and
+then thrown away. The QA → tech-lead test-intent gate is one-shot (`team-task-workflow.ts:196` —
+a rejection returns `blocked`, no rewrite loop), and although the orchestrator retries the whole
+workflow up to the attempt cap (`decideAttemptOutcome` → `retry` while below cap,
+`orch-attempt-cap.ts:50`), every retry re-invokes `qaWriteTests({task, spec})` with identical
+inputs and zero feedback — three blind redos of the same mistake, then the entire project run
+blocks. The coder round loop has the same defect: `deps.coder({task, spec, context, tests})`
+(`team-task-workflow.ts:208`) re-runs on reviewer/tech-lead disagreement without the reviewer's
+notes. No role learns from the rejection that triggered its retry. A human reads the feedback
+and fixes the tests; the orchestration cannot.
+
+**B. A server restart amputates the run instead of resuming it.** When the server restarted
+mid-run, crash recovery flipped the still-`running` mutation to `failed/orphaned`
+(`reconcileOrphans`, `mutations-log.ts:45`, called at `index.ts:70`) — blind to whether the run
+is resumable. The Phase 3 reconstruction primitive (`orch-reconstruct.ts`) is **dead code**:
+imported only by its own test, wired into no runtime path, and dependent on `TaskRunRecord`s that
+are **never persisted** (in-memory only, `project-orchestrator.ts:90`). The committed per-task
+closeout commits and ticked `tasks.md` survive on the branch (resumable in principle —
+`createWorktree` even has a branch-resume path, `sandbox-runtime.ts:303`), but nothing
+re-dispatches the run, and `cleanupOrphanWorktrees` (`index.ts:92`) then sweeps the worktree dir.
+The double-terminal is the same disconnect: `reconcileOrphans` rewrites the on-disk `running`
+line in place while the still-draining generator later appends its own terminal
+(`mutations.ts:415`), with no idempotency guard — two terminals for one id.
+
+**Definition of done.** (1) A gate rejection threads its structured feedback into the rejected
+role's next attempt, so QA/coder revise *with* the feedback rather than blindly redoing; a task
+that still can't pass after bounded feedback-retries parks blocked-on-human with its worktree
+preserved, instead of ending the whole project run. (2) A server restart mid-run resumes the
+orchestrated run from durable state (persisted records + branch commits + `tasks.md`) rather than
+orphaning it, and no run ever lands two terminal records.
+
+**Work items — A. Feedback-threaded retries.**
+
+1. **Carry rejection feedback in the evidence.** The workflow already records `blockedReason`/
+   role notes; surface them as structured `feedback` the orchestrator can pass back (which role,
+   what it rejected, the actionable notes).
+2. **Thread feedback into the retrying role.** On retry, `qaWriteTests` receives the tech-lead's
+   test-intent rejection notes; the coder receives the reviewer + tech-lead-diff notes from the
+   failed round; designer likewise where it gates. The retry is corrective, not a blind redo.
+3. **Make the QA → tech-lead test gate a bounded rewrite loop**, not a one-shot block — QA
+   revises against the tech-lead's notes up to a small cap, mirroring the coder→reviewer round
+   loop, before the task escalates.
+4. **Park, don't kill, on exhausted retries.** When a task can't pass after its feedback-retry
+   cap, route it to blocked-on-human with the worktree preserved (reuse the Project 13 parked-run
+   machinery) so a human can intervene on that task. The project run holds at that task; the
+   committed work and branch are not discarded.
+
+**Work items — B. Crash recovery & resumable runs.**
+
+5. **Persist orchestrated run state.** Build the `TaskRunRecord` JSONL store
+   (`orch-run-record.ts`'s header already promises it) plus a run cursor, so a partial run is
+   reconstructable from disk. Reuse Phase 10's durable transcript as part of the record set.
+6. **Resume, don't orphan, on boot.** Route a still-`running` orchestrated mutation through
+   `reconstructRun` (`orch-reconstruct.ts`) + a re-dispatch against its existing branch, instead
+   of the blind `reconcileOrphans` flip. Resume from `tasks.md` + branch commits + records.
+7. **Make orphaning idempotent and orchestration-aware.** `reconcileOrphans` must not write a
+   terminal for a run that will resume, and the pipeline must never land two terminals for one id
+   (skip-if-already-terminal guard). Add a graceful-shutdown drain that flips in-flight
+   orchestrated runs to a durable `resumable` state rather than leaving a bare `running` line.
+8. **Don't sweep a resumable run's worktree** (or rely on `createWorktree`'s branch-resume to
+   rebuild it) — `cleanupOrphanWorktrees` must skip a run marked for resume.
+9. **Live acceptance:** a restart injected mid-run resumes to completion with no orphaned record
+   and exactly one terminal; and a forced gate rejection drives a corrective QA retry that
+   *passes* on the feedback (not a blind redo) — the stub-free proof both failure modes are
+   closed.
+
 ---
 
 ## Success Metrics
@@ -777,6 +874,9 @@ orchestrated runs is binding effects, not new merge logic.
 | Orchestrated run produces substrate | always | `transcript.jsonl` + `summary.json` + classification written under `WORK_RUNS_DIR`, as a legacy run does |
 | Clean run auto-merges | yes | A clean `branch-complete` orchestrated run lands on base through the Project 15 gated finalizer, no operator hold |
 | Merge stays gated | always | Failed gate or open objection holds the branch; merge only ever via the finalizer's gates, never an independent path |
+| Retries are corrective | always | A gate rejection threads its feedback into the role's next attempt; no blind same-input redo |
+| Rejection parks, not kills | always | A task that exhausts feedback-retries parks blocked-on-human with worktree preserved; work is never discarded |
+| Restart resumes | always | A restart mid-run resumes from durable state; no orphaned record, exactly one terminal per run id |
 
 ---
 

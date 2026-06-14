@@ -708,6 +708,79 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > clean — lands on its base branch through the same gated finalizer a legacy `/work` run uses,
 > with no operator merge step.
 
+## Phase 11 - Orchestration resilience (reopened 2026-06-14)
+
+> Depends on: Phase 5, 8 (part B reuses Phase 10's durable transcript). Triggered by the
+> overnight project-17 run, which exposed two structural failure modes (see spec.md §"Phase 11"
+> and requirements 47-53): (A) gate rejections discard the feedback that would fix them — QA's
+> tech-lead rejection was retried three times with identical inputs and no feedback, then the
+> whole run blocked; (B) a server restart orphaned the run (`reconcileOrphans`,
+> `mutations-log.ts:45`) instead of resuming it — the Phase 3 `reconstructRun` is dead code and
+> `TaskRunRecord`s are never persisted — and left a double-terminal record.
+
+### Tests (write first)
+
+**A. Feedback-threaded retries**
+
+- [ ] Feedback-carried test: a gate rejection surfaces structured feedback (rejecting role,
+      what it rejected, actionable notes) in the task evidence, not just a `blockedReason` string.
+- [ ] QA-rewrite-loop test: a tech-lead test-intent rejection re-invokes `qaWriteTests` WITH the
+      tech-lead's notes, bounded by a small cap, before the task escalates — not a one-shot block.
+- [ ] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
+      WITH the reviewer + tech-lead notes from the failed round, not identical inputs.
+- [ ] No-blind-redo regression: no retry path re-runs a role with identical inputs and no
+      feedback (the project-17 defect) — must fail on today's `team-task-workflow.ts`.
+- [ ] Park-not-kill test: a task that exhausts its feedback-retry cap parks blocked-on-human with
+      the worktree preserved; the project run holds at that task and does not discard the branch.
+
+**B. Crash recovery & resumable runs**
+
+- [ ] Record-persistence test: `TaskRunRecord`s + a run cursor are written to a durable store and
+      read back to reconstruct a partial run.
+- [ ] Resume test: a still-`running` orchestrated mutation at boot is reconstructed
+      (`reconstructRun`) and re-dispatched against its existing branch, resuming from the first
+      unchecked task — not flipped to `failed/orphaned`.
+- [ ] No-double-terminal test: crash recovery never writes a terminal for a run that will resume,
+      and the pipeline never lands two terminal records for one id (skip-if-terminal guard).
+- [ ] Worktree-preserve test: the orphan-worktree sweep skips a run marked for resume (or the
+      branch-resume path rebuilds it on re-dispatch).
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> Part A and Part B are independent workstreams under one resilience phase; land each as a unit.
+> The phase is not done until the live acceptance proves a corrective (non-blind) retry passes
+> AND a mid-run restart resumes to a single clean terminal.
+
+**A. Feedback-threaded retries**
+
+- [ ] Carry structured rejection feedback in `TaskEvidence` and thread it back through
+      `runTaskWithRetries` → `runTaskWorkflow` into the retrying role's input.
+- [ ] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
+      loop) so QA revises against feedback before escalating.
+- [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
+- [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
+      (reuse the Project 13 parked-run machinery); hold the project run at that task.
+
+**B. Crash recovery & resumable runs**
+
+- [ ] Build the `TaskRunRecord` JSONL store + run cursor (the persistence layer
+      `orch-run-record.ts` promises); reuse Phase 10's transcript as part of the record set.
+- [ ] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
+      orchestrated mutation against its branch instead of the blind `reconcileOrphans` flip.
+- [ ] Make `reconcileOrphans` orchestration-aware + idempotent (never terminal-write a
+      resumable run; skip-if-already-terminal), and add a graceful-shutdown drain that marks
+      in-flight orchestrated runs `resumable` rather than leaving a bare `running` line.
+- [ ] Make `cleanupOrphanWorktrees` skip a resume-marked run's worktree.
+- [ ] **Live acceptance:** a restart injected mid-run resumes to completion (no orphaned record,
+      exactly one terminal); a forced gate rejection drives a corrective QA retry that PASSES on
+      the feedback. Stub-free proof both failure modes are closed.
+
+> **User-reachability:** YES — after this phase, an orchestrated run survives a mid-run server
+> restart (resumes instead of dying) and turns a gate rejection into a corrective retry, both
+> observable on the cockpit card; a genuinely-stuck task parks for the operator with its work
+> intact instead of ending the run.
+
 ---
 
 ## Out of scope

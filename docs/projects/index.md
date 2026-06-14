@@ -19,7 +19,7 @@ its `spec.md`.
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
-| [14-product-team-agents](14-product-team-agents/spec.md) | In Progress | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (execution observability parity):** orchestrated runs do real work but stream nothing and let the heartbeat go stale mid-run; make codex AND claude role activity observable on the cockpit at first-class parity with the legacy `/work` runner. |
+| [14-product-team-agents](14-product-team-agents/spec.md) | In Progress | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (observability + auto-merge)** and **Phase 11 (orchestration resilience):** Phase 10 makes codex AND claude role activity observable on the cockpit (and reuses the stream as the finalizer transcript so clean runs auto-merge); Phase 11 fixes two failure modes the overnight project-17 run exposed — gate rejections that discard their feedback (QA retried blindly, then blocked), and a server restart that orphans a run instead of resuming it. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Not Started | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
@@ -261,6 +261,17 @@ explicit context handoff.
   an operator (reversing the Phase 8 deliberate hold; merge stays gated, never self-merge).
   Triggered by the 2026-06-14 observation that "codex writing tests" showed nothing in the
   cockpit stream and didn't register for the heartbeat.
+- **Phase 11 — orchestration resilience (reopened 2026-06-14):** the overnight project-17 run
+  surfaced two structural failure modes. (A) Gate rejections discard the feedback that would fix
+  them: QA fed already-redacted placeholders as test inputs, the tech-lead rejected with precise
+  notes, and the orchestrator retried the whole workflow three times with identical inputs and
+  no feedback (`team-task-workflow.ts:196`, `orch-attempt-cap.ts:50`) before blocking the entire
+  run. (B) A server restart orphaned the run instead of resuming it: `reconcileOrphans`
+  (`mutations-log.ts:45`) blindly flips a `running` mutation to `failed/orphaned`, the Phase 3
+  `reconstructRun` is dead code, `TaskRunRecord`s are never persisted, and a double-terminal
+  record results. Phase 11 threads rejection feedback into corrective retries (QA/coder revise
+  *with* the notes), parks a genuinely-stuck task instead of killing the run, persists run state,
+  and resumes a restarted run from durable state with exactly one terminal.
 - **Provenance:** 2026-06-05 product-team design extending projects 08 and 12, merged with
   the 2026-06-07 Jarvis-orchestrated-work idea. The merged scope makes Jarvis the workflow
   owner rather than a launcher for one long `/work --auto` process.
