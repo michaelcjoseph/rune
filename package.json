@@ -12,7 +12,8 @@
     "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts",
     "intent-scan": "tsx --env-file-if-exists=.env.local scripts/run-intent-scan.ts",
     "library-backfill": "tsx --env-file-if-exists=.env.local scripts/library-backfill.ts",
-    "dispatch-review": "tsx --env-file-if-exists=.env.local scripts/dispatch-review.ts"
+    "dispatch-review": "tsx --env-file-if-exists=.env.local scripts/dispatch-review.ts",
+    "acceptance:orchestrated": "tsx --env-file-if-exists=.env.local src/jobs/__acceptance__/orchestrated-live.acceptance.ts"
   },
   "engines": {
     "node": ">=22"

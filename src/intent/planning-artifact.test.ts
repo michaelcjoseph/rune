@@ -26,6 +26,7 @@ const PLANNED: Extract<PlanningRolesOutcome, { kind: 'planned' }> = {
   techSpec: 'Pure core + REST + card.',
   tasks: TASKS,
   context: '# Project Context: Streak tracker\n\n## Current State\n\nPlanning complete.',
+  codexCritiqueSkipped: false,
 };
 
 describe('sizedTasksToMarkdown', () => {

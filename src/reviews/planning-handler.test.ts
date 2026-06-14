@@ -154,6 +154,7 @@ describe('handlePlanningTurn — ready turn (role flow authors the spec)', () =>
     techSpec: 'Tech spec body.',
     tasks: SIZED,
     context: '# Project Context: Role-planned project\n\n## Current State\n\nSeeded.',
+    codexCritiqueSkipped: false,
   };
 
   it('runs the role flow on a ready brief and transitions to spec-proposed', async () => {

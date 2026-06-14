@@ -24,6 +24,7 @@
  */
 
 import { seedProjectContext } from './project-context.js';
+import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.js';
 
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
  *  strategy"). Drives whether QA writes code tests, records a no-code-test
@@ -85,7 +86,7 @@ export interface SpecMatchResult {
   mismatches: string[];
 }
 
-/** The three injected planner-role seams. */
+/** The injected planner-role seams. */
 export interface PlanningRoleDeps {
   /** PM: judge specified-enough; on yes, write spec + assumptions; on no, name
    *  interview needs. */
@@ -102,6 +103,13 @@ export interface PlanningRoleDeps {
     techSpec: string;
     tasks: SizedTask[];
   }) => Promise<SpecMatchResult>;
+  /** Phase 9: the Jarvis-owned cross-model critique pass — runs AFTER the
+   *  spec/tech-spec match gate and BEFORE the context seed, refining the
+   *  assembled artifacts before the human approval gate. Optional: when absent
+   *  the planner skips the critique (plan unchanged) — backward-compatible for
+   *  callers that predate Phase 9. The production binding wires
+   *  `runPlanningCritique` (planning-critique.ts). */
+  critiquePlan?: (plan: PlanCritique) => Promise<PlanningCritiqueResult>;
 }
 
 export interface RunPlannerInput {
@@ -130,6 +138,9 @@ export type PlanningRolesOutcome =
       techSpec: string;
       tasks: SizedTask[];
       context: string;
+      /** Phase 9: true when the cross-model critique degraded to the Claude pass
+       *  alone (Codex unavailable). Surfaced so the planning record can note it. */
+      codexCritiqueSkipped: boolean;
     };
 
 /**
@@ -186,7 +197,8 @@ export async function runPlannerRoles(
   });
 
   // Gate 2: PM-flagged spec/tech-spec drift → surface it, do NOT pass it through
-  // and do NOT seed context (planning did not complete).
+  // and do NOT seed context (planning did not complete). The critique never
+  // runs on a mismatched plan — it sharpens a coherent plan, not a broken one.
   if (!review.match) {
     return {
       kind: 'spec-mismatch',
@@ -198,29 +210,52 @@ export async function runPlannerRoles(
     };
   }
 
-  // Planning complete → seed the initial context.md. `firstParagraph` skips
-  // heading lines, so it lands on the product description even though `spec`
-  // now carries an appended Assumptions section.
-  const firstTask = techLead.tasks[0];
+  // Phase 9: cross-model critique pass over the assembled spec/tech-spec/tasks,
+  // AFTER the match gate and BEFORE the context seed, so its revision feeds both
+  // the seed and the human approval surface (every critique change stays
+  // human-gated). Optional seam: when absent the plan passes through unchanged.
+  let critiquedSpec = spec;
+  let critiquedTechSpec = techLead.techSpec;
+  let critiquedTasks = techLead.tasks;
+  let codexCritiqueSkipped = false;
+  if (deps.critiquePlan) {
+    const critique = await deps.critiquePlan({
+      spec,
+      techSpec: techLead.techSpec,
+      tasks: techLead.tasks,
+    });
+    // Re-guarantee the Assumptions section in case the critique reshaped the
+    // spec body (req 6 holds regardless of how the critic formatted its output).
+    critiquedSpec = withAssumptionsSection(critique.plan.spec, assumptions);
+    critiquedTechSpec = critique.plan.techSpec;
+    critiquedTasks = critique.plan.tasks;
+    codexCritiqueSkipped = critique.codexSkipped;
+  }
+
+  // Planning complete → seed the initial context.md from the CRITIQUED artifacts.
+  // `firstParagraph` skips heading lines, so it lands on the product description
+  // even though `spec` carries an appended Assumptions section.
+  const firstTask = critiquedTasks[0];
   const context = seedProjectContext({
     product: input.product,
     projectTitle: title,
-    specSummary: firstParagraph(spec),
+    specSummary: firstParagraph(critiquedSpec),
     assumptions,
     // The tech spec seeds the Interfaces & Contracts section; the Phase 3 update
     // path refines it as tasks establish concrete contracts.
-    interfaces: techLead.techSpec,
+    interfaces: critiquedTechSpec,
     firstTaskHandoff: firstTask ? `Start with: ${firstTask.text}` : undefined,
   });
 
   return {
     kind: 'planned',
     title,
-    spec,
+    spec: critiquedSpec,
     assumptions,
-    techSpec: techLead.techSpec,
-    tasks: techLead.tasks,
+    techSpec: critiquedTechSpec,
+    tasks: critiquedTasks,
     context,
+    codexCritiqueSkipped,
   };
 }
 

@@ -313,6 +313,33 @@ describe('ai/codex', () => {
       expect(result).toBe(true);
     });
 
+    it('returns true when the "Logged in" marker arrives on stderr (current CLI writes it there)', async () => {
+      // Regression: the Codex CLI emits "Logged in using ChatGPT" on STDERR
+      // (stdout empty). The probe must read both streams or it false-negatives
+      // and fail-closes the entire orchestrated path.
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(
+        createChild({ stdout: '', stderr: 'Logged in using ChatGPT', code: 0 }),
+      );
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(true);
+    });
+
+    it('returns false when "Not logged in" arrives on stderr (no false-positive)', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(
+        createChild({ stdout: '', stderr: 'Not logged in', code: 0 }),
+      );
+
+      const { isCodexLoggedIn } = await import('./codex.js');
+      const result = await isCodexLoggedIn();
+
+      expect(result).toBe(false);
+    });
+
     it('returns false when stdout does not contain "Logged in" (exit 0)', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockReturnValue(
