@@ -85,6 +85,56 @@ describe('config', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Project 14 (Phase 8) — PRODUCTS_CONFIG_FILE env redirect. The live-acceptance
+  // harness points the orchestrated applier at a throwaway products.json without
+  // editing the committed policies/products.json. WRITE-FIRST: the getter ignores
+  // the env var today, so the override assertion is red until the redirect lands.
+  // -------------------------------------------------------------------------
+  describe('PRODUCTS_CONFIG_FILE env redirect (Phase 8)', () => {
+    const REQUIRED = {
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_USER_ID: '12345',
+      VAULT_DIR: '/tmp/vault',
+    };
+
+    it('defaults to policies/products.json under PROJECT_ROOT when unset', async () => {
+      Object.assign(process.env, REQUIRED);
+      delete process.env['PRODUCTS_CONFIG_FILE'];
+      const { default: config } = await import('./config.js');
+      expect(config.PRODUCTS_CONFIG_FILE).toMatch(/\/policies\/products\.json$/);
+    });
+
+    it('honors a PRODUCTS_CONFIG_FILE override (absolute path as-is)', async () => {
+      Object.assign(process.env, REQUIRED, {
+        PRODUCTS_CONFIG_FILE: '/tmp/p14-accept/products.json',
+      });
+      const { default: config } = await import('./config.js');
+      expect(config.PRODUCTS_CONFIG_FILE).toBe('/tmp/p14-accept/products.json');
+    });
+
+    it('expands a leading ~ in the PRODUCTS_CONFIG_FILE override', async () => {
+      Object.assign(process.env, REQUIRED, {
+        PRODUCTS_CONFIG_FILE: '~/tmp/products.json',
+      });
+      const { default: config } = await import('./config.js');
+      const { homedir } = await import('node:os');
+      expect(config.PRODUCTS_CONFIG_FILE).toBe(`${homedir()}/tmp/products.json`);
+    });
+
+    it('WORKTREE_ROOT is a getter: an override set AFTER import is still honored', async () => {
+      Object.assign(process.env, REQUIRED);
+      delete process.env['WORKTREE_ROOT'];
+      const { default: config } = await import('./config.js');
+      // Default before any override.
+      expect(config.WORKTREE_ROOT).toMatch(/\/\.worktrees$/);
+      // The harness redirects worktrees AFTER config is first imported — a
+      // getter (not an eager property) must reflect the late override.
+      process.env['WORKTREE_ROOT'] = '/tmp/p14-accept/worktrees';
+      expect(config.WORKTREE_ROOT).toBe('/tmp/p14-accept/worktrees');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Project 15 (P0.2) — work-run finalizer timing constants. WRITE-FIRST: the
   // five constants don't exist in config.ts yet, so they read `undefined` and
   // every assertion below is red until the P0.2 task adds them via

@@ -1,12 +1,4 @@
 {
-  "accept-demo": {
-    "_comment": "TEMPORARY project-14 Phase 8 live-acceptance target — REMOVE before commit",
-    "repoPath": "/tmp/p14-accept/demo-repo",
-    "baseBranch": "main",
-    "orchestratedMode": true,
-    "credentialsFile": "/tmp/p14-accept/no-credentials.env",
-    "egressAllowlist": []
-  },
   "aura": {
     "repoPath": "~/workspace/aura",
     "baseBranch": "main",

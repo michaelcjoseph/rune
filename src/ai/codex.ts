@@ -94,6 +94,7 @@ export async function isCodexLoggedIn(): Promise<boolean> {
   }
   return new Promise((resolve) => {
     let stdout = '';
+    let stderr = '';
     let resolved = false;
     const finish = (value: boolean): void => {
       if (resolved) return;
@@ -101,11 +102,14 @@ export async function isCodexLoggedIn(): Promise<boolean> {
       resolve(value);
     };
     try {
-      // stderr: 'ignore' rather than 'pipe' — the probe doesn't read stderr,
-      // and an open-but-unread stderr pipe can deadlock the child if it
-      // writes enough diagnostic output to fill the OS pipe buffer.
+      // Both streams are piped and drained: the current Codex CLI prints the
+      // "Logged in using ChatGPT" marker to STDERR (stdout empty), so reading
+      // stdout alone false-negatives and fail-closes the orchestrated path.
+      // Draining stderr (rather than 'ignore') also prevents the pipe-buffer
+      // deadlock the old comment warned about — `login status` emits a single
+      // short line, well under the OS buffer.
       const child = spawn(bin, ['login', 'status'], {
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       const timer = setTimeout(() => {
         child.kill('SIGTERM');
@@ -113,6 +117,9 @@ export async function isCodexLoggedIn(): Promise<boolean> {
       }, LOGIN_PROBE_TIMEOUT_MS);
       child.stdout.on('data', (data: Buffer) => {
         stdout += data;
+      });
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data;
       });
       child.on('error', () => {
         clearTimeout(timer);
@@ -122,7 +129,11 @@ export async function isCodexLoggedIn(): Promise<boolean> {
         clearTimeout(timer);
         // Start-anchored so "Not logged in" (the logged-out case) doesn't
         // false-positive against "Logged in" (the substring it contains).
-        finish(code === 0 && /^Logged in/i.test(stdout.trim()));
+        // Checked per-stream so a logged-out marker on one stream can't be
+        // rescued by unrelated text on the other.
+        const loggedIn =
+          /^Logged in/i.test(stdout.trim()) || /^Logged in/i.test(stderr.trim());
+        finish(code === 0 && loggedIn);
       });
     } catch {
       finish(false);

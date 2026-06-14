@@ -154,9 +154,12 @@ const config = {
 
   /** Per-product config (repo path, base branch, credentials file, egress
    *  allowlist) consulted by `src/jobs/sandbox-runtime.ts`. Committed repo file,
-   *  same shelf as `model-policy.json`. */
+   *  same shelf as `model-policy.json`. Overridable via the `PRODUCTS_CONFIG_FILE`
+   *  env var (mirrors `WORKTREE_ROOT`) so the project-14 live-acceptance harness
+   *  can point the orchestrated applier at a throwaway products.json without
+   *  editing the committed file; defaults to `<PROJECT_ROOT>/policies/products.json`. */
   get PRODUCTS_CONFIG_FILE() {
-    return join(PROJECT_ROOT, 'policies', 'products.json');
+    return optional('PRODUCTS_CONFIG_FILE') ?? join(PROJECT_ROOT, 'policies', 'products.json');
   },
 
   /** Declarative escalation policy (project 08). Same shelf as
@@ -171,8 +174,14 @@ const config = {
    *  per product (`<WORKTREE_ROOT>/<product>/<project>`). Defaults to
    *  `<PROJECT_ROOT>/.worktrees` (gitignored); override with the `WORKTREE_ROOT`
    *  env var to point at a host-level location (useful when running multiple
-   *  jarvis instances or when keeping worktrees off the indexed repo tree). */
-  WORKTREE_ROOT: optional('WORKTREE_ROOT') ?? join(PROJECT_ROOT, '.worktrees'),
+   *  jarvis instances or when keeping worktrees off the indexed repo tree).
+   *  A getter (not an eager property) so a process that sets the env var after
+   *  this module is first imported — e.g. the project-14 live-acceptance harness
+   *  redirecting worktrees into a temp dir — still sees the override; matches
+   *  the `PRODUCTS_CONFIG_FILE` pattern. */
+  get WORKTREE_ROOT() {
+    return optional('WORKTREE_ROOT') ?? join(PROJECT_ROOT, '.worktrees');
+  },
 
   /** Journal-to-intent proposal queue (project 08) — runtime state, gitignored. */
   get INTENT_PROPOSAL_QUEUE_FILE() {
