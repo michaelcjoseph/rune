@@ -601,6 +601,113 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval
 > gate, no new trigger.
 
+## Phase 10 - Execution observability parity (reopened 2026-06-14)
+
+> Depends on: Phase 5, 8. Reopens the project. Phase 8 made orchestrated `/work` do real
+> work; Phase 10 makes that work observable. Today the applier emits only a "starting" `log`
+> (`orchestrated-work-runner.ts:347`) and one terminal event (`:373`), with the whole loop
+> inside one `await runOrchestration` — so codex/claude role activity never reaches the
+> cockpit stream and the heartbeat goes stale mid-run (it advances only on `output`/`activity`
+> events, `transport/mutations.ts:364`). Two goals: (1) stream role activity and advance the
+> heartbeat for BOTH executors at first-class parity with the legacy work-runner
+> (`work-runner.ts:1284-1313`); (2) reuse that stream as the durable transcript so a clean
+> orchestrated run auto-merges through the Project 15 gated finalizer instead of holding for an
+> operator — reversing the Phase 8 deliberate hold. See spec.md §"Phase 10" and requirements
+> 36-46.
+
+### Tests (write first)
+
+- [ ] Active-harm probe test: assert whether a working orchestrated run (no `output`/`activity`
+      for the quiet window) is currently cancelled/nudged by the quiet→cancel / quiet-nudge
+      backstop. Pins the finding so the fix is regression-guarded either way.
+- [ ] Sink-pump test: the orchestrated applier's `apply()` yields ≥1 `activity`/`output` event
+      BETWEEN the "starting" event and the terminal event when the injected workflow reports
+      role activity — the regression guard against the current two-event gap (it must fail on
+      today's runner).
+- [ ] Heartbeat-advance test: a long-running injected role session advances
+      `lastHeartbeatAt`/`lastOutputAt` mid-run; supervision never reads the working run as quiet.
+- [ ] Codex-stream test: `runCodex` with an injected `onStdout`/`onEvent` callback fires
+      per-line as data arrives (not only at `close`); an empty run fires none; if `--json` is
+      chosen, a structured event maps to one display line.
+- [ ] Claude-artifact-stream test: `spawnClaudeAgent` forwards stream-json envelopes as
+      `output`/`activity` through the shared `streamJsonToDisplay` mapping — parity with the
+      legacy work-runner, no plain-stdout accumulation.
+- [ ] Role-transition test: `runTeamTaskWorkflow` emits a labeled event per role stage
+      (QA → tech-lead review → coder → reviewer → designer → PM wrap-up) and per verdict/objection.
+- [ ] Provider-attribution test: every emitted activity line carries role + provider + model
+      alias and is path/secret-scrubbed.
+- [ ] Quiet-backstop-safe test: an orchestrated run that is genuinely working (streaming
+      activity) is NOT tripped by the quiet-nudge / quiet→cancel backstop — streaming makes the
+      active-harm probe test (above) go green.
+- [ ] Substrate test: a completed orchestrated run writes `transcript.jsonl`, `summary.json`
+      (well-formed `WorkRunSummary`), and a computed work-product classification under
+      `WORK_RUNS_DIR/<runId>/`.
+- [ ] Classification test: `computeWorkProduct`/`classifyWorkProduct` over an orchestrated
+      branch with commits and `tasksRemaining == 0` yields `branch-complete`; a remaining task
+      yields `partial`; a clean tree yields `noop`.
+- [ ] Auto-merge test: a clean `branch-complete` orchestrated run invokes `runFinalizer`
+      (`gated-merge`), the gate passes, and the branch merges `--no-ff` + pushes under the
+      per-base merge lock — no operator hold.
+- [ ] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and
+      does NOT touch the base branch.
+- [ ] Objection-hold test: an open objection-class finding holds the branch with the handoff
+      payload recorded and never merges (reqs 17, 25).
+- [ ] No-stub regression test: the orchestrated `finalize` `unavailable` stub
+      (`orchestrated-work-runner.ts:234`) is gone and cannot reappear without failing.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> The event sink is the spine; the executor-streaming items are what put live codex/claude
+> activity on it, AND they double as the transcript source the finalizer needs — so streaming
+> and auto-merge share one foundation. Land the section as a unit (partial wiring leaves the
+> stream half-dark or the run stuck on an operator hold). The phase is not done until the live
+> acceptance below proves BOTH a non-stale heartbeat and a clean run merging through the gate.
+
+- [ ] Verify the active-harm hypothesis and record it (spec Phase 10 work item 1): can the
+      quiet→cancel backstop kill a working orchestrated run today? Reframes priority if yes.
+- [ ] Add an injected `emit(event)` sink to `OrchestrationDeps`; convert the applier's single
+      `await runOrchestration` into a queue-drained pump (`apply()` races the orchestration
+      promise and yields queued events — mirror the work-runner `enqueue`/generator pattern).
+      Thread `emit` through `runProjectOrchestration` and `runTeamTaskWorkflow`.
+- [ ] Emit orchestration-granularity events: task selected, attempt start/retry, closeout
+      commit sha, finalizer handoff/hold, block reason.
+- [ ] Emit role-transition + verdict/objection events from the team-task workflow.
+- [ ] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.
+      **Decide** raw-line vs `codex exec --json` (recommend `--json` + a `streamJsonToDisplay`
+      analog); record the choice and fallback.
+- [ ] Stream the claude artifact path: route `spawnClaudeAgent` through
+      `--output-format stream-json --verbose` + the shared display mapping for parity.
+- [ ] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
+      up as `activity`/`output` while the session is alive (keeps the heartbeat advancing).
+- [ ] Attribute every emitted line with role + provider + model, scrubbed via the existing
+      `tool-labels`/`redactSecrets` path.
+- [ ] Verify the cockpit projection (`server/webview.ts`) populates the orchestrated run's
+      `lastOutput`/transcript tail and the project card renders role activity.
+- [ ] Persist the streamed events to a durable transcript sink (`createTranscriptSink` →
+      `WORK_RUNS_DIR/<runId>/transcript.jsonl`), mirroring `work-runner.ts:399`.
+- [ ] Produce work-product classification over the orchestrated branch (`computeWorkProduct` +
+      `classifyWorkProduct`) and write `summary.json` (`buildSummary` → `WorkRunSummary`).
+- [ ] Wire `runFinalizer` in `gated-merge` mode (`work-run-finalizer.ts:283`), replacing the
+      `unavailable` stub: bind `classify`/`flushTranscript`/`writeSummary`/`appendIndexRow`/
+      `recordPhase`/`readLastPhase` and `gate` = `withBaseBranchLock` + `runGate` over the
+      product's `validationCommands`, plus `mergeBranch`/`pushBranch`/`deleteBranch`.
+- [ ] Preserve the invariants: failed gate or open objection holds branch-complete with the
+      handoff payload recorded; merge only ever through the finalizer's gates (reqs 17, 25).
+- [ ] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
+      ≥N intermediate stream events from BOTH executors and `lastHeartbeatAt` advanced during
+      execution; (b) a clean run drives all the way to a MERGED base branch (gated); (c) a
+      deliberately gate-failing run records a hold. Supersedes the Phase 8 branch-complete-held
+      acceptance — stub-free proof both the observability and auto-merge gaps are closed.
+- [ ] Record the transcript/finalizer-substrate decisions at closeout (e.g. the WORK_RUNS_DIR
+      layout reuse and any orchestrated-specific gate config), and reverse the Phase 8
+      deliberate-hold ADR note.
+
+> **User-reachability:** YES — after this phase, an orchestrated run streams live role activity
+> (codex AND claude, attributed) to the cockpit card, keeps the heartbeat alive, and — when
+> clean — lands on its base branch through the same gated finalizer a legacy `/work` run uses,
+> with no operator merge step.
+
 ---
 
 ## Out of scope

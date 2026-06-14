@@ -19,7 +19,7 @@ its `spec.md`.
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
-| [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. **Phase 8 live execution binding DONE 2026-06-13** (`npm run acceptance:orchestrated` drove a real task to a real diff with live models — proof `live-acceptance-6abf35cf.md`); **Phase 9** (planning critique pass) DONE; orchestrated mode re-enabled 2026-06-13. |
+| [14-product-team-agents](14-product-team-agents/spec.md) | In Progress | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (execution observability parity):** orchestrated runs do real work but stream nothing and let the heartbeat go stale mid-run; make codex AND claude role activity observable on the cockpit at first-class parity with the legacy `/work` runner. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Not Started | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
@@ -214,7 +214,7 @@ hand-back to the finalizer after the human acts.
   release.
 - **Task breakdown & test plan:** see [tasks.md](13-work-run-monitoring/tasks.md) and [test-plan.md](13-work-run-monitoring/test-plan.md). Test-first per phase.
 
-## 14-product-team-agents — Done
+## 14-product-team-agents — In Progress (reopened 2026-06-14)
 
 [Spec](14-product-team-agents/spec.md)
 
@@ -247,6 +247,20 @@ explicit context handoff.
 - **Gate:** loop closure, not quality — a deterministic fixture project goes from planning to
   at least two orchestrated task runs, updates `context.md` between them, and hands off to the
   finalizer with no live model call or human merge requirement.
+- **Phase 10 — execution observability + auto-merge (reopened 2026-06-14):** orchestrated runs
+  do real work but do it blind. The applier emits only a "starting" log and one terminal event
+  (`orchestrated-work-runner.ts:347,373`), so codex/claude role activity never reaches the
+  cockpit stream and the supervision heartbeat goes stale mid-run (it advances only on
+  `output`/`activity` events the orchestrated path never emits — which also leaves a working run
+  exposed to the quiet→cancel backstop). Phase 10 plumbs an event sink through the orchestration
+  call stack, streams both executors (incremental `runCodex` + stream-json claude artifact
+  path), and attributes every line by role/provider/model — first-class parity with the legacy
+  `/work` runner. It then reuses that stream as the durable transcript so a clean orchestrated
+  run produces the full finalizer substrate (`transcript.jsonl`, `summary.json`, work-product
+  classification) and auto-merges through the Project 15 gated finalizer instead of holding for
+  an operator (reversing the Phase 8 deliberate hold; merge stays gated, never self-merge).
+  Triggered by the 2026-06-14 observation that "codex writing tests" showed nothing in the
+  cockpit stream and didn't register for the heartbeat.
 - **Provenance:** 2026-06-05 product-team design extending projects 08 and 12, merged with
   the 2026-06-07 Jarvis-orchestrated-work idea. The merged scope makes Jarvis the workflow
   owner rather than a launcher for one long `/work --auto` process.
