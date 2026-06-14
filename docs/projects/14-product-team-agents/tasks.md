@@ -541,44 +541,66 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [ ] Sequential-order test: the critique runs Claude (Opus 4.8) first over the assembled
+- [x] Sequential-order test: the critique runs Claude (Opus 4.8) first over the assembled
       spec/tech-spec/tasks, then Codex (GPT-5.5) over Claude's revised output; the Codex seam
       receives the Claude-revised artifacts, not the originals. Model calls injected.
-- [ ] Single-pass test: each model is invoked exactly once — the pass does not loop to
-      convergence.
-- [ ] Codex-degrade test: when `probeCodexProvider` reports unavailable, the critique runs the
+      (`planning-critique.test.ts` "sequential cross-model order".)
+- [x] Single-pass test: each model is invoked exactly once — the pass does not loop to
+      convergence. (`planning-critique.test.ts` "invokes each model exactly once".)
+- [x] Codex-degrade test: when `probeCodexProvider` reports unavailable, the critique runs the
       Claude pass alone, records that the Codex pass was skipped, and returns the Claude-revised
-      plan; planning does not block.
-- [ ] Order-in-flow test: the critique runs after the PM spec/tech-spec match gate and before
-      `context.md` is seeded, over the same in-memory artifacts.
-- [ ] No-op / fail-closed test: a critique that yields no change returns the assembled plan
+      plan; planning does not block. (`planning-critique.test.ts` "Codex degrade".)
+- [x] Order-in-flow test: the critique runs after the PM spec/tech-spec match gate and before
+      `context.md` is seeded, over the same in-memory artifacts. (`planning-critique.test.ts`
+      "runPlannerRoles integration" — runs after gate 2, NOT on gate-1/gate-2 exits.)
+- [x] No-op / fail-closed test: a critique that yields no change returns the assembled plan
       unchanged and still seeds context; an unparseable critic reply falls back to the
-      pre-critique plan rather than dropping content.
-- [ ] Approval-gate test: critique-introduced changes are present in the artifact the human
+      pre-critique plan rather than dropping content. (`planning-critique.test.ts` "no-op and
+      fail-closed" + the bounded-parser "NO block bleed-through" / nested-fence tests.)
+- [x] Approval-gate test: critique-introduced changes are present in the artifact the human
       approval surface renders, so every change is human-gated before scaffold.
-- [ ] Confirm red before implementation.
+      (`planning-critique.test.ts` integration — the `planned` outcome spec/techSpec carry the
+      critique revision.)
+- [x] Confirm red before implementation. (Confirmed 2026-06-13: suite red on module-not-found
+      for `./planning-critique.js` before the module existed.)
 
 ### Implementation
 
-- [ ] Add a `critiquePlan({spec, techSpec, tasks})` seam to the planner-role deps returning
+- [x] Add a `critiquePlan({spec, techSpec, tasks})` seam to the planner-role deps returning
       revised `{spec, techSpec, tasks}`, injected like the other role seams so the flow stays
-      fixture-testable with no live model call.
-- [ ] Wire the sequential two-model run: Claude (Opus 4.8) critique+revise, then Codex
+      fixture-testable with no live model call. (Optional `critiquePlan?` on `PlanningRoleDeps`;
+      pure `runPlanningCritique` core in `planning-critique.ts`.)
+- [x] Wire the sequential two-model run: Claude (Opus 4.8) critique+revise, then Codex
       (GPT-5.5) critique+revise over Claude's output, reusing the `defaultRoleModelCall` text
       round-trip and the `runCodex` / `probeCodexProvider` availability gate from `src/ai/codex.ts`.
-- [ ] Author the critique instruction prompt (restate goal → scope-achieves-goal + fix →
+      (`buildProductionCritiquePlan` in `planning-roles-wiring.ts` — both seams fail-closed /
+      non-throwing so a critic miss degrades to the pre-critique plan.)
+- [x] Author the critique instruction prompt (restate goal → scope-achieves-goal + fix →
       task-list-comprehensive-for-done-and-usable + add → critique spec/tasks + fix), parsed
       into revised artifacts and fail-closed to the pre-critique plan on an unparseable reply.
-- [ ] Insert the pass into `runPlannerRoles` after the PM spec/tech-spec match gate (gate 2)
+      (`CRITIQUE_SYSTEM`/`CRITIQUE_INSTRUCTION` + `parseCritiqueReply` with bounded fenced-block
+      extraction so the tech-spec can't bleed into the spec.)
+- [x] Insert the pass into `runPlannerRoles` after the PM spec/tech-spec match gate (gate 2)
       and before the context seed; the revised artifacts feed both the seed and the approval
-      surface.
-- [ ] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
-      pass on the planning record.
+      surface. (Wired; live via `planning-handler.ts` → `defaultPlanningRoleDeps()`.)
+- [x] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
+      pass on the planning record. (`codexSkipped` → `codexCritiqueSkipped` on the `planned`
+      outcome.)
 - [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
       **only after the Phase 8 live-acceptance harness exits green** — the green gate is the
       precondition, so the sequence is autonomous: live gate passes → flip the flag → the
       acceptance harness re-runs against the real `jarvis` product as the final confirmation.
       Reverses the 2026-06-11 `e8424bd` revert to legacy `/work`.
+      (BLOCKED ON HUMAN 2026-06-13: the stated final confirmation — "the acceptance harness
+      re-runs against the real `jarvis` product" — cannot run headless from this feature branch.
+      The confirmation target `18-agent-activity-label` exists only on THIS branch, not on
+      jarvis `main`, so an orchestrated run against the `jarvis` product (repoPath = the main
+      checkout) would `findProjectDir`-miss it. Flipping `orchestratedMode: true` on jarvis to
+      ship orchestrated-by-default is also a go-live decision the operator should own — the
+      orchestrated path has one (toy) live run, while the spec's own legacy-removal deferral
+      wants N consecutive real runs. Parked for the operator: merge this branch to main, run
+      `npx tsx scripts/run-orchestrated-acceptance.ts --project 18-agent-activity-label --product jarvis`,
+      then flip the flag if green.)
 
 > **User-reachability:** the existing `/plan <product>` trigger now runs the critique before
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval

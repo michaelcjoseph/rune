@@ -20,6 +20,8 @@
 import { randomUUID } from 'node:crypto';
 
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
+import { runCodex, probeCodexProvider } from '../ai/codex.js';
+import { getBaseEnv } from '../jobs/credential-injector.js';
 import { composeRoleContext, type RoleContext, type RoleName } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import type {
@@ -30,6 +32,11 @@ import type {
   TechLeadResult,
   TestStrategy,
 } from './planning-roles.js';
+import {
+  runPlanningCritique,
+  type PlanCritique,
+  type PlanningCritiqueResult,
+} from './planning-critique.js';
 
 const log = createLogger('planning-roles-wiring');
 
@@ -314,6 +321,218 @@ function parsePmReview(text: string): SpecMatchResult {
 }
 
 // ---------------------------------------------------------------------------
+// Planning critique pass (Phase 9) — Jarvis-owned neutral cross-model step
+// ---------------------------------------------------------------------------
+
+/** Neutral system framing — the critique is NOT a role; it critiques the whole
+ *  plan because no role critiques its own write-up. */
+const CRITIQUE_SYSTEM = [
+  'You are a neutral senior reviewer hardening a project plan before a human approves it.',
+  'You are not any single role — you critique the whole plan (product spec, tech spec, and',
+  'task breakdown together), because the question spans artifacts no single role owns.',
+].join('\n');
+
+const CRITIQUE_INSTRUCTION = [
+  'Below are the assembled product spec, tech spec, and task breakdown. Run this critique IN ORDER:',
+  '1. Restate, in one or two sentences, the goal the spec and tasks define.',
+  '2. Check whether the defined scope actually ACHIEVES that goal. Fix the scope if it falls short.',
+  '3. Check whether the task list is comprehensive enough that completing EVERY task leaves a',
+  '   project a real user can actually USE (done AND usable). Add the missing tasks if it is not.',
+  '4. Critique the spec and tasks for coherence and fix what you find.',
+  '',
+  'Then return the REVISED artifacts — even if you changed nothing (a no-op is fine). Emit EXACTLY',
+  'three fenced blocks, the JSON first and nothing after the last block. Keep each task object shaped',
+  'like the input tasks (id, text, optional phase, testStrategy one of',
+  'code-tests-required|docs-or-config-only|tests-as-deliverable, designerNeeded boolean, roles array):',
+  '```critique-tasks',
+  '{"tasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
+  '```',
+  '```critique-spec',
+  '<revised product spec markdown>',
+  '```',
+  '```critique-tech-spec',
+  '<revised tech spec markdown>',
+  '```',
+].join('\n');
+
+/** Render the assembled plan into the critique prompt body. */
+function renderPlanForCritique(plan: PlanCritique): string {
+  const taskJson = JSON.stringify({ tasks: plan.tasks }, null, 2);
+  return [
+    '## Product spec',
+    '',
+    plan.spec,
+    '',
+    '## Tech spec',
+    '',
+    plan.techSpec,
+    '',
+    '## Tasks (JSON)',
+    '',
+    '```json',
+    taskJson,
+    '```',
+  ].join('\n');
+}
+
+/**
+ * Extract a fenced block body within a bounded window [opening fence, hardEnd).
+ * Greedy to the LAST closing fence INSIDE that window, so nested ``` code fences
+ * in the body survive while a SUBSEQUENT block can't bleed in. (Plain
+ * `extractFencedText` is greedy to the last fence in the WHOLE reply — correct
+ * only for the final block; the critique reply has two markdown blocks, so the
+ * earlier one must be bounded before the next block's opening fence.)
+ */
+function extractFencedBlock(text: string, tag: string, hardEnd: number): string | null {
+  const open = new RegExp('```' + tag + '[^\\n]*\\n').exec(text);
+  if (!open || open.index >= hardEnd) return null;
+  const bodyStart = open.index + open[0].length;
+  const region = text.slice(bodyStart, hardEnd);
+  const close = region.lastIndexOf('\n```');
+  if (close < 0) return null;
+  const body = region.slice(0, close).trim();
+  return body.length > 0 ? body : null;
+}
+
+/**
+ * Parse a critic reply into a revised plan, or `null` when NO recognizable block
+ * is present (unparseable → the orchestrator keeps the pre-critique plan rather
+ * than dropping content). A partially-parseable reply keeps the `fallback`
+ * value for any artifact whose block is missing/malformed — the critique can
+ * sharpen, never silently delete.
+ *
+ * The reply order is critique-tasks (JSON) → critique-spec (md) → critique-tech-spec
+ * (md). The spec block is bounded to BEFORE the tech-spec opening fence so the
+ * tech-spec markdown can't bleed into the spec field; the tech-spec block (last)
+ * is greedy to the reply's end.
+ */
+export function parseCritiqueReply(text: string, fallback: PlanCritique): PlanCritique | null {
+  const techOpen = /```critique-tech-spec[^\n]*\n/.exec(text);
+  const specHardEnd = techOpen ? techOpen.index : text.length;
+  const spec = extractFencedBlock(text, 'critique-spec', specHardEnd);
+  const techSpec = extractFencedBlock(text, 'critique-tech-spec', text.length);
+  const tasksJson = extractFencedJson(text, 'critique-tasks');
+  if (spec === null && techSpec === null && tasksJson === null) return null;
+
+  let tasks = fallback.tasks;
+  if (tasksJson && typeof tasksJson === 'object' && Array.isArray((tasksJson as { tasks?: unknown }).tasks)) {
+    try {
+      const parsed = (tasksJson as { tasks: unknown[] }).tasks.map(parseSizedTask);
+      if (parsed.length > 0) tasks = parsed;
+    } catch {
+      // Malformed task objects → keep the fallback tasks rather than dropping them.
+      tasks = fallback.tasks;
+    }
+  }
+  return {
+    spec: spec ?? fallback.spec,
+    techSpec: techSpec ?? fallback.techSpec,
+    tasks,
+  };
+}
+
+/** Injectable critique model seams (tests fake these; production uses the live
+ *  Claude + Codex calls). `codexCall` returns null on an executor failure
+ *  (fail-closed → the orchestrator keeps the Claude-revised plan). */
+export interface CritiquePlanSeams {
+  claudeCall?: (system: string, message: string) => Promise<string>;
+  codexCall?: (message: string) => Promise<string | null>;
+  isCodexAvailable?: () => Promise<boolean>;
+}
+
+/** Non-throwing: a Claude critique miss (CLI error or empty output) degrades to
+ *  the pre-critique plan — the critique is a best-effort hardening pass, it must
+ *  never hard-block a `/plan` turn. Returns '' on failure so `parseCritiqueReply`
+ *  yields null and the orchestrator keeps the prior plan. */
+const defaultCritiqueClaudeCall = async (system: string, message: string): Promise<string> => {
+  const sessionId = randomUUID();
+  try {
+    const result = await askClaudeWithContext(message, sessionId, system, {
+      opLabel: 'planner:critique-claude',
+    });
+    if (result.error) {
+      log.warn('planning critique (claude) failed; degrading to the pre-critique plan', {
+        error: result.error,
+      });
+      return '';
+    }
+    if (!result.text) {
+      log.warn('planning critique (claude) returned empty output; degrading to the pre-critique plan');
+      return '';
+    }
+    return result.text;
+  } catch (err) {
+    log.warn('planning critique (claude) threw; degrading to the pre-critique plan', {
+      error: (err as Error).message,
+    });
+    return '';
+  } finally {
+    cleanupSession(sessionId);
+  }
+};
+
+const defaultCritiqueCodexCall = async (message: string): Promise<string | null> => {
+  // read-only sandbox: the critique only returns text, it never edits the repo.
+  // Slim env (defense-in-depth): a text-only internal critique has no need for
+  // Jarvis's Telegram/HTTP secrets — pass only what the Codex CLI itself needs.
+  let result;
+  try {
+    result = await runCodex(message, {
+      model: 'gpt-5.5',
+      sandboxMode: 'read-only',
+      env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+    });
+  } catch (err) {
+    log.warn('planning critique (codex) threw; degrading to the Claude-revised plan', {
+      error: (err as Error).message,
+    });
+    return null;
+  }
+  if (result.error) {
+    log.warn('planning critique (codex) failed; degrading to the Claude-revised plan', {
+      error: result.error,
+    });
+    return null;
+  }
+  return result.text;
+};
+
+/**
+ * Build the production `critiquePlan` seam: the sequential Claude→Codex critique
+ * over `runPlanningCritique`, with real model calls + fenced-artifact parsing.
+ * Every model seam is injectable so the wiring is unit-testable with no live call.
+ */
+export function buildProductionCritiquePlan(
+  seams: CritiquePlanSeams = {},
+): (plan: PlanCritique) => Promise<PlanningCritiqueResult> {
+  const claudeCall = seams.claudeCall ?? defaultCritiqueClaudeCall;
+  const codexCall = seams.codexCall ?? defaultCritiqueCodexCall;
+  const isCodexAvailable =
+    seams.isCodexAvailable ?? (async () => (await probeCodexProvider()).available);
+
+  return (plan) =>
+    runPlanningCritique(plan, {
+      critiqueWithClaude: async (p) => {
+        const reply = await claudeCall(
+          CRITIQUE_SYSTEM,
+          `${CRITIQUE_INSTRUCTION}\n\n${renderPlanForCritique(p)}`,
+        );
+        return parseCritiqueReply(reply, p);
+      },
+      critiqueWithCodex: async (p) => {
+        // Codex has no separate system channel — fold CRITIQUE_SYSTEM into the
+        // single prompt so the injected seam and the production default receive
+        // the same self-contained message (no asymmetric double-prepend).
+        const reply = await codexCall(
+          `${CRITIQUE_SYSTEM}\n\n${CRITIQUE_INSTRUCTION}\n\n${renderPlanForCritique(p)}`,
+        );
+        return reply === null ? null : parseCritiqueReply(reply, p);
+      },
+      isCodexAvailable,
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Wiring factory
 // ---------------------------------------------------------------------------
 
@@ -360,5 +579,10 @@ export function defaultPlanningRoleDeps(
       });
       return parsePmReview(reply);
     },
+
+    // Phase 9: the Jarvis-owned cross-model critique pass (Claude → Codex,
+    // degrade-to-Claude when Codex is unavailable). Wired with the live model
+    // calls; runPlannerRoles invokes it after the spec/tech-spec match gate.
+    critiquePlan: buildProductionCritiquePlan(),
   };
 }
