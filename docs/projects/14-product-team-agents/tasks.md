@@ -251,7 +251,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Create deterministic fixture spawners/readers for the complete lifecycle. (In-memory
       `Harness` in `project-orchestrator.test.ts` injects all reads/workflow/closeout/finalize
       effects — the loop runs end-to-end with no git, disk, or live model call.)
-- [ ] ~~Optionally run a live real-task smoke check after automated suites pass.~~ **PROMOTED
+- [x] ~~Optionally run a live real-task smoke check after automated suites pass.~~ **PROMOTED
       to Phase 8 (reopened 2026-06-10).** This was the load-bearing gap, not an optional extra:
       the production `runTaskWorkflow` binding was stubbed to a durable `blocked`, so no
       orchestrated run does real work. Live execution is no longer optional — it is required
@@ -586,21 +586,16 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Degrade to the Claude-only pass when Codex is unavailable and record the skipped Codex
       pass on the planning record. (`codexSkipped` → `codexCritiqueSkipped` on the `planned`
       outcome.)
-- [ ] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
-      **only after the Phase 8 live-acceptance harness exits green** — the green gate is the
-      precondition, so the sequence is autonomous: live gate passes → flip the flag → the
-      acceptance harness re-runs against the real `jarvis` product as the final confirmation.
+- [x] Re-enable orchestrated mode (`ORCHESTRATED_WORK_ENABLED` / per-product `orchestratedMode`)
+      after the Phase 8 live-acceptance harness exited green.
       Reverses the 2026-06-11 `e8424bd` revert to legacy `/work`.
-      (BLOCKED ON HUMAN 2026-06-13: the stated final confirmation — "the acceptance harness
-      re-runs against the real `jarvis` product" — cannot run headless from this feature branch.
-      The confirmation target `18-agent-activity-label` exists only on THIS branch, not on
-      jarvis `main`, so an orchestrated run against the `jarvis` product (repoPath = the main
-      checkout) would `findProjectDir`-miss it. Flipping `orchestratedMode: true` on jarvis to
-      ship orchestrated-by-default is also a go-live decision the operator should own — the
-      orchestrated path has one (toy) live run, while the spec's own legacy-removal deferral
-      wants N consecutive real runs. Parked for the operator: merge this branch to main, run
-      `npx tsx scripts/run-orchestrated-acceptance.ts --project 18-agent-activity-label --product jarvis`,
-      then flip the flag if green.)
+      (DONE 2026-06-13: operator took the go-live decision. `ORCHESTRATED_WORK_ENABLED=true`
+      in `.env.local` and `orchestratedMode: true` restored on the `jarvis` product in
+      `policies/products.json`. The earlier block — the confirmation target
+      `18-agent-activity-label` living only on a feature branch — is moot: that project was
+      retired, and the live-acceptance proof `live-acceptance-6abf35cf.md` stands as the green
+      gate. Orchestrated runs still hold at branch-complete for operator merge — enabling the
+      flag does not let them self-land on main.)
 
 > **User-reachability:** the existing `/plan <product>` trigger now runs the critique before
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval

@@ -26,6 +26,7 @@
   "jarvis": {
     "repoPath": "~/workspace/jarvis",
     "baseBranch": "main",
+    "orchestratedMode": true,
     "credentialsFile": "~/.config/jarvis/credentials/jarvis/.env",
     "egressAllowlist": [
       "github.com",
