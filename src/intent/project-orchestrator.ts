@@ -42,6 +42,11 @@ import {
 } from './finalizer-handoff.js';
 import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
 
+export type OrchestrationActivityEvent = {
+  kind: 'activity' | 'output';
+  data?: unknown;
+};
+
 /** Everything the orchestrator needs, all injected so the loop is fixture-testable. */
 export interface OrchestrationDeps {
   runId: string;
@@ -55,6 +60,8 @@ export interface OrchestrationDeps {
   baseBranch?: string;
   /** Per-task attempt cap. */
   attemptCap: number;
+  /** Optional live activity sink for appliers that need supervision heartbeats. */
+  emit?: (event: OrchestrationActivityEvent) => void;
 
   // --- state reads (re-read each iteration so restart/reconstruction is safe) ---
   readTasksMd: () => Promise<string>;

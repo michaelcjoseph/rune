@@ -703,7 +703,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Active-harm probe test: assert whether a working orchestrated run (no `output`/`activity`
       for the quiet window) is currently cancelled/nudged by the quiet→cancel / quiet-nudge
       backstop. Pins the finding so the fix is regression-guarded either way.
-- [ ] Sink-pump test: the orchestrated applier's `apply()` yields ≥1 `activity`/`output` event
+- [x] Sink-pump test: the orchestrated applier's `apply()` yields ≥1 `activity`/`output` event
       BETWEEN the "starting" event and the terminal event when the injected workflow reports
       role activity — the regression guard against the current two-event gap (it must fail on
       today's runner).

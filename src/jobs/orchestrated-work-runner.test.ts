@@ -177,6 +177,49 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('pumps reported role activity between the starting log and terminal event', async () => {
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => {
+          const emit = (deps as unknown as {
+            emit?: (event: { kind: 'activity' | 'output'; data?: unknown }) => void;
+          }).emit;
+          emit?.({
+            kind: 'output',
+            data: { line: 'qa wrote tests from the spec', role: 'qa' },
+          });
+          return { kind: 'finalized', outcome: 'branch-complete' };
+        },
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const startIndex = events.findIndex(
+        (e) => e.kind === 'log' && String((e.data as Record<string, unknown> | undefined)?.['line']).includes('orchestrated run starting'),
+      );
+      const terminalIndex = events.findIndex((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(terminalIndex).toBeGreaterThan(startIndex);
+
+      const streamed = events
+        .slice(startIndex + 1, terminalIndex)
+        .filter((e) => e.kind === 'activity' || e.kind === 'output');
+      expect(streamed.length, 'expected apply() to pump at least one reported activity/output event before terminal').toBeGreaterThanOrEqual(1);
+      expect(streamed[0]).toMatchObject({
+        mutationId: 'mut-1',
+        kind: 'output',
+        data: { line: 'qa wrote tests from the spec', role: 'qa' },
+      });
+      expect(destroyed).toBe(true);
+    });
+
     it('held (finalizer unavailable) → completed terminal event flagged held, never self-merge', async () => {
       inject({
         kind: 'held',

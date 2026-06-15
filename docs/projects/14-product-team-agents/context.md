@@ -98,7 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- m run build` still fails on unrelated existing TypeScript errors in other test/modules. Also, `git status` shows `MM` for this file because there was pre-existing staged content and the sandbox prevented updating the Git index lock; the working tree diff against `HEAD` is the intended scoped change.
-- /jobs/orchestrated-work-runner.test.ts`
-- `npm test -- src/jobs/orchestrated-work-runner.test.ts` is blocked by sandbox write permissions to symlinked `node_modules/.vite-temp`; `--configLoader runner` avoids that.
-- `npm run build` still fails on existing unrelated TypeScript errors in other files.
+- .test.ts` passes.
+- `TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/vault npm test -- --configLoader runner src/intent/project-orchestrator.test.ts` passes.
+
+`npm run build` still fails on existing unrelated TypeScript errors in other files, matching the handoff context. I did not commit.

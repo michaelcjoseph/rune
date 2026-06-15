@@ -44,6 +44,7 @@ import {
 } from './sandbox-runtime.js';
 import {
   runProjectOrchestration,
+  type OrchestrationActivityEvent,
   type OrchestrationDeps,
   type OrchestrationResult,
 } from '../intent/project-orchestrator.js';
@@ -160,6 +161,7 @@ function buildOrchestrationDeps(args: {
   baseBranch: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
+  emit?: (event: OrchestrationActivityEvent) => void;
 }): OrchestrationDeps {
   const { descriptor, sandbox, projectDir, product, projectSlug, branch, baseBranch, runGit } = args;
   const specPath = join(projectDir, 'spec.md');
@@ -174,6 +176,7 @@ function buildOrchestrationDeps(args: {
     branch,
     worktreePath: sandbox.worktree,
     baseBranch,
+    ...(args.emit !== undefined ? { emit: args.emit } : {}),
     // Per-task attempt cap (re-invoke the whole workflow on a non-objection
     // failure). The team-task-workflow runs its own internal round cap; this
     // bounds the OUTER retries. 3 mirrors gen-eval-loop's default round cap.
@@ -350,6 +353,14 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
       yield { mutationId: descriptor.id, ts: new Date().toISOString(), kind: 'log', data: { line: `orchestrated run starting for ${projectSlug}` } };
 
+      const streamedEvents: MutationEvent[] = [];
+      let wakeStream: (() => void) | undefined;
+      const emit = (event: OrchestrationActivityEvent): void => {
+        streamedEvents.push(toMutationEvent(descriptor.id, event));
+        wakeStream?.();
+        wakeStream = undefined;
+      };
+
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
         sandbox,
@@ -360,20 +371,42 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         baseBranch,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
+        emit,
       });
 
-      let result: OrchestrationResult;
-      try {
-        result = await deps.runOrchestration(orchestrationDeps);
-      } catch (err) {
+      const orchestration = deps.runOrchestration(orchestrationDeps).then(
+        (result) => ({ kind: 'result' as const, result }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+
+      let outcome: Awaited<typeof orchestration> | undefined;
+      while (outcome === undefined) {
+        const event = streamedEvents.shift();
+        if (event !== undefined) {
+          yield event;
+          continue;
+        }
+
+        const nextStream = new Promise<{ kind: 'stream' }>((resolve) => {
+          wakeStream = () => resolve({ kind: 'stream' });
+        });
+        const next = await Promise.race([orchestration, nextStream]);
+        wakeStream = undefined;
+        if (next.kind === 'stream') continue;
+        outcome = next;
+      }
+
+      for (const event of streamedEvents.splice(0)) yield event;
+      if (outcome.kind === 'error') {
         yield term(descriptor.id, 'failed', {
-          reason: scrubPathsInText(`orchestration loop threw: ${(err as Error).message}`),
+          reason: scrubPathsInText(`orchestration loop threw: ${(outcome.error as Error).message}`),
           projectSlug,
           product,
         });
         return;
       }
 
+      const result = outcome.result;
       preserveWorktree = result.kind === 'blocked' && result.parked?.preserveWorktree === true;
       yield mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
     } finally {
@@ -447,4 +480,13 @@ function term(
   data: Record<string, unknown>,
 ): MutationEvent {
   return { mutationId, ts: new Date().toISOString(), kind, data };
+}
+
+function toMutationEvent(mutationId: string, event: OrchestrationActivityEvent): MutationEvent {
+  return {
+    mutationId,
+    ts: new Date().toISOString(),
+    kind: event.kind,
+    ...(event.data !== undefined ? { data: event.data } : {}),
+  };
 }
