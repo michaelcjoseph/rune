@@ -550,6 +550,26 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 53. WHEN a run is marked for resume THEN the orphan-worktree sweep preserves its worktree (or the
     branch-resume path rebuilds it on re-dispatch).
 
+### Role learning & exemplars (Phase 12)
+
+54. WHEN a role is invoked THEN it receives reference exemplars of good output (a permanent
+    baseline plus any per-project exemplars) as a low-authority channel alongside SOUL and memory.
+55. WHEN the tech lead completes planning THEN it emits per-project exemplars for the relevant
+    roles, persisted with the project.
+56. WHEN a gate rejects THEN a structured rejection record (rejecting role, counterpart role, what
+    failed, actionable notes) is produced — the same object threaded into the Phase 11 retry.
+57. WHEN a gate-rejection record exists THEN the rejecting role drafts a candidate lesson for the
+    counterpart role.
+58. WHEN a candidate lesson is drafted THEN a neutral Jarvis validation pass privacy-filters,
+    dedupes, attributes, and fails safe to no-lesson before any write; roles never write memory
+    directly.
+59. WHEN validation passes THEN the lesson is written to the counterpart role's memory via the
+    existing `writeRoleLesson` path, synchronously at gate-time.
+60. WHEN a role is invoked after a gate-time lesson was written THEN that lesson appears in its
+    low-authority reference context (the Phase 6 compounding path).
+61. WHEN both the nightly loop and the gate-time path can write a lesson THEN they share one write
+    path and do not double-write the same lesson.
+
 ---
 
 ## Implementation Phases
@@ -850,6 +870,64 @@ orphaning it, and no run ever lands two terminal records.
    *passes* on the feedback (not a blind redo) — the stub-free proof both failure modes are
    closed.
 
+### Phase 12: Role learning & exemplars (reopened 2026-06-14)
+
+The project-17 run exposed that the team has no memory and no model of "good." All six role
+memories are cold-start (`agents/qa/memory.md` is 1 byte), no role receives an exemplar of good
+output, and a gate rejection leaves zero durable residue — so the same mistake recurs every run.
+Where Phase 11A makes a rejection *fix the current attempt*, Phase 12 makes it *teach the next
+one*.
+
+**A. No model of "good output."** A role receives two channels (`composeRoleContext`,
+`loader.ts:142`): SOUL (charter prose) + memory (lessons — empty today). There are no reference
+exemplars — no golden examples, nothing the tech-lead tailors per project. QA fed already-redacted
+placeholders as test inputs partly because it had no example of a correctly-pinned redaction test
+to mirror; it gets charter prose + an empty memory + a `testStrategy` enum, none of which shows
+the shape the tech-lead would approve.
+
+**B. Gate rejections leave no durable lesson.** The learning loop (Phase 6) runs only nightly,
+fed exclusively by externally-authored feedback records (`feedback-record.ts:5` — feedback is
+"never inferred from arbitrary chat, transcripts, or usage logs"). There is no path from an in-run
+gate block to a feedback record — the block produces in-memory `TaskEvidence` and nothing else
+(`team-task-workflow.ts:196`). So the system cannot learn from its own gate failures, and the
+tech-lead's precise redaction feedback taught QA nothing.
+
+**Definition of done.** Every role receives reference exemplars of good output (a permanent
+baseline plus per-project exemplars), and every gate rejection produces a neutral-validated lesson
+written into the *counterpart's* memory at gate-time and loaded into that role's next invocation.
+The QA→tech-lead redaction failure that blocked project-17 leaves both a QA lesson and an exemplar
+that a re-run uses to pass.
+
+**Work items — A. Role exemplars.**
+
+1. **Author a permanent per-role exemplar baseline** under `agents/<role>/examples/`, starting
+   with QA — a correctly-pinned security-boundary test (real secret-shaped token in; raw token
+   asserted absent while the redacted placeholder is present), the exact shape project-17 lacked.
+2. **Tech-lead emits per-project exemplars** during planning (extends the test-strategy step it
+   already owns), tailored to the project's conventions, persisted with the project.
+3. **Add an exemplar channel to `composeRoleContext`** (`loader.ts`): charter + memory +
+   exemplars, as low-authority reference, budget-bounded like memory.
+
+**Work items — B. Gate-triggered learning (hybrid authoring, neutral guard preserved).**
+
+4. **Emit a structured gate-rejection record** at each gate block in `team-task-workflow.ts`
+   (QA←tech-lead test intent, coder←reviewer, coder←tech-lead diff, designer): the rejecting
+   role, the counterpart role, what failed, and actionable notes — the SAME object Phase 11A
+   threads into the retry, reused not duplicated.
+5. **The rejecting role drafts a candidate lesson** for the counterpart from that record — it
+   has the most context on what was wrong.
+6. **A neutral Jarvis validation pass writes it.** Run the existing post-mortem attribution model
+   (`runPostMortem`, `postmortem.ts:3` — "roles are witnesses, not the judge") synchronously at
+   gate-time: privacy-filter, dedupe, attribute, fail safe to no-lesson, then write via
+   `writeRoleLesson` (`memory-writer.ts:78`) into the counterpart's memory. Roles never write
+   memory directly — the neutral guard stays.
+7. **Make the learning loop gate-triggered, not only nightly.** The gate-time path and the
+   nightly loop share one write path (`writeRoleLesson`) and must not double-write the same
+   lesson (the dedupe in `memory-writer.ts` is the guard).
+8. **Live acceptance:** a forced QA→tech-lead redaction rejection writes a validated QA lesson and
+   the exemplar is present; a re-run loads both into QA's reference context and the QA output
+   passes the gate — stub-free proof the team now learns from a gate failure.
+
 ---
 
 ## Success Metrics
@@ -877,6 +955,9 @@ orphaning it, and no run ever lands two terminal records.
 | Retries are corrective | always | A gate rejection threads its feedback into the role's next attempt; no blind same-input redo |
 | Rejection parks, not kills | always | A task that exhausts feedback-retries parks blocked-on-human with worktree preserved; work is never discarded |
 | Restart resumes | always | A restart mid-run resumes from durable state; no orphaned record, exactly one terminal per run id |
+| Roles have exemplars | always | Each role invocation includes reference exemplars of good output (baseline + per-project) |
+| Gate failures teach | always | Every gate rejection yields a neutral-validated lesson in the counterpart's memory at gate-time |
+| Neutral guard preserved | always | Roles never write memory directly; a neutral Jarvis pass attributes and filters every lesson |
 
 ---
 

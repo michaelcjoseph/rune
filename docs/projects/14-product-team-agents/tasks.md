@@ -781,6 +781,74 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > observable on the cockpit card; a genuinely-stuck task parks for the operator with its work
 > intact instead of ending the run.
 
+## Phase 12 - Role learning & exemplars (reopened 2026-06-14)
+
+> Depends on: Phase 4, 6 (reuses the `writeRoleLesson` + `runPostMortem` machinery), and the
+> Phase 11A gate-rejection feedback object. Triggered by the project-17 run, which exposed that
+> the team has no memory and no model of "good": all six role memories are cold-start, no role
+> gets an exemplar of good output, and a gate block leaves zero durable lesson (the learning
+> loop is nightly + explicit-feedback-only, `feedback-record.ts:5`). Where Phase 11A makes a
+> rejection fix the current attempt, Phase 12 makes it teach the next. See spec.md §"Phase 12"
+> and requirements 54-61.
+
+### Tests (write first)
+
+**A. Role exemplars**
+
+- [ ] Exemplar-channel test: `composeRoleContext` includes an exemplars channel (baseline +
+      per-project) as low-authority reference, alongside SOUL and memory, budget-bounded.
+- [ ] Baseline test: each role has a permanent `agents/<role>/examples/` baseline; QA's includes
+      a correctly-pinned redaction test (real token in, raw token asserted absent).
+- [ ] Per-project exemplar test: the tech-lead planning output emits per-project exemplars,
+      persisted with the project and surfaced to the relevant role's context.
+
+**B. Gate-triggered learning**
+
+- [ ] Gate-record test: each gate block in `team-task-workflow.ts` emits a structured rejection
+      record (rejecting role, counterpart, what failed, notes) — the same object Phase 11A threads.
+- [ ] Draft-then-validate test: the rejecting role drafts a candidate lesson; a neutral Jarvis
+      pass (`runPostMortem` model) privacy-filters, dedupes, attributes, and fails safe to
+      no-lesson before any write — roles never write memory directly.
+- [ ] Gate-time-write test: a passing validation writes the lesson to the COUNTERPART's memory
+      via `writeRoleLesson`, synchronously at gate-time (not deferred to nightly).
+- [ ] Compounding test: a gate-time lesson loads into the counterpart role's next invocation
+      reference context (the Phase 6 compounding path).
+- [ ] No-double-write test: the nightly loop and the gate-time path share one write path and do
+      not double-write the same lesson (the `memory-writer.ts` dedupe is the guard).
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> Part A (exemplars) and Part B (gate-triggered learning) are independent; land each as a unit.
+> Part B reuses the existing `writeRoleLesson` + `runPostMortem` seams — it adds a gate-time
+> trigger and a role-drafted candidate, not a new memory-write path. The phase is not done until
+> the live acceptance shows a re-run passing on a lesson + exemplar a prior gate failure produced.
+
+**A. Role exemplars**
+
+- [ ] Author the permanent per-role exemplar baseline under `agents/<role>/examples/`, starting
+      with QA (a correctly-pinned redaction/security-boundary test).
+- [ ] Extend the tech-lead planning output to emit per-project exemplars (alongside test
+      strategy), persisted with the project.
+- [ ] Add the exemplar channel to `composeRoleContext` (`loader.ts`): charter + memory +
+      exemplars, budget-bounded as low-authority reference.
+
+**B. Gate-triggered learning**
+
+- [ ] Emit the structured gate-rejection record at each gate block in `team-task-workflow.ts`,
+      shared with the Phase 11A feedback object.
+- [ ] Have the rejecting role draft a candidate lesson from that record.
+- [ ] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
+      write via `writeRoleLesson` into the counterpart's memory; fail safe to no-lesson.
+- [ ] Confirm the gate-time path and nightly loop share one write path without double-writing.
+- [ ] **Live acceptance:** a forced QA→tech-lead redaction rejection writes a validated QA lesson
+      and leaves the exemplar; a re-run loads both and the QA output passes the gate.
+
+> **User-reachability:** YES — after this phase, a gate failure makes the team permanently
+> smarter: the rejected role gains a memory lesson and reference exemplars, observable in the
+> committed `memory.md` / `examples/` diffs, and the next run on a similar task passes where this
+> one blocked.
+
 ---
 
 ## Out of scope
