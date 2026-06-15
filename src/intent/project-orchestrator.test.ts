@@ -166,6 +166,42 @@ describe('project-orchestrator — block', () => {
     expect(h.state.commits).toEqual([]);
     expect(h.state.finalizeCalled).toBe(false);
   });
+
+  it('parks blocked-on-human with branch and worktree preserved when feedback retries exhaust', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
+    const h = makeHarness({
+      attemptCap: 1,
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        objectionOpen: false,
+        handoffNotes: ['partial corrective work remains in the run worktree'],
+        blockedReason: 'feedback retry cap exhausted',
+      }),
+    });
+    const res = await runProjectOrchestration({
+      ...h.deps,
+      worktreePath,
+    } as OrchestrationDeps & { worktreePath: string });
+
+    expect(res.kind).toBe('blocked');
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    expect(h.state.tasksMd).toContain('- [ ] Render the streak card');
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: 'feedback retry cap exhausted',
+      parked: {
+        status: 'blocked-on-human',
+        branch: 'jarvis-work/14-x',
+        worktreePath,
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
