@@ -113,6 +113,17 @@ describe('team-task-workflow — QA-first', () => {
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
     expect(coderCalled).toBe(false);
     expect(ev.outcome).toBe('blocked');
+    expect(ev.rejectionFeedback).toMatchObject({
+      rejectingRole: 'tech-lead',
+      counterpartRole: 'qa',
+      rejectedRole: 'qa',
+      artifact: 'test-intent',
+      rejectedArtifact: 'test-intent',
+      reason: 'tests miss the rollover case',
+      whatFailed: 'tests miss the rollover case',
+      notes: ['tests miss the rollover case'],
+      actionableNotes: ['tests miss the rollover case'],
+    });
   });
 });
 

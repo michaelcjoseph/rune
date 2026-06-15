@@ -24,6 +24,7 @@
 
 import type { SizedTask } from './planning-roles.js';
 import type { DispatchProvider } from './dispatch.js';
+import type { RoleName } from '../roles/loader.js';
 
 /** Objection classes — defects normal usage won't surface until they matter.
  *  An open finding in any class is a hard gate. */
@@ -51,6 +52,27 @@ export interface ReviewerVerdict {
   pass: boolean;
   objections: ObjectionFinding[];
 }
+
+/** Machine-readable feedback from a role gate rejection. This is the object
+ *  future retries and gate-time learning consume; `blockedReason` remains the
+ *  human-readable summary. */
+export interface GateRejectionFeedback {
+  rejectingRole: RoleName;
+  counterpartRole: RoleName;
+  rejectedRole: RoleName;
+  artifact: GateRejectedArtifact;
+  rejectedArtifact: GateRejectedArtifact;
+  reason: string;
+  whatFailed: string;
+  notes: string[];
+  actionableNotes: string[];
+}
+
+export type GateRejectedArtifact =
+  | 'test-intent'
+  | 'reviewer-verdict'
+  | 'implementation-diff'
+  | 'design-review';
 
 /** QA's output for a task — code tests, or a reviewed no-code-test rationale. */
 export type QaResult =
@@ -130,6 +152,8 @@ export interface TaskEvidence {
   noCodeTestRationale?: string;
   /** Set on a `blocked` outcome. */
   blockedReason?: string;
+  /** Structured role-gate feedback for corrective retries / learning. */
+  rejectionFeedback?: GateRejectionFeedback;
   /** Set on a `failed` outcome — the structured reason a role seam rejected
    *  (for the Phase 5 retry / model-swap decision). */
   failureReason?: string;
@@ -194,8 +218,15 @@ async function runGated(
   roles.add('tech-lead');
   const tlTests = await deps.techLeadReviewTests({ task, qa });
   if (!tlTests.approved) {
+    const reason = tlTests.notes?.trim() || 'tech-lead rejected test intent';
     return block(task, roles, handoffNotes, {
-      blockedReason: `tech-lead rejected test intent: ${tlTests.notes ?? ''}`.trim(),
+      blockedReason: reason,
+      rejectionFeedback: buildGateRejectionFeedback({
+        rejectingRole: 'tech-lead',
+        counterpartRole: 'qa',
+        artifact: 'test-intent',
+        reason,
+      }),
       noCodeTestRationale,
     });
   }
@@ -203,6 +234,7 @@ async function runGated(
   // Round loop — coder → reviewer → tech-lead diff → designer, bounded by cap.
   let lastReviewer: ReviewerVerdict | undefined;
   let lastDesignerPass = true;
+  let lastRejectionFeedback: GateRejectionFeedback | undefined;
   for (let attempt = 0; attempt < input.cap; attempt++) {
     roles.add('coder');
     const coder = await deps.coder({ task, spec: input.spec, context: input.contextMd, tests });
@@ -221,20 +253,52 @@ async function runGated(
     // Hard gate: an open objection-class finding blocks immediately. PM wrap-up
     // authority does not extend here.
     if (lastReviewer.objections.length > 0) {
+      const feedback = buildGateRejectionFeedback({
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        artifact: 'reviewer-verdict',
+        reason: summarizeObjections(lastReviewer.objections),
+      });
       return block(task, roles, handoffNotes, {
         blockedReason: 'open objection-class finding',
+        rejectionFeedback: feedback,
         reviewerVerdict: lastReviewer,
         objectionOpen: true,
         noCodeTestRationale,
       });
     }
+    if (!lastReviewer.pass) {
+      lastRejectionFeedback = buildGateRejectionFeedback({
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        artifact: 'reviewer-verdict',
+        reason: 'reviewer did not pass the implementation diff',
+      });
+    }
 
     const tlDiff = await deps.techLeadReviewDiff({ task, diff: coder.diff });
+    if (!tlDiff.pass) {
+      lastRejectionFeedback = buildGateRejectionFeedback({
+        rejectingRole: 'tech-lead',
+        counterpartRole: 'coder',
+        artifact: 'implementation-diff',
+        reason: tlDiff.notes ?? 'tech-lead did not pass the implementation diff',
+      });
+    }
 
     lastDesignerPass = true;
     if (task.designerNeeded) {
       roles.add('designer');
-      lastDesignerPass = (await deps.designer({ task, diff: coder.diff })).pass;
+      const designer = await deps.designer({ task, diff: coder.diff });
+      lastDesignerPass = designer.pass;
+      if (!designer.pass) {
+        lastRejectionFeedback = buildGateRejectionFeedback({
+          rejectingRole: 'designer',
+          counterpartRole: 'coder',
+          artifact: 'design-review',
+          reason: designer.notes ?? 'designer review failed',
+        });
+      }
     }
 
     if (lastReviewer.pass && tlDiff.pass && lastDesignerPass) {
@@ -256,6 +320,9 @@ async function runGated(
   if (task.designerNeeded && !lastDesignerPass) {
     return block(task, roles, handoffNotes, {
       blockedReason: 'designer review failed at the round cap',
+      ...(lastRejectionFeedback !== undefined
+        ? { rejectionFeedback: lastRejectionFeedback }
+        : {}),
       reviewerVerdict: lastReviewer,
       noCodeTestRationale,
     });
@@ -276,6 +343,9 @@ async function runGated(
   }
   return block(task, roles, handoffNotes, {
     blockedReason: 'PM decision unresolved at the round cap',
+    ...(lastRejectionFeedback !== undefined
+      ? { rejectionFeedback: lastRejectionFeedback }
+      : {}),
     reviewerVerdict: lastReviewer,
     noCodeTestRationale,
   });
@@ -302,6 +372,7 @@ function block(
   handoffNotes: string[],
   extra: {
     blockedReason: string;
+    rejectionFeedback?: GateRejectionFeedback;
     reviewerVerdict?: ReviewerVerdict;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
@@ -314,9 +385,38 @@ function block(
     objectionOpen: extra.objectionOpen ?? false,
     handoffNotes,
     blockedReason: extra.blockedReason,
+    ...(extra.rejectionFeedback !== undefined
+      ? { rejectionFeedback: extra.rejectionFeedback }
+      : {}),
     ...(extra.reviewerVerdict !== undefined ? { reviewerVerdict: extra.reviewerVerdict } : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
   };
+}
+
+function buildGateRejectionFeedback(input: {
+  rejectingRole: RoleName;
+  counterpartRole: RoleName;
+  artifact: GateRejectedArtifact;
+  reason: string;
+}): GateRejectionFeedback {
+  const reason = input.reason.trim() || `${input.rejectingRole} rejected ${input.artifact}`;
+  return {
+    rejectingRole: input.rejectingRole,
+    counterpartRole: input.counterpartRole,
+    rejectedRole: input.counterpartRole,
+    artifact: input.artifact,
+    rejectedArtifact: input.artifact,
+    reason,
+    whatFailed: reason,
+    notes: [reason],
+    actionableNotes: [reason],
+  };
+}
+
+function summarizeObjections(objections: ObjectionFinding[]): string {
+  return objections
+    .map((o) => `${o.class}/${o.severity} at ${o.location}: ${o.rationale}`)
+    .join('; ');
 }
