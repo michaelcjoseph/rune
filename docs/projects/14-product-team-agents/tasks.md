@@ -707,7 +707,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       BETWEEN the "starting" event and the terminal event when the injected workflow reports
       role activity — the regression guard against the current two-event gap (it must fail on
       today's runner).
-- [ ] Heartbeat-advance test: a long-running injected role session advances
+- [x] Heartbeat-advance test: a long-running injected role session advances
       `lastHeartbeatAt`/`lastOutputAt` mid-run; supervision never reads the working run as quiet.
 - [ ] Codex-stream test: `runCodex` with an injected `onStdout`/`onEvent` callback fires
       per-line as data arrives (not only at `close`); an empty run fires none; `codex exec

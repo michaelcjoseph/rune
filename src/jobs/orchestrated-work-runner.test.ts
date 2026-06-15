@@ -28,7 +28,8 @@ import {
 } from '../transport/mutations.js';
 import type { OrchestrationResult } from '../intent/project-orchestrator.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
-import { planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
+import { isStalled, planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
+import type { TaskEvidence } from '../intent/team-task-workflow.js';
 
 // ---------------------------------------------------------------------------
 // Phase 5 orchestrated applier (project 14): the mutation applier that runs
@@ -374,6 +375,101 @@ describe('orchestratedWorkApplier', () => {
         expect(destroyed).toBe(true);
       } finally {
         finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+      }
+    });
+
+    it('advances child-liveness heartbeat during a long-running injected role session without faking output', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-15T12:00:00.000Z'));
+      const projectSlug = '14-product-team-agents';
+      let runId: string | undefined;
+      let finishRole: ((evidence: TaskEvidence) => void) | undefined;
+
+      try {
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree(projectSlug);
+            wtDir = dir;
+            return sandbox;
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          createTaskWorkflowRunner: () => async (task) =>
+            new Promise<TaskEvidence>((resolve) => {
+              finishRole = resolve;
+            }).then((evidence) => ({ ...evidence, taskId: task.id })),
+        });
+
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'jarvis' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        runId = createdMutation.descriptor.id;
+
+        await waitForUpserts(2);
+        await waitForCondition(() => created);
+        const runningBeforeHeartbeat = latestRun(runId);
+        expect(runningBeforeHeartbeat.status).toBe('running');
+        expect(runningBeforeHeartbeat.lastOutputAt).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(31_000);
+        for (let i = 0; i < 20 && latestRun(runId).lastChildAliveAt === undefined; i++) {
+          await Promise.resolve();
+        }
+
+        const runningAfterHeartbeat = latestRun(runId);
+        expect(runningAfterHeartbeat.status).toBe('running');
+        expect(runningAfterHeartbeat.lastHeartbeatAt).toBe(runningBeforeHeartbeat.lastHeartbeatAt);
+        expect(
+          runningAfterHeartbeat.lastChildAliveAt,
+          'expected a keep-alive upsert carrying lastChildAliveAt while the injected role session is still running',
+        ).toBeDefined();
+        expect(Date.parse(runningAfterHeartbeat.lastChildAliveAt!)).toBeGreaterThan(
+          Date.parse(runningBeforeHeartbeat.lastHeartbeatAt),
+        );
+        expect(runningAfterHeartbeat.lastOutputAt).toBeUndefined();
+
+        const quietAt = Date.parse(runningBeforeHeartbeat.startedAt) + (5 * 60 * 1000) + 1;
+        expect(isStalled(runningAfterHeartbeat, 5 * 60 * 1000, quietAt)).toBe(false);
+
+        const quietPlan = planQuietNudges([runningAfterHeartbeat], 5 * 60 * 1000, quietAt);
+        expect(quietPlan.toNudge.map((r) => r.id)).toEqual([runId]);
+
+        const nudgedRun = quietPlan.updated[0]!;
+        const cancelAt = quietAt + (20 * 60 * 1000) + 1;
+        expect(planQuietCancel([nudgedRun], 20 * 60 * 1000, cancelAt).toCancel.map((r) => r.id))
+          .toEqual([runId]);
+
+        finishRole?.({
+          taskId: 'placeholder',
+          outcome: 'blocked',
+          rolesInvoked: ['qa'],
+          objectionOpen: true,
+          handoffNotes: [],
+          blockedReason: 'test cleanup hard block',
+        });
+        await waitForCondition(() => runId !== undefined && !activeRuns.has(runId));
+        expect(destroyed).toBe(true);
+      } finally {
+        finishRole?.({
+          taskId: 'placeholder',
+          outcome: 'blocked',
+          rolesInvoked: ['qa'],
+          objectionOpen: true,
+          handoffNotes: [],
+          blockedReason: 'test cleanup hard block',
+        });
+        if (runId !== undefined) {
+          for (let i = 0; i < 20 && activeRuns.has(runId); i++) {
+            await Promise.resolve();
+          }
+        }
+        vi.useRealTimers();
       }
     });
   });

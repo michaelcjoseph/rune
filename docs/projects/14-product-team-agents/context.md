@@ -98,7 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- .test.ts` passes.
-- `TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/vault npm test -- --configLoader runner src/intent/project-orchestrator.test.ts` passes.
+- unner.test.ts:448): corrected the cleanup fixture to use a hard block so it does not enter the orchestrator’s valid retry path.
 
-`npm run build` still fails on existing unrelated TypeScript errors in other files, matching the handoff context. I did not commit.
+Verified:
+`TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts`
+
+Result: 13 passed.

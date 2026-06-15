@@ -355,10 +355,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
       const streamedEvents: MutationEvent[] = [];
       let wakeStream: (() => void) | undefined;
-      const emit = (event: OrchestrationActivityEvent): void => {
-        streamedEvents.push(toMutationEvent(descriptor.id, event));
+      const enqueue = (event: MutationEvent): void => {
+        streamedEvents.push(event);
         wakeStream?.();
         wakeStream = undefined;
+      };
+      const emit = (event: OrchestrationActivityEvent): void => {
+        enqueue(toMutationEvent(descriptor.id, event));
       };
 
       const orchestrationDeps = buildOrchestrationDeps({
@@ -378,22 +381,37 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         (result) => ({ kind: 'result' as const, result }),
         (error: unknown) => ({ kind: 'error' as const, error }),
       );
+      // Child-liveness parity with work-runner: role sessions can be alive
+      // while producing no output, so emit keep-alive without faking activity.
+      const keepAliveTicker = setInterval(() => {
+        enqueue({
+          mutationId: descriptor.id,
+          ts: new Date().toISOString(),
+          kind: 'keep-alive',
+          data: {},
+        });
+      }, 30_000);
+      keepAliveTicker.unref();
 
       let outcome: Awaited<typeof orchestration> | undefined;
-      while (outcome === undefined) {
-        const event = streamedEvents.shift();
-        if (event !== undefined) {
-          yield event;
-          continue;
-        }
+      try {
+        while (outcome === undefined) {
+          const event = streamedEvents.shift();
+          if (event !== undefined) {
+            yield event;
+            continue;
+          }
 
-        const nextStream = new Promise<{ kind: 'stream' }>((resolve) => {
-          wakeStream = () => resolve({ kind: 'stream' });
-        });
-        const next = await Promise.race([orchestration, nextStream]);
-        wakeStream = undefined;
-        if (next.kind === 'stream') continue;
-        outcome = next;
+          const nextStream = new Promise<{ kind: 'stream' }>((resolve) => {
+            wakeStream = () => resolve({ kind: 'stream' });
+          });
+          const next = await Promise.race([orchestration, nextStream]);
+          wakeStream = undefined;
+          if (next.kind === 'stream') continue;
+          outcome = next;
+        }
+      } finally {
+        clearInterval(keepAliveTicker);
       }
 
       for (const event of streamedEvents.splice(0)) yield event;
