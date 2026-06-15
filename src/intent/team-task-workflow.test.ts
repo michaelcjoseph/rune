@@ -22,6 +22,7 @@ import {
   type TeamTaskDeps,
   type ReviewerVerdict,
   type ObjectionFinding,
+  type GateRejectionFeedback,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
 
@@ -294,6 +295,54 @@ describe('team-task-workflow — objection gate', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — round cap', () => {
+  it('re-invokes the coder with reviewer and tech-lead feedback from the failed round', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let reviewerCalls = 0;
+    let techLeadDiffCalls = 0;
+    const reviewerRejection = {
+      pass: false,
+      objections: [],
+      notes: 'reviewer wants the empty-state branch covered',
+    } as ReviewerVerdict & { notes: string };
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => {
+        reviewerCalls += 1;
+        return reviewerCalls === 1 ? reviewerRejection : cleanVerdict;
+      },
+      techLeadReviewDiff: async () => {
+        techLeadDiffCalls += 1;
+        return techLeadDiffCalls === 1
+          ? { pass: false, notes: 'tech lead wants an explicit empty-state guard' }
+          : { pass: true };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderInputs).toHaveLength(2);
+    expect(coderInputs[1]?.rejectionFeedback).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rejectingRole: 'reviewer',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'reviewer-verdict',
+          actionableNotes: ['reviewer wants the empty-state branch covered'],
+        }),
+        expect.objectContaining({
+          rejectingRole: 'tech-lead',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'implementation-diff',
+          actionableNotes: ['tech lead wants an explicit empty-state guard'],
+        }),
+      ]),
+    );
+  });
+
   it('routes non-objection disagreement at the cap to PM wrap-up', async () => {
     let pmCalled = false;
     const deps = makeDeps({

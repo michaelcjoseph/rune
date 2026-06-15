@@ -636,8 +636,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       tech-lead's notes, bounded by a small cap, before the task escalates — not a one-shot block.
       (`team-task-workflow.test.ts`; confirmed red: current workflow returns `blocked` after the
       first tech-lead rejection instead of a second QA invocation.)
-- [ ] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
+- [x] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
       WITH the reviewer + tech-lead notes from the failed round, not identical inputs.
+      (`team-task-workflow.test.ts`; confirmed red: current retry calls the coder a second time,
+      but the second input has no reviewer/tech-lead rejection feedback.)
 - [ ] No-blind-redo regression: no retry path re-runs a role with identical inputs and no
       feedback (the project-17 defect) — must fail on today's `team-task-workflow.ts`.
 - [ ] Park-not-kill test: a task that exhausts its feedback-retry cap parks blocked-on-human with
