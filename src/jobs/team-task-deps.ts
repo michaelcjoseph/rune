@@ -219,7 +219,7 @@ const REVIEWER_INSTRUCTION = [
   'Respond with EXACTLY ONE fenced ```reviewer-verdict block containing JSON,',
   'and nothing after the fence:',
   '```reviewer-verdict',
-  '{"pass": true, "objections": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
+  '{"pass": true, "notes": "<short non-objection feedback>", "objections": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
   '```',
   'An empty objections array means no objection-class finding.',
 ].join('\n');
@@ -313,7 +313,12 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
         ];
       })
     : [];
-  return { pass: v['pass'] === true, objections };
+  const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  return {
+    pass: v['pass'] === true,
+    objections,
+    ...(notes !== undefined ? { notes } : {}),
+  };
 }
 
 /** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */

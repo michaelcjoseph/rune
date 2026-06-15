@@ -51,6 +51,8 @@ export interface ObjectionFinding {
 export interface ReviewerVerdict {
   pass: boolean;
   objections: ObjectionFinding[];
+  /** Optional notes for non-objection failures; objection details live in `objections`. */
+  notes?: string;
 }
 
 /** Machine-readable feedback from a role gate rejection. This is the object
@@ -217,7 +219,7 @@ async function runGated(
   // Gate 1: QA-first — tests (or a no-code-test rationale) before the coder.
   const carriedFeedback = normalizeFeedback(input.rejectionFeedback);
   let qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
-  const coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
+  let coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
   let qa: QaResult | undefined;
   let noCodeTestRationale: string | undefined;
   let tests: string[] | string | undefined;
@@ -272,6 +274,7 @@ async function runGated(
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
     });
     handoffNotes.push(...coder.handoffNotes);
+    const roundFeedback: GateRejectionFeedback[] = [];
 
     roles.add('reviewer');
     lastReviewer = await deps.reviewer({
@@ -301,22 +304,27 @@ async function runGated(
       });
     }
     if (!lastReviewer.pass) {
-      lastRejectionFeedback = buildGateRejectionFeedback({
+      const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
         artifact: 'reviewer-verdict',
-        reason: 'reviewer did not pass the implementation diff',
+        reason:
+          lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
       });
+      lastRejectionFeedback = feedback;
+      roundFeedback.push(feedback);
     }
 
     const tlDiff = await deps.techLeadReviewDiff({ task, diff: coder.diff });
     if (!tlDiff.pass) {
-      lastRejectionFeedback = buildGateRejectionFeedback({
+      const feedback = buildGateRejectionFeedback({
         rejectingRole: 'tech-lead',
         counterpartRole: 'coder',
         artifact: 'implementation-diff',
         reason: tlDiff.notes ?? 'tech-lead did not pass the implementation diff',
       });
+      lastRejectionFeedback = feedback;
+      roundFeedback.push(feedback);
     }
 
     lastDesignerPass = true;
@@ -325,12 +333,14 @@ async function runGated(
       const designer = await deps.designer({ task, diff: coder.diff });
       lastDesignerPass = designer.pass;
       if (!designer.pass) {
-        lastRejectionFeedback = buildGateRejectionFeedback({
+        const feedback = buildGateRejectionFeedback({
           rejectingRole: 'designer',
           counterpartRole: 'coder',
           artifact: 'design-review',
           reason: designer.notes ?? 'designer review failed',
         });
+        lastRejectionFeedback = feedback;
+        roundFeedback.push(feedback);
       }
     }
 
@@ -346,6 +356,9 @@ async function runGated(
       };
     }
     // Non-objection disagreement → retry within the cap.
+    if (roundFeedback.length > 0) {
+      coderFeedback = roundFeedback;
+    }
   }
 
   // Cap reached. A failed designer gate blocks (a UX defect is not PM-clearable);

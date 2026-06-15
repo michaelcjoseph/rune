@@ -669,7 +669,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       loop) so QA revises against feedback before escalating.
       (`team-task-workflow.ts`; focused QA rewrite tests green; relevant suites now show only
       the expected coder-feedback/no-blind-redo/park-not-kill reds.)
-- [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
+- [x] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
+      (`team-task-workflow.ts`, `team-task-deps.ts`; coder-feedback and no-blind-redo tests
+      green; relevant suites now show only the expected park-not-kill red.)
 - [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
       (reuse the Project 13 parked-run machinery); hold the project run at that task.
 
