@@ -98,19 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-**Phase 11A must land first, out of band.** Per the 2026-06-15 sequencing decision, the next task
-is NOT an orchestrated run — it is **Phase 11A (gate-rejection feedback retries)**, built by a direct
-`/work` run in the CLI (codex or claude), or by hand. 11A is the retry-with-feedback the orchestrator
-lacks; building it through the orchestrator hits the one-shot-gate deadlock it fixes (the 2026-06-14
-Phase 10 run died exactly this way — tech-lead rejected the probe test intent, no feedback retry, run
-terminal). Start with 11A's first unchecked task: the **feedback-carried test** (a gate rejection
-surfaces structured feedback in task evidence, not just a `blockedReason` string). Do NOT point
-`/work --auto` at project 14 until 11A is complete and its boxes are ticked — the selector would
-otherwise pick 11A and run it through the very harness it repairs.
-
-Once 11A lands on main, resume the orchestrator on **Phase 10**, starting with the **active-harm
-probe test**: assert whether a working orchestrated run (no `output`/`activity` for the quiet window)
-is currently cancelled or nudged by the quiet→cancel / quiet-nudge backstop. Write it red first to
-pin current behavior, so the streaming fix (sink-pump + heartbeat-advance) is regression-guarded
-either way. Then proceed through Phase 10 (sink-pump, heartbeat, codex/claude stream,
-role-transition, provider-attribution, transcript substrate, auto-merge) → Phase 11B → Phase 12.
+- m run build` still fails on unrelated existing TypeScript errors in other test/modules. Also, `git status` shows `MM` for this file because there was pre-existing staged content and the sandbox prevented updating the Git index lock; the working tree diff against `HEAD` is the intended scoped change.
+- /jobs/orchestrated-work-runner.test.ts`
+- `npm test -- src/jobs/orchestrated-work-runner.test.ts` is blocked by sandbox write permissions to symlinked `node_modules/.vite-temp`; `--configLoader runner` avoids that.
+- `npm run build` still fails on existing unrelated TypeScript errors in other files.

@@ -3,14 +3,32 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const mockAppendMutationLine = vi.hoisted(() => vi.fn());
+const mockUpsertRun = vi.hoisted(() => vi.fn());
+
+vi.mock('./mutations-log.js', () => ({
+  appendMutationLine: mockAppendMutationLine,
+}));
+
+vi.mock('./supervision-store.js', () => ({
+  upsertRun: mockUpsertRun,
+}));
+
 import {
   orchestratedWorkApplier,
   __setOrchestratedRuntimeForTest,
   __resetOrchestratedRuntimeForTest,
 } from './orchestrated-work-runner.js';
-import type { MutationDescriptor, MutationEvent } from '../transport/mutations.js';
+import {
+  activeRuns,
+  createMutation,
+  registerApplier,
+  type MutationDescriptor,
+  type MutationEvent,
+} from '../transport/mutations.js';
 import type { OrchestrationResult } from '../intent/project-orchestrator.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
+import { planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
 
 // ---------------------------------------------------------------------------
 // Phase 5 orchestrated applier (project 14): the mutation applier that runs
@@ -23,9 +41,9 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 /** Build a temp worktree containing docs/projects/demo/{spec,tasks,context}.md
  *  so the applier's real `findProjectDir` + `buildOrchestrationDeps` resolve
  *  against a genuine tree (the orchestration loop itself is injected). */
-function makeWorktree(): { sandbox: SandboxSpec; dir: string } {
+function makeWorktree(project = 'demo'): { sandbox: SandboxSpec; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'orch-wt-'));
-  const projDir = join(dir, 'docs', 'projects', 'demo');
+  const projDir = join(dir, 'docs', 'projects', project);
   mkdirSync(projDir, { recursive: true });
   writeFileSync(join(projDir, 'spec.md'), '# Spec\n', 'utf8');
   writeFileSync(join(projDir, 'tasks.md'), '- [ ] task one\n', 'utf8');
@@ -33,7 +51,7 @@ function makeWorktree(): { sandbox: SandboxSpec; dir: string } {
   return {
     sandbox: {
       product: 'jarvis',
-      project: 'demo',
+      project,
       worktree: dir,
       egressAllowlist: [],
       baseSha: 'abc123',
@@ -65,6 +83,29 @@ async function drain(gen: AsyncIterable<MutationEvent>): Promise<MutationEvent[]
 }
 
 const ctx = { bus: { publish: vi.fn() } as any, cancel: () => false };
+
+async function waitForUpserts(n: number): Promise<unknown[][]> {
+  for (let i = 0; i < 20 && mockUpsertRun.mock.calls.length < n; i++) {
+    await Promise.resolve();
+  }
+  expect(mockUpsertRun.mock.calls.length).toBeGreaterThanOrEqual(n);
+  return mockUpsertRun.mock.calls;
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 20 && !condition(); i++) {
+    await Promise.resolve();
+  }
+  expect(condition()).toBe(true);
+}
+
+function latestRun(id: string): SupervisedRun {
+  const runs = mockUpsertRun.mock.calls
+    .map((call) => call[0] as SupervisedRun)
+    .filter((run) => run.id === id);
+  expect(runs.length).toBeGreaterThan(0);
+  return runs[runs.length - 1]!;
+}
 
 describe('orchestratedWorkApplier', () => {
   it('is a non-auto-approve? — registered as autoApprove work applier kind', () => {
@@ -98,10 +139,14 @@ describe('orchestratedWorkApplier', () => {
       created = false;
       destroyed = false;
       wtDir = null;
+      mockAppendMutationLine.mockClear();
+      mockUpsertRun.mockClear();
+      activeRuns.clear();
     });
 
     afterEach(() => {
       __resetOrchestratedRuntimeForTest();
+      activeRuns.clear();
       if (wtDir) rmSync(wtDir, { recursive: true, force: true });
     });
 
@@ -227,6 +272,66 @@ describe('orchestratedWorkApplier', () => {
       const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal?.kind).toBe('failed');
       expect(destroyed).toBe(false);
+    });
+
+    it('active-harm probe: a silent in-flight orchestration stays quiet and is eligible for the quiet nudge', async () => {
+      let finishRun: ((result: OrchestrationResult) => void) | undefined;
+      try {
+        const projectSlug = '14-product-team-agents';
+        const runResult = new Promise<OrchestrationResult>((resolve) => {
+          finishRun = resolve;
+        });
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree(projectSlug);
+            wtDir = dir;
+            return sandbox;
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runOrchestration: async () => runResult,
+        });
+
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'jarvis' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        const runId = createdMutation.descriptor.id;
+
+        // createMutation seeds the supervised run, then startApply flips it to
+        // running. That real mutation/applier linkage is the load-bearing
+        // state this probe must inspect.
+        await waitForUpserts(2);
+        await waitForCondition(() => created);
+        expect(activeRuns.has(runId)).toBe(true);
+
+        const stillRunning = latestRun(runId);
+        expect(stillRunning.status).toBe('running');
+        expect(stillRunning.project).toBe(projectSlug);
+        expect(stillRunning.lastOutputAt).toBeUndefined();
+        expect(mockUpsertRun.mock.calls).toHaveLength(2);
+
+        const quietAt = Date.parse(stillRunning.startedAt) + (5 * 60 * 1000) + 1;
+        const quietPlan = planQuietNudges([stillRunning], 5 * 60 * 1000, quietAt);
+        expect(quietPlan.toNudge.map((r) => r.id)).toEqual([runId]);
+
+        const nudgedRun = quietPlan.updated[0]!;
+        const cancelAt = quietAt + (20 * 60 * 1000) + 1;
+        expect(planQuietCancel([nudgedRun], 20 * 60 * 1000, cancelAt).toCancel.map((r) => r.id))
+          .toEqual([runId]);
+
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+        await waitForUpserts(3);
+        expect(latestRun(runId).status).toBe('completed');
+        expect(destroyed).toBe(true);
+      } finally {
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+      }
     });
   });
 });
