@@ -648,7 +648,12 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the worktree preserved; the project run holds at that task and does not discard the branch.
       (`project-orchestrator.test.ts`; confirmed red: current blocked result holds the task but
       has no parked payload preserving branch/worktree.)
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation. (Confirmed via
+      `node --env-file-if-exists=.env.local ./node_modules/vitest/vitest.mjs run
+      src/intent/team-task-workflow.test.ts src/intent/project-orchestrator.test.ts -t
+      "re-invokes QA with tech-lead feedback|re-invokes the coder with reviewer|does not
+      blindly redo|parks blocked-on-human" --reporter=verbose`: 4 expected failures,
+      26 skipped.)
 
 ### Implementation
 
