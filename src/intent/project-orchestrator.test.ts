@@ -26,7 +26,7 @@ import {
   type OrchestrationDeps,
   type OrchestrationResult,
 } from './project-orchestrator.js';
-import type { TaskEvidence } from './team-task-workflow.js';
+import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
 import type { SelectedTask } from './orch-task-select.js';
 import type { FinalizerAdapter } from './finalizer-handoff.js';
 import { seedProjectContext } from './project-context.js';
@@ -201,6 +201,53 @@ describe('project-orchestrator — block', () => {
         preserveWorktree: true,
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry feedback — attempt N+1 receives gate feedback from attempt N
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — retry feedback', () => {
+  it('threads structured rejection feedback into the next task workflow attempt', async () => {
+    const feedback: GateRejectionFeedback = {
+      rejectingRole: 'tech-lead',
+      counterpartRole: 'qa',
+      rejectedRole: 'qa',
+      artifact: 'test-intent',
+      rejectedArtifact: 'test-intent',
+      reason: 'tests miss the rollover case',
+      whatFailed: 'tests miss the rollover case',
+      notes: ['tests miss the rollover case'],
+      actionableNotes: ['tests miss the rollover case'],
+    };
+    const workflowInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
+    let calls = 0;
+    const h = makeHarness({
+      attemptCap: 2,
+      runTaskWorkflow: async (task, ctx) => {
+        workflowInputs.push(ctx as { rejectionFeedback?: GateRejectionFeedback });
+        calls += 1;
+        if (calls === 1) {
+          return {
+            taskId: task.id,
+            outcome: 'blocked',
+            rolesInvoked: ['qa', 'tech-lead'],
+            objectionOpen: false,
+            handoffNotes: [],
+            blockedReason: feedback.reason,
+            rejectionFeedback: feedback,
+          };
+        }
+        return readyEvidence(task);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(workflowInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(workflowInputs[1]?.rejectionFeedback).toEqual(feedback);
   });
 });
 

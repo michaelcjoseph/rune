@@ -40,7 +40,7 @@ import {
   type FinalizerAdapter,
   type FinalizerHandoff,
 } from './finalizer-handoff.js';
-import type { TaskEvidence } from './team-task-workflow.js';
+import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
 
 /** Everything the orchestrator needs, all injected so the loop is fixture-testable. */
 export interface OrchestrationDeps {
@@ -62,7 +62,7 @@ export interface OrchestrationDeps {
   // --- per-task workflow (wraps team-task-workflow in production) ---
   runTaskWorkflow: (
     task: SelectedTask,
-    ctx: { handoff: string; contextMd: string },
+    ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
   ) => Promise<TaskEvidence>;
 
   // --- closeout effects ---
@@ -188,7 +188,13 @@ async function runTaskWithRetries(
       objectionOpen: evidence.objectionOpen,
     });
     if (decision.action !== 'retry') return evidence;
-    evidence = await deps.runTaskWorkflow(task, { handoff, contextMd });
+    evidence = await deps.runTaskWorkflow(task, {
+      handoff,
+      contextMd,
+      ...(evidence.rejectionFeedback !== undefined
+        ? { rejectionFeedback: evidence.rejectionFeedback }
+        : {}),
+    });
   }
   return evidence;
 }

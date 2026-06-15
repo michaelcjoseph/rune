@@ -99,7 +99,11 @@ export interface ReviewerInput {
 /** The injected role seams. Tests pass fixtures; production wraps real role
  *  invocations (charter loader + model-policy dispatch). */
 export interface TeamTaskDeps {
-  qaWriteTests: (input: { task: SizedTask; spec: string }) => Promise<QaResult>;
+  qaWriteTests: (input: {
+    task: SizedTask;
+    spec: string;
+    rejectionFeedback?: GateRejectionFeedback;
+  }) => Promise<QaResult>;
   techLeadReviewTests: (input: {
     task: SizedTask;
     qa: QaResult;
@@ -109,6 +113,7 @@ export interface TeamTaskDeps {
     spec: string;
     context: string;
     tests: string[] | string;
+    rejectionFeedback?: GateRejectionFeedback[];
   }) => Promise<CoderResult>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
@@ -130,6 +135,8 @@ export interface TeamTaskRunInput {
   spec: string;
   contextMd: string;
   coderProvider: DispatchProvider;
+  /** Feedback carried from a previous whole-task attempt. */
+  rejectionFeedback?: GateRejectionFeedback | GateRejectionFeedback[];
   /** Per-task round cap. */
   cap: number;
 }
@@ -208,8 +215,15 @@ async function runGated(
   }
 
   // Gate 1: QA-first — tests (or a no-code-test rationale) before the coder.
+  const carriedFeedback = normalizeFeedback(input.rejectionFeedback);
+  const qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
+  const coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
   roles.add('qa');
-  const qa = await deps.qaWriteTests({ task, spec: input.spec });
+  const qa = await deps.qaWriteTests({
+    task,
+    spec: input.spec,
+    ...(qaFeedback !== undefined ? { rejectionFeedback: qaFeedback } : {}),
+  });
   const noCodeTestRationale =
     qa.kind === 'no-code-test-rationale' ? qa.rationale : undefined;
   const tests: string[] | string = qa.kind === 'tests-written' ? qa.testIds : qa.rationale;
@@ -237,7 +251,13 @@ async function runGated(
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   for (let attempt = 0; attempt < input.cap; attempt++) {
     roles.add('coder');
-    const coder = await deps.coder({ task, spec: input.spec, context: input.contextMd, tests });
+    const coder = await deps.coder({
+      task,
+      spec: input.spec,
+      context: input.contextMd,
+      tests,
+      ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
+    });
     handoffNotes.push(...coder.handoffNotes);
 
     roles.add('reviewer');
@@ -419,4 +439,11 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
   return objections
     .map((o) => `${o.class}/${o.severity} at ${o.location}: ${o.rationale}`)
     .join('; ');
+}
+
+function normalizeFeedback(
+  feedback: GateRejectionFeedback | GateRejectionFeedback[] | undefined,
+): GateRejectionFeedback[] {
+  if (feedback === undefined) return [];
+  return Array.isArray(feedback) ? feedback : [feedback];
 }

@@ -43,6 +43,7 @@ import {
   type ObjectionFinding,
   type ObjectionSeverity,
   type QaResult,
+  type GateRejectionFeedback,
   type ReviewerVerdict,
   type TaskEvidence,
   type TeamTaskDeps,
@@ -371,6 +372,24 @@ function tailNote(output: string): string[] {
   return [trimmed.slice(-300)];
 }
 
+function formatRejectionFeedback(
+  feedback: GateRejectionFeedback | GateRejectionFeedback[] | undefined,
+): string {
+  if (feedback === undefined) return '';
+  const items = Array.isArray(feedback) ? feedback : [feedback];
+  if (items.length === 0) return '';
+  return [
+    '## Rejection feedback for this retry',
+    '',
+    ...items.flatMap((item, index) => [
+      `${index + 1}. ${item.rejectingRole} rejected ${item.rejectedRole}'s ${item.rejectedArtifact}.`,
+      `What failed: ${item.whatFailed}`,
+      `Actionable notes: ${item.actionableNotes.join('; ')}`,
+      '',
+    ]),
+  ].join('\n').trim();
+}
+
 /**
  * Build the production TeamTaskDeps: all eight seams live. Tests inject
  * `seams`; production omits it and gets the real judgment call + execution
@@ -412,8 +431,14 @@ export function buildProductionTeamTaskDeps(
     // NOTE: artifact seams (qaWriteTests, coder) THROW on executor failure —
     // runTeamTaskWorkflow's outer catch turns the throw into structured
     // `failed` evidence with failureReason. That is the error-flow contract.
-    qaWriteTests: async ({ task, spec }) => {
-      const body = [`## Task\n\n${task.text}`, '', `## Spec\n\n${spec}`].join('\n');
+    qaWriteTests: async ({ task, spec, rejectionFeedback }) => {
+      const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Spec\n\n${spec}`,
+        ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
+      ].join('\n');
       const result = await execute('qa', models.qa, QA_EXEC_INSTRUCTION, body);
       if (!result.ok) {
         throw new Error(`QA execution failed: ${result.error}`);
@@ -441,8 +466,9 @@ export function buildProductionTeamTaskDeps(
       return { approved: value, ...(notes !== undefined ? { notes } : {}) };
     },
 
-    coder: async ({ task, spec, context, tests }) => {
+    coder: async ({ task, spec, context, tests, rejectionFeedback }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
+      const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
       const body = [
         `## Task\n\n${task.text}`,
         '',
@@ -453,6 +479,7 @@ export function buildProductionTeamTaskDeps(
         `## Project context\n\n${scrubPathsInText(context)}`,
         '',
         `## QA tests\n\n${testsBlock}`,
+        ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
       ].join('\n');
       const result = await execute('coder', models.coder, CODER_EXEC_INSTRUCTION, body);
       if (!result.ok) {
@@ -563,7 +590,10 @@ function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
 export function createProductionTaskWorkflowRunner(
   args: TaskWorkflowRunnerArgs,
   seamOverrides: Partial<TeamTaskSeams> = {},
-): (task: SelectedTask, ctx: { handoff: string; contextMd: string }) => Promise<TaskEvidence> {
+): (
+  task: SelectedTask,
+  ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
+) => Promise<TaskEvidence> {
   return async (task, ctx) => {
     let policy: ModelPolicy | null;
     try {
@@ -598,6 +628,9 @@ export function createProductionTaskWorkflowRunner(
         spec: ctx.handoff,
         contextMd: ctx.contextMd,
         coderProvider: models.coder.provider,
+        ...(ctx.rejectionFeedback !== undefined
+          ? { rejectionFeedback: ctx.rejectionFeedback }
+          : {}),
         cap: args.cap ?? DEFAULT_ROUND_CAP,
       },
       deps,

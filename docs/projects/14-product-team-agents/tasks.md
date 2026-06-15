@@ -661,8 +661,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > phase is done when a corrective (non-blind) retry passes and an exhausted task parks instead of
 > killing the run.
 
-- [ ] Carry structured rejection feedback in `TaskEvidence` and thread it back through
+- [x] Carry structured rejection feedback in `TaskEvidence` and thread it back through
       `runTaskWithRetries` → `runTaskWorkflow` into the retrying role's input.
+      (`project-orchestrator.ts`, `team-task-workflow.ts`, `team-task-deps.ts`; focused
+      retry-threading test green; production task binding suite green.)
 - [ ] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
       loop) so QA revises against feedback before escalating.
 - [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
