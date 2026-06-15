@@ -422,11 +422,11 @@ async function startApply(
         // status. This is the second of the two terminal supervision writers
         // (the applier wrote the parked record first); without the override this
         // writer would clobber it back to completed/failed. Gated on
-        // `kind === 'work-run'` (parking is a work-run concept — Project 13
-        // Background §6) so the stringly-typed `parked` flag can only divert
-        // supervision for the applier that actually emits it.
+        // work appliers that can preserve a run worktree, so the stringly-typed
+        // `parked` flag can only divert supervision for appliers that actually
+        // emit it.
         const parked =
-          descriptor.kind === 'work-run' &&
+          (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') &&
           (event.data as Record<string, unknown> | undefined)?.['parked'] === true;
         const supervisionStatus: SupervisedRun['status'] = parked
           ? 'blocked-on-human'

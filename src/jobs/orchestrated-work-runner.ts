@@ -14,6 +14,8 @@
  *   - held      → completed, flagged `held` (finalizer unavailable: the run
  *                 stops branch-complete with the handoff recorded, NEVER a
  *                 self-merge — spec req 17)
+ *   - parked blocked → completed, flagged `parked` with the operator worktree
+ *                 path; supervision remains blocked-on-human until release
  *   - blocked   → failed, carrying the durable block reason (spec req 13/14)
  *
  * Every effect is injected through `OrchestratedRuntimeDeps` so the apply→event
@@ -170,6 +172,7 @@ function buildOrchestrationDeps(args: {
     project: projectSlug,
     product,
     branch,
+    worktreePath: sandbox.worktree,
     baseBranch,
     // Per-task attempt cap (re-invoke the whole workflow on a non-objection
     // failure). The team-task-workflow runs its own internal round cap; this
@@ -309,6 +312,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     }
 
     let sandbox: SandboxSpec | null = null;
+    let preserveWorktree = false;
     try {
       try {
         sandbox = await deps.createWorktree({
@@ -370,9 +374,10 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         return;
       }
 
+      preserveWorktree = result.kind === 'blocked' && result.parked?.preserveWorktree === true;
       yield mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
     } finally {
-      if (sandbox) {
+      if (sandbox && !preserveWorktree) {
         try {
           await deps.destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -384,6 +389,10 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             error: (err as Error).message,
           });
         }
+      } else if (sandbox && preserveWorktree) {
+        log.info('orchestrated-work-runner: preserving parked worktree', {
+          sandbox: sandbox.worktree,
+        });
       }
     }
   },
@@ -411,6 +420,18 @@ function mapResultToTerminal(
       branch: result.handoff.branch,
       baseBranch,
       taskCount: result.handoff.taskRecords.length,
+    });
+  }
+  if (result.parked !== undefined) {
+    return term(mutationId, 'completed', {
+      ...base,
+      parked: true,
+      reason: scrubPathsInText(`orchestration parked on "${result.task.text}": ${result.reason}`),
+      operatorWorktreePath: result.parked.worktreePath,
+      branch: result.parked.branch,
+      baseBranch,
+      preserveBranch: result.parked.preserveBranch,
+      preserveWorktree: result.parked.preserveWorktree,
     });
   }
   // blocked

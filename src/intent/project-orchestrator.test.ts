@@ -183,7 +183,7 @@ describe('project-orchestrator — block', () => {
     const res = await runProjectOrchestration({
       ...h.deps,
       worktreePath,
-    } as OrchestrationDeps & { worktreePath: string });
+    });
 
     expect(res.kind).toBe('blocked');
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');

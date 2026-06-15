@@ -167,13 +167,9 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
-    it('Phase 1b scope (project 13): a blocked orchestrated run is FAILED + worktree destroyed, never parked', async () => {
-      // Parking is the legacy `work-run` applier's behavior ONLY. The
-      // orchestrated applier never spawns the `/work --auto` process the
-      // JARVIS_WORK_RUN_SENTINEL rides on, and it maps a human-block to `failed`
-      // + unconditional worktree teardown in its finally. This documents the
-      // legacy-only boundary (spec.md Background §6 / Non-Goals) — a
-      // verify-not-implement regression, green today.
+    it('ordinary blocked orchestrated runs are FAILED + worktree destroyed, never parked', async () => {
+      // Only explicit parked orchestration results preserve the worktree. A
+      // normal block still fails terminally and tears down the sandbox.
       inject({
         kind: 'blocked',
         reason: 'a task needs a human decision',
@@ -189,6 +185,32 @@ describe('orchestratedWorkApplier', () => {
       expect(data['operatorWorktreePath']).toBeUndefined();
       // The worktree is unconditionally torn down (never left live for a human).
       expect(destroyed).toBe(true);
+    });
+
+    it('parked blocked-on-human orchestrated runs complete with parked metadata and preserve the worktree', async () => {
+      const parkedPath = '/tmp/jarvis-worktrees/jarvis/demo';
+      inject({
+        kind: 'blocked',
+        reason: 'feedback retry cap exhausted',
+        task: { id: 't1', text: 'task one', section: 'Phase 1' },
+        parked: {
+          status: 'blocked-on-human',
+          branch: 'jarvis-work/demo',
+          worktreePath: parkedPath,
+          preserveBranch: true,
+          preserveWorktree: true,
+        },
+      });
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal?.kind).toBe('completed');
+      const data = (terminal?.data ?? {}) as Record<string, unknown>;
+      expect(data['parked']).toBe(true);
+      expect(data['operatorWorktreePath']).toBe(parkedPath);
+      expect(data['branch']).toBe('jarvis-work/demo');
+      expect(data['preserveBranch']).toBe(true);
+      expect(data['preserveWorktree']).toBe(true);
+      expect(destroyed).toBe(false);
     });
 
     it('worktree-create failure → failed terminal event, no destroy of a non-existent tree', async () => {

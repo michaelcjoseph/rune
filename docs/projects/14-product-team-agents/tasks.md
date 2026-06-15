@@ -672,8 +672,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
       (`team-task-workflow.ts`, `team-task-deps.ts`; coder-feedback and no-blind-redo tests
       green; relevant suites now show only the expected park-not-kill red.)
-- [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
+- [x] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
       (reuse the Project 13 parked-run machinery); hold the project run at that task.
+      (`project-orchestrator.ts`, `orchestrated-work-runner.ts`, `mutations.ts`; relevant
+      Phase 11A/orchestrated-runner/mutation tests green.)
 
 > **User-reachability:** YES — after this phase, a gate rejection becomes a corrective retry (QA/coder
 > revise WITH the rejecting role's notes), and a genuinely-stuck task parks for the operator with its

@@ -49,6 +49,8 @@ export interface OrchestrationDeps {
   product: string;
   /** Work branch handed to the finalizer. */
   branch: string;
+  /** Operator-visible worktree path for parked blocked-on-human runs. */
+  worktreePath?: string;
   /** Base branch a gated merge would land on. */
   baseBranch?: string;
   /** Per-task attempt cap. */
@@ -81,7 +83,15 @@ export interface OrchestrationDeps {
 export type OrchestrationResult =
   | { kind: 'finalized'; outcome: string }
   | { kind: 'held'; handoff: FinalizerHandoff }
-  | { kind: 'blocked'; reason: string; task: SelectedTask };
+  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun };
+
+export interface ParkedTaskRun {
+  status: 'blocked-on-human';
+  branch: string;
+  worktreePath: string;
+  preserveBranch: true;
+  preserveWorktree: true;
+}
 
 /** Run the whole project loop to a terminal result. */
 export async function runProjectOrchestration(
@@ -122,10 +132,12 @@ export async function runProjectOrchestration(
     // Run the workflow, retrying within the attempt cap on non-objection failures.
     const evidence = await runTaskWithRetries(deps, task, assembled.handoff, contextMd);
     if (evidence.outcome !== 'ready-for-closeout') {
+      const parked = maybeParkedRun(deps, evidence);
       return {
         kind: 'blocked',
         reason: evidence.blockedReason ?? evidence.failureReason ?? 'task did not reach closeout',
         task,
+        ...(parked !== undefined ? { parked } : {}),
       };
     }
 
@@ -249,4 +261,25 @@ async function performCloseout(
 
 function countTasks(tasksMd: string): number {
   return (tasksMd.match(/^\s*-\s*\[[ xX]\]/gm) ?? []).length;
+}
+
+function maybeParkedRun(
+  deps: OrchestrationDeps,
+  evidence: TaskEvidence,
+): ParkedTaskRun | undefined {
+  if (evidence.outcome !== 'blocked' || evidence.objectionOpen || deps.worktreePath === undefined) {
+    return undefined;
+  }
+  const reason = evidence.blockedReason ?? '';
+  const exhaustedFeedbackRetry =
+    evidence.rejectionFeedback !== undefined ||
+    /feedback retry cap|round cap/i.test(reason);
+  if (!exhaustedFeedbackRetry) return undefined;
+  return {
+    status: 'blocked-on-human',
+    branch: deps.branch,
+    worktreePath: deps.worktreePath,
+    preserveBranch: true,
+    preserveWorktree: true,
+  };
 }
