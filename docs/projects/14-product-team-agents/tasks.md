@@ -10,6 +10,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > This is the merged project formerly split between product-team role agents and
 > Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
 > planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
+>
+> **Autonomy rule for reopened phases:** Phases 10-12 must be runnable by `/work --auto`
+> without human choices, manual repo setup, production push credentials in tests, or
+> interactive approval. If a task needs a choice, the default and fallback are named here.
 
 ## Phase 1 - Role substrate
 
@@ -627,8 +631,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Heartbeat-advance test: a long-running injected role session advances
       `lastHeartbeatAt`/`lastOutputAt` mid-run; supervision never reads the working run as quiet.
 - [ ] Codex-stream test: `runCodex` with an injected `onStdout`/`onEvent` callback fires
-      per-line as data arrives (not only at `close`); an empty run fires none; if `--json` is
-      chosen, a structured event maps to one display line.
+      per-line as data arrives (not only at `close`); an empty run fires none; `codex exec
+      --json` events map to display lines, and malformed/unsupported JSONL falls back to
+      scrubbed raw-line streaming with fallback metadata.
 - [ ] Claude-artifact-stream test: `spawnClaudeAgent` forwards stream-json envelopes as
       `output`/`activity` through the shared `streamJsonToDisplay` mapping — parity with the
       legacy work-runner, no plain-stdout accumulation.
@@ -674,8 +679,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       commit sha, finalizer handoff/hold, block reason.
 - [ ] Emit role-transition + verdict/objection events from the team-task workflow.
 - [ ] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.
-      **Decide** raw-line vs `codex exec --json` (recommend `--json` + a `streamJsonToDisplay`
-      analog); record the choice and fallback.
+      Implement `codex exec --json` + a `streamJsonToDisplay` analog as the default; if the
+      installed CLI lacks `--json` or emits malformed JSONL, automatically fall back to
+      scrubbed raw-line streaming and record that fallback in run metadata. No human decision.
 - [ ] Stream the claude artifact path: route `spawnClaudeAgent` through
       `--output-format stream-json --verbose` + the shared display mapping for parity.
 - [ ] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
@@ -697,8 +703,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
       ≥N intermediate stream events from BOTH executors and `lastHeartbeatAt` advanced during
       execution; (b) a clean run drives all the way to a MERGED base branch (gated); (c) a
-      deliberately gate-failing run records a hold. Supersedes the Phase 8 branch-complete-held
-      acceptance — stub-free proof both the observability and auto-merge gaps are closed.
+      deliberately gate-failing run records a hold. Use a self-contained temp repo and local
+      bare remote for merge/push assertions, so the harness needs no production credentials or
+      operator action. Supersedes the Phase 8 branch-complete-held acceptance — stub-free proof
+      both the observability and auto-merge gaps are closed.
 - [ ] Record the transcript/finalizer-substrate decisions at closeout (e.g. the WORK_RUNS_DIR
       layout reuse and any orchestrated-specific gate config), and reverse the Phase 8
       deliberate-hold ADR note.
@@ -736,10 +744,12 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 **B. Crash recovery & resumable runs**
 
 - [ ] Record-persistence test: `TaskRunRecord`s + a run cursor are written to a durable store and
-      read back to reconstruct a partial run.
+      read back to reconstruct a partial run; the resume marker carries product, branch, base,
+      worktree, cursor, and attempt-cap data needed for autonomous restart.
 - [ ] Resume test: a still-`running` orchestrated mutation at boot is reconstructed
       (`reconstructRun`) and re-dispatched against its existing branch, resuming from the first
-      unchecked task — not flipped to `failed/orphaned`.
+      unchecked task — not flipped to `failed/orphaned`; a single-run lease prevents two
+      processes from resuming the same mutation concurrently.
 - [ ] No-double-terminal test: crash recovery never writes a terminal for a run that will resume,
       and the pipeline never lands two terminal records for one id (skip-if-terminal guard).
 - [ ] Worktree-preserve test: the orphan-worktree sweep skips a run marked for resume (or the
@@ -764,10 +774,11 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **B. Crash recovery & resumable runs**
 
-- [ ] Build the `TaskRunRecord` JSONL store + run cursor (the persistence layer
+- [ ] Build the `TaskRunRecord` JSONL store + run cursor + resume marker (the persistence layer
       `orch-run-record.ts` promises); reuse Phase 10's transcript as part of the record set.
 - [ ] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
-      orchestrated mutation against its branch instead of the blind `reconcileOrphans` flip.
+      or `resumable` orchestrated mutation against its branch instead of the blind
+      `reconcileOrphans` flip; guard with a single-run lease.
 - [ ] Make `reconcileOrphans` orchestration-aware + idempotent (never terminal-write a
       resumable run; skip-if-already-terminal), and add a graceful-shutdown drain that marks
       in-flight orchestrated runs `resumable` rather than leaving a bare `running` line.
@@ -789,7 +800,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > gets an exemplar of good output, and a gate block leaves zero durable lesson (the learning
 > loop is nightly + explicit-feedback-only, `feedback-record.ts:5`). Where Phase 11A makes a
 > rejection fix the current attempt, Phase 12 makes it teach the next. See spec.md §"Phase 12"
-> and requirements 54-61.
+> and requirements 54-62.
 
 ### Tests (write first)
 
@@ -801,6 +812,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       a correctly-pinned redaction test (real token in, raw token asserted absent).
 - [ ] Per-project exemplar test: the tech-lead planning output emits per-project exemplars,
       persisted with the project and surfaced to the relevant role's context.
+- [ ] Exemplar-fail-safe test: missing or over-budget exemplar files degrade to a visible
+      low-authority note and do not block role invocation.
 
 **B. Gate-triggered learning**
 
@@ -815,6 +828,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       reference context (the Phase 6 compounding path).
 - [ ] No-double-write test: the nightly loop and the gate-time path share one write path and do
       not double-write the same lesson (the `memory-writer.ts` dedupe is the guard).
+- [ ] Learning-fail-safe test: lesson drafting, validation, or memory-write failure records a
+      durable skip/error and does not block the current corrective retry path.
 - [ ] Confirm red before implementation.
 
 ### Implementation
@@ -831,7 +846,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Extend the tech-lead planning output to emit per-project exemplars (alongside test
       strategy), persisted with the project.
 - [ ] Add the exemplar channel to `composeRoleContext` (`loader.ts`): charter + memory +
-      exemplars, budget-bounded as low-authority reference.
+      exemplars, budget-bounded as low-authority reference; missing/invalid exemplars degrade
+      visibly and never block a role call.
 
 **B. Gate-triggered learning**
 
@@ -841,6 +857,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
       write via `writeRoleLesson` into the counterpart's memory; fail safe to no-lesson.
 - [ ] Confirm the gate-time path and nightly loop share one write path without double-writing.
+- [ ] Record durable skip/error metadata when drafting, validation, or memory writing fails, and
+      keep the Phase 11 corrective retry path moving.
 - [ ] **Live acceptance:** a forced QA→tech-lead redaction rejection writes a validated QA lesson
       and leaves the exemplar; a re-run loads both and the QA output passes the gate.
 

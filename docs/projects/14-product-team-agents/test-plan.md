@@ -157,6 +157,80 @@ acceptance criteria.
       seam and mode-visibility tests, so closeout cannot mark the project complete while
       orchestrated work is still not user-reachable.
 
+## 10. Execution observability parity
+
+- [ ] Critical: A working orchestrated run emits `activity`/`output` events between the start
+      and terminal events when roles report activity; the old two-event gap is impossible.
+- [ ] Critical: `lastHeartbeatAt` and `lastOutputAt` advance during a long-running role
+      session, and the quiet-nudge / quiet-cancel path does not fire while activity streams.
+- [ ] Critical: `runCodex` streams incrementally before process close. `codex exec --json` is
+      the default; unsupported or malformed JSONL falls back automatically to scrubbed raw-line
+      streaming with fallback metadata.
+- [ ] Critical: Claude artifact-role sessions use stream-json display mapping and stream
+      through the same event sink as Codex roles.
+- [ ] Critical: Team-task workflow emits labeled role-stage transitions and verdict/objection
+      summaries with role/provider/model attribution.
+- [ ] Critical: Every streamed line is path/secret-scrubbed before it leaves the process.
+- [ ] Critical: A completed orchestrated run writes `transcript.jsonl`, `summary.json`, and
+      work-product classification under `WORK_RUNS_DIR/<runId>/`.
+- [ ] Critical: A clean `branch-complete` orchestrated run invokes the Project 15 finalizer in
+      `gated-merge` mode and merges/pushes only through the gate.
+- [ ] Critical: Failed finalizer gate or open objection-class finding records a hold and never
+      touches the base branch.
+- [ ] Critical: The Phase 8 finalizer `unavailable` hold stub is removed and regression-guarded.
+- [ ] High: Cockpit run projection shows the orchestrated transcript tail / last output while
+      the run is active.
+- [ ] High: Live acceptance uses a self-contained temp repo and local bare remote for
+      merge/push assertions, with no production push credentials or operator action.
+
+## 11. Orchestration resilience
+
+- [ ] Critical: Gate rejection evidence includes structured feedback: rejecting role,
+      counterpart/rejected role, rejected artifact, what failed, and actionable notes.
+- [ ] Critical: QA test-intent rejection enters a bounded QA rewrite loop with the tech-lead's
+      feedback in the next QA input; it is not a one-shot block.
+- [ ] Critical: Coder retry inputs include reviewer and tech-lead-diff feedback from the
+      failed round; no retry path repeats identical role inputs with no feedback.
+- [ ] Critical: Exhausted feedback retries park blocked-on-human with branch/worktree
+      preserved, and the project run holds at the selected task instead of ending
+      destructively.
+- [ ] Critical: `TaskRunRecord`s, run cursor, and resume marker persist enough product,
+      branch, base, worktree, cursor, and attempt-cap data to reconstruct a partial run.
+- [ ] Critical: Boot recovery reconstructs still-running/resumable orchestrated mutations and
+      re-dispatches against the existing branch instead of orphaning them.
+- [ ] Critical: A single-run lease prevents two server processes from resuming the same
+      mutation concurrently.
+- [ ] Critical: Terminal writes are idempotent; crash recovery and late generator drain cannot
+      append two terminal records for one mutation id.
+- [ ] Critical: Orphan-worktree cleanup skips resumable runs, or branch-resume rebuilds the
+      worktree deterministically before execution resumes.
+- [ ] High: Live acceptance injects a restart mid-run and verifies completion with exactly one
+      terminal, plus a forced gate rejection that passes after a corrective retry.
+
+## 12. Role learning and exemplars
+
+- [ ] Critical: `composeRoleContext` loads SOUL as authority and memory/exemplars as
+      low-authority reference; exemplars are budget-bounded and visibly truncated/skipped when
+      invalid.
+- [ ] Critical: Each role has a permanent `agents/<role>/examples/` baseline; QA includes a
+      correct redaction/security-boundary test using real secret-shaped input and asserting raw
+      secret absence.
+- [ ] Critical: Tech-lead planning emits per-project exemplars, persists them with the project,
+      and the relevant role invocation receives them.
+- [ ] Critical: Each gate block emits the same structured rejection record used by Phase 11
+      corrective retries; learning does not invent a second schema.
+- [ ] Critical: The rejecting role may draft a candidate lesson, but a neutral Jarvis validation
+      pass privacy-filters, dedupes, attributes, and may fail safe to no-lesson before any
+      memory write.
+- [ ] Critical: Passing gate-time validation writes the lesson to the counterpart role's
+      memory through `writeRoleLesson`; roles never write memory directly.
+- [ ] Critical: Gate-time learning and the nightly feedback loop share the same write/dedupe
+      path and do not double-write the same lesson.
+- [ ] Critical: Drafting, validation, exemplar load, or memory-write failure records a durable
+      skip/error and does not block the current corrective retry path.
+- [ ] High: Live acceptance forces a QA->tech-lead redaction rejection, writes a validated QA
+      lesson, then verifies a re-run loads the lesson/exemplar and passes the gate.
+
 ---
 
 ## Integration Verification

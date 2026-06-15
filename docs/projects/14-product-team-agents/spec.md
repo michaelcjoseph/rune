@@ -1,15 +1,18 @@
 # Product-Team Orchestrated Work Specification
 
-> **Status: REOPENED 2026-06-14 — Phase 10 (execution observability parity).**
+> **Status: REOPENED 2026-06-14 — Phases 10-12 (observability, resilience, learning).**
 > Phases 1-9 shipped the role substrate, planning, per-task orchestration, the live
 > execution binding (Phase 8 — proof `live-acceptance-6abf35cf.md`), and the planning
 > critique pass (Phase 9). Orchestrated runs now do real work — but they do it blind:
 > the applier emits only a "starting" `log` and one terminal event, so codex and claude
 > role activity never reaches the cockpit stream, and the supervision heartbeat goes
 > stale mid-run (it advances only on `output`/`activity` events the orchestrated path
-> never emits). Remaining scope is **Phase 10** below: stream role activity and advance
-> the heartbeat for both executors, at first-class parity with the legacy `/work --auto`
-> work-runner. Both Claude and Codex runs are observable and treated equally.
+> never emits). The same project-17 run also exposed blind retries, non-resumable crash
+> recovery, and cold-start roles with no exemplars. Remaining scope is **Phases 10-12**
+> below: stream role activity and advance the heartbeat for both executors, produce the
+> finalizer substrate for gated auto-merge, make retries/restarts resilient, and make
+> gate failures teach future runs. Both Claude and Codex runs are observable and treated
+> equally.
 >
 > *(Prior reopen, 2026-06-10: Phases 8-9 — live execution binding + planning critique —
 > now DONE.)*
@@ -546,7 +549,8 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 51. WHEN orchestrated run state is persisted THEN `TaskRunRecord`s and a run cursor are written
     to disk so a partial run is reconstructable via `reconstructRun`.
 52. WHEN crash recovery runs THEN it never writes a terminal for a run that will resume, and the
-    pipeline never lands two terminal records for one mutation id.
+    pipeline never lands two terminal records for one mutation id; a single-run lease prevents
+    concurrent double-resume of the same mutation.
 53. WHEN a run is marked for resume THEN the orphan-worktree sweep preserves its worktree (or the
     branch-resume path rebuilds it on re-dispatch).
 
@@ -569,10 +573,19 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     low-authority reference context (the Phase 6 compounding path).
 61. WHEN both the nightly loop and the gate-time path can write a lesson THEN they share one write
     path and do not double-write the same lesson.
+62. WHEN exemplar loading, lesson drafting, validation, or memory writing fails THEN Jarvis
+    records a durable skip/error and continues the current corrective retry path.
 
 ---
 
 ## Implementation Phases
+
+**Autonomy constraint for reopened phases.** Phases 10-12 must be executable by an
+autonomous `/work --auto` run with no operator decisions, no manual repo setup, no production
+push in tests, and no interactive approval. Where an implementation choice is needed, this
+spec names the default and a deterministic fallback. Live acceptance uses self-contained
+temporary repositories and local bare remotes unless it is explicitly exercising the normal
+production runtime path through injected seams.
 
 ### Phase 1: Role substrate
 
@@ -732,10 +745,11 @@ callback). Neither claude nor codex role activity is observable inside orchestra
 5. **Stream the codex executor.** Add an incremental `onStdout`/`onEvent` callback to
    `runCodex` fired per line as data arrives (the `child.stdout` handler at `codex.ts:273`
    already accumulates — split into lines and fire, mirroring `work-runner.ts:1316-1321`).
-   **Decision required:** raw-line streaming (cheap, ships now) vs `codex exec --json` (JSONL
-   event stream — codex's analog to claude's `--output-format stream-json`). Recommend
-   `--json` with a label mapper analogous to `streamJsonToDisplay`, so codex activity renders
-   as cleanly and structured as claude's. Record the choice and the fallback.
+   Implement `codex exec --json` first, with a label mapper analogous to
+   `streamJsonToDisplay`, so codex activity renders as cleanly and structured as claude's.
+   If the installed Codex CLI does not support `--json` or emits malformed JSONL, fall back
+   automatically to scrubbed raw-line streaming and record that fallback in the run metadata.
+   No human decision is allowed on this path.
 6. **Stream the claude artifact path for parity.** `spawnClaudeAgent` (`execution-agent.ts:198`)
    spawns `claude -p` with plain stdio and accumulates `stdout`. Route it through
    `--output-format stream-json --verbose` and the same `streamJsonToDisplay` → `output`/
@@ -790,8 +804,10 @@ orchestrated runs is binding effects, not new merge logic.
     holds the branch at branch-complete with the handoff payload recorded (req 25). Auto-merge
     is the clean-run terminal, not an unconditional one.
 16. **Extend the live acceptance harness again** to drive a clean orchestrated run all the way
-    to a merged base branch (gated), and a deliberately-gate-failing run to a recorded hold —
-    proving both terminals. This supersedes the Phase 8 "branch-complete held" acceptance.
+    to a merged base branch (gated) in a self-contained temp repo with a local bare remote, and
+    a deliberately-gate-failing run to a recorded hold — proving both terminals without
+    production push credentials or operator action. This supersedes the Phase 8
+    "branch-complete held" acceptance.
 
 ### Phase 11: Orchestration resilience (reopened 2026-06-14)
 
@@ -854,15 +870,20 @@ orphaning it, and no run ever lands two terminal records.
 **Work items — B. Crash recovery & resumable runs.**
 
 5. **Persist orchestrated run state.** Build the `TaskRunRecord` JSONL store
-   (`orch-run-record.ts`'s header already promises it) plus a run cursor, so a partial run is
-   reconstructable from disk. Reuse Phase 10's durable transcript as part of the record set.
-6. **Resume, don't orphan, on boot.** Route a still-`running` orchestrated mutation through
-   `reconstructRun` (`orch-reconstruct.ts`) + a re-dispatch against its existing branch, instead
-   of the blind `reconcileOrphans` flip. Resume from `tasks.md` + branch commits + records.
+   (`orch-run-record.ts`'s header already promises it) plus a run cursor and resume marker
+   keyed by mutation id/run id, so a partial run is reconstructable from disk. Reuse Phase 10's
+   durable transcript as part of the record set. The marker must include enough product,
+   branch, base, worktree, cursor, and attempt-cap data to resume without asking an operator.
+6. **Resume, don't orphan, on boot.** Route a still-`running` or `resumable` orchestrated
+   mutation through `reconstructRun` (`orch-reconstruct.ts`) + a re-dispatch against its
+   existing branch, instead of the blind `reconcileOrphans` flip. Resume from `tasks.md` +
+   branch commits + records under a single-run lease so two server processes cannot resume the
+   same mutation concurrently.
 7. **Make orphaning idempotent and orchestration-aware.** `reconcileOrphans` must not write a
    terminal for a run that will resume, and the pipeline must never land two terminals for one id
-   (skip-if-already-terminal guard). Add a graceful-shutdown drain that flips in-flight
-   orchestrated runs to a durable `resumable` state rather than leaving a bare `running` line.
+   (skip-if-already-terminal guard before every terminal append). Add a graceful-shutdown drain
+   that flips in-flight orchestrated runs to a durable `resumable` state rather than leaving a
+   bare `running` line.
 8. **Don't sweep a resumable run's worktree** (or rely on `createWorktree`'s branch-resume to
    rebuild it) — `cleanupOrphanWorktrees` must skip a run marked for resume.
 9. **Live acceptance:** a restart injected mid-run resumes to completion with no orphaned record
@@ -927,6 +948,10 @@ that a re-run uses to pass.
 8. **Live acceptance:** a forced QA→tech-lead redaction rejection writes a validated QA lesson and
    the exemplar is present; a re-run loads both into QA's reference context and the QA output
    passes the gate — stub-free proof the team now learns from a gate failure.
+9. **Fail safe without blocking the task path.** If exemplar loading, lesson drafting,
+   validation, or memory writing fails, record a durable skip/error and continue the Phase 11
+   corrective retry path. Gate-time learning must improve future runs, not make the current
+   run depend on a memory write.
 
 ---
 
@@ -958,6 +983,7 @@ that a re-run uses to pass.
 | Roles have exemplars | always | Each role invocation includes reference exemplars of good output (baseline + per-project) |
 | Gate failures teach | always | Every gate rejection yields a neutral-validated lesson in the counterpart's memory at gate-time |
 | Neutral guard preserved | always | Roles never write memory directly; a neutral Jarvis pass attributes and filters every lesson |
+| Learning failures are non-blocking | always | Exemplar/lesson failures record durable skip/error metadata and do not block the current corrective retry |
 
 ---
 
