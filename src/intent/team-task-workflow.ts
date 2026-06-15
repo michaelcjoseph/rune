@@ -216,32 +216,45 @@ async function runGated(
 
   // Gate 1: QA-first — tests (or a no-code-test rationale) before the coder.
   const carriedFeedback = normalizeFeedback(input.rejectionFeedback);
-  const qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
+  let qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
   const coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
-  roles.add('qa');
-  const qa = await deps.qaWriteTests({
-    task,
-    spec: input.spec,
-    ...(qaFeedback !== undefined ? { rejectionFeedback: qaFeedback } : {}),
-  });
-  const noCodeTestRationale =
-    qa.kind === 'no-code-test-rationale' ? qa.rationale : undefined;
-  const tests: string[] | string = qa.kind === 'tests-written' ? qa.testIds : qa.rationale;
+  let qa: QaResult | undefined;
+  let noCodeTestRationale: string | undefined;
+  let tests: string[] | string | undefined;
+  for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
+    roles.add('qa');
+    qa = await deps.qaWriteTests({
+      task,
+      spec: input.spec,
+      ...(qaFeedback !== undefined ? { rejectionFeedback: qaFeedback } : {}),
+    });
+    noCodeTestRationale =
+      qa.kind === 'no-code-test-rationale' ? qa.rationale : undefined;
+    tests = qa.kind === 'tests-written' ? qa.testIds : qa.rationale;
 
-  // Gate 2: tech lead reviews the test intent BEFORE the coder starts.
-  roles.add('tech-lead');
-  const tlTests = await deps.techLeadReviewTests({ task, qa });
-  if (!tlTests.approved) {
+    // Gate 2: tech lead reviews the test intent BEFORE the coder starts.
+    roles.add('tech-lead');
+    const tlTests = await deps.techLeadReviewTests({ task, qa });
+    if (tlTests.approved) break;
+
     const reason = tlTests.notes?.trim() || 'tech-lead rejected test intent';
+    qaFeedback = buildGateRejectionFeedback({
+      rejectingRole: 'tech-lead',
+      counterpartRole: 'qa',
+      artifact: 'test-intent',
+      reason,
+    });
+    if (qaAttempt === input.cap - 1) {
+      return block(task, roles, handoffNotes, {
+        blockedReason: reason,
+        rejectionFeedback: qaFeedback,
+        noCodeTestRationale,
+      });
+    }
+  }
+  if (qa === undefined || tests === undefined) {
     return block(task, roles, handoffNotes, {
-      blockedReason: reason,
-      rejectionFeedback: buildGateRejectionFeedback({
-        rejectingRole: 'tech-lead',
-        counterpartRole: 'qa',
-        artifact: 'test-intent',
-        reason,
-      }),
-      noCodeTestRationale,
+      blockedReason: 'QA test intent was not produced',
     });
   }
 

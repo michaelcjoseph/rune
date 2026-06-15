@@ -665,8 +665,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `runTaskWithRetries` → `runTaskWorkflow` into the retrying role's input.
       (`project-orchestrator.ts`, `team-task-workflow.ts`, `team-task-deps.ts`; focused
       retry-threading test green; production task binding suite green.)
-- [ ] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
+- [x] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
       loop) so QA revises against feedback before escalating.
+      (`team-task-workflow.ts`; focused QA rewrite tests green; relevant suites now show only
+      the expected coder-feedback/no-blind-redo/park-not-kill reds.)
 - [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
 - [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
       (reuse the Project 13 parked-run machinery); hold the project run at that task.
