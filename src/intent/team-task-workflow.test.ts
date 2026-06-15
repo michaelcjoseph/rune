@@ -343,6 +343,49 @@ describe('team-task-workflow — round cap', () => {
     );
   });
 
+  it('does not blindly redo a retryable role with identical inputs and no feedback', async () => {
+    const coderInputs: Array<{
+      task: SizedTask;
+      spec: string;
+      context: string;
+      tests: string[] | string;
+      rejectionFeedback?: GateRejectionFeedback[];
+    }> = [];
+    let reviewerCalls = 0;
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(
+          input as {
+            task: SizedTask;
+            spec: string;
+            context: string;
+            tests: string[] | string;
+            rejectionFeedback?: GateRejectionFeedback[];
+          },
+        );
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => {
+        reviewerCalls += 1;
+        return reviewerCalls === 1 ? { pass: false, objections: [] } : cleanVerdict;
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    const retryPayloads = coderInputs.map((input) => ({
+      taskId: input.task.id,
+      spec: input.spec,
+      context: input.context,
+      tests: input.tests,
+      rejectionFeedback: input.rejectionFeedback ?? null,
+    }));
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(retryPayloads).toHaveLength(2);
+    expect(retryPayloads[1]).not.toEqual(retryPayloads[0]);
+    expect(retryPayloads[1]?.rejectionFeedback).not.toBeNull();
+  });
+
   it('routes non-objection disagreement at the cap to PM wrap-up', async () => {
     let pmCalled = false;
     const deps = makeDeps({
