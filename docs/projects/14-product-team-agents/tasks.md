@@ -632,8 +632,10 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Feedback-carried test: a gate rejection surfaces structured feedback (rejecting role,
       what it rejected, actionable notes) in the task evidence, not just a `blockedReason` string.
       (`team-task-workflow.test.ts`; confirmed red, then green with `GateRejectionFeedback`.)
-- [ ] QA-rewrite-loop test: a tech-lead test-intent rejection re-invokes `qaWriteTests` WITH the
+- [x] QA-rewrite-loop test: a tech-lead test-intent rejection re-invokes `qaWriteTests` WITH the
       tech-lead's notes, bounded by a small cap, before the task escalates — not a one-shot block.
+      (`team-task-workflow.test.ts`; confirmed red: current workflow returns `blocked` after the
+      first tech-lead rejection instead of a second QA invocation.)
 - [ ] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
       WITH the reviewer + tech-lead notes from the failed round, not identical inputs.
 - [ ] No-blind-redo regression: no retry path re-runs a role with identical inputs and no

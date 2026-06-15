@@ -125,6 +125,41 @@ describe('team-task-workflow — QA-first', () => {
       actionableNotes: ['tests miss the rollover case'],
     });
   });
+
+  it('re-invokes QA with tech-lead feedback before escalating a rejected test intent', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: unknown }> = [];
+    const techLeadReviews: string[] = [];
+    let coderCalled = false;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: unknown });
+        return { kind: 'tests-written', testIds: [`t${qaInputs.length}`] };
+      },
+      techLeadReviewTests: async ({ qa }) => {
+        techLeadReviews.push(qa.kind === 'tests-written' ? qa.testIds.join(',') : qa.rationale);
+        return techLeadReviews.length === 1
+          ? { approved: false, notes: 'add a rollover assertion before coding' }
+          : { approved: true };
+      },
+      coder: async () => {
+        coderCalled = true;
+        return { diff: 'd', handoffNotes: [] };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderCalled).toBe(true);
+    expect(qaInputs).toHaveLength(2);
+    expect(techLeadReviews).toEqual(['t1', 't2']);
+    expect(qaInputs[1]?.rejectionFeedback).toMatchObject({
+      rejectingRole: 'tech-lead',
+      rejectedRole: 'qa',
+      rejectedArtifact: 'test-intent',
+      actionableNotes: ['add a rollover assertion before coding'],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
