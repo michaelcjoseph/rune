@@ -533,7 +533,10 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 46. WHEN the orchestrated finalizer wiring lands THEN the Phase 8 `unavailable` hold stub is
     gone and cannot reappear without failing a regression test.
 
-### Orchestration resilience (Phase 11)
+### Orchestration resilience (Phases 11A + 11B)
+
+> Reqs 47-49 → Phase 11A (feedback retries + park-not-kill; built out of band, first). Reqs 50-53 →
+> Phase 11B (crash recovery & resumable runs; via the orchestrator, after Phase 10).
 
 47. WHEN a role gate rejects (tech-lead test intent, reviewer, tech-lead diff, designer) THEN
     the rejection's structured feedback is threaded into that role's next attempt; no retry
@@ -561,7 +564,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 55. WHEN the tech lead completes planning THEN it emits per-project exemplars for the relevant
     roles, persisted with the project.
 56. WHEN a gate rejects THEN a structured rejection record (rejecting role, counterpart role, what
-    failed, actionable notes) is produced — the same object threaded into the Phase 11 retry.
+    failed, actionable notes) is produced — the same object threaded into the Phase 11A retry.
 57. WHEN a gate-rejection record exists THEN the rejecting role drafts a candidate lesson for the
     counterpart role.
 58. WHEN a candidate lesson is drafted THEN a neutral Jarvis validation pass privacy-filters,
@@ -586,6 +589,14 @@ push in tests, and no interactive approval. Where an implementation choice is ne
 spec names the default and a deterministic fallback. Live acceptance uses self-contained
 temporary repositories and local bare remotes unless it is explicitly exercising the normal
 production runtime path through injected seams.
+
+**Execution sequencing (decided 2026-06-15).** Phase 11A (gate-rejection feedback retries) is built
+FIRST and OUT OF BAND — a direct `/work` run in the CLI (codex or claude), or by hand — not the
+orchestrator. It is the retry-with-feedback resilience the orchestrator lacks, so building it through
+the orchestrator hits the one-shot-gate deadlock it fixes: any mid-build gate rejection is terminal,
+and a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the
+orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 — with gate
+rejections becoming corrective retries. Only Phases 10, 11B, and 12 are `/work --auto` targets.
 
 ### Phase 1: Role substrate
 
@@ -672,6 +683,45 @@ evidence of completion.
    branch-complete hold if Project 15 is still unwired.
 6. Add an acceptance test that exercises the real end-to-end path on a non-fixture task — the
    stub-free proof that this gap cannot recur.
+
+### Phase 11A: Gate-rejection feedback retries (reopened 2026-06-14) — build first, out of band
+
+> **Sequencing.** Built before Phase 10 and outside the orchestrator (direct CLI `/work`, codex or
+> claude). It is the retry resilience the orchestrator lacks — see the Execution sequencing note
+> above. Once it lands on main, gate rejections in every later orchestrated phase become corrective
+> retries instead of terminal blocks.
+
+**Retries discard the feedback that would fix them.** The overnight project-17 run — and again the
+2026-06-14 Phase 10 run — blocked on a one-shot tech-lead test-intent rejection. The tech-lead
+rejected with precise, actionable feedback; that feedback was recorded in `blockedReason` and then
+thrown away. The QA → tech-lead test-intent gate is one-shot (`team-task-workflow.ts:195` — a
+rejection returns `blocked`, no rewrite loop), and although the orchestrator retries the whole
+workflow up to the attempt cap (`decideAttemptOutcome` → `retry` while below cap,
+`orch-attempt-cap.ts:50`), every retry re-invokes `qaWriteTests({task, spec})` with identical inputs
+and zero feedback — blind redos of the same mistake, then the entire project run blocks. The coder
+round loop has the same defect: `deps.coder({task, spec, context, tests})`
+(`team-task-workflow.ts:208`) re-runs on reviewer/tech-lead disagreement without the reviewer's
+notes. A human reads the feedback and fixes the work; the orchestration cannot.
+
+**Definition of done.** A gate rejection threads its structured feedback into the rejected role's
+next attempt, so QA/coder revise *with* the feedback rather than blindly redoing; a task that still
+can't pass after bounded feedback-retries parks blocked-on-human with its worktree preserved, instead
+of ending the whole project run.
+
+**Work items.**
+
+1. **Carry rejection feedback in the evidence.** The workflow already records `blockedReason`/role
+   notes; surface them as structured `feedback` the orchestrator can pass back (which role, what it
+   rejected, the actionable notes).
+2. **Thread feedback into the retrying role.** On retry, `qaWriteTests` receives the tech-lead's
+   test-intent rejection notes; the coder receives the reviewer + tech-lead-diff notes from the
+   failed round; designer likewise where it gates. The retry is corrective, not a blind redo.
+3. **Make the QA → tech-lead test gate a bounded rewrite loop**, not a one-shot block — QA revises
+   against the tech-lead's notes up to a small cap, mirroring the coder→reviewer round loop, before
+   the task escalates.
+4. **Park, don't kill, on exhausted retries.** When a task can't pass after its feedback-retry cap,
+   route it to blocked-on-human with the worktree preserved (reuse the Project 13 parked-run
+   machinery); the project run holds at that task and the committed work and branch are not discarded.
 
 ### Phase 10: Execution observability parity (reopened 2026-06-14)
 
@@ -809,29 +859,15 @@ orchestrated runs is binding effects, not new merge logic.
     production push credentials or operator action. This supersedes the Phase 8
     "branch-complete held" acceptance.
 
-### Phase 11: Orchestration resilience (reopened 2026-06-14)
+### Phase 11B: Crash recovery & resumable runs (reopened 2026-06-14)
 
-The overnight project-17 orchestrated run exposed two failure modes that make orchestrated runs
-brittle in ways the task content didn't cause. Both are structural in the loop. Forensics:
-`mutations.jsonl` shows the run as `pending → failed/orphaned → failed/orchestration-blocked`,
-and the identical pattern repeats on the 2026-06-10 run — so both are systemic, not one-offs.
+Runs via the orchestrator after Phase 10 (it reuses Phase 10's durable transcript) and after Phase
+11A has landed. The feedback-retry failure mode that was bundled here moved to **Phase 11A** above;
+this section is the crash-recovery half. Forensics: `mutations.jsonl` shows the project-17 run as
+`pending → failed/orphaned → failed/orchestration-blocked`, and the identical pattern repeats on the
+2026-06-10 run — systemic, not a one-off.
 
-**A. Retries discard the feedback that would fix them.** The run blocked because QA fed
-*already-redacted* placeholder strings (`sk-<redacted>`, `Bearer <redacted>`) as test inputs,
-producing self-contradictory and vacuous redaction assertions. The tech-lead rejected with
-precise, actionable feedback ("use real secret-shaped tokens; assert the raw token is absent
-while the redacted placeholder is present"). That feedback was recorded in `blockedReason` and
-then thrown away. The QA → tech-lead test-intent gate is one-shot (`team-task-workflow.ts:196` —
-a rejection returns `blocked`, no rewrite loop), and although the orchestrator retries the whole
-workflow up to the attempt cap (`decideAttemptOutcome` → `retry` while below cap,
-`orch-attempt-cap.ts:50`), every retry re-invokes `qaWriteTests({task, spec})` with identical
-inputs and zero feedback — three blind redos of the same mistake, then the entire project run
-blocks. The coder round loop has the same defect: `deps.coder({task, spec, context, tests})`
-(`team-task-workflow.ts:208`) re-runs on reviewer/tech-lead disagreement without the reviewer's
-notes. No role learns from the rejection that triggered its retry. A human reads the feedback
-and fixes the tests; the orchestration cannot.
-
-**B. A server restart amputates the run instead of resuming it.** When the server restarted
+**A server restart amputates the run instead of resuming it.** When the server restarted
 mid-run, crash recovery flipped the still-`running` mutation to `failed/orphaned`
 (`reconcileOrphans`, `mutations-log.ts:45`, called at `index.ts:70`) — blind to whether the run
 is resumable. The Phase 3 reconstruction primitive (`orch-reconstruct.ts`) is **dead code**:
@@ -844,30 +880,11 @@ The double-terminal is the same disconnect: `reconcileOrphans` rewrites the on-d
 line in place while the still-draining generator later appends its own terminal
 (`mutations.ts:415`), with no idempotency guard — two terminals for one id.
 
-**Definition of done.** (1) A gate rejection threads its structured feedback into the rejected
-role's next attempt, so QA/coder revise *with* the feedback rather than blindly redoing; a task
-that still can't pass after bounded feedback-retries parks blocked-on-human with its worktree
-preserved, instead of ending the whole project run. (2) A server restart mid-run resumes the
-orchestrated run from durable state (persisted records + branch commits + `tasks.md`) rather than
-orphaning it, and no run ever lands two terminal records.
+**Definition of done.** A server restart mid-run resumes the orchestrated run from durable state
+(persisted records + branch commits + `tasks.md`) rather than orphaning it, and no run ever lands
+two terminal records. (The feedback-retry definition of done moved to Phase 11A.)
 
-**Work items — A. Feedback-threaded retries.**
-
-1. **Carry rejection feedback in the evidence.** The workflow already records `blockedReason`/
-   role notes; surface them as structured `feedback` the orchestrator can pass back (which role,
-   what it rejected, the actionable notes).
-2. **Thread feedback into the retrying role.** On retry, `qaWriteTests` receives the tech-lead's
-   test-intent rejection notes; the coder receives the reviewer + tech-lead-diff notes from the
-   failed round; designer likewise where it gates. The retry is corrective, not a blind redo.
-3. **Make the QA → tech-lead test gate a bounded rewrite loop**, not a one-shot block — QA
-   revises against the tech-lead's notes up to a small cap, mirroring the coder→reviewer round
-   loop, before the task escalates.
-4. **Park, don't kill, on exhausted retries.** When a task can't pass after its feedback-retry
-   cap, route it to blocked-on-human with the worktree preserved (reuse the Project 13 parked-run
-   machinery) so a human can intervene on that task. The project run holds at that task; the
-   committed work and branch are not discarded.
-
-**Work items — B. Crash recovery & resumable runs.**
+**Work items.**
 
 5. **Persist orchestrated run state.** Build the `TaskRunRecord` JSONL store
    (`orch-run-record.ts`'s header already promises it) plus a run cursor and resume marker

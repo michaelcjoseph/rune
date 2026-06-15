@@ -14,6 +14,14 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > **Autonomy rule for reopened phases:** Phases 10-12 must be runnable by `/work --auto`
 > without human choices, manual repo setup, production push credentials in tests, or
 > interactive approval. If a task needs a choice, the default and fallback are named here.
+>
+> **Execution sequencing (decided 2026-06-15):** Phase 11A (gate-rejection feedback retries) ships
+> FIRST and OUT OF BAND — a direct `/work` run in the CLI (codex or claude), not the orchestrator —
+> because it is the retry resilience the orchestrator itself lacks. Building it through the
+> orchestrator hits the one-shot-gate deadlock it fixes: a mid-build gate rejection is terminal, and
+> a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the orchestrator
+> runs the rest in order: Phase 10 → Phase 11B → Phase 12. Only Phases 10, 11B, and 12 are
+> `/work --auto` targets; do not point `--auto` at 11A.
 
 ## Phase 1 - Role substrate
 
@@ -605,9 +613,58 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > surfacing the plan for approval — the user sees a sharper spec/tasks at the same approval
 > gate, no new trigger.
 
+## Phase 11A - Gate-rejection feedback retries (reopened 2026-06-14) — BUILD FIRST, OUT OF BAND
+
+> **Sequencing:** 11A is built BEFORE Phase 10 and NOT through the orchestrator — it ships via a
+> direct `/work` run in the CLI (codex or claude), or by hand. It is the retry-with-feedback the
+> orchestrator itself lacks; building it through the orchestrator hits the one-shot-gate deadlock it
+> fixes (any tech-lead/reviewer rejection mid-build is terminal, and a blind restart re-runs the same
+> inputs with no feedback — it won't converge). Land it on main, then the orchestrator can run Phase
+> 10 → 11B → 12 with gate rejections becoming corrective retries. Do NOT point `/work --auto` here.
+>
+> Depends on: Phase 5, 8 (no dependency on Phase 10). Triggered by the project-17 run AND the
+> 2026-06-14 Phase 10 run, both of which died on a one-shot tech-lead test-intent rejection
+> (`team-task-workflow.ts:195`): the feedback that would fix the test was recorded in `blockedReason`,
+> then thrown away, and the whole run blocked. See spec.md §"Phase 11A" and requirements 47-49.
+
+### Tests (write first)
+
+- [ ] Feedback-carried test: a gate rejection surfaces structured feedback (rejecting role,
+      what it rejected, actionable notes) in the task evidence, not just a `blockedReason` string.
+- [ ] QA-rewrite-loop test: a tech-lead test-intent rejection re-invokes `qaWriteTests` WITH the
+      tech-lead's notes, bounded by a small cap, before the task escalates — not a one-shot block.
+- [ ] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
+      WITH the reviewer + tech-lead notes from the failed round, not identical inputs.
+- [ ] No-blind-redo regression: no retry path re-runs a role with identical inputs and no
+      feedback (the project-17 defect) — must fail on today's `team-task-workflow.ts`.
+- [ ] Park-not-kill test: a task that exhausts its feedback-retry cap parks blocked-on-human with
+      the worktree preserved; the project run holds at that task and does not discard the branch.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> Lives entirely in the team-task workflow / retry path — no dependency on Phase 10's streaming. The
+> phase is done when a corrective (non-blind) retry passes and an exhausted task parks instead of
+> killing the run.
+
+- [ ] Carry structured rejection feedback in `TaskEvidence` and thread it back through
+      `runTaskWithRetries` → `runTaskWorkflow` into the retrying role's input.
+- [ ] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
+      loop) so QA revises against feedback before escalating.
+- [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
+- [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
+      (reuse the Project 13 parked-run machinery); hold the project run at that task.
+
+> **User-reachability:** YES — after this phase, a gate rejection becomes a corrective retry (QA/coder
+> revise WITH the rejecting role's notes), and a genuinely-stuck task parks for the operator with its
+> work intact instead of ending the run. This is the prerequisite that lets every later orchestrated
+> phase survive a gate rejection.
+
 ## Phase 10 - Execution observability parity (reopened 2026-06-14)
 
-> Depends on: Phase 5, 8. Reopens the project. Phase 8 made orchestrated `/work` do real
+> Depends on: Phase 5, 8; runs via the orchestrator AFTER Phase 11A has landed, so a gate rejection
+> here becomes a corrective retry instead of a terminal block. Reopens the project. Phase 8 made
+> orchestrated `/work` do real
 > work; Phase 10 makes that work observable. Today the applier emits only a "starting" `log`
 > (`orchestrated-work-runner.ts:347`) and one terminal event (`:373`), with the whole loop
 > inside one `await runOrchestration` — so codex/claude role activity never reaches the
@@ -716,32 +773,17 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > clean — lands on its base branch through the same gated finalizer a legacy `/work` run uses,
 > with no operator merge step.
 
-## Phase 11 - Orchestration resilience (reopened 2026-06-14)
+## Phase 11B - Crash recovery & resumable runs (reopened 2026-06-14)
 
-> Depends on: Phase 5, 8 (part B reuses Phase 10's durable transcript). Triggered by the
-> overnight project-17 run, which exposed two structural failure modes (see spec.md §"Phase 11"
-> and requirements 47-53): (A) gate rejections discard the feedback that would fix them — QA's
-> tech-lead rejection was retried three times with identical inputs and no feedback, then the
-> whole run blocked; (B) a server restart orphaned the run (`reconcileOrphans`,
-> `mutations-log.ts:45`) instead of resuming it — the Phase 3 `reconstructRun` is dead code and
-> `TaskRunRecord`s are never persisted — and left a double-terminal record.
+> Runs via the orchestrator AFTER Phase 10 (it reuses Phase 10's durable transcript) and after Phase
+> 11A has landed (so a gate rejection during this build is corrective, not terminal). The
+> feedback-retry half of the original Phase 11 moved to **Phase 11A** above. Depends on: Phase 5, 8,
+> 10. Triggered by the overnight project-17 run (see spec.md §"Phase 11B" and requirements 50-53): a
+> server restart orphaned the run (`reconcileOrphans`, `mutations-log.ts:45`) instead of resuming it
+> — the Phase 3 `reconstructRun` is dead code and `TaskRunRecord`s are never persisted — and left a
+> double-terminal record.
 
 ### Tests (write first)
-
-**A. Feedback-threaded retries**
-
-- [ ] Feedback-carried test: a gate rejection surfaces structured feedback (rejecting role,
-      what it rejected, actionable notes) in the task evidence, not just a `blockedReason` string.
-- [ ] QA-rewrite-loop test: a tech-lead test-intent rejection re-invokes `qaWriteTests` WITH the
-      tech-lead's notes, bounded by a small cap, before the task escalates — not a one-shot block.
-- [ ] Coder-feedback test: a non-objection reviewer/tech-lead-diff rejection re-invokes the coder
-      WITH the reviewer + tech-lead notes from the failed round, not identical inputs.
-- [ ] No-blind-redo regression: no retry path re-runs a role with identical inputs and no
-      feedback (the project-17 defect) — must fail on today's `team-task-workflow.ts`.
-- [ ] Park-not-kill test: a task that exhausts its feedback-retry cap parks blocked-on-human with
-      the worktree preserved; the project run holds at that task and does not discard the branch.
-
-**B. Crash recovery & resumable runs**
 
 - [ ] Record-persistence test: `TaskRunRecord`s + a run cursor are written to a durable store and
       read back to reconstruct a partial run; the resume marker carries product, branch, base,
@@ -758,21 +800,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Implementation
 
-> Part A and Part B are independent workstreams under one resilience phase; land each as a unit.
-> The phase is not done until the live acceptance proves a corrective (non-blind) retry passes
-> AND a mid-run restart resumes to a single clean terminal.
-
-**A. Feedback-threaded retries**
-
-- [ ] Carry structured rejection feedback in `TaskEvidence` and thread it back through
-      `runTaskWithRetries` → `runTaskWorkflow` into the retrying role's input.
-- [ ] Add the bounded QA → tech-lead test-intent rewrite loop (mirror the coder→reviewer round
-      loop) so QA revises against feedback before escalating.
-- [ ] Pass reviewer + tech-lead-diff notes into the coder's retry within the round loop.
-- [ ] On exhausted feedback-retries, park the task blocked-on-human with the worktree preserved
-      (reuse the Project 13 parked-run machinery); hold the project run at that task.
-
-**B. Crash recovery & resumable runs**
+> Lands via the orchestrator as a single unit. Not done until the live acceptance proves a mid-run
+> restart resumes to a single clean terminal.
 
 - [ ] Build the `TaskRunRecord` JSONL store + run cursor + resume marker (the persistence layer
       `orch-run-record.ts` promises); reuse Phase 10's transcript as part of the record set.
@@ -788,9 +817,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the feedback. Stub-free proof both failure modes are closed.
 
 > **User-reachability:** YES — after this phase, an orchestrated run survives a mid-run server
-> restart (resumes instead of dying) and turns a gate rejection into a corrective retry, both
-> observable on the cockpit card; a genuinely-stuck task parks for the operator with its work
-> intact instead of ending the run.
+> restart (resumes instead of dying) rather than orphaning, with exactly one terminal record,
+> observable on the cockpit card.
 
 ## Phase 12 - Role learning & exemplars (reopened 2026-06-14)
 
