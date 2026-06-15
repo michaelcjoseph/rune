@@ -67,7 +67,7 @@ Read `docs/projects/[project]/tasks.md`. Find the first unchecked task (`- [ ]`)
 
 ### 4. Explore and Research
 
-Read the project spec and reference materials. Use Read, Glob, Grep, and the Explore agent to understand the codebase before designing the approach.
+Read the project spec and reference materials. Use shell/file reads, `rg`, and Codex explorer subagents (`agent_type: "explorer"`) when a bounded codebase question can run in parallel before designing the approach.
 
 **Always read:**
 
@@ -103,7 +103,7 @@ Write the implementation plan. The plan should include:
 
 ### 7. Create Execution Tasks
 
-After the user approves the plan, create `TaskCreate` items for each sub-task from the plan:
+After the user approves the plan, track the implementation sub-tasks with Codex's task/plan tracking:
 
 - Use clear descriptions and `activeForm` labels
 - Set up `blockedBy` dependencies where sub-tasks must be sequential
@@ -112,7 +112,7 @@ After the user approves the plan, create `TaskCreate` items for each sub-task fr
 
 Before writing any implementation, write the tests that define this task's contract. Settling that contract before the code exists gives the review step (step 11) something objective to check and keeps the cycle from grading vibes.
 
-Use the `Agent` tool with `subagent_type: "test-specialist"`:
+Spawn a Codex subagent with `agent_type: "test-specialist"`:
 
 ```
 Write failing tests for the [task name] task in project [project], before any
@@ -135,7 +135,7 @@ Confirm the suite fails before proceeding to step 9. A test that passes before t
 
 Work through the sub-tasks in order:
 
-- Mark each sub-task `in_progress` via `TaskUpdate` before starting it
+- Mark each sub-task `in_progress` before starting it
 - Mark each sub-task `completed` when done
 - Follow all conventions in `AGENTS.md`
 - Keep changes minimal and focused on the task
@@ -145,7 +145,7 @@ After implementation is complete, stage all changes but do NOT commit yet. This 
 
 ### 10. Test — Round 1
 
-Use the `Agent` tool with `subagent_type: "test-specialist"` to confirm the test-first tests from step 8 now pass and no regressions were introduced:
+Spawn a Codex subagent with `agent_type: "test-specialist"` to confirm the test-first tests from step 8 now pass and no regressions were introduced:
 
 ```
 Run the full test suite after implementing the [task name] task in project
@@ -165,11 +165,11 @@ Tests that are red only because their feature is not yet built are expected — 
 
 ### 11. Review — Conditional, Parallel
 
-Run `git diff HEAD --name-only` to get the list of changed files, then launch the applicable reviewers in parallel:
+Run `git diff HEAD --name-only` to get the list of changed files, then launch the applicable reviewers in parallel. Issue all applicable Codex `spawn_agent` calls in the same assistant turn so they run concurrently.
 
 **Always run code-reviewer** (every change needs bug/security review):
 
-Use the `Agent` tool with `subagent_type: "code-reviewer"`:
+Spawn a Codex subagent with `agent_type: "code-reviewer"`:
 
 ```
 Review the changes made for the [task name] task. The following files were
@@ -179,7 +179,7 @@ violations, and project convention violations per AGENTS.md.
 
 **Always run security-auditor** (every change needs security & exposure review):
 
-Use the `Agent` tool with `subagent_type: "security-auditor"`:
+Spawn a Codex subagent with `agent_type: "security-auditor"`:
 
 ```
 Audit the changes made for the [task name] task. The following files were
@@ -190,7 +190,7 @@ in shell commands, and anything unsafe to commit to the remote.
 
 **Run architecture-reviewer when applicable:**
 
-Use the `Agent` tool with `subagent_type: "architecture-reviewer"` **if** the task involves new modules, changes to centralized wrappers (config, logger, external-CLI/process spawning, I/O helpers), new background/scheduled work, changes to process startup/shutdown, new agent definitions, or changes that cross module boundaries.
+Spawn a Codex subagent with `agent_type: "architecture-reviewer"` **if** the task involves new modules, changes to centralized wrappers (config, logger, external-CLI/process spawning, I/O helpers), new background/scheduled work, changes to process startup/shutdown, new agent definitions, or changes that cross module boundaries.
 
 ```
 Review the changes made for the [task name] task. The following files were
@@ -216,7 +216,7 @@ If any reviewer returns a BLOCK verdict, or fixing issues requires fundamentally
 
 ### 13. Test — Round 2
 
-Use the `Agent` tool with `subagent_type: "test-specialist"`:
+Spawn a Codex subagent with `agent_type: "test-specialist"`:
 
 ```
 Run all tests to verify the review fixes for [task name] didn't break
@@ -231,7 +231,7 @@ If a regression persists after two fix attempts — a previously-passing test st
 
 ### 14. Simplify
 
-Use the `Agent` tool with `subagent_type: "code-simplifier"`:
+Spawn a Codex subagent with `agent_type: "code-simplifier"`:
 
 ```
 Check the changes made for the [task name] task for dead code,
@@ -246,7 +246,7 @@ The code-simplifier is read-only — it reports findings but cannot edit files. 
 
 ### 15. Test — Round 3
 
-Use the `Agent` tool with `subagent_type: "test-specialist"` one final time:
+Spawn a Codex subagent with `agent_type: "test-specialist"` one final time:
 
 ```
 Final test run after simplification for [task name]. The following files
@@ -260,9 +260,9 @@ Skip this step if step 14 made no code changes.
 
 If the task modified agent behavior in any of these ways, run the relevant evals:
 
-- Any file under `.claude/agents/` (Jarvis) or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
-- The prompt strings, context assembly, or args passed to `runAgent()` changed in a source file (grep the diff for `runAgent(`)
-- `AGENT_MODEL` / agent-loading logic in `src/ai/claude.ts` changed
+- Any file under `.codex/agents/`, `.claude/agents/` (Jarvis), or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
+- The prompt strings, context assembly, or args passed to `runAgent()` / Codex subagent spawning changed in a source file
+- Agent model-selection or agent-loading logic changed
 
 ```bash
 npm run evals -- <agent-name>     # single agent
@@ -278,7 +278,7 @@ Skip this step if the task didn't touch agent behavior. MVP: no CI gate, manual 
 
 ### 17. Sync Docs
 
-Use the `Agent` tool with `subagent_type: "docs-sync"`:
+Spawn a Codex subagent with `agent_type: "docs-sync"`:
 
 ```
 Scan the codebase for structural changes and update AGENTS.md and project
@@ -310,7 +310,7 @@ This applies in **both** modes (with and without `--auto`), and happens **before
 **With `--auto`**: Create one commit that captures everything done for this task (code, tests, docs, tasks.md update).
 
 1. Run `git add -A` to stage all changes for the task. (Pre-existing dirty files should have been caught at step 2 — if any slipped through, stop and report rather than committing unknown work.)
-2. Use the `Agent` tool with `subagent_type: "release-notes"` to draft the message:
+2. Spawn a Codex subagent with `agent_type: "release-notes"` to draft the message:
 
    ```
    Generate a commit message (Mode B) for the currently staged changes, which
