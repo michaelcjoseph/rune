@@ -281,6 +281,15 @@ explicit context handoff.
   candidate lesson, a neutral Jarvis pass (`runPostMortem` model) validates/attributes it, and it
   lands in the counterpart's `memory.md` via `writeRoleLesson` at gate-time — making the learning
   loop gate-triggered, not just nightly, while keeping roles out of each other's memory directly.
+- **Phase 13 — outcome gating (reopened 2026-06-16):** the 2026-06-15 Codex-stream run exposed
+  that the review gate is effectively binary and unforgiving — severity is captured but unused (any
+  objection hard-blocks), and a block maps to `failed` with the worktree destroyed instead of
+  parking for a human. One reviewer objection (a redaction artifact, not a real defect) discarded a
+  complete run. Phase 13 makes the four outcomes explicit (`pass` / `pass-with-warnings` / `fail` /
+  `block`), drives them by severity (`critical`/`high`→block, `medium`→fail, `low`→warning), gives
+  blocks one corrective coder round before parking `blocked-on-human` (worktree preserved), and adds
+  an accept-with-rationale override. The `sk-` redaction collision that triggered it is already
+  fixed on main (`fb2e2a0`); Phase 13 is the structural follow-up.
 - **Provenance:** 2026-06-05 product-team design extending projects 08 and 12, merged with
   the 2026-06-07 Jarvis-orchestrated-work idea. The merged scope makes Jarvis the workflow
   owner rather than a launcher for one long `/work --auto` process.

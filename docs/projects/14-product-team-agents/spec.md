@@ -359,18 +359,61 @@ tech-lead validation. Product-intent changes require PM validation when flagged.
 ## Objection Classes
 
 Some defects do not show up in normal usage until they matter: security holes, data-integrity
-bugs, concurrency races, irreversible operations, and cost/perf regressions. These are hard
-gates.
+bugs, concurrency races, irreversible operations, privacy leaks, and cost/perf regressions.
+These are the objection classes — the findings the reviewer is specifically charged to surface.
 
-- An open objection-class finding blocks task completion and project finalization.
-- PM wrap-up authority does not extend to unresolved objection-class findings.
-- The reviewer role's verdict is structured: alongside pass/fail it carries a
-  machine-readable objection-class payload (class, severity, location, rationale) that the
+- The reviewer role's verdict is structured: alongside the outcome it carries a
+  machine-readable objection payload (class, severity, location, rationale) that the
   orchestrator gates on. This is a property of the reviewer-role agent invoked inside the
   team-task workflow, not a change to the standalone `/review` skill — if the workflow later
   reuses `/review` as the reviewer harness, that skill must emit the same payload shape, and
   that wiring is its own task.
-- Per-product additions can extend the global baseline list.
+- An objection's SEVERITY decides how hard it gates — see "Outcome gating" below (Phase 13).
+  Severity is not advisory metadata: `critical`/`high` block, `medium` is a fixable fail, `low`
+  ships as a recorded warning. A reviewer cannot halt the line on a trivial finding.
+- A blocking objection parks the task `blocked-on-human` with worktree and branch preserved, and
+  a human can accept-it-with-rationale. It is never silently failed-and-discarded.
+- Per-product additions can extend the global baseline class list.
+
+## Outcome gating
+
+> Refines the binary objection gate after the 2026-06-15 Codex-stream failure, where one reviewer
+> objection — caused by a redaction artifact, not a real defect — short-circuited retries and
+> discarded an otherwise-complete run. Two flaws compounded: a reviewer can always find
+> *something*, and any objection (any severity) was a one-shot, run-ending hard gate that mapped
+> to `failed` with the worktree destroyed.
+
+A reviewing role (reviewer, tech-lead diff review, designer) returns one of four outcomes:
+
+| Outcome | Meaning | Effect |
+| --- | --- | --- |
+| `pass` | No concerns | Proceed |
+| `pass-with-warnings` | Non-blocking concerns recorded | Proceed; warnings travel with the handoff + finalizer record |
+| `fail` | Contract not satisfied, fixable in place | Feedback-threaded retry within the round cap; PM wrap-up at the cap |
+| `block` | Hard stop the team can't clear autonomously | Park `blocked-on-human`, worktree + branch preserved; human may accept-with-rationale |
+
+**Severity drives the outcome — severity now has teeth.** An objection-class finding maps by
+severity: `critical`/`high` → `block`; `medium` → `fail`; `low` → `pass-with-warnings`. This
+closes the "someone can always find issues" stall: finding issues is fine, but only high/critical
+findings stop the line.
+
+**Blocks get one corrective round, then a human — never a silent discard.** Today an objection
+short-circuits retries entirely (one-shot) and renders as `failed` with the worktree destroyed.
+Under this model a `block` first delivers its already-built feedback to the coder for ONE
+corrective round; a genuine block survives it, a transport artifact (e.g. a redacted fixture)
+gets fixed. A surviving block parks `blocked-on-human` with worktree and branch preserved —
+aligning the code with the Retry-bounds intent ("all objection-class findings enter
+blocked-on-human"), which the `maybeParkedRun` `objectionOpen` exclusion and the
+`mapResultToTerminal` blocked→failed mapping currently violate.
+
+**Override authority.** PM adjudicates `fail`, `pass-with-warnings`, and `medium` escalations, and
+may accept-with-rationale. A `block` (high/critical) is not auto-clearable by PM, but a human via
+the blocked-on-human inbox can accept-it-with-recorded-rationale. Every acceptance is logged in
+the task/run record — an audit trail of what shipped with known caveats.
+
+**Warnings ledger.** `pass-with-warnings` findings and accepted-block rationales are recorded in
+the task run record and carried into the finalizer handoff, so the operator sees what shipped with
+open caveats.
 
 ---
 
@@ -470,7 +513,8 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     review; independence is fail-closed, never silently downgraded.
 24. WHEN the tech-lead sizing flags a task as front-end / designer-needed THEN designer review
     is required; non-flagged tasks do not invoke the designer by default.
-25. WHEN objection-class findings remain open THEN the task cannot complete autonomously.
+25. WHEN a blocking objection-class finding (severity `high`/`critical`) remains open THEN the
+    task cannot complete autonomously; lower-severity findings gate per Outcome gating (reqs 63-70).
 
 ### Context and recovery
 
@@ -528,8 +572,10 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 44. WHEN the finalizer gate passes THEN the branch merges `--no-ff` onto its base under the
     per-base merge lock and is pushed; WHEN the gate fails THEN the run holds branch-complete,
     records the gate reason, and never touches the base branch.
-45. WHEN an objection-class finding is open OR the outcome is not `branch-complete` THEN the run
-    holds with the handoff payload recorded and does not merge (reqs 17, 25 preserved).
+45. WHEN a blocking objection-class finding (severity `high`/`critical`) is open OR the outcome is
+    not `branch-complete` THEN the run holds with the handoff payload recorded and does not merge
+    (reqs 17, 25, 63-70 preserved). A `pass-with-warnings` outcome does not block the merge but its
+    warnings are carried into the handoff.
 46. WHEN the orchestrated finalizer wiring lands THEN the Phase 8 `unavailable` hold stub is
     gone and cannot reappear without failing a regression test.
 
@@ -579,11 +625,34 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 62. WHEN exemplar loading, lesson drafting, validation, or memory writing fails THEN Jarvis
     records a durable skip/error and continues the current corrective retry path.
 
+### Outcome gating (Phase 13)
+
+63. WHEN a reviewing role returns its verdict THEN the outcome is exactly one of `pass`,
+    `pass-with-warnings`, `fail`, or `block`, carried as a structured field rather than inferred
+    from a bare boolean.
+64. WHEN an objection-class finding is present THEN its severity determines the outcome:
+    `critical`/`high` → `block`, `medium` → `fail`, `low` → `pass-with-warnings`; a reviewer
+    cannot produce `block` from a `low` or `medium` finding.
+65. WHEN the outcome is `pass-with-warnings` THEN the task proceeds and the warnings are recorded
+    in the task run record and carried into the finalizer handoff.
+66. WHEN the outcome is `fail` THEN the coder receives the structured feedback and retries within
+    the round cap; at the cap a non-cleared `fail` routes to PM wrap-up (reqs 47, 19 preserved).
+67. WHEN the outcome is `block` THEN the coder gets exactly one feedback-threaded corrective round
+    before the task parks; a block is never short-circuited with zero coder attempts.
+68. WHEN a `block` survives its corrective round THEN the task parks `blocked-on-human` with
+    worktree and branch preserved, and the run never maps an open objection to `failed` with a
+    destroyed worktree (supersedes the `maybeParkedRun` `objectionOpen` exclusion and the
+    blocked→failed terminal mapping).
+69. WHEN a human (or PM, for non-`block` outcomes) accepts a finding THEN the acceptance and its
+    rationale are recorded in the task/run record and the task proceeds as `pass-with-warnings`.
+70. WHEN severity-to-outcome mapping or warning/acceptance recording fails THEN Jarvis fails safe
+    to the stricter outcome (treat as `block`) and records a durable reason.
+
 ---
 
 ## Implementation Phases
 
-**Autonomy constraint for reopened phases.** Phases 10-12 must be executable by an
+**Autonomy constraint for reopened phases.** Phases 10-13 must be executable by an
 autonomous `/work --auto` run with no operator decisions, no manual repo setup, no production
 push in tests, and no interactive approval. Where an implementation choice is needed, this
 spec names the default and a deterministic fallback. Live acceptance uses self-contained
@@ -595,8 +664,9 @@ FIRST and OUT OF BAND — a direct `/work` run in the CLI (codex or claude), or 
 orchestrator. It is the retry-with-feedback resilience the orchestrator lacks, so building it through
 the orchestrator hits the one-shot-gate deadlock it fixes: any mid-build gate rejection is terminal,
 and a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the
-orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 — with gate
-rejections becoming corrective retries. Only Phases 10, 11B, and 12 are `/work --auto` targets.
+orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 → Phase 13 — with
+gate rejections becoming corrective retries. Only Phases 10, 11B, 12, and 13 are `/work --auto`
+targets.
 
 ### Phase 1: Role substrate
 
