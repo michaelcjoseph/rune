@@ -643,6 +643,44 @@ describe('redactSecrets', () => {
     expect(result).toBe(safe);
   });
 
+  // Regression (docs/projects/bugs.md 2026-06-15): a redacted secret must be
+  // DISTINGUISHABLE from the bare placeholder literal, or a redaction test's
+  // real `sk-…` fixture redacts to the same string the test names as its
+  // expected output — making the test self-contradictory on the inter-agent
+  // diff path and triggering a false objection that hard-gates the run.
+  it('redacted secret is distinguishable from the bare placeholder (no fixture collision)', () => {
+    const rawSecret = 'sk-live_ABC123secret';
+    const redacted = redactSecrets(rawSecret);
+    expect(redacted).not.toContain(rawSecret); // secret gone
+    expect(redacted).not.toBe('sk-<redacted>'); // not the bare literal a test asserts on
+    expect(redacted).toMatch(/^sk-<redacted-[0-9a-f]{6}>$/);
+  });
+
+  it('distinct secrets redact to distinct tagged placeholders', () => {
+    expect(redactSecrets('sk-aaaaaaAAAAAA')).not.toBe(redactSecrets('sk-bbbbbbBBBBBB'));
+  });
+
+  it('redaction is idempotent — a placeholder never re-matches its own pattern', () => {
+    const once = redactSecrets('token sk-live_ABC123secret here');
+    expect(redactSecrets(once)).toBe(once);
+  });
+
+  it(
+    // The exact Codex-stream failure: with a tagged placeholder, a redaction
+    // test stays SATISFIABLE after its source passes through redactSecrets.
+    'a secret-redaction test fixture stays satisfiable after passing through redactSecrets',
+    () => {
+      // What QA wrote on disk: a real fixture + the canonical expected output.
+      const rawSecretLiteral = 'sk-live_ABC123secret';
+      const expectedOutputLiteral = 'plain output with sk-<redacted>';
+      // What the reviewer is handed (source run through redactSecrets):
+      const seenRaw = redactSecrets(rawSecretLiteral);
+      const seenExpected = redactSecrets(expectedOutputLiteral);
+      // `not.toContain(rawSecret)` and `toContain(expected)` must not collide:
+      expect(seenExpected.includes(seenRaw)).toBe(false);
+    },
+  );
+
   it(
     // test-plan §1: sink-level redaction — persisted bytes must not contain
     // the raw secret.
