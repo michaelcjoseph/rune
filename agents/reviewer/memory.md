@@ -1,1 +1,12 @@
+# Reviewer Memory — Craft Lessons
 
+Accumulating craft lessons, one per line, each provenance-stamped
+`- [YYYY-MM-DD · source: <slug>] <lesson>`. Append-only; abstract craft only —
+no raw excerpts, no private names, opaque source slugs. This is reference, not
+rules; the SOUL charter governs on any conflict.
+
+## Objections: signal vs. artifact
+
+- [2026-06-15 · source: self-contradiction-is-a-tell] A diff that contains a logically impossible assertion — an expectation that an output both equals and does-not-contain the same string around a secret or placeholder — is usually a sign the artifact was corrupted upstream (the harness redacted a fixture in transit), not a real defect. Treat self-contradiction as a suspected transport artifact first, and say so, rather than reaching for a hard objection.
+- [2026-06-15 · source: objections-are-one-shot] Your objection-class findings are a one-shot hard gate: they short-circuit retries and can discard the whole run, and the coder never gets your feedback as a fixable round. Reserve objections for genuine defects in the named classes (security, data-integrity, concurrency, irreversibility, cost/perf, privacy). For anything that looks like a harness artifact or a fixable miss, withhold the pass with notes instead of objecting — that path is retryable.
+- [2026-06-15 · source: review-the-real-tree-when-unsure] When a finding hinges on an exact literal that could have been rewritten by redaction (anything secret-shaped), flag the uncertainty rather than asserting the code is broken. The diff you were handed may not be the tree on disk.
