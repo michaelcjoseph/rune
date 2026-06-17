@@ -98,12 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- /ai/codex.test.ts` is blocked by the known sandbox `node_modules/.vite-temp` EPERM issue.
-- `npm run build` fails on unrelated existing type errors in other tests/modules, not `src/ai/codex.ts`.
+- h
+npx vitest run --configLoader runner --config vitest.config.ts --fileParallelism=false --reporter=verbose src/jobs/execution-agent.test.ts
+```
 
-Worktree still has the preexisting staged QA test change in `src/ai/codex.test.ts`; I left it untouched.
-- x-safe runner:
-
-`vitest run --configLoader runner --config vitest.config.ts --fileParallelism=false --reporter=verbose src/ai/codex.test.ts`
-
-Result: 32 tests passed. Plain `npm test -- src/ai/codex.test.ts` hung under this sandbox, consistent with the handoff note, so I used the config-loader path.
+Result: 7 tests passed. The only worktree change remains the preexisting staged QA test update in `src/jobs/execution-agent.test.ts`; I left it untouched.

@@ -158,6 +158,17 @@ function makeFakeChild(opts: {
   return child;
 }
 
+function makeControlledChild() {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = new EventEmitter() as any;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn();
+  child.pid = 12345;
+  return child;
+}
+
 // ---------------------------------------------------------------------------
 // Diff capture
 // ---------------------------------------------------------------------------
@@ -289,5 +300,42 @@ describe('runExecutionAgent — Claude stream-json forwarding (Phase 10)', () =>
       { kind: 'output', data: { line: 'finished cleanly' } },
     ]);
     expect(events.some((event) => event.data?.line?.includes('"type":"assistant"'))).toBe(false);
+  });
+
+  it('streams Claude display events before close and flushes a trailing partial envelope on close', async () => {
+    const child = makeControlledChild();
+    mockSpawn.mockReturnValue(child);
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const pending = runExecutionAgent({
+      ...makeOpts({ model: claudeModel }),
+      emit: (event) => events.push(event),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    child.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'first live line' }] },
+    })}\n`, 'utf8'));
+
+    expect(events).toEqual([
+      { kind: 'output', data: { line: 'first live line' } },
+    ]);
+
+    child.stdout.emit('data', Buffer.from(JSON.stringify({
+      type: 'result',
+      result: 'final line without newline',
+    }), 'utf8'));
+    expect(events).toHaveLength(1);
+
+    child.emit('close', 0, null);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    expect(events).toEqual([
+      { kind: 'output', data: { line: 'first live line' } },
+      { kind: 'output', data: { line: 'final line without newline' } },
+    ]);
   });
 });

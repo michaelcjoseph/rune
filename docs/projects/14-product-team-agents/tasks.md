@@ -761,7 +761,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       Implement `codex exec --json` + a `streamJsonToDisplay` analog as the default; if the
       installed CLI lacks `--json` or emits malformed JSONL, automatically fall back to
       scrubbed raw-line streaming and record that fallback in run metadata. No human decision.
-- [ ] Stream the claude artifact path: route `spawnClaudeAgent` through
+- [x] Stream the claude artifact path: route `spawnClaudeAgent` through
       `--output-format stream-json --verbose` + the shared display mapping for parity.
 - [ ] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
       up as `activity`/`output` while the session is alive (keeps the heartbeat advancing).
