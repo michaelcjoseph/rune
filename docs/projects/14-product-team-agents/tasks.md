@@ -756,7 +756,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       Thread `emit` through `runProjectOrchestration` and `runTeamTaskWorkflow`.
 - [x] Emit orchestration-granularity events: task selected, attempt start/retry, closeout
       commit sha, finalizer handoff/hold, block reason.
-- [ ] Emit role-transition + verdict/objection events from the team-task workflow.
+- [x] Emit role-transition + verdict/objection events from the team-task workflow.
 - [ ] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.
       Implement `codex exec --json` + a `streamJsonToDisplay` analog as the default; if the
       installed CLI lacks `--json` or emits malformed JSONL, automatically fall back to

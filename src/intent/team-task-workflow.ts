@@ -227,12 +227,13 @@ async function runGated(
   const carriedFeedback = normalizeFeedback(input.rejectionFeedback);
   let qaFeedback = carriedFeedback.find((feedback) => feedback.rejectedRole === 'qa');
   let coderFeedback = carriedFeedback.filter((feedback) => feedback.rejectedRole === 'coder');
+  let previousRole: RoleName | undefined;
   let qa: QaResult | undefined;
   let noCodeTestRationale: string | undefined;
   let tests: string[] | string | undefined;
   for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
     roles.add('qa');
-    emitRoleStage(input, 'qa', 'test');
+    previousRole = emitRoleTransition(input, previousRole, 'qa', 'test', 'qa-tests');
     qa = await deps.qaWriteTests({
       task,
       spec: input.spec,
@@ -244,8 +245,22 @@ async function runGated(
 
     // Gate 2: tech lead reviews the test intent BEFORE the coder starts.
     roles.add('tech-lead');
-    emitRoleStage(input, 'tech-lead', 'test-review');
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
+      'tech-lead',
+      'test-review',
+      'tech-lead-test-review',
+    );
     const tlTests = await deps.techLeadReviewTests({ task, qa });
+    emitRoleVerdict(input, {
+      role: 'tech-lead',
+      gate: 'test-intent',
+      verdict: tlTests.approved ? 'pass' : 'fail',
+      summary: tlTests.notes?.trim() || (tlTests.approved
+        ? 'tech-lead approved test intent'
+        : 'tech-lead rejected test intent'),
+    });
     if (tlTests.approved) break;
 
     const reason = tlTests.notes?.trim() || 'tech-lead rejected test intent';
@@ -275,7 +290,13 @@ async function runGated(
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   for (let attempt = 0; attempt < input.cap; attempt++) {
     roles.add('coder');
-    emitRoleStage(input, 'coder', 'implementation');
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
+      'coder',
+      'implementation',
+      'coder-implementation',
+    );
     const coder = await deps.coder({
       task,
       spec: input.spec,
@@ -287,7 +308,13 @@ async function runGated(
     const roundFeedback: GateRejectionFeedback[] = [];
 
     roles.add('reviewer');
-    emitRoleStage(input, 'reviewer', 'review');
+    previousRole = emitRoleTransition(
+      input,
+      previousRole,
+      'reviewer',
+      'review',
+      'reviewer-review',
+    );
     lastReviewer = await deps.reviewer({
       diff: coder.diff,
       spec: input.spec,
@@ -296,10 +323,19 @@ async function runGated(
       context: input.contextMd,
       reviewerProvider,
     });
+    emitRoleVerdict(input, {
+      role: 'reviewer',
+      gate: 'reviewer-verdict',
+      verdict: lastReviewer.pass && lastReviewer.objections.length === 0 ? 'pass' : 'fail',
+      summary: summarizeReviewerVerdict(lastReviewer),
+    });
 
     // Hard gate: an open objection-class finding blocks immediately. PM wrap-up
     // authority does not extend here.
     if (lastReviewer.objections.length > 0) {
+      for (const objection of lastReviewer.objections) {
+        emitObjection(input, objection);
+      }
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
@@ -327,6 +363,14 @@ async function runGated(
     }
 
     const tlDiff = await deps.techLeadReviewDiff({ task, diff: coder.diff });
+    emitRoleVerdict(input, {
+      role: 'tech-lead',
+      gate: 'implementation-diff',
+      verdict: tlDiff.pass ? 'pass' : 'fail',
+      summary: tlDiff.notes?.trim() || (tlDiff.pass
+        ? 'tech-lead approved implementation diff'
+        : 'tech-lead rejected implementation diff'),
+    });
     if (!tlDiff.pass) {
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'tech-lead',
@@ -341,9 +385,23 @@ async function runGated(
     lastDesignerPass = true;
     if (task.designerNeeded) {
       roles.add('designer');
-      emitRoleStage(input, 'designer', 'design');
+      previousRole = emitRoleTransition(
+        input,
+        previousRole,
+        'designer',
+        'design',
+        'designer-review',
+      );
       const designer = await deps.designer({ task, diff: coder.diff });
       lastDesignerPass = designer.pass;
+      emitRoleVerdict(input, {
+        role: 'designer',
+        gate: 'design-review',
+        verdict: designer.pass ? 'pass' : 'fail',
+        summary: designer.notes?.trim() || (designer.pass
+          ? 'designer approved implementation diff'
+          : 'designer rejected implementation diff'),
+      });
       if (!designer.pass) {
         const feedback = buildGateRejectionFeedback({
           rejectingRole: 'designer',
@@ -387,8 +445,16 @@ async function runGated(
   }
 
   roles.add('pm');
-  emitRoleStage(input, 'pm', 'pm-wrapup');
+  previousRole = emitRoleTransition(input, previousRole, 'pm', 'pm-wrapup', 'pm-wrapup');
   const pm = await deps.pmWrapup({ task, reason: 'non-objection disagreement at the round cap' });
+  emitRoleVerdict(input, {
+    role: 'pm',
+    gate: 'pm-wrapup',
+    verdict: pm.resolved ? 'resolved' : 'unresolved',
+    summary: pm.resolved
+      ? 'PM resolved non-objection disagreement at the round cap'
+      : 'PM left non-objection disagreement unresolved at the round cap',
+  });
   if (pm.resolved) {
     return {
       taskId: task.id,
@@ -480,11 +546,52 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
     .join('; ');
 }
 
+function summarizeReviewerVerdict(verdict: ReviewerVerdict): string {
+  if (verdict.objections.length > 0) {
+    return summarizeObjections(verdict.objections);
+  }
+  if (verdict.notes?.trim()) {
+    return verdict.notes.trim();
+  }
+  return verdict.pass
+    ? 'reviewer passed implementation diff'
+    : 'reviewer rejected implementation diff';
+}
+
 function normalizeFeedback(
   feedback: GateRejectionFeedback | GateRejectionFeedback[] | undefined,
 ): GateRejectionFeedback[] {
   if (feedback === undefined) return [];
   return Array.isArray(feedback) ? feedback : [feedback];
+}
+
+function emitRoleTransition(
+  input: TeamTaskRunInput,
+  fromRole: RoleName | undefined,
+  role: RoleName,
+  stage: string,
+  transition: string,
+): RoleName {
+  emitRoleStage(input, role, stage);
+  if (input.emit === undefined) return role;
+  const label = `${role}: ${stage}`;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'role-transition',
+        role,
+        ...(fromRole !== undefined ? { fromRole } : {}),
+        stage,
+        transition,
+        label,
+        line: label,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+  return role;
 }
 
 function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): void {
@@ -499,6 +606,55 @@ function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): 
         stage,
         label,
         line: label,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitRoleVerdict(
+  input: TeamTaskRunInput,
+  event: {
+    role: RoleName;
+    gate: GateRejectedArtifact | 'pm-wrapup';
+    verdict: 'pass' | 'fail' | 'resolved' | 'unresolved';
+    summary: string;
+  },
+): void {
+  if (input.emit === undefined) return;
+  const summary = event.summary.trim() || `${event.role} ${event.verdict}`;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'role-verdict',
+        role: event.role,
+        gate: event.gate,
+        verdict: event.verdict,
+        summary,
+        line: `${event.role}: ${event.gate} ${event.verdict} - ${summary}`,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitObjection(input: TeamTaskRunInput, objection: ObjectionFinding): void {
+  if (input.emit === undefined) return;
+  const summary =
+    `${objection.class}/${objection.severity} at ${objection.location}: ${objection.rationale}`;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'objection',
+        role: 'reviewer',
+        gate: 'reviewer-verdict',
+        objection,
+        summary,
+        line: `reviewer objection: ${summary}`,
       },
     });
   } catch {

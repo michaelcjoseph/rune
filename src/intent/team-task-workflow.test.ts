@@ -519,6 +519,144 @@ describe('team-task-workflow — execution observability', () => {
     expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
     expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
   });
+
+  it('emits explicit role-transition events for every stage in workflow order', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    const inputWithEmitter = {
+      ...INPUT,
+      cap: 1,
+      emit: (event: WorkflowActivityEvent) => {
+        events.push(event);
+      },
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        pass: false,
+        objections: [],
+        notes: 'reviewer wants one more assertion',
+      }),
+      pmWrapup: async () => ({ resolved: true }),
+    });
+
+    await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
+
+    const transitions = events.filter(
+      (event) => event.data?.['event'] === 'role-transition',
+    );
+    expect(transitions.map((event) => event.data?.['role'])).toEqual([
+      'qa',
+      'tech-lead',
+      'coder',
+      'reviewer',
+      'designer',
+      'pm',
+    ]);
+    expect(transitions.map((event) => event.data?.['transition'])).toEqual([
+      'qa-tests',
+      'tech-lead-test-review',
+      'coder-implementation',
+      'reviewer-review',
+      'designer-review',
+      'pm-wrapup',
+    ]);
+    expect(transitions.map((event) => event.data?.['fromRole'])).toEqual([
+      undefined,
+      'qa',
+      'tech-lead',
+      'coder',
+      'reviewer',
+      'designer',
+    ]);
+    expect(transitions.every((event) => event.kind === 'activity')).toBe(true);
+    expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
+    expect(transitions.every((event) => String(event.data?.['line']).trim().length > 0)).toBe(true);
+  });
+
+  it('emits role-verdict events summarizing reviewer, tech-lead, designer, and PM gates', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    const inputWithEmitter = {
+      ...INPUT,
+      cap: 1,
+      emit: (event: WorkflowActivityEvent) => {
+        events.push(event);
+      },
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        pass: false,
+        objections: [],
+        notes: 'reviewer wants one more assertion',
+      }),
+      pmWrapup: async () => ({ resolved: true }),
+    });
+
+    const ev = await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    const verdicts = events.filter((event) => event.data?.['event'] === 'role-verdict');
+    expect(verdicts.map((event) => ({
+      role: event.data?.['role'],
+      verdict: event.data?.['verdict'],
+      gate: event.data?.['gate'],
+    }))).toEqual([
+      { role: 'tech-lead', verdict: 'pass', gate: 'test-intent' },
+      { role: 'reviewer', verdict: 'fail', gate: 'reviewer-verdict' },
+      { role: 'tech-lead', verdict: 'pass', gate: 'implementation-diff' },
+      { role: 'designer', verdict: 'pass', gate: 'design-review' },
+      { role: 'pm', verdict: 'resolved', gate: 'pm-wrapup' },
+    ]);
+    expect(verdicts.every((event) => String(event.data?.['summary']).trim().length > 0)).toBe(true);
+    expect(verdicts.every((event) => String(event.data?.['line']).trim().length > 0)).toBe(true);
+  });
+
+  it('emits structured objection events before blocking on objection-class findings', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    const objection: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+    };
+    const inputWithEmitter = {
+      ...INPUT,
+      emit: (event: WorkflowActivityEvent) => {
+        events.push(event);
+      },
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        pass: false,
+        objections: [objection],
+      }),
+      pmWrapup: async () => {
+        throw new Error('PM must not run for objection-class findings');
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, inputWithEmitter, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.objectionOpen).toBe(true);
+    const objectionEvents = events.filter((event) => event.data?.['event'] === 'objection');
+    expect(objectionEvents).toHaveLength(1);
+    expect(objectionEvents[0]?.data).toMatchObject({
+      role: 'reviewer',
+      gate: 'reviewer-verdict',
+      objection,
+    });
+    expect(String(objectionEvents[0]?.data?.['line'])).toContain('security/high');
+    expect(String(objectionEvents[0]?.data?.['line'])).toContain('src/auth.ts:42');
+
+    const reviewerVerdictIndex = events.findIndex(
+      (event) =>
+        event.data?.['event'] === 'role-verdict' &&
+        event.data?.['role'] === 'reviewer' &&
+        event.data?.['verdict'] === 'fail',
+    );
+    const objectionIndex = events.findIndex((event) => event.data?.['event'] === 'objection');
+    expect(reviewerVerdictIndex).toBeGreaterThanOrEqual(0);
+    expect(objectionIndex).toBeGreaterThan(reviewerVerdictIndex);
+  });
 });
 
 // ---------------------------------------------------------------------------

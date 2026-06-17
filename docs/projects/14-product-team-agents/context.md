@@ -98,8 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ator.test.ts`: 12 passed.
-- `src/jobs/orchestrated-work-runner.test.ts`: 24 passed.
-- `npm run build`: still fails on existing repo-wide TypeScript issues in unrelated tests/files, including the pre-existing `orchestrated-work-runner.test.ts` mock typing errors noted in the handoff.
+- Script errors in other test/modules
 
-No commit made.
+Note: `src/intent/team-task-workflow.test.ts` was already modified at start; I left it untouched. The first plain `npm test -- ...` invocation got stuck due the sandbox/Vitest temp-write path, so I used the runner config loader for the reliable targeted test run.
