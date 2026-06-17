@@ -171,6 +171,70 @@ describe('ai/codex', () => {
       expect(onEvent).toHaveBeenCalledTimes(2);
     });
 
+    it('calls onStdout incrementally while the codex process is still running', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = createChild({ neverClose: true });
+      spawnMock.mockReturnValue(child);
+      const onStdout = vi.fn();
+
+      const { runCodex } = await import('./codex.js');
+      const pending = runCodex('my prompt', { onStdout });
+
+      child.stdout.emit('data', Buffer.from('first chunk'));
+      expect(onStdout).toHaveBeenCalledTimes(1);
+      expect(onStdout).toHaveBeenLastCalledWith('first chunk');
+      expect(unregisterMock).not.toHaveBeenCalledWith(child);
+
+      child.stdout.emit('data', Buffer.from(' second chunk\n'));
+      expect(onStdout).toHaveBeenCalledTimes(2);
+      expect(onStdout).toHaveBeenLastCalledWith(' second chunk\n');
+
+      child.emit('close', 0, null);
+      await expect(pending).resolves.toEqual({
+        text: 'first chunk second chunk',
+        error: null,
+        exitCode: 0,
+      });
+    });
+
+    it('reassembles split JSONL stdout before firing onEvent', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const child = createChild({ neverClose: true });
+      spawnMock.mockReturnValue(child);
+      const onEvent = vi.fn();
+
+      const { runCodex } = await import('./codex.js');
+      const pending = runCodex('my prompt', { onEvent });
+
+      child.stdout.emit('data', Buffer.from('{"type":"turn.'));
+      expect(onEvent).not.toHaveBeenCalled();
+
+      child.stdout.emit('data', Buffer.from('completed","delta":"ok"}\n'));
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledWith({ type: 'turn.completed', delta: 'ok' });
+
+      child.emit('close', 0, null);
+      await expect(pending).resolves.toMatchObject({ error: null, exitCode: 0 });
+    });
+
+    it('streams malformed JSONL as a scrubbed raw fallback event', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(
+        createChild({ stdout: 'not-json /test/project/private/file.md\n', code: 0 }),
+      );
+      const onEvent = vi.fn();
+
+      const { runCodex } = await import('./codex.js');
+      await runCodex('my prompt', { onEvent });
+
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(onEvent).toHaveBeenCalledWith({
+        type: 'raw',
+        line: 'not-json private/file.md',
+      });
+      expect(onEvent.mock.calls[0]![0].line).not.toContain('/test/project');
+    });
+
     it('non-zero exit: returns partial stdout and error from stderr', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockReturnValue(createChild({ stdout: 'partial', stderr: 'error from codex', code: 1 }));

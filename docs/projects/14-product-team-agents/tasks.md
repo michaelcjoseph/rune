@@ -757,7 +757,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Emit orchestration-granularity events: task selected, attempt start/retry, closeout
       commit sha, finalizer handoff/hold, block reason.
 - [x] Emit role-transition + verdict/objection events from the team-task workflow.
-- [ ] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.
+- [x] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.
       Implement `codex exec --json` + a `streamJsonToDisplay` analog as the default; if the
       installed CLI lacks `--json` or emits malformed JSONL, automatically fall back to
       scrubbed raw-line streaming and record that fallback in run metadata. No human decision.

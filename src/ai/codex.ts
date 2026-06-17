@@ -5,11 +5,10 @@
  *
  * This module is intentionally lean. It mirrors the spawn surface of
  * `src/ai/claude.ts` — binary resolution, child spawn, timeout, graceful-
- * shutdown registration — but skips the user-facing op-tracker, streaming
- * JSON parsing, and prompt-prepending (learnings, voice, date context).
- * Those wrap-around layers belong in the dispatch adapter (A5.2,
- * `dispatchToExecutor`) or in callers that want them; the wrapper itself
- * is the minimum a dispatcher needs.
+ * shutdown registration — and exposes optional stdout/JSONL stream callbacks.
+ * User-facing op tracking and prompt-prepending (learnings, voice, date
+ * context) belong in the dispatch adapter (A5.2, `dispatchToExecutor`) or in
+ * callers that want them; the wrapper itself is the minimum a dispatcher needs.
  *
  * Graceful shutdown: each spawn registers with the `activeProcesses` set in
  * `src/ai/claude.ts` via `registerActiveProcess`/`unregisterActiveProcess`,
