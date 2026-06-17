@@ -60,6 +60,7 @@ import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
+import { redactSecrets } from './work-run-transcript.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('team-task-deps');
@@ -617,7 +618,8 @@ function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding 
 }
 
 function attributedLine(role: RoleName, binding: RoleModelBinding, line: string): string {
-  return `${role} | ${binding.provider} | ${binding.alias} | ${line}`;
+  const displayLine = redactSecrets(scrubPathsInText(line));
+  return `${role} | ${binding.provider} | ${binding.alias} | ${displayLine}`;
 }
 
 function attributeRoleEvent(

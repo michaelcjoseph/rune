@@ -409,6 +409,54 @@ describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)
       model: 'gpt-5.5',
     });
   });
+
+  it('scrubs artifact executor output before adding role provider and model attribution', async () => {
+    const events: AttributedActivityEvent[] = [];
+    const rawSecret = 'sk-qaStreamFixture1234567890';
+    const rawPath = join(REPO_ROOT, 'src/private/fixture.ts');
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+        cap: 1,
+      },
+      makeSeams({
+        runExecution: async (opts) => {
+          opts.emit?.({
+            kind: 'output',
+            data: { line: `executor saw ${rawSecret} at ${rawPath}` },
+          });
+          return {
+            ok: true,
+            diff: 'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n',
+            output: 'executor done',
+          };
+        },
+      }),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const executorLines = events.filter((event) =>
+      String(event.data?.['line'] ?? '').includes('executor saw'),
+    );
+    expect(executorLines).toHaveLength(2);
+    for (const line of executorLines) {
+      expectAttributedLine(line, {
+        role: String(line.data?.['role']),
+        provider: 'openai',
+        model: 'gpt-5.5',
+      });
+      const displayLine = String(line.data?.['line']);
+      expect(displayLine).not.toContain(rawSecret);
+      expect(displayLine).toMatch(/sk-<redacted-[a-f0-9]{6}>/);
+      expect(displayLine).not.toContain(REPO_ROOT);
+      expect(displayLine).toContain('src/private/fixture.ts');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

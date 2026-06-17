@@ -98,10 +98,11 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- to `spawnAgent`.
+- role | provider | model`.
 
-Verification passed:
+Verification:
+- `src/jobs/team-task-deps.test.ts`: 17 passed
+- `src/jobs/execution-agent.test.ts`: 8 passed
+- `npm run build`: blocked by existing unrelated TypeScript errors outside this change
 
-`npx vitest run --configLoader runner --config vitest.config.ts --fileParallelism=false --reporter=verbose src/jobs/execution-agent.test.ts`
-
-Result: 8 tests passed. The preexisting staged QA test change remains untouched; my implementation change is unstaged.
+QA’s staged test change remains staged; my implementation change is unstaged.

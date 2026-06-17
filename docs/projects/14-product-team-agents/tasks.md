@@ -765,7 +765,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `--output-format stream-json --verbose` + the shared display mapping for parity.
 - [x] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
       up as `activity`/`output` while the session is alive (keeps the heartbeat advancing).
-- [ ] Attribute every emitted line with role + provider + model, scrubbed via the existing
+- [x] Attribute every emitted line with role + provider + model, scrubbed via the existing
       `tool-labels`/`redactSecrets` path.
 - [ ] Verify the cockpit projection (`server/webview.ts`) populates the orchestrated run's
       `lastOutput`/transcript tail and the project card renders role activity.
