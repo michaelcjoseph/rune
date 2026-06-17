@@ -98,11 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- test -- --configLoader runner src/jobs/work-run-finalizer.test.ts src/jobs/orchestrated-work-runner.test.ts
+- obs/orchestrated-work-runner.test.ts src/jobs/work-run-gate-runtime.test.ts src/jobs/work-run-merge-lock.test.ts src/intent/project-orchestrator.test.ts
 ```
 
-Result: 2 test files passed, 60 tests passed. Worktree status still only shows QA’s staged test change in `src/jobs/orchestrated-work-runner.test.ts`; I did not commit or mark `tasks.md`.
-- er runner src/jobs/orchestrated-work-runner.test.ts` passed, 28 tests.
-- Same env, runner + finalizer + gate-runtime + merge-lock suites passed, 72 tests.
+Result: 5 files passed, 87 tests.
 
-`npm run build` still fails on existing repo-wide TypeScript test errors; it also reports typing issues in the staged QA test. I did not commit.
+Worktree still only has the pre-existing staged QA test edits; I did not commit or modify production files.

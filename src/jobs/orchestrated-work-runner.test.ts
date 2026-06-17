@@ -886,6 +886,91 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it('production finalize adapter preserves the failed-gate hold invariant through the real finalizer', async () => {
+      const runId = 'mut-orch-real-gate-held';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-real-gate-held-artifacts-'));
+      const operations: string[] = [];
+      const phases: string[] = [];
+      const runGit = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+        if (gitArgs[0] === 'rev-list') {
+          return { stdout: 'abc1111\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+          return { stdout: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'status' && gitArgs.includes('--porcelain')) {
+          return { stdout: '', stderr: '' };
+        }
+        if (gitArgs[0] === 'merge') operations.push(`merge:${opts?.cwd ?? ''}`);
+        if (gitArgs[0] === 'push') operations.push(`push:${gitArgs.join(' ')}`);
+        if (gitArgs[0] === 'branch' && gitArgs[1] === '-d') operations.push(`delete:${gitArgs[2]}`);
+        return { stdout: '', stderr: '' };
+      });
+
+      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
+      mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
+        const actual = await vi.importActual<typeof import('./work-run-finalizer.js')>('./work-run-finalizer.js');
+        return actual.runFinalizer(input, effects);
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-real-gate-held' };
+        },
+        destroyWorktree: async () => {
+          operations.push('destroy-worktree');
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        recordWorkRunPhase: (id, phase) => {
+          expect(id).toBe(runId);
+          phases.push(phase);
+        },
+        readLastWorkRunPhase: (id) => {
+          expect(id).toBe(runId);
+          return null;
+        },
+        runOrchestration: async (deps) => {
+          await deps.writeTasksMd('- [x] task one\n');
+          return deps.finalize();
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+        expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
+        expect(mockRunGate).toHaveBeenCalledOnce();
+        expect(terminal?.kind).toBe('completed');
+        expect(terminal?.data).toMatchObject({
+          outcome: 'branch-complete',
+          merged: false,
+          branchDeleted: false,
+          gateHeldReason: 'tests-red',
+          baseBranch: 'main',
+          dispatchMode: 'orchestrated',
+        });
+        expect(phases).toEqual([
+          'classified',
+          'transcript-flushed',
+          'summary-written',
+          'index-appended',
+          'worktree-resolved',
+          'finalized',
+        ]);
+        expect(operations).toEqual(['destroy-worktree']);
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('a gate-failing branch-complete orchestrated run holds with the gate reason recorded and does not touch the base branch', async () => {
       const runId = 'mut-orch-gate-held';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-gate-held-artifacts-'));

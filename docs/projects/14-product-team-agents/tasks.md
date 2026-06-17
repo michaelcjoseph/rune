@@ -777,7 +777,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `unavailable` stub: bind `classify`/`flushTranscript`/`writeSummary`/`appendIndexRow`/
       `recordPhase`/`readLastPhase` and `gate` = `withBaseBranchLock` + `runGate` over the
       product's `validationCommands`, plus `mergeBranch`/`pushBranch`/`deleteBranch`.
-- [ ] Preserve the invariants: failed gate or open high/critical objection holds
+- [x] Preserve the invariants: failed gate or open high/critical objection holds
       branch-complete with the handoff payload recorded; merge only ever through the
       finalizer's gates (reqs 17, 25, 63-70).
 - [ ] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
