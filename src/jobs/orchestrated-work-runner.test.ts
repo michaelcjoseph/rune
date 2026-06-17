@@ -761,6 +761,131 @@ describe('orchestratedWorkApplier', () => {
       expect(String(data['reason'] ?? '')).not.toMatch(/finalizer.*not wired|unavailable/i);
     });
 
+    it('production finalize adapter drives the real gated-merge finalizer effects in order', async () => {
+      const runId = 'mut-orch-real-gated-merge';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-real-gated-merge-artifacts-'));
+      const repoPath = join(artifactsDir, 'product-repo');
+      const productsFile = join(artifactsDir, 'products.json');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      const operations: string[] = [];
+      const phases: string[] = [];
+      const calls: Array<{ args: string[]; cwd?: string }> = [];
+      const runGit = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+        calls.push({ args: [...gitArgs], cwd: opts?.cwd });
+        if (gitArgs[0] === 'rev-list') {
+          return { stdout: 'abc1111\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+          return { stdout: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'status' && gitArgs.includes('--porcelain')) {
+          return { stdout: '', stderr: '' };
+        }
+        if (gitArgs[0] === 'merge') operations.push('merge');
+        if (gitArgs[0] === 'push') operations.push('push');
+        if (gitArgs[0] === 'branch' && gitArgs[1] === '-d') operations.push('delete-branch');
+        return { stdout: '', stderr: '' };
+      });
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(
+        productsFile,
+        JSON.stringify({
+          jarvis: {
+            repoPath,
+            baseBranch: 'trunk',
+            credentialsFile: '',
+            egressAllowlist: [],
+            validationCommands: ['npm test -- --runInBand'],
+          },
+        }),
+        'utf8',
+      );
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockRunGate.mockResolvedValueOnce({ ok: true });
+      mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
+        const actual = await vi.importActual<typeof import('./work-run-finalizer.js')>('./work-run-finalizer.js');
+        return actual.runFinalizer(input, effects);
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-real-gated-merge' };
+        },
+        destroyWorktree: async () => {
+          operations.push('destroy-worktree');
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        recordWorkRunPhase: (id, phase) => {
+          expect(id).toBe(runId);
+          phases.push(phase);
+        },
+        readLastWorkRunPhase: (id) => {
+          expect(id).toBe(runId);
+          return null;
+        },
+        runOrchestration: async (deps) => {
+          await deps.writeTasksMd('- [x] task one\n');
+          return deps.finalize();
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+        expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
+        expect(mockRunGate).toHaveBeenCalledWith(expect.objectContaining({
+          product: 'jarvis',
+          repoPath,
+          baseBranch: 'trunk',
+          branch: 'jarvis-work/demo',
+          validationCommands: ['npm test -- --runInBand'],
+          tasksRemaining: 0,
+          concurrentRun: false,
+          integrationWorktree: expect.stringContaining(`gate-jarvis-${runId}`),
+        }));
+        expect(terminal?.kind).toBe('completed');
+        expect(terminal?.data).toMatchObject({
+          outcome: 'branch-complete',
+          merged: true,
+          branchDeleted: true,
+          baseBranch: 'trunk',
+          dispatchMode: 'orchestrated',
+        });
+        expect(phases).toEqual([
+          'classified',
+          'transcript-flushed',
+          'summary-written',
+          'index-appended',
+          'merged-not-pushed',
+          'pushed-not-deleted',
+          'worktree-resolved',
+          'finalized',
+        ]);
+        expect(operations).toEqual(['merge', 'push', 'destroy-worktree', 'delete-branch']);
+        expect(calls).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            args: ['merge', '--no-ff', 'jarvis-work/demo', '-m', 'jarvis(jarvis): merge orchestrated branch jarvis-work/demo'],
+            cwd: repoPath,
+          }),
+          expect.objectContaining({ args: ['push', 'origin', 'trunk'], cwd: repoPath }),
+          expect.objectContaining({ args: ['branch', '-d', 'jarvis-work/demo'], cwd: repoPath }),
+        ]));
+        expect(destroyed).toBe(true);
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('a gate-failing branch-complete orchestrated run holds with the gate reason recorded and does not touch the base branch', async () => {
       const runId = 'mut-orch-gate-held';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-gate-held-artifacts-'));

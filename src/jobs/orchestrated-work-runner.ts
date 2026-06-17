@@ -77,7 +77,7 @@ import {
 } from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase, type GateFailReason } from './work-run-finalizer.js';
-import { runGate } from './work-run-gate-runtime.js';
+import { runGate as defaultRunGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 
 const log = createLogger('orchestrated-work-runner');
@@ -127,6 +127,10 @@ export interface OrchestratedRuntimeDeps {
   /** Durable per-run finalize-phase store for gated-merge crash resume. */
   recordWorkRunPhase?: (runId: string, phase: FinalizerPhase) => void;
   readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
+  /** Run the hard merge gate in its throwaway integration worktree. */
+  runGate: typeof defaultRunGate;
+  /** Build the throwaway integration worktree path used by the gate runtime. */
+  integrationWorktree: (product: string, runId: string) => string;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -143,6 +147,8 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     appendIndexRow,
     recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
+    runGate: defaultRunGate,
+    integrationWorktree: (product, runId) => join(config.WORKTREE_ROOT, `gate-${product}-${runId}`),
   };
 }
 
@@ -428,7 +434,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         finalize: async () => {
           let gateTasksRemaining = 0;
           let endedAt = '';
-          const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${product}-${descriptor.id}`);
+          const integrationWorktree = deps.integrationWorktree(product, descriptor.id);
           const exit = (): ExitFacts => ({
             exitCode: 0,
             signal: null,
@@ -539,7 +545,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
             gate: () =>
               withBaseBranchLock(product, baseBranch, () =>
-                runGate({
+                deps.runGate({
                   product,
                   repoPath,
                   baseBranch,

@@ -98,12 +98,11 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- events now persist `outcome` and `workProduct` onto the descriptor the same way `work-run` does.
-
-Verified with:
-
-```sh
-TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/jarvis-vault npm test -- --configLoader runner src/transport/mutations.test.ts
+- test -- --configLoader runner src/jobs/work-run-finalizer.test.ts src/jobs/orchestrated-work-runner.test.ts
 ```
 
-Result: 1 test file passed, 30 tests passed. I did not commit.
+Result: 2 test files passed, 60 tests passed. Worktree status still only shows QA’s staged test change in `src/jobs/orchestrated-work-runner.test.ts`; I did not commit or mark `tasks.md`.
+- er runner src/jobs/orchestrated-work-runner.test.ts` passed, 28 tests.
+- Same env, runner + finalizer + gate-runtime + merge-lock suites passed, 72 tests.
+
+`npm run build` still fails on existing repo-wide TypeScript test errors; it also reports typing issues in the staged QA test. I did not commit.
