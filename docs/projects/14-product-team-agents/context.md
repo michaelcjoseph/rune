@@ -98,6 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- eps.test.ts src/jobs/orchestrated-work-runner.test.ts` passed: 27 tests.
-- `npm test -- src/intent/team-task-workflow.test.ts` is blocked by the known `.vite-temp` EPERM config issue.
-- `npm run build -- --pretty false` still fails on existing unrelated TypeScript errors outside these changed files.
+- runner --reporter=verbose --fileParallelism=false` — 16 tests passed.
+- `npm run build -- --pretty false` still fails on existing unrelated TypeScript errors outside this change.
+- Plain Vitest config loading hits the known `.vite-temp` EPERM issue in this sandbox, so I used `--configLoader runner`.

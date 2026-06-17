@@ -310,6 +310,108 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Execution observability attribution (Phase 10)
+// ---------------------------------------------------------------------------
+
+describe('createProductionTaskWorkflowRunner — activity attribution (Phase 10)', () => {
+  type AttributedActivityEvent = {
+    kind: 'activity' | 'output';
+    data?: Record<string, unknown>;
+  };
+
+  function expectAttributedLine(
+    event: AttributedActivityEvent,
+    expected: { role: string; provider: string; model: string },
+  ): void {
+    expect(event.data?.['role']).toBe(expected.role);
+    expect(event.data?.['provider']).toBe(expected.provider);
+    expect(event.data?.['model']).toBe(expected.model);
+    expect(String(event.data?.['line'])).toContain(expected.role);
+    expect(String(event.data?.['line'])).toContain(expected.provider);
+    expect(String(event.data?.['line'])).toContain(expected.model);
+  }
+
+  it('attributes every emitted role-stage activity line with role, provider, and model', async () => {
+    const events: AttributedActivityEvent[] = [];
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+        cap: 1,
+      },
+      makeSeams(),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const lines = events.filter((event) => typeof event.data?.['line'] === 'string');
+    expect(lines.length).toBeGreaterThan(0);
+    const expectedByRole = new Map([
+      ['qa', { role: 'qa', provider: 'openai', model: 'gpt-5.5' }],
+      ['tech-lead', { role: 'tech-lead', provider: 'anthropic', model: 'opus' }],
+      ['coder', { role: 'coder', provider: 'openai', model: 'gpt-5.5' }],
+      ['reviewer', { role: 'reviewer', provider: 'anthropic', model: 'opus' }],
+    ]);
+
+    for (const line of lines) {
+      const role = String(line.data?.['role']);
+      const expected = expectedByRole.get(role);
+      expect(expected, `unexpected emitted role activity line: ${JSON.stringify(line.data)}`).toBeDefined();
+      expectAttributedLine(line, expected!);
+    }
+  });
+
+  it('forwards artifact executor output lines with the invoking role provider and model', async () => {
+    const events: AttributedActivityEvent[] = [];
+    let executionCalls = 0;
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+        emit: (event) => events.push(event),
+        cap: 1,
+      },
+      makeSeams({
+        runExecution: async (opts) => {
+          executionCalls += 1;
+          opts.emit?.({
+            kind: 'output',
+            data: { line: `executor progress ${executionCalls}` },
+          });
+          return {
+            ok: true,
+            diff: `diff --git a/src/${executionCalls}.test.ts b/src/${executionCalls}.test.ts\n+++ b/src/${executionCalls}.test.ts\n+expect(${executionCalls}).toBe(${executionCalls})\n`,
+            output: `executor ${executionCalls} done`,
+          };
+        },
+      }),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    const executorLines = events.filter((event) =>
+      String(event.data?.['line'] ?? '').includes('executor progress'),
+    );
+    expect(executorLines).toHaveLength(2);
+    expectAttributedLine(executorLines[0]!, {
+      role: 'qa',
+      provider: 'openai',
+      model: 'gpt-5.5',
+    });
+    expectAttributedLine(executorLines[1]!, {
+      role: 'coder',
+      provider: 'openai',
+      model: 'gpt-5.5',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // No-stub regression — the production runTaskWorkflow is the real workflow
 // ---------------------------------------------------------------------------
 

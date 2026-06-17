@@ -718,7 +718,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       legacy work-runner, no plain-stdout accumulation.
 - [x] Role-transition test: `runTeamTaskWorkflow` emits a labeled event per role stage
       (QA → tech-lead review → coder → reviewer → designer → PM wrap-up) and per verdict/objection.
-- [ ] Provider-attribution test: every emitted activity line carries role + provider + model
+- [x] Provider-attribution test: every emitted activity line carries role + provider + model
       alias and is path/secret-scrubbed.
 - [ ] Quiet-backstop-safe test: an orchestrated run that is genuinely working (streaming
       activity) is NOT tripped by the quiet-nudge / quiet→cancel backstop — streaming makes the

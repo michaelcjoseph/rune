@@ -345,6 +345,10 @@ export interface BuildTeamTaskDepsArgs {
   sandbox: SandboxSpec;
   productsConfigPath: string;
   models: TeamRoleModels;
+  /** Optional activity sink; production uses this to attribute artifact
+   * executor output with the invoking role/model before it reaches the
+   * mutation stream. */
+  emit?: (event: WorkflowActivityEvent) => void;
 }
 
 /** Compose a judgment role's two-channel charter prompt and run one call. */
@@ -424,12 +428,16 @@ export function buildProductionTeamTaskDeps(
     body: string,
   ): Promise<ExecutionAgentResult> => {
     const ctx = composeRoleContext(role, instruction);
+    const emit = args.emit
+      ? attributeRoleEvents(args.emit, role, binding)
+      : undefined;
     return seams.runExecution({
       systemPrompt: ctx.systemInstructions,
       prompt: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
       sandbox,
       model: binding,
       productsConfigPath,
+      ...(emit !== undefined ? { emit } : {}),
     });
   };
 
@@ -589,6 +597,75 @@ function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
   };
 }
 
+function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding | null {
+  switch (role) {
+    case 'pm':
+      return models.pm;
+    case 'tech-lead':
+      return models.techLead;
+    case 'qa':
+      return models.qa;
+    case 'coder':
+      return models.coder;
+    case 'reviewer':
+      return models.reviewer;
+    case 'designer':
+      return models.designer;
+    default:
+      return null;
+  }
+}
+
+function attributedLine(role: RoleName, binding: RoleModelBinding, line: string): string {
+  return `${role} | ${binding.provider} | ${binding.alias} | ${line}`;
+}
+
+function attributeRoleEvent(
+  event: WorkflowActivityEvent,
+  role: RoleName,
+  binding: RoleModelBinding,
+): WorkflowActivityEvent {
+  const data: Record<string, unknown> = {
+    ...(event.data ?? {}),
+    role,
+    provider: binding.provider,
+    model: binding.alias,
+  };
+  if (typeof data['line'] === 'string') {
+    data['line'] = attributedLine(role, binding, data['line']);
+  }
+  return { kind: event.kind, data };
+}
+
+function attributeRoleEvents(
+  emit: (event: WorkflowActivityEvent) => void,
+  role: RoleName,
+  binding: RoleModelBinding,
+): (event: WorkflowActivityEvent) => void {
+  return (event) => {
+    try {
+      emit(attributeRoleEvent(event, role, binding));
+    } catch {
+      /* activity sinks are observability-only; they must not fail role execution. */
+    }
+  };
+}
+
+function attributeWorkflowEvents(
+  emit: (event: WorkflowActivityEvent) => void,
+  models: TeamRoleModels,
+): (event: WorkflowActivityEvent) => void {
+  return (event) => {
+    const role = typeof event.data?.['role'] === 'string' ? event.data['role'] : undefined;
+    const binding = role === undefined ? null : bindingForRole(models, role);
+    if (role === undefined || binding === null) {
+      emit(event);
+      return;
+    }
+    emit(attributeRoleEvent(event, role as RoleName, binding));
+  };
+}
+
 /**
  * The production `OrchestrationDeps.runTaskWorkflow` factory the orchestrated
  * applier mounts. Resolution failures block durably with a truthful reason —
@@ -624,9 +701,17 @@ export function createProductionTaskWorkflowRunner(
     }
 
     const deps = buildProductionTeamTaskDeps(
-      { sandbox: args.sandbox, productsConfigPath: args.productsConfigPath, models },
+      {
+        sandbox: args.sandbox,
+        productsConfigPath: args.productsConfigPath,
+        models,
+        ...(args.emit !== undefined ? { emit: args.emit } : {}),
+      },
       seamOverrides,
     );
+    const emit = args.emit !== undefined
+      ? attributeWorkflowEvents(args.emit, models)
+      : undefined;
 
     return runTeamTaskWorkflow(
       toSizedTask(task),
@@ -639,7 +724,7 @@ export function createProductionTaskWorkflowRunner(
         ...(ctx.rejectionFeedback !== undefined
           ? { rejectionFeedback: ctx.rejectionFeedback }
           : {}),
-        ...(args.emit !== undefined ? { emit: args.emit } : {}),
+        ...(emit !== undefined ? { emit } : {}),
         cap: args.cap ?? DEFAULT_ROUND_CAP,
       },
       deps,
