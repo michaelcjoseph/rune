@@ -98,9 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- obs/orchestrated-work-runner.test.ts src/jobs/work-run-gate-runtime.test.ts src/jobs/work-run-merge-lock.test.ts src/intent/project-orchestrator.test.ts
-```
-
-Result: 5 files passed, 87 tests.
-
-Worktree still only has the pre-existing staged QA test edits; I did not commit or modify production files.
+- rk-runner.test.ts src/jobs/team-task-deps.test.ts src/transport/mutations.test.ts` passed: 4 files, 84 tests.
+- `npm run build` is still blocked by existing unrelated TypeScript errors outside these changes.
+- I did not run the live acceptance harness itself because it makes live Claude/Codex calls.

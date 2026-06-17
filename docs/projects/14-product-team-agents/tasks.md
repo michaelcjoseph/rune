@@ -780,7 +780,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Preserve the invariants: failed gate or open high/critical objection holds
       branch-complete with the handoff payload recorded; merge only ever through the
       finalizer's gates (reqs 17, 25, 63-70).
-- [ ] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
+- [x] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
       ≥N intermediate stream events from BOTH executors and `lastHeartbeatAt` advanced during
       execution; (b) a clean run drives all the way to a MERGED base branch (gated); (c) a
       deliberately gate-failing run records a hold. Use a self-contained temp repo and local

@@ -29,11 +29,10 @@
  *   3. Drive the applier    — resolve dispatch (global OFF, per-product ON ⇒
  *                             orchestrated), run `orchestratedWorkApplier.apply()`
  *                             to its terminal event over the REAL path.
- *   4. Self-verify          — branch diff is non-empty and touches the target
- *                             file; the QA-authored test PASSES against the
- *                             coder's diff; the run reached branch-complete with
- *                             a well-formed handoff payload (orchestrated runs
- *                             never self-merge — spec req 17).
+ *   4. Self-verify          — both providers streamed attributed activity;
+ *                             supervision heartbeat advanced; a clean run merged
+ *                             and pushed through the gated finalizer; a red gate
+ *                             held branch-complete without mutating main.
  *   5. Proof artifact       — write the event log + diffstat + asserted outcome
  *                             to docs/projects/14-product-team-agents/
  *                             live-acceptance-<run-id>.md.
@@ -63,13 +62,16 @@ import { join } from 'node:path';
 // Fixture content — one small REAL task: implement an absent `sum` function.
 // ---------------------------------------------------------------------------
 
-const PRODUCT = 'accept-live';
+const CLEAN_PRODUCT = 'accept-live-clean';
+const GATE_FAIL_PRODUCT = 'accept-live-gate-fail';
 const PROJECT_SLUG = 'live-accept-sum';
 const TARGET_FILE = 'impl/sum.mjs';
 const TEST_FILE = 'impl/sum.test.mjs';
 // Tuple (`as const`) so TEST_COMMAND[0] narrows to 'node' under
 // noUncheckedIndexedAccess; the call site spreads the tail.
 const TEST_COMMAND = ['node', TEST_FILE] as const;
+const MIN_STREAM_EVENTS_PER_PROVIDER = 1;
+const APPLY_TERMINAL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 /** The seed implementation: present but unimplemented, so the seeded test is
  *  red until the coder fills it in. */
@@ -247,16 +249,22 @@ async function preflight(): Promise<void> {
 interface Fixture {
   root: string;
   repoPath: string;
+  remotePath: string;
   worktreeRoot: string;
   productsConfigPath: string;
-  verifyDir: string;
+  product: string;
+  seedSha: string;
 }
 
-async function makeFixture(): Promise<Fixture> {
-  const root = mkdtempSync(join(tmpdir(), 'p14-live-accept-'));
+async function makeFixture(args: {
+  label: string;
+  product: string;
+  validationCommands: string[];
+}): Promise<Fixture> {
+  const root = mkdtempSync(join(tmpdir(), `p14-live-accept-${args.label}-`));
   const repoPath = join(root, 'demo-repo');
+  const remotePath = join(root, 'origin.git');
   const worktreeRoot = join(root, 'worktrees');
-  const verifyDir = join(root, 'verify');
   const productsConfigPath = join(root, 'products.json');
   const credentialsPath = join(root, 'no-credentials.env');
 
@@ -277,7 +285,7 @@ async function makeFixture(): Promise<Fixture> {
     productsConfigPath,
     JSON.stringify(
       {
-        [PRODUCT]: {
+        [args.product]: {
           _comment:
             'Ephemeral project-14 live-acceptance product. Lives only in this temp dir.',
           repoPath,
@@ -285,7 +293,7 @@ async function makeFixture(): Promise<Fixture> {
           orchestratedMode: true,
           credentialsFile: credentialsPath,
           egressAllowlist: [],
-          validationCommands: [TEST_COMMAND.join(' ')],
+          validationCommands: args.validationCommands,
         },
       },
       null,
@@ -305,9 +313,38 @@ async function makeFixture(): Promise<Fixture> {
   if (commit.code !== 0) {
     throw new AcceptanceError(`fixture git commit failed: ${commit.stderr.trim()}`);
   }
+  const seedShaResult = await git(['rev-parse', 'HEAD']);
+  if (seedShaResult.code !== 0) {
+    throw new AcceptanceError(`fixture seed rev-parse failed: ${seedShaResult.stderr.trim()}`);
+  }
+  const seedSha = seedShaResult.stdout.trim();
 
-  log('fixture', `seeded throwaway repo at ${repoPath}`);
-  return { root, repoPath, worktreeRoot, productsConfigPath, verifyDir };
+  const initRemote = await run('git', ['init', '--bare', '-q', remotePath], {
+    timeoutMs: 30_000,
+    env: MINIMAL_ENV,
+  });
+  if (initRemote.code !== 0) {
+    throw new AcceptanceError(`fixture bare remote init failed: ${initRemote.stderr.trim()}`);
+  }
+  const addRemote = await git(['remote', 'add', 'origin', remotePath]);
+  if (addRemote.code !== 0) {
+    throw new AcceptanceError(`fixture git remote add failed: ${addRemote.stderr.trim()}`);
+  }
+  const pushSeed = await git(['push', '-u', 'origin', 'main']);
+  if (pushSeed.code !== 0) {
+    throw new AcceptanceError(`fixture seed push failed: ${pushSeed.stderr.trim()}`);
+  }
+
+  log('fixture', `seeded throwaway repo at ${repoPath} with local bare remote ${remotePath}`);
+  return {
+    root,
+    repoPath,
+    remotePath,
+    worktreeRoot,
+    productsConfigPath,
+    product: args.product,
+    seedSha,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,14 +354,21 @@ async function makeFixture(): Promise<Fixture> {
 interface DriveResult {
   events: Array<Record<string, unknown>>;
   terminal: Record<string, unknown> | null;
+  runId: string;
+  createdAt: string;
 }
 
 async function driveApplier(fixture: Fixture): Promise<DriveResult> {
+  process.env['PRODUCTS_CONFIG_FILE'] = fixture.productsConfigPath;
+  process.env['WORKTREE_ROOT'] = fixture.worktreeRoot;
+  // Keep the global default OFF — the per-product opt-in must do the routing.
+  process.env['ORCHESTRATED_WORK_ENABLED'] = 'false';
+
   // Dispatch resolution: global default OFF, per-product opt-in ON ⇒ orchestrated.
   const { resolveWorkDispatch, readDispatchModeInput } = await import('../work-dispatch.js');
   const dispatch = resolveWorkDispatch(
     readDispatchModeInput({
-      product: PRODUCT,
+      product: fixture.product,
       productsConfigPath: fixture.productsConfigPath,
       globalEnabled: false,
     }),
@@ -339,40 +383,62 @@ async function driveApplier(fixture: Fixture): Promise<DriveResult> {
 
   const { orchestratedWorkApplier } = await import('../orchestrated-work-runner.js');
   const { NotificationBus } = await import('../../transport/notification-bus.js');
+  const { createMutation, registerApplier, setMutationBus } = await import('../../transport/mutations.js');
   type Descriptor = Parameters<typeof orchestratedWorkApplier.apply>[0];
-  type Ctx = Parameters<typeof orchestratedWorkApplier.apply>[1];
 
-  const payload = { projectSlug: PROJECT_SLUG, product: PRODUCT };
-  // NOTE: we deliberately do NOT call `orchestratedWorkApplier.validate()`. That
-  // guard resolves the project under the JARVIS PROJECT_ROOT (its `findProjectDir`
-  // base), but this fixture's project lives only in the ephemeral temp repo — so
-  // validate() would always reject it. validate() is the daemon's public-entry
-  // guard (slug shape + in-repo project + concurrency caps); a standalone harness
-  // driving the applier directly against a throwaway repo doesn't need it, and
-  // apply()'s own failure paths surface any real misconfiguration as a terminal
-  // `failed` event.
-  const descriptor: Descriptor = {
-    id: randomUUID(),
-    kind: 'orchestrated-work',
-    source: 'cli',
-    target: { type: 'orchestrated-work', ref: PROJECT_SLUG },
-    preview: { summary: `live acceptance: orchestrated-work on ${PROJECT_SLUG}` },
-    payload,
-    createdAt: new Date().toISOString(),
-    status: 'running',
-  };
-  log('apply', `run id ${descriptor.id} — driving orchestratedWorkApplier.apply()`);
+  const payload = { projectSlug: PROJECT_SLUG, product: fixture.product };
+  log('apply', `creating orchestrated-work mutation for ${fixture.product}`);
 
-  const ctx: Ctx = { bus: new NotificationBus(), cancel: () => false };
+  setMutationBus(new NotificationBus());
   const events: Array<Record<string, unknown>> = [];
   let terminal: Record<string, unknown> | null = null;
-  for await (const event of orchestratedWorkApplier.apply(descriptor, ctx)) {
-    const e = event as unknown as Record<string, unknown>;
-    events.push(e);
-    log('event', JSON.stringify(e));
-    if (e.kind === 'completed' || e.kind === 'failed') terminal = e;
+  let resolveTerminal: (() => void) | undefined;
+  const terminalSeen = new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new AcceptanceError(`timed out waiting for terminal event for ${fixture.product}`));
+    }, APPLY_TERMINAL_TIMEOUT_MS);
+    timer.unref();
+    resolveTerminal = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+  });
+
+  // The daemon's public validate() resolves projects under this Jarvis
+  // checkout's PROJECT_ROOT. This harness intentionally points production
+  // apply() at a throwaway product repo in /tmp, so validation is bypassed here
+  // only; createMutation/startApply still own supervision, active-runs, and
+  // terminal persistence for the run.
+  registerApplier({
+    ...orchestratedWorkApplier,
+    validate: () => ({ ok: true as const }),
+    async *apply(descriptor: Descriptor, ctx) {
+      for await (const event of orchestratedWorkApplier.apply(descriptor, ctx)) {
+        const e = event as unknown as Record<string, unknown>;
+        events.push(e);
+        log('event', JSON.stringify(e));
+        if (e.kind === 'completed' || e.kind === 'failed') {
+          terminal = e;
+          resolveTerminal?.();
+        }
+        yield event;
+      }
+    },
+  });
+
+  const created = await createMutation('orchestrated-work', payload, 'cli');
+  if (!created.ok) {
+    throw new AcceptanceError(`createMutation failed: ${created.reason}`);
   }
-  return { events, terminal };
+  log('apply', `run id ${created.descriptor.id} — mutation pipeline started`);
+
+  await terminalSeen;
+  return {
+    events,
+    terminal,
+    runId: created.descriptor.id,
+    createdAt: created.descriptor.createdAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,72 +450,188 @@ interface VerifyResult {
   diffstat: string;
   touchedTarget: boolean;
   testPassed: boolean;
+  merged: boolean;
+  branchDeleted: boolean;
+  remotePushed: boolean;
 }
 
-async function verify(fixture: Fixture, drive: DriveResult): Promise<VerifyResult> {
+interface GateHoldVerifyResult {
+  branch: string;
+  touchedTarget: boolean;
+  baseUnchanged: boolean;
+  gateHeldReason: string;
+}
+
+function streamEvents(drive: DriveResult): Array<Record<string, unknown>> {
+  return drive.events.filter((event) => event.kind === 'activity' || event.kind === 'output');
+}
+
+function dataOf(event: Record<string, unknown>): Record<string, unknown> {
+  const data = event.data;
+  return data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+}
+
+function assertStreamObservability(drive: DriveResult, label: string): void {
+  const events = streamEvents(drive);
+  const attributed = events.filter((event) => {
+    const data = dataOf(event);
+    return (
+      typeof data['role'] === 'string' &&
+      typeof data['provider'] === 'string' &&
+      typeof data['model'] === 'string'
+    );
+  });
+  const counts = new Map<string, number>();
+  for (const event of attributed) {
+    const provider = String(dataOf(event)['provider']);
+    counts.set(provider, (counts.get(provider) ?? 0) + 1);
+  }
+
+  for (const provider of ['openai', 'anthropic']) {
+    const count = counts.get(provider) ?? 0;
+    if (count < MIN_STREAM_EVENTS_PER_PROVIDER) {
+      throw new AcceptanceError(
+        `${label}: expected at least ${MIN_STREAM_EVENTS_PER_PROVIDER} intermediate ` +
+          `activity/output event(s) from provider '${provider}', got ${count}. ` +
+          `streamed=${events.length} attributed=${attributed.length}`,
+      );
+    }
+  }
+  log(
+    'verify',
+    `${label}: streamed attributed events openai=${counts.get('openai') ?? 0} ` +
+      `anthropic=${counts.get('anthropic') ?? 0}`,
+  );
+}
+
+async function assertSupervisionHeartbeatAdvanced(drive: DriveResult, label: string): Promise<void> {
+  const configModule = await import('../../config.js');
+  const { readAllRuns } = await import('../supervision-store.js');
+  const runs = readAllRuns(configModule.default.SUPERVISED_RUNS_FILE);
+  const run = runs.find((entry) => entry.id === drive.runId);
+  if (!run) {
+    throw new AcceptanceError(
+      `${label}: no supervised run record for ${drive.runId}; live acceptance must drive ` +
+        `the orchestrated run through the mutation/supervision path, not only direct apply()`,
+    );
+  }
+  if (run.lastOutputAt === undefined) {
+    throw new AcceptanceError(
+      `${label}: supervised run ${drive.runId} never recorded lastOutputAt from ` +
+        'activity/output events',
+    );
+  }
+  const createdAt = Date.parse(drive.createdAt);
+  const lastHeartbeatAt = Date.parse(run.lastHeartbeatAt);
+  const lastOutputAt = Date.parse(run.lastOutputAt);
+  if (!Number.isFinite(lastHeartbeatAt) || lastHeartbeatAt <= createdAt) {
+    throw new AcceptanceError(
+      `${label}: lastHeartbeatAt did not advance during execution ` +
+        `(createdAt=${drive.createdAt}, lastHeartbeatAt=${run.lastHeartbeatAt})`,
+    );
+  }
+  if (!Number.isFinite(lastOutputAt) || lastOutputAt <= createdAt) {
+    throw new AcceptanceError(
+      `${label}: lastOutputAt did not advance during execution ` +
+        `(createdAt=${drive.createdAt}, lastOutputAt=${run.lastOutputAt})`,
+    );
+  }
+  log('verify', `${label}: supervision heartbeat advanced to ${run.lastHeartbeatAt}`);
+}
+
+async function verifyCleanMerged(fixture: Fixture, drive: DriveResult): Promise<VerifyResult> {
   const { terminal } = drive;
   if (!terminal) {
     throw new AcceptanceError('applier ended without a terminal event');
   }
 
-  // (d) terminal outcome — orchestrated runs never self-merge (spec req 17):
-  // the well-formed success terminal is `completed` + `held:true` (branch-complete,
-  // holding for the Project 15 finalizer) with a real branch + >=1 task recorded.
-  // Reaching branch-complete is ONLY possible if every task's reviewer/objection
-  // gate passed (the orchestrator renders any gate failure as `failed`), so this
-  // is the transitive proof of assertion (c) "reviewer verdict is a structured pass".
+  assertStreamObservability(drive, 'clean run');
+  await assertSupervisionHeartbeatAdvanced(drive, 'clean run');
+
+  // A clean run now lands through the Project 15 gated finalizer: completed
+  // branch-complete, merged to the base branch, pushed to the local bare remote,
+  // and the work branch deleted after the worktree is removed.
   const data = (terminal.data ?? {}) as Record<string, unknown>;
   if (terminal.kind !== 'completed') {
     throw new AcceptanceError(
-      `terminal was '${terminal.kind}', expected 'completed' (branch-complete/held). ` +
+      `terminal was '${terminal.kind}', expected 'completed' (branch-complete/merged). ` +
         `reason: ${String(data.reason ?? '<none>')}`,
     );
   }
   const branch = typeof data.branch === 'string' ? data.branch : '';
   const taskCount = typeof data.taskCount === 'number' ? data.taskCount : 0;
-  const outcomeOk = data.held === true && branch !== '' && taskCount >= 1;
+  const outcomeOk =
+    data.outcome === 'branch-complete' &&
+    data.merged === true &&
+    data.branchDeleted === true &&
+    branch !== '' &&
+    taskCount >= 1;
   if (!outcomeOk) {
     throw new AcceptanceError(
-      `terminal completed but the handoff payload is not well-formed branch-complete: ` +
+      `terminal completed but the payload is not a well-formed merged branch-complete run: ` +
         `${JSON.stringify(data)}`,
     );
   }
-  log('verify', `terminal: branch-complete held branch=${branch} tasks=${taskCount}`);
+  log('verify', `terminal: branch-complete merged branch=${branch} tasks=${taskCount}`);
 
   const git = (args: string[]) =>
     run('git', args, { cwd: fixture.repoPath, timeoutMs: 30_000, env: MINIMAL_ENV });
 
-  // (a) the branch diff is non-empty and touches the seeded target file.
-  const diffNames = await git(['diff', '--name-only', `main..${branch}`]);
+  const localMain = await git(['rev-parse', 'main']);
+  if (localMain.code !== 0) {
+    throw new AcceptanceError(`git rev-parse main failed: ${localMain.stderr.trim()}`);
+  }
+  const mainSha = localMain.stdout.trim();
+  if (mainSha === fixture.seedSha) {
+    throw new AcceptanceError(`clean run did not advance local main beyond seed ${fixture.seedSha}`);
+  }
+
+  const remoteMain = await run('git', ['--git-dir', fixture.remotePath, 'rev-parse', 'main'], {
+    timeoutMs: 30_000,
+    env: MINIMAL_ENV,
+  });
+  if (remoteMain.code !== 0) {
+    throw new AcceptanceError(`git rev-parse remote main failed: ${remoteMain.stderr.trim()}`);
+  }
+  const remotePushed = remoteMain.stdout.trim() === mainSha;
+  if (!remotePushed) {
+    throw new AcceptanceError(
+      `clean run merged locally but did not push main to origin ` +
+        `(local=${mainSha}, remote=${remoteMain.stdout.trim()})`,
+    );
+  }
+
+  const deletedBranch = await git(['rev-parse', '--verify', branch]);
+  if (deletedBranch.code === 0) {
+    throw new AcceptanceError(`clean run reported branchDeleted=true but ${branch} still exists`);
+  }
+
+  // (a) the merged base diff is non-empty and touches the seeded target file.
+  const diffNames = await git(['diff', '--name-only', `${fixture.seedSha}..main`]);
   if (diffNames.code !== 0) {
-    throw new AcceptanceError(`git diff main..${branch} failed: ${diffNames.stderr.trim()}`);
+    throw new AcceptanceError(`git diff ${fixture.seedSha}..main failed: ${diffNames.stderr.trim()}`);
   }
   const changed = diffNames.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   if (changed.length === 0) {
-    throw new AcceptanceError(`branch ${branch} has an empty diff against main — no real work`);
+    throw new AcceptanceError('clean run has an empty merged diff against the seed — no real work');
   }
   const touchedTarget = changed.includes(TARGET_FILE);
   if (!touchedTarget) {
     throw new AcceptanceError(
-      `branch diff does not touch the target ${TARGET_FILE}. changed: ${changed.join(', ')}`,
+      `merged diff does not touch the target ${TARGET_FILE}. changed: ${changed.join(', ')}`,
     );
   }
-  const diffstat = (await git(['diff', '--stat', `main..${branch}`])).stdout.trim();
+  const diffstat = (await git(['diff', '--stat', `${fixture.seedSha}..main`])).stdout.trim();
   log('verify', `branch diff touches ${TARGET_FILE}; ${changed.length} file(s) changed`);
 
-  // (b) the QA-authored test PASSES against the coder's diff. Check the branch
-  // out in a throwaway worktree and run the temp repo's test command there.
-  const addWt = await git(['worktree', 'add', '--detach', fixture.verifyDir, branch]);
-  if (addWt.code !== 0) {
-    throw new AcceptanceError(`could not check out ${branch} for verification: ${addWt.stderr.trim()}`);
-  }
-  if (!existsSync(join(fixture.verifyDir, TEST_FILE))) {
+  // (b) the QA-authored test PASSES against the merged base.
+  if (!existsSync(join(fixture.repoPath, TEST_FILE))) {
     throw new AcceptanceError(
-      `the QA test ${TEST_FILE} does not exist on ${branch} — no test was authored`,
+      `the QA test ${TEST_FILE} does not exist on merged main — no test was authored`,
     );
   }
   const test = await run(TEST_COMMAND[0], [...TEST_COMMAND.slice(1)], {
-    cwd: fixture.verifyDir,
+    cwd: fixture.repoPath,
     timeoutMs: 30_000,
     env: MINIMAL_ENV,
   });
@@ -463,7 +645,77 @@ async function verify(fixture: Fixture, drive: DriveResult): Promise<VerifyResul
   }
   log('verify', `QA test PASSES against the coder's diff (${TEST_COMMAND.join(' ')})`);
 
-  return { branch, diffstat, touchedTarget, testPassed };
+  return {
+    branch,
+    diffstat,
+    touchedTarget,
+    testPassed,
+    merged: true,
+    branchDeleted: true,
+    remotePushed,
+  };
+}
+
+async function verifyGateHold(fixture: Fixture, drive: DriveResult): Promise<GateHoldVerifyResult> {
+  const { terminal } = drive;
+  if (!terminal) {
+    throw new AcceptanceError('gate-fail applier ended without a terminal event');
+  }
+
+  assertStreamObservability(drive, 'gate-fail run');
+
+  const data = (terminal.data ?? {}) as Record<string, unknown>;
+  if (terminal.kind !== 'completed') {
+    throw new AcceptanceError(
+      `gate-fail terminal was '${terminal.kind}', expected completed branch-complete hold. ` +
+        `reason: ${String(data.reason ?? '<none>')}`,
+    );
+  }
+  const branch = typeof data.branch === 'string' ? data.branch : '';
+  const gateHeldReason = typeof data.gateHeldReason === 'string' ? data.gateHeldReason : '';
+  const holdOk =
+    data.outcome === 'branch-complete' &&
+    data.merged === false &&
+    data.branchDeleted === false &&
+    branch !== '' &&
+    gateHeldReason !== '';
+  if (!holdOk) {
+    throw new AcceptanceError(
+      `gate-fail run did not record a branch-complete hold with merge suppressed: ` +
+        `${JSON.stringify(data)}`,
+    );
+  }
+
+  const git = (args: string[]) =>
+    run('git', args, { cwd: fixture.repoPath, timeoutMs: 30_000, env: MINIMAL_ENV });
+  const localMain = await git(['rev-parse', 'main']);
+  if (localMain.code !== 0) {
+    throw new AcceptanceError(`gate-fail git rev-parse main failed: ${localMain.stderr.trim()}`);
+  }
+  const baseUnchanged = localMain.stdout.trim() === fixture.seedSha;
+  if (!baseUnchanged) {
+    throw new AcceptanceError(
+      `gate-fail run mutated main despite a failed gate ` +
+        `(seed=${fixture.seedSha}, main=${localMain.stdout.trim()})`,
+    );
+  }
+  const branchExists = await git(['rev-parse', '--verify', branch]);
+  if (branchExists.code !== 0) {
+    throw new AcceptanceError(`gate-fail run did not retain held branch ${branch}`);
+  }
+  const diffNames = await git(['diff', '--name-only', `${fixture.seedSha}..${branch}`]);
+  if (diffNames.code !== 0) {
+    throw new AcceptanceError(`gate-fail git diff ${fixture.seedSha}..${branch} failed: ${diffNames.stderr.trim()}`);
+  }
+  const changed = diffNames.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  const touchedTarget = changed.includes(TARGET_FILE);
+  if (!touchedTarget) {
+    throw new AcceptanceError(
+      `gate-fail held branch does not contain the expected target diff. changed: ${changed.join(', ')}`,
+    );
+  }
+  log('verify', `gate-fail run held branch=${branch} reason=${gateHeldReason}`);
+  return { branch, touchedTarget, baseUnchanged, gateHeldReason };
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +726,7 @@ async function emitProof(
   runId: string,
   drive: DriveResult,
   verifyResult: VerifyResult,
+  gateHold: GateHoldVerifyResult,
 ): Promise<string> {
   // Anchor on config's canonical PROJECT_ROOT rather than a fragile relative
   // walk from import.meta.url. config is already loaded by this point (apply()
@@ -495,7 +748,7 @@ async function emitProof(
 
 **Run id:** \`${runId}\`
 **Recorded:** ${stamp}
-**Result:** PASS — a non-fixture orchestrated run drove a real task to a real diff.
+**Result:** PASS — a live, non-stub orchestrated run drove a real task to a real diff.
 
 This is the stub-free proof required by Phase 8 (spec.md §"Phase 8"): the
 production \`orchestratedWorkApplier\` ran end-to-end against an ephemeral repo
@@ -504,11 +757,21 @@ the harness self-verified real work with zero human intervention.
 
 ## Asserted outcome
 
-- **Terminal:** \`completed\` + \`held:true\` — branch-complete, holding for the
-  Project 15 finalizer. Orchestrated runs never self-merge (spec req 17).
+- **Terminal:** \`completed\` + \`outcome:"branch-complete"\` with
+  \`merged:true\` + \`branchDeleted:true\` for the clean run.
 - **Branch:** \`${verifyResult.branch}\`
+- **Merged to local \`main\` and pushed to local bare \`origin\`:** ${verifyResult.merged && verifyResult.remotePushed ? 'yes' : 'NO'}
+- **Work branch deleted after push:** ${verifyResult.branchDeleted ? 'yes' : 'NO'}
 - **Diff touches target (\`${TARGET_FILE}\`):** ${verifyResult.touchedTarget ? 'yes' : 'NO'}
 - **QA test passes against the coder's diff (\`${TEST_COMMAND.join(' ')}\`):** ${verifyResult.testPassed ? 'yes' : 'NO'}
+- **Stream parity:** provider-attributed activity/output from both OpenAI and
+  Anthropic was observed before terminal.
+- **Heartbeat:** supervision \`lastHeartbeatAt\`/\`lastOutputAt\` advanced during
+  the clean run.
+- **Gate-fail hold:** branch \`${gateHold.branch}\` was retained, \`main\` stayed
+  unchanged (${gateHold.baseUnchanged ? 'yes' : 'NO'}), the held diff touched
+  \`${TARGET_FILE}\` (${gateHold.touchedTarget ? 'yes' : 'NO'}), and the terminal
+  recorded gate hold reason \`${gateHold.gateHeldReason}\`.
 - **Reviewer/objection gate:** passed (transitive — branch-complete is
   unreachable if any task's gate fails; a gate failure renders \`failed\`).
 
@@ -544,38 +807,38 @@ async function main(): Promise<void> {
   // PRODUCTS_CONFIG_FILE / WORKTREE_ROOT are getters that read the env at access
   // time, so the redirect must already be in place when the first import lands.
   // Every config-reading import in this file is dynamic for exactly this reason.
-  let fixture: Fixture | null = null;
+  const fixtures: Fixture[] = [];
   try {
-    fixture = await makeFixture();
-    process.env['PRODUCTS_CONFIG_FILE'] = fixture.productsConfigPath;
-    process.env['WORKTREE_ROOT'] = fixture.worktreeRoot;
-    // Keep the global default OFF — the per-product opt-in must do the routing.
+    const cleanFixture = await makeFixture({
+      label: 'clean',
+      product: CLEAN_PRODUCT,
+      validationCommands: [TEST_COMMAND.join(' ')],
+    });
+    fixtures.push(cleanFixture);
+    process.env['PRODUCTS_CONFIG_FILE'] = cleanFixture.productsConfigPath;
+    process.env['WORKTREE_ROOT'] = cleanFixture.worktreeRoot;
     process.env['ORCHESTRATED_WORK_ENABLED'] = 'false';
 
     await preflight();
 
-    const drive = await driveApplier(fixture);
-    const verifyResult = await verify(fixture, drive);
-    const proofPath = await emitProof(runId, drive, verifyResult);
+    const cleanDrive = await driveApplier(cleanFixture);
+    const verifyResult = await verifyCleanMerged(cleanFixture, cleanDrive);
+
+    const gateFailFixture = await makeFixture({
+      label: 'gate-fail',
+      product: GATE_FAIL_PRODUCT,
+      validationCommands: ['node -e process.exit(1)'],
+    });
+    fixtures.push(gateFailFixture);
+    const gateFailDrive = await driveApplier(gateFailFixture);
+    const gateHold = await verifyGateHold(gateFailFixture, gateFailDrive);
+    const proofPath = await emitProof(runId, cleanDrive, verifyResult, gateHold);
 
     log('done', `PASS — proof written to ${proofPath}`);
     // eslint-disable-next-line no-console
     console.log(`\n✅ LIVE ACCEPTANCE PASSED (run ${runId})`);
   } finally {
-    if (fixture) {
-      // Release the verify worktree's git registration before the OS delete
-      // (`remove --force` also handles the detached-HEAD checkout), then nuke
-      // the whole temp root (repo + worktrees + temp product config). All
-      // best-effort — the temp root is ephemeral, so a residual git record dies
-      // with the repo regardless.
-      try {
-        await run('git', ['-C', fixture.repoPath, 'worktree', 'remove', '--force', fixture.verifyDir], {
-          timeoutMs: 15_000,
-          env: MINIMAL_ENV,
-        });
-      } catch {
-        /* best-effort */
-      }
+    for (const fixture of fixtures) {
       try {
         rmSync(fixture.root, { recursive: true, force: true });
         log('teardown', `removed temp root ${fixture.root}`);

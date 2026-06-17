@@ -204,6 +204,7 @@ async function defaultSpawnAgent(args: {
     const codexPrompt = args.systemPrompt
       ? `${args.systemPrompt}\n\n${args.prompt}`
       : args.prompt;
+    let streamedOutput = '';
     const result = await runCodex(codexPrompt, {
       cwd: args.cwd,
       model: args.model.alias,
@@ -212,10 +213,48 @@ async function defaultSpawnAgent(args: {
       // Scoped credentials only — never the default process.env spread (see
       // RunCodexOpts.env: sandboxed callers MUST pass a built env).
       env: args.env,
+      onEvent: (event) => {
+        const line = codexEventToDisplay(event);
+        if (!line) return;
+        streamedOutput += `${line}\n`;
+        args.emit?.({ kind: 'output', data: { line } });
+      },
     });
-    return { output: result.text ?? '', error: result.error };
+    return { output: streamedOutput.trim() || (result.text ?? ''), error: result.error };
   }
   return spawnClaudeAgent(args);
+}
+
+function codexEventToDisplay(event: Record<string, unknown>): string {
+  const display =
+    firstString(event, ['message', 'text', 'delta', 'content', 'output', 'result', 'summary']) ??
+    nestedString(event, ['item', 'message', 'content', 'delta']) ??
+    nestedString(event, ['data', 'message', 'content', 'delta']);
+  if (display && display.trim() !== '') {
+    return redactSecrets(scrubPathsInText(display.trim()));
+  }
+  const type = typeof event['type'] === 'string' ? event['type'] : 'event';
+  return redactSecrets(scrubPathsInText(`codex ${type}`));
+}
+
+function firstString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string') return value;
+  }
+  return null;
+}
+
+function nestedString(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested = firstString(value as Record<string, unknown>, keys);
+      if (nested !== null) return nested;
+    }
+  }
+  return null;
 }
 
 /** Claude CLI spawn against the worktree — mirrors gen-eval-loop-runner's
