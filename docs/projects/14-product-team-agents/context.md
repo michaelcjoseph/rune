@@ -98,7 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- -runner.test.ts`
-- Result: 19 tests passed.
+- ed`.
 
-`npm run build` is still blocked by existing repo-wide TypeScript errors, including handed test typing errors in `src/jobs/orchestrated-work-runner.test.ts`; `src/jobs/orchestrated-work-runner.ts` no longer appears in the build error list. No commit made.
+Notes: the only repo change is the staged QA test addition in `src/jobs/orchestrated-work-runner.test.ts`; I did not commit. The plain `npm test -- ...` path is blocked in this sandbox because Vite tries to write under the symlinked `node_modules/.vite-temp`, so I used `--configLoader runner`.

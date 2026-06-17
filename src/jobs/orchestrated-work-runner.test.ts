@@ -34,6 +34,7 @@ const mockRunFinalizer = vi.hoisted(() =>
     ],
   })),
 );
+const mockRunGate = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 
 vi.mock('./mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
@@ -50,6 +51,10 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
     runFinalizer: mockRunFinalizer,
   };
 });
+
+vi.mock('./work-run-gate-runtime.js', () => ({
+  runGate: mockRunGate,
+}));
 
 import {
   orchestratedWorkApplier,
@@ -204,6 +209,8 @@ describe('orchestratedWorkApplier', () => {
       destroyed = false;
       wtDir = null;
       mockRunFinalizer.mockClear();
+      mockRunGate.mockReset();
+      mockRunGate.mockResolvedValue({ ok: true });
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
       activeRuns.clear();
@@ -395,6 +402,96 @@ describe('orchestratedWorkApplier', () => {
       expect((terminal?.data as Record<string, unknown>)['outcome']).toBe('branch-complete');
       expect((terminal?.data as Record<string, unknown>)['held']).toBeUndefined();
       expect(created).toBe(true);
+    });
+
+    it('a gate-failing branch-complete orchestrated run holds with the gate reason recorded and does not touch the base branch', async () => {
+      const runId = 'mut-orch-gate-held';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-gate-held-artifacts-'));
+      const { runGit, calls } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+      mockRunGate.mockResolvedValueOnce({ ok: false, reason: 'tests-red' });
+      mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
+        expect(input).toMatchObject({ mode: 'gated-merge', runId, baseBranch: 'main' });
+        const terminalEvent = await effects.classify();
+        await effects.flushTranscript();
+        effects.writeSummary(terminalEvent);
+        effects.appendIndexRow(terminalEvent);
+        const verdict = await effects.gate!();
+        expect(verdict).toEqual({ ok: false, reason: 'tests-red' });
+        effects.alert!('tests-red');
+        await effects.removeWorktree();
+        effects.writeSupervisionTerminal('completed', terminalEvent);
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: true,
+          merged: false,
+          branchDeleted: false,
+          phases: [
+            'classified',
+            'transcript-flushed',
+            'summary-written',
+            'index-appended',
+            'worktree-resolved',
+            'finalized',
+          ],
+        };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-held-123' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        expect(terminal?.kind).toBe('completed');
+        expect(terminal?.data).toMatchObject({
+          outcome: 'branch-complete',
+          merged: false,
+          branchDeleted: false,
+          gateHeldReason: 'tests-red',
+          baseBranch: 'main',
+          dispatchMode: 'orchestrated',
+        });
+
+        const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, unknown>;
+        expect(summary).toMatchObject({
+          id: runId,
+          outcome: 'branch-complete',
+          merged: false,
+          branchDeleted: false,
+          gateHeldReason: 'tests-red',
+          baseBranch: 'main',
+        });
+
+        const baseMutations = calls.filter(({ args }) => {
+          const command = args[0];
+          return (
+            (command === 'merge' && args.includes('jarvis-work/demo')) ||
+            (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
+            (command === 'branch' && args[1] === '-d' && args[2] === 'jarvis-work/demo')
+          );
+        });
+        expect(baseMutations).toEqual([]);
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it.each([

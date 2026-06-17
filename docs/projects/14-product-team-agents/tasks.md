@@ -732,7 +732,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Auto-merge test: a clean `branch-complete` orchestrated run invokes `runFinalizer`
       (`gated-merge`), the gate passes, and the branch merges `--no-ff` + pushes under the
       per-base merge lock — no operator hold.
-- [ ] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and
+- [x] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and
       does NOT touch the base branch.
 - [ ] Objection-hold test: an open high/critical objection-class finding holds the branch with
       the handoff payload recorded and never merges (reqs 17, 25, 63-70).
