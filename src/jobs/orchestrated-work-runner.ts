@@ -32,7 +32,7 @@
  * regression in team-task-deps.test.ts pins the production binding.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
@@ -58,6 +58,9 @@ import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets, type TranscriptSink } from './work-run-transcript.js';
+import { writeSummary, type WorkRunSummary } from './work-run-store.js';
+import type { ExitFacts, WorkOutcome, WorkProductFacts } from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
 const log = createLogger('orchestrated-work-runner');
@@ -94,6 +97,12 @@ export interface OrchestratedRuntimeDeps {
    *  role-spawn binding from team-task-deps.ts — the no-stub regression test
    *  identity-asserts this default. */
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
+  /** Base dir for per-run artifacts (`<workRunsDir>/<id>/{transcript,summary}`). */
+  workRunsDir: string;
+  /** Build the per-run durable transcript sink. */
+  createSink: (runId: string, baseDir: string) => TranscriptSink | null;
+  /** Atomically write the run's `summary.json` into its per-run dir. */
+  writeSummary: (dir: string, summary: WorkRunSummary) => void;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -103,6 +112,9 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     runOrchestration: runProjectOrchestration,
     runGit: defaultRunGit,
     createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
+    workRunsDir: config.WORK_RUNS_DIR,
+    createSink: createSyncTranscriptSink,
+    writeSummary,
   };
 }
 
@@ -232,9 +244,8 @@ function buildOrchestrationDeps(args: {
 
     // DELIBERATE HOLD (Phase 8 decision, recorded 2026-06-10): the Project 15
     // finalizer is live for `work-run` mutations, but its gated-merge pipeline
-    // is bound to the work-run artifact substrate (transcript sink,
-    // summary.json, work-product classification, gate runtime + per-base
-    // merge lock) — none of which exists for orchestrated runs yet. Until an
+    // still depends on work-product classification, gate runtime + per-base
+    // merge lock inputs that are not wired for orchestrated runs yet. Until an
     // orchestrated run produces those inputs, the adapter reports
     // `unavailable` and the run HOLDS branch-complete with the handoff
     // payload recorded for the operator — it NEVER self-merges (spec req 17).
@@ -242,7 +253,7 @@ function buildOrchestrationDeps(args: {
       kind: 'unavailable',
       reason:
         'deliberate hold: the Project 15 gated-merge finalizer is bound to work-run ' +
-        'artifacts (transcript/summary/classification) that orchestrated runs do not ' +
+        'classification/gate inputs that orchestrated runs do not ' +
         'produce yet — branch-complete, awaiting operator merge',
     }),
   };
@@ -317,6 +328,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
     let sandbox: SandboxSpec | null = null;
     let preserveWorktree = false;
+    let sink: TranscriptSink | null = null;
+    const startedAtMs = Date.now();
     try {
       try {
         sandbox = await deps.createWorktree({
@@ -350,6 +363,16 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         baseBranch = getProductConfig(product, config.PRODUCTS_CONFIG_FILE).baseBranch;
       } catch {
         /* default to main if products.json is unreadable */
+      }
+
+      try {
+        sink = deps.createSink(descriptor.id, deps.workRunsDir);
+      } catch (err) {
+        log.warn('orchestrated-work-runner: transcript sink creation failed; run continues without a durable transcript', {
+          id: descriptor.id,
+          error: (err as Error).message,
+        });
+        sink = null;
       }
 
       yield { mutationId: descriptor.id, ts: new Date().toISOString(), kind: 'log', data: { line: `orchestrated run starting for ${projectSlug}` } };
@@ -399,6 +422,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         while (outcome === undefined) {
           const event = streamedEvents.shift();
           if (event !== undefined) {
+            await persistTranscriptEvent(sink, event);
             yield event;
             continue;
           }
@@ -415,20 +439,50 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         clearInterval(keepAliveTicker);
       }
 
-      for (const event of streamedEvents.splice(0)) yield event;
+      for (const event of streamedEvents.splice(0)) {
+        await persistTranscriptEvent(sink, event);
+        yield event;
+      }
       if (outcome.kind === 'error') {
-        yield term(descriptor.id, 'failed', {
+        const terminal = term(descriptor.id, 'failed', {
           reason: scrubPathsInText(`orchestration loop threw: ${(outcome.error as Error).message}`),
           projectSlug,
           product,
         });
+        await persistTerminalArtifacts({
+          deps,
+          sink,
+          descriptor,
+          terminal,
+          startedAtMs,
+          projectSlug,
+          product,
+          branch,
+          sandbox,
+          result: null,
+        });
+        yield terminal;
         return;
       }
 
       const result = outcome.result;
       preserveWorktree = result.kind === 'blocked' && result.parked?.preserveWorktree === true;
-      yield mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
+      const terminal = mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
+      await persistTerminalArtifacts({
+        deps,
+        sink,
+        descriptor,
+        terminal,
+        startedAtMs,
+        projectSlug,
+        product,
+        branch,
+        sandbox,
+        result,
+      });
+      yield terminal;
     } finally {
+      sink?.destroy();
       if (sandbox && !preserveWorktree) {
         try {
           await deps.destroyWorktree(sandbox, {
@@ -449,6 +503,152 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     }
   },
 };
+
+function createSyncTranscriptSink(runId: string, baseDir: string): TranscriptSink {
+  if (!VALID_SLUG.test(runId)) {
+    throw new Error(`createSyncTranscriptSink: invalid runId (must be a slug): ${runId}`);
+  }
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'transcript.jsonl');
+  let destroyed = false;
+  return {
+    path,
+    append(event: unknown): Promise<void> {
+      if (destroyed) return Promise.reject(new Error('createSyncTranscriptSink: append after destroy'));
+      appendFileSync(path, redactSecrets(JSON.stringify(event)) + '\n', 'utf8');
+      return Promise.resolve();
+    },
+    finish(): Promise<void> {
+      if (destroyed) return Promise.reject(new Error('createSyncTranscriptSink: finish after destroy'));
+      return Promise.resolve();
+    },
+    destroy(): void {
+      destroyed = true;
+    },
+  };
+}
+
+async function persistTranscriptEvent(sink: TranscriptSink | null, event: MutationEvent): Promise<void> {
+  if (!sink || (event.kind !== 'activity' && event.kind !== 'output')) return;
+  try {
+    await sink.append(event);
+  } catch (err) {
+    log.warn('orchestrated-work-runner: transcript append failed', {
+      id: event.mutationId,
+      error: (err as Error).message,
+    });
+  }
+}
+
+async function persistTerminalArtifacts(args: {
+  deps: OrchestratedRuntimeDeps;
+  sink: TranscriptSink | null;
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>;
+  terminal: MutationEvent;
+  startedAtMs: number;
+  projectSlug: string;
+  product: string;
+  branch: string;
+  sandbox: SandboxSpec;
+  result: OrchestrationResult | null;
+}): Promise<void> {
+  const { deps, sink, descriptor, terminal, startedAtMs, projectSlug, product, branch, sandbox, result } = args;
+  if (sink) {
+    try {
+      await sink.finish();
+    } catch (err) {
+      log.warn('orchestrated-work-runner: transcript flush failed', {
+        id: descriptor.id,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  const endedAt = new Date().toISOString();
+  const summary = buildOrchestratedSummary({
+    id: descriptor.id,
+    project: projectSlug,
+    product,
+    branch,
+    baseSha: sandbox.baseSha ?? '',
+    startedAtMs,
+    endedAt,
+    terminal,
+    sink,
+    workRunsDir: deps.workRunsDir,
+    result,
+  });
+  try {
+    deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
+  } catch (err) {
+    log.warn('orchestrated-work-runner: writeSummary failed', {
+      id: descriptor.id,
+      error: (err as Error).message,
+    });
+  }
+}
+
+const EMPTY_WORK_PRODUCT: WorkProductFacts = {
+  commitCount: 0,
+  commitShas: [],
+  filesChanged: [],
+  diffstat: '',
+  dirty: false,
+  untracked: false,
+  transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+};
+
+function buildOrchestratedSummary(args: {
+  id: string;
+  project: string;
+  product: string;
+  branch: string;
+  baseSha: string;
+  startedAtMs: number;
+  endedAt: string;
+  terminal: MutationEvent;
+  sink: TranscriptSink | null;
+  workRunsDir: string;
+  result: OrchestrationResult | null;
+}): WorkRunSummary {
+  const { id, project, product, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, result } = args;
+  const data = (terminal.data ?? {}) as Record<string, unknown>;
+  const exit: ExitFacts = {
+    exitCode: terminal.kind === 'completed' ? 0 : 1,
+    signal: null,
+    cancelled: false,
+    durationMs: Date.parse(endedAt) - startedAtMs,
+    exitFact: 'clean-exit',
+  };
+  return {
+    id,
+    project,
+    product,
+    outcome: orchestratedOutcome(result, terminal),
+    reason: typeof data['reason'] === 'string' ? data['reason'] : '',
+    exit,
+    workProduct: EMPTY_WORK_PRODUCT,
+    baseSha,
+    branch,
+    startedAt: new Date(startedAtMs).toISOString(),
+    endedAt,
+    transcriptPath: sink?.path ?? '',
+    forensicsPath: join(workRunsDir, id),
+    ...(typeof data['baseBranch'] === 'string' ? { baseBranch: data['baseBranch'] } : {}),
+  };
+}
+
+function orchestratedOutcome(result: OrchestrationResult | null, terminal: MutationEvent): WorkOutcome {
+  if (result?.kind === 'finalized' && isWorkOutcome(result.outcome)) return result.outcome;
+  if (result?.kind === 'held') return 'branch-complete';
+  if (terminal.kind === 'completed') return 'partial';
+  return 'failed';
+}
+
+function isWorkOutcome(value: unknown): value is WorkOutcome {
+  return value === 'branch-complete' || value === 'partial' || value === 'noop' || value === 'dirty-uncommitted' || value === 'failed';
+}
 
 /** Map the terminal OrchestrationResult to the single MutationEvent apply yields.
  *  Held is a legitimate durable terminal (branch-complete, awaiting Project 15) —

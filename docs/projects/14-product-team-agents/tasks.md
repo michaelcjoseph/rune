@@ -723,7 +723,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Quiet-backstop-safe test: an orchestrated run that is genuinely working (streaming
       activity) is NOT tripped by the quiet-nudge / quiet→cancel backstop — streaming makes the
       active-harm probe test (above) go green.
-- [ ] Substrate test: a completed orchestrated run writes `transcript.jsonl`, `summary.json`
+- [x] Substrate test: a completed orchestrated run writes `transcript.jsonl`, `summary.json`
       (well-formed `WorkRunSummary`), and a computed work-product classification under
       `WORK_RUNS_DIR/<runId>/`.
 - [ ] Classification test: `computeWorkProduct`/`classifyWorkProduct` over an orchestrated

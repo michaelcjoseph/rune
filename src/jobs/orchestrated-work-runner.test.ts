@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -64,9 +64,10 @@ function makeWorktree(project = 'demo'): { sandbox: SandboxSpec; dir: string } {
 
 function makeDescriptor(
   payload: { projectSlug: string; product?: string } = { projectSlug: 'demo', product: 'jarvis' },
+  id = 'mut-1',
 ): MutationDescriptor<{ projectSlug: string; product?: string }> {
   return {
-    id: 'mut-1',
+    id,
     kind: 'orchestrated-work',
     source: 'webview',
     target: { type: 'orchestrated-work', ref: 'demo' },
@@ -219,6 +220,72 @@ describe('orchestratedWorkApplier', () => {
         data: { line: 'qa wrote tests from the spec', role: 'qa' },
       });
       expect(destroyed).toBe(true);
+    });
+
+    it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
+      const runId = 'mut-orch-substrate';
+      const runDir = join(process.cwd(), 'logs', 'work-runs', runId);
+      rmSync(runDir, { recursive: true, force: true });
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => {
+          deps.emit?.({
+            kind: 'activity',
+            data: { role: 'qa', line: 'qa wrote tests from the spec' },
+          });
+          return { kind: 'finalized', outcome: 'branch-complete' };
+        },
+      });
+
+      let transcriptExistedAtTerminal: boolean | undefined;
+      let summaryExistedAtTerminal: boolean | undefined;
+      const events: MutationEvent[] = [];
+      for await (const event of orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx)) {
+        if (event.kind === 'completed' || event.kind === 'failed') {
+          transcriptExistedAtTerminal = existsSync(join(runDir, 'transcript.jsonl'));
+          summaryExistedAtTerminal = existsSync(join(runDir, 'summary.json'));
+        }
+        events.push(event);
+      }
+
+      expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+      expect(transcriptExistedAtTerminal).toBe(true);
+      expect(summaryExistedAtTerminal).toBe(true);
+
+      const transcriptLines = readFileSync(join(runDir, 'transcript.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(transcriptLines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: { role: 'qa', line: 'qa wrote tests from the spec' },
+          }),
+        ]),
+      );
+
+      const summary = JSON.parse(readFileSync(join(runDir, 'summary.json'), 'utf8')) as Record<string, unknown>;
+      expect(summary).toMatchObject({
+        id: runId,
+        project: 'demo',
+        product: 'jarvis',
+        outcome: 'branch-complete',
+      });
+      expect(summary['transcriptPath']).toBe(join(runDir, 'transcript.jsonl'));
+      expect(typeof summary['startedAt']).toBe('string');
+      expect(typeof summary['endedAt']).toBe('string');
+      expect(destroyed).toBe(true);
+
+      rmSync(runDir, { recursive: true, force: true });
     });
 
     it('held (finalizer unavailable) → completed terminal event flagged held, never self-merge', async () => {

@@ -98,9 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ts src/jobs/orchestrated-work-runner.test.ts --configLoader runner --reporter=verbose --fileParallelism=false
-```
-
-Result: 2 test files passed, 21 tests passed.
-
-Worktree note: `src/jobs/orchestrated-work-runner.test.ts` remains modified as the QA-provided test change; I did not modify source files.
+- n:
+- Passed: `TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=123 VAULT_DIR=/tmp/test-vault npm test -- src/jobs/orchestrated-work-runner.test.ts --configLoader runner --reporter=verbose --fileParallelism=false`
+- `npm run build` is still blocked by unrelated existing TypeScript errors outside this change.
