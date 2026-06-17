@@ -404,6 +404,35 @@ describe('orchestratedWorkApplier', () => {
       expect(created).toBe(true);
     });
 
+    it('no-stub regression: production finalize wiring cannot return the old unavailable hold terminal', async () => {
+      const runId = 'mut-orch-automerge';
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-no-stub-123' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => deps.finalize(),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+      expect(terminal?.kind).toBe('completed');
+      expect(terminal?.data).toMatchObject({
+        outcome: 'branch-complete',
+        dispatchMode: 'orchestrated',
+      });
+      const data = (terminal?.data ?? {}) as Record<string, unknown>;
+      expect(data['held']).toBeUndefined();
+      expect(String(data['reason'] ?? '')).not.toMatch(/finalizer.*not wired|unavailable/i);
+    });
+
     it('a gate-failing branch-complete orchestrated run holds with the gate reason recorded and does not touch the base branch', async () => {
       const runId = 'mut-orch-gate-held';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-gate-held-artifacts-'));

@@ -98,8 +98,16 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
--  npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts
-TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=42 VAULT_DIR=/tmp/jarvis-test-vault npm test -- --configLoader runner src/intent/project-orchestrator.test.ts src/intent/orch-execution.test.ts
+- -merge` mode instead of returning the old `unavailable` hold terminal.
+
+Verified with:
+
+```bash
+TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=42 VAULT_DIR=/tmp/jarvis-test-vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts
 ```
 
-All passed. No commit made.
+Result: 22 tests passed. No commit made.
+-  runner src/jobs/orchestrated-work-runner.test.ts
+```
+
+Note: the file was already staged with the rejected version. I tried to update the index, but this sandbox cannot write `.git/index.lock`, so `git status` still shows `MM`. The working tree content and `git diff HEAD` reflect the corrected test.
