@@ -93,11 +93,66 @@ describe('orch-closeout — selected checkbox', () => {
     if (!res.ok) expect(res.reason).toBe('stale-task');
   });
 
-  it('refuses (ambiguous) when two unchecked tasks share the same text', () => {
+  it('ticks the section-scoped task when the same text repeats across phases (project-14 regression)', () => {
+    // The "Confirm red before implementation." boilerplate repeats verbatim in every
+    // phase, so text alone is non-unique. Closeout must tick the box in the SELECTED
+    // task's section rather than refusing as ambiguous (the bug that blocked the
+    // 2026-06-16 project-14 run).
+    const md = [
+      '# Tasks',
+      '## Phase 10',
+      '- [ ] Confirm red before implementation.',
+      '## Phase 11',
+      '- [ ] Confirm red before implementation.',
+    ].join('\n');
+    const res = markSelectedTaskComplete(md, {
+      id: 'confirm-red-before-implementation',
+      text: 'Confirm red before implementation.',
+      section: 'Phase 11',
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toBe(
+        [
+          '# Tasks',
+          '## Phase 10',
+          '- [ ] Confirm red before implementation.',
+          '## Phase 11',
+          '- [x] Confirm red before implementation.',
+        ].join('\n'),
+      );
+    }
+  });
+
+  it('ticks the SAME line selection picked when text repeats (lockstep with selectNextTask)', () => {
+    // Selection and closeout must agree: both scan in document order for the first
+    // unchecked match, so closeout always lands on exactly the selected task.
+    const md = [
+      '# Tasks',
+      '## Phase 10',
+      '- [x] Confirm red before implementation.',
+      '## Phase 11',
+      '- [ ] Confirm red before implementation.',
+      '## Phase 12',
+      '- [ ] Confirm red before implementation.',
+    ].join('\n');
+    const sel = selectNextTask(md);
+    if (sel.kind !== 'task') throw new Error('expected a task');
+    expect(sel.task.section).toBe('Phase 11');
+    const res = markSelectedTaskComplete(md, sel.task);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      // Phase 11 ticked (checked count 1 → 2); Phase 12 stays open.
+      expect((res.content.match(/- \[x\]/g) ?? []).length).toBe(2);
+      expect(res.content).toContain('## Phase 12\n- [ ] Confirm red before implementation.');
+    }
+  });
+
+  it('ticks the first matching unchecked task when text repeats with no section (mirrors selection first-match)', () => {
     const dup = '# T\n- [ ] Same text\n- [ ] Same text\n';
-    const res = markSelectedTaskComplete(dup, { id: 'same-text', text: 'Same text' });
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toBe('ambiguous');
+    const res = markSelectedTaskComplete(dup, { id: 'same-text', text: 'Same text', section: '' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toBe('# T\n- [x] Same text\n- [ ] Same text\n');
   });
 
   it('preserves leading indentation when flipping a nested task', () => {
