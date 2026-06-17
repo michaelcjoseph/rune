@@ -98,7 +98,12 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- my TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/jarvis-vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts`
-- `npm run build` still fails on existing unrelated TypeScript errors, including staged QA test typing issues.
+- events now persist `outcome` and `workProduct` onto the descriptor the same way `work-run` does.
 
-I did not edit the staged QA test changes and did not commit.
+Verified with:
+
+```sh
+TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/jarvis-vault npm test -- --configLoader runner src/transport/mutations.test.ts
+```
+
+Result: 1 test file passed, 30 tests passed. I did not commit.

@@ -701,6 +701,53 @@ describe('mutations', () => {
       expect((terminalCall![0] as { outcome?: string }).outcome).toBe('noop');
     });
 
+    it('copies outcome + workProduct from an orchestrated-work terminal event onto the descriptor before persist', async () => {
+      // Phase 10 parity: orchestrated-work computes the same work-product
+      // classification over its branch. The mutation pipeline must persist that
+      // verdict exactly like the legacy work-run path, otherwise the cockpit,
+      // Telegram, mutations.jsonl, and GC lose the orchestrated result.
+      const workProduct = {
+        commitCount: 2,
+        commitShas: ['abc1111', 'def2222'],
+        filesChanged: ['src/jobs/orchestrated-work-runner.ts'],
+        diffstat: ' src/jobs/orchestrated-work-runner.ts | 8 ++++++++\n 1 file changed, 8 insertions(+)',
+        dirty: false,
+        untracked: false,
+        transitions: { tasksNewlyChecked: 1, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+      };
+      async function* outcomeGen(): AsyncIterable<any> {
+        yield {
+          mutationId: 'x',
+          ts: new Date().toISOString(),
+          kind: 'completed',
+          data: { outcome: 'branch-complete', reason: '2 commits, all original tasks checked', workProduct },
+        };
+      }
+      const applier = makeApplier({
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: outcomeGen(),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('orchestrated-work', { projectSlug: 'demo' }, 'webview');
+      const descriptor = (result as any).descriptor;
+
+      await waitForUpserts(3);
+
+      expect(descriptor.outcome).toBe('branch-complete');
+      expect(descriptor.workProduct).toEqual(workProduct);
+      expect(descriptor.status).toBe('completed');
+
+      const terminalCall = mockAppendMutationLine.mock.calls.find(
+        (c) => (c[0] as { status: string }).status === 'completed',
+      );
+      expect(terminalCall).toBeDefined();
+      expect((terminalCall![0] as { outcome?: string; workProduct?: unknown }).outcome).toBe('branch-complete');
+      expect((terminalCall![0] as { outcome?: string; workProduct?: unknown }).workProduct).toEqual(workProduct);
+    });
+
     it('copies outcome:failed off a failed terminal event onto the descriptor', async () => {
       async function* failedOutcomeGen(): AsyncIterable<any> {
         yield {

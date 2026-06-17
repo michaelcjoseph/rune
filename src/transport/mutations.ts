@@ -403,13 +403,13 @@ async function startApply(
         if (event.kind === 'failed' && event.data) {
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
         }
-        // Copy the work-run verdict (outcome + workProduct) off the terminal
+        // Copy the work-applier verdict (outcome + workProduct) off the terminal
         // event onto the descriptor BEFORE persisting — otherwise the
         // classification is dropped here and never reaches mutations.jsonl, the
         // cockpit, Telegram, the index, or GC. Gated on `kind` so the
-        // work-run-specific stamping is explicit at the call site (the helper is
+        // work-specific stamping is explicit at the call site (the helper is
         // also a guarded no-op for terminals that carry no outcome).
-        if (descriptor.kind === 'work-run') {
+        if (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') {
           applyOutcomeToDescriptor(descriptor, event);
         }
         appendMutationLine(descriptor);

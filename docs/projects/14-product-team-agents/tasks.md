@@ -771,7 +771,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `lastOutput`/transcript tail and the project card renders role activity.
 - [x] Persist the streamed events to a durable transcript sink (`createTranscriptSink` →
       `WORK_RUNS_DIR/<runId>/transcript.jsonl`), mirroring `work-runner.ts:399`.
-- [ ] Produce work-product classification over the orchestrated branch (`computeWorkProduct` +
+- [x] Produce work-product classification over the orchestrated branch (`computeWorkProduct` +
       `classifyWorkProduct`) and write `summary.json` (`buildSummary` → `WorkRunSummary`).
 - [ ] Wire `runFinalizer` in `gated-merge` mode (`work-run-finalizer.ts:283`), replacing the
       `unavailable` stub: bind `classify`/`flushTranscript`/`writeSummary`/`appendIndexRow`/
