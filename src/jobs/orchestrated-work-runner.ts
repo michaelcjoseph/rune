@@ -60,7 +60,13 @@ import { activeRuns } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import { redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import { writeSummary, type WorkRunSummary } from './work-run-store.js';
-import type { ExitFacts, WorkOutcome, WorkProductFacts } from './work-run-classify.js';
+import {
+  classifyOutcome,
+  computeWorkProduct,
+  type ExitFacts,
+  type WorkOutcome,
+  type WorkProductFacts,
+} from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
 
 const log = createLogger('orchestrated-work-runner');
@@ -357,6 +363,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         });
         return;
       }
+      const baselineTasks = readFileSafe(join(projectDir, 'tasks.md'));
 
       let baseBranch = 'main';
       try {
@@ -459,6 +466,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           product,
           branch,
           sandbox,
+          projectDir,
+          baselineTasks,
           result: null,
         });
         yield terminal;
@@ -478,6 +487,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         product,
         branch,
         sandbox,
+        projectDir,
+        baselineTasks,
         result,
       });
       yield terminal;
@@ -551,9 +562,11 @@ async function persistTerminalArtifacts(args: {
   product: string;
   branch: string;
   sandbox: SandboxSpec;
+  projectDir: string;
+  baselineTasks: string;
   result: OrchestrationResult | null;
 }): Promise<void> {
-  const { deps, sink, descriptor, terminal, startedAtMs, projectSlug, product, branch, sandbox, result } = args;
+  const { deps, sink, descriptor, terminal, startedAtMs, projectSlug, product, branch, sandbox, projectDir, baselineTasks, result } = args;
   if (sink) {
     try {
       await sink.finish();
@@ -566,6 +579,14 @@ async function persistTerminalArtifacts(args: {
   }
 
   const endedAt = new Date().toISOString();
+  const workProduct = await computeOrchestratedWorkProduct({
+    deps,
+    descriptor,
+    sandbox,
+    branch,
+    projectDir,
+    baselineTasks,
+  });
   const summary = buildOrchestratedSummary({
     id: descriptor.id,
     project: projectSlug,
@@ -577,6 +598,7 @@ async function persistTerminalArtifacts(args: {
     terminal,
     sink,
     workRunsDir: deps.workRunsDir,
+    workProduct,
     result,
   });
   try {
@@ -599,6 +621,36 @@ const EMPTY_WORK_PRODUCT: WorkProductFacts = {
   transitions: { tasksNewlyChecked: 0, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
 };
 
+async function computeOrchestratedWorkProduct(args: {
+  deps: OrchestratedRuntimeDeps;
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>;
+  sandbox: SandboxSpec;
+  branch: string;
+  projectDir: string;
+  baselineTasks: string;
+}): Promise<WorkProductFacts | null> {
+  const { deps, descriptor, sandbox, branch, projectDir, baselineTasks } = args;
+  if (deps.runGit === defaultRunGit && !existsSync(join(sandbox.worktree, '.git'))) {
+    return null;
+  }
+  try {
+    return await computeWorkProduct({
+      runGit: deps.runGit,
+      cwd: sandbox.worktree,
+      baseSha: sandbox.baseSha ?? '',
+      branch,
+      baselineTasks,
+      finalTasks: readFileSafe(join(projectDir, 'tasks.md')),
+    });
+  } catch (err) {
+    log.warn('orchestrated-work-runner: work-product classification failed; summary uses declared outcome', {
+      id: descriptor.id,
+      error: (err as Error).message,
+    });
+    return null;
+  }
+}
+
 function buildOrchestratedSummary(args: {
   id: string;
   project: string;
@@ -610,9 +662,10 @@ function buildOrchestratedSummary(args: {
   terminal: MutationEvent;
   sink: TranscriptSink | null;
   workRunsDir: string;
+  workProduct: WorkProductFacts | null;
   result: OrchestrationResult | null;
 }): WorkRunSummary {
-  const { id, project, product, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, result } = args;
+  const { id, project, product, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, workProduct, result } = args;
   const data = (terminal.data ?? {}) as Record<string, unknown>;
   const exit: ExitFacts = {
     exitCode: terminal.kind === 'completed' ? 0 : 1,
@@ -621,14 +674,18 @@ function buildOrchestratedSummary(args: {
     durationMs: Date.parse(endedAt) - startedAtMs,
     exitFact: 'clean-exit',
   };
+  const classification =
+    workProduct !== null
+      ? classifyOutcome({ exit, product: workProduct })
+      : { outcome: orchestratedOutcome(result, terminal), reason: '' };
   return {
     id,
     project,
     product,
-    outcome: orchestratedOutcome(result, terminal),
-    reason: typeof data['reason'] === 'string' ? data['reason'] : '',
+    outcome: classification.outcome,
+    reason: typeof data['reason'] === 'string' ? data['reason'] : classification.reason,
     exit,
-    workProduct: EMPTY_WORK_PRODUCT,
+    workProduct: workProduct ?? EMPTY_WORK_PRODUCT,
     baseSha,
     branch,
     startedAt: new Date(startedAtMs).toISOString(),

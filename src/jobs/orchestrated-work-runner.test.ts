@@ -42,12 +42,12 @@ import type { TaskEvidence } from '../intent/team-task-workflow.js';
 /** Build a temp worktree containing docs/projects/demo/{spec,tasks,context}.md
  *  so the applier's real `findProjectDir` + `buildOrchestrationDeps` resolve
  *  against a genuine tree (the orchestration loop itself is injected). */
-function makeWorktree(project = 'demo'): { sandbox: SandboxSpec; dir: string } {
+function makeWorktree(project = 'demo', tasks = '- [ ] task one\n'): { sandbox: SandboxSpec; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'orch-wt-'));
   const projDir = join(dir, 'docs', 'projects', project);
   mkdirSync(projDir, { recursive: true });
   writeFileSync(join(projDir, 'spec.md'), '# Spec\n', 'utf8');
-  writeFileSync(join(projDir, 'tasks.md'), '- [ ] task one\n', 'utf8');
+  writeFileSync(join(projDir, 'tasks.md'), tasks, 'utf8');
   writeFileSync(join(projDir, 'context.md'), '# Project Context\n', 'utf8');
   return {
     sandbox: {
@@ -85,6 +85,31 @@ async function drain(gen: AsyncIterable<MutationEvent>): Promise<MutationEvent[]
 }
 
 const ctx = { bus: { publish: vi.fn() } as any, cancel: () => false };
+
+function makeWorkProductGitStub(args: {
+  commitShas: string[];
+  diffstat: string;
+  status?: string;
+}): {
+  runGit: ReturnType<typeof vi.fn>;
+  calls: Array<{ args: string[]; cwd?: string }>;
+} {
+  const calls: Array<{ args: string[]; cwd?: string }> = [];
+  const runGit = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+    calls.push({ args: [...gitArgs], cwd: opts?.cwd });
+    if (gitArgs[0] === 'rev-list') {
+      return { stdout: args.commitShas.length > 0 ? `${args.commitShas.join('\n')}\n` : '', stderr: '' };
+    }
+    if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+      return { stdout: args.diffstat, stderr: '' };
+    }
+    if (gitArgs[0] === 'status' && gitArgs.includes('--porcelain')) {
+      return { stdout: args.status ?? '', stderr: '' };
+    }
+    return { stdout: '', stderr: '' };
+  });
+  return { runGit, calls };
+}
 
 async function waitForUpserts(n: number): Promise<unknown[][]> {
   for (let i = 0; i < 20 && mockUpsertRun.mock.calls.length < n; i++) {
@@ -287,6 +312,109 @@ describe('orchestratedWorkApplier', () => {
 
       rmSync(runDir, { recursive: true, force: true });
     });
+
+    it.each([
+      {
+        label: 'commits with all original tasks checked',
+        runId: 'mut-orch-classify-complete',
+        declaredOutcome: 'noop' as const,
+        initialTasks: '- [ ] write classifier tests\n- [ ] wire classifier\n',
+        finalTasks: '- [x] write classifier tests\n- [x] wire classifier\n',
+        commitShas: ['1111111', '2222222'],
+        diffstat: ' src/jobs/orchestrated-work-runner.ts | 12 ++++++++++++\n 1 file changed, 12 insertions(+)\n',
+        expectedOutcome: 'branch-complete',
+        expectedTransitions: { tasksNewlyChecked: 2, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+        expectedFilesChanged: ['src/jobs/orchestrated-work-runner.ts'],
+      },
+      {
+        label: 'commits with an original task still unchecked',
+        runId: 'mut-orch-classify-partial',
+        declaredOutcome: 'branch-complete' as const,
+        initialTasks: '- [ ] write classifier tests\n- [ ] wire classifier\n',
+        finalTasks: '- [x] write classifier tests\n- [ ] wire classifier\n',
+        commitShas: ['3333333'],
+        diffstat: ' src/jobs/orchestrated-work-runner.ts | 8 ++++++++\n 1 file changed, 8 insertions(+)\n',
+        expectedOutcome: 'partial',
+        expectedTransitions: { tasksNewlyChecked: 1, tasksRemaining: 1, tasksAdded: 0, tasksRemoved: 0 },
+        expectedFilesChanged: ['src/jobs/orchestrated-work-runner.ts'],
+      },
+      {
+        label: 'zero commits and clean worktree',
+        runId: 'mut-orch-classify-noop',
+        declaredOutcome: 'branch-complete' as const,
+        initialTasks: '- [ ] write classifier tests\n',
+        finalTasks: '- [ ] write classifier tests\n',
+        commitShas: [],
+        diffstat: '',
+        expectedOutcome: 'noop',
+        expectedTransitions: { tasksNewlyChecked: 0, tasksRemaining: 1, tasksAdded: 0, tasksRemoved: 0 },
+        expectedFilesChanged: [],
+      },
+    ])(
+      'writes summary.json from computed orchestrated branch work product: $label',
+      async ({
+        runId,
+        declaredOutcome,
+        initialTasks,
+        finalTasks,
+        commitShas,
+        diffstat,
+        expectedOutcome,
+        expectedTransitions,
+        expectedFilesChanged,
+      }) => {
+        const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-classify-artifacts-'));
+        const baseSha = 'base-orch-123';
+        const { runGit, calls } = makeWorkProductGitStub({ commitShas, diffstat });
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree('demo', initialTasks);
+            wtDir = dir;
+            return { ...sandbox, baseSha };
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runGit,
+          workRunsDir: artifactsDir,
+          runOrchestration: async (deps) => {
+            await deps.writeTasksMd(finalTasks);
+            return { kind: 'finalized', outcome: declaredOutcome };
+          },
+        });
+
+        try {
+          const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+          expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+
+          const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, any>;
+          expect(summary['outcome']).toBe(expectedOutcome);
+          expect(summary['workProduct']).toMatchObject({
+            commitCount: commitShas.length,
+            commitShas,
+            filesChanged: expectedFilesChanged,
+            diffstat: diffstat.trim(),
+            dirty: false,
+            untracked: false,
+            transitions: expectedTransitions,
+          });
+          expect(summary['baseSha']).toBe(baseSha);
+
+          const expectedRange = `${baseSha}..jarvis-work/demo`;
+          expect(calls).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ args: ['rev-list', expectedRange] }),
+              expect.objectContaining({ args: ['diff', '--stat', expectedRange] }),
+              expect.objectContaining({ args: ['status', '--porcelain'] }),
+            ]),
+          );
+          expect(destroyed).toBe(true);
+        } finally {
+          rmSync(artifactsDir, { recursive: true, force: true });
+        }
+      },
+    );
 
     it('held (finalizer unavailable) → completed terminal event flagged held, never self-merge', async () => {
       inject({

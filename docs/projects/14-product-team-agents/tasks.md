@@ -726,7 +726,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Substrate test: a completed orchestrated run writes `transcript.jsonl`, `summary.json`
       (well-formed `WorkRunSummary`), and a computed work-product classification under
       `WORK_RUNS_DIR/<runId>/`.
-- [ ] Classification test: `computeWorkProduct`/`classifyWorkProduct` over an orchestrated
+- [x] Classification test: `computeWorkProduct`/`classifyWorkProduct` over an orchestrated
       branch with commits and `tasksRemaining == 0` yields `branch-complete`; a remaining task
       yields `partial`; a clean tree yields `noop`.
 - [ ] Auto-merge test: a clean `branch-complete` orchestrated run invokes `runFinalizer`
