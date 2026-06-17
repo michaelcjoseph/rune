@@ -763,7 +763,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       scrubbed raw-line streaming and record that fallback in run metadata. No human decision.
 - [x] Stream the claude artifact path: route `spawnClaudeAgent` through
       `--output-format stream-json --verbose` + the shared display mapping for parity.
-- [ ] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
+- [x] Add an `onActivity` callback to `ExecutionAgentIO` so per-session incremental output flows
       up as `activity`/`output` while the session is alive (keeps the heartbeat advancing).
 - [ ] Attribute every emitted line with role + provider + model, scrubbed via the existing
       `tool-labels`/`redactSecrets` path.

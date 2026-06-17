@@ -91,6 +91,7 @@ export interface ExecutionAgentIO {
   }) => Promise<SpawnAgentResult>;
   runGit: GitRunner;
   buildEnv: (sandbox: SandboxSpec, opts: { productsConfigPath: string }) => NodeJS.ProcessEnv;
+  onActivity?: (event: ExecutionAgentStreamEvent) => void;
 }
 
 export interface ExecutionAgentOpts {
@@ -133,9 +134,10 @@ export async function runExecutionAgent(
   opts: ExecutionAgentOpts,
   io: Partial<ExecutionAgentIO> = {},
 ): Promise<ExecutionAgentResult> {
-  const { spawnAgent, runGit, buildEnv } = { ...defaultIo, ...io };
+  const { spawnAgent, runGit, buildEnv, onActivity } = { ...defaultIo, ...io };
   const cwd = opts.sandbox.worktree;
   const timeoutMs = opts.timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
+  const emit = composeActivityEmit(opts.emit, onActivity);
 
   try {
     const env = buildEnv(opts.sandbox, { productsConfigPath: opts.productsConfigPath });
@@ -146,7 +148,7 @@ export async function runExecutionAgent(
       cwd,
       env,
       timeoutMs,
-      ...(opts.emit !== undefined ? { emit: opts.emit } : {}),
+      ...(emit !== undefined ? { emit } : {}),
     });
     if (error !== null) {
       return { ok: false, error: sanitize(error) };
@@ -169,6 +171,17 @@ export async function runExecutionAgent(
  *  upstream into TaskEvidence → mutation events → user surfaces. */
 function sanitize(text: string): string {
   return redactSecrets(scrubPathsInText(text));
+}
+
+function composeActivityEmit(
+  runEmit: ExecutionAgentOpts['emit'],
+  ioEmit: ExecutionAgentIO['onActivity'],
+): ExecutionAgentOpts['emit'] {
+  if (runEmit === undefined && ioEmit === undefined) return undefined;
+  return (event) => {
+    if (runEmit !== undefined) runEmit(event);
+    if (ioEmit !== undefined) ioEmit(event);
+  };
 }
 
 // ---------------------------------------------------------------------------

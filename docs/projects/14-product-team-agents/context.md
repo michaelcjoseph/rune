@@ -98,8 +98,10 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- h
-npx vitest run --configLoader runner --config vitest.config.ts --fileParallelism=false --reporter=verbose src/jobs/execution-agent.test.ts
-```
+- to `spawnAgent`.
 
-Result: 7 tests passed. The only worktree change remains the preexisting staged QA test update in `src/jobs/execution-agent.test.ts`; I left it untouched.
+Verification passed:
+
+`npx vitest run --configLoader runner --config vitest.config.ts --fileParallelism=false --reporter=verbose src/jobs/execution-agent.test.ts`
+
+Result: 8 tests passed. The preexisting staged QA test change remains untouched; my implementation change is unstaged.

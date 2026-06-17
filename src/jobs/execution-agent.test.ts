@@ -252,6 +252,39 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-session incremental activity callback
+// ---------------------------------------------------------------------------
+
+describe('runExecutionAgent — IO activity callback (Phase 10)', () => {
+  it('wires ExecutionAgentIO.onActivity into the live per-session emit callback', async () => {
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    let sawLiveEmitBeforeReturn = false;
+    const io = {
+      ...makeIo(async ({ emit }) => {
+        emit?.({ kind: 'output', data: { line: 'qa test authoring started' } });
+        emit?.({ kind: 'activity' });
+        sawLiveEmitBeforeReturn = events.length === 2;
+        return { output: 'tests authored', error: null };
+      }),
+      onActivity: (event: { kind: 'activity' | 'output'; data?: { line?: string } }) => {
+        events.push(event);
+      },
+    } as Partial<ExecutionAgentIO> & {
+      onActivity: (event: { kind: 'activity' | 'output'; data?: { line?: string } }) => void;
+    };
+
+    const result = await runExecutionAgent(makeOpts(), io);
+
+    expect(result.ok).toBe(true);
+    expect(sawLiveEmitBeforeReturn).toBe(true);
+    expect(events).toEqual([
+      { kind: 'output', data: { line: 'qa test authoring started' } },
+      { kind: 'activity' },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Claude artifact stream forwarding
 // ---------------------------------------------------------------------------
 
