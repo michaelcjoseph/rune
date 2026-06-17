@@ -748,7 +748,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > stream half-dark or the run stuck on an operator hold). The phase is not done until the live
 > acceptance below proves BOTH a non-stale heartbeat and a clean run merging through the gate.
 
-- [ ] Verify the active-harm hypothesis and record it (spec Phase 10 work item 1): can the
+- [x] Verify the active-harm hypothesis and record it (spec Phase 10 work item 1): can the
       quiet→cancel backstop kill a working orchestrated run today? Reframes priority if yes.
 - [ ] Add an injected `emit(event)` sink to `OrchestrationDeps`; convert the applier's single
       `await runOrchestration` into a queue-drained pump (`apply()` races the orchestration

@@ -98,27 +98,13 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ntent/team-task-workflow.test.ts --reporter=verbose
+- T=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
 ```
 
-Result: `5 passed`, `150 passed`.
-
-No files changed; `git status --short` and `git diff --stat` are both clean. Since the selected task is only “Confirm red before implementation” and the tests are already green, I left the worktree untouched.
-- vent before terminal:
-expected 0 to be greater than or equal to 1
-src/jobs/orchestrated-work-runner.test.ts:286
+Result: `1 passed | 21 skipped`. No files changed; `git status --short` and `git diff --stat` are clean.
+- ult JARVIS_HTTP_SECRET=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
 ```
 
-Current worktree verification remains green:
+Result: `1 passed | 21 skipped`.
 
-```text
-Test Files 5 passed
-Tests 150 passed
-```
-
-`git status --short` and `git diff --stat` are clean. No files changed, no commit made.
-- () to pump at least one reported activity/output event before terminal:
-expected 0 to be greater than or equal to 1
-```
-
-Current HEAD is already green for that same focused test, and the full focused Phase 10 suite is green (`5 passed`, `150 passed`). No files changed; `git status --short` is clean.
+Worktree: one new untracked file, no commit made.
