@@ -98,7 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- .ts --configLoader runner --reporter=verbose --fileParallelism=false`
-passed: 18 tests.
+- -runner.test.ts`
+- Result: 19 tests passed.
 
-`npm run build` is still blocked by existing TypeScript errors outside the implementation change, including test typing errors in `src/jobs/orchestrated-work-runner.test.ts` and other test files. No commit made.
+`npm run build` is still blocked by existing repo-wide TypeScript errors, including handed test typing errors in `src/jobs/orchestrated-work-runner.test.ts`; `src/jobs/orchestrated-work-runner.ts` no longer appears in the build error list. No commit made.

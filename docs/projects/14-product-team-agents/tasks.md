@@ -729,7 +729,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Classification test: `computeWorkProduct`/`classifyWorkProduct` over an orchestrated
       branch with commits and `tasksRemaining == 0` yields `branch-complete`; a remaining task
       yields `partial`; a clean tree yields `noop`.
-- [ ] Auto-merge test: a clean `branch-complete` orchestrated run invokes `runFinalizer`
+- [x] Auto-merge test: a clean `branch-complete` orchestrated run invokes `runFinalizer`
       (`gated-merge`), the gate passes, and the branch merges `--no-ff` + pushes under the
       per-base merge lock — no operator hold.
 - [ ] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and

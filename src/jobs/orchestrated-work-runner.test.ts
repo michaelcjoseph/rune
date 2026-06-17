@@ -5,6 +5,35 @@ import { join } from 'node:path';
 
 const mockAppendMutationLine = vi.hoisted(() => vi.fn());
 const mockUpsertRun = vi.hoisted(() => vi.fn());
+const mockRunFinalizer = vi.hoisted(() =>
+  vi.fn(async () => ({
+    outcome: 'branch-complete',
+    terminalEvent: {
+      mutationId: 'mut-orch-automerge',
+      ts: new Date('2026-06-16T12:00:00.000Z').toISOString(),
+      kind: 'completed',
+      data: {
+        outcome: 'branch-complete',
+        merged: true,
+        branchDeleted: true,
+      },
+    },
+    supervisionStatus: 'completed',
+    worktreeRemoved: true,
+    merged: true,
+    branchDeleted: true,
+    phases: [
+      'classified',
+      'transcript-flushed',
+      'summary-written',
+      'index-appended',
+      'merged-not-pushed',
+      'pushed-not-deleted',
+      'worktree-resolved',
+      'finalized',
+    ],
+  })),
+);
 
 vi.mock('./mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
@@ -13,6 +42,14 @@ vi.mock('./mutations-log.js', () => ({
 vi.mock('./supervision-store.js', () => ({
   upsertRun: mockUpsertRun,
 }));
+
+vi.mock('./work-run-finalizer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./work-run-finalizer.js')>();
+  return {
+    ...actual,
+    runFinalizer: mockRunFinalizer,
+  };
+});
 
 import {
   orchestratedWorkApplier,
@@ -166,6 +203,7 @@ describe('orchestratedWorkApplier', () => {
       created = false;
       destroyed = false;
       wtDir = null;
+      mockRunFinalizer.mockClear();
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
       activeRuns.clear();
@@ -311,6 +349,52 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
 
       rmSync(runDir, { recursive: true, force: true });
+    });
+
+    it('a clean branch-complete orchestrated run invokes runFinalizer in gated-merge mode', async () => {
+      const runId = 'mut-orch-automerge';
+      const baseSha = 'base-clean-123';
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+
+      expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
+      const [input, effects] = mockRunFinalizer.mock.calls[0]!;
+      expect(input).toMatchObject({
+        mode: 'gated-merge',
+        runId,
+        project: 'demo',
+        product: 'jarvis',
+        branch: 'jarvis-work/demo',
+        baseBranch: 'main',
+      });
+      expect(typeof effects.classify).toBe('function');
+      expect(typeof effects.gate).toBe('function');
+      expect(typeof effects.mergeBranch).toBe('function');
+      expect(typeof effects.pushBranch).toBe('function');
+      expect(typeof effects.deleteBranch).toBe('function');
+
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+      expect(terminal?.kind).toBe('completed');
+      expect((terminal?.data as Record<string, unknown>)['outcome']).toBe('branch-complete');
+      expect((terminal?.data as Record<string, unknown>)['held']).toBeUndefined();
+      expect(created).toBe(true);
     });
 
     it.each([

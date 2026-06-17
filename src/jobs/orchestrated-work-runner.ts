@@ -52,22 +52,33 @@ import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
-import type { FinalizerAdapterResult } from '../intent/finalizer-handoff.js';
+import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import { redactSecrets, type TranscriptSink } from './work-run-transcript.js';
-import { writeSummary, type WorkRunSummary } from './work-run-store.js';
+import {
+  writeSummary,
+  appendIndexRow,
+  recordWorkRunPhase,
+  readLastWorkRunPhase,
+  type WorkRunSummary,
+  type WorkRunIndexRow,
+} from './work-run-store.js';
 import {
   classifyOutcome,
   computeWorkProduct,
+  finalizeWorkRun,
   type ExitFacts,
   type WorkOutcome,
   type WorkProductFacts,
 } from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
+import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase, type GateFailReason } from './work-run-finalizer.js';
+import { runGate } from './work-run-gate-runtime.js';
+import { withBaseBranchLock } from './work-run-merge-lock.js';
 
 const log = createLogger('orchestrated-work-runner');
 
@@ -105,10 +116,17 @@ export interface OrchestratedRuntimeDeps {
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   /** Base dir for per-run artifacts (`<workRunsDir>/<id>/{transcript,summary}`). */
   workRunsDir: string;
+  /** Rolling recent-runs index file (`logs/work-runs/index.jsonl`). */
+  workRunsIndexFile: string;
   /** Build the per-run durable transcript sink. */
   createSink: (runId: string, baseDir: string) => TranscriptSink | null;
   /** Atomically write the run's `summary.json` into its per-run dir. */
   writeSummary: (dir: string, summary: WorkRunSummary) => void;
+  /** Append one torn-line-tolerant row to the rolling index. */
+  appendIndexRow: (filePath: string, row: WorkRunIndexRow) => void;
+  /** Durable per-run finalize-phase store for gated-merge crash resume. */
+  recordWorkRunPhase?: (runId: string, phase: FinalizerPhase) => void;
+  readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -119,8 +137,12 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     runGit: defaultRunGit,
     createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
     workRunsDir: config.WORK_RUNS_DIR,
+    workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
     createSink: createSyncTranscriptSink,
     writeSummary,
+    appendIndexRow,
+    recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
+    readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
   };
 }
 
@@ -180,6 +202,7 @@ function buildOrchestrationDeps(args: {
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
+  finalize: FinalizerAdapter;
 }): OrchestrationDeps {
   const { descriptor, sandbox, projectDir, product, projectSlug, branch, baseBranch, runGit } = args;
   const specPath = join(projectDir, 'spec.md');
@@ -248,20 +271,7 @@ function buildOrchestrationDeps(args: {
       return stdout.trim() === '';
     },
 
-    // DELIBERATE HOLD (Phase 8 decision, recorded 2026-06-10): the Project 15
-    // finalizer is live for `work-run` mutations, but its gated-merge pipeline
-    // still depends on work-product classification, gate runtime + per-base
-    // merge lock inputs that are not wired for orchestrated runs yet. Until an
-    // orchestrated run produces those inputs, the adapter reports
-    // `unavailable` and the run HOLDS branch-complete with the handoff
-    // payload recorded for the operator — it NEVER self-merges (spec req 17).
-    finalize: async (): Promise<FinalizerAdapterResult> => ({
-      kind: 'unavailable',
-      reason:
-        'deliberate hold: the Project 15 gated-merge finalizer is bound to work-run ' +
-        'classification/gate inputs that orchestrated runs do not ' +
-        'produce yet — branch-complete, awaiting operator merge',
-    }),
+    finalize: args.finalize,
   };
 }
 
@@ -334,6 +344,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
     let sandbox: SandboxSpec | null = null;
     let preserveWorktree = false;
+    let finalizerOwnedTeardown = false;
     let sink: TranscriptSink | null = null;
     const startedAtMs = Date.now();
     try {
@@ -363,11 +374,17 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         });
         return;
       }
+      const runSandbox = sandbox;
       const baselineTasks = readFileSafe(join(projectDir, 'tasks.md'));
 
       let baseBranch = 'main';
+      let repoPath = runSandbox.worktree;
+      let validationCommands: string[] = [];
       try {
-        baseBranch = getProductConfig(product, config.PRODUCTS_CONFIG_FILE).baseBranch;
+        const productConfig = getProductConfig(product, config.PRODUCTS_CONFIG_FILE);
+        baseBranch = productConfig.baseBranch;
+        repoPath = productConfig.repoPath;
+        validationCommands = productConfig.validationCommands ?? [];
       } catch {
         /* default to main if products.json is unreadable */
       }
@@ -394,10 +411,12 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       const emit = (event: OrchestrationActivityEvent): void => {
         enqueue(toMutationEvent(descriptor.id, event));
       };
+      let finalizerTerminal: MutationEvent | null = null;
+      let gateHeldReason: GateFailReason | null = null;
 
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
-        sandbox,
+        sandbox: runSandbox,
         projectDir,
         product,
         projectSlug,
@@ -406,6 +425,186 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         emit,
+        finalize: async () => {
+          let gateTasksRemaining = 0;
+          let endedAt = '';
+          const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${product}-${descriptor.id}`);
+          const exit = (): ExitFacts => ({
+            exitCode: 0,
+            signal: null,
+            cancelled: false,
+            durationMs: Date.now() - startedAtMs,
+            exitFact: 'clean-exit',
+          });
+          const hasConcurrentRun = (): boolean =>
+            [...activeRuns.values()].some(
+              (h) =>
+                (h.descriptor.kind === 'orchestrated-work' || h.descriptor.kind === 'work-run') &&
+                h.descriptor.id !== descriptor.id &&
+                ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'jarvis') === product &&
+                h.descriptor.status === 'running',
+            );
+
+          const effects: FinalizerEffects = {
+            classify: async () => {
+              const terminalEvent = await finalizeWorkRun({
+                mutationId: descriptor.id,
+                computeFacts: async () => {
+                  const workProduct = await computeOrchestratedWorkProduct({
+                    deps,
+                    descriptor,
+                    sandbox: runSandbox,
+                    branch,
+                    projectDir,
+                    baselineTasks,
+                  });
+                  if (!workProduct) throw new Error('orchestrated work product unavailable');
+                  return { exit: exit(), product: workProduct };
+                },
+                exportForensics: async () => {},
+              });
+              const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
+              data['projectSlug'] = projectSlug;
+              data['product'] = product;
+              data['dispatchMode'] = 'orchestrated';
+              data['baseBranch'] = baseBranch;
+              terminalEvent.data = data;
+              const workProduct = data['workProduct'] as WorkProductFacts | undefined;
+              gateTasksRemaining = workProduct?.transitions.tasksRemaining ?? 0;
+              endedAt = new Date().toISOString();
+              return terminalEvent;
+            },
+            flushTranscript: async () => {
+              if (!sink) return;
+              try {
+                await sink.finish();
+              } catch (err) {
+                log.warn('orchestrated-work-runner: transcript flush failed', {
+                  id: descriptor.id,
+                  error: (err as Error).message,
+                });
+              }
+            },
+            writeSummary: (event) => {
+              const summary = buildOrchestratedSummary({
+                id: descriptor.id,
+                project: projectSlug,
+                product,
+                branch,
+                baseSha: runSandbox.baseSha ?? '',
+                startedAtMs,
+                endedAt: endedAt || new Date().toISOString(),
+                terminal: event,
+                sink,
+                workRunsDir: deps.workRunsDir,
+                workProduct: terminalWorkProduct(event),
+                result: { kind: 'finalized', outcome: readOutcome(event) },
+              });
+              try {
+                deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
+              } catch (err) {
+                log.warn('orchestrated-work-runner: writeSummary failed', {
+                  id: descriptor.id,
+                  error: (err as Error).message,
+                });
+              }
+            },
+            appendIndexRow: (event) => {
+              try {
+                const finishedAt = endedAt || new Date().toISOString();
+                deps.appendIndexRow(deps.workRunsIndexFile, {
+                  id: descriptor.id,
+                  project: projectSlug,
+                  outcome: readOutcome(event),
+                  durationMs: Date.parse(finishedAt) - startedAtMs,
+                  startedAt: new Date(startedAtMs).toISOString(),
+                  endedAt: finishedAt,
+                });
+              } catch (err) {
+                log.warn('orchestrated-work-runner: appendIndexRow failed', {
+                  id: descriptor.id,
+                  error: (err as Error).message,
+                });
+              }
+            },
+            writeSupervisionTerminal: () => {},
+            removeWorktree: async () => {
+              await deps.destroyWorktree(runSandbox, {
+                productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+                worktreeRoot: config.WORKTREE_ROOT,
+              });
+              finalizerOwnedTeardown = true;
+            },
+            recordPhase: (phase) => deps.recordWorkRunPhase?.(descriptor.id, phase),
+            readLastPhase: () => deps.readLastWorkRunPhase?.(descriptor.id) ?? null,
+            gate: () =>
+              withBaseBranchLock(product, baseBranch, () =>
+                runGate({
+                  product,
+                  repoPath,
+                  baseBranch,
+                  branch,
+                  integrationWorktree,
+                  validationCommands,
+                  tasksRemaining: gateTasksRemaining,
+                  concurrentRun: hasConcurrentRun(),
+                  commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+                }),
+              ),
+            alert: (reason) => {
+              gateHeldReason = reason;
+              log.warn('orchestrated run held at branch-complete: gate failed', {
+                id: descriptor.id,
+                projectSlug,
+                product,
+                branch,
+                reason,
+              });
+            },
+            mergeBranch: async () => {
+              const message = `jarvis(${product}): merge orchestrated branch ${branch}`;
+              try {
+                await deps.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
+              } catch (err) {
+                throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
+              }
+            },
+            pushBranch: async () => {
+              try {
+                await deps.runGit(['push', 'origin', baseBranch], { cwd: repoPath });
+              } catch (err) {
+                log.warn('orchestrated-work-runner: git push failed after local merge', {
+                  product,
+                  branch,
+                  error: redactSecrets((err as Error).message),
+                });
+                throw new Error(redactSecrets(`git push failed: ${(err as Error).message}`));
+              }
+            },
+            deleteBranch: async () => {
+              await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
+            },
+          };
+
+          const finalizerResult = await runFinalizer(
+            { mode: 'gated-merge', runId: descriptor.id, project: projectSlug, product, branch, baseBranch },
+            effects,
+          );
+          const data = (finalizerResult.terminalEvent.data ?? {}) as Record<string, unknown>;
+          data['projectSlug'] = projectSlug;
+          data['product'] = product;
+          data['dispatchMode'] = 'orchestrated';
+          if (readOutcome(finalizerResult.terminalEvent) === 'branch-complete') {
+            data['merged'] = finalizerResult.merged;
+            data['branchDeleted'] = finalizerResult.branchDeleted;
+            data['baseBranch'] = baseBranch;
+            if (!finalizerResult.merged && gateHeldReason) data['gateHeldReason'] = gateHeldReason;
+          }
+          finalizerResult.terminalEvent.data = data;
+          finalizerTerminal = finalizerResult.terminalEvent;
+          finalizerOwnedTeardown = finalizerResult.worktreeRemoved;
+          return { kind: 'finalized', outcome: readOutcome(finalizerResult.terminalEvent) };
+        },
       });
 
       const orchestration = deps.runOrchestration(orchestrationDeps).then(
@@ -476,7 +675,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
 
       const result = outcome.result;
       preserveWorktree = result.kind === 'blocked' && result.parked?.preserveWorktree === true;
-      const terminal = mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
+      const terminal = finalizerTerminal ?? mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
       await persistTerminalArtifacts({
         deps,
         sink,
@@ -494,7 +693,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       yield terminal;
     } finally {
       sink?.destroy();
-      if (sandbox && !preserveWorktree) {
+      if (sandbox && !preserveWorktree && !finalizerOwnedTeardown) {
         try {
           await deps.destroyWorktree(sandbox, {
             productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -693,7 +892,16 @@ function buildOrchestratedSummary(args: {
     transcriptPath: sink?.path ?? '',
     forensicsPath: join(workRunsDir, id),
     ...(typeof data['baseBranch'] === 'string' ? { baseBranch: data['baseBranch'] } : {}),
+    ...(typeof data['merged'] === 'boolean' ? { merged: data['merged'] } : {}),
+    ...(typeof data['branchDeleted'] === 'boolean' ? { branchDeleted: data['branchDeleted'] } : {}),
+    ...(typeof data['gateHeldReason'] === 'string' ? { gateHeldReason: data['gateHeldReason'] } : {}),
   };
+}
+
+function terminalWorkProduct(event: MutationEvent): WorkProductFacts | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const workProduct = data['workProduct'];
+  return workProduct && typeof workProduct === 'object' ? (workProduct as WorkProductFacts) : null;
 }
 
 function orchestratedOutcome(result: OrchestrationResult | null, terminal: MutationEvent): WorkOutcome {
