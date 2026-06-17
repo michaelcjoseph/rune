@@ -195,6 +195,7 @@ function buildOrchestrationDeps(args: {
       productsConfigPath: config.PRODUCTS_CONFIG_FILE,
       modelPolicyPath: config.MODEL_POLICY_FILE,
       cap: ORCHESTRATED_ROUND_CAP,
+      ...(args.emit !== undefined ? { emit: args.emit } : {}),
     }),
 
     // Derive a neutral context update from the task evidence. Real role-authored

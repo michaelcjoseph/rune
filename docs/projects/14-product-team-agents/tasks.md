@@ -716,7 +716,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Claude-artifact-stream test: `spawnClaudeAgent` forwards stream-json envelopes as
       `output`/`activity` through the shared `streamJsonToDisplay` mapping — parity with the
       legacy work-runner, no plain-stdout accumulation.
-- [ ] Role-transition test: `runTeamTaskWorkflow` emits a labeled event per role stage
+- [x] Role-transition test: `runTeamTaskWorkflow` emits a labeled event per role stage
       (QA → tech-lead review → coder → reviewer → designer → PM wrap-up) and per verdict/objection.
 - [ ] Provider-attribution test: every emitted activity line carries role + provider + model
       alias and is path/secret-scrubbed.

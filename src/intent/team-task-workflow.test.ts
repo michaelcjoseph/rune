@@ -470,6 +470,58 @@ describe('team-task-workflow — returns evidence, owns no closeout', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Execution observability — role-stage transition events
+// ---------------------------------------------------------------------------
+
+type WorkflowActivityEvent = {
+  kind: 'activity' | 'output';
+  data?: Record<string, unknown>;
+};
+
+describe('team-task-workflow — execution observability', () => {
+  it('emits a labeled event for each role-stage transition', async () => {
+    const events: WorkflowActivityEvent[] = [];
+    const inputWithEmitter = {
+      ...INPUT,
+      cap: 1,
+      emit: (event: WorkflowActivityEvent) => {
+        events.push(event);
+      },
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        pass: false,
+        objections: [],
+        notes: 'reviewer wants one more assertion',
+      }),
+      pmWrapup: async () => ({ resolved: true }),
+    });
+
+    const ev = await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
+
+    const transitions = events.filter(
+      (event) => event.data?.['event'] === 'role-stage',
+    );
+    const observedStages = transitions.map((event) => ({
+      role: event.data?.['role'],
+      stage: event.data?.['stage'],
+    }));
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(observedStages).toEqual([
+      { role: 'qa', stage: 'test' },
+      { role: 'tech-lead', stage: 'test-review' },
+      { role: 'coder', stage: 'implementation' },
+      { role: 'reviewer', stage: 'review' },
+      { role: 'designer', stage: 'design' },
+      { role: 'pm', stage: 'pm-wrapup' },
+    ]);
+    expect(transitions.every((event) => typeof event.data?.['label'] === 'string')).toBe(true);
+    expect(transitions.every((event) => String(event.data?.['label']).trim().length > 0)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Robustness — role rejection → structured failed; bad cap → loud throw
 // ---------------------------------------------------------------------------
 

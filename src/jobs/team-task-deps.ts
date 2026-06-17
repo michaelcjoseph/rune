@@ -47,6 +47,7 @@ import {
   type ReviewerVerdict,
   type TaskEvidence,
   type TeamTaskDeps,
+  type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
 import {
   runExecutionAgent,
@@ -560,6 +561,8 @@ export interface TaskWorkflowRunnerArgs {
   modelPolicyPath: string;
   /** Inner per-task round cap; defaults to {@link DEFAULT_ROUND_CAP}. */
   cap?: number;
+  /** Optional live activity sink forwarded into runTeamTaskWorkflow. */
+  emit?: (event: WorkflowActivityEvent) => void;
 }
 
 /** Map a selected `tasks.md` task onto the workflow's SizedTask. tasks.md
@@ -636,6 +639,7 @@ export function createProductionTaskWorkflowRunner(
         ...(ctx.rejectionFeedback !== undefined
           ? { rejectionFeedback: ctx.rejectionFeedback }
           : {}),
+        ...(args.emit !== undefined ? { emit: args.emit } : {}),
         cap: args.cap ?? DEFAULT_ROUND_CAP,
       },
       deps,

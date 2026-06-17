@@ -98,6 +98,11 @@ export interface ReviewerInput {
   reviewerProvider: DispatchProvider;
 }
 
+export type WorkflowActivityEvent = {
+  kind: 'activity' | 'output';
+  data?: Record<string, unknown>;
+};
+
 /** The injected role seams. Tests pass fixtures; production wraps real role
  *  invocations (charter loader + model-policy dispatch). */
 export interface TeamTaskDeps {
@@ -139,6 +144,8 @@ export interface TeamTaskRunInput {
   coderProvider: DispatchProvider;
   /** Feedback carried from a previous whole-task attempt. */
   rejectionFeedback?: GateRejectionFeedback | GateRejectionFeedback[];
+  /** Optional live activity sink for appliers that need role-stage visibility. */
+  emit?: (event: WorkflowActivityEvent) => void;
   /** Per-task round cap. */
   cap: number;
 }
@@ -225,6 +232,7 @@ async function runGated(
   let tests: string[] | string | undefined;
   for (let qaAttempt = 0; qaAttempt < input.cap; qaAttempt++) {
     roles.add('qa');
+    emitRoleStage(input, 'qa', 'test');
     qa = await deps.qaWriteTests({
       task,
       spec: input.spec,
@@ -236,6 +244,7 @@ async function runGated(
 
     // Gate 2: tech lead reviews the test intent BEFORE the coder starts.
     roles.add('tech-lead');
+    emitRoleStage(input, 'tech-lead', 'test-review');
     const tlTests = await deps.techLeadReviewTests({ task, qa });
     if (tlTests.approved) break;
 
@@ -266,6 +275,7 @@ async function runGated(
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   for (let attempt = 0; attempt < input.cap; attempt++) {
     roles.add('coder');
+    emitRoleStage(input, 'coder', 'implementation');
     const coder = await deps.coder({
       task,
       spec: input.spec,
@@ -277,6 +287,7 @@ async function runGated(
     const roundFeedback: GateRejectionFeedback[] = [];
 
     roles.add('reviewer');
+    emitRoleStage(input, 'reviewer', 'review');
     lastReviewer = await deps.reviewer({
       diff: coder.diff,
       spec: input.spec,
@@ -330,6 +341,7 @@ async function runGated(
     lastDesignerPass = true;
     if (task.designerNeeded) {
       roles.add('designer');
+      emitRoleStage(input, 'designer', 'design');
       const designer = await deps.designer({ task, diff: coder.diff });
       lastDesignerPass = designer.pass;
       if (!designer.pass) {
@@ -375,6 +387,7 @@ async function runGated(
   }
 
   roles.add('pm');
+  emitRoleStage(input, 'pm', 'pm-wrapup');
   const pm = await deps.pmWrapup({ task, reason: 'non-objection disagreement at the round cap' });
   if (pm.resolved) {
     return {
@@ -472,4 +485,23 @@ function normalizeFeedback(
 ): GateRejectionFeedback[] {
   if (feedback === undefined) return [];
   return Array.isArray(feedback) ? feedback : [feedback];
+}
+
+function emitRoleStage(input: TeamTaskRunInput, role: RoleName, stage: string): void {
+  if (input.emit === undefined) return;
+  const label = `${role}: ${stage}`;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'role-stage',
+        role,
+        stage,
+        label,
+        line: label,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
 }

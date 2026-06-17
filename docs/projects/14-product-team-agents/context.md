@@ -98,5 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- jobs/execution-agent.ts` passed.
-- Full `npm run build -- --pretty false` is still blocked by unrelated existing errors outside this file. The default `npm test -- src/jobs/execution-agent.test.ts` also hit the sandboxed `node_modules/.vite-temp` EPERM issue, so I used Vitest’s runner config loader.
+- eps.test.ts src/jobs/orchestrated-work-runner.test.ts` passed: 27 tests.
+- `npm test -- src/intent/team-task-workflow.test.ts` is blocked by the known `.vite-temp` EPERM config issue.
+- `npm run build -- --pretty false` still fails on existing unrelated TypeScript errors outside these changed files.
