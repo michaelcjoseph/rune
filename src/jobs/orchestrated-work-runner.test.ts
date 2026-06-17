@@ -678,6 +678,87 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(false);
     });
 
+    it('an open high/critical objection holds the branch with handoff payload recorded and never merges', async () => {
+      const runId = 'mut-orch-objection-held';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-objection-held-artifacts-'));
+      const { runGit, calls } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/security.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] close the objection\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-objection-123' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer'],
+          objectionOpen: true,
+          reviewerVerdict: {
+            pass: false,
+            objections: [
+              {
+                class: 'security',
+                severity: 'high',
+                location: 'src/security.ts:42',
+                rationale: 'token material can be written to disk without redaction',
+              },
+            ],
+          },
+          handoffNotes: ['partial fix is on the branch and needs human objection handling'],
+          blockedReason: 'open objection-class finding',
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        expect(terminal?.kind).toBe('completed');
+        expect(terminal?.data).toMatchObject({
+          parked: true,
+          reason: expect.stringContaining('open objection-class finding'),
+          operatorWorktreePath: wtDir,
+          branch: 'jarvis-work/demo',
+          baseBranch: 'main',
+          preserveBranch: true,
+          preserveWorktree: true,
+          dispatchMode: 'orchestrated',
+        });
+
+        const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, unknown>;
+        expect(summary).toMatchObject({
+          id: runId,
+          branch: 'jarvis-work/demo',
+          reason: expect.stringContaining('open objection-class finding'),
+          baseSha: 'base-objection-123',
+        });
+
+        const baseMutations = calls.filter(({ args }) => {
+          const command = args[0];
+          return (
+            (command === 'merge' && args.includes('jarvis-work/demo')) ||
+            (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
+            (command === 'branch' && args[1] === '-d' && args[2] === 'jarvis-work/demo')
+          );
+        });
+        expect(baseMutations).toEqual([]);
+        expect(mockRunFinalizer).not.toHaveBeenCalled();
+        expect(destroyed).toBe(false);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('worktree-create failure → failed terminal event, no destroy of a non-existent tree', async () => {
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {

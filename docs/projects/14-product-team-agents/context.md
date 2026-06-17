@@ -98,6 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ed`.
+-  npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts
+TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=42 VAULT_DIR=/tmp/jarvis-test-vault npm test -- --configLoader runner src/intent/project-orchestrator.test.ts src/intent/orch-execution.test.ts
+```
 
-Notes: the only repo change is the staged QA test addition in `src/jobs/orchestrated-work-runner.test.ts`; I did not commit. The plain `npm test -- ...` path is blocked in this sandbox because Vite tries to write under the symlinked `node_modules/.vite-temp`, so I used `--configLoader runner`.
+All passed. No commit made.

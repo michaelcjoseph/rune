@@ -274,8 +274,17 @@ function maybeParkedRun(
   deps: OrchestrationDeps,
   evidence: TaskEvidence,
 ): ParkedTaskRun | undefined {
-  if (evidence.outcome !== 'blocked' || evidence.objectionOpen || deps.worktreePath === undefined) {
+  if (evidence.outcome !== 'blocked' || deps.worktreePath === undefined) {
     return undefined;
+  }
+  if (hasHighCriticalObjection(evidence)) {
+    return {
+      status: 'blocked-on-human',
+      branch: deps.branch,
+      worktreePath: deps.worktreePath,
+      preserveBranch: true,
+      preserveWorktree: true,
+    };
   }
   const reason = evidence.blockedReason ?? '';
   const exhaustedFeedbackRetry =
@@ -289,4 +298,11 @@ function maybeParkedRun(
     preserveBranch: true,
     preserveWorktree: true,
   };
+}
+
+function hasHighCriticalObjection(evidence: TaskEvidence): boolean {
+  if (!evidence.objectionOpen) return false;
+  return (evidence.reviewerVerdict?.objections ?? []).some(
+    (objection) => objection.severity === 'high' || objection.severity === 'critical',
+  );
 }

@@ -734,7 +734,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       per-base merge lock — no operator hold.
 - [x] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and
       does NOT touch the base branch.
-- [ ] Objection-hold test: an open high/critical objection-class finding holds the branch with
+- [x] Objection-hold test: an open high/critical objection-class finding holds the branch with
       the handoff payload recorded and never merges (reqs 17, 25, 63-70).
 - [ ] No-stub regression test: the orchestrated `finalize` `unavailable` stub
       (`orchestrated-work-runner.ts:234`) is gone and cannot reappear without failing.
