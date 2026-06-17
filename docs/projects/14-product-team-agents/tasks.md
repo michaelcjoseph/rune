@@ -738,7 +738,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the handoff payload recorded and never merges (reqs 17, 25, 63-70).
 - [x] No-stub regression test: the orchestrated `finalize` `unavailable` stub
       (`orchestrated-work-runner.ts:234`) is gone and cannot reappear without failing.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 

@@ -98,16 +98,27 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- -merge` mode instead of returning the old `unavailable` hold terminal.
-
-Verified with:
-
-```bash
-TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=42 VAULT_DIR=/tmp/jarvis-test-vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts
+- ntent/team-task-workflow.test.ts --reporter=verbose
 ```
 
-Result: 22 tests passed. No commit made.
--  runner src/jobs/orchestrated-work-runner.test.ts
+Result: `5 passed`, `150 passed`.
+
+No files changed; `git status --short` and `git diff --stat` are both clean. Since the selected task is only “Confirm red before implementation” and the tests are already green, I left the worktree untouched.
+- vent before terminal:
+expected 0 to be greater than or equal to 1
+src/jobs/orchestrated-work-runner.test.ts:286
 ```
 
-Note: the file was already staged with the rejected version. I tried to update the index, but this sandbox cannot write `.git/index.lock`, so `git status` still shows `MM`. The working tree content and `git diff HEAD` reflect the corrected test.
+Current worktree verification remains green:
+
+```text
+Test Files 5 passed
+Tests 150 passed
+```
+
+`git status --short` and `git diff --stat` are clean. No files changed, no commit made.
+- () to pump at least one reported activity/output event before terminal:
+expected 0 to be greater than or equal to 1
+```
+
+Current HEAD is already green for that same focused test, and the full focused Phase 10 suite is green (`5 passed`, `150 passed`). No files changed; `git status --short` is clean.
