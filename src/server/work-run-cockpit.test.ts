@@ -154,6 +154,7 @@ vi.mock('../transport/approval-actions.js', () => ({
 
 const { mountWebviewRoutes } = await import('./webview.js');
 const { buildCockpitView } = await import('../intent/cockpit.js');
+const { readAllRuns } = await import('../jobs/supervision-store.js');
 
 // Loosely-typed view of buildCockpitView so the (future) 4th work-run arg can
 // be passed without a TS arity error before the param exists on the signature.
@@ -236,6 +237,7 @@ const AUTH_COOKIE = 'jarvis-auth=test-secret';
 // A run fixture seeded under WORK_RUNS_DIR/<id>/ — summary.json + transcript.jsonl.
 const RUN_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const RUN_NO_TRANSCRIPT = 'ffffffff-1111-2222-3333-444444444444';
+const ORCH_RUN_ID = 'orch-run-active-001';
 
 const SUMMARY_FIXTURE = {
   id: RUN_ID,
@@ -263,6 +265,31 @@ const TRANSCRIPT_LINES = [
   JSON.stringify({ type: 'result', subtype: 'success' }),
 ].join('\n') + '\n';
 
+const ORCH_TRANSCRIPT_LINES = [
+  JSON.stringify({
+    mutationId: ORCH_RUN_ID,
+    ts: '2026-06-17T10:00:05.000Z',
+    kind: 'activity',
+    data: {
+      role: 'qa',
+      provider: 'openai',
+      model: 'gpt-5.5',
+      line: 'qa | openai | gpt-5.5 | writing tests from the spec',
+    },
+  }),
+  JSON.stringify({
+    mutationId: ORCH_RUN_ID,
+    ts: '2026-06-17T10:00:10.000Z',
+    kind: 'output',
+    data: {
+      role: 'coder',
+      provider: 'openai',
+      model: 'gpt-5.5',
+      line: 'coder | openai | gpt-5.5 | wiring cockpit projection',
+    },
+  }),
+].join('\n') + '\n';
+
 beforeAll(async () => {
   // Seed fixtures: one full run (summary + transcript), one record-only run.
   mkdirSync(join(WORK_RUNS_DIR, RUN_ID), { recursive: true });
@@ -285,6 +312,8 @@ beforeAll(async () => {
     join(WORK_RUNS_DIR, 'index.jsonl'),
     `${indexRow(RUN_ID)}\n${indexRow(RUN_NO_TRANSCRIPT)}\n`,
   );
+  mkdirSync(join(WORK_RUNS_DIR, ORCH_RUN_ID), { recursive: true });
+  writeFileSync(join(WORK_RUNS_DIR, ORCH_RUN_ID, 'transcript.jsonl'), ORCH_TRANSCRIPT_LINES);
 
   server = http.createServer(async (req, res) => {
     const handled = await webviewHandler(req, res);
@@ -309,6 +338,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockActiveRunsMap.clear();
   mockReadCockpitRunStatus.mockReturnValue({});
+  (readAllRuns as ReturnType<typeof vi.fn>).mockReturnValue([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -415,6 +445,36 @@ describe('GET /api/cockpit surfaces the work-run projection (§5.1)', () => {
     expect(project.workRun).toBeDefined();
     expect(project.workRun.outcome).toBe('partial');
     expect(project.workRun.reason).toBeTruthy();
+  });
+
+  it('projects active orchestrated role activity into lastOutput with a transcript link', async () => {
+    (readAllRuns as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        id: ORCH_RUN_ID,
+        product: 'aura',
+        project: '02-growth',
+        status: 'running',
+        startedAt: '2026-06-17T10:00:00.000Z',
+        lastHeartbeatAt: '2026-06-17T10:00:10.000Z',
+        lastOutputAt: '2026-06-17T10:00:10.000Z',
+      },
+    ]);
+
+    const res = await makeRequest(port, '/api/cockpit', { headers: { Cookie: AUTH_COOKIE } });
+
+    expect(res.status).toBe(200);
+    const view = res.body as CockpitView;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const project = view.products?.[0]?.projects?.[0] as any;
+    expect(project).toBeDefined();
+    expect(project.workRun).toBeDefined();
+    expect(project.workRun.mutationId).toBe(ORCH_RUN_ID);
+    expect(project.workRun.outcome).toBeNull();
+    expect(project.workRun.transcriptUrl).toBe(`/api/work-runs/${ORCH_RUN_ID}/transcript`);
+    expect(project.workRun.lastOutput).toEqual([
+      'qa | openai | gpt-5.5 | writing tests from the spec',
+      'coder | openai | gpt-5.5 | wiring cockpit projection',
+    ]);
   });
 });
 

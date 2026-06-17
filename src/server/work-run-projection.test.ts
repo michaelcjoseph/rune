@@ -172,6 +172,47 @@ describe('readWorkRunProjections — active-run merge (Fix #2)', () => {
     expect(out['02-growth']!.lastOutput.some((l) => l.includes('Waiting on approval'))).toBe(true);
   });
 
+  it('projects orchestrated activity/output transcript events as role-attributed lastOutput lines', () => {
+    const id = 'orch-run-active-001';
+    seedTranscript(id, [
+      {
+        mutationId: id,
+        ts: '2026-06-17T10:00:05.000Z',
+        kind: 'activity',
+        data: {
+          role: 'qa',
+          provider: 'openai',
+          model: 'gpt-5.5',
+          line: 'qa | openai | gpt-5.5 | writing tests from the spec',
+        },
+      },
+      {
+        mutationId: id,
+        ts: '2026-06-17T10:00:10.000Z',
+        kind: 'output',
+        data: {
+          role: 'coder',
+          provider: 'openai',
+          model: 'gpt-5.5',
+          line: 'coder | openai | gpt-5.5 | wiring cockpit projection',
+        },
+      },
+    ]);
+
+    const out = readWorkRunProjections(dir, indexFile, undefined, [
+      activeRun(id, '02-growth', '2026-06-17T10:00:00.000Z'),
+    ]);
+
+    expect(out['02-growth']).toBeDefined();
+    expect(out['02-growth']!.mutationId).toBe(id);
+    expect(out['02-growth']!.outcome).toBeNull();
+    expect(out['02-growth']!.transcriptUrl).toBe(`/api/work-runs/${id}/transcript`);
+    expect(out['02-growth']!.lastOutput).toEqual([
+      'qa | openai | gpt-5.5 | writing tests from the spec',
+      'coder | openai | gpt-5.5 | wiring cockpit projection',
+    ]);
+  });
+
   it('rejects an active run with a non-slug (path-traversal) id without projecting it', () => {
     const out = readWorkRunProjections(dir, indexFile, undefined, [
       activeRun('../escape', '02-growth', '2026-06-01T12:00:00.000Z'),

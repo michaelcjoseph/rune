@@ -98,11 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- role | provider | model`.
+- annot run in this sandbox because binding `127.0.0.1` fails with `listen EPERM`
+- Blocked: `npm run build` still fails on existing unrelated TypeScript errors outside this change
 
-Verification:
-- `src/jobs/team-task-deps.test.ts`: 17 passed
-- `src/jobs/execution-agent.test.ts`: 8 passed
-- `npm run build`: blocked by existing unrelated TypeScript errors outside this change
-
-QA’s staged test change remains staged; my implementation change is unstaged.
+I did not touch the staged QA test changes; only `src/server/work-run-projection.ts` is unstaged from my implementation.

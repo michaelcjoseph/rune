@@ -77,11 +77,26 @@ function readTranscriptTail(transcriptPath: string, n: number): string[] {
   const display: string[] = [];
   for (const line of raw.split('\n')) {
     const envelope = parseStreamJsonLine(line);
-    if (!envelope) continue;
-    const text = streamJsonToDisplay(envelope);
+    const text = envelope ? streamJsonToDisplay(envelope) : mutationEventLineToDisplay(line);
     if (text) display.push(...text.split('\n'));
   }
   return display.slice(-n);
+}
+
+function mutationEventLineToDisplay(line: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj['kind'] !== 'activity' && obj['kind'] !== 'output') return null;
+  const data = obj['data'];
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const lineText = (data as Record<string, unknown>)['line'];
+  return typeof lineText === 'string' ? lineText : null;
 }
 
 /**
