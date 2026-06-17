@@ -11,7 +11,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
 > planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
 >
-> **Autonomy rule for reopened phases:** Phases 10-12 must be runnable by `/work --auto`
+> **Autonomy rule for reopened phases:** Phases 10-13 must be runnable by `/work --auto`
 > without human choices, manual repo setup, production push credentials in tests, or
 > interactive approval. If a task needs a choice, the default and fallback are named here.
 >
@@ -734,8 +734,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       per-base merge lock — no operator hold.
 - [ ] Gate-hold test: a gate-failing run holds branch-complete, records the gate reason, and
       does NOT touch the base branch.
-- [ ] Objection-hold test: an open objection-class finding holds the branch with the handoff
-      payload recorded and never merges (reqs 17, 25).
+- [ ] Objection-hold test: an open high/critical objection-class finding holds the branch with
+      the handoff payload recorded and never merges (reqs 17, 25, 63-70).
 - [ ] No-stub regression test: the orchestrated `finalize` `unavailable` stub
       (`orchestrated-work-runner.ts:234`) is gone and cannot reappear without failing.
 - [ ] Confirm red before implementation.
@@ -777,8 +777,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `unavailable` stub: bind `classify`/`flushTranscript`/`writeSummary`/`appendIndexRow`/
       `recordPhase`/`readLastPhase` and `gate` = `withBaseBranchLock` + `runGate` over the
       product's `validationCommands`, plus `mergeBranch`/`pushBranch`/`deleteBranch`.
-- [ ] Preserve the invariants: failed gate or open objection holds branch-complete with the
-      handoff payload recorded; merge only ever through the finalizer's gates (reqs 17, 25).
+- [ ] Preserve the invariants: failed gate or open high/critical objection holds
+      branch-complete with the handoff payload recorded; merge only ever through the
+      finalizer's gates (reqs 17, 25, 63-70).
 - [ ] **Live acceptance:** extend `__acceptance__/orchestrated-live.acceptance.ts` to assert (a)
       ≥N intermediate stream events from BOTH executors and `lastHeartbeatAt` advanced during
       execution; (b) a clean run drives all the way to a MERGED base branch (gated); (c) a
@@ -940,39 +941,45 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `pass`/`pass-with-warnings`/`fail`/`block` as a structured field; a bare boolean is
       normalized/rejected, never silently coerced.
 - [ ] Severity-mapping test: `critical`/`high` objection → `block`; `medium` → `fail`; `low` →
-      `pass-with-warnings`. A `low`/`medium` finding can never produce `block`.
+      `pass-with-warnings`. A `low`/`medium` finding can never produce `block`, and multiple
+      findings resolve to the strictest mapped outcome.
 - [ ] Warnings-recorded test: a `pass-with-warnings` outcome proceeds and the warnings land in the
       `TaskRunRecord` and the finalizer handoff.
 - [ ] Fail-retry test: a `fail` threads feedback to the coder and retries within the round cap; at
       the cap it routes to PM wrap-up.
-- [ ] Block-one-round test: a `block` delivers its feedback to the coder for exactly one corrective
-      round before parking; it does not short-circuit with zero coder attempts.
+- [ ] Block-one-round test: a reviewer-produced `block` delivers its feedback to the coder for
+      exactly one corrective round from the dedicated block-correction budget before parking; it
+      does not short-circuit with zero corrective attempts.
 - [ ] Block-parks-not-fails test: a surviving `block` parks `blocked-on-human` with worktree +
-      branch preserved; an open objection is NEVER mapped to `failed` with a destroyed worktree
-      (regression for the `maybeParkedRun` `objectionOpen` exclusion + `mapResultToTerminal`
-      blocked→failed mapping).
-- [ ] Accept-with-rationale test: a human/PM acceptance records the rationale in the task/run
-      record and the task proceeds as `pass-with-warnings`.
-- [ ] Fail-safe test: a malformed severity or a recording failure degrades to the stricter outcome
-      (`block`) with a durable reason.
+      branch preserved; an open blocking objection is NEVER mapped to `failed` with a destroyed
+      worktree (regression for the `maybeParkedRun` `objectionOpen` exclusion +
+      `mapResultToTerminal` blocked→failed mapping).
+- [ ] Accept-with-rationale test: an injected human/PM acceptance requires a rationale, records
+      it in the task/run record, and the task proceeds as `pass-with-warnings`.
+- [ ] Fail-safe test: a malformed severity or a recording failure degrades to an operational
+      `block`, records a durable reason, and parks without consuming a coder corrective round.
 - [ ] Confirm red before implementation.
 
 ### Implementation
 
 - [ ] Add a structured `outcome` field (`pass`/`pass-with-warnings`/`fail`/`block`) to
-      `ReviewerVerdict` and the tech-lead diff / designer verdicts; migrate callers off the bare
-      `pass` boolean + `objections.length > 0` branch (`team-task-workflow.ts`).
+      a shared `GateVerdict` contract used by reviewer, tech-lead diff, and designer gates.
+      Normalize existing boolean adapters at their boundary, then migrate orchestration callers
+      off the bare `pass` boolean + `objections.length > 0` branch (`team-task-workflow.ts`).
 - [ ] Add a single severity→outcome mapping function (one source of truth) and route every gate
-      through it instead of the `objections.length > 0` hard branch.
-- [ ] Replace the one-shot objection block: deliver the already-built `GateRejectionFeedback`, allow
-      one corrective coder round, then park.
+      through it instead of the `objections.length > 0` hard branch; choose the strictest mapped
+      outcome when a verdict carries multiple findings.
+- [ ] Replace the one-shot reviewer objection block: deliver the already-built
+      `GateRejectionFeedback`, allow one corrective coder round from the dedicated
+      block-correction budget, then park. Operational fail-safe blocks park immediately.
 - [ ] Fix `maybeParkedRun` to park objection-open blocks (drop the `objectionOpen` exclusion) and
       `mapResultToTerminal` to map a surviving block to a parked/`blocked-on-human` terminal, not
       `failed` (`project-orchestrator.ts`, `orchestrated-work-runner.ts`).
 - [ ] Thread `pass-with-warnings` findings + accepted-block rationales into the `TaskRunRecord` and
       finalizer handoff.
-- [ ] Add an accept-with-rationale path on the blocked-on-human inbox surface (injected seam for
-      tests; real surface wiring can be its own task).
+- [ ] Add an accept-with-rationale core override seam (injected for tests) that requires a
+      rationale, records it durably, and resumes the task as `pass-with-warnings`; real
+      cockpit/Telegram inbox wiring can be its own task.
 - [ ] Update Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating.
 
 > **User-reachability:** YES — after this phase, a low-severity nit ships as a recorded warning

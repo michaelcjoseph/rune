@@ -88,11 +88,13 @@ acceptance criteria.
       never silently downgraded.
 - [ ] Critical: Reviewer input contains diff, spec, tests, task, and bounded context; it does
       not contain coder hidden reasoning.
-- [ ] Critical: Open objection-class findings block task completion.
+- [ ] Critical: Objection-class findings gate task completion by severity: low records a
+      warning, medium enters corrective retry/PM wrap-up, and high/critical blocks autonomous
+      completion after the dedicated corrective round.
 - [ ] High: The reviewer verdict carries a machine-readable objection-class payload
       (class, severity, location, rationale) the orchestrator can gate on — distinct from a
       bare pass/fail.
-- [ ] Critical: PM wrap-up does not clear unresolved objection-class findings.
+- [ ] Critical: PM wrap-up does not clear unresolved high/critical objection-class findings.
 - [ ] High: Non-objection disagreement at the configured cap routes to PM; unresolved PM
       decisions enter blocked-on-human.
 - [ ] High: Designer is invoked when the tech-lead sizing flags a task front-end/designer-needed
@@ -175,8 +177,8 @@ acceptance criteria.
       work-product classification under `WORK_RUNS_DIR/<runId>/`.
 - [ ] Critical: A clean `branch-complete` orchestrated run invokes the Project 15 finalizer in
       `gated-merge` mode and merges/pushes only through the gate.
-- [ ] Critical: Failed finalizer gate or open objection-class finding records a hold and never
-      touches the base branch.
+- [ ] Critical: Failed finalizer gate or open high/critical objection-class finding records a
+      hold and never touches the base branch.
 - [ ] Critical: The Phase 8 finalizer `unavailable` hold stub is removed and regression-guarded.
 - [ ] High: Cockpit run projection shows the orchestrated transcript tail / last output while
       the run is active.
@@ -231,6 +233,30 @@ acceptance criteria.
 - [ ] High: Live acceptance forces a QA->tech-lead redaction rejection, writes a validated QA
       lesson, then verifies a re-run loads the lesson/exemplar and passes the gate.
 
+## 13. Outcome gating
+
+- [ ] Critical: Reviewer, tech-lead diff, and designer gates normalize to a shared structured
+      verdict with exactly one outcome: `pass`, `pass-with-warnings`, `fail`, or `block`; bare
+      booleans are accepted only at adapter boundaries and never drive orchestration directly.
+- [ ] Critical: Objection-class severity maps through one helper:
+      `critical`/`high` -> `block`, `medium` -> `fail`, `low` -> `pass-with-warnings`; multiple
+      findings resolve to the strictest mapped outcome.
+- [ ] Critical: `pass-with-warnings` advances the task and records warnings in both the
+      `TaskRunRecord` and finalizer handoff.
+- [ ] Critical: `fail` threads structured feedback to the coder and retries within the round cap;
+      a non-cleared fail at the cap routes to PM wrap-up.
+- [ ] Critical: Reviewer-produced `block` receives exactly one feedback-threaded corrective
+      coder round from a dedicated block-correction budget before parking; it never
+      short-circuits with zero corrective attempts.
+- [ ] Critical: A surviving block parks `blocked-on-human` with branch/worktree preserved and is
+      not mapped to a failed terminal with destroyed work.
+- [ ] High: The core accept-with-rationale seam requires a rationale, records it durably, and
+      resumes the task as `pass-with-warnings`; cockpit/Telegram wiring is not required for this
+      phase's automated acceptance.
+- [ ] High: Unknown outcomes, malformed severities, or failed warning/acceptance recording fail
+      closed to an operational `block` with a durable reason and park without consuming a coder
+      corrective round.
+
 ---
 
 ## Integration Verification
@@ -242,10 +268,11 @@ flags, PM confirms spec/tech-spec match, and Jarvis seeds `context.md`.
 Run orchestrated work through injected spawners/readers: Jarvis selects task 1, QA writes
 tests or records a no-code-test rationale according to task strategy, tech lead reviews it,
 coder implements, reviewer and tech lead review, designer runs only when the tech-lead sizing
-flag requires it, objection-class gates clear, Jarvis performs closeout (`tasks.md` checkbox
-+ `context.md` + closeout checks + commit + clean worktree), Jarvis advances to task 2 with
-that context included, then hands the completed project to an injected Project 15 finalizer
-adapter. No live model call, Telegram interaction, or production push is required.
+flag requires it, objection-class gates resolve per Outcome gating, Jarvis performs closeout
+(`tasks.md` checkbox + `context.md` + closeout checks + commit + clean worktree), Jarvis
+advances to task 2 with that context included, then hands the completed project to an injected
+Project 15 finalizer adapter. No live model call, Telegram interaction, or production push is
+required.
 
 Feed a valid fixture feedback record into the nightly post-mortem seam. Jarvis attributes the
 miss and writes one atomic lesson into the relevant role memory. Feed a malformed record and

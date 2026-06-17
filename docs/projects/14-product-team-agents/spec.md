@@ -1,6 +1,7 @@
 # Product-Team Orchestrated Work Specification
 
-> **Status: REOPENED 2026-06-14 — Phases 10-12 (observability, resilience, learning).**
+> **Status: REOPENED 2026-06-14/16 — Phases 10-13 (observability, resilience, learning,
+> outcome gating).**
 > Phases 1-9 shipped the role substrate, planning, per-task orchestration, the live
 > execution binding (Phase 8 — proof `live-acceptance-6abf35cf.md`), and the planning
 > critique pass (Phase 9). Orchestrated runs now do real work — but they do it blind:
@@ -8,11 +9,12 @@
 > role activity never reaches the cockpit stream, and the supervision heartbeat goes
 > stale mid-run (it advances only on `output`/`activity` events the orchestrated path
 > never emits). The same project-17 run also exposed blind retries, non-resumable crash
-> recovery, and cold-start roles with no exemplars. Remaining scope is **Phases 10-12**
+> recovery, cold-start roles with no exemplars, and binary outcome gating that treats every
+> objection as a hard stop. Remaining scope is **Phases 10-13**
 > below: stream role activity and advance the heartbeat for both executors, produce the
-> finalizer substrate for gated auto-merge, make retries/restarts resilient, and make
-> gate failures teach future runs. Both Claude and Codex runs are observable and treated
-> equally.
+> finalizer substrate for gated auto-merge, make retries/restarts resilient, make gate
+> failures teach future runs, and make severity-aware outcomes preserve useful work. Both
+> Claude and Codex runs are observable and treated equally.
 >
 > *(Prior reopen, 2026-06-10: Phases 8-9 — live execution binding + planning critique —
 > now DONE.)*
@@ -63,7 +65,7 @@ real usage.
    that carries high-signal project continuity between fresh task executions.
 4. **Secondary:** enforce role gates: QA before coder, tech-lead test review, cross-model
    reviewer independence, designer review for tech-lead-flagged front-end/designer-needed
-   work, and objection-class hard gates.
+   work, and severity-aware objection-class gates.
 5. **Secondary:** route models through the existing model-policy resolver; coder/reviewer
    independence is required by construction.
 6. **Tertiary:** capture lessons from feedback through a neutral Jarvis-owned post-mortem
@@ -79,7 +81,7 @@ real usage.
 - **Replacing Project 15.** The finalizer owns project terminal classification, gated merge,
   push, cleanup, and terminal writes. This project defines an injectable finalizer handoff
   seam so its automated tests do not require Project 15 to be implemented first.
-- **Unconditional merge.** Objection-class findings and failed finalizer gates block
+- **Unconditional merge.** Blocking objection-class findings and failed finalizer gates block
   autonomous landing.
 - **Scheduler-driven dispatch.** A human or existing surface can start a run in v1; fully
   autonomous scheduling remains a later intent-layer concern.
@@ -231,7 +233,7 @@ QA writes or updates tests from the spec, or records a reviewed no-test rational
   -> coder implements
   -> reviewer + tech lead review the diff
   -> designer reviews if tech-lead sizing flags front-end/designer-needed
-  -> objection-class gates must clear
+  -> objection-class gates resolve per Outcome gating
   -> ready-for-closeout / blocked / failed verdict
 ```
 
@@ -371,8 +373,9 @@ These are the objection classes — the findings the reviewer is specifically ch
 - An objection's SEVERITY decides how hard it gates — see "Outcome gating" below (Phase 13).
   Severity is not advisory metadata: `critical`/`high` block, `medium` is a fixable fail, `low`
   ships as a recorded warning. A reviewer cannot halt the line on a trivial finding.
-- A blocking objection parks the task `blocked-on-human` with worktree and branch preserved, and
-  a human can accept-it-with-rationale. It is never silently failed-and-discarded.
+- A blocking objection gets one dedicated corrective coder round; if it survives, the task parks
+  `blocked-on-human` with worktree and branch preserved, and a human can
+  accept-it-with-rationale. It is never silently failed-and-discarded.
 - Per-product additions can extend the global baseline class list.
 
 ## Outcome gating
@@ -383,33 +386,46 @@ These are the objection classes — the findings the reviewer is specifically ch
 > *something*, and any objection (any severity) was a one-shot, run-ending hard gate that mapped
 > to `failed` with the worktree destroyed.
 
-A reviewing role (reviewer, tech-lead diff review, designer) returns one of four outcomes:
+A reviewing gate returns one of four outcomes. Phase 13 introduces a shared `GateVerdict`
+contract for reviewer, tech-lead diff review, and designer gates; existing simple boolean
+adapters must be normalized at the boundary so downstream code gates on one shape.
 
 | Outcome | Meaning | Effect |
 | --- | --- | --- |
 | `pass` | No concerns | Proceed |
 | `pass-with-warnings` | Non-blocking concerns recorded | Proceed; warnings travel with the handoff + finalizer record |
 | `fail` | Contract not satisfied, fixable in place | Feedback-threaded retry within the round cap; PM wrap-up at the cap |
-| `block` | Hard stop the team can't clear autonomously | Park `blocked-on-human`, worktree + branch preserved; human may accept-with-rationale |
+| `block` | Hard stop the team can't clear autonomously | One dedicated corrective round; surviving block parks `blocked-on-human`, worktree + branch preserved |
 
 **Severity drives the outcome — severity now has teeth.** An objection-class finding maps by
 severity: `critical`/`high` → `block`; `medium` → `fail`; `low` → `pass-with-warnings`. This
 closes the "someone can always find issues" stall: finding issues is fine, but only high/critical
-findings stop the line.
+findings stop the line. If multiple findings are present, the strictest mapped outcome wins
+(`block` > `fail` > `pass-with-warnings` > `pass`).
 
-**Blocks get one corrective round, then a human — never a silent discard.** Today an objection
-short-circuits retries entirely (one-shot) and renders as `failed` with the worktree destroyed.
-Under this model a `block` first delivers its already-built feedback to the coder for ONE
-corrective round; a genuine block survives it, a transport artifact (e.g. a redacted fixture)
-gets fixed. A surviving block parks `blocked-on-human` with worktree and branch preserved —
-aligning the code with the Retry-bounds intent ("all objection-class findings enter
-blocked-on-human"), which the `maybeParkedRun` `objectionOpen` exclusion and the
-`mapResultToTerminal` blocked→failed mapping currently violate.
+**Reviewer-produced blocks get one corrective round, then a human — never a silent discard.**
+Today an objection short-circuits retries entirely (one-shot) and renders as `failed` with the
+worktree destroyed.
+Under this model a `block` first delivers its already-built feedback to the coder for one
+dedicated corrective round. This is a separate block-correction budget, not the general
+non-objection round cap: after the first `block` verdict, exactly one feedback-threaded coder
+round is allowed; if that verdict still maps to `block`, it parks. A genuine block survives it,
+while a transport artifact (e.g. a redacted fixture) gets fixed. A surviving block parks
+`blocked-on-human` with worktree and branch preserved — aligning the code with the Retry-bounds
+intent ("all objection-class findings enter blocked-on-human"), which the `maybeParkedRun`
+`objectionOpen` exclusion and the `mapResultToTerminal` blocked→failed mapping currently
+violate.
+
+**Operational fail-safe blocks park immediately.** Unknown outcomes, malformed severities, and
+warning/acceptance recording failures are not coder-fixable defects. They still degrade to
+`block`, but they park with a durable reason rather than spending the coder's corrective round.
 
 **Override authority.** PM adjudicates `fail`, `pass-with-warnings`, and `medium` escalations, and
-may accept-with-rationale. A `block` (high/critical) is not auto-clearable by PM, but a human via
-the blocked-on-human inbox can accept-it-with-recorded-rationale. Every acceptance is logged in
-the task/run record — an audit trail of what shipped with known caveats.
+may accept-with-rationale. A `block` (high/critical) is not auto-clearable by PM, but a human can
+accept-it-with-recorded-rationale through an injected override seam. Real cockpit/Telegram inbox
+wiring may ship separately; Phase 13's required surface is the core override contract and durable
+record, not live UI interaction. Every acceptance is logged in the task/run record — an audit
+trail of what shipped with known caveats.
 
 **Warnings ledger.** `pass-with-warnings` findings and accepted-block rationales are recorded in
 the task run record and carried into the finalizer handoff, so the operator sees what shipped with
@@ -632,21 +648,25 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     from a bare boolean.
 64. WHEN an objection-class finding is present THEN its severity determines the outcome:
     `critical`/`high` → `block`, `medium` → `fail`, `low` → `pass-with-warnings`; a reviewer
-    cannot produce `block` from a `low` or `medium` finding.
+    cannot produce `block` from a `low` or `medium` finding, and multiple findings resolve to
+    the strictest mapped outcome.
 65. WHEN the outcome is `pass-with-warnings` THEN the task proceeds and the warnings are recorded
     in the task run record and carried into the finalizer handoff.
 66. WHEN the outcome is `fail` THEN the coder receives the structured feedback and retries within
     the round cap; at the cap a non-cleared `fail` routes to PM wrap-up (reqs 47, 19 preserved).
-67. WHEN the outcome is `block` THEN the coder gets exactly one feedback-threaded corrective round
-    before the task parks; a block is never short-circuited with zero coder attempts.
+67. WHEN a valid reviewing verdict maps to `block` THEN the coder gets exactly one
+    feedback-threaded corrective round from the dedicated block-correction budget before the task
+    parks; a reviewer-produced block is never short-circuited with zero corrective attempts.
 68. WHEN a `block` survives its corrective round THEN the task parks `blocked-on-human` with
-    worktree and branch preserved, and the run never maps an open objection to `failed` with a
-    destroyed worktree (supersedes the `maybeParkedRun` `objectionOpen` exclusion and the
+    worktree and branch preserved, and the run never maps an open blocking objection to
+    `failed` with a destroyed worktree (supersedes the `maybeParkedRun` `objectionOpen` exclusion and the
     blocked→failed terminal mapping).
-69. WHEN a human (or PM, for non-`block` outcomes) accepts a finding THEN the acceptance and its
-    rationale are recorded in the task/run record and the task proceeds as `pass-with-warnings`.
+69. WHEN a human (or PM, for non-`block` outcomes) accepts a finding through the injected
+    override seam THEN the acceptance and its rationale are recorded in the task/run record and
+    the task proceeds as `pass-with-warnings`.
 70. WHEN severity-to-outcome mapping or warning/acceptance recording fails THEN Jarvis fails safe
-    to the stricter outcome (treat as `block`) and records a durable reason.
+    to the stricter outcome (treat as an operational `block`), records a durable reason, and
+    parks without consuming a coder corrective round.
 
 ---
 
@@ -833,8 +853,8 @@ callback). Neither claude nor codex role activity is observable inside orchestra
 2. **Landable.** A clean orchestrated run auto-merges onto its base branch through the
    Project 15 gated finalizer — no operator hold — producing the full artifact substrate the
    finalizer needs (durable transcript, `summary.json`, work-product classification). A failing
-   gate or an open objection-class finding still holds the branch; the merge always goes through
-   the finalizer's gates, never an independent path (spec req 17/25 preserved). This reverses
+   gate or an open blocking objection-class finding still holds the branch; the merge always goes
+   through the finalizer's gates, never an independent path (spec req 17/25 preserved). This reverses
    the Phase 8 deliberate-hold decision (`orchestrated-work-runner.ts:234`), which deferred the
    merge only because orchestrated runs did not yet produce that substrate.
 
@@ -920,9 +940,9 @@ orchestrated runs is binding effects, not new merge logic.
     `mergeBranch`/`pushBranch`/`deleteBranch`. A `branch-complete` outcome that passes the gate
     merges `--no-ff` and pushes; any other outcome or a failed gate holds and alerts.
 15. **Preserve the no-self-merge and objection invariants.** The merge path is the finalizer's
-    gate, never an independent merge (req 17). An open objection-class finding or a failed gate
-    holds the branch at branch-complete with the handoff payload recorded (req 25). Auto-merge
-    is the clean-run terminal, not an unconditional one.
+    gate, never an independent merge (req 17). An open blocking objection-class finding or a
+    failed gate holds the branch at branch-complete with the handoff payload recorded (req 25).
+    Auto-merge is the clean-run terminal, not an unconditional one.
 16. **Extend the live acceptance harness again** to drive a clean orchestrated run all the way
     to a merged base branch (gated) in a self-contained temp repo with a local bare remote, and
     a deliberately-gate-failing run to a recorded hold — proving both terminals without
@@ -1040,6 +1060,33 @@ that a re-run uses to pass.
    corrective retry path. Gate-time learning must improve future runs, not make the current
    run depend on a memory write.
 
+### Phase 13: Outcome gating (reopened 2026-06-16)
+
+Runs via the orchestrator after Phase 12. This phase replaces the current binary gate logic with
+one shared verdict contract and severity-aware outcomes.
+
+1. **Introduce `GateVerdict`.** Reviewer, tech-lead diff review, and designer gates normalize to
+   `{ outcome, findings, notes }`, where outcome is one of `pass`, `pass-with-warnings`, `fail`,
+   or `block`. Legacy `{ pass: boolean }` role adapters are normalized at their boundary; internal
+   orchestration no longer infers behavior from booleans plus `objections.length`.
+2. **Make severity the single source of truth.** Add one mapping helper for objection-class
+   findings: `critical`/`high` -> `block`, `medium` -> `fail`, `low` ->
+   `pass-with-warnings`; multiple findings choose the strictest outcome.
+3. **Treat warnings as shippable evidence.** `pass-with-warnings` advances the task, but warnings
+   are written into `TaskRunRecord` and the finalizer handoff so terminal summaries can show the
+   caveats that shipped.
+4. **Retry reviewer-produced blocks once, then park.** A valid `block` verdict feeds the existing
+   `GateRejectionFeedback` to the coder for exactly one corrective round from a dedicated
+   block-correction budget. If it survives, the run parks `blocked-on-human` with branch and
+   worktree preserved; it must not become a failed terminal with deleted work.
+5. **Record accepted risk.** The core override seam accepts a finding only with a rationale and
+   records the acceptance in the task/run record. PM may use it for non-`block` outcomes; human
+   acceptance of `block` remains an injected seam for this phase, with cockpit/Telegram wiring
+   allowed as a follow-up.
+6. **Fail closed on malformed gates.** Unknown outcome, malformed severity, or failed warning /
+   acceptance recording degrades to an operational `block` with a durable reason and parks
+   immediately because the coder cannot fix that class of failure.
+
 ---
 
 ## Success Metrics
@@ -1052,7 +1099,7 @@ that a re-run uses to pass.
 | Context stays useful | always | Required sections preserved, bounded, no transcript dumps |
 | Multi-task loop closes | yes | Fixture runs through at least two task closeouts, context update, and finalizer handoff |
 | Start surface is truthful | always | Cockpit Start/confirmation shows orchestrated vs legacy mode and fallback reason |
-| Objection classes block | enforced | Security/data/concurrency/irreversibility/cost findings hold completion |
+| Objection classes gate by severity | always | Security/data/concurrency/irreversibility/cost findings map to warning, retry, or block by severity |
 | Finalizer owns landing | always | Completed project hands off to Project 15; no independent merge path |
 | Branch stays finalizer-ready | always | Every advanced task has a clean closeout commit including task/context state |
 | Task retries are bounded | always | Attempt cap reached -> PM wrap-up or blocked-on-human, never infinite retry |
@@ -1063,7 +1110,7 @@ that a re-run uses to pass.
 | Provider parity | always | Codex and claude role activity stream and are attributed equally (role/provider/model per line) |
 | Orchestrated run produces substrate | always | `transcript.jsonl` + `summary.json` + classification written under `WORK_RUNS_DIR`, as a legacy run does |
 | Clean run auto-merges | yes | A clean `branch-complete` orchestrated run lands on base through the Project 15 gated finalizer, no operator hold |
-| Merge stays gated | always | Failed gate or open objection holds the branch; merge only ever via the finalizer's gates, never an independent path |
+| Merge stays gated | always | Failed gate or blocking objection holds the branch; merge only ever via the finalizer's gates, never an independent path |
 | Retries are corrective | always | A gate rejection threads its feedback into the role's next attempt; no blind same-input redo |
 | Rejection parks, not kills | always | A task that exhausts feedback-retries parks blocked-on-human with worktree preserved; work is never discarded |
 | Restart resumes | always | A restart mid-run resumes from durable state; no orphaned record, exactly one terminal per run id |
@@ -1071,6 +1118,8 @@ that a re-run uses to pass.
 | Gate failures teach | always | Every gate rejection yields a neutral-validated lesson in the counterpart's memory at gate-time |
 | Neutral guard preserved | always | Roles never write memory directly; a neutral Jarvis pass attributes and filters every lesson |
 | Learning failures are non-blocking | always | Exemplar/lesson failures record durable skip/error metadata and do not block the current corrective retry |
+| Outcome gating is severity-aware | always | Low findings ship as recorded warnings, medium findings retry/PM-wrap, high/critical findings get one corrective round then park |
+| Accepted risk is auditable | always | Every accepted finding carries a rationale in the task/run record and finalizer handoff |
 
 ---
 
