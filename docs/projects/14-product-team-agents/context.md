@@ -98,8 +98,5 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- er src/ai/codex.test.ts` passed: 29 tests.
-- Isolated TypeScript check for `src/ai/codex.ts` passed.
-- Full `npm run build` is currently blocked by unrelated existing errors in other test/modules, not this file.
-
-Note: `src/ai/codex.test.ts` was already staged with the QA tests; I left it untouched.
+- jobs/execution-agent.ts` passed.
+- Full `npm run build -- --pretty false` is still blocked by unrelated existing errors outside this file. The default `npm test -- src/jobs/execution-agent.test.ts` also hit the sandboxed `node_modules/.vite-temp` EPERM issue, so I used Vitest’s runner config loader.

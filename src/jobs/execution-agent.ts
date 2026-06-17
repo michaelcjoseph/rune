@@ -40,7 +40,11 @@ import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { buildSandboxEnv } from './credential-injector.js';
 import { defaultRunGit, type GitRunner } from './sandbox-runtime.js';
-import { redactSecrets } from './work-run-transcript.js';
+import {
+  parseStreamJsonLine,
+  redactSecrets,
+  streamJsonToDisplay,
+} from './work-run-transcript.js';
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -70,6 +74,10 @@ export interface SpawnAgentResult {
   error: string | null;
 }
 
+export type ExecutionAgentStreamEvent =
+  | { kind: 'activity'; data?: Record<string, never> }
+  | { kind: 'output'; data: { line: string } };
+
 /** Injectable IO seam — tests fake the spawn and env, keep real git. */
 export interface ExecutionAgentIO {
   spawnAgent: (args: {
@@ -79,6 +87,7 @@ export interface ExecutionAgentIO {
     cwd: string;
     env: NodeJS.ProcessEnv;
     timeoutMs: number;
+    emit?: (event: ExecutionAgentStreamEvent) => void;
   }) => Promise<SpawnAgentResult>;
   runGit: GitRunner;
   buildEnv: (sandbox: SandboxSpec, opts: { productsConfigPath: string }) => NodeJS.ProcessEnv;
@@ -100,6 +109,8 @@ export interface ExecutionAgentOpts {
   productsConfigPath: string;
   /** Per-session budget; defaults to the shared Claude CLI timeout. */
   timeoutMs?: number;
+  /** Optional activity stream for orchestrated-run observability/heartbeat. */
+  emit?: (event: ExecutionAgentStreamEvent) => void;
 }
 
 export type ExecutionAgentResult =
@@ -135,6 +146,7 @@ export async function runExecutionAgent(
       cwd,
       env,
       timeoutMs,
+      ...(opts.emit !== undefined ? { emit: opts.emit } : {}),
     });
     if (error !== null) {
       return { ok: false, error: sanitize(error) };
@@ -170,6 +182,7 @@ async function defaultSpawnAgent(args: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  emit?: (event: ExecutionAgentStreamEvent) => void;
 }): Promise<SpawnAgentResult> {
   const { format } = args.model;
   if (format === 'codex') {
@@ -202,6 +215,7 @@ function spawnClaudeAgent(args: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  emit?: (event: ExecutionAgentStreamEvent) => void;
 }): Promise<SpawnAgentResult> {
   return new Promise((resolve) => {
     let resolved = false;
@@ -224,6 +238,9 @@ function spawnClaudeAgent(args: {
           // Two-channel authority boundary: the role SOUL rides the system
           // channel, not the user turn.
           ...(args.systemPrompt ? ['--append-system-prompt', args.systemPrompt] : []),
+          '--output-format',
+          'stream-json',
+          '--verbose',
           '-p',
           args.prompt,
         ],
@@ -236,6 +253,7 @@ function spawnClaudeAgent(args: {
 
     registerActiveProcess(child);
     let stdout = '';
+    let stdoutBuf = '';
     let stderr = '';
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -252,8 +270,41 @@ function spawnClaudeAgent(args: {
       killTimer.unref();
     }, args.timeoutMs);
 
+    const emitEvent = (event: ExecutionAgentStreamEvent): void => {
+      if (!args.emit) return;
+      try {
+        args.emit(event);
+      } catch (err) {
+        log.warn('execution agent stream callback failed', { error: (err as Error).message });
+      }
+    };
+
+    const emitStdoutLine = (line: string): void => {
+      if (!line.trim()) return;
+      const envelope = parseStreamJsonLine(line);
+      if (!envelope) {
+        const redacted = redactSecrets(scrubPathsInText(line));
+        if (redacted) stdout += `${redacted}\n`;
+        return;
+      }
+      const display = streamJsonToDisplay(envelope);
+      if (display === null) {
+        emitEvent({ kind: 'activity' });
+        return;
+      }
+      const redacted = redactSecrets(display);
+      for (const displayLine of redacted.split('\n')) {
+        if (!displayLine) continue;
+        stdout += `${displayLine}\n`;
+        emitEvent({ kind: 'output', data: { line: displayLine } });
+      }
+    };
+
     child.stdout!.on('data', (b: Buffer) => {
-      stdout += b.toString('utf8');
+      stdoutBuf += b.toString('utf8');
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) emitStdoutLine(line);
     });
     // stderr is only diagnostic tail — cap it so a verbose run can't grow it
     // unbounded (the read itself keeps the pipe drained either way).
@@ -267,6 +318,10 @@ function spawnClaudeAgent(args: {
     });
     // `close` always follows `error`, so one handler owns cleanup.
     child.on('close', (code) => {
+      if (stdoutBuf.trim()) {
+        emitStdoutLine(stdoutBuf);
+        stdoutBuf = '';
+      }
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       unregisterActiveProcess(child);

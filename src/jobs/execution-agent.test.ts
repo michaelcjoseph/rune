@@ -16,7 +16,8 @@
  * See tasks.md Phase 8 "Execution-agent diff-capture test".
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,6 +31,43 @@ import {
 import type { RoleModelBinding } from './team-task-deps.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
+const {
+  mockSpawn,
+  mockRegisterActiveProcess,
+  mockUnregisterActiveProcess,
+} = vi.hoisted(() => ({
+  mockSpawn: vi.fn(),
+  mockRegisterActiveProcess: vi.fn(),
+  mockUnregisterActiveProcess: vi.fn(),
+}));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: mockSpawn,
+  };
+});
+
+vi.mock('../ai/claude.js', () => ({
+  CLAUDE_BIN: '/usr/local/bin/claude',
+  getProjectMcpArgs: () => [
+    '--strict-mcp-config',
+    '--mcp-config',
+    '/tmp/test-project/.claude/settings.json',
+  ],
+  registerActiveProcess: mockRegisterActiveProcess,
+  unregisterActiveProcess: mockUnregisterActiveProcess,
+}));
+
+vi.mock('../config.js', () => ({
+  PROJECT_ROOT: '/tmp/test-jarvis',
+  default: {
+    CLAUDE_TIMEOUT_MS: 5_000,
+    WORK_RUN_REAP_GRACE_MS: 100,
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Temp git worktree fixture
 // ---------------------------------------------------------------------------
@@ -41,6 +79,9 @@ function git(args: string[], cwd: string): string {
 }
 
 beforeEach(() => {
+  mockSpawn.mockReset();
+  mockRegisterActiveProcess.mockReset();
+  mockUnregisterActiveProcess.mockReset();
   repoDir = mkdtempSync(join(tmpdir(), 'exec-agent-'));
   git(['init', '-b', 'main'], repoDir);
   git(['config', 'user.email', 'test@test.local'], repoDir);
@@ -65,6 +106,7 @@ function makeSandbox(): SandboxSpec {
 }
 
 const coderModel: RoleModelBinding = { alias: 'gpt-5.5', provider: 'openai', format: 'codex' };
+const claudeModel: RoleModelBinding = { alias: 'opus', provider: 'anthropic', format: 'claude' };
 
 function makeOpts(overrides: Partial<ExecutionAgentOpts> = {}): ExecutionAgentOpts {
   return {
@@ -86,6 +128,34 @@ function makeIo(
     spawnAgent,
     buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
   };
+}
+
+function makeFakeChild(opts: {
+  exitCode?: number;
+  exitSignal?: string | null;
+  stdoutLines?: string[];
+  stderrLines?: string[];
+} = {}) {
+  const { exitCode = 0, exitSignal = null, stdoutLines = [], stderrLines = [] } = opts;
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const child = new EventEmitter() as any;
+  child.stdout = stdout;
+  child.stderr = stderr;
+  child.kill = vi.fn();
+  child.pid = 12345;
+
+  setTimeout(() => {
+    for (const line of stdoutLines) {
+      stdout.emit('data', Buffer.from(`${line}\n`, 'utf8'));
+    }
+    for (const line of stderrLines) {
+      stderr.emit('data', Buffer.from(`${line}\n`, 'utf8'));
+    }
+    child.emit('close', exitCode, exitSignal);
+  }, 0);
+
+  return child;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,5 +237,57 @@ describe('runExecutionAgent — diff capture (Phase 8)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Claude artifact stream forwarding
+// ---------------------------------------------------------------------------
+
+describe('runExecutionAgent — Claude stream-json forwarding (Phase 10)', () => {
+  it('spawns Claude in stream-json mode and forwards envelopes as output/activity events', async () => {
+    const envelopes = [
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'visible progress' }] },
+      }),
+      JSON.stringify({ type: 'system', subtype: 'task_progress', parent_tool_use_id: 'toolu_sub' }),
+      JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', content: 'ok', tool_use_id: 'toolu_x' }],
+        },
+      }),
+      JSON.stringify({ type: 'result', result: 'finished cleanly' }),
+    ];
+    mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0, stdoutLines: envelopes }));
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const opts = {
+      ...makeOpts({ model: claudeModel }),
+      emit: (event: { kind: 'activity' | 'output'; data?: { line?: string } }) => {
+        events.push(event);
+      },
+    };
+
+    const result = await runExecutionAgent(opts, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    const [, spawnArgs] = mockSpawn.mock.calls[0]!;
+    expect(spawnArgs).toContain('--output-format');
+    expect(spawnArgs[(spawnArgs as string[]).indexOf('--output-format') + 1]).toBe('stream-json');
+    expect(spawnArgs).toContain('--verbose');
+
+    expect(events).toEqual([
+      { kind: 'output', data: { line: 'visible progress' } },
+      { kind: 'activity' },
+      { kind: 'activity' },
+      { kind: 'output', data: { line: 'finished cleanly' } },
+    ]);
+    expect(events.some((event) => event.data?.line?.includes('"type":"assistant"'))).toBe(false);
   });
 });

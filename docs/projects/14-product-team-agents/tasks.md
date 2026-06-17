@@ -713,7 +713,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       per-line as data arrives (not only at `close`); an empty run fires none; `codex exec
       --json` events map to display lines, and malformed/unsupported JSONL falls back to
       scrubbed raw-line streaming with fallback metadata.
-- [ ] Claude-artifact-stream test: `spawnClaudeAgent` forwards stream-json envelopes as
+- [x] Claude-artifact-stream test: `spawnClaudeAgent` forwards stream-json envelopes as
       `output`/`activity` through the shared `streamJsonToDisplay` mapping — parity with the
       legacy work-runner, no plain-stdout accumulation.
 - [ ] Role-transition test: `runTeamTaskWorkflow` emits a labeled event per role stage
