@@ -750,7 +750,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [x] Verify the active-harm hypothesis and record it (spec Phase 10 work item 1): can the
       quiet→cancel backstop kill a working orchestrated run today? Reframes priority if yes.
-- [ ] Add an injected `emit(event)` sink to `OrchestrationDeps`; convert the applier's single
+- [x] Add an injected `emit(event)` sink to `OrchestrationDeps`; convert the applier's single
       `await runOrchestration` into a queue-drained pump (`apply()` races the orchestration
       promise and yields queued events — mirror the work-runner `enqueue`/generator pattern).
       Thread `emit` through `runProjectOrchestration` and `runTeamTaskWorkflow`.

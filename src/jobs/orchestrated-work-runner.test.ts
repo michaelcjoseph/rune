@@ -292,6 +292,63 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('yields queued role activity while orchestration is still running', async () => {
+      let emitActivity: ((event: { kind: 'activity' | 'output'; data?: unknown }) => void) | undefined;
+      let finishRun: ((result: OrchestrationResult) => void) | undefined;
+      const runResult = new Promise<OrchestrationResult>((resolve) => {
+        finishRun = resolve;
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => {
+          emitActivity = deps.emit;
+          return runResult;
+        },
+      });
+
+      try {
+        const iterator = orchestratedWorkApplier.apply(makeDescriptor(), ctx)[Symbol.asyncIterator]();
+        const start = await iterator.next();
+        expect(start.value).toMatchObject({
+          mutationId: 'mut-1',
+          kind: 'log',
+        });
+
+        const streamed = iterator.next();
+        await waitForCondition(() => emitActivity !== undefined);
+        emitActivity?.({
+          kind: 'activity',
+          data: { role: 'coder', line: 'coder is implementing the task' },
+        });
+
+        await expect(streamed).resolves.toMatchObject({
+          done: false,
+          value: {
+            mutationId: 'mut-1',
+            kind: 'activity',
+            data: { role: 'coder', line: 'coder is implementing the task' },
+          },
+        });
+
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+        const terminal = await iterator.next();
+        expect(terminal.value.kind).toBe('completed');
+        expect(await iterator.next()).toMatchObject({ done: true });
+        expect(destroyed).toBe(true);
+      } finally {
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+      }
+    });
+
     it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
       const runId = 'mut-orch-substrate';
       const runDir = join(process.cwd(), 'logs', 'work-runs', runId);

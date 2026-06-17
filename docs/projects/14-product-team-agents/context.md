@@ -98,13 +98,12 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- T=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
-```
+- used streaming tests: passed
+- `npm run build`: failed on existing repo-wide TypeScript issues, mostly test mock typing and unrelated files; I did not expand scope to fix those.
 
-Result: `1 passed | 21 skipped`. No files changed; `git status --short` and `git diff --stat` are clean.
-- ult JARVIS_HTTP_SECRET=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
-```
+Worktree status remains only the staged QA test change in `src/jobs/orchestrated-work-runner.test.ts`; I made no commits.
+- ULT_NAME=TestVault VAULT_DIR=/tmp/workspace/TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts --reporter=verbose`
 
-Result: `1 passed | 21 skipped`.
+Result: `23 passed`.
 
-Worktree: one new untracked file, no commit made.
+`npm run build` is still red on existing repo-wide TypeScript test issues unrelated to this slice.
