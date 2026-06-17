@@ -349,6 +349,116 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it('pumps Jarvis-owned orchestration lifecycle events as activity before the terminal event', async () => {
+      const gitCalls: string[][] = [];
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        gitCalls.push([...gitArgs]);
+        if (gitArgs[0] === 'rev-parse') {
+          return { stdout: 'closeout-sha\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'rev-list') {
+          return { stdout: 'closeout-sha\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+          return { stdout: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Build the streak core\n');
+          wtDir = dir;
+          writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), [
+            '# Project Context',
+            '',
+            '## Current State',
+            'Initial state.',
+            '',
+            '## Key Decisions',
+            'None yet.',
+            '',
+            '## Interfaces & Contracts',
+            'Use the existing orchestration seams.',
+            '',
+            '## Known Risks',
+            'None yet.',
+            '',
+            '## Next Task Handoff',
+            'Start with the first unchecked task.',
+            '',
+          ].join('\n'), 'utf8');
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+        }),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminalIndex = events.findIndex((event) => event.kind === 'completed' || event.kind === 'failed');
+      expect(terminalIndex).toBeGreaterThan(0);
+      const lifecycle = events.slice(0, terminalIndex).filter((event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        return event.kind === 'activity' && typeof data['event'] === 'string';
+      });
+
+      expect(lifecycle.map((event) => (event.data as Record<string, unknown>)['event'])).toEqual([
+        'task-selected',
+        'attempt-start',
+        'closeout-start',
+        'closeout-complete',
+      ]);
+      expect(lifecycle).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            mutationId: 'mut-1',
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'task-selected',
+              taskId: 'build-the-streak-core',
+              taskText: 'Build the streak core',
+            }),
+          }),
+          expect.objectContaining({
+            mutationId: 'mut-1',
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'attempt-start',
+              taskId: 'build-the-streak-core',
+              attemptNumber: 1,
+              attemptId: 'mut-1-build-the-streak-core-attempt-1',
+            }),
+          }),
+          expect.objectContaining({
+            mutationId: 'mut-1',
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'closeout-complete',
+              taskId: 'build-the-streak-core',
+              commitSha: 'closeout-sha',
+            }),
+          }),
+        ]),
+      );
+      expect(gitCalls).toEqual(expect.arrayContaining([
+        ['add', '-A'],
+        ['commit', '-m', 'jarvis(jarvis): closeout — Build the streak core'],
+        ['rev-parse', 'HEAD'],
+      ]));
+      expect(destroyed).toBe(true);
+    });
+
     it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
       const runId = 'mut-orch-substrate';
       const runDir = join(process.cwd(), 'logs', 'work-runs', runId);

@@ -132,6 +132,7 @@ export async function runProjectOrchestration(
     }
 
     const task = selection.task;
+    emitTaskSelected(deps, task);
     const contextMd = await deps.readContextMd();
     const spec = await deps.readSpec();
     const assembled = assembleTaskContext({ task, contextMd, spec });
@@ -197,8 +198,16 @@ async function runTaskWithRetries(
   handoff: string,
   contextMd: string,
 ): Promise<TaskEvidence> {
-  let evidence = await deps.runTaskWorkflow(task, { handoff, contextMd });
-  for (let attempt = 1; attempt < deps.attemptCap; attempt++) {
+  let attempt = 1;
+  let rejectionFeedback: GateRejectionFeedback | undefined;
+
+  for (;;) {
+    emitAttemptStart(deps, task, attempt);
+    const evidence = await deps.runTaskWorkflow(task, {
+      handoff,
+      contextMd,
+      ...(rejectionFeedback !== undefined ? { rejectionFeedback } : {}),
+    });
     if (evidence.outcome === 'ready-for-closeout') return evidence;
     const decision = decideAttemptOutcome({
       attempts: attempt,
@@ -207,15 +216,10 @@ async function runTaskWithRetries(
       objectionOpen: evidence.objectionOpen,
     });
     if (decision.action !== 'retry') return evidence;
-    evidence = await deps.runTaskWorkflow(task, {
-      handoff,
-      contextMd,
-      ...(evidence.rejectionFeedback !== undefined
-        ? { rejectionFeedback: evidence.rejectionFeedback }
-        : {}),
-    });
+    emitAttemptRetry(deps, task, attempt, attempt + 1, evidence);
+    rejectionFeedback = evidence.rejectionFeedback;
+    attempt += 1;
   }
-  return evidence;
 }
 
 type CloseoutResult =
@@ -232,6 +236,8 @@ async function performCloseout(
   contextMd: string,
   evidence: TaskEvidence,
 ): Promise<CloseoutResult> {
+  emitCloseoutStart(deps, task);
+
   // 1. Compute BOTH the context update and the checkbox tick before writing
   //    either — so a tick failure can't leave a half-advanced closeout (context
   //    written, task still unchecked) that a retry would then double-apply.
@@ -263,7 +269,87 @@ async function performCloseout(
     return { kind: 'blocked', reason: 'worktree not clean after closeout' };
   }
 
+  emitCloseoutComplete(deps, task, commitSha);
   return { kind: 'ok', commitSha };
+}
+
+function emitTaskSelected(deps: OrchestrationDeps, task: SelectedTask): void {
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'task-selected',
+      taskId: task.id,
+      taskText: task.text,
+      section: task.section,
+      line: `selected task: ${task.text}`,
+    },
+  });
+}
+
+function emitAttemptStart(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: number): void {
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'attempt-start',
+      taskId: task.id,
+      attemptNumber,
+      attemptId: attemptId(deps, task, attemptNumber),
+      line: `starting attempt ${attemptNumber} for ${task.text}`,
+    },
+  });
+}
+
+function emitAttemptRetry(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  previousAttemptNumber: number,
+  nextAttemptNumber: number,
+  evidence: TaskEvidence,
+): void {
+  const reason =
+    evidence.blockedReason ??
+    evidence.failureReason ??
+    evidence.rejectionFeedback?.reason ??
+    'task attempt did not reach closeout';
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'attempt-retry',
+      taskId: task.id,
+      previousAttemptNumber,
+      nextAttemptNumber,
+      previousOutcome: evidence.outcome,
+      reason,
+      line: `retrying ${task.text}: attempt ${previousAttemptNumber} ${evidence.outcome}; attempt ${nextAttemptNumber} next (${reason})`,
+    },
+  });
+}
+
+function emitCloseoutStart(deps: OrchestrationDeps, task: SelectedTask): void {
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'closeout-start',
+      taskId: task.id,
+      line: `starting closeout for ${task.text}`,
+    },
+  });
+}
+
+function emitCloseoutComplete(deps: OrchestrationDeps, task: SelectedTask, commitSha: string): void {
+  deps.emit?.({
+    kind: 'activity',
+    data: {
+      event: 'closeout-complete',
+      taskId: task.id,
+      commitSha,
+      line: `closeout complete for ${task.text}: ${commitSha}`,
+    },
+  });
+}
+
+function attemptId(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: number): string {
+  return `${deps.runId}-${task.id}-attempt-${attemptNumber}`;
 }
 
 function countTasks(tasksMd: string): number {

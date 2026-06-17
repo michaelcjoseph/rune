@@ -602,7 +602,6 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           }
           finalizerResult.terminalEvent.data = data;
           finalizerTerminal = finalizerResult.terminalEvent;
-          finalizerOwnedTeardown = finalizerResult.worktreeRemoved;
           return { kind: 'finalized', outcome: readOutcome(finalizerResult.terminalEvent) };
         },
       });

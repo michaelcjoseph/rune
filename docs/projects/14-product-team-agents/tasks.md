@@ -754,7 +754,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `await runOrchestration` into a queue-drained pump (`apply()` races the orchestration
       promise and yields queued events — mirror the work-runner `enqueue`/generator pattern).
       Thread `emit` through `runProjectOrchestration` and `runTeamTaskWorkflow`.
-- [ ] Emit orchestration-granularity events: task selected, attempt start/retry, closeout
+- [x] Emit orchestration-granularity events: task selected, attempt start/retry, closeout
       commit sha, finalizer handoff/hold, block reason.
 - [ ] Emit role-transition + verdict/objection events from the team-task workflow.
 - [ ] Stream the codex executor: add an incremental `onStdout`/`onEvent` callback to `runCodex`.

@@ -43,6 +43,7 @@ interface Harness {
     commits: string[];
     contextHandoffs: string[]; // the context each task saw at workflow time
     finalizeCalled: boolean;
+    events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>;
   };
 }
 
@@ -71,6 +72,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     commits: [] as string[],
     contextHandoffs: [] as string[],
     finalizeCalled: false,
+    events: [] as Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>,
   };
 
   const finalize: FinalizerAdapter = async () => {
@@ -110,10 +112,26 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     },
     verifyCleanWorktree: async () => true,
     finalize,
+    emit: (event) => {
+      state.events.push(event as { kind: 'activity' | 'output'; data?: Record<string, unknown> });
+    },
     ...over,
   };
 
   return { deps, state };
+}
+
+function eventsByName(
+  events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>,
+  name: string,
+): Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }> {
+  return events.filter((event) => event.data?.['event'] === name);
+}
+
+function eventNames(events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>): string[] {
+  return events
+    .map((event) => event.data?.['event'])
+    .filter((name): name is string => typeof name === 'string');
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +158,151 @@ describe('project-orchestrator — closeout', () => {
     // and it never finalizes.
     expect(h.state.tasksMd).toContain('- [ ] Render the streak card');
     expect(h.state.finalizeCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Observability — orchestration-granularity lifecycle events
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — observability events', () => {
+  it('emits task-selected, attempt-start, and closeout lifecycle activity for a clean task', async () => {
+    const h = makeHarness({}, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Build the streak core',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(eventNames(h.state.events)).toEqual([
+      'task-selected',
+      'attempt-start',
+      'closeout-start',
+      'closeout-complete',
+    ]);
+
+    expect(eventsByName(h.state.events, 'task-selected')[0]).toMatchObject({
+      kind: 'activity',
+      data: {
+        event: 'task-selected',
+        taskId: 'build-the-streak-core',
+        taskText: 'Build the streak core',
+        section: 'Phase 1',
+        line: expect.stringContaining('Build the streak core'),
+      },
+    });
+    expect(eventsByName(h.state.events, 'attempt-start')[0]).toMatchObject({
+      kind: 'activity',
+      data: {
+        event: 'attempt-start',
+        taskId: 'build-the-streak-core',
+        attemptNumber: 1,
+        attemptId: 'run-1-build-the-streak-core-attempt-1',
+        line: expect.stringContaining('attempt 1'),
+      },
+    });
+    expect(eventsByName(h.state.events, 'closeout-start')[0]).toMatchObject({
+      kind: 'activity',
+      data: {
+        event: 'closeout-start',
+        taskId: 'build-the-streak-core',
+        line: expect.stringContaining('closeout'),
+      },
+    });
+    expect(eventsByName(h.state.events, 'closeout-complete')[0]).toMatchObject({
+      kind: 'activity',
+      data: {
+        event: 'closeout-complete',
+        taskId: 'build-the-streak-core',
+        commitSha: 'sha-build-the-streak-core',
+        line: expect.stringContaining('sha-build-the-streak-core'),
+      },
+    });
+  });
+
+  it('emits attempt-retry between failed and replacement attempts, carrying retry context', async () => {
+    const feedback: GateRejectionFeedback = {
+      rejectingRole: 'tech-lead',
+      counterpartRole: 'qa',
+      rejectedRole: 'qa',
+      artifact: 'test-intent',
+      rejectedArtifact: 'test-intent',
+      reason: 'tests miss the rollover case',
+      whatFailed: 'tests miss the rollover case',
+      notes: ['tests miss the rollover case'],
+      actionableNotes: ['tests miss the rollover case'],
+    };
+    let calls = 0;
+    const h = makeHarness({
+      attemptCap: 2,
+      runTaskWorkflow: async (task) => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            taskId: task.id,
+            outcome: 'blocked',
+            rolesInvoked: ['qa', 'tech-lead'],
+            objectionOpen: false,
+            handoffNotes: [],
+            blockedReason: feedback.reason,
+            rejectionFeedback: feedback,
+          };
+        }
+        return readyEvidence(task);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Build the streak core',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(eventNames(h.state.events)).toEqual([
+      'task-selected',
+      'attempt-start',
+      'attempt-retry',
+      'attempt-start',
+      'closeout-start',
+      'closeout-complete',
+    ]);
+    expect(eventsByName(h.state.events, 'attempt-start')).toEqual([
+      expect.objectContaining({
+        kind: 'activity',
+        data: expect.objectContaining({
+          event: 'attempt-start',
+          taskId: 'build-the-streak-core',
+          attemptNumber: 1,
+          attemptId: 'run-1-build-the-streak-core-attempt-1',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'activity',
+        data: expect.objectContaining({
+          event: 'attempt-start',
+          taskId: 'build-the-streak-core',
+          attemptNumber: 2,
+          attemptId: 'run-1-build-the-streak-core-attempt-2',
+        }),
+      }),
+    ]);
+    expect(eventsByName(h.state.events, 'attempt-retry')[0]).toMatchObject({
+      kind: 'activity',
+      data: {
+        event: 'attempt-retry',
+        taskId: 'build-the-streak-core',
+        previousAttemptNumber: 1,
+        nextAttemptNumber: 2,
+        previousOutcome: 'blocked',
+        reason: feedback.reason,
+        line: expect.stringContaining(feedback.reason),
+      },
+    });
   });
 });
 
