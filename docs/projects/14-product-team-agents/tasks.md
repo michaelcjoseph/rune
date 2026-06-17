@@ -709,7 +709,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       today's runner).
 - [x] Heartbeat-advance test: a long-running injected role session advances
       `lastHeartbeatAt`/`lastOutputAt` mid-run; supervision never reads the working run as quiet.
-- [ ] Codex-stream test: `runCodex` with an injected `onStdout`/`onEvent` callback fires
+- [x] Codex-stream test: `runCodex` with an injected `onStdout`/`onEvent` callback fires
       per-line as data arrives (not only at `close`); an empty run fires none; `codex exec
       --json` events map to display lines, and malformed/unsupported JSONL falls back to
       scrubbed raw-line streaming with fallback metadata.

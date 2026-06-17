@@ -137,6 +137,40 @@ describe('ai/codex', () => {
       expect(result).toEqual({ text: 'collected stdout', error: null, exitCode: 0 });
     });
 
+    it('requests codex JSON mode when an onEvent callback is injected', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      spawnMock.mockReturnValue(createChild({ stdout: '{"type":"turn.completed"}\n', code: 0 }));
+
+      const { runCodex } = await import('./codex.js');
+      const opts = { onEvent: vi.fn() };
+      await runCodex('my prompt', opts);
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(args).toContain('--json');
+    });
+
+    it('fires injected onStdout and onEvent callbacks for streamed JSONL stdout', async () => {
+      execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
+      const firstEvent = { type: 'thread.started', thread_id: 'thread-123' };
+      const secondEvent = { type: 'turn.completed', usage: { input_tokens: 12, output_tokens: 3 } };
+      const stdout =
+        `${JSON.stringify(firstEvent)}\n` +
+        `${JSON.stringify(secondEvent)}\n`;
+      spawnMock.mockReturnValue(createChild({ stdout, code: 0 }));
+      const onStdout = vi.fn();
+      const onEvent = vi.fn();
+
+      const { runCodex } = await import('./codex.js');
+      const opts = { onStdout, onEvent };
+      const result = await runCodex('my prompt', opts);
+
+      expect(result).toEqual({ text: stdout.trim(), error: null, exitCode: 0 });
+      expect(onStdout).toHaveBeenCalledWith(stdout);
+      expect(onEvent).toHaveBeenNthCalledWith(1, firstEvent);
+      expect(onEvent).toHaveBeenNthCalledWith(2, secondEvent);
+      expect(onEvent).toHaveBeenCalledTimes(2);
+    });
+
     it('non-zero exit: returns partial stdout and error from stderr', async () => {
       execFileSyncMock.mockReturnValue('/opt/homebrew/bin/codex\n');
       spawnMock.mockReturnValue(createChild({ stdout: 'partial', stderr: 'error from codex', code: 1 }));

@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { registerActiveProcess, unregisterActiveProcess } from './claude.js';
+import { scrubPathsInText } from './tool-labels.js';
 
 const log = createLogger('codex');
 
@@ -194,6 +195,14 @@ export interface RunCodexOpts {
    *  enforces. Non-sandboxed callers (internal Jarvis dispatches) keep
    *  the default. */
   env?: NodeJS.ProcessEnv;
+  /** Optional raw stdout observer. Receives each stdout chunk as emitted by
+   *  the child process, before the final collected `text` is trimmed. */
+  onStdout?: (chunk: string) => void;
+  /** Optional JSONL event observer. When set, `runCodex` requests
+   *  `codex exec --json` and calls this once for each complete stdout line:
+   *  parsed JSON objects are delivered as-is; malformed lines are delivered
+   *  as a scrubbed raw fallback event instead of crashing the run. */
+  onEvent?: (event: Record<string, unknown>) => void;
 }
 
 export interface CodexResult {
@@ -236,6 +245,7 @@ export async function runCodex(
   const args: string[] = ['exec', '--ephemeral', '--skip-git-repo-check'];
   if (opts.model) args.push('-m', opts.model);
   if (opts.sandboxMode) args.push('-s', opts.sandboxMode);
+  if (opts.onEvent) args.push('--json');
   // Prompt is the final positional arg — matches the CLI's documented usage.
   args.push(prompt);
 
@@ -260,6 +270,54 @@ export async function runCodex(
 
     let stdout = '';
     let stderr = '';
+    let stdoutLineBuffer = '';
+
+    const emitStdoutChunk = (chunk: string): void => {
+      stdout += chunk;
+      if (opts.onStdout) {
+        try {
+          opts.onStdout(chunk);
+        } catch (err) {
+          log.warn('codex onStdout callback failed', { error: (err as Error).message });
+        }
+      }
+      if (!opts.onEvent) return;
+      stdoutLineBuffer += chunk;
+      let newlineIndex = stdoutLineBuffer.indexOf('\n');
+      while (newlineIndex !== -1) {
+        const line = stdoutLineBuffer.slice(0, newlineIndex).replace(/\r$/, '');
+        stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
+        emitStdoutEventLine(line);
+        newlineIndex = stdoutLineBuffer.indexOf('\n');
+      }
+    };
+
+    const emitStdoutEventLine = (line: string): void => {
+      if (!line.trim()) return;
+      let event: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('stdout JSONL line is not an object');
+        }
+        event = parsed as Record<string, unknown>;
+      } catch {
+        event = { type: 'raw', line: scrubPathsInText(line) };
+      }
+      try {
+        opts.onEvent?.(event);
+      } catch (err) {
+        log.warn('codex onEvent callback failed', { error: (err as Error).message });
+      }
+    };
+
+    const flushStdoutEventRemainder = (): void => {
+      if (!opts.onEvent || stdoutLineBuffer === '') return;
+      const line = stdoutLineBuffer.replace(/\r$/, '');
+      stdoutLineBuffer = '';
+      emitStdoutEventLine(line);
+    };
+
     const timer = setTimeout(() => {
       log.warn('codex exec timed out; sending SIGTERM', { timeoutMs: timeout });
       child.kill('SIGTERM');
@@ -271,7 +329,7 @@ export async function runCodex(
     // no optional chaining; matches claude.ts and surfaces stdio config
     // mistakes loudly instead of silently dropping output.
     child.stdout.on('data', (data: Buffer) => {
-      stdout += data;
+      emitStdoutChunk(data.toString('utf8'));
     });
     child.stderr.on('data', (data: Buffer) => {
       stderr += data;
@@ -287,6 +345,7 @@ export async function runCodex(
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       unregisterActiveProcess(child);
+      flushStdoutEventRemainder();
 
       // Treat both signal=SIGTERM and code=143 (POSIX 128+SIGTERM) as the
       // timeout outcome — mirrors the Claude wrapper's convention so the

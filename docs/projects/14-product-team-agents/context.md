@@ -98,9 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- unner.test.ts:448): corrected the cleanup fixture to use a hard block so it does not enter the orchestrator’s valid retry path.
+- er src/ai/codex.test.ts` passed: 29 tests.
+- Isolated TypeScript check for `src/ai/codex.ts` passed.
+- Full `npm run build` is currently blocked by unrelated existing errors in other test/modules, not this file.
 
-Verified:
-`TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts`
-
-Result: 13 passed.
+Note: `src/ai/codex.test.ts` was already staged with the QA tests; I left it untouched.
