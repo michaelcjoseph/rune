@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 const mockAppendMutationLine = vi.hoisted(() => vi.fn());
 const mockUpsertRun = vi.hoisted(() => vi.fn());
+const mockCreateTranscriptSink = vi.hoisted(() => vi.fn());
 const mockRunFinalizer = vi.hoisted(() =>
   vi.fn(async () => ({
     outcome: 'branch-complete',
@@ -44,6 +45,14 @@ vi.mock('./supervision-store.js', () => ({
   upsertRun: mockUpsertRun,
 }));
 
+vi.mock('./work-run-transcript.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./work-run-transcript.js')>();
+  return {
+    ...actual,
+    createTranscriptSink: mockCreateTranscriptSink,
+  };
+});
+
 vi.mock('./work-run-finalizer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./work-run-finalizer.js')>();
   return {
@@ -60,6 +69,7 @@ import {
   orchestratedWorkApplier,
   __setOrchestratedRuntimeForTest,
   __resetOrchestratedRuntimeForTest,
+  __getRuntimeDepsForTest,
 } from './orchestrated-work-runner.js';
 import {
   activeRuns,
@@ -168,6 +178,28 @@ async function waitForCondition(condition: () => boolean): Promise<void> {
   expect(condition()).toBe(true);
 }
 
+function makeFakeTranscriptSink(path = '/tmp/work-runs/orch/transcript.jsonl') {
+  const appended: unknown[] = [];
+  const operations: string[] = [];
+  const sink = {
+    path,
+    append: vi.fn(async (event: unknown) => {
+      const mutationEvent = event as MutationEvent;
+      appended.push(event);
+      operations.push(`append:${mutationEvent.kind}:${String((mutationEvent.data as Record<string, unknown> | undefined)?.['line'] ?? '')}`);
+    }),
+    finish: vi.fn(async () => {
+      operations.push('finish:start');
+      await Promise.resolve();
+      operations.push('finish:end');
+    }),
+    destroy: vi.fn(() => {
+      operations.push('destroy');
+    }),
+  };
+  return { sink, appended, operations };
+}
+
 function latestRun(id: string): SupervisedRun {
   const runs = mockUpsertRun.mock.calls
     .map((call) => call[0] as SupervisedRun)
@@ -213,6 +245,7 @@ describe('orchestratedWorkApplier', () => {
       mockRunGate.mockResolvedValue({ ok: true });
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
+      mockCreateTranscriptSink.mockReset();
       activeRuns.clear();
     });
 
@@ -236,6 +269,31 @@ describe('orchestratedWorkApplier', () => {
         runOrchestration: async () => result,
       });
     }
+
+    it('binds the production transcript sink to createTranscriptSink under WORK_RUNS_DIR/<runId>/transcript.jsonl', () => {
+      const baseDir = mkdtempSync(join(tmpdir(), 'orch-transcript-binding-'));
+      const fakeSink = {
+        path: join(baseDir, 'mut-transcript-binding', 'transcript.jsonl'),
+        append: vi.fn(async () => undefined),
+        finish: vi.fn(async () => undefined),
+        destroy: vi.fn(),
+      };
+      mockCreateTranscriptSink.mockReturnValueOnce(fakeSink);
+      __resetOrchestratedRuntimeForTest();
+
+      try {
+        const sink = __getRuntimeDepsForTest().createSink('mut-transcript-binding', baseDir);
+
+        expect(sink).toBe(fakeSink);
+        expect(mockCreateTranscriptSink).toHaveBeenCalledWith({
+          runId: 'mut-transcript-binding',
+          baseDir,
+        });
+      } finally {
+        rmSync(baseDir, { recursive: true, force: true });
+        mockCreateTranscriptSink.mockReset();
+      }
+    });
 
     it('finalized → completed terminal event tagged orchestrated', async () => {
       inject({ kind: 'finalized', outcome: 'branch-complete' });
@@ -290,6 +348,109 @@ describe('orchestratedWorkApplier', () => {
         data: { line: 'qa wrote tests from the spec', role: 'qa' },
       });
       expect(destroyed).toBe(true);
+    });
+
+    it('tees each streamed role event to the transcript sink and awaits finish before the terminal event', async () => {
+      const runId = 'mut-orch-stream-transcript';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-stream-transcript-'));
+      const fake = makeFakeTranscriptSink(join(artifactsDir, runId, 'transcript.jsonl'));
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createSink: vi.fn(() => fake.sink),
+        runOrchestration: async (deps) => {
+          deps.emit?.({
+            kind: 'activity',
+            data: { role: 'qa', line: 'qa wrote tests from the spec' },
+          });
+          deps.emit?.({
+            kind: 'output',
+            data: { role: 'coder', line: 'coder implemented against the red test' },
+          });
+          return { kind: 'finalized', outcome: 'branch-complete' };
+        },
+      });
+
+      try {
+        const events: MutationEvent[] = [];
+        for await (const event of orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx)) {
+          if (event.kind === 'completed' || event.kind === 'failed') {
+            fake.operations.push('terminal');
+            expect(fake.sink.finish).toHaveBeenCalledOnce();
+            expect(fake.operations.indexOf('finish:end')).toBeLessThan(fake.operations.indexOf('terminal'));
+          }
+          events.push(event);
+        }
+
+        const streamed = events.filter((event) => event.kind === 'activity' || event.kind === 'output');
+        expect(streamed).toHaveLength(2);
+        expect(fake.sink.append).toHaveBeenCalledTimes(2);
+        expect(fake.appended).toEqual(streamed);
+        expect(fake.operations).toEqual(expect.arrayContaining([
+          'append:activity:qa wrote tests from the spec',
+          'append:output:coder implemented against the red test',
+          'finish:end',
+          'terminal',
+          'destroy',
+        ]));
+        expect(fake.operations.indexOf('append:activity:qa wrote tests from the spec')).toBeLessThan(fake.operations.indexOf('finish:start'));
+        expect(fake.operations.indexOf('append:output:coder implemented against the red test')).toBeLessThan(fake.operations.indexOf('finish:start'));
+        expect(fake.operations.indexOf('terminal')).toBeLessThan(fake.operations.indexOf('destroy'));
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('destroys an opened transcript sink when the orchestration loop throws', async () => {
+      const runId = 'mut-orch-transcript-failure';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-transcript-failure-'));
+      const fake = makeFakeTranscriptSink(join(artifactsDir, runId, 'transcript.jsonl'));
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createSink: vi.fn(() => fake.sink),
+        runOrchestration: async (deps) => {
+          deps.emit?.({
+            kind: 'activity',
+            data: { role: 'reviewer', line: 'reviewer started before the crash' },
+          });
+          throw new Error('role process crashed');
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+        expect(terminal?.kind).toBe('failed');
+        expect(String((terminal?.data as Record<string, unknown> | undefined)?.['reason'] ?? '')).toContain('role process crashed');
+        expect(fake.sink.append).toHaveBeenCalledOnce();
+        expect(fake.sink.finish).toHaveBeenCalledOnce();
+        expect(fake.sink.destroy).toHaveBeenCalledOnce();
+        expect(fake.operations[fake.operations.length - 1]).toBe('destroy');
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it('yields queued role activity while orchestration is still running', async () => {

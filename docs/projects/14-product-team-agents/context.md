@@ -98,7 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- annot run in this sandbox because binding `127.0.0.1` fails with `listen EPERM`
-- Blocked: `npm run build` still fails on existing unrelated TypeScript errors outside this change
+- my TELEGRAM_USER_ID=1 VAULT_DIR=/tmp/jarvis-vault npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts`
+- `npm run build` still fails on existing unrelated TypeScript errors, including staged QA test typing issues.
 
-I did not touch the staged QA test changes; only `src/server/work-run-projection.ts` is unstaged from my implementation.
+I did not edit the staged QA test changes and did not commit.

@@ -58,7 +58,7 @@ import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { activeRuns } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
-import { redactSecrets, type TranscriptSink } from './work-run-transcript.js';
+import { createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import {
   writeSummary,
   appendIndexRow,
@@ -138,7 +138,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     createTaskWorkflowRunner: createProductionTaskWorkflowRunner,
     workRunsDir: config.WORK_RUNS_DIR,
     workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
-    createSink: createSyncTranscriptSink,
+    createSink: createOrchestratedTranscriptSink,
     writeSummary,
     appendIndexRow,
     recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
@@ -713,9 +713,14 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
   },
 };
 
-function createSyncTranscriptSink(runId: string, baseDir: string): TranscriptSink {
+function createOrchestratedTranscriptSink(runId: string, baseDir: string): TranscriptSink {
+  const sink = createTranscriptSink({ runId, baseDir }) as TranscriptSink | undefined;
+  return sink ?? createFallbackTranscriptSink(runId, baseDir);
+}
+
+function createFallbackTranscriptSink(runId: string, baseDir: string): TranscriptSink {
   if (!VALID_SLUG.test(runId)) {
-    throw new Error(`createSyncTranscriptSink: invalid runId (must be a slug): ${runId}`);
+    throw new Error(`createFallbackTranscriptSink: invalid runId (must be a slug): ${runId}`);
   }
   const dir = join(baseDir, runId);
   mkdirSync(dir, { recursive: true });
@@ -724,12 +729,12 @@ function createSyncTranscriptSink(runId: string, baseDir: string): TranscriptSin
   return {
     path,
     append(event: unknown): Promise<void> {
-      if (destroyed) return Promise.reject(new Error('createSyncTranscriptSink: append after destroy'));
+      if (destroyed) return Promise.reject(new Error('createFallbackTranscriptSink: append after destroy'));
       appendFileSync(path, redactSecrets(JSON.stringify(event)) + '\n', 'utf8');
       return Promise.resolve();
     },
     finish(): Promise<void> {
-      if (destroyed) return Promise.reject(new Error('createSyncTranscriptSink: finish after destroy'));
+      if (destroyed) return Promise.reject(new Error('createFallbackTranscriptSink: finish after destroy'));
       return Promise.resolve();
     },
     destroy(): void {
