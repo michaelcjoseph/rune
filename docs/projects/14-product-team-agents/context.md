@@ -98,6 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- runner --reporter=verbose --fileParallelism=false` — 16 tests passed.
-- `npm run build -- --pretty false` still fails on existing unrelated TypeScript errors outside this change.
-- Plain Vitest config loading hits the known `.vite-temp` EPERM issue in this sandbox, so I used `--configLoader runner`.
+- ts src/jobs/orchestrated-work-runner.test.ts --configLoader runner --reporter=verbose --fileParallelism=false
+```
+
+Result: 2 test files passed, 21 tests passed.
+
+Worktree note: `src/jobs/orchestrated-work-runner.test.ts` remains modified as the QA-provided test change; I did not modify source files.

@@ -472,5 +472,101 @@ describe('orchestratedWorkApplier', () => {
         vi.useRealTimers();
       }
     });
+
+    it('quiet-backstop safe: a genuinely streaming orchestrated run advances lastOutputAt and is not quiet-cancel eligible', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-15T12:00:00.000Z'));
+      const projectSlug = '14-product-team-agents';
+      let runId: string | undefined;
+      let emitActivity: ((line: string) => void) | undefined;
+      let finishRun: ((result: OrchestrationResult) => void) | undefined;
+
+      try {
+        const runResult = new Promise<OrchestrationResult>((resolve) => {
+          finishRun = resolve;
+        });
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree(projectSlug);
+            wtDir = dir;
+            return sandbox;
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runOrchestration: async (deps) => {
+            emitActivity = (line: string) => {
+              deps.emit?.({
+                kind: 'activity',
+                data: { role: 'coder', line },
+              });
+            };
+            return runResult;
+          },
+        });
+
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'jarvis' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        runId = createdMutation.descriptor.id;
+
+        await waitForUpserts(2);
+        await waitForCondition(() => created && emitActivity !== undefined);
+        const runningBeforeStream = latestRun(runId);
+        expect(runningBeforeStream.status).toBe('running');
+        expect(runningBeforeStream.lastOutputAt).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(31_000);
+        emitActivity?.('reviewer is reading the diff');
+        await waitForCondition(() => latestRun(runId!).lastOutputAt !== undefined);
+
+        const runningAfterStream = latestRun(runId);
+        expect(runningAfterStream.status).toBe('running');
+        expect(runningAfterStream.lastOutputAt).toBeDefined();
+        expect(Date.parse(runningAfterStream.lastOutputAt!)).toBeGreaterThan(
+          Date.parse(runningBeforeStream.startedAt),
+        );
+
+        const fiveMinutesAfterStart = Date.parse(runningBeforeStream.startedAt) + (5 * 60 * 1000) + 1;
+        const quietPlan = planQuietNudges([runningAfterStream], 5 * 60 * 1000, fiveMinutesAfterStart);
+        expect(
+          quietPlan.toNudge.map((r) => r.id),
+          'streamed role activity should reset the quiet baseline away from startedAt',
+        ).toEqual([]);
+
+        const wouldHaveBeenNudgedFromStart = {
+          ...runningAfterStream,
+          lastOutputAt: undefined,
+          quietNudgedAt: new Date(fiveMinutesAfterStart).toISOString(),
+        };
+        const cancelAt = fiveMinutesAfterStart + (20 * 60 * 1000) + 1;
+        expect(
+          planQuietCancel([wouldHaveBeenNudgedFromStart], 20 * 60 * 1000, cancelAt).toCancel.map((r) => r.id),
+          'control check: without a streamed lastOutputAt, this run shape would enter the quiet-cancel path',
+        ).toEqual([runId]);
+        expect(planQuietCancel([runningAfterStream], 20 * 60 * 1000, cancelAt).toCancel.map((r) => r.id))
+          .toEqual([]);
+
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+        const completedRunId = runId;
+        await waitForCondition(() => completedRunId !== undefined && !activeRuns.has(completedRunId));
+        expect(completedRunId).toBeDefined();
+        expect(latestRun(completedRunId!).status).toBe('completed');
+        expect(destroyed).toBe(true);
+      } finally {
+        finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
+        if (runId !== undefined) {
+          for (let i = 0; i < 20 && activeRuns.has(runId); i++) {
+            await Promise.resolve();
+          }
+        }
+        vi.useRealTimers();
+      }
+    });
   });
 });

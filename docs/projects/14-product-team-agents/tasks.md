@@ -720,7 +720,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       (QA → tech-lead review → coder → reviewer → designer → PM wrap-up) and per verdict/objection.
 - [x] Provider-attribution test: every emitted activity line carries role + provider + model
       alias and is path/secret-scrubbed.
-- [ ] Quiet-backstop-safe test: an orchestrated run that is genuinely working (streaming
+- [x] Quiet-backstop-safe test: an orchestrated run that is genuinely working (streaming
       activity) is NOT tripped by the quiet-nudge / quiet→cancel backstop — streaming makes the
       active-harm probe test (above) go green.
 - [ ] Substrate test: a completed orchestrated run writes `transcript.jsonl`, `summary.json`
