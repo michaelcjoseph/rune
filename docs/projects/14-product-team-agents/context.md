@@ -98,7 +98,4 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- .test.ts` passed: 34 tests
-- `git diff --check` passed
-
-Note: [team-task-workflow.test.ts](/Users/jarvis/workspace/jarvis/.worktrees/jarvis/14-product-team-agents/src/intent/team-task-workflow.test.ts) was already modified when I started; I treated it as the QA-authored contract and did not edit it.
+- .worktrees/jarvis/14-product-team-agents/src/intent/team-task-workflow.test.ts) was already modified; I did not edit it. An earlier Vitest attempt remains inaccessible because it was started without a TTY and the sandbox blocks `ps`/`pkill`, but the corrected verification run completed successfully.

@@ -947,7 +947,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `TaskRunRecord` and the finalizer handoff.
 - [x] Fail-retry test: a `fail` threads feedback to the coder and retries within the round cap; at
       the cap it routes to PM wrap-up.
-- [ ] Block-one-round test: a reviewer-produced `block` delivers its feedback to the coder for
+- [x] Block-one-round test: a reviewer-produced `block` delivers its feedback to the coder for
       exactly one corrective round from the dedicated block-correction budget before parking; it
       does not short-circuit with zero corrective attempts.
 - [ ] Block-parks-not-fails test: a surviving `block` parks `blocked-on-human` with worktree +

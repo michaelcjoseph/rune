@@ -450,6 +450,55 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       expect(ev.objectionOpen, c.name).toBe(c.expectedObjectionOpen);
     }
   });
+
+  it('gives a reviewer-produced block exactly one feedback-threaded coder correction before parking', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const reviewerObjection: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+    };
+    let reviewerCalls = 0;
+    let pmCalled = false;
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => {
+        reviewerCalls += 1;
+        return {
+          outcome: 'block',
+          objections: [reviewerObjection],
+          notes: `blocking security finding still open after review ${reviewerCalls}`,
+        };
+      },
+      pmWrapup: async () => {
+        pmCalled = true;
+        return { resolved: true };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.objectionOpen).toBe(true);
+    expect(pmCalled).toBe(false);
+    expect(reviewerCalls).toBe(2);
+    expect(coderInputs).toHaveLength(2);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: 'security/high at src/auth.ts:42: token comparison leaks timing information',
+        actionableNotes: ['security/high at src/auth.ts:42: token comparison leaks timing information'],
+      }),
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

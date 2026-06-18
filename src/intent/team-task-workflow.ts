@@ -324,7 +324,10 @@ async function runGated(
   let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastDesignerPass = true;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
-  for (let attempt = 0; attempt < input.cap; attempt++) {
+  let reviewerBlockCorrectionUsed = false;
+  let coderAttemptsRemaining = input.cap;
+  while (coderAttemptsRemaining > 0) {
+    coderAttemptsRemaining -= 1;
     roles.add('coder');
     previousRole = emitRoleTransition(
       input,
@@ -366,12 +369,10 @@ async function runGated(
       summary: summarizeReviewerVerdict(lastReviewer),
     });
 
-    // Hard gate: an open objection-class finding blocks immediately. PM wrap-up
+    // Hard gate: an open objection-class finding gets one feedback-threaded
+    // coder correction, then parks if the reviewer still blocks. PM wrap-up
     // authority does not extend here.
     if (isReviewerBlock(lastReviewer)) {
-      for (const objection of lastReviewer.objections) {
-        emitObjection(input, objection);
-      }
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
@@ -379,6 +380,16 @@ async function runGated(
         reason: summarizeReviewerVerdict(lastReviewer),
       });
       await recordGateRejection(deps, feedback);
+      lastRejectionFeedback = feedback;
+      if (!reviewerBlockCorrectionUsed) {
+        reviewerBlockCorrectionUsed = true;
+        coderFeedback = [feedback];
+        coderAttemptsRemaining += 1;
+        continue;
+      }
+      for (const objection of lastReviewer.objections) {
+        emitObjection(input, objection);
+      }
       emitGateRejection(input, feedback);
       return block(task, roles, handoffNotes, {
         blockedReason: 'open objection-class finding',
