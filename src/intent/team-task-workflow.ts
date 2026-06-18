@@ -47,10 +47,11 @@ export interface ObjectionFinding {
   rationale: string;
 }
 
-export type ReviewerOutcome = 'pass' | 'pass-with-warnings' | 'fail' | 'block';
+export type GateOutcome = 'pass' | 'pass-with-warnings' | 'fail';
+export type ReviewerOutcome = GateOutcome | 'block';
 
 export interface GateVerdict {
-  outcome: ReviewerOutcome;
+  outcome: GateOutcome;
   findings: ObjectionFinding[];
   notes?: string;
 }
@@ -378,7 +379,6 @@ async function runGated(
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
-  let reviewerBlockCorrectionUsed = false;
   let coderAttemptsRemaining = input.cap;
   while (coderAttemptsRemaining > 0) {
     coderAttemptsRemaining -= 1;
@@ -441,68 +441,6 @@ async function runGated(
       });
     }
 
-    // Hard gate: an open objection-class finding gets one feedback-threaded
-    // coder correction, then parks if the reviewer still blocks. PM wrap-up
-    // authority does not extend here.
-    if (isReviewerBlock(lastReviewer)) {
-      const feedback = buildGateRejectionFeedback({
-        rejectingRole: 'reviewer',
-        counterpartRole: 'coder',
-        artifact: 'reviewer-verdict',
-        reason: summarizeReviewerVerdict(lastReviewer),
-      });
-      await recordGateRejection(deps, feedback);
-      lastRejectionFeedback = feedback;
-      if (!reviewerBlockCorrectionUsed) {
-        reviewerBlockCorrectionUsed = true;
-        coderFeedback = [feedback];
-        coderAttemptsRemaining += 1;
-        continue;
-      }
-      const acceptance = await maybeAcceptWithRationale(deps, {
-        task,
-        reason: feedback.whatFailed,
-        reviewerVerdict: lastReviewer,
-        rejectionFeedback: feedback,
-      });
-      if (acceptance === null) {
-        emitGateRejection(input, feedback);
-        return block(task, roles, handoffNotes, {
-          blockedReason: 'accept-with-rationale override requires a non-empty rationale',
-          rejectionFeedback: feedback,
-          reviewerVerdict: lastReviewer,
-          gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
-          objectionOpen: true,
-          noCodeTestRationale,
-        });
-      }
-      if (acceptance !== undefined) {
-        const acceptedReviewer = reviewerAcceptedWithWarnings(lastReviewer);
-        return {
-          taskId: task.id,
-          outcome: 'ready-for-closeout',
-          rolesInvoked: roles.list(),
-          reviewerVerdict: acceptedReviewer,
-          gateVerdicts: buildWorkflowGateVerdicts(acceptedReviewer, undefined, undefined),
-          objectionOpen: false,
-          handoffNotes,
-          ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
-          acceptance,
-        };
-      }
-      for (const objection of lastReviewer.objections) {
-        emitObjection(input, objection);
-      }
-      emitGateRejection(input, feedback);
-      return block(task, roles, handoffNotes, {
-        blockedReason: 'open objection-class finding',
-        rejectionFeedback: feedback,
-        reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
-        objectionOpen: true,
-        noCodeTestRationale,
-      });
-    }
     if (!isReviewerPass(lastReviewer)) {
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
@@ -742,7 +680,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       `operational block: reviewer-verdict contained malformed severity ` +
       `"${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`;
     return {
-      outcome: 'block',
+      outcome: 'fail',
       findings,
       objections: findings,
       notes: reason,
@@ -753,17 +691,17 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
   if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome)) {
     const reason = `operational block: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
     return {
-      outcome: 'block',
+      outcome: 'fail',
       findings,
       objections: findings,
       notes: reason,
       operationalBlockReason: reason,
     };
   }
-  const outcomes: ReviewerOutcome[] = [];
+  const outcomes: GateOutcome[] = [];
   if (findings.length > 0) {
     outcomes.push(outcomeForObjectionSeverities(findings));
-  } else if (isReviewerOutcome(rawOutcome)) {
+  } else if (isGateOutcome(rawOutcome)) {
     outcomes.push(rawOutcome);
   } else {
     outcomes.push(raw['pass'] === true ? 'pass' : 'fail');
@@ -784,7 +722,7 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
   const rawOutcome = raw['outcome'];
-  const outcome = isReviewerOutcome(rawOutcome)
+  const outcome = isGateOutcome(rawOutcome)
     ? rawOutcome
     : raw['pass'] === true
       ? 'pass'
@@ -826,16 +764,15 @@ function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
   });
 }
 
-function outcomeForObjectionSeverities(objections: ObjectionFinding[]): ReviewerOutcome {
+function outcomeForObjectionSeverities(objections: ObjectionFinding[]): GateOutcome {
   return strictestReviewerOutcome(objections.map((objection) =>
     mapObjectionSeverityToOutcome(objection.severity)));
 }
 
-export function mapObjectionSeverityToOutcome(severity: ObjectionSeverity): ReviewerOutcome {
+export function mapObjectionSeverityToOutcome(severity: ObjectionSeverity): GateOutcome {
   switch (severity) {
     case 'critical':
     case 'high':
-      return 'block';
     case 'medium':
       return 'fail';
     case 'low':
@@ -853,15 +790,18 @@ function isObjectionSeverity(severity: unknown): severity is ObjectionSeverity {
 }
 
 function isReviewerOutcome(outcome: unknown): outcome is ReviewerOutcome {
+  return isGateOutcome(outcome) || outcome === 'block';
+}
+
+function isGateOutcome(outcome: unknown): outcome is GateOutcome {
   return (
     outcome === 'pass' ||
     outcome === 'pass-with-warnings' ||
-    outcome === 'fail' ||
-    outcome === 'block'
+    outcome === 'fail'
   );
 }
 
-function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {
+function strictestReviewerOutcome(outcomes: GateOutcome[]): GateOutcome {
   return outcomes.reduce(
     (strictest, outcome) =>
       reviewerOutcomeRank[outcome] > reviewerOutcomeRank[strictest] ? outcome : strictest,
@@ -869,11 +809,10 @@ function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome 
   );
 }
 
-const reviewerOutcomeRank: Record<ReviewerOutcome, number> = {
+const reviewerOutcomeRank: Record<GateOutcome, number> = {
   pass: 0,
   'pass-with-warnings': 1,
   fail: 2,
-  block: 3,
 };
 
 function isReviewerPass(verdict: NormalizedReviewerVerdict): boolean {
@@ -884,10 +823,6 @@ function isGatePass(verdict: GateVerdict | undefined): boolean {
   return verdict === undefined ||
     verdict.outcome === 'pass' ||
     verdict.outcome === 'pass-with-warnings';
-}
-
-function isReviewerBlock(verdict: NormalizedReviewerVerdict): boolean {
-  return verdict.outcome === 'block';
 }
 
 function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {
@@ -904,8 +839,6 @@ function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {
       return 'reviewer passed implementation diff with warnings';
     case 'fail':
       return 'reviewer rejected implementation diff';
-    case 'block':
-      return 'reviewer blocked implementation diff';
   }
 }
 
@@ -934,7 +867,8 @@ function reviewerAcceptedWithWarnings(
 ): NormalizedReviewerVerdict | undefined {
   if (
     verdict === undefined ||
-    (verdict.outcome !== 'block' && (verdict.outcome !== 'fail' || verdict.findings.length > 0))
+    verdict.outcome !== 'fail' ||
+    verdict.findings.length > 0
   ) {
     return verdict;
   }

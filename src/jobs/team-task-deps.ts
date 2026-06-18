@@ -52,7 +52,7 @@ import {
   type QaResult,
   type GateRejectionFeedback,
   type GateVerdict,
-  type ReviewerOutcome,
+  type GateOutcome,
   type ReviewerVerdict,
   type TaskEvidence,
   type TeamTaskDeps,
@@ -216,11 +216,10 @@ const OBJECTION_CLASSES: ReadonlySet<string> = new Set([
   'cost-perf',
 ]);
 const OBJECTION_SEVERITIES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'critical']);
-const REVIEWER_OUTCOMES: ReadonlySet<string> = new Set([
+const GATE_OUTCOMES: ReadonlySet<string> = new Set([
   'pass',
   'pass-with-warnings',
   'fail',
-  'block',
 ]);
 
 const REVIEWER_INSTRUCTION = [
@@ -235,7 +234,7 @@ const REVIEWER_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```reviewer-verdict block containing JSON,',
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
-  'value: pass, pass-with-warnings, fail, or block:',
+  'value: pass, pass-with-warnings, or fail:',
   '```reviewer-verdict',
   '{"outcome": "pass", "notes": "<short non-objection feedback>", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
   '```',
@@ -322,8 +321,8 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
   const findings = parseFindings(v);
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
-  const parsedOutcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
-    ? v['outcome'] as ReviewerOutcome
+  const parsedOutcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
+    ? v['outcome'] as GateOutcome
     : undefined;
   const severityOutcome = outcomeForFindings(findings);
   const baseOutcome = parsedOutcome ??
@@ -390,8 +389,8 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
   }
   const v = parsed as Record<string, unknown>;
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
-  const outcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
-    ? v['outcome'] as ReviewerOutcome
+  const outcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
+    ? v['outcome'] as GateOutcome
     : undefined;
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
   const findings = parseFindings(v);
@@ -410,14 +409,14 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
   };
 }
 
-function outcomeForFindings(findings: ObjectionFinding[]): ReviewerOutcome | undefined {
+function outcomeForFindings(findings: ObjectionFinding[]): GateOutcome | undefined {
   if (findings.length === 0) return undefined;
   return strictestReviewerOutcome(
     findings.map((finding) => mapObjectionSeverityToOutcome(finding.severity)),
   );
 }
 
-function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {
+function strictestReviewerOutcome(outcomes: GateOutcome[]): GateOutcome {
   return outcomes.reduce(
     (strictest, outcome) =>
       reviewerOutcomeRank[outcome] > reviewerOutcomeRank[strictest] ? outcome : strictest,
@@ -425,11 +424,10 @@ function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome 
   );
 }
 
-const reviewerOutcomeRank: Record<ReviewerOutcome, number> = {
+const reviewerOutcomeRank: Record<GateOutcome, number> = {
   pass: 0,
   'pass-with-warnings': 1,
   fail: 2,
-  block: 3,
 };
 
 /** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */
@@ -738,7 +736,7 @@ export function buildProductionTeamTaskDeps(
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
         // reviewer verdict must never be fabricable without a resolved
         // independent reviewer, even if a future caller skips the gate.
-        return { outcome: 'block', findings: [] };
+        return { outcome: 'fail', findings: [] };
       }
       const body = [
         `## Task\n\n${task.text}`,

@@ -104,7 +104,7 @@ const greenExecution = async (): Promise<ExecutionAgentResult> => ({
   output: 'wrote tests',
 });
 
-const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail', 'block'] as const;
+const GATE_VERDICT_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 
 function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeams> {
   return { judgmentCall: greenJudgment, runExecution: greenExecution, ...overrides };
@@ -278,7 +278,9 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const structured = verdict as unknown as Record<string, unknown>;
 
     expect(structured).toHaveProperty('outcome');
-    expect(REVIEW_OUTCOMES).toContain(structured['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
+    expect(GATE_VERDICT_OUTCOMES).toContain(
+      structured['outcome'] as (typeof GATE_VERDICT_OUTCOMES)[number],
+    );
     expect(structured['outcome']).toBe('pass');
     expect(structured).not.toHaveProperty('pass');
   });
@@ -362,6 +364,56 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(designer).not.toHaveProperty('pass');
   });
 
+  it('treats GateVerdict.outcome as exactly pass/pass-with-warnings/fail, never block', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'reviewer') {
+          return [
+            '```reviewer-verdict',
+            '{"outcome":"block","findings":[],"notes":"legacy hard block"}',
+            '```',
+          ].join('\n');
+        }
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            '{"outcome":"block","findings":[],"notes":"legacy hard block"}',
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            '{"outcome":"block","findings":[],"notes":"legacy hard block"}',
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const reviewer = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    for (const verdict of [reviewer, techLead, designer]) {
+      const structured = verdict as unknown as Record<string, unknown>;
+      expect(verdict).toHaveProperty('outcome');
+      expect(GATE_VERDICT_OUTCOMES).toContain(
+        structured['outcome'] as (typeof GATE_VERDICT_OUTCOMES)[number],
+      );
+      expect(structured['outcome']).toBe('fail');
+      expect(structured['outcome']).not.toBe('block');
+    }
+  });
+
   it('routes severity-derived outcomes through every production review gate parser', async () => {
     const highFinding = {
       class: 'security',
@@ -419,7 +471,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
     const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
 
-    expect(reviewer).toMatchObject({ outcome: 'block', findings: [highFinding] });
+    expect(reviewer).toMatchObject({ outcome: 'fail', findings: [highFinding] });
     expect(techLead).toMatchObject({ outcome: 'fail', findings: [mediumFinding] });
     expect(designer).toMatchObject({ outcome: 'pass-with-warnings', findings: [lowFinding] });
   });
@@ -439,7 +491,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       reviewerProvider: 'anthropic',
     });
     const structured = verdict as unknown as Record<string, unknown>;
-    expect(structured['outcome']).toMatch(/fail|block/);
+    expect(structured['outcome']).toBe('fail');
     expect(structured).not.toHaveProperty('pass');
 
     const tl = await deps.techLeadReviewTests({ task: sizedTask, qa: { kind: 'tests-written', testIds: [] } });

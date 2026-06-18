@@ -1011,7 +1011,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Red tests (confirm red before implementation)
 
-- [ ] Outcome-enum test: `GateVerdict.outcome` is exactly one of `pass`/`pass-with-warnings`/`fail`;
+- [x] Outcome-enum test: `GateVerdict.outcome` is exactly one of `pass`/`pass-with-warnings`/`fail`;
       `block` is no longer a producible outcome and any attempt to map a finding to `block` is a
       type/normalization error.
 - [ ] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
