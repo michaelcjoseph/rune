@@ -39,6 +39,8 @@ import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
 import { runGateTriggeredLearning } from '../intent/gate-learning.js';
 import { writeGateLearningLesson } from '../intent/learning-write-path.js';
+import { runPostMortem } from '../intent/postmortem.js';
+import type { FeedbackRecord, RoleStage } from '../intent/feedback-record.js';
 import {
   runTeamTaskWorkflow,
   type ObjectionClass,
@@ -296,22 +298,6 @@ const GATE_LESSON_DRAFT_INSTRUCTION = [
   '```',
 ].join('\n');
 
-const GATE_LESSON_VALIDATE_INSTRUCTION = [
-  'You are Jarvis running a neutral validation pass on ONE gate-triggered lesson',
-  'candidate. Decide whether it is privacy-safe, abstract, and worth adding to',
-  "the counterpart role's memory.",
-  '',
-  'Respond with EXACTLY ONE fenced ```gate-lesson-validation block containing JSON,',
-  'one of:',
-  '```gate-lesson-validation',
-  '{"kind":"lesson","stage":"<stage>","role":"<role>","lesson":"<validated abstract lesson>"}',
-  '```',
-  'or',
-  '```gate-lesson-validation',
-  '{"kind":"no-lesson","rationale":"<why>"}',
-  '```',
-].join('\n');
-
 /** Fail-closed: unparseable ⇒ pass:false (a verdict that cannot be read never
  *  passes a gate). Malformed objection entries are dropped — an invalid entry
  *  must not hard-block on garbage, and the pass flag still gates the round. */
@@ -447,6 +433,41 @@ function formatGateLearningRejection(feedback: GateRejectionFeedback): string {
   ].join('\n');
 }
 
+function stageForGateRejection(feedback: GateRejectionFeedback): RoleStage | undefined {
+  if (feedback.rejectedArtifact === 'test-intent' || feedback.rejectedRole === 'qa') return 'test';
+  if (feedback.rejectedArtifact === 'implementation-diff' || feedback.rejectedRole === 'coder') {
+    return 'implementation';
+  }
+  if (feedback.rejectedArtifact === 'design-review' || feedback.rejectedRole === 'designer') return 'design';
+  if (feedback.rejectedRole === 'reviewer') return 'review';
+  if (feedback.rejectedRole === 'tech-lead') return 'tech-spec';
+  if (feedback.rejectedRole === 'pm') return 'spec';
+  return undefined;
+}
+
+function gateRejectionFeedbackRecord(
+  projectSlug: string,
+  rejection: GateRejectionFeedback,
+  candidateLesson: string,
+): FeedbackRecord {
+  return {
+    projectSlug,
+    source: `gate:${rejection.rejectingRole}:${rejection.rejectedArtifact}`,
+    createdAt: new Date().toISOString(),
+    issueSummary: `${rejection.rejectingRole} rejected ${rejection.rejectedRole}'s ${rejection.rejectedArtifact}: ${rejection.whatFailed}`,
+    evidence: [
+      formatGateLearningRejection(rejection),
+      '',
+      '<candidate-lesson>',
+      candidateLesson,
+      '</candidate-lesson>',
+    ].join('\n'),
+    expectedBehavior: rejection.actionableNotes.join('; '),
+    actualBehavior: rejection.reason,
+    reporterStage: stageForGateRejection(rejection),
+  };
+}
+
 /**
  * Build the production TeamTaskDeps: all eight seams live. Tests inject
  * `seams`; production omits it and gets the real judgment call + execution
@@ -480,15 +501,21 @@ export function buildProductionTeamTaskDeps(
           return extractFencedJson(reply, 'gate-lesson-candidate');
         },
         validateLesson: async ({ rejection: inputRejection, candidate }) => {
-          const body = [
-            formatGateLearningRejection(inputRejection),
-            '',
-            '<candidate>',
-            JSON.stringify(candidate),
-            '</candidate>',
-          ].join('\n');
-          const reply = await judge('pm', models.pm, GATE_LESSON_VALIDATE_INSTRUCTION, body);
-          return extractFencedJson(reply, 'gate-lesson-validation');
+          const sessionId = randomUUID();
+          try {
+            return await runPostMortem(
+              gateRejectionFeedbackRecord(sandbox.project, inputRejection, candidate.lesson),
+              {
+                ask: (prompt) =>
+                  askClaudeWithContext(prompt, sessionId, '', {
+                    model: models.pm.alias,
+                    opLabel: 'learning-postmortem',
+                  }),
+              },
+            );
+          } finally {
+            cleanupSession(sessionId);
+          }
         },
         writeLesson: async (role, lesson, inputRejection) => {
           const result = await writeGateLearningLesson({

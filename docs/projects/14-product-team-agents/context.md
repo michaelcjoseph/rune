@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- 
-- Passed within adjacent run: `src/intent/gate-learning.test.ts`
-- Blocked: `src/jobs/team-task-deps.test.ts` fails at import because `TELEGRAM_BOT_TOKEN` is not set in this environment.
+- f --check` passed.
 
-Note: `src/jobs/team-task-deps.gate-learning.test.ts` was already modified before my work; I left it untouched.
+Notes:
+- Plain Vitest startup is sandbox-blocked because Vite tries to write under symlinked `node_modules/.vite-temp`; `--configLoader runner` avoids that.
+- Full `npx tsc --noEmit` still fails on existing repo-wide issues outside this task; no `team-task-deps.ts` errors remain.

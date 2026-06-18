@@ -905,7 +905,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Emit the structured gate-rejection record at each gate block in `team-task-workflow.ts`,
       shared with the Phase 11A feedback object.
 - [x] Have the rejecting role draft a candidate lesson from that record.
-- [ ] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
+- [x] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
       write via `writeRoleLesson` into the counterpart's memory; fail safe to no-lesson.
 - [ ] Confirm the gate-time path and nightly loop share one write path without double-writing.
 - [ ] Record durable skip/error metadata when drafting, validation, or memory writing fails, and
