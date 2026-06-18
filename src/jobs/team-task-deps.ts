@@ -332,15 +332,12 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
   const parsedOutcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as GateOutcome
     : undefined;
-  const severityOutcome = outcomeForFindings(findings);
-  const baseOutcome = parsedOutcome ??
-    (legacyPass !== undefined
-      ? legacyPass === true ? 'pass' : 'fail'
-      : severityOutcome ?? 'fail');
-  const outcome = strictestReviewerOutcome([
-    baseOutcome,
-    ...(severityOutcome !== undefined ? [severityOutcome] : []),
-  ]);
+  const outcome = findings.length > 0
+    ? outcomeForFindings(findings) ?? 'fail'
+    : parsedOutcome ??
+      (legacyPass !== undefined
+        ? legacyPass === true ? 'pass' : 'fail'
+        : 'fail');
   if (parsedOutcome === undefined && legacyPass !== undefined && hasAggregateFixtureFences(text)) {
     return {
       pass: legacyPass,
@@ -423,16 +420,13 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
       notes: notes ?? malformedReason,
     };
   }
-  const severityOutcome = outcomeForFindings(findings);
-  const baseOutcome = outcome ??
-    (legacyPass !== undefined
-      ? legacyPass === true ? 'pass' : 'fail'
-      : severityOutcome ?? 'fail');
   return {
-    outcome: strictestReviewerOutcome([
-      baseOutcome,
-      ...(severityOutcome !== undefined ? [severityOutcome] : []),
-    ]),
+    outcome: findings.length > 0
+      ? outcomeForFindings(findings) ?? 'fail'
+      : outcome ??
+        (legacyPass !== undefined
+          ? legacyPass === true ? 'pass' : 'fail'
+          : 'fail'),
     findings,
     ...(notes !== undefined ? { notes } : {}),
   };

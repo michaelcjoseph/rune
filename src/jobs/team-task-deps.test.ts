@@ -479,6 +479,59 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     }
   });
 
+  it('ignores legacy block labels and derives production gate outcomes from finding severity', async () => {
+    const lowFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:8',
+      rationale: 'duplicate read is a follow-up, not a task-stopping objection',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'reviewer') {
+          return [
+            '```reviewer-verdict',
+            JSON.stringify({ outcome: 'block', findings: [lowFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            JSON.stringify({ outcome: 'block', findings: [lowFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            JSON.stringify({ outcome: 'block', findings: [lowFinding] }),
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const reviewer = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    for (const verdict of [reviewer, techLead, designer]) {
+      const structured = verdict as unknown as Record<string, unknown>;
+      expect(structured['outcome']).toBe('pass-with-warnings');
+      expect(structured['outcome']).not.toBe('block');
+      expect(structured['findings']).toEqual([lowFinding]);
+    }
+  });
+
   it('routes severity-derived outcomes through every production review gate parser', async () => {
     const criticalFinding = {
       class: 'privacy',
@@ -545,6 +598,55 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(reviewer).toMatchObject({ outcome: 'fail', findings: [criticalFinding, highFinding] });
     expect(techLead).toMatchObject({ outcome: 'fail', findings: [mediumFinding] });
     expect(designer).toMatchObject({ outcome: 'pass-with-warnings', findings: [lowFinding] });
+  });
+
+  it('maps high and critical review findings to fail, never block', async () => {
+    const highFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+    };
+    const criticalFinding = {
+      class: 'privacy',
+      severity: 'critical',
+      location: 'src/profile.ts:7',
+      rationale: 'private notes can be exposed to another user',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'reviewer') {
+          return [
+            '```reviewer-verdict',
+            JSON.stringify({ outcome: 'pass', findings: [highFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            JSON.stringify({ outcome: 'pass', findings: [criticalFinding] }),
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const reviewer = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+
+    expect(reviewer).toMatchObject({ outcome: 'fail', findings: [highFinding] });
+    expect(techLead).toMatchObject({ outcome: 'fail', findings: [criticalFinding] });
+    expect((reviewer as unknown as Record<string, unknown>)['outcome']).not.toBe('block');
+    expect((techLead as unknown as Record<string, unknown>)['outcome']).not.toBe('block');
   });
 
   it('judgment seams fail closed on an unparseable reply', async () => {

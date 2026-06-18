@@ -1063,7 +1063,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Implementation
 
-- [ ] Remove `block` from `GateVerdict`; rewrite `mapObjectionSeverityToOutcome`
+- [x] Remove `block` from `GateVerdict`; rewrite `mapObjectionSeverityToOutcome`
       (`team-task-workflow.ts`) to `critical`/`high`/`medium` → `fail`, `low` →
       `pass-with-warnings`; delete the block branch + block-correction budget.
 - [ ] Restructure `ObjectionClass` (`team-task-workflow.ts`): drop `irreversibility`, add

@@ -488,7 +488,7 @@ describe('project-orchestrator — block', () => {
         handoffNotes: ['the branch contains useful work that needs human objection handling'],
         blockedReason: 'open objection-class finding',
         reviewerVerdict: {
-          outcome: 'block',
+          outcome: 'fail',
           objections: [],
         },
       }),

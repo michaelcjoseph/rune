@@ -626,19 +626,21 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
 
-  it('normalizes a legacy reviewer block payload to public fail evidence without block residue', async () => {
+  it('fails closed on an unsupported reviewer outcome without public block residue', async () => {
     const ev = await runTeamTaskWorkflow(
       codeTask,
       { ...INPUT, cap: 1 },
       makeDeps({
         reviewer: async () => ({
-          outcome: 'block',
+          outcome: 'retired-block',
           findings: [],
-          notes: 'legacy hard block residue',
+          notes: 'unsupported outcome residue',
         } as unknown as ReviewerVerdict),
       }),
     );
 
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toMatch(/unsupported outcome/i);
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(ev.gateVerdicts?.reviewer?.outcome).toBe('fail');
     expect(ev.reviewerVerdict?.outcome).not.toBe('block');
@@ -760,7 +762,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }
   });
 
-  it('does not let a low-severity finding enter the block-correction path even when the reviewer labels it block', async () => {
+  it('does not let a low-severity finding enter the correction path', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;
     let pmCalled = false;
@@ -776,9 +778,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         reviewer: async () => {
           reviewerCalls += 1;
           return {
-            outcome: 'block',
+            outcome: 'pass-with-warnings',
             findings: [lowFinding],
-            notes: 'reviewer tried to block on a low-severity follow-up',
+            notes: 'reviewer raised a low-severity follow-up',
           } as unknown as ReviewerVerdict;
         },
         pmWrapup: async () => {
@@ -798,7 +800,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(pmCalled).toBe(false);
   });
 
-  it('does not let a medium-severity finding consume the dedicated block-correction round', async () => {
+  it('does not let a medium-severity finding consume a dedicated block-correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let pmCalled = false;
     const mediumFinding = objectionWithSeverity('medium');
@@ -811,9 +813,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
         },
         reviewer: async () => ({
-          outcome: 'block',
+          outcome: 'fail',
           findings: [mediumFinding],
-          notes: 'reviewer tried to block on a medium-severity fixable finding',
+          notes: 'reviewer raised a medium-severity fixable finding',
         } as unknown as ReviewerVerdict),
         pmWrapup: async () => {
           pmCalled = true;
@@ -869,7 +871,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
 
-  it('normalizes a reviewer-produced block with a high finding to fail without a block-correction round', async () => {
+  it('normalizes a reviewer-produced high finding to fail without a block-correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const reviewerObjection: ObjectionFinding = {
       class: 'security',
@@ -887,9 +889,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       reviewer: async () => {
         reviewerCalls += 1;
         return {
-          outcome: 'block',
+          outcome: 'fail',
           objections: [reviewerObjection],
-          notes: `blocking security finding still open after review ${reviewerCalls}`,
+          notes: `security finding still open after review ${reviewerCalls}`,
         };
       },
       pmWrapup: async () => {
@@ -956,9 +958,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
       },
       reviewer: async () => ({
-        outcome: 'block',
+        outcome: 'fail',
         findings: [blockingFinding],
-        notes: 'blocking security finding remains open',
+        notes: 'security finding remains open',
       }),
       pmWrapup: async () => {
         pmCalled = true;
@@ -1002,7 +1004,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     let pmCalled = false;
     const deps = makeDeps({
       reviewer: async () => ({
-        outcome: 'block',
+        outcome: 'fail',
         findings: [blockingFinding],
       }),
       pmWrapup: async () => {

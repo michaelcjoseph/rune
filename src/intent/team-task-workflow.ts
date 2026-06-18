@@ -72,7 +72,7 @@ export interface NormalizedReviewerVerdict extends GateVerdict {
  *  seams migrate; workflow evidence is normalized to `NormalizedReviewerVerdict`
  *  before any gate or caller observes it. */
 export interface ReviewerVerdict {
-  outcome?: ReviewerOutcome | 'block';
+  outcome?: ReviewerOutcome;
   pass?: boolean;
   findings?: ObjectionFinding[];
   objections?: ObjectionFinding[];
@@ -850,7 +850,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
     };
   }
   const rawOutcome = raw['outcome'];
-  if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome) && rawOutcome !== 'block') {
+  if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome)) {
     const reason = `operational block: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
     return {
       outcome: 'fail',
@@ -861,15 +861,11 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       operationalBlockReason: reason,
     };
   }
-  const outcomes: GateOutcome[] = [];
-  if (findings.length > 0) {
-    outcomes.push(outcomeForObjectionSeverities(findings));
-  } else if (isGateOutcome(rawOutcome)) {
-    outcomes.push(rawOutcome);
-  } else {
-    outcomes.push(raw['pass'] === true ? 'pass' : 'fail');
-  }
-  const outcome = strictestReviewerOutcome(outcomes);
+  const outcome = findings.length > 0
+    ? outcomeForObjectionSeverities(findings)
+    : isGateOutcome(rawOutcome)
+      ? rawOutcome
+      : raw['pass'] === true ? 'pass' : 'fail';
   return {
     outcome,
     findings,
@@ -893,18 +889,23 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
       notes: `unsupported finding class "${String(malformedClass.class)}" at ${malformedClass.location}`,
     };
   }
+  const malformedSeverity = findings.find((finding) => !isObjectionSeverity(finding.severity));
+  if (malformedSeverity !== undefined) {
+    return {
+      outcome: 'fail',
+      findings,
+      notes: `unsupported finding severity "${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`,
+    };
+  }
   const rawOutcome = raw['outcome'];
-  const outcome = isGateOutcome(rawOutcome)
-    ? rawOutcome
-    : raw['pass'] === true
-      ? 'pass'
-      : 'fail';
+  const outcome = findings.length > 0
+    ? outcomeForObjectionSeverities(findings)
+    : isGateOutcome(rawOutcome)
+      ? rawOutcome
+      : raw['pass'] === true ? 'pass' : 'fail';
   const notes = typeof raw['notes'] === 'string' ? raw['notes'] : undefined;
   return {
-    outcome: strictestReviewerOutcome([
-      outcome,
-      ...(findings.length > 0 ? [outcomeForObjectionSeverities(findings)] : []),
-    ]),
+    outcome,
     findings,
     ...(notes !== undefined ? { notes } : {}),
   };
