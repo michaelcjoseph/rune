@@ -47,6 +47,22 @@ export type OrchestrationActivityEvent = {
   data?: unknown;
 };
 
+export interface OrchestrationRunCursor {
+  runId: string;
+  product: string;
+  project: string;
+  branch: string;
+  baseBranch: string;
+  worktreePath: string;
+  attemptCap: number;
+  resumeMarker: 'resumable';
+  cursor: {
+    completedTaskIds: string[];
+    currentTaskId: string | null;
+    nextTaskId: string | null;
+  };
+}
+
 /** Everything the orchestrator needs, all injected so the loop is fixture-testable. */
 export interface OrchestrationDeps {
   runId: string;
@@ -62,6 +78,10 @@ export interface OrchestrationDeps {
   attemptCap: number;
   /** Optional live activity sink for appliers that need supervision heartbeats. */
   emit?: (event: OrchestrationActivityEvent) => void;
+  /** Optional durable run-record sink used by restart reconstruction. */
+  appendTaskRunRecord?: (record: TaskRunRecord) => Promise<void>;
+  /** Optional durable cursor sink used to resume a still-running mutation. */
+  writeRunCursor?: (cursor: OrchestrationRunCursor) => Promise<void>;
 
   // --- state reads (re-read each iteration so restart/reconstruction is safe) ---
   readTasksMd: () => Promise<string>;
@@ -155,21 +175,21 @@ export async function runProjectOrchestration(
       return { kind: 'blocked', reason: closeout.reason, task };
     }
 
-    taskRecords.push(
-      buildTaskRunRecord({
-        taskId: task.id,
-        taskText: task.text,
-        attemptId: `${deps.runId}-${task.id}`,
-        rolesInvoked: evidence.rolesInvoked,
-        transcriptIds: [],
-        modelChoices: {},
-        commitSha: closeout.commitSha,
-        verdicts: evidence.reviewerVerdict ? { reviewer: evidence.reviewerVerdict.pass ? 'pass' : 'fail' } : {},
-        contextOutcome: 'updated',
-        gates: { objectionOpen: evidence.objectionOpen },
-        outcome: 'ready-for-closeout',
-      }),
-    );
+    const taskRecord = buildTaskRunRecord({
+      taskId: task.id,
+      taskText: task.text,
+      attemptId: `${deps.runId}-${task.id}`,
+      rolesInvoked: evidence.rolesInvoked,
+      transcriptIds: [],
+      modelChoices: {},
+      commitSha: closeout.commitSha,
+      verdicts: evidence.reviewerVerdict ? { reviewer: evidence.reviewerVerdict.pass ? 'pass' : 'fail' } : {},
+      contextOutcome: 'updated',
+      gates: { objectionOpen: evidence.objectionOpen },
+      outcome: 'ready-for-closeout',
+    });
+    taskRecords.push(taskRecord);
+    await persistRunCheckpoint(deps, taskRecords, taskRecord, closeout.tasksMd);
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
 
@@ -223,7 +243,7 @@ async function runTaskWithRetries(
 }
 
 type CloseoutResult =
-  | { kind: 'ok'; commitSha: string }
+  | { kind: 'ok'; commitSha: string; tasksMd: string }
   | { kind: 'blocked'; reason: string };
 
 /** Perform the closeout sequence for one passed task. The order keeps the branch
@@ -270,7 +290,42 @@ async function performCloseout(
   }
 
   emitCloseoutComplete(deps, task, commitSha);
-  return { kind: 'ok', commitSha };
+  return { kind: 'ok', commitSha, tasksMd: tick.content };
+}
+
+async function persistRunCheckpoint(
+  deps: OrchestrationDeps,
+  taskRecords: TaskRunRecord[],
+  taskRecord: TaskRunRecord,
+  tasksMd: string,
+): Promise<void> {
+  await deps.appendTaskRunRecord?.(taskRecord);
+  await deps.writeRunCursor?.(buildRunCursor(deps, taskRecords, tasksMd));
+}
+
+function buildRunCursor(
+  deps: OrchestrationDeps,
+  taskRecords: TaskRunRecord[],
+  tasksMd: string,
+): OrchestrationRunCursor {
+  const next = selectNextTask(tasksMd);
+  return {
+    runId: deps.runId,
+    product: deps.product,
+    project: deps.project,
+    branch: deps.branch,
+    baseBranch: deps.baseBranch ?? '',
+    worktreePath: deps.worktreePath ?? '',
+    attemptCap: deps.attemptCap,
+    resumeMarker: 'resumable',
+    cursor: {
+      completedTaskIds: taskRecords
+        .filter((record) => record.outcome === 'ready-for-closeout')
+        .map((record) => record.taskId),
+      currentTaskId: null,
+      nextTaskId: next.kind === 'task' ? next.task.id : null,
+    },
+  };
 }
 
 function emitTaskSelected(deps: OrchestrationDeps, task: SelectedTask): void {

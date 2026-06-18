@@ -29,6 +29,8 @@ import {
 import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
 import type { SelectedTask } from './orch-task-select.js';
 import type { FinalizerAdapter } from './finalizer-handoff.js';
+import type { TaskRunRecord } from './orch-run-record.js';
+import { reconstructRun } from './orch-reconstruct.js';
 import { seedProjectContext } from './project-context.js';
 
 // ---------------------------------------------------------------------------
@@ -133,6 +135,27 @@ function eventNames(events: Array<{ kind: 'activity' | 'output'; data?: Record<s
     .map((event) => event.data?.['event'])
     .filter((name): name is string => typeof name === 'string');
 }
+
+interface PersistedRunCursor {
+  runId: string;
+  product: string;
+  project: string;
+  branch: string;
+  baseBranch: string;
+  worktreePath: string;
+  attemptCap: number;
+  resumeMarker: 'resumable';
+  cursor: {
+    completedTaskIds: string[];
+    currentTaskId: string | null;
+    nextTaskId: string | null;
+  };
+}
+
+type DurableRunStateDeps = OrchestrationDeps & {
+  appendTaskRunRecord: (record: TaskRunRecord) => Promise<void>;
+  writeRunCursor: (cursor: PersistedRunCursor) => Promise<void>;
+};
 
 // ---------------------------------------------------------------------------
 // Closeout — marks exactly the task, commits, advances
@@ -479,6 +502,82 @@ describe('project-orchestrator — context influence', () => {
     // The second task saw a context that records the first task's completion.
     expect(h.state.contextHandoffs).toHaveLength(2);
     expect(h.state.contextHandoffs[1]).toContain('done: build-the-streak-core');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Durable run state — TaskRunRecords + resume cursor survive a restart
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — durable run state', () => {
+  it('persists TaskRunRecords and a resumable cursor after closeout before advancing', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
+    const persistedRecords: TaskRunRecord[] = [];
+    const persistedCursors: PersistedRunCursor[] = [];
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        if (workflowCalls === 1) return readyEvidence(task);
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer'],
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: 'pause after one persisted task',
+        };
+      },
+    });
+    const deps = {
+      ...h.deps,
+      worktreePath,
+      appendTaskRunRecord: async (record: TaskRunRecord) => {
+        persistedRecords.push(record);
+      },
+      writeRunCursor: async (cursor: PersistedRunCursor) => {
+        persistedCursors.push(cursor);
+      },
+    } satisfies DurableRunStateDeps;
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('blocked');
+    expect(persistedRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'build-the-streak-core',
+        taskText: 'Build the streak core',
+        attemptId: 'run-1-build-the-streak-core',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        commitSha: 'sha-build-the-streak-core',
+        contextOutcome: 'updated',
+        gates: { objectionOpen: false },
+        outcome: 'ready-for-closeout',
+      }),
+    ]);
+    expect(persistedCursors).toContainEqual({
+      runId: 'run-1',
+      product: 'aura',
+      project: '14-x',
+      branch: 'jarvis-work/14-x',
+      baseBranch: 'main',
+      worktreePath,
+      attemptCap: 2,
+      resumeMarker: 'resumable',
+      cursor: {
+        completedTaskIds: ['build-the-streak-core'],
+        currentTaskId: null,
+        nextTaskId: 'render-the-streak-card',
+      },
+    });
+
+    const reconstructed = reconstructRun({
+      tasksMd: h.state.tasksMd,
+      records: persistedRecords,
+    });
+    expect(reconstructed.completedTaskIds).toEqual(['build-the-streak-core']);
+    expect(reconstructed.nextTask?.id).toBe('render-the-streak-card');
+    expect(reconstructed.drift).toBe(false);
   });
 });
 
