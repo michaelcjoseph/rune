@@ -49,12 +49,16 @@ export interface ObjectionFinding {
 
 export type ReviewerOutcome = 'pass' | 'pass-with-warnings' | 'fail' | 'block';
 
-/** The normalized reviewer's structured verdict carried in workflow evidence. */
-export interface NormalizedReviewerVerdict {
+export interface GateVerdict {
   outcome: ReviewerOutcome;
-  objections: ObjectionFinding[];
-  /** Optional notes for non-objection failures; objection details live in `objections`. */
+  findings: ObjectionFinding[];
   notes?: string;
+}
+
+/** The normalized reviewer's structured verdict carried in workflow evidence. */
+export interface NormalizedReviewerVerdict extends GateVerdict {
+  /** Legacy reviewer-evidence field retained for existing run-record consumers. */
+  objections: ObjectionFinding[];
   /** Set when the reviewer payload itself is malformed and must fail closed operationally. */
   operationalBlockReason?: string;
 }
@@ -65,10 +69,23 @@ export interface NormalizedReviewerVerdict {
 export interface ReviewerVerdict {
   outcome?: ReviewerOutcome;
   pass?: boolean;
-  objections: ObjectionFinding[];
-  /** Optional notes for non-objection failures; objection details live in `objections`. */
+  findings?: ObjectionFinding[];
+  objections?: ObjectionFinding[];
+  /** Optional notes for non-objection failures; finding details live in `findings`. */
   notes?: string;
 }
+
+export type GateReviewVerdict = GateVerdict | { pass: boolean; notes?: string };
+
+export interface WorkflowGateVerdicts {
+  reviewer?: GateVerdict;
+  techLeadDiff?: GateVerdict;
+  designer?: GateVerdict;
+}
+
+export type ReviewerEvidence =
+  | NormalizedReviewerVerdict
+  | (ReviewerVerdict & { objections: ObjectionFinding[] });
 
 export interface PmAcceptance {
   actor: 'pm';
@@ -147,11 +164,11 @@ export interface TeamTaskDeps {
   techLeadReviewDiff: (input: {
     task: SizedTask;
     diff: string;
-  }) => Promise<{ pass: boolean; notes?: string }>;
+  }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
     diff: string;
-  }) => Promise<{ pass: boolean; notes?: string }>;
+  }) => Promise<GateReviewVerdict>;
   pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
     resolved: boolean;
     rationale?: string;
@@ -189,7 +206,8 @@ export interface TaskEvidence {
    *  role-PRESENCE list (deduplicated), not a per-invocation count — a role that
    *  reviews twice (tech-lead: test intent then diff) appears once. */
   rolesInvoked: string[];
-  reviewerVerdict?: ReviewerVerdict;
+  reviewerVerdict?: ReviewerEvidence;
+  gateVerdicts?: WorkflowGateVerdicts;
   objectionOpen: boolean;
   handoffNotes: string[];
   noCodeTestRationale?: string;
@@ -335,7 +353,8 @@ async function runGated(
 
   // Round loop — coder → reviewer → tech-lead diff → designer, bounded by cap.
   let lastReviewer: NormalizedReviewerVerdict | undefined;
-  let lastDesignerPass = true;
+  let lastTechLeadDiff: GateVerdict | undefined;
+  let lastDesigner: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   let reviewerBlockCorrectionUsed = false;
   let coderAttemptsRemaining = input.cap;
@@ -394,6 +413,7 @@ async function runGated(
         blockedReason: lastReviewer.operationalBlockReason,
         rejectionFeedback: feedback,
         reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
         objectionOpen: false,
         noCodeTestRationale,
       });
@@ -425,6 +445,7 @@ async function runGated(
         blockedReason: 'open objection-class finding',
         rejectionFeedback: feedback,
         reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
         objectionOpen: true,
         noCodeTestRationale,
       });
@@ -442,28 +463,28 @@ async function runGated(
       roundFeedback.push(feedback);
     }
 
-    const tlDiff = await deps.techLeadReviewDiff({ task, diff: coder.diff });
+    lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({ task, diff: coder.diff }));
     emitRoleVerdict(input, {
       role: 'tech-lead',
       gate: 'implementation-diff',
-      verdict: tlDiff.pass ? 'pass' : 'fail',
-      summary: tlDiff.notes?.trim() || (tlDiff.pass
+      verdict: isGatePass(lastTechLeadDiff) ? 'pass' : 'fail',
+      summary: lastTechLeadDiff.notes?.trim() || (isGatePass(lastTechLeadDiff)
         ? 'tech-lead approved implementation diff'
         : 'tech-lead rejected implementation diff'),
     });
-    if (!tlDiff.pass) {
+    if (!isGatePass(lastTechLeadDiff)) {
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'tech-lead',
         counterpartRole: 'coder',
         artifact: 'implementation-diff',
-        reason: tlDiff.notes ?? 'tech-lead did not pass the implementation diff',
+        reason: lastTechLeadDiff.notes ?? 'tech-lead did not pass the implementation diff',
       });
       await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
       roundFeedback.push(feedback);
     }
 
-    lastDesignerPass = true;
+    lastDesigner = undefined;
     if (task.designerNeeded) {
       roles.add('designer');
       previousRole = emitRoleTransition(
@@ -473,22 +494,21 @@ async function runGated(
         'design',
         'designer-review',
       );
-      const designer = await deps.designer({ task, diff: coder.diff });
-      lastDesignerPass = designer.pass;
+      lastDesigner = normalizeGateVerdict(await deps.designer({ task, diff: coder.diff }));
       emitRoleVerdict(input, {
         role: 'designer',
         gate: 'design-review',
-        verdict: designer.pass ? 'pass' : 'fail',
-        summary: designer.notes?.trim() || (designer.pass
+        verdict: isGatePass(lastDesigner) ? 'pass' : 'fail',
+        summary: lastDesigner.notes?.trim() || (isGatePass(lastDesigner)
           ? 'designer approved implementation diff'
           : 'designer rejected implementation diff'),
       });
-      if (!designer.pass) {
+      if (!isGatePass(lastDesigner)) {
         const feedback = buildGateRejectionFeedback({
           rejectingRole: 'designer',
           counterpartRole: 'coder',
           artifact: 'design-review',
-          reason: designer.notes ?? 'designer review failed',
+          reason: lastDesigner.notes ?? 'designer review failed',
         });
         await recordGateRejection(deps, feedback);
         lastRejectionFeedback = feedback;
@@ -496,12 +516,13 @@ async function runGated(
       }
     }
 
-    if (isReviewerPass(lastReviewer) && tlDiff.pass && lastDesignerPass) {
+    if (isReviewerPass(lastReviewer) && isGatePass(lastTechLeadDiff) && isGatePass(lastDesigner)) {
       return {
         taskId: task.id,
         outcome: 'ready-for-closeout',
         rolesInvoked: roles.list(),
         reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
         objectionOpen: false,
         handoffNotes,
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
@@ -515,7 +536,7 @@ async function runGated(
 
   // Cap reached. A failed designer gate blocks (a UX defect is not PM-clearable);
   // otherwise non-objection disagreement routes to PM wrap-up.
-  if (task.designerNeeded && !lastDesignerPass) {
+  if (task.designerNeeded && !isGatePass(lastDesigner)) {
     if (lastRejectionFeedback !== undefined) {
       emitGateRejection(input, lastRejectionFeedback);
     }
@@ -525,6 +546,7 @@ async function runGated(
         ? { rejectionFeedback: lastRejectionFeedback }
         : {}),
       reviewerVerdict: lastReviewer,
+      gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
       noCodeTestRationale,
     });
   }
@@ -552,14 +574,19 @@ async function runGated(
           ? { rejectionFeedback: lastRejectionFeedback }
           : {}),
         reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
         noCodeTestRationale,
       });
     }
+    const acceptedReviewer = acceptance !== undefined
+      ? reviewerAcceptedWithWarnings(lastReviewer)
+      : lastReviewer;
     return {
       taskId: task.id,
       outcome: 'ready-for-closeout',
       rolesInvoked: roles.list(),
-      reviewerVerdict: lastReviewer,
+      reviewerVerdict: acceptedReviewer,
+      gateVerdicts: buildWorkflowGateVerdicts(acceptedReviewer, lastTechLeadDiff, lastDesigner),
       objectionOpen: false,
       handoffNotes,
       ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
@@ -575,6 +602,7 @@ async function runGated(
       ? { rejectionFeedback: lastRejectionFeedback }
       : {}),
     reviewerVerdict: lastReviewer,
+    gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
     noCodeTestRationale,
   });
 }
@@ -601,7 +629,8 @@ function block(
   extra: {
     blockedReason: string;
     rejectionFeedback?: GateRejectionFeedback;
-    reviewerVerdict?: ReviewerVerdict;
+    reviewerVerdict?: ReviewerEvidence;
+    gateVerdicts?: WorkflowGateVerdicts;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
   },
@@ -617,6 +646,7 @@ function block(
       ? { rejectionFeedback: extra.rejectionFeedback }
       : {}),
     ...(extra.reviewerVerdict !== undefined ? { reviewerVerdict: extra.reviewerVerdict } : {}),
+    ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
@@ -650,35 +680,97 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
 }
 
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
-  const objections = [...verdict.objections];
-  const malformedSeverity = objections.find((objection) =>
-    !isObjectionSeverity(objection.severity));
+  const raw = verdict as Record<string, unknown>;
+  const findings = findingsFromVerdict(raw);
+  const malformedSeverity = findings.find((finding) => !isObjectionSeverity(finding.severity));
   if (malformedSeverity !== undefined) {
     const reason =
       `operational block: reviewer-verdict contained malformed severity ` +
       `"${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`;
     return {
       outcome: 'block',
-      objections,
+      findings,
+      objections: findings,
+      notes: reason,
+      operationalBlockReason: reason,
+    };
+  }
+  const rawOutcome = raw['outcome'];
+  if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome)) {
+    const reason = `operational block: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
+    return {
+      outcome: 'block',
+      findings,
+      objections: findings,
       notes: reason,
       operationalBlockReason: reason,
     };
   }
   const outcomes: ReviewerOutcome[] = [];
-  if (objections.length > 0) {
-    outcomes.push(outcomeForObjectionSeverities(objections));
+  if (findings.length > 0) {
+    outcomes.push(outcomeForObjectionSeverities(findings));
   }
-  if (verdict.outcome !== undefined) {
-    outcomes.push(verdict.outcome);
-  } else if (objections.length === 0) {
-    outcomes.push(verdict.pass === true ? 'pass' : 'fail');
+  if (isReviewerOutcome(rawOutcome)) {
+    outcomes.push(rawOutcome);
+  } else if (findings.length === 0) {
+    outcomes.push(raw['pass'] === true ? 'pass' : 'fail');
   }
   const outcome = strictestReviewerOutcome(outcomes);
   return {
     outcome,
-    objections,
+    findings,
+    objections: findings,
     ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
   };
+}
+
+function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdict {
+  if (verdict === undefined) {
+    return { outcome: 'fail', findings: [], notes: 'missing gate verdict — failing closed' };
+  }
+  const raw = verdict as Record<string, unknown>;
+  const findings = findingsFromVerdict(raw);
+  const rawOutcome = raw['outcome'];
+  const outcome = isReviewerOutcome(rawOutcome)
+    ? rawOutcome
+    : raw['pass'] === true
+      ? 'pass'
+      : 'fail';
+  const notes = typeof raw['notes'] === 'string' ? raw['notes'] : undefined;
+  return {
+    outcome: strictestReviewerOutcome([
+      outcome,
+      ...(findings.length > 0 ? [outcomeForObjectionSeverities(findings)] : []),
+    ]),
+    findings,
+    ...(notes !== undefined ? { notes } : {}),
+  };
+}
+
+function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
+  const source = Array.isArray(raw['findings'])
+    ? raw['findings']
+    : Array.isArray(raw['objections'])
+      ? raw['objections']
+      : [];
+  return source.flatMap((item): ObjectionFinding[] => {
+    if (!item || typeof item !== 'object') return [];
+    const finding = item as Record<string, unknown>;
+    if (
+      typeof finding['class'] !== 'string' ||
+      typeof finding['severity'] !== 'string' ||
+      typeof finding['location'] !== 'string' ||
+      typeof finding['rationale'] !== 'string'
+    ) {
+      return [];
+    }
+    return [{
+      class: finding['class'] as ObjectionClass,
+      severity: finding['severity'] as ObjectionSeverity,
+      location: finding['location'],
+      rationale: finding['rationale'],
+    }];
+  });
 }
 
 function outcomeForObjectionSeverities(objections: ObjectionFinding[]): ReviewerOutcome {
@@ -707,6 +799,15 @@ function isObjectionSeverity(severity: unknown): severity is ObjectionSeverity {
   );
 }
 
+function isReviewerOutcome(outcome: unknown): outcome is ReviewerOutcome {
+  return (
+    outcome === 'pass' ||
+    outcome === 'pass-with-warnings' ||
+    outcome === 'fail' ||
+    outcome === 'block'
+  );
+}
+
 function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {
   return outcomes.reduce(
     (strictest, outcome) =>
@@ -726,13 +827,19 @@ function isReviewerPass(verdict: NormalizedReviewerVerdict): boolean {
   return verdict.outcome === 'pass' || verdict.outcome === 'pass-with-warnings';
 }
 
+function isGatePass(verdict: GateVerdict | undefined): boolean {
+  return verdict === undefined ||
+    verdict.outcome === 'pass' ||
+    verdict.outcome === 'pass-with-warnings';
+}
+
 function isReviewerBlock(verdict: NormalizedReviewerVerdict): boolean {
   return verdict.outcome === 'block';
 }
 
 function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {
-  if (verdict.objections.length > 0) {
-    return summarizeObjections(verdict.objections);
+  if (verdict.findings.length > 0) {
+    return summarizeObjections(verdict.findings);
   }
   if (verdict.notes?.trim()) {
     return verdict.notes.trim();
@@ -747,6 +854,38 @@ function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {
     case 'block':
       return 'reviewer blocked implementation diff';
   }
+}
+
+function buildWorkflowGateVerdicts(
+  reviewer: NormalizedReviewerVerdict | undefined,
+  techLeadDiff: GateVerdict | undefined,
+  designer: GateVerdict | undefined,
+): WorkflowGateVerdicts | undefined {
+  const verdicts: WorkflowGateVerdicts = {};
+  if (reviewer !== undefined) verdicts.reviewer = toPublicGateVerdict(reviewer);
+  if (techLeadDiff !== undefined) verdicts.techLeadDiff = toPublicGateVerdict(techLeadDiff);
+  if (designer !== undefined) verdicts.designer = toPublicGateVerdict(designer);
+  return Object.keys(verdicts).length > 0 ? verdicts : undefined;
+}
+
+function toPublicGateVerdict(verdict: GateVerdict): GateVerdict {
+  return {
+    outcome: verdict.outcome,
+    findings: verdict.findings.map((finding) => ({ ...finding })),
+    ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
+  };
+}
+
+function reviewerAcceptedWithWarnings(
+  verdict: NormalizedReviewerVerdict | undefined,
+): NormalizedReviewerVerdict | undefined {
+  if (verdict === undefined || verdict.outcome !== 'fail' || verdict.findings.length > 0) {
+    return verdict;
+  }
+  return {
+    ...verdict,
+    outcome: 'pass-with-warnings',
+  };
 }
 
 function normalizeFeedback(

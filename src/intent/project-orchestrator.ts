@@ -444,10 +444,11 @@ function reviewerOutcome(verdict: NonNullable<TaskEvidence['reviewerVerdict']>):
 function reviewerWarningsField(
   verdict: TaskEvidence['reviewerVerdict'],
 ): Pick<TaskRunRecord, 'warnings'> | Record<string, never> {
-  if (verdict?.outcome !== 'pass-with-warnings' || verdict.objections.length === 0) {
+  const warnings = reviewerFindings(verdict);
+  if (verdict?.outcome !== 'pass-with-warnings' || warnings.length === 0) {
     return {};
   }
-  return { warnings: verdict.objections };
+  return { warnings };
 }
 
 function acceptanceField(
@@ -504,7 +505,16 @@ function operationalParkedRunField(
 
 function hasHighCriticalObjection(evidence: TaskEvidence): boolean {
   if (!evidence.objectionOpen) return false;
-  return (evidence.reviewerVerdict?.objections ?? []).some(
+  return reviewerFindings(evidence.reviewerVerdict).some(
     (objection) => objection.severity === 'high' || objection.severity === 'critical',
   );
+}
+
+function reviewerFindings(
+  verdict: TaskEvidence['reviewerVerdict'],
+): NonNullable<TaskEvidence['reviewerVerdict']>['objections'] {
+  if (verdict === undefined) return [];
+  return 'findings' in verdict && verdict.findings !== undefined
+    ? verdict.findings
+    : verdict.objections;
 }

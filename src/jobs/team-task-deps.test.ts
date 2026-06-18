@@ -283,6 +283,85 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(structured).not.toHaveProperty('pass');
   });
 
+  it('parses reviewer verdicts as shared GateVerdict records with findings, not objections', async () => {
+    const finding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'duplicate reads are harmless but should be tracked',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role !== 'reviewer') return GREEN_JUDGMENT_REPLY;
+        return [
+          '```reviewer-verdict',
+          JSON.stringify({
+            outcome: 'pass-with-warnings',
+            findings: [finding],
+            notes: 'ship with a recorded performance caveat',
+          }),
+          '```',
+        ].join('\n');
+      },
+    }));
+
+    const verdict = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const structured = verdict as unknown as Record<string, unknown>;
+
+    expect(structured).toMatchObject({
+      outcome: 'pass-with-warnings',
+      findings: [finding],
+      notes: 'ship with a recorded performance caveat',
+    });
+    expect(structured).not.toHaveProperty('pass');
+    expect(structured).not.toHaveProperty('objections');
+  });
+
+  it('parses tech-lead diff and designer reviews as shared GateVerdict records', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            '{"outcome":"pass-with-warnings","findings":[],"notes":"acceptable with a follow-up caveat"}',
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            '{"outcome":"pass","findings":[],"notes":"UI is consistent"}',
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    expect(techLead as unknown as Record<string, unknown>).toMatchObject({
+      outcome: 'pass-with-warnings',
+      findings: [],
+      notes: 'acceptable with a follow-up caveat',
+    });
+    expect(designer as unknown as Record<string, unknown>).toMatchObject({
+      outcome: 'pass',
+      findings: [],
+      notes: 'UI is consistent',
+    });
+    expect(techLead).not.toHaveProperty('pass');
+    expect(designer).not.toHaveProperty('pass');
+  });
+
   it('judgment seams fail closed on an unparseable reply', async () => {
     const deps = buildDeps(
       resolveTeamRoleModels(loadRealPolicy()),
@@ -297,7 +376,9 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
       context: 'c',
       reviewerProvider: 'anthropic',
     });
-    expect(verdict.pass).toBe(false);
+    const structured = verdict as unknown as Record<string, unknown>;
+    expect(structured['outcome']).toMatch(/fail|block/);
+    expect(structured).not.toHaveProperty('pass');
 
     const tl = await deps.techLeadReviewTests({ task: sizedTask, qa: { kind: 'tests-written', testIds: [] } });
     expect(tl.approved).toBe(false);

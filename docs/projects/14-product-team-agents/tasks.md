@@ -962,7 +962,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Implementation
 
-- [ ] Add a structured `outcome` field (`pass`/`pass-with-warnings`/`fail`/`block`) to
+- [x] Add a structured `outcome` field (`pass`/`pass-with-warnings`/`fail`/`block`) to
       a shared `GateVerdict` contract used by reviewer, tech-lead diff, and designer gates.
       Normalize existing boolean adapters at their boundary, then migrate orchestration callers
       off the bare `pass` boolean + `objections.length > 0` branch (`team-task-workflow.ts`).

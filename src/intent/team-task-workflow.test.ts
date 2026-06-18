@@ -80,6 +80,13 @@ const INPUT = {
 };
 
 const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail', 'block'] as const;
+type GateVerdictRecord = {
+  outcome?: unknown;
+  findings?: unknown;
+  notes?: unknown;
+  pass?: unknown;
+  objections?: unknown;
+};
 
 // ---------------------------------------------------------------------------
 // QA-first
@@ -346,20 +353,53 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(verdict).not.toHaveProperty('pass');
   });
 
-  it('normalizes reviewer, tech-lead diff, and designer gates to the shared outcome verdict shape', async () => {
-    const ev = await runTeamTaskWorkflow(frontEndTask, INPUT, makeDeps());
+  it('normalizes reviewer, tech-lead diff, and designer gates to one shared GateVerdict shape', async () => {
+    const warningFinding: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+    };
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        reviewer: async () => ({
+          outcome: 'pass-with-warnings',
+          findings: [warningFinding],
+          notes: 'non-blocking performance follow-up',
+        } as unknown as ReviewerVerdict),
+        techLeadReviewDiff: async () => ({
+          outcome: 'pass',
+          findings: [],
+          notes: 'implementation is coherent',
+        } as unknown as { pass: boolean; notes?: string }),
+        designer: async () => ({
+          outcome: 'pass',
+          findings: [],
+          notes: 'UI is consistent',
+        } as unknown as { pass: boolean; notes?: string }),
+      }),
+    );
     const gateVerdicts = (ev as unknown as {
-      gateVerdicts?: Record<string, Record<string, unknown>>;
+      gateVerdicts?: Record<string, GateVerdictRecord>;
     }).gateVerdicts;
 
+    expect(ev.outcome).toBe('ready-for-closeout');
     expect(gateVerdicts).toMatchObject({
-      reviewer: { outcome: 'pass' },
-      techLeadDiff: { outcome: 'pass' },
-      designer: { outcome: 'pass' },
+      reviewer: {
+        outcome: 'pass-with-warnings',
+        findings: [warningFinding],
+        notes: 'non-blocking performance follow-up',
+      },
+      techLeadDiff: { outcome: 'pass', findings: [], notes: 'implementation is coherent' },
+      designer: { outcome: 'pass', findings: [], notes: 'UI is consistent' },
     });
     for (const verdict of Object.values(gateVerdicts ?? {})) {
       expect(REVIEW_OUTCOMES).toContain(verdict['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
+      expect(verdict).toHaveProperty('findings');
       expect(verdict).not.toHaveProperty('pass');
+      expect(verdict).not.toHaveProperty('objections');
     }
   });
 

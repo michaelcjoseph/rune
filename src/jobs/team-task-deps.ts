@@ -50,6 +50,7 @@ import {
   type ObjectionSeverity,
   type QaResult,
   type GateRejectionFeedback,
+  type GateVerdict,
   type ReviewerOutcome,
   type ReviewerVerdict,
   type TaskEvidence,
@@ -235,9 +236,9 @@ const REVIEWER_INSTRUCTION = [
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
   'value: pass, pass-with-warnings, fail, or block:',
   '```reviewer-verdict',
-  '{"outcome": "pass", "notes": "<short non-objection feedback>", "objections": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
+  '{"outcome": "pass", "notes": "<short non-objection feedback>", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
   '```',
-  'An empty objections array means no objection-class finding.',
+  'An empty findings array means no objection-class finding.',
 ].join('\n');
 
 const TL_TEST_REVIEW_INSTRUCTION = [
@@ -257,7 +258,7 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
-  '{"pass": true, "notes": "<short reason>"}',
+  '{"outcome": "pass", "findings": [], "notes": "<short reason>"}',
   '```',
 ].join('\n');
 
@@ -267,7 +268,7 @@ const DESIGNER_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```designer-review block containing JSON:',
   '```designer-review',
-  '{"pass": true, "notes": "<short reason>"}',
+  '{"outcome": "pass", "findings": [], "notes": "<short reason>"}',
   '```',
 ].join('\n');
 
@@ -314,51 +315,26 @@ const GATE_LESSON_DRAFT_INSTRUCTION = [
 function parseReviewerVerdict(text: string): ReviewerVerdict {
   const parsed = extractFencedJson(text, 'reviewer-verdict');
   if (!parsed || typeof parsed !== 'object') {
-    return withLegacyPassAccessor({ outcome: 'fail', objections: [] }, false);
+    return { outcome: 'fail', findings: [] };
   }
   const v = parsed as Record<string, unknown>;
-  const objections: ObjectionFinding[] = Array.isArray(v['objections'])
-    ? (v['objections'] as unknown[]).flatMap((raw): ObjectionFinding[] => {
-        if (!raw || typeof raw !== 'object') return [];
-        const o = raw as Record<string, unknown>;
-        if (
-          typeof o['class'] !== 'string' ||
-          !OBJECTION_CLASSES.has(o['class']) ||
-          typeof o['severity'] !== 'string' ||
-          !OBJECTION_SEVERITIES.has(o['severity']) ||
-          typeof o['location'] !== 'string' ||
-          typeof o['rationale'] !== 'string'
-        ) {
-          return [];
-        }
-        return [
-          {
-            class: o['class'] as ObjectionClass,
-            severity: o['severity'] as ObjectionSeverity,
-            location: o['location'].slice(0, NOTE_MAX_CHARS),
-            rationale: o['rationale'].slice(0, NOTE_MAX_CHARS),
-          },
-        ];
-      })
-    : [];
+  const findings = parseFindings(v);
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
   const parsedOutcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as ReviewerOutcome
     : undefined;
-  const outcome = objections.length > 0
-    ? 'block'
-    : parsedOutcome ?? (legacyPass === true ? 'pass' : 'fail');
+  const outcome = parsedOutcome ?? (findings.length > 0 ? 'block' : legacyPass === true ? 'pass' : 'fail');
   if (parsedOutcome === undefined && legacyPass !== undefined && hasAggregateFixtureFences(text)) {
     return {
       pass: legacyPass,
-      objections,
+      objections: findings,
       ...(notes !== undefined ? { notes } : {}),
     };
   }
   return {
     outcome,
-    objections,
+    findings,
     ...(notes !== undefined ? { notes } : {}),
   };
 }
@@ -368,13 +344,53 @@ function hasAggregateFixtureFences(text: string): boolean {
     text.includes('```designer-review') || text.includes('```pm-wrapup');
 }
 
-function withLegacyPassAccessor(verdict: ReviewerVerdict, pass: boolean): ReviewerVerdict {
-  Object.defineProperty(verdict, 'pass', {
-    value: pass,
-    enumerable: false,
-    configurable: true,
+function parseFindings(v: Record<string, unknown>): ObjectionFinding[] {
+  const source = Array.isArray(v['findings'])
+    ? v['findings']
+    : Array.isArray(v['objections'])
+      ? v['objections']
+      : [];
+  return (source as unknown[]).flatMap((raw): ObjectionFinding[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const o = raw as Record<string, unknown>;
+    if (
+      typeof o['class'] !== 'string' ||
+      !OBJECTION_CLASSES.has(o['class']) ||
+      typeof o['severity'] !== 'string' ||
+      !OBJECTION_SEVERITIES.has(o['severity']) ||
+      typeof o['location'] !== 'string' ||
+      typeof o['rationale'] !== 'string'
+    ) {
+      return [];
+    }
+    return [
+      {
+        class: o['class'] as ObjectionClass,
+        severity: o['severity'] as ObjectionSeverity,
+        location: o['location'].slice(0, NOTE_MAX_CHARS),
+        rationale: o['rationale'].slice(0, NOTE_MAX_CHARS),
+      },
+    ];
   });
-  return verdict;
+}
+
+function parseGateVerdict(text: string, tag: string): GateVerdict {
+  const parsed = extractFencedJson(text, tag);
+  if (!parsed || typeof parsed !== 'object') {
+    return { outcome: 'fail', findings: [], notes: `unparseable ${tag} verdict — failing closed` };
+  }
+  const v = parsed as Record<string, unknown>;
+  const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  const outcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
+    ? v['outcome'] as ReviewerOutcome
+    : v['pass'] === true
+      ? 'pass'
+      : 'fail';
+  return {
+    outcome,
+    findings: parseFindings(v),
+    ...(notes !== undefined ? { notes } : {}),
+  };
 }
 
 /** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */
@@ -683,7 +699,7 @@ export function buildProductionTeamTaskDeps(
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
         // reviewer verdict must never be fabricable without a resolved
         // independent reviewer, even if a future caller skips the gate.
-        return { outcome: 'block', objections: [] };
+        return { outcome: 'block', findings: [] };
       }
       const body = [
         `## Task\n\n${task.text}`,
@@ -703,15 +719,13 @@ export function buildProductionTeamTaskDeps(
     techLeadReviewDiff: async ({ task, diff }) => {
       const body = [`## Task\n\n${task.text}`, '', `## Diff\n\n${diff}`].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body);
-      const { value, notes } = parseFlagVerdict(reply, 'tl-diff-review', 'pass');
-      return { pass: value, ...(notes !== undefined ? { notes } : {}) };
+      return parseGateVerdict(reply, 'tl-diff-review');
     },
 
     designer: async ({ task, diff }) => {
       const body = [`## Task\n\n${task.text}`, '', `## Diff\n\n${diff}`].join('\n');
       const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body);
-      const { value, notes } = parseFlagVerdict(reply, 'designer-review', 'pass');
-      return { pass: value, ...(notes !== undefined ? { notes } : {}) };
+      return parseGateVerdict(reply, 'designer-review');
     },
 
     pmWrapup: async ({ task, reason }) => {
