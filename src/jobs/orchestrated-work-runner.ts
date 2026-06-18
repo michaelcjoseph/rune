@@ -114,6 +114,8 @@ export interface OrchestratedRecoveryRedispatch {
 
 export interface OrchestratedWorkRecoveryDeps {
   readRunningOrchestratedMutations: () => Promise<MutationDescriptor<OrchestratedWorkPayload>[]>;
+  acquireRecoveryLease?: (runId: string) => Promise<boolean>;
+  releaseRecoveryLease?: (runId: string) => Promise<void>;
   readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
   readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
   readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
@@ -331,19 +333,72 @@ function readFileSafe(path: string): string {
 const ORCHESTRATED_TASK_RECORDS_FILE = 'task-records.jsonl';
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
 
-function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, record: TaskRunRecord): void {
+export function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, record: TaskRunRecord): void {
   const dir = join(baseDir, runId);
   mkdirSync(dir, { recursive: true });
   appendFileSync(join(dir, ORCHESTRATED_TASK_RECORDS_FILE), JSON.stringify(record) + '\n', 'utf8');
 }
 
-function writeOrchestratedRunCursor(baseDir: string, runId: string, cursor: OrchestrationRunCursor): void {
+export function readOrchestratedTaskRunRecords(baseDir: string, runId: string): TaskRunRecord[] {
+  let raw: string;
+  try {
+    raw = readFileSync(join(baseDir, runId, ORCHESTRATED_TASK_RECORDS_FILE), 'utf8');
+  } catch {
+    return [];
+  }
+
+  const records: TaskRunRecord[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line) as TaskRunRecord);
+    } catch {
+      log.warn('orchestrated task-records.jsonl: skipped malformed line', { runId });
+    }
+  }
+  return records;
+}
+
+export function writeOrchestratedRunCursor(baseDir: string, runId: string, cursor: OrchestrationRunCursor): void {
   const dir = join(baseDir, runId);
   mkdirSync(dir, { recursive: true });
   const target = join(dir, ORCHESTRATED_CURSOR_FILE);
   const tmp = join(dir, `.${ORCHESTRATED_CURSOR_FILE}.${process.pid}.tmp`);
   writeFileSync(tmp, JSON.stringify(cursor, null, 2), 'utf8');
   renameSync(tmp, target);
+}
+
+export function readOrchestratedRunCursor(baseDir: string, runId: string): OrchestrationRunCursor | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(baseDir, runId, ORCHESTRATED_CURSOR_FILE), 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!isOrchestrationRunCursor(parsed) || parsed.runId !== runId) return null;
+  return parsed;
+}
+
+function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCursor {
+  if (!value || typeof value !== 'object') return false;
+  const cursor = value as Partial<OrchestrationRunCursor>;
+  const position = cursor.cursor as Partial<OrchestrationRunCursor['cursor']> | undefined;
+  return (
+    cursor.resumeMarker === 'resumable' &&
+    typeof cursor.runId === 'string' &&
+    typeof cursor.product === 'string' &&
+    typeof cursor.project === 'string' &&
+    typeof cursor.branch === 'string' &&
+    typeof cursor.baseBranch === 'string' &&
+    typeof cursor.worktreePath === 'string' &&
+    typeof cursor.attemptCap === 'number' &&
+    Number.isFinite(cursor.attemptCap) &&
+    !!position &&
+    Array.isArray(position.completedTaskIds) &&
+    position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
+    (position.currentTaskId === null || typeof position.currentTaskId === 'string') &&
+    (position.nextTaskId === null || typeof position.nextTaskId === 'string')
+  );
 }
 
 export async function recoverOrchestratedWorkRuns(
@@ -358,44 +413,59 @@ export async function recoverOrchestratedWorkRuns(
       continue;
     }
 
-    const cursor = await deps.readRunCursor(mutation.id);
-    if (!cursor || cursor.resumeMarker !== 'resumable') {
-      await deps.markOrphaned(mutation, 'missing resumable orchestrated cursor');
-      result.orphaned.push(mutation.id);
-      continue;
+    let leaseAcquired = false;
+    if (deps.acquireRecoveryLease) {
+      leaseAcquired = await deps.acquireRecoveryLease(mutation.id);
+      if (!leaseAcquired) {
+        result.skipped.push(mutation.id);
+        continue;
+      }
     }
 
     try {
-      const [records, tasksMd] = await Promise.all([
-        deps.readTaskRunRecords(mutation.id),
-        deps.readTasksMd(cursor),
-      ]);
-      const reconstruction = reconstructRun({ tasksMd, records });
-
-      if (reconstruction.drift) {
-        const terminal = term(mutation.id, 'failed', {
-          projectSlug: mutation.payload.projectSlug,
-          product: mutation.payload.product ?? cursor.product,
-          reason: 'orchestrated recovery drift: completed task records disagree with tasks.md',
-        });
-        await deps.writeTerminal(mutation, terminal);
+      const cursor = await deps.readRunCursor(mutation.id);
+      if (!cursor || cursor.resumeMarker !== 'resumable') {
+        await deps.markOrphaned(mutation, 'missing resumable orchestrated cursor');
         result.orphaned.push(mutation.id);
         continue;
       }
 
-      await deps.redispatchOrchestratedMutation(mutation, {
-        branch: cursor.branch,
-        baseBranch: cursor.baseBranch,
-        worktreePath: cursor.worktreePath,
-        attemptCap: cursor.attemptCap,
-        reconstruction,
-        resumeFromTaskId: reconstruction.nextTask?.id ?? null,
-        existingBranch: true,
-      });
-      result.resumed.push(mutation.id);
-    } catch (err) {
-      await deps.markOrphaned(mutation, (err as Error).message);
-      result.orphaned.push(mutation.id);
+      try {
+        const [records, tasksMd] = await Promise.all([
+          deps.readTaskRunRecords(mutation.id),
+          deps.readTasksMd(cursor),
+        ]);
+        const reconstruction = reconstructRun({ tasksMd, records });
+
+        if (reconstruction.drift) {
+          const terminal = term(mutation.id, 'failed', {
+            projectSlug: mutation.payload.projectSlug,
+            product: mutation.payload.product ?? cursor.product,
+            reason: 'orchestrated recovery drift: completed task records disagree with tasks.md',
+          });
+          await deps.writeTerminal(mutation, terminal);
+          result.orphaned.push(mutation.id);
+          continue;
+        }
+
+        await deps.redispatchOrchestratedMutation(mutation, {
+          branch: cursor.branch,
+          baseBranch: cursor.baseBranch,
+          worktreePath: cursor.worktreePath,
+          attemptCap: cursor.attemptCap,
+          reconstruction,
+          resumeFromTaskId: reconstruction.nextTask?.id ?? null,
+          existingBranch: true,
+        });
+        result.resumed.push(mutation.id);
+      } catch (err) {
+        await deps.markOrphaned(mutation, (err as Error).message);
+        result.orphaned.push(mutation.id);
+      }
+    } finally {
+      if (leaseAcquired) {
+        await deps.releaseRecoveryLease?.(mutation.id);
+      }
     }
   }
 

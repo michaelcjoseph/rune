@@ -826,7 +826,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > Lands via the orchestrator as a single unit. Not done until the live acceptance proves a mid-run
 > restart resumes to a single clean terminal.
 
-- [ ] Build the `TaskRunRecord` JSONL store + run cursor + resume marker (the persistence layer
+- [x] Build the `TaskRunRecord` JSONL store + run cursor + resume marker (the persistence layer
       `orch-run-record.ts` promises); reuse Phase 10's transcript as part of the record set.
 - [ ] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
       or `resumable` orchestrated mutation against its branch instead of the blind
