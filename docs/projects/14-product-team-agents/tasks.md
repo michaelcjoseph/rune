@@ -879,7 +879,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       reference context (the Phase 6 compounding path).
 - [x] No-double-write test: the nightly loop and the gate-time path share one write path and do
       not double-write the same lesson (the `memory-writer.ts` dedupe is the guard).
-- [ ] Learning-fail-safe test: lesson drafting, validation, or memory-write failure records a
+- [x] Learning-fail-safe test: lesson drafting, validation, or memory-write failure records a
       durable skip/error and does not block the current corrective retry path.
 - [ ] Confirm red before implementation.
 

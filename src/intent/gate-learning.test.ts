@@ -173,3 +173,63 @@ describe('gate-triggered learning — draft then neutral-validate', () => {
     expect(deps.writeLesson).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('gate-triggered learning — fail-safe skip/error record', () => {
+  it.each([
+    {
+      phase: 'lesson-drafting',
+      deps: {
+        draftLesson: vi.fn(async () => {
+          throw new Error('draft model unavailable');
+        }),
+        validateLesson: vi.fn(),
+        writeLesson: vi.fn(),
+      } satisfies GateLearningDeps,
+    },
+    {
+      phase: 'lesson-validation',
+      deps: {
+        draftLesson: vi.fn(async () => ({
+          kind: 'candidate-lesson',
+          draftedBy: 'tech-lead',
+          targetRole: 'qa',
+          lesson: 'Keep redaction fixtures structurally distinct from expected output.',
+        })),
+        validateLesson: vi.fn(async () => {
+          throw new Error('validator timed out');
+        }),
+        writeLesson: vi.fn(),
+      } satisfies GateLearningDeps,
+    },
+    {
+      phase: 'memory-write',
+      deps: {
+        draftLesson: vi.fn(async () => ({
+          kind: 'candidate-lesson',
+          draftedBy: 'tech-lead',
+          targetRole: 'qa',
+          lesson: 'Keep redaction fixtures structurally distinct from expected output.',
+        })),
+        validateLesson: vi.fn(async () => ({
+          kind: 'lesson',
+          stage: 'test',
+          role: 'qa',
+          lesson: 'Keep redaction fixtures structurally distinct from expected output.',
+        })),
+        writeLesson: vi.fn(async () => {
+          throw new Error('memory file locked');
+        }),
+      } satisfies GateLearningDeps,
+    },
+  ])('records a durable skip/error and resolves when $phase fails', async ({ phase, deps }) => {
+    const record = rejection();
+
+    await expect(runGateTriggeredLearning(record, deps)).resolves.toMatchObject({
+      kind: 'skipped',
+      phase,
+      role: 'qa',
+      rejection: record,
+      error: expect.any(String),
+    });
+  });
+});

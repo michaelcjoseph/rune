@@ -98,7 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- loop.test.ts src/jobs/team-task-deps.gate-learning.test.ts --configLoader runner` passed.
-- `npm run build` still fails on existing unrelated repo type errors; none point at the new adapter or changed gate-time wiring.
+- - `npm test -- src/jobs/team-task-deps.gate-learning.test.ts --configLoader runner` passed.
+- `npm run build` still fails on existing unrelated repo type errors; none reference the changed implementation files.
 
-No commit made. The QA test remains staged; implementation changes are unstaged.
+No commit made. The QA test files remain staged; my implementation changes are unstaged.

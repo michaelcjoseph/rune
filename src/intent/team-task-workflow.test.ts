@@ -161,6 +161,43 @@ describe('team-task-workflow — QA-first', () => {
       actionableNotes: ['add a rollover assertion before coding'],
     });
   });
+
+  it('continues the corrective QA retry when gate-time learning fails', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: unknown }> = [];
+    let techLeadReviews = 0;
+    let coderCalled = false;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: unknown });
+        return { kind: 'tests-written', testIds: [`t${qaInputs.length}`] };
+      },
+      techLeadReviewTests: async () => {
+        techLeadReviews += 1;
+        return techLeadReviews === 1
+          ? { approved: false, notes: 'add the raw secret absence assertion' }
+          : { approved: true };
+      },
+      onGateRejection: async () => {
+        throw new Error('learning write failed');
+      },
+      coder: async () => {
+        coderCalled = true;
+        return { diff: 'd', handoffNotes: [] };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderCalled).toBe(true);
+    expect(qaInputs).toHaveLength(2);
+    expect(qaInputs[1]?.rejectionFeedback).toMatchObject({
+      rejectingRole: 'tech-lead',
+      rejectedRole: 'qa',
+      rejectedArtifact: 'test-intent',
+      actionableNotes: ['add the raw secret absence assertion'],
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

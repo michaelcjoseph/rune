@@ -69,27 +69,49 @@ export type GateLearningResult =
       role: RoleName;
       lesson: string;
     }
-  | GateNoLesson;
+  | GateNoLesson
+  | {
+      kind: 'skipped';
+      phase: 'lesson-drafting' | 'lesson-validation' | 'memory-write';
+      role: RoleName;
+      rejection: GateRejectionFeedback;
+      error: string;
+    };
 
 /** Run one gate-triggered learning pass for a structured rejection. */
 export async function runGateTriggeredLearning(
   rejection: GateRejectionFeedback,
   deps: GateLearningDeps,
 ): Promise<GateLearningResult> {
-  const candidate = parseGateLessonCandidate(await deps.draftLesson({ rejection }));
+  const targetRole = rejection.counterpartRole;
+  let candidate: GateLessonCandidate | null;
+  try {
+    candidate = parseGateLessonCandidate(await deps.draftLesson({ rejection }));
+  } catch (err) {
+    return skipped('lesson-drafting', targetRole, rejection, err);
+  }
   if (!candidate) {
     return { kind: 'no-lesson', rationale: 'draft lesson output could not be parsed' };
   }
-  const validation = parseGateValidationResult(
-    await deps.validateLesson({ rejection, candidate }),
-  );
+  let validation: GateValidationResult;
+  try {
+    validation = parseGateValidationResult(
+      await deps.validateLesson({ rejection, candidate }),
+    );
+  } catch (err) {
+    return skipped('lesson-validation', targetRole, rejection, err);
+  }
 
   if (validation.kind === 'no-lesson') {
     return validation;
   }
 
-  const targetRole = rejection.counterpartRole;
-  const write = await deps.writeLesson(targetRole, validation.lesson, rejection);
+  let write: { committed: boolean; captured?: string };
+  try {
+    write = await deps.writeLesson(targetRole, validation.lesson, rejection);
+  } catch (err) {
+    return skipped('memory-write', targetRole, rejection, err);
+  }
   if (!write.committed) {
     return {
       kind: 'filtered',
@@ -103,6 +125,21 @@ export async function runGateTriggeredLearning(
     role: targetRole,
     lesson: validation.lesson,
     ...(write.captured !== undefined ? { captured: write.captured } : {}),
+  };
+}
+
+function skipped(
+  phase: 'lesson-drafting' | 'lesson-validation' | 'memory-write',
+  role: RoleName,
+  rejection: GateRejectionFeedback,
+  err: unknown,
+): GateLearningResult {
+  return {
+    kind: 'skipped',
+    phase,
+    role,
+    rejection,
+    error: err instanceof Error ? err.message : String(err),
   };
 }
 

@@ -280,7 +280,7 @@ async function runGated(
       artifact: 'test-intent',
       reason,
     });
-    await deps.onGateRejection?.(qaFeedback);
+    await recordGateRejection(deps, qaFeedback);
     if (qaAttempt === input.cap - 1) {
       return block(task, roles, handoffNotes, {
         blockedReason: reason,
@@ -360,7 +360,7 @@ async function runGated(
         artifact: 'reviewer-verdict',
         reason: summarizeObjections(lastReviewer.objections),
       });
-      await deps.onGateRejection?.(feedback);
+      await recordGateRejection(deps, feedback);
       return block(task, roles, handoffNotes, {
         blockedReason: 'open objection-class finding',
         rejectionFeedback: feedback,
@@ -377,7 +377,7 @@ async function runGated(
         reason:
           lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
       });
-      await deps.onGateRejection?.(feedback);
+      await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
       roundFeedback.push(feedback);
     }
@@ -398,7 +398,7 @@ async function runGated(
         artifact: 'implementation-diff',
         reason: tlDiff.notes ?? 'tech-lead did not pass the implementation diff',
       });
-      await deps.onGateRejection?.(feedback);
+      await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
       roundFeedback.push(feedback);
     }
@@ -430,7 +430,7 @@ async function runGated(
           artifact: 'design-review',
           reason: designer.notes ?? 'designer review failed',
         });
-        await deps.onGateRejection?.(feedback);
+        await recordGateRejection(deps, feedback);
         lastRejectionFeedback = feedback;
         roundFeedback.push(feedback);
       }
@@ -585,6 +585,18 @@ function normalizeFeedback(
 ): GateRejectionFeedback[] {
   if (feedback === undefined) return [];
   return Array.isArray(feedback) ? feedback : [feedback];
+}
+
+async function recordGateRejection(
+  deps: TeamTaskDeps,
+  feedback: GateRejectionFeedback,
+): Promise<void> {
+  try {
+    await deps.onGateRejection?.(feedback);
+  } catch {
+    // Gate-time learning is best-effort. The structured feedback still drives
+    // the corrective retry/block path even if lesson drafting or memory I/O fails.
+  }
 }
 
 function emitRoleTransition(
