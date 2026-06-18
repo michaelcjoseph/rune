@@ -179,6 +179,32 @@ describe('roles/loader — exemplar channel', () => {
     expect(ctx.referenceContext.toLowerCase()).toContain('reference');
   });
 
+  it('missing requested project exemplar degrades to a visible low-authority skip note', () => {
+    seed(SOUL_BODY, '');
+    const projectExemplarsDir = join(dir, 'project-exemplars');
+    mkdirSync(projectExemplarsDir, { recursive: true });
+
+    const ctx = composeRoleContext('qa', BASE, {
+      dir,
+      projectExemplarsDir,
+      charBudget: 240,
+    } as Parameters<typeof composeRoleContext>[2] & { projectExemplarsDir: string });
+
+    // Role invocation still has the authoritative prompt; the missing optional
+    // exemplar must not block the task path.
+    expect(ctx.systemInstructions).toContain('ROLE-SOUL-MARKER');
+    expect(ctx.systemInstructions).toContain('BASE-ROLE-INSTRUCTIONS');
+
+    // The degradation is visible, but only in the low-authority reference
+    // channel. A silent empty reference would hide broken exemplar plumbing.
+    expect(ctx.referenceContext).toContain('<qa-exemplars>');
+    expect(ctx.referenceContext).toContain('project/qa.md');
+    expect(ctx.referenceContext).toMatch(/(?:missing|skipped|unavailable)/i);
+    expect(ctx.referenceContext.toLowerCase()).toContain('reference');
+    expect(ctx.systemInstructions).not.toContain('project/qa.md');
+    expect(ctx.systemInstructions).not.toMatch(/(?:missing|skipped|unavailable)/i);
+  });
+
   it('applies the load-time budget to exemplars with a visible truncation marker', () => {
     seed(SOUL_BODY, '');
     seedBaselineExemplar(
@@ -193,6 +219,8 @@ describe('roles/loader — exemplar channel', () => {
 
     expect(ctx.referenceContext).toContain('BASELINE-EXEMPLAR-MARKER');
     expect(ctx.referenceContext).not.toContain('BASELINE-TAIL-SHOULD-NOT-LOAD');
+    expect(ctx.systemInstructions).toContain('BASE-ROLE-INSTRUCTIONS');
+    expect(ctx.systemInstructions).not.toContain('truncated');
     expect(ctx.referenceContext.toLowerCase()).toContain('truncated');
     expect(ctx.referenceContext.length).toBeLessThan(520);
   });

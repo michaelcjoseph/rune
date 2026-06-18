@@ -70,6 +70,7 @@ const MEMORY_TRUNCATION_MARKER =
 /** Visible marker appended when role exemplars are truncated to fit the budget. */
 const EXEMPLAR_TRUNCATION_MARKER =
   '\n\n…(truncated — role exemplars exceed the load-time char budget)';
+const EXEMPLAR_SKIP_NOTE = 'skipped: exemplar unavailable or empty.';
 
 /** The two prompt fragments a role invocation needs, kept on separate authority
  *  channels: `systemInstructions` → `--append-system-prompt`; `referenceContext`
@@ -171,7 +172,12 @@ function readProjectExemplar(role: RoleName, projectExemplarsDir?: string): Role
   if (!projectExemplarsDir) return [];
   const filename = `${role}.md`;
   const body = readRoleExemplarFile(projectExemplarsDir, filename);
-  return body.trim() ? [{ label: `project/${filename}`, body }] : [];
+  return [
+    {
+      label: `project/${filename}`,
+      body: body.trim() || EXEMPLAR_SKIP_NOTE,
+    },
+  ];
 }
 
 function readRoleExemplarFile(dir: string, filename: string): string {
@@ -191,7 +197,9 @@ export function buildRoleExemplarContext(
   charBudget: number = ROLE_MEMORY_CHAR_BUDGET,
 ): string {
   const body = exemplars
-    .map((exemplar) => [`## ${exemplar.label}`, exemplar.body.trim()].join('\n'))
+    .map((exemplar) =>
+      [`## ${exemplar.label}`, exemplar.body.trim() || EXEMPLAR_SKIP_NOTE].join('\n'),
+    )
     .join('\n\n')
     .trim();
   if (!body) return '';

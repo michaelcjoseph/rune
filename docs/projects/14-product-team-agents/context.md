@@ -98,9 +98,11 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
--  src/jobs/scaffold-approval.test.ts --configLoader runner`
-- Result: `54 passed`
-- Focused TypeScript check over changed implementation files passed.
+- e visible note.
+- Existing over-budget exemplar truncation remains visible and budgeted.
 
-Full `npm run build` is still blocked by unrelated repo-wide TypeScript errors in existing tests/modules, not by these changed files. No commit made.
-- ked by existing unrelated repo type errors; a filtered check produced no diagnostics for the files touched by this task. No commit made. Note: `git add` was blocked by sandbox permissions on the shared git index, so `planning-roles-wiring.test.ts` shows `MM`; the working tree has the corrected test.
+Verification:
+- `npm test -- src/roles/loader.test.ts --configLoader runner`
+- Result: `44 passed`
+
+No commit made. `src/roles/loader.test.ts` was already modified before my changes and remains untouched by me.

@@ -863,7 +863,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       a correctly-pinned redaction test (real token in, raw token asserted absent).
 - [x] Per-project exemplar test: the tech-lead planning output emits per-project exemplars,
       persisted with the project and surfaced to the relevant role's context.
-- [ ] Exemplar-fail-safe test: missing or over-budget exemplar files degrade to a visible
+- [x] Exemplar-fail-safe test: missing or over-budget exemplar files degrade to a visible
       low-authority note and do not block role invocation.
 
 **B. Gate-triggered learning**
