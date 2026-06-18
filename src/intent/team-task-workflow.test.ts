@@ -28,6 +28,7 @@ import {
   type GateOutcome,
   type GateVerdict,
   type GateRejectionFeedback,
+  type FindingsLedgerEntry,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
 
@@ -1281,6 +1282,116 @@ describe('team-task-workflow — round cap', () => {
       throw new Error('PM wrap-up must not be consulted for per-task terminal handling');
     };
   }
+
+  it('passes every open finding to the next coder round sorted by severity', async () => {
+    type CoderInputWithLedger = {
+      rejectionFeedback?: GateRejectionFeedback[];
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+
+    const coderInputs: CoderInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    let techLeadCalls = 0;
+    let designerCalls = 0;
+    const reviewerFinding: ObjectionFinding = {
+      class: 'outbound',
+      severity: 'medium',
+      location: 'src/egress.ts:27',
+      rationale: 'egress allow-list misses the retry path',
+      reversible: true,
+    };
+    const techLeadFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'critical',
+      location: 'src/ledger.ts:12',
+      rationale: 'task ledger writes can drop an accepted finding',
+      reversible: true,
+    };
+    const designerFinding: ObjectionFinding = {
+      class: 'privacy',
+      severity: 'high',
+      location: 'src/server/static/app.js:82',
+      rationale: 'review surface exposes private branch metadata',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as CoderInputWithLedger);
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          reviewerCalls += 1;
+          return reviewerCalls === 1
+            ? {
+                outcome: 'fail',
+                findings: [reviewerFinding],
+                notes: 'reviewer found an above-low open finding',
+              }
+            : cleanVerdict;
+        },
+        techLeadReviewDiff: async () => {
+          techLeadCalls += 1;
+          return techLeadCalls === 1
+            ? {
+                outcome: 'fail',
+                findings: [techLeadFinding],
+                notes: 'tech lead found an above-low open finding',
+              }
+            : { pass: true };
+        },
+        designer: async () => {
+          designerCalls += 1;
+          return designerCalls === 1
+            ? {
+                outcome: 'fail',
+                findings: [designerFinding],
+                notes: 'designer found an above-low open finding',
+              }
+            : { pass: true };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderInputs).toHaveLength(2);
+    expect(coderInputs[1]?.findingsLedger?.map((entry) => ({
+      sourceGate: entry.sourceGate,
+      severity: entry.severity,
+      location: entry.location,
+      status: entry.status,
+    }))).toEqual([
+      {
+        sourceGate: 'tech-lead',
+        severity: 'critical',
+        location: 'src/ledger.ts:12',
+        status: 'open',
+      },
+      {
+        sourceGate: 'designer',
+        severity: 'high',
+        location: 'src/server/static/app.js:82',
+        status: 'open',
+      },
+      {
+        sourceGate: 'reviewer',
+        severity: 'medium',
+        location: 'src/egress.ts:27',
+        status: 'open',
+      },
+    ]);
+    expect(coderInputs[1]?.findingsLedger?.map((entry) => entry.location).sort()).toEqual(
+      [
+        'src/egress.ts:27',
+        'src/ledger.ts:12',
+        'src/server/static/app.js:82',
+      ].sort(),
+    );
+  });
 
   it('primary-exits to closeout after one all-low round and records lows in the ledger', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];

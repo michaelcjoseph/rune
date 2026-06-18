@@ -1044,7 +1044,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       round 5 never executes.
 - [x] Convergence test: a run whose max severity strictly drops each round (critical→high→medium→low)
       runs past round 3 and exits via the primary all-low gate, not a backstop.
-- [ ] Coder-ordering test: the coder receives the ledger severity-sorted, attempts every open finding,
+- [x] Coder-ordering test: the coder receives the ledger severity-sorted, attempts every open finding,
       addresses the highest severity first, and reports which findings it addressed.
 - [ ] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
       (citing it) before discovery; a previously `resolved` finding that reappears is marked

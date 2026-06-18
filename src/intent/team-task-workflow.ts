@@ -189,6 +189,7 @@ export interface TeamTaskDeps {
     context: string;
     tests: string[] | string;
     rejectionFeedback?: GateRejectionFeedback[];
+    findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderResult>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
@@ -426,6 +427,7 @@ async function runGated(
       context: input.contextMd,
       tests,
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
+      ...coderFindingsLedger(findingsLedger),
     });
     handoffNotes.push(...coder.handoffNotes);
     const roundFeedback: GateRejectionFeedback[] = [];
@@ -947,6 +949,35 @@ function maxOpenFindingSeverity(
       undefined,
     );
 }
+
+function coderFindingsLedger(
+  ledger: FindingsLedgerEntry[],
+): { findingsLedger?: FindingsLedgerEntry[] } {
+  const open = ledger
+    .filter((entry) => entry.status === 'open')
+    .sort(compareFindingsForCoder)
+    .map((entry) => ({ ...entry }));
+  return open.length > 0 ? { findingsLedger: open } : {};
+}
+
+function compareFindingsForCoder(
+  a: FindingsLedgerEntry,
+  b: FindingsLedgerEntry,
+): number {
+  const bySeverity = severityRank[b.severity] - severityRank[a.severity];
+  if (bySeverity !== 0) return bySeverity;
+  const byRound = a.raisedRound - b.raisedRound;
+  if (byRound !== 0) return byRound;
+  const byGate = sourceGateRank[a.sourceGate] - sourceGateRank[b.sourceGate];
+  if (byGate !== 0) return byGate;
+  return a.id.localeCompare(b.id);
+}
+
+const sourceGateRank: Record<FindingSourceGate, number> = {
+  reviewer: 0,
+  'tech-lead': 1,
+  designer: 2,
+};
 
 function hasOnlySeverityDerivedFailures(
   reviewer: NormalizedReviewerVerdict | undefined,
