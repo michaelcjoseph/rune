@@ -1066,7 +1066,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Remove `block` from `GateVerdict`; rewrite `mapObjectionSeverityToOutcome`
       (`team-task-workflow.ts`) to `critical`/`high`/`medium` → `fail`, `low` →
       `pass-with-warnings`; delete the block branch + block-correction budget.
-- [ ] Restructure `ObjectionClass` (`team-task-workflow.ts`): drop `irreversibility`, add
+- [x] Restructure `ObjectionClass` (`team-task-workflow.ts`): drop `irreversibility`, add
       `outbound`; add a `reversible: boolean` field to `ObjectionFinding`.
 - [ ] Delete the outer attempt cap: remove `decideAttemptOutcome` (`orch-attempt-cap.ts`), the
       PM-wrap-up-at-cap terminal, and every `blocked-on-human` per-task terminal. Collapse

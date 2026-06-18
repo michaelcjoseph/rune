@@ -29,6 +29,7 @@ import {
   type GateVerdict,
   type GateRejectionFeedback,
   type FindingsLedgerEntry,
+  type ObjectionClass,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
 
@@ -101,6 +102,22 @@ type Assert<T extends true> = T;
 type ReviewerOutcomeMatchesGateOutcome = Assert<TypeEqual<ReviewerOutcome, GateOutcome>>;
 type ReviewerOutcomeHasNoBlock = Assert<IsNever<Extract<ReviewerOutcome, 'block'>>>;
 type GateVerdictOutcomeHasNoBlock = Assert<IsNever<Extract<GateVerdict['outcome'], 'block'>>>;
+type ExpectedPhase14ObjectionClass =
+  | 'security'
+  | 'privacy'
+  | 'data-integrity'
+  | 'concurrency'
+  | 'outbound'
+  | 'cost-perf';
+type ObjectionClassMatchesPhase14Taxonomy = Assert<
+  TypeEqual<ObjectionClass, ExpectedPhase14ObjectionClass>
+>;
+type ObjectionClassIncludesOutbound = Assert<Extract<ObjectionClass, 'outbound'> extends 'outbound'
+  ? true
+  : false>;
+type ObjectionClassRetiresIrreversibility = Assert<
+  IsNever<Extract<ObjectionClass, 'irreversibility'>>
+>;
 
 // ---------------------------------------------------------------------------
 // QA-first
