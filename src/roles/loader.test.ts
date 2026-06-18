@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,10 +49,25 @@ let dir: string;
 const SOUL_BODY = 'ROLE-SOUL-MARKER — charter. Review edges below.';
 const MEMORY_BODY = '- [2026-06-08 · source: run-test] ROLE-MEMORY-MARKER one lesson.';
 const BASE = 'BASE-ROLE-INSTRUCTIONS — execute the selected task.';
+const BASELINE_EXEMPLAR_BODY =
+  'BASELINE-EXEMPLAR-MARKER — good QA output asserts raw secrets are absent.';
+const PROJECT_EXEMPLAR_BODY =
+  'PROJECT-EXEMPLAR-MARKER — this project expects redaction tests to use raw input fixtures.';
 
 function seed(soul: string | null, memory: string | null): void {
   if (soul !== null) writeFileSync(join(dir, SOUL_FILENAME), soul);
   if (memory !== null) writeFileSync(join(dir, MEMORY_FILENAME), memory);
+}
+
+function seedBaselineExemplar(filename: string, body: string): void {
+  const examplesDir = join(dir, 'examples');
+  mkdirSync(examplesDir, { recursive: true });
+  writeFileSync(join(examplesDir, filename), body);
+}
+
+function seedProjectExemplar(projectDir: string, role: RoleName, body: string): void {
+  mkdirSync(projectDir, { recursive: true });
+  writeFileSync(join(projectDir, `${role}.md`), body);
 }
 
 beforeEach(() => {
@@ -109,6 +124,54 @@ describe('roles/loader — authority boundary', () => {
     seed(SOUL_BODY, MEMORY_BODY);
     const ctx = composeRoleContext('pm', BASE, { dir });
     expect(ctx.referenceContext).toContain('pm');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Exemplars — baseline + per-project examples are low-authority reference
+// ---------------------------------------------------------------------------
+
+describe('roles/loader — exemplar channel', () => {
+  it('includes baseline and per-project exemplars in referenceContext, never systemInstructions', () => {
+    seed(SOUL_BODY, MEMORY_BODY);
+    seedBaselineExemplar('qa-redaction.md', BASELINE_EXEMPLAR_BODY);
+    const projectExemplarsDir = join(dir, 'project-exemplars');
+    seedProjectExemplar(projectExemplarsDir, 'qa', PROJECT_EXEMPLAR_BODY);
+
+    const ctx = composeRoleContext('qa', BASE, {
+      dir,
+      projectExemplarsDir,
+      charBudget: 240,
+    } as Parameters<typeof composeRoleContext>[2] & { projectExemplarsDir: string });
+
+    expect(ctx.systemInstructions).toContain('ROLE-SOUL-MARKER');
+    expect(ctx.systemInstructions).not.toContain('ROLE-MEMORY-MARKER');
+    expect(ctx.systemInstructions).not.toContain('BASELINE-EXEMPLAR-MARKER');
+    expect(ctx.systemInstructions).not.toContain('PROJECT-EXEMPLAR-MARKER');
+
+    expect(ctx.referenceContext).toContain('ROLE-MEMORY-MARKER');
+    expect(ctx.referenceContext).toContain('<qa-exemplars>');
+    expect(ctx.referenceContext).toContain('BASELINE-EXEMPLAR-MARKER');
+    expect(ctx.referenceContext).toContain('PROJECT-EXEMPLAR-MARKER');
+    expect(ctx.referenceContext.toLowerCase()).toContain('reference');
+  });
+
+  it('applies the load-time budget to exemplars with a visible truncation marker', () => {
+    seed(SOUL_BODY, '');
+    seedBaselineExemplar(
+      'qa-redaction.md',
+      `BASELINE-EXEMPLAR-MARKER\n${'x'.repeat(500)}\nBASELINE-TAIL-SHOULD-NOT-LOAD`,
+    );
+
+    const ctx = composeRoleContext('qa', BASE, {
+      dir,
+      charBudget: 120,
+    });
+
+    expect(ctx.referenceContext).toContain('BASELINE-EXEMPLAR-MARKER');
+    expect(ctx.referenceContext).not.toContain('BASELINE-TAIL-SHOULD-NOT-LOAD');
+    expect(ctx.referenceContext.toLowerCase()).toContain('truncated');
+    expect(ctx.referenceContext.length).toBeLessThan(520);
   });
 });
 

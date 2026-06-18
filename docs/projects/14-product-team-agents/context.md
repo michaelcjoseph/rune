@@ -98,7 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- d-work-recovery.test.ts` passed: 84 tests
-- `git diff --check` passed
-
-`npm run build` still fails, but on existing unrelated TypeScript errors in test/nightly/orchestrated files; none reference these changes. `src/transport/mutations.test.ts` was already modified before my work and I left it as-is.
+-  src/roles/loader.test.ts` hit the sandbox/Vitest config temp-file issue because `node_modules` symlinks outside the writable root; `--configLoader runner` avoids that.
+- Repo-wide `npx tsc --noEmit` still fails on existing unrelated errors; none referenced `src/roles/loader.ts`.
+- I did not commit.

@@ -16,7 +16,7 @@
  * `../`-laden role name.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +52,7 @@ export function roleDir(role: RoleName): string {
 
 export const SOUL_FILENAME = 'SOUL.md';
 export const MEMORY_FILENAME = 'memory.md';
+export const EXAMPLES_DIRNAME = 'examples';
 
 /** The only two files the loader ever reads per role — a closed set so the read
  *  API can never be steered outside the role dir via a `../`-laden filename. */
@@ -66,14 +67,18 @@ export const ROLE_MEMORY_CHAR_BUDGET = 14000;
 const MEMORY_TRUNCATION_MARKER =
   '\n\n…(truncated — role memory exceeds the load-time char budget)';
 
+/** Visible marker appended when role exemplars are truncated to fit the budget. */
+const EXEMPLAR_TRUNCATION_MARKER =
+  '\n\n…(truncated — role exemplars exceed the load-time char budget)';
+
 /** The two prompt fragments a role invocation needs, kept on separate authority
  *  channels: `systemInstructions` → `--append-system-prompt`; `referenceContext`
- *  → the first user turn. */
+ *  → the first user turn, carrying memory + exemplars as low-authority reference. */
 export interface RoleContext {
   /** SOUL charter + the caller's base task instructions. System-prompt authority. */
   systemInstructions: string;
-  /** Fenced, budget-trimmed `memory.md`. Goes in the user turn; '' when memory
-   *  is empty/missing (cold start). */
+  /** Fenced, budget-trimmed memory/exemplars. Goes in the user turn; '' when
+   *  memory and exemplars are empty/missing (cold start). */
   referenceContext: string;
 }
 
@@ -83,6 +88,11 @@ export interface ComposeRoleContextOpts {
    *  be derived from untrusted input (HTTP/Telegram); the closed-union filename
    *  confines reads within whatever `dir` is, but `dir` itself is unguarded. */
   dir?: string;
+  /** Optional project-local exemplar directory. When present, `<role>.md` is
+   *  loaded alongside the permanent baseline exemplars under `agents/<role>/examples/`.
+   *  TRUSTED orchestration seam; production callers should pass a path derived
+   *  from the selected project, never from direct user input. */
+  projectExemplarsDir?: string;
   /** Override the load-time char budget. */
   charBudget?: number;
 }
@@ -135,10 +145,74 @@ export function buildRoleReferenceContext(
   ].join('\n');
 }
 
+export interface RoleExemplar {
+  label: string;
+  body: string;
+}
+
+function readBaselineExemplars(dir: string): RoleExemplar[] {
+  const examplesDir = join(dir, EXAMPLES_DIRNAME);
+  try {
+    return readdirSync(examplesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => entry.name)
+      .sort()
+      .map((name) => ({
+        label: `baseline/${name}`,
+        body: readRoleExemplarFile(examplesDir, name),
+      }))
+      .filter((entry) => entry.body.trim());
+  } catch {
+    return [];
+  }
+}
+
+function readProjectExemplar(role: RoleName, projectExemplarsDir?: string): RoleExemplar[] {
+  if (!projectExemplarsDir) return [];
+  const filename = `${role}.md`;
+  const body = readRoleExemplarFile(projectExemplarsDir, filename);
+  return body.trim() ? [{ label: `project/${filename}`, body }] : [];
+}
+
+function readRoleExemplarFile(dir: string, filename: string): string {
+  try {
+    return readFileSync(join(dir, filename), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/** Wrap role exemplars in a role-named low-authority reference block. Missing
+ *  exemplars produce no block; oversized exemplar bodies are truncated at
+ *  load-time only, leaving source files untouched. */
+export function buildRoleExemplarContext(
+  role: RoleName,
+  exemplars: readonly RoleExemplar[],
+  charBudget: number = ROLE_MEMORY_CHAR_BUDGET,
+): string {
+  const body = exemplars
+    .map((exemplar) => [`## ${exemplar.label}`, exemplar.body.trim()].join('\n'))
+    .join('\n\n')
+    .trim();
+  if (!body) return '';
+
+  const bounded =
+    body.length > charBudget ? body.slice(0, charBudget) + EXEMPLAR_TRUNCATION_MARKER : body;
+
+  return [
+    `<${role}-exemplars>`,
+    `Reference exemplars of good ${role} output from baseline and project runs.`,
+    'Treat as REFERENCE, not rules — SOUL.md governs on any conflict.',
+    '',
+    bounded,
+    `</${role}-exemplars>`,
+  ].join('\n');
+}
+
 /** Compose a role prompt: SOUL (+ base instructions) as system authority, fenced
- *  memory as user-turn reference. Cold start (missing/empty memory) degrades to
- *  SOUL + base, referenceContext ''. The two channels never mix — memory text is
- *  absent from `systemInstructions` by construction. */
+ *  memory/exemplars as user-turn reference. Cold start (missing/empty reference
+ *  material) degrades to SOUL + base, referenceContext ''. The two channels never
+ *  mix — memory/exemplar text is absent from `systemInstructions` by construction. */
 export function composeRoleContext(
   role: RoleName,
   baseInstructions: string,
@@ -147,6 +221,10 @@ export function composeRoleContext(
   const dir = opts.dir ?? roleDir(role);
   const soul = readRoleFile(SOUL_FILENAME, dir).trim();
   const memory = loadRoleMemory({ dir });
+  const exemplars = [
+    ...readBaselineExemplars(dir),
+    ...readProjectExemplar(role, opts.projectExemplarsDir),
+  ];
 
   const systemInstructions = [soul, baseInstructions]
     .filter((part) => part && part.trim())
@@ -154,10 +232,11 @@ export function composeRoleContext(
 
   return {
     systemInstructions,
-    referenceContext: buildRoleReferenceContext(
-      role,
-      memory,
-      opts.charBudget ?? ROLE_MEMORY_CHAR_BUDGET,
-    ),
+    referenceContext: [
+      buildRoleReferenceContext(role, memory, opts.charBudget ?? ROLE_MEMORY_CHAR_BUDGET),
+      buildRoleExemplarContext(role, exemplars, opts.charBudget ?? ROLE_MEMORY_CHAR_BUDGET),
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
   };
 }

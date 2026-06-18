@@ -857,7 +857,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **A. Role exemplars**
 
-- [ ] Exemplar-channel test: `composeRoleContext` includes an exemplars channel (baseline +
+- [x] Exemplar-channel test: `composeRoleContext` includes an exemplars channel (baseline +
       per-project) as low-authority reference, alongside SOUL and memory, budget-bounded.
 - [ ] Baseline test: each role has a permanent `agents/<role>/examples/` baseline; QA's includes
       a correctly-pinned redaction test (real token in, raw token asserted absent).
