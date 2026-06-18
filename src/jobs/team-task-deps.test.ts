@@ -362,6 +362,68 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(designer).not.toHaveProperty('pass');
   });
 
+  it('routes severity-derived outcomes through every production review gate parser', async () => {
+    const highFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+    };
+    const mediumFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:19',
+      rationale: 'stale rows can be reported until the next refresh',
+    };
+    const lowFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:8',
+      rationale: 'duplicate read is non-blocking but worth tracking',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'reviewer') {
+          return [
+            '```reviewer-verdict',
+            JSON.stringify({ pass: true, findings: [highFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            JSON.stringify({ pass: true, findings: [mediumFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            JSON.stringify({ pass: true, findings: [lowFinding] }),
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const reviewer = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    expect(reviewer).toMatchObject({ outcome: 'block', findings: [highFinding] });
+    expect(techLead).toMatchObject({ outcome: 'fail', findings: [mediumFinding] });
+    expect(designer).toMatchObject({ outcome: 'pass-with-warnings', findings: [lowFinding] });
+  });
+
   it('judgment seams fail closed on an unparseable reply', async () => {
     const deps = buildDeps(
       resolveTeamRoleModels(loadRealPolicy()),

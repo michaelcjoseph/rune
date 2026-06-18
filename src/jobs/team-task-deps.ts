@@ -44,6 +44,7 @@ import { writeGateLearningLesson } from '../intent/learning-write-path.js';
 import { runPostMortem } from '../intent/postmortem.js';
 import type { FeedbackRecord, RoleStage } from '../intent/feedback-record.js';
 import {
+  mapObjectionSeverityToOutcome,
   runTeamTaskWorkflow,
   type ObjectionClass,
   type ObjectionFinding,
@@ -324,7 +325,15 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
   const parsedOutcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as ReviewerOutcome
     : undefined;
-  const outcome = parsedOutcome ?? (findings.length > 0 ? 'block' : legacyPass === true ? 'pass' : 'fail');
+  const severityOutcome = outcomeForFindings(findings);
+  const baseOutcome = parsedOutcome ??
+    (legacyPass !== undefined
+      ? legacyPass === true ? 'pass' : 'fail'
+      : severityOutcome ?? 'fail');
+  const outcome = strictestReviewerOutcome([
+    baseOutcome,
+    ...(severityOutcome !== undefined ? [severityOutcome] : []),
+  ]);
   if (parsedOutcome === undefined && legacyPass !== undefined && hasAggregateFixtureFences(text)) {
     return {
       pass: legacyPass,
@@ -383,15 +392,45 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
   const outcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as ReviewerOutcome
-    : v['pass'] === true
-      ? 'pass'
-      : 'fail';
+    : undefined;
+  const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
+  const findings = parseFindings(v);
+  const severityOutcome = outcomeForFindings(findings);
+  const baseOutcome = outcome ??
+    (legacyPass !== undefined
+      ? legacyPass === true ? 'pass' : 'fail'
+      : severityOutcome ?? 'fail');
   return {
-    outcome,
-    findings: parseFindings(v),
+    outcome: strictestReviewerOutcome([
+      baseOutcome,
+      ...(severityOutcome !== undefined ? [severityOutcome] : []),
+    ]),
+    findings,
     ...(notes !== undefined ? { notes } : {}),
   };
 }
+
+function outcomeForFindings(findings: ObjectionFinding[]): ReviewerOutcome | undefined {
+  if (findings.length === 0) return undefined;
+  return strictestReviewerOutcome(
+    findings.map((finding) => mapObjectionSeverityToOutcome(finding.severity)),
+  );
+}
+
+function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {
+  return outcomes.reduce(
+    (strictest, outcome) =>
+      reviewerOutcomeRank[outcome] > reviewerOutcomeRank[strictest] ? outcome : strictest,
+    'pass',
+  );
+}
+
+const reviewerOutcomeRank: Record<ReviewerOutcome, number> = {
+  pass: 0,
+  'pass-with-warnings': 1,
+  fail: 2,
+  block: 3,
+};
 
 /** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */
 function parseFlagVerdict(

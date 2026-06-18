@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ct-orchestrator.test.ts` passes: 79/79.
-- `git diff --check` passes.
-- `npm run build` still fails on existing repo-wide TypeScript test errors outside the touched implementation files.
+- rkflow.test.ts src/jobs/team-task-deps.test.ts` passed: 63/63.
+- `git diff --check` passed.
+- `npm run build` still fails on existing unrelated repo-wide TypeScript test errors, matching the handoff.
 
-I did not commit. Note: `git status` still shows the two QA test files staged from before; I did not modify them.
+I did not commit. The two QA test files are still staged/modified from before; I did not edit them.

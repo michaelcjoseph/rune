@@ -775,10 +775,10 @@ function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
 
 function outcomeForObjectionSeverities(objections: ObjectionFinding[]): ReviewerOutcome {
   return strictestReviewerOutcome(objections.map((objection) =>
-    outcomeForObjectionSeverity(objection.severity)));
+    mapObjectionSeverityToOutcome(objection.severity)));
 }
 
-function outcomeForObjectionSeverity(severity: ObjectionSeverity): ReviewerOutcome {
+export function mapObjectionSeverityToOutcome(severity: ObjectionSeverity): ReviewerOutcome {
   switch (severity) {
     case 'critical':
     case 'high':

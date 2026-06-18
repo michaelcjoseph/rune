@@ -966,7 +966,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       a shared `GateVerdict` contract used by reviewer, tech-lead diff, and designer gates.
       Normalize existing boolean adapters at their boundary, then migrate orchestration callers
       off the bare `pass` boolean + `objections.length > 0` branch (`team-task-workflow.ts`).
-- [ ] Add a single severity→outcome mapping function (one source of truth) and route every gate
+- [x] Add a single severity→outcome mapping function (one source of truth) and route every gate
       through it instead of the `objections.length > 0` hard branch; choose the strictest mapped
       outcome when a verdict carries multiple findings.
 - [ ] Replace the one-shot reviewer objection block: deliver the already-built

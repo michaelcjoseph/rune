@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 
+import * as teamTaskWorkflow from './team-task-workflow.js';
 import {
   runTeamTaskWorkflow,
   type TeamTaskDeps,
@@ -343,6 +344,23 @@ describe('team-task-workflow — objection gate', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — reviewing verdict outcome enum', () => {
+  it('exports one severity-to-outcome mapper as the shared source of truth', () => {
+    const mapSeverity = (
+      teamTaskWorkflow as typeof teamTaskWorkflow & {
+        mapObjectionSeverityToOutcome?: (severity: ObjectionSeverity) => ReviewerOutcome;
+      }
+    ).mapObjectionSeverityToOutcome;
+
+    expect(typeof mapSeverity).toBe('function');
+    if (typeof mapSeverity !== 'function') {
+      throw new Error('mapObjectionSeverityToOutcome must be exported');
+    }
+    expect(mapSeverity('critical')).toBe('block');
+    expect(mapSeverity('high')).toBe('block');
+    expect(mapSeverity('medium')).toBe('fail');
+    expect(mapSeverity('low')).toBe('pass-with-warnings');
+  });
+
   it('returns the reviewer verdict with exactly one structured outcome enum, not a bare pass boolean', async () => {
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, makeDeps());
     const verdict = ev.reviewerVerdict as Record<string, unknown> | undefined;
