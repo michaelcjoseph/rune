@@ -894,7 +894,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [x] Author the permanent per-role exemplar baseline under `agents/<role>/examples/`, starting
       with QA (a correctly-pinned redaction/security-boundary test).
-- [ ] Extend the tech-lead planning output to emit per-project exemplars (alongside test
+- [x] Extend the tech-lead planning output to emit per-project exemplars (alongside test
       strategy), persisted with the project.
 - [ ] Add the exemplar channel to `composeRoleContext` (`loader.ts`): charter + memory +
       exemplars, budget-bounded as low-authority reference; missing/invalid exemplars degrade

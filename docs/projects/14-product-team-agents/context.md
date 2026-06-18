@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- der.test.ts --configLoader runner`
+- ader runner`
 
-Result: `1 passed`, `50 passed`.
+Result: `3 passed`, `41 passed`.
 
-Note: plain Vitest startup tried to write through the `node_modules` symlink outside the writable sandbox, so I used `--configLoader runner`. The only worktree change is the pre-existing staged QA test update; I did not modify it.
+Worktree note: the only modified file remains the pre-existing staged QA test update, [planning-roles-wiring.test.ts](/Users/jarvis/workspace/jarvis/.worktrees/jarvis/14-product-team-agents/src/intent/planning-roles-wiring.test.ts). I did not touch it.

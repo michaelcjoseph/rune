@@ -159,6 +159,45 @@ const BREAKDOWN_WITH_EXEMPLARS_REPLY = [
   '```',
 ].join('\n');
 
+const BREAKDOWN_WITH_TASK_LOCAL_EXEMPLARS_REPLY = [
+  '```tech-breakdown',
+  JSON.stringify({
+    tasks: [
+      {
+        id: 'p1-core',
+        text: 'Run model',
+        phase: 'Phase 1 - Core',
+        testStrategy: 'code-tests-required',
+        designerNeeded: false,
+        roles: ['qa', 'coder'],
+        perProjectExemplars: {
+          qa: QA_PROJECT_EXEMPLAR,
+        },
+      },
+    ],
+  }),
+  '```',
+  '```tech-spec',
+  HAZARDOUS_TECH_SPEC,
+  '```',
+].join('\n');
+
+function breakdownWithRawExemplars(raw: unknown): string {
+  return [
+    '```tech-breakdown',
+    JSON.stringify({
+      tasks: [
+        { id: 'p1-core', text: 'Run model', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
+      ],
+      perProjectExemplars: raw,
+    }),
+    '```',
+    '```tech-spec',
+    HAZARDOUS_TECH_SPEC,
+    '```',
+  ].join('\n');
+}
+
 describe('planning-roles-wiring — PM assessment seam', () => {
   it('parses a specified-enough reply into title/spec/assumptions', async () => {
     const { call, seenSystem } = stubModelCall({ pm: [SPECIFIED_REPLY] });
@@ -211,6 +250,26 @@ describe('planning-roles-wiring — PM assessment seam', () => {
 });
 
 describe('planning-roles-wiring — tech-lead breakdown seam', () => {
+  it('asks the tech lead to emit per-project exemplars alongside task test strategy', async () => {
+    const { call, seenSystem } = stubModelCall({ 'tech-lead': BREAKDOWN_REPLY });
+
+    await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'jarvis',
+      spec: 's',
+    });
+
+    const systemPrompt = seenSystem['tech-lead'] ?? '';
+    expect(systemPrompt).toContain('```tech-breakdown');
+    expect(systemPrompt).toContain('"testStrategy"');
+    expect(systemPrompt).toContain('"perProjectExemplars"');
+    expect(systemPrompt.indexOf('"testStrategy"')).toBeLessThan(
+      systemPrompt.indexOf('"perProjectExemplars"'),
+    );
+    expect(systemPrompt).toContain('keys must be role slugs');
+    expect(systemPrompt).toContain('values must be markdown');
+  });
+
   it('parses tasks with test strategy + designer flag + phase', async () => {
     const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'aura', spec: 's' });
@@ -238,7 +297,47 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
       spec: 's',
     });
 
-    expect((result as any).perProjectExemplars).toMatchObject({ qa: QA_PROJECT_EXEMPLAR });
+    expect(result.perProjectExemplars).toEqual({ qa: QA_PROJECT_EXEMPLAR });
+  });
+
+  it('treats per-project exemplars as a top-level breakdown field, not per-task data', async () => {
+    const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_TASK_LOCAL_EXEMPLARS_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'jarvis',
+      spec: 's',
+    });
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.perProjectExemplars).toBeUndefined();
+  });
+
+  it('defaults a missing per-project exemplar map to absent output', async () => {
+    const { call } = stubModelCall({ 'tech-lead': SPLIT_BREAKDOWN_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'jarvis',
+      spec: 's',
+    });
+
+    expect(result.perProjectExemplars).toBeUndefined();
+  });
+
+  it('ignores malformed per-project exemplar entries instead of returning unusable role guidance', async () => {
+    const { call } = stubModelCall({
+      'tech-lead': breakdownWithRawExemplars({
+        qa: 42,
+        coder: '',
+        'made-up-role': QA_PROJECT_EXEMPLAR,
+      }),
+    });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'jarvis',
+      spec: 's',
+    });
+
+    expect(result.perProjectExemplars).toBeUndefined();
   });
 
   it('defaults an invalid testStrategy to code-tests-required', async () => {
