@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- rkflow.test.ts src/jobs/team-task-deps.test.ts` passed: 63/63.
-- `git diff --check` passed.
-- `npm run build` still fails on existing unrelated repo-wide TypeScript test errors, matching the handoff.
+- t.ts` → 44/44 passed
+- `TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npx vitest run --configLoader runner --maxWorkers=1 src/jobs/team-task-deps.test.ts` → 21/21 passed
+- `git diff --check` passed
 
-I did not commit. The two QA test files are still staged/modified from before; I did not edit them.
+No commit made. The QA test file remains pre-existing staged/modified; I did not edit it.

@@ -969,7 +969,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Add a single severity→outcome mapping function (one source of truth) and route every gate
       through it instead of the `objections.length > 0` hard branch; choose the strictest mapped
       outcome when a verdict carries multiple findings.
-- [ ] Replace the one-shot reviewer objection block: deliver the already-built
+- [x] Replace the one-shot reviewer objection block: deliver the already-built
       `GateRejectionFeedback`, allow one corrective coder round from the dedicated
       block-correction budget, then park. Operational fail-safe blocks park immediately.
 - [ ] Fix `maybeParkedRun` to park objection-open blocks (drop the `objectionOpen` exclusion) and

@@ -556,6 +556,89 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }
   });
 
+  it('does not let a low-severity finding enter the block-correction path even when the reviewer labels it block', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let reviewerCalls = 0;
+    let pmCalled = false;
+    const lowFinding = objectionWithSeverity('low');
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          reviewerCalls += 1;
+          return {
+            outcome: 'block',
+            findings: [lowFinding],
+            notes: 'reviewer tried to block on a low-severity follow-up',
+          };
+        },
+        pmWrapup: async () => {
+          pmCalled = true;
+          return { resolved: true, rationale: 'PM should not be needed for a warning.' };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.outcome).toBe('pass-with-warnings');
+    expect(ev.reviewerVerdict?.findings).toEqual([lowFinding]);
+    expect(ev.objectionOpen).toBe(false);
+    expect(coderInputs).toHaveLength(1);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(reviewerCalls).toBe(1);
+    expect(pmCalled).toBe(false);
+  });
+
+  it('does not let a medium-severity finding consume the dedicated block-correction round', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const pmInputs: Array<{ reason: string }> = [];
+    const mediumFinding = objectionWithSeverity('medium');
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => ({
+          outcome: 'block',
+          findings: [mediumFinding],
+          notes: 'reviewer tried to block on a medium-severity fixable finding',
+        }),
+        pmWrapup: async (input) => {
+          pmInputs.push(input);
+          return {
+            resolved: true,
+            rationale: 'Accepting because this medium finding is understood and non-blocking for this task.',
+          };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.reviewerVerdict?.findings).toEqual([mediumFinding]);
+    expect(ev.objectionOpen).toBe(false);
+    expect(coderInputs).toHaveLength(1);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(pmInputs).toEqual([
+      expect.objectContaining({
+        reason: expect.stringContaining('medium severity finding'),
+      }),
+    ]);
+    expect(ev.acceptance).toMatchObject({
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale: expect.stringContaining('medium finding'),
+    });
+  });
+
   it('fails safe to an operational block when reviewer severity is malformed, without spending a coder correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const malformedFinding = {

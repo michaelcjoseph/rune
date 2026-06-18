@@ -455,8 +455,9 @@ async function runGated(
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
         artifact: 'reviewer-verdict',
-        reason:
-          lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
+        reason: lastReviewer.findings.length > 0
+          ? summarizeReviewerVerdict(lastReviewer)
+          : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
       });
       await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
@@ -709,10 +710,9 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
   const outcomes: ReviewerOutcome[] = [];
   if (findings.length > 0) {
     outcomes.push(outcomeForObjectionSeverities(findings));
-  }
-  if (isReviewerOutcome(rawOutcome)) {
+  } else if (isReviewerOutcome(rawOutcome)) {
     outcomes.push(rawOutcome);
-  } else if (findings.length === 0) {
+  } else {
     outcomes.push(raw['pass'] === true ? 'pass' : 'fail');
   }
   const outcome = strictestReviewerOutcome(outcomes);
