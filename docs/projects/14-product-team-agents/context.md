@@ -98,13 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- anges made.
+- der.test.ts --configLoader runner`
 
-I could not confirm a valid red state: the focused QA command passed with required env set:
+Result: `1 passed`, `50 passed`.
 
-`6 passed`, `75 tests passed`
-
-A plain run without env fails only on `Missing required env var: TELEGRAM_BOT_TOKEN`, which is setup-related rather than task-related red.
-
-Worktree remains clean.
-- re are unrelated failures in `ideas-promoted.test.ts` and `journal.test.ts`, plus server/MCP failures from sandbox localhost binding (`listen EPERM 127.0.0.1`). So the selected task is blocked by missing or already-satisfied QA red-state tests, not by an implementation gap I can safely address here.
+Note: plain Vitest startup tried to write through the `node_modules` symlink outside the writable sandbox, so I used `--configLoader runner`. The only worktree change is the pre-existing staged QA test update; I did not modify it.

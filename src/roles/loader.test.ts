@@ -345,6 +345,26 @@ describe('roles/loader — charter inventory (real disk)', () => {
     },
   );
 
+  it.each([...ROLE_NAMES])(
+    'role "%s" permanent examples load as low-authority reference context',
+    (role: RoleName) => {
+      const ctx = composeRoleContext(role, BASE);
+      const examples = readRoleExampleFiles(role);
+
+      expect(examples.length).toBeGreaterThan(0);
+      expect(ctx.referenceContext).toContain(`<${role}-exemplars>`);
+      expect(ctx.referenceContext).toContain(
+        `Reference exemplars of good ${role} output from baseline and project runs.`,
+      );
+
+      for (const example of examples) {
+        expect(ctx.referenceContext).toContain(`## baseline/${example.name}`);
+        expect(ctx.referenceContext).toContain(example.body.trim());
+        expect(ctx.systemInstructions).not.toContain(example.body.trim());
+      }
+    },
+  );
+
   it('QA baseline examples include a correctly pinned redaction/security-boundary test', () => {
     const examples = readRoleExampleFiles('qa');
     const combined = examples.map((example) => `# ${example.name}\n${example.body}`).join('\n\n');
