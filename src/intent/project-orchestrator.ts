@@ -186,6 +186,7 @@ export async function runProjectOrchestration(
       verdicts: evidence.reviewerVerdict
         ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
         : {},
+      ...reviewerWarningsField(evidence.reviewerVerdict),
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
       outcome: 'ready-for-closeout',
@@ -416,6 +417,15 @@ function countTasks(tasksMd: string): number {
 function reviewerOutcome(verdict: NonNullable<TaskEvidence['reviewerVerdict']>): string {
   if (verdict.outcome !== undefined) return verdict.outcome;
   return verdict.pass === true ? 'pass' : 'fail';
+}
+
+function reviewerWarningsField(
+  verdict: TaskEvidence['reviewerVerdict'],
+): Pick<TaskRunRecord, 'warnings'> | Record<string, never> {
+  if (verdict?.outcome !== 'pass-with-warnings' || verdict.objections.length === 0) {
+    return {};
+  }
+  return { warnings: verdict.objections };
 }
 
 function maybeParkedRun(

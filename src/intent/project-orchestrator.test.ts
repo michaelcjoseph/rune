@@ -579,6 +579,61 @@ describe('project-orchestrator — durable run state', () => {
     expect(reconstructed.nextTask?.id).toBe('render-the-streak-card');
     expect(reconstructed.drift).toBe(false);
   });
+
+  it('records pass-with-warnings findings in the TaskRunRecord and finalizer handoff while proceeding', async () => {
+    const persistedRecords: TaskRunRecord[] = [];
+    const warningFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+    } as const;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: {
+          outcome: 'pass-with-warnings',
+          objections: [warningFinding],
+        },
+        objectionOpen: false,
+        handoffNotes: ['shipped with a low-severity performance caveat'],
+      }),
+      appendTaskRunRecord: async (record) => {
+        persistedRecords.push(record);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Cache repeated reads',
+    ].join('\n'));
+    let finalizerRecords: TaskRunRecord[] | undefined;
+    h.deps.finalize = async (handoff) => {
+      finalizerRecords = handoff.taskRecords;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(h.state.tasksMd).toContain('- [x] Cache repeated reads');
+    expect(persistedRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'cache-repeated-reads',
+        outcome: 'ready-for-closeout',
+        verdicts: { reviewer: 'pass-with-warnings' },
+        warnings: [warningFinding],
+      }),
+    ]);
+    expect(finalizerRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'cache-repeated-reads',
+        warnings: [warningFinding],
+      }),
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

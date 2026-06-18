@@ -98,8 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- est run --configLoader runner src/intent/team-task-workflow.test.ts src/jobs/team-task-deps.test.ts` passed: 50 tests
+- est -- --configLoader runner src/intent/project-orchestrator.test.ts src/intent/orch-execution.test.ts src/jobs/orchestrated-run-store.test.ts` passed: 37 tests
 - `git diff --check` passed
-- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; no remaining error in `src/intent/team-task-workflow.ts`
-
-No commit made.
+- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the changed files.

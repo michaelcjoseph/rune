@@ -943,7 +943,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Severity-mapping test: `critical`/`high` objection → `block`; `medium` → `fail`; `low` →
       `pass-with-warnings`. A `low`/`medium` finding can never produce `block`, and multiple
       findings resolve to the strictest mapped outcome.
-- [ ] Warnings-recorded test: a `pass-with-warnings` outcome proceeds and the warnings land in the
+- [x] Warnings-recorded test: a `pass-with-warnings` outcome proceeds and the warnings land in the
       `TaskRunRecord` and the finalizer handoff.
 - [ ] Fail-retry test: a `fail` threads feedback to the coder and retries within the round cap; at
       the cap it routes to PM wrap-up.

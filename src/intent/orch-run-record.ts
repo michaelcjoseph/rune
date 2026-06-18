@@ -10,6 +10,8 @@
  * runtime layer's job.
  */
 
+import type { ObjectionFinding } from './team-task-workflow.js';
+
 /** Outcome the team-task workflow returned for this attempt. */
 export type TaskWorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
 
@@ -33,6 +35,8 @@ export interface TaskRunRecord {
   commitSha: string | null;
   /** Role → verdict (e.g. reviewer: 'pass'). */
   verdicts: Record<string, string>;
+  /** Accepted low-severity findings from pass-with-warnings reviews. */
+  warnings?: ObjectionFinding[];
   /** What happened to `context.md` on this attempt. */
   contextOutcome: TaskContextOutcome;
   /** Gate decisions the orchestrator made. */
@@ -56,6 +60,9 @@ export function buildTaskRunRecord(input: TaskRunRecord): TaskRunRecord {
     modelChoices: { ...input.modelChoices },
     commitSha: input.commitSha,
     verdicts: { ...input.verdicts },
+    ...(input.warnings !== undefined
+      ? { warnings: input.warnings.map((warning) => ({ ...warning })) }
+      : {}),
     contextOutcome: input.contextOutcome,
     gates: { ...input.gates },
     outcome: input.outcome,
