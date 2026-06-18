@@ -1393,6 +1393,169 @@ describe('team-task-workflow — round cap', () => {
     );
   });
 
+  it('keeps tech-lead diff and designer gates in the convergence loop with shared ledger context', async () => {
+    type GateInputWithLedger = {
+      task: SizedTask;
+      diff: string;
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+    type ReviewerVerdictWithVerification = ReviewerVerdict & {
+      verifiedFindings?: Array<{
+        id: string;
+        status: 'resolved' | 'open' | 'regressed';
+        notes: string;
+      }>;
+    };
+
+    const techLeadInputs: GateInputWithLedger[] = [];
+    const designerInputs: GateInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    let techLeadCalls = 0;
+    let designerCalls = 0;
+    const reviewerFinding: ObjectionFinding = {
+      class: 'outbound',
+      severity: 'medium',
+      location: 'src/sync.ts:18',
+      rationale: 'retry path can call the external API after cancellation',
+      reversible: true,
+    };
+    const techLeadFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'high',
+      location: 'src/ledger.ts:12',
+      rationale: 'task ledger writes can drop an accepted finding',
+      reversible: true,
+    };
+    const designerFinding: ObjectionFinding = {
+      class: 'privacy',
+      severity: 'medium',
+      location: 'src/server/static/app.js:82',
+      rationale: 'review surface exposes private branch metadata',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        coder: async () => ({ diff: `diff-${reviewerCalls + 1}`, handoffNotes: [] }),
+        reviewer: async (input) => {
+          reviewerCalls += 1;
+          if (reviewerCalls === 1) {
+            return {
+              outcome: 'fail',
+              findings: [reviewerFinding],
+              notes: 'first review found an above-low outbound finding',
+            };
+          }
+          return {
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: (input.findingsLedger ?? []).map((finding) => ({
+              id: finding.id,
+              status: 'resolved',
+              notes: `reviewer verified ${finding.sourceGate} finding ${finding.id}`,
+            })),
+          } as ReviewerVerdictWithVerification;
+        },
+        techLeadReviewDiff: async (input) => {
+          techLeadCalls += 1;
+          techLeadInputs.push(input as GateInputWithLedger);
+          return techLeadCalls === 1
+            ? {
+                outcome: 'fail',
+                findings: [techLeadFinding],
+                notes: 'tech lead found an above-low data integrity finding',
+              }
+            : { outcome: 'pass', findings: [], notes: 'tech lead verified prior findings' };
+        },
+        designer: async (input) => {
+          designerCalls += 1;
+          designerInputs.push(input as GateInputWithLedger);
+          return designerCalls === 1
+            ? {
+                outcome: 'fail',
+                findings: [designerFinding],
+                notes: 'designer found an above-low privacy finding',
+              }
+            : { outcome: 'pass', findings: [], notes: 'designer verified prior findings' };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(techLeadInputs).toHaveLength(2);
+    expect(designerInputs).toHaveLength(2);
+    expect(techLeadInputs[1]?.findingsLedger?.map((entry) => ({
+      sourceGate: entry.sourceGate,
+      severity: entry.severity,
+      location: entry.location,
+      status: entry.status,
+    }))).toEqual([
+      {
+        sourceGate: 'tech-lead',
+        severity: 'high',
+        location: 'src/ledger.ts:12',
+        status: 'open',
+      },
+      {
+        sourceGate: 'reviewer',
+        severity: 'medium',
+        location: 'src/sync.ts:18',
+        status: 'open',
+      },
+      {
+        sourceGate: 'designer',
+        severity: 'medium',
+        location: 'src/server/static/app.js:82',
+        status: 'open',
+      },
+    ]);
+    expect(designerInputs[1]?.findingsLedger?.map((entry) => ({
+      sourceGate: entry.sourceGate,
+      severity: entry.severity,
+      location: entry.location,
+      status: entry.status,
+    }))).toEqual([
+      {
+        sourceGate: 'tech-lead',
+        severity: 'high',
+        location: 'src/ledger.ts:12',
+        status: 'open',
+      },
+      {
+        sourceGate: 'reviewer',
+        severity: 'medium',
+        location: 'src/sync.ts:18',
+        status: 'open',
+      },
+      {
+        sourceGate: 'designer',
+        severity: 'medium',
+        location: 'src/server/static/app.js:82',
+        status: 'open',
+      },
+    ]);
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        sourceGate: 'reviewer',
+        location: 'src/sync.ts:18',
+        status: 'resolved',
+      }),
+      expect.objectContaining({
+        sourceGate: 'tech-lead',
+        location: 'src/ledger.ts:12',
+        status: 'resolved',
+      }),
+      expect.objectContaining({
+        sourceGate: 'designer',
+        location: 'src/server/static/app.js:82',
+        status: 'resolved',
+      }),
+    ]);
+  });
+
   it('passes every open prior finding to the reviewer on re-review and requires explicit verification', async () => {
     type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
       findingsLedger?: FindingsLedgerEntry[];

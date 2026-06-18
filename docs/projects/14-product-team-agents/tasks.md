@@ -1049,7 +1049,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
       (citing it) before discovery; a previously `resolved` finding that reappears is marked
       `regressed`; the ledger persists across rounds.
-- [ ] Review-gates-preserved test: tech-lead diff review and designer review (when
+- [x] Review-gates-preserved test: tech-lead diff review and designer review (when
       designer-needed) still run inside each convergence round; their findings normalize into the
       shared ledger with `sourceGate`, so Phase 14 does not bypass existing gates.
 - [ ] Terminal-bugs.md test: at terminal the orchestrator writes one detailed

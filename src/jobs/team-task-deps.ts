@@ -49,6 +49,7 @@ import {
   type ObjectionClass,
   type ObjectionFinding,
   type ObjectionSeverity,
+  type FindingsLedgerEntry,
   type QaResult,
   type GateRejectionFeedback,
   type GateVerdict,
@@ -552,6 +553,21 @@ function formatRejectionFeedback(
   ].join('\n').trim();
 }
 
+function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined): string {
+  if (findingsLedger === undefined || findingsLedger.length === 0) return '';
+  return [
+    '## Open findings ledger for this round',
+    '',
+    ...findingsLedger.flatMap((finding, index) => [
+      `${index + 1}. ${finding.sourceGate} ${finding.class}/${finding.severity} at ` +
+        `${finding.location}`,
+      `Status: ${finding.status}; reversible: ${finding.reversible ? 'yes' : 'no'}`,
+      `Rationale: ${finding.rationale.slice(0, NOTE_MAX_CHARS)}`,
+      '',
+    ]),
+  ].join('\n').trim();
+}
+
 function formatGateLearningRejection(feedback: GateRejectionFeedback): string {
   return [
     '<gate-rejection>',
@@ -733,9 +749,10 @@ export function buildProductionTeamTaskDeps(
       return { approved: value, ...(notes !== undefined ? { notes } : {}) };
     },
 
-    coder: async ({ task, spec, context, tests, rejectionFeedback }) => {
+    coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const feedbackBlock = formatRejectionFeedback(rejectionFeedback);
+      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       const body = [
         `## Task\n\n${task.text}`,
         '',
@@ -747,6 +764,7 @@ export function buildProductionTeamTaskDeps(
         '',
         `## QA tests\n\n${testsBlock}`,
         ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
+        ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const result = await execute('coder', models.coder, CODER_EXEC_INSTRUCTION, body);
       if (!result.ok) {
@@ -758,8 +776,9 @@ export function buildProductionTeamTaskDeps(
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
     // provider identity is baked into `models.reviewer` at construction time
     // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
-    reviewer: async ({ diff, spec, tests, task, context }) => {
+    reviewer: async ({ diff, spec, tests, task, context, findingsLedger }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
+      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       if (models.reviewer === null) {
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
         // reviewer verdict must never be fabricable without a resolved
@@ -776,19 +795,32 @@ export function buildProductionTeamTaskDeps(
         `## Tests\n\n${testsBlock}`,
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
+        ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const reply = await judge('reviewer', models.reviewer, REVIEWER_INSTRUCTION, body);
       return parseReviewerVerdict(reply);
     },
 
-    techLeadReviewDiff: async ({ task, diff }) => {
-      const body = [`## Task\n\n${task.text}`, '', `## Diff\n\n${diff}`].join('\n');
+    techLeadReviewDiff: async ({ task, diff, findingsLedger }) => {
+      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Diff\n\n${diff}`,
+        ...(findingsBlock !== '' ? ['', findingsBlock] : []),
+      ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body);
       return parseGateVerdict(reply, 'tl-diff-review');
     },
 
-    designer: async ({ task, diff }) => {
-      const body = [`## Task\n\n${task.text}`, '', `## Diff\n\n${diff}`].join('\n');
+    designer: async ({ task, diff, findingsLedger }) => {
+      const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Diff\n\n${diff}`,
+        ...(findingsBlock !== '' ? ['', findingsBlock] : []),
+      ].join('\n');
       const reply = await judge('designer', models.designer, DESIGNER_INSTRUCTION, body);
       return parseGateVerdict(reply, 'designer-review');
     },

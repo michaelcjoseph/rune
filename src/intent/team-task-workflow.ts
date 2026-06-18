@@ -205,10 +205,12 @@ export interface TeamTaskDeps {
   techLeadReviewDiff: (input: {
     task: SizedTask;
     diff: string;
+    findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
     diff: string;
+    findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<GateReviewVerdict>;
   pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
     resolved: boolean;
@@ -450,7 +452,7 @@ async function runGated(
       'review',
       'reviewer-review',
     );
-    const reviewerFindingsLedger = openFindingsLedger(findingsLedger);
+    const roundFindingsLedger = openFindingsLedger(findingsLedger);
     const rawReviewerVerdict = await deps.reviewer({
       diff: coder.diff,
       spec: input.spec,
@@ -458,8 +460,8 @@ async function runGated(
       task,
       context: input.contextMd,
       reviewerProvider,
-      ...(reviewerFindingsLedger.length > 0
-        ? { findingsLedger: reviewerFindingsLedger }
+      ...(roundFindingsLedger.length > 0
+        ? { findingsLedger: roundFindingsLedger }
         : {}),
     });
     lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
@@ -506,7 +508,13 @@ async function runGated(
       roundFeedback.push(feedback);
     }
 
-    lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({ task, diff: coder.diff }));
+    lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({
+      task,
+      diff: coder.diff,
+      ...(roundFindingsLedger.length > 0
+        ? { findingsLedger: roundFindingsLedger }
+        : {}),
+    }));
     mergeFindingsIntoLedger(findingsLedger, 'tech-lead', lastTechLeadDiff.findings, round);
     emitRoleVerdict(input, {
       role: 'tech-lead',
@@ -538,7 +546,13 @@ async function runGated(
         'design',
         'designer-review',
       );
-      lastDesigner = normalizeGateVerdict(await deps.designer({ task, diff: coder.diff }));
+      lastDesigner = normalizeGateVerdict(await deps.designer({
+        task,
+        diff: coder.diff,
+        ...(roundFindingsLedger.length > 0
+          ? { findingsLedger: roundFindingsLedger }
+          : {}),
+      }));
       mergeFindingsIntoLedger(findingsLedger, 'designer', lastDesigner.findings, round);
       emitRoleVerdict(input, {
         role: 'designer',
@@ -566,7 +580,7 @@ async function runGated(
       isGatePass(lastTechLeadDiff) &&
       isGatePass(lastDesigner) &&
       reviewerVerificationAllowsCloseout(
-        reviewerFindingsLedger,
+        roundFindingsLedger,
         lastReviewer.verifiedFindings,
         findingsLedger,
       )
