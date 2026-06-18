@@ -457,6 +457,40 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }
   });
 
+  it('fails safe to an operational block when reviewer severity is malformed, without spending a coder correction round', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const malformedFinding = {
+      class: 'security',
+      severity: 'severe',
+      location: 'src/auth.ts:42',
+      rationale: 'severity was not one of the supported outcome-gating values',
+    } as unknown as ObjectionFinding;
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        objections: [malformedFinding],
+      }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.objectionOpen).toBe(false);
+    expect(ev.blockedReason).toMatch(/operational|malformed severity/i);
+    expect(ev.rejectionFeedback).toMatchObject({
+      rejectingRole: 'reviewer',
+      rejectedRole: 'coder',
+      rejectedArtifact: 'reviewer-verdict',
+      reason: expect.stringMatching(/malformed severity|unsupported severity/i),
+    });
+    expect(ev.reviewerVerdict?.outcome).toBe('block');
+    expect(coderInputs).toHaveLength(1);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+  });
+
   it('gives a reviewer-produced block exactly one feedback-threaded coder correction before parking', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const reviewerObjection: ObjectionFinding = {

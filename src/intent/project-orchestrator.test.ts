@@ -690,6 +690,65 @@ describe('project-orchestrator — durable run state', () => {
       }),
     ]);
   });
+
+  it('parks as an operational block when warning recording fails, without re-running the coder workflow', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-recording-failure';
+    const warningFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+    } as const;
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return {
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          reviewerVerdict: {
+            outcome: 'pass-with-warnings',
+            objections: [warningFinding],
+          },
+          objectionOpen: false,
+          handoffNotes: ['shipped with a low-severity performance caveat'],
+        };
+      },
+      appendTaskRunRecord: async () => {
+        throw new Error('task-run-record store unavailable');
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Cache repeated reads',
+    ].join('\n'));
+    let finalizeCalled = false;
+    h.deps.finalize = async () => {
+      finalizeCalled = true;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration({
+      ...h.deps,
+      worktreePath,
+    });
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: expect.stringMatching(/operational|record/i),
+      parked: {
+        status: 'blocked-on-human',
+        branch: 'jarvis-work/14-x',
+        worktreePath,
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
+    });
+    expect(workflowCalls).toBe(1);
+    expect(finalizeCalled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

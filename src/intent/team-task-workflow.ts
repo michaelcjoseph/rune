@@ -55,6 +55,8 @@ export interface NormalizedReviewerVerdict {
   objections: ObjectionFinding[];
   /** Optional notes for non-objection failures; objection details live in `objections`. */
   notes?: string;
+  /** Set when the reviewer payload itself is malformed and must fail closed operationally. */
+  operationalBlockReason?: string;
 }
 
 /** The reviewer role boundary accepts legacy boolean verdicts while production
@@ -379,6 +381,23 @@ async function runGated(
       verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
       summary: summarizeReviewerVerdict(lastReviewer),
     });
+    if (lastReviewer.operationalBlockReason !== undefined) {
+      const feedback = buildGateRejectionFeedback({
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        artifact: 'reviewer-verdict',
+        reason: lastReviewer.operationalBlockReason,
+      });
+      await recordGateRejection(deps, feedback);
+      emitGateRejection(input, feedback);
+      return block(task, roles, handoffNotes, {
+        blockedReason: lastReviewer.operationalBlockReason,
+        rejectionFeedback: feedback,
+        reviewerVerdict: lastReviewer,
+        objectionOpen: false,
+        noCodeTestRationale,
+      });
+    }
 
     // Hard gate: an open objection-class finding gets one feedback-threaded
     // coder correction, then parks if the reviewer still blocks. PM wrap-up
@@ -632,6 +651,19 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
 
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
   const objections = [...verdict.objections];
+  const malformedSeverity = objections.find((objection) =>
+    !isObjectionSeverity(objection.severity));
+  if (malformedSeverity !== undefined) {
+    const reason =
+      `operational block: reviewer-verdict contained malformed severity ` +
+      `"${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`;
+    return {
+      outcome: 'block',
+      objections,
+      notes: reason,
+      operationalBlockReason: reason,
+    };
+  }
   const outcomes: ReviewerOutcome[] = [];
   if (objections.length > 0) {
     outcomes.push(outcomeForObjectionSeverities(objections));
@@ -664,6 +696,15 @@ function outcomeForObjectionSeverity(severity: ObjectionSeverity): ReviewerOutco
     case 'low':
       return 'pass-with-warnings';
   }
+}
+
+function isObjectionSeverity(severity: unknown): severity is ObjectionSeverity {
+  return (
+    severity === 'low' ||
+    severity === 'medium' ||
+    severity === 'high' ||
+    severity === 'critical'
+  );
 }
 
 function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {

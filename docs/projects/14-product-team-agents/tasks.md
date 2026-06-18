@@ -956,7 +956,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `mapResultToTerminal` blocked→failed mapping).
 - [x] Accept-with-rationale test: an injected human/PM acceptance requires a rationale, records
       it in the task/run record, and the task proceeds as `pass-with-warnings`.
-- [ ] Fail-safe test: a malformed severity or a recording failure degrades to an operational
+- [x] Fail-safe test: a malformed severity or a recording failure degrades to an operational
       `block`, records a durable reason, and parks without consuming a coder corrective round.
 - [ ] Confirm red before implementation.
 

@@ -98,6 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- -orchestrator.test.ts` passed: 54 tests.
-- `TELEGRAM_BOT_TOKEN=dummy TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npm test -- --configLoader runner src/jobs/team-task-deps.test.ts` passed: 18 tests.
-- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the modified files.
+- workflow.test.ts src/intent/project-orchestrator.test.ts` passed: 56 tests.
+- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the touched implementation files.
+
+I did not commit. The QA test files were already staged; my implementation changes are unstaged.

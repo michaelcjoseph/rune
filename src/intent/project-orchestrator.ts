@@ -193,7 +193,20 @@ export async function runProjectOrchestration(
       outcome: 'ready-for-closeout',
     });
     taskRecords.push(taskRecord);
-    await persistRunCheckpoint(deps, taskRecords, taskRecord, closeout.tasksMd);
+    const checkpoint = await persistRunCheckpoint(
+      deps,
+      taskRecords,
+      taskRecord,
+      closeout.tasksMd,
+    );
+    if (checkpoint.kind === 'blocked') {
+      return {
+        kind: 'blocked',
+        reason: checkpoint.reason,
+        task,
+        ...operationalParkedRunField(deps),
+      };
+    }
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
 
@@ -297,14 +310,22 @@ async function performCloseout(
   return { kind: 'ok', commitSha, tasksMd: tick.content };
 }
 
+type CheckpointResult = { kind: 'ok' } | { kind: 'blocked'; reason: string };
+
 async function persistRunCheckpoint(
   deps: OrchestrationDeps,
   taskRecords: TaskRunRecord[],
   taskRecord: TaskRunRecord,
   tasksMd: string,
-): Promise<void> {
-  await deps.appendTaskRunRecord?.(taskRecord);
-  await deps.writeRunCursor?.(buildRunCursor(deps, taskRecords, tasksMd));
+): Promise<CheckpointResult> {
+  try {
+    await deps.appendTaskRunRecord?.(taskRecord);
+    await deps.writeRunCursor?.(buildRunCursor(deps, taskRecords, tasksMd));
+    return { kind: 'ok' };
+  } catch (err) {
+    const message = (err as Error).message.trim() || 'unknown checkpoint write failure';
+    return { kind: 'blocked', reason: `operational recording failure: ${message}` };
+  }
 }
 
 function buildRunCursor(
@@ -463,6 +484,21 @@ function maybeParkedRun(
     worktreePath: deps.worktreePath,
     preserveBranch: true,
     preserveWorktree: true,
+  };
+}
+
+function operationalParkedRunField(
+  deps: OrchestrationDeps,
+): Pick<Extract<OrchestrationResult, { kind: 'blocked' }>, 'parked'> | Record<string, never> {
+  if (deps.worktreePath === undefined) return {};
+  return {
+    parked: {
+      status: 'blocked-on-human',
+      branch: deps.branch,
+      worktreePath: deps.worktreePath,
+      preserveBranch: true,
+      preserveWorktree: true,
+    },
   };
 }
 
