@@ -733,6 +733,93 @@ describe('team-task-workflow — gate rejection records', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — round cap', () => {
+  it('retries a structured reviewer fail with feedback threaded into the next coder round', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let reviewerCalls = 0;
+    let pmCalled = false;
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => {
+        reviewerCalls += 1;
+        return reviewerCalls === 1
+          ? {
+              outcome: 'fail',
+              objections: [],
+              notes: 'reviewer needs the empty-state branch covered before this can pass',
+            }
+          : { outcome: 'pass', objections: [] };
+      },
+      pmWrapup: async () => {
+        pmCalled = true;
+        return { resolved: true };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(pmCalled).toBe(false);
+    expect(coderInputs).toHaveLength(2);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        counterpartRole: 'coder',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: 'reviewer needs the empty-state branch covered before this can pass',
+        actionableNotes: ['reviewer needs the empty-state branch covered before this can pass'],
+      }),
+    ]);
+  });
+
+  it('routes a non-cleared structured reviewer fail to PM wrap-up at the cap with the fail feedback', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const pmInputs: Array<{ reason: string }> = [];
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        outcome: 'fail',
+        objections: [],
+        notes: 'reviewer still sees the contract violation after retry',
+      }),
+      pmWrapup: async (input) => {
+        pmInputs.push(input);
+        return { resolved: false };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(coderInputs).toHaveLength(2);
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: 'reviewer still sees the contract violation after retry',
+      }),
+    ]);
+    expect(pmInputs).toEqual([
+      expect.objectContaining({
+        reason: expect.stringContaining('reviewer still sees the contract violation after retry'),
+      }),
+    ]);
+    expect(ev.rejectionFeedback).toMatchObject({
+      rejectingRole: 'reviewer',
+      rejectedRole: 'coder',
+      rejectedArtifact: 'reviewer-verdict',
+      reason: 'reviewer still sees the contract violation after retry',
+    });
+  });
+
   it('re-invokes the coder with reviewer and tech-lead feedback from the failed round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;

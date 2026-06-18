@@ -98,6 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- est -- --configLoader runner src/intent/project-orchestrator.test.ts src/intent/orch-execution.test.ts src/jobs/orchestrated-run-store.test.ts` passed: 37 tests
+- .test.ts` passed: 34 tests
 - `git diff --check` passed
-- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the changed files.
+
+Note: [team-task-workflow.test.ts](/Users/jarvis/workspace/jarvis/.worktrees/jarvis/14-product-team-agents/src/intent/team-task-workflow.test.ts) was already modified when I started; I treated it as the QA-authored contract and did not edit it.

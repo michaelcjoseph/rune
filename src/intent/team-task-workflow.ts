@@ -490,7 +490,10 @@ async function runGated(
 
   roles.add('pm');
   previousRole = emitRoleTransition(input, previousRole, 'pm', 'pm-wrapup', 'pm-wrapup');
-  const pm = await deps.pmWrapup({ task, reason: 'non-objection disagreement at the round cap' });
+  const pmReason = lastRejectionFeedback === undefined
+    ? 'non-objection disagreement at the round cap'
+    : `non-objection disagreement at the round cap: ${lastRejectionFeedback.whatFailed}`;
+  const pm = await deps.pmWrapup({ task, reason: pmReason });
   emitRoleVerdict(input, {
     role: 'pm',
     gate: 'pm-wrapup',
