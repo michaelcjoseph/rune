@@ -137,28 +137,32 @@ describe('orch-run-record — required fields', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Attempt caps — bounded retry, then escalation
+// Attempt caps — bounded retry, no human terminal
 // ---------------------------------------------------------------------------
 
 describe('orch-attempt-cap — bounded retry', () => {
+  const humanTerminalActions = ['pm-wrapup', 'blocked-on-human'];
+
   it('retries below the cap on a non-objection failure', () => {
     const d = decideAttemptOutcome({ attempts: 1, cap: 3, outcome: 'failed', objectionOpen: false });
     expect(d.action).toBe('retry');
   });
 
-  it('routes non-objection disagreement at the cap to PM wrap-up', () => {
+  it('does not route non-objection disagreement at the cap to PM wrap-up or blocked-on-human', () => {
     const d = decideAttemptOutcome({ attempts: 3, cap: 3, outcome: 'blocked', objectionOpen: false });
-    expect(d.action).toBe('pm-wrapup');
+    expect(d.action).not.toBe('retry');
+    expect(humanTerminalActions).not.toContain(d.action);
   });
 
-  it('routes an open objection-class finding to blocked-on-human, even below cap', () => {
+  it('does not route an open objection-class finding to blocked-on-human', () => {
     const d = decideAttemptOutcome({ attempts: 1, cap: 3, outcome: 'blocked', objectionOpen: true });
-    expect(d.action).toBe('blocked-on-human');
+    expect(humanTerminalActions).not.toContain(d.action);
   });
 
   it('never retries past the cap', () => {
     const d = decideAttemptOutcome({ attempts: 5, cap: 3, outcome: 'failed', objectionOpen: false });
     expect(d.action).not.toBe('retry');
+    expect(humanTerminalActions).not.toContain(d.action);
   });
 
   it('proceeds on a successful attempt, even on the final allowed attempt', () => {
@@ -171,14 +175,14 @@ describe('orch-attempt-cap — bounded retry', () => {
     expect(d.action).toBe('proceed');
   });
 
-  it('an open objection blocks even a successful attempt', () => {
+  it('an open objection does not turn a successful attempt into a human terminal', () => {
     const d = decideAttemptOutcome({
       attempts: 1,
       cap: 3,
       outcome: 'ready-for-closeout',
       objectionOpen: true,
     });
-    expect(d.action).toBe('blocked-on-human');
+    expect(humanTerminalActions).not.toContain(d.action);
   });
 });
 

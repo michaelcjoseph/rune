@@ -353,7 +353,7 @@ describe('project-orchestrator — block', () => {
     expect(h.state.finalizeCalled).toBe(false);
   });
 
-  it('parks blocked-on-human with branch and worktree preserved when feedback retries exhaust', async () => {
+  it('stops without blocked-on-human parking when feedback retries exhaust', async () => {
     const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
     const h = makeHarness({
       attemptCap: 1,
@@ -379,18 +379,12 @@ describe('project-orchestrator — block', () => {
     expect(res).toMatchObject({
       kind: 'blocked',
       reason: 'feedback retry cap exhausted',
-      parked: {
-        status: 'blocked-on-human',
-        branch: 'jarvis-work/14-x',
-        worktreePath,
-        preserveBranch: true,
-        preserveWorktree: true,
-      },
     });
+    expect(res).not.toHaveProperty('parked');
   });
 
   it.each(['high', 'critical'] as const)(
-    'parks and preserves the run when an open %s objection blocks a task',
+    'stops without blocked-on-human parking when an open %s objection blocks a task',
     async (severity) => {
       const worktreePath = `/tmp/jarvis-worktrees/aura/14-x-${severity}`;
       const h = makeHarness({
@@ -424,21 +418,15 @@ describe('project-orchestrator — block', () => {
       expect(res).toMatchObject({
         kind: 'blocked',
         reason: 'open objection-class finding',
-        parked: {
-          status: 'blocked-on-human',
-          branch: 'jarvis-work/14-x',
-          worktreePath,
-          preserveBranch: true,
-          preserveWorktree: true,
-        },
       });
+      expect(res).not.toHaveProperty('parked');
       expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
       expect(h.state.commits).toEqual([]);
       expect(h.state.finalizeCalled).toBe(false);
     },
   );
 
-  it('parks and preserves the run when an objection-open block has no severity details', async () => {
+  it('stops without blocked-on-human parking when an objection-open block has no severity details', async () => {
     const worktreePath = '/tmp/jarvis-worktrees/aura/14-x-objection-open';
     const h = makeHarness({
       attemptCap: 1,
@@ -464,14 +452,8 @@ describe('project-orchestrator — block', () => {
     expect(res).toMatchObject({
       kind: 'blocked',
       reason: 'open objection-class finding',
-      parked: {
-        status: 'blocked-on-human',
-        branch: 'jarvis-work/14-x',
-        worktreePath,
-        preserveBranch: true,
-        preserveWorktree: true,
-      },
     });
+    expect(res).not.toHaveProperty('parked');
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
     expect(h.state.commits).toEqual([]);
     expect(h.state.finalizeCalled).toBe(false);

@@ -222,13 +222,11 @@ export async function runProjectOrchestration(
 /** Run one task through the workflow, retrying within the cap on non-objection
  *  failures. Returns the final attempt's evidence.
  *
- *  NOTE: the team-task-workflow already runs its own internal round cap + PM
- *  wrap-up, so by the time it returns `blocked`/`failed` the PM decision (if any)
- *  has happened INSIDE it. This outer loop is the per-task ATTEMPT cap — how many
- *  times to re-invoke the whole workflow. So `decideAttemptOutcome`'s `pm-wrapup`
- *  vs `blocked-on-human` distinction is intentionally flattened to "stop" here:
- *  both mean don't re-run, return the evidence, and let the caller block. Only an
- *  objection short-circuits a retry below the cap. */
+ *  NOTE: the team-task-workflow already runs its own internal round cap and
+ *  returns terminal task evidence. This outer loop is the per-task ATTEMPT cap:
+ *  how many times to re-invoke the whole workflow. `decideAttemptOutcome`
+ *  returns `stop` for non-retry terminals, so this loop returns the evidence and
+ *  lets the caller block. Only an objection short-circuits a retry below the cap. */
 async function runTaskWithRetries(
   deps: OrchestrationDeps,
   task: SelectedTask,
@@ -462,30 +460,12 @@ function maybeParkedRun(
   deps: OrchestrationDeps,
   evidence: TaskEvidence,
 ): ParkedTaskRun | undefined {
-  if (evidence.outcome !== 'blocked' || deps.worktreePath === undefined) {
-    return undefined;
-  }
-  if (evidence.objectionOpen) {
-    return {
-      status: 'blocked-on-human',
-      branch: deps.branch,
-      worktreePath: deps.worktreePath,
-      preserveBranch: true,
-      preserveWorktree: true,
-    };
-  }
-  const reason = evidence.blockedReason ?? '';
-  const exhaustedFeedbackRetry =
-    evidence.rejectionFeedback !== undefined ||
-    /feedback retry cap|round cap/i.test(reason);
-  if (!exhaustedFeedbackRetry) return undefined;
-  return {
-    status: 'blocked-on-human',
-    branch: deps.branch,
-    worktreePath: deps.worktreePath,
-    preserveBranch: true,
-    preserveWorktree: true,
-  };
+  void deps;
+  void evidence;
+  // Phase 14 removes the per-task human park. A task that does not reach
+  // closeout still stops the run, but it is no longer converted into a
+  // supervision `blocked-on-human` row from task evidence.
+  return undefined;
 }
 
 function operationalParkedRunField(

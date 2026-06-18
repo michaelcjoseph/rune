@@ -1022,7 +1022,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Reversible-default test: a finding (from reviewer, tech-lead diff, or designer) that OMITS or
       malforms `reversible` normalizes to `reversible: false` — never dropped and never defaulted to
       mergeable — so a high/critical finding with a missing flag fails safe to the terminal HOLD.
-- [ ] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
+- [x] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
       outer attempt cap; `decideAttemptOutcome` and the block-correction budget are gone.
 - [ ] No-block-residue test: `ReviewerOutcome`/`GateVerdict.outcome` no longer admits `block` and
       no `ObjectionClass` admits `irreversibility` (compile-level guard); the Phase 13 tests that

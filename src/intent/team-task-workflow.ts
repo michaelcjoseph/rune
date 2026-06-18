@@ -14,8 +14,8 @@
  *         → tech lead reviews the diff
  *         → designer reviews IFF the sizing flagged front-end/designer-needed
  *         → all gates green ⇒ ready-for-closeout
- *     → cap reached: designer gate unmet ⇒ block; else PM wrap-up
- *         → PM resolves ⇒ ready-for-closeout; unresolved ⇒ blocked-on-human
+ *     → cap reached: return machine terminal evidence; never PM wrap-up /
+ *       blocked-on-human from a per-task path
  *
  * It does NOT mark `tasks.md`, write `context.md`, or merge — Jarvis owns
  * closeout. Every role is an injected seam, so the whole flow runs on fixtures
@@ -253,8 +253,8 @@ export async function runTeamTaskWorkflow(
   input: TeamTaskRunInput,
   deps: TeamTaskDeps,
 ): Promise<TaskEvidence> {
-  // A zero/negative cap would skip the round loop yet still reach PM wrap-up with
-  // a "disagreement at the cap" reason no round produced — reject it loudly,
+  // A zero/negative cap would skip the round loop yet still reach terminal
+  // evidence with a reason no round produced — reject it loudly,
   // matching gen-eval-loop's `maxEvaluatorRounds` guard.
   if (input.cap < 1) {
     throw new RangeError(`runTeamTaskWorkflow: cap must be >= 1 (got ${input.cap})`);
@@ -528,8 +528,33 @@ async function runGated(
     }
   }
 
-  // Cap reached. A failed designer gate blocks (a UX defect is not PM-clearable);
-  // otherwise non-objection disagreement routes to PM wrap-up.
+  // Cap reached. Per-task terminal handling is machine-owned: preserve the
+  // structured verdicts/feedback, but do not route to PM wrap-up or a human
+  // blocked state.
+  if (
+    lastReviewer !== undefined &&
+    lastReviewer.outcome === 'fail' &&
+    lastReviewer.findings.length > 0 &&
+    isGatePass(lastTechLeadDiff) &&
+    isGatePass(lastDesigner)
+  ) {
+    for (const finding of lastReviewer.findings) {
+      if (finding.severity !== 'low') {
+        emitObjection(input, toPublicFinding(finding));
+      }
+    }
+    return {
+      taskId: task.id,
+      outcome: 'ready-for-closeout',
+      rolesInvoked: roles.list(),
+      reviewerVerdict: lastReviewer,
+      gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+      objectionOpen: false,
+      handoffNotes,
+      ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+    };
+  }
+
   if (task.designerNeeded && !isGatePass(lastDesigner)) {
     if (lastRejectionFeedback !== undefined) {
       emitGateRejection(input, lastRejectionFeedback);
@@ -545,53 +570,13 @@ async function runGated(
     });
   }
 
-  roles.add('pm');
-  previousRole = emitRoleTransition(input, previousRole, 'pm', 'pm-wrapup', 'pm-wrapup');
-  const pmReason = lastRejectionFeedback === undefined
-    ? 'non-objection disagreement at the round cap'
-    : `non-objection disagreement at the round cap: ${lastRejectionFeedback.whatFailed}`;
-  const pm = await deps.pmWrapup({ task, reason: pmReason });
-  emitRoleVerdict(input, {
-    role: 'pm',
-    gate: 'pm-wrapup',
-    verdict: pm.resolved ? 'resolved' : 'unresolved',
-    summary: pm.resolved
-      ? 'PM resolved non-objection disagreement at the round cap'
-      : 'PM left non-objection disagreement unresolved at the round cap',
-  });
-  if (pm.resolved) {
-    const acceptance = acceptanceFromPmWrapup(pm);
-    if (acceptance === null) {
-      return block(task, roles, handoffNotes, {
-        blockedReason: 'PM acceptance requires a non-empty rationale',
-        ...(lastRejectionFeedback !== undefined
-          ? { rejectionFeedback: lastRejectionFeedback }
-          : {}),
-        reviewerVerdict: lastReviewer,
-        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
-        noCodeTestRationale,
-      });
-    }
-    const acceptedReviewer = acceptance !== undefined
-      ? reviewerAcceptedWithWarnings(lastReviewer)
-      : lastReviewer;
-    return {
-      taskId: task.id,
-      outcome: 'ready-for-closeout',
-      rolesInvoked: roles.list(),
-      reviewerVerdict: acceptedReviewer,
-      gateVerdicts: buildWorkflowGateVerdicts(acceptedReviewer, lastTechLeadDiff, lastDesigner),
-      objectionOpen: false,
-      handoffNotes,
-      ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
-      ...(acceptance !== undefined ? { acceptance } : {}),
-    };
-  }
   if (lastRejectionFeedback !== undefined) {
     emitGateRejection(input, lastRejectionFeedback);
   }
   return block(task, roles, handoffNotes, {
-    blockedReason: 'PM decision unresolved at the round cap',
+    blockedReason: lastRejectionFeedback === undefined
+      ? 'round cap reached with unresolved task feedback'
+      : `round cap reached with unresolved task feedback: ${lastRejectionFeedback.whatFailed}`,
     ...(lastRejectionFeedback !== undefined
       ? { rejectionFeedback: lastRejectionFeedback }
       : {}),
@@ -906,57 +891,11 @@ function toPublicFinding(finding: ObjectionFinding): ObjectionFinding {
   };
 }
 
-function reviewerAcceptedWithWarnings(
-  verdict: NormalizedReviewerVerdict | undefined,
-): NormalizedReviewerVerdict | undefined {
-  if (
-    verdict === undefined ||
-    verdict.outcome !== 'fail' ||
-    verdict.findings.length > 0
-  ) {
-    return verdict;
-  }
-  return {
-    ...verdict,
-    outcome: 'pass-with-warnings',
-  };
-}
-
 function normalizeFeedback(
   feedback: GateRejectionFeedback | GateRejectionFeedback[] | undefined,
 ): GateRejectionFeedback[] {
   if (feedback === undefined) return [];
   return Array.isArray(feedback) ? feedback : [feedback];
-}
-
-function acceptanceFromPmWrapup(pm: {
-  resolved: boolean;
-  rationale?: string;
-}): PmAcceptance | undefined | null {
-  if (!Object.hasOwn(pm, 'rationale')) return undefined;
-  const rationale = pm.rationale?.trim() ?? '';
-  if (rationale.length === 0) return null;
-  return {
-    actor: 'pm',
-    decision: 'accepted-with-rationale',
-    rationale,
-  };
-}
-
-async function maybeAcceptWithRationale(
-  deps: TeamTaskDeps,
-  input: AcceptWithRationaleInput,
-): Promise<PmAcceptance | undefined | null> {
-  if (deps.acceptWithRationale === undefined) return undefined;
-  const result = await deps.acceptWithRationale(input);
-  if (!result.accepted) return undefined;
-  const rationale = result.rationale?.trim() ?? '';
-  if (rationale.length === 0) return null;
-  return {
-    actor: result.actor,
-    decision: 'accepted-with-rationale',
-    rationale,
-  };
 }
 
 async function recordGateRejection(
@@ -1023,8 +962,8 @@ function emitRoleVerdict(
   input: TeamTaskRunInput,
   event: {
     role: RoleName;
-    gate: GateRejectedArtifact | 'pm-wrapup';
-    verdict: 'pass' | 'fail' | 'resolved' | 'unresolved';
+    gate: GateRejectedArtifact;
+    verdict: 'pass' | 'fail';
     summary: string;
   },
 ): void {
