@@ -937,7 +937,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Red tests (confirm red before implementation)
 
-- [ ] Outcome-enum test: a reviewing role's verdict carries exactly one of
+- [x] Outcome-enum test: a reviewing role's verdict carries exactly one of
       `pass`/`pass-with-warnings`/`fail`/`block` as a structured field; a bare boolean is
       normalized/rejected, never silently coerced.
 - [ ] Severity-mapping test: `critical`/`high` objection → `block`; `medium` → `fail`; `low` →

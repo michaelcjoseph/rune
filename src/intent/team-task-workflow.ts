@@ -47,9 +47,22 @@ export interface ObjectionFinding {
   rationale: string;
 }
 
-/** The reviewer's structured verdict. */
+export type ReviewerOutcome = 'pass' | 'pass-with-warnings' | 'fail' | 'block';
+
+/** The normalized reviewer's structured verdict carried in workflow evidence. */
+export interface NormalizedReviewerVerdict {
+  outcome: ReviewerOutcome;
+  objections: ObjectionFinding[];
+  /** Optional notes for non-objection failures; objection details live in `objections`. */
+  notes?: string;
+}
+
+/** The reviewer role boundary accepts legacy boolean verdicts while production
+ *  seams migrate; workflow evidence is normalized to `NormalizedReviewerVerdict`
+ *  before any gate or caller observes it. */
 export interface ReviewerVerdict {
-  pass: boolean;
+  outcome?: ReviewerOutcome;
+  pass?: boolean;
   objections: ObjectionFinding[];
   /** Optional notes for non-objection failures; objection details live in `objections`. */
   notes?: string;
@@ -308,7 +321,7 @@ async function runGated(
   }
 
   // Round loop — coder → reviewer → tech-lead diff → designer, bounded by cap.
-  let lastReviewer: ReviewerVerdict | undefined;
+  let lastReviewer: NormalizedReviewerVerdict | undefined;
   let lastDesignerPass = true;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   for (let attempt = 0; attempt < input.cap; attempt++) {
@@ -338,24 +351,24 @@ async function runGated(
       'review',
       'reviewer-review',
     );
-    lastReviewer = await deps.reviewer({
+    lastReviewer = normalizeReviewerVerdict(await deps.reviewer({
       diff: coder.diff,
       spec: input.spec,
       tests,
       task,
       context: input.contextMd,
       reviewerProvider,
-    });
+    }));
     emitRoleVerdict(input, {
       role: 'reviewer',
       gate: 'reviewer-verdict',
-      verdict: lastReviewer.pass && lastReviewer.objections.length === 0 ? 'pass' : 'fail',
+      verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
       summary: summarizeReviewerVerdict(lastReviewer),
     });
 
     // Hard gate: an open objection-class finding blocks immediately. PM wrap-up
     // authority does not extend here.
-    if (lastReviewer.objections.length > 0) {
+    if (isReviewerBlock(lastReviewer)) {
       for (const objection of lastReviewer.objections) {
         emitObjection(input, objection);
       }
@@ -363,7 +376,7 @@ async function runGated(
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
         artifact: 'reviewer-verdict',
-        reason: summarizeObjections(lastReviewer.objections),
+        reason: summarizeReviewerVerdict(lastReviewer),
       });
       await recordGateRejection(deps, feedback);
       emitGateRejection(input, feedback);
@@ -375,7 +388,7 @@ async function runGated(
         noCodeTestRationale,
       });
     }
-    if (!lastReviewer.pass) {
+    if (!isReviewerPass(lastReviewer)) {
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
@@ -442,7 +455,7 @@ async function runGated(
       }
     }
 
-    if (lastReviewer.pass && tlDiff.pass && lastDesignerPass) {
+    if (isReviewerPass(lastReviewer) && tlDiff.pass && lastDesignerPass) {
       return {
         taskId: task.id,
         outcome: 'ready-for-closeout',
@@ -580,16 +593,43 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
     .join('; ');
 }
 
-function summarizeReviewerVerdict(verdict: ReviewerVerdict): string {
+function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
+  const objections = [...verdict.objections];
+  const outcome = objections.length > 0
+    ? 'block'
+    : verdict.outcome ?? (verdict.pass === true ? 'pass' : 'fail');
+  return {
+    outcome,
+    objections,
+    ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
+  };
+}
+
+function isReviewerPass(verdict: NormalizedReviewerVerdict): boolean {
+  return verdict.outcome === 'pass' || verdict.outcome === 'pass-with-warnings';
+}
+
+function isReviewerBlock(verdict: NormalizedReviewerVerdict): boolean {
+  return verdict.outcome === 'block' || verdict.objections.length > 0;
+}
+
+function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {
   if (verdict.objections.length > 0) {
     return summarizeObjections(verdict.objections);
   }
   if (verdict.notes?.trim()) {
     return verdict.notes.trim();
   }
-  return verdict.pass
-    ? 'reviewer passed implementation diff'
-    : 'reviewer rejected implementation diff';
+  switch (verdict.outcome) {
+    case 'pass':
+      return 'reviewer passed implementation diff';
+    case 'pass-with-warnings':
+      return 'reviewer passed implementation diff with warnings';
+    case 'fail':
+      return 'reviewer rejected implementation diff';
+    case 'block':
+      return 'reviewer blocked implementation diff';
+  }
 }
 
 function normalizeFeedback(

@@ -183,7 +183,9 @@ export async function runProjectOrchestration(
       transcriptIds: [],
       modelChoices: {},
       commitSha: closeout.commitSha,
-      verdicts: evidence.reviewerVerdict ? { reviewer: evidence.reviewerVerdict.pass ? 'pass' : 'fail' } : {},
+      verdicts: evidence.reviewerVerdict
+        ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
+        : {},
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
       outcome: 'ready-for-closeout',
@@ -409,6 +411,11 @@ function attemptId(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: n
 
 function countTasks(tasksMd: string): number {
   return (tasksMd.match(/^\s*-\s*\[[ xX]\]/gm) ?? []).length;
+}
+
+function reviewerOutcome(verdict: NonNullable<TaskEvidence['reviewerVerdict']>): string {
+  if (verdict.outcome !== undefined) return verdict.outcome;
+  return verdict.pass === true ? 'pass' : 'fail';
 }
 
 function maybeParkedRun(

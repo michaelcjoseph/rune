@@ -98,7 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- -configLoader runner src/jobs/team-task-deps.postmortem-gate.test.ts`
-- `git diff --check`
+- r verdict using the enum outcome.
 
-`npm run build` is still blocked by existing repo-wide TypeScript errors in unrelated tests and staged QA test mock typing; I left QA’s staged `src/jobs/team-task-deps.gate-learning.test.ts` change untouched.
+Verification:
+- `src/intent/team-task-workflow.test.ts` + `src/jobs/team-task-deps.test.ts`: 48 passed.
+- `git diff --check`: passed.
+- `npm run build`: still blocked by existing unrelated repo-wide TypeScript errors; no task-related reviewer verdict errors remain.

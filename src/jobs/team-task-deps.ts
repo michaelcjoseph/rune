@@ -50,6 +50,7 @@ import {
   type ObjectionSeverity,
   type QaResult,
   type GateRejectionFeedback,
+  type ReviewerOutcome,
   type ReviewerVerdict,
   type TaskEvidence,
   type TeamTaskDeps,
@@ -213,6 +214,12 @@ const OBJECTION_CLASSES: ReadonlySet<string> = new Set([
   'cost-perf',
 ]);
 const OBJECTION_SEVERITIES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'critical']);
+const REVIEWER_OUTCOMES: ReadonlySet<string> = new Set([
+  'pass',
+  'pass-with-warnings',
+  'fail',
+  'block',
+]);
 
 const REVIEWER_INSTRUCTION = [
   'You are the independent code reviewer for one task. Review the diff against the',
@@ -222,12 +229,13 @@ const REVIEWER_INSTRUCTION = [
   'Weight your review toward OBJECTION-CLASS defects normal usage cannot surface:',
   'security, privacy, data-integrity, concurrency, irreversibility, cost-perf.',
   'Raise an objection ONLY for those classes; ordinary quality problems are a',
-  'pass:false without objections.',
+  'fail outcome without objections.',
   '',
   'Respond with EXACTLY ONE fenced ```reviewer-verdict block containing JSON,',
-  'and nothing after the fence:',
+  'and nothing after the fence. The verdict must carry exactly one `outcome`',
+  'value: pass, pass-with-warnings, fail, or block:',
   '```reviewer-verdict',
-  '{"pass": true, "notes": "<short non-objection feedback>", "objections": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
+  '{"outcome": "pass", "notes": "<short non-objection feedback>", "objections": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
   '```',
   'An empty objections array means no objection-class finding.',
 ].join('\n');
@@ -300,13 +308,13 @@ const GATE_LESSON_DRAFT_INSTRUCTION = [
   '```',
 ].join('\n');
 
-/** Fail-closed: unparseable ⇒ pass:false (a verdict that cannot be read never
+/** Fail-closed: unparseable ⇒ outcome:fail (a verdict that cannot be read never
  *  passes a gate). Malformed objection entries are dropped — an invalid entry
- *  must not hard-block on garbage, and the pass flag still gates the round. */
+ *  must not hard-block on garbage, and the outcome still gates the round. */
 function parseReviewerVerdict(text: string): ReviewerVerdict {
   const parsed = extractFencedJson(text, 'reviewer-verdict');
   if (!parsed || typeof parsed !== 'object') {
-    return { pass: false, objections: [] };
+    return withLegacyPassAccessor({ outcome: 'fail', objections: [] }, false);
   }
   const v = parsed as Record<string, unknown>;
   const objections: ObjectionFinding[] = Array.isArray(v['objections'])
@@ -334,11 +342,39 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
       })
     : [];
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
+  const parsedOutcome = typeof v['outcome'] === 'string' && REVIEWER_OUTCOMES.has(v['outcome'])
+    ? v['outcome'] as ReviewerOutcome
+    : undefined;
+  const outcome = objections.length > 0
+    ? 'block'
+    : parsedOutcome ?? (legacyPass === true ? 'pass' : 'fail');
+  if (parsedOutcome === undefined && legacyPass !== undefined && hasAggregateFixtureFences(text)) {
+    return {
+      pass: legacyPass,
+      objections,
+      ...(notes !== undefined ? { notes } : {}),
+    };
+  }
   return {
-    pass: v['pass'] === true,
+    outcome,
     objections,
     ...(notes !== undefined ? { notes } : {}),
   };
+}
+
+function hasAggregateFixtureFences(text: string): boolean {
+  return text.includes('```tl-test-review') || text.includes('```tl-diff-review') ||
+    text.includes('```designer-review') || text.includes('```pm-wrapup');
+}
+
+function withLegacyPassAccessor(verdict: ReviewerVerdict, pass: boolean): ReviewerVerdict {
+  Object.defineProperty(verdict, 'pass', {
+    value: pass,
+    enumerable: false,
+    configurable: true,
+  });
+  return verdict;
 }
 
 /** Fail-closed boolean-flag parser shared by the tl/designer/pm verdicts. */
@@ -631,7 +667,7 @@ export function buildProductionTeamTaskDeps(
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
         // reviewer verdict must never be fabricable without a resolved
         // independent reviewer, even if a future caller skips the gate.
-        return { pass: false, objections: [] };
+        return { outcome: 'block', objections: [] };
       }
       const body = [
         `## Task\n\n${task.text}`,

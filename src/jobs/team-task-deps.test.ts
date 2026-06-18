@@ -104,6 +104,8 @@ const greenExecution = async (): Promise<ExecutionAgentResult> => ({
   output: 'wrote tests',
 });
 
+const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail', 'block'] as const;
+
 function makeSeams(overrides: Partial<TeamTaskSeams> = {}): Partial<TeamTaskSeams> {
   return { judgmentCall: greenJudgment, runExecution: greenExecution, ...overrides };
 }
@@ -251,6 +253,34 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(calls.map((c) => c.role)).toEqual(['reviewer', 'tech-lead']);
     // Judgment roles run on the policy-resolved opus binding.
     expect(calls.every((c) => c.model === 'opus')).toBe(true);
+  });
+
+  it('normalizes a legacy reviewer boolean verdict to the shared outcome enum at the role boundary', async () => {
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role !== 'reviewer') return GREEN_JUDGMENT_REPLY;
+        return [
+          '```reviewer-verdict',
+          '{"pass": true, "objections": []}',
+          '```',
+        ].join('\n');
+      },
+    }));
+
+    const verdict = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const structured = verdict as unknown as Record<string, unknown>;
+
+    expect(structured).toHaveProperty('outcome');
+    expect(REVIEW_OUTCOMES).toContain(structured['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
+    expect(structured['outcome']).toBe('pass');
+    expect(structured).not.toHaveProperty('pass');
   });
 
   it('judgment seams fail closed on an unparseable reply', async () => {

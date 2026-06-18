@@ -77,6 +77,8 @@ const INPUT = {
   cap: 2,
 };
 
+const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail', 'block'] as const;
+
 // ---------------------------------------------------------------------------
 // QA-first
 // ---------------------------------------------------------------------------
@@ -324,6 +326,22 @@ describe('team-task-workflow — objection gate', () => {
       severity: 'high',
       location: 'src/x.ts:10',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outcome gating — shared reviewing verdict contract (Phase 13)
+// ---------------------------------------------------------------------------
+
+describe('team-task-workflow — reviewing verdict outcome enum', () => {
+  it('returns the reviewer verdict with exactly one structured outcome enum, not a bare pass boolean', async () => {
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, makeDeps());
+    const verdict = ev.reviewerVerdict as Record<string, unknown> | undefined;
+
+    expect(verdict).toBeDefined();
+    expect(verdict).toHaveProperty('outcome');
+    expect(REVIEW_OUTCOMES).toContain(verdict?.['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
+    expect(verdict).not.toHaveProperty('pass');
   });
 });
 
