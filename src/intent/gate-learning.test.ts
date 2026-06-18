@@ -178,6 +178,7 @@ describe('gate-triggered learning — fail-safe skip/error record', () => {
   it.each([
     {
       phase: 'lesson-drafting',
+      errorText: 'draft model unavailable',
       deps: {
         draftLesson: vi.fn(async () => {
           throw new Error('draft model unavailable');
@@ -188,6 +189,7 @@ describe('gate-triggered learning — fail-safe skip/error record', () => {
     },
     {
       phase: 'lesson-validation',
+      errorText: 'validator timed out',
       deps: {
         draftLesson: vi.fn(async () => ({
           kind: 'candidate-lesson',
@@ -203,6 +205,7 @@ describe('gate-triggered learning — fail-safe skip/error record', () => {
     },
     {
       phase: 'memory-write',
+      errorText: 'memory file locked',
       deps: {
         draftLesson: vi.fn(async () => ({
           kind: 'candidate-lesson',
@@ -221,15 +224,35 @@ describe('gate-triggered learning — fail-safe skip/error record', () => {
         }),
       } satisfies GateLearningDeps,
     },
-  ])('records a durable skip/error and resolves when $phase fails', async ({ phase, deps }) => {
+  ])('records durable skip/error metadata and resolves when $phase fails', async ({ phase, errorText, deps }) => {
     const record = rejection();
+    const durableRecords: unknown[] = [];
+    const recordSkip = vi.fn(async (metadata: unknown) => {
+      durableRecords.push(metadata);
+    });
 
-    await expect(runGateTriggeredLearning(record, deps)).resolves.toMatchObject({
+    await expect(
+      runGateTriggeredLearning(record, {
+        ...deps,
+        recordSkip,
+      }),
+    ).resolves.toMatchObject({
       kind: 'skipped',
       phase,
       role: 'qa',
       rejection: record,
       error: expect.any(String),
     });
+    expect(recordSkip).toHaveBeenCalledTimes(1);
+    expect(durableRecords).toHaveLength(1);
+    expect(durableRecords[0]).toMatchObject({
+      kind: 'gate-learning-skip',
+      phase,
+      role: 'qa',
+      rejection: record,
+      error: expect.stringContaining(errorText),
+      createdAt: expect.any(String),
+    });
+    expect(Date.parse((durableRecords[0] as { createdAt: string }).createdAt)).not.toBeNaN();
   });
 });

@@ -908,7 +908,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
       write via `writeRoleLesson` into the counterpart's memory; fail safe to no-lesson.
 - [x] Confirm the gate-time path and nightly loop share one write path without double-writing.
-- [ ] Record durable skip/error metadata when drafting, validation, or memory writing fails, and
+- [x] Record durable skip/error metadata when drafting, validation, or memory writing fails, and
       keep the Phase 11 corrective retry path moving.
 - [ ] **Live acceptance:** a forced QA→tech-lead redaction rejection writes a validated QA lesson
       and leaves the exemplar; a re-run loads both and the QA output passes the gate.

@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- postmortem-gate.test.ts` passed: 72 tests.
-- `npx vitest run --configLoader runner src/intent/learning-write-path.test.ts` passed.
-- `npx tsc --noEmit --pretty false` still fails on existing repo-wide issues outside this task.
+- configLoader runner src/intent/gate-learning.test.ts`
+- `npx vitest run --configLoader runner src/intent/learning-write-path.test.ts`
+- `npx vitest run --configLoader runner src/jobs/team-task-deps.gate-learning.test.ts`
 
-I left the existing staged QA test changes untouched and did not commit.
+Left QA’s existing staged `src/intent/gate-learning.test.ts` change untouched.

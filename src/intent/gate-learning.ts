@@ -39,6 +39,17 @@ export interface GateNoLesson {
 
 export type GateValidationResult = GateValidatedLesson | GateNoLesson;
 
+export type GateLearningSkipPhase = 'lesson-drafting' | 'lesson-validation' | 'memory-write';
+
+export interface GateLearningSkipMetadata {
+  kind: 'gate-learning-skip';
+  phase: GateLearningSkipPhase;
+  role: RoleName;
+  rejection: GateRejectionFeedback;
+  error: string;
+  createdAt: string;
+}
+
 export interface GateLearningDeps {
   /** Rejecting role drafts from the structured gate rejection only. */
   draftLesson: (input: {
@@ -55,6 +66,8 @@ export interface GateLearningDeps {
     lesson: string,
     rejection: GateRejectionFeedback,
   ) => Promise<{ committed: boolean; captured?: string }>;
+  /** Durable audit seam for fail-safe gate-learning skips. */
+  recordSkip?: (metadata: GateLearningSkipMetadata) => void | Promise<void>;
 }
 
 export type GateLearningResult =
@@ -72,7 +85,7 @@ export type GateLearningResult =
   | GateNoLesson
   | {
       kind: 'skipped';
-      phase: 'lesson-drafting' | 'lesson-validation' | 'memory-write';
+      phase: GateLearningSkipPhase;
       role: RoleName;
       rejection: GateRejectionFeedback;
       error: string;
@@ -88,7 +101,7 @@ export async function runGateTriggeredLearning(
   try {
     candidate = parseGateLessonCandidate(await deps.draftLesson({ rejection }));
   } catch (err) {
-    return skipped('lesson-drafting', targetRole, rejection, err);
+    return recordSkipped('lesson-drafting', targetRole, rejection, err, deps);
   }
   if (!candidate) {
     return { kind: 'no-lesson', rationale: 'draft lesson output could not be parsed' };
@@ -99,7 +112,7 @@ export async function runGateTriggeredLearning(
       await deps.validateLesson({ rejection, candidate }),
     );
   } catch (err) {
-    return skipped('lesson-validation', targetRole, rejection, err);
+    return recordSkipped('lesson-validation', targetRole, rejection, err, deps);
   }
 
   if (validation.kind === 'no-lesson') {
@@ -110,7 +123,7 @@ export async function runGateTriggeredLearning(
   try {
     write = await deps.writeLesson(targetRole, validation.lesson, rejection);
   } catch (err) {
-    return skipped('memory-write', targetRole, rejection, err);
+    return recordSkipped('memory-write', targetRole, rejection, err, deps);
   }
   if (!write.committed) {
     return {
@@ -128,18 +141,35 @@ export async function runGateTriggeredLearning(
   };
 }
 
-function skipped(
-  phase: 'lesson-drafting' | 'lesson-validation' | 'memory-write',
+async function recordSkipped(
+  phase: GateLearningSkipPhase,
   role: RoleName,
   rejection: GateRejectionFeedback,
   err: unknown,
-): GateLearningResult {
+  deps: GateLearningDeps,
+): Promise<GateLearningResult> {
+  const error = err instanceof Error ? err.message : String(err);
+  const skip: GateLearningSkipMetadata = {
+    kind: 'gate-learning-skip',
+    phase,
+    role,
+    rejection,
+    error,
+    createdAt: new Date().toISOString(),
+  };
+
+  try {
+    await deps.recordSkip?.(skip);
+  } catch {
+    // Recording is best-effort; the learning path must still fail safe to skip.
+  }
+
   return {
     kind: 'skipped',
     phase,
     role,
     rejection,
-    error: err instanceof Error ? err.message : String(err),
+    error,
   };
 }
 
