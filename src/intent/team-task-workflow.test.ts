@@ -291,6 +291,139 @@ describe('team-task-workflow — objection gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Gate records — every blocking gate returns structured rejection feedback
+// ---------------------------------------------------------------------------
+
+describe('team-task-workflow — gate rejection records', () => {
+  function expectStructuredGateRejection(
+    feedback: GateRejectionFeedback | undefined,
+    expected: Partial<GateRejectionFeedback>,
+  ): void {
+    expect(feedback).toMatchObject({
+      rejectingRole: expect.any(String),
+      counterpartRole: expect.any(String),
+      rejectedRole: expect.any(String),
+      artifact: expect.any(String),
+      rejectedArtifact: expect.any(String),
+      reason: expect.any(String),
+      whatFailed: expect.any(String),
+      notes: expect.arrayContaining([expect.any(String)]),
+      actionableNotes: expect.arrayContaining([expect.any(String)]),
+      ...expected,
+    });
+    expect(feedback?.reason.trim()).not.toBe('');
+    expect(feedback?.whatFailed.trim()).not.toBe('');
+    expect(feedback?.notes.every((note) => note.trim().length > 0)).toBe(true);
+    expect(feedback?.actionableNotes.every((note) => note.trim().length > 0)).toBe(true);
+  }
+
+  it('emits a structured rejection for every blocking role gate', async () => {
+    const objection: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/x.ts:10',
+      rationale: 'unsanitized shell interpolation',
+    };
+    const cases: Array<{
+      name: string;
+      task: SizedTask;
+      input?: typeof INPUT;
+      deps: Partial<TeamTaskDeps>;
+      expected: Partial<GateRejectionFeedback>;
+    }> = [
+      {
+        name: 'reviewer independence',
+        task: codeTask,
+        deps: { resolveReviewerProvider: () => null },
+        expected: {
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          artifact: 'reviewer-verdict',
+          rejectedArtifact: 'reviewer-verdict',
+        },
+      },
+      {
+        name: 'tech-lead test intent',
+        task: codeTask,
+        deps: {
+          techLeadReviewTests: async () => ({
+            approved: false,
+            notes: 'tests miss the rollover case',
+          }),
+        },
+        expected: {
+          rejectingRole: 'tech-lead',
+          counterpartRole: 'qa',
+          rejectedRole: 'qa',
+          artifact: 'test-intent',
+          rejectedArtifact: 'test-intent',
+        },
+      },
+      {
+        name: 'reviewer objection',
+        task: codeTask,
+        deps: {
+          reviewer: async () => ({ pass: false, objections: [objection] }),
+        },
+        expected: {
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          artifact: 'reviewer-verdict',
+          rejectedArtifact: 'reviewer-verdict',
+        },
+      },
+      {
+        name: 'designer review at cap',
+        task: frontEndTask,
+        input: { ...INPUT, cap: 1 },
+        deps: {
+          designer: async () => ({ pass: false, notes: 'control not reachable' }),
+        },
+        expected: {
+          rejectingRole: 'designer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          artifact: 'design-review',
+          rejectedArtifact: 'design-review',
+        },
+      },
+      {
+        name: 'PM-unresolved cap after reviewer rejection',
+        task: codeTask,
+        input: { ...INPUT, cap: 1 },
+        deps: {
+          reviewer: async () => ({
+            pass: false,
+            objections: [],
+            notes: 'reviewer wants the empty-state branch covered',
+          }),
+          pmWrapup: async () => ({ resolved: false }),
+        },
+        expected: {
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          artifact: 'reviewer-verdict',
+          rejectedArtifact: 'reviewer-verdict',
+        },
+      },
+    ];
+
+    for (const c of cases) {
+      const ev = await runTeamTaskWorkflow(
+        c.task,
+        c.input ?? INPUT,
+        makeDeps(c.deps),
+      );
+      expect(ev.outcome, c.name).toBe('blocked');
+      expectStructuredGateRejection(ev.rejectionFeedback, c.expected);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Round cap → PM wrap-up → blocked-on-human
 // ---------------------------------------------------------------------------
 

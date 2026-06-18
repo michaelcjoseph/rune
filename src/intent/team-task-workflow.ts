@@ -218,8 +218,15 @@ async function runGated(
   // before any coder work rather than risk a same-provider review later.
   const reviewerProvider = deps.resolveReviewerProvider(input.coderProvider);
   if (reviewerProvider === null) {
+    const feedback = buildGateRejectionFeedback({
+      rejectingRole: 'reviewer',
+      counterpartRole: 'coder',
+      artifact: 'reviewer-verdict',
+      reason: 'reviewer independence: no distinct-provider reviewer available',
+    });
     return block(task, roles, handoffNotes, {
       blockedReason: 'reviewer independence: no distinct-provider reviewer available',
+      rejectionFeedback: feedback,
     });
   }
 
@@ -279,8 +286,15 @@ async function runGated(
     }
   }
   if (qa === undefined || tests === undefined) {
+    const feedback = buildGateRejectionFeedback({
+      rejectingRole: 'tech-lead',
+      counterpartRole: 'qa',
+      artifact: 'test-intent',
+      reason: 'QA test intent was not produced',
+    });
     return block(task, roles, handoffNotes, {
       blockedReason: 'QA test intent was not produced',
+      rejectionFeedback: feedback,
     });
   }
 

@@ -868,7 +868,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **B. Gate-triggered learning**
 
-- [ ] Gate-record test: each gate block in `team-task-workflow.ts` emits a structured rejection
+- [x] Gate-record test: each gate block in `team-task-workflow.ts` emits a structured rejection
       record (rejecting role, counterpart, what failed, notes) — the same object Phase 11A threads.
 - [ ] Draft-then-validate test: the rejecting role drafts a candidate lesson; a neutral Jarvis
       pass (`runPostMortem` model) privacy-filters, dedupes, attributes, and fails safe to

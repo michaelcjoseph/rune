@@ -98,11 +98,10 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- e visible note.
-- Existing over-budget exemplar truncation remains visible and budgeted.
+-  not produced” block now also returns structured `rejectionFeedback`.
 
 Verification:
-- `npm test -- src/roles/loader.test.ts --configLoader runner`
-- Result: `44 passed`
+- `npm test -- src/intent/team-task-workflow.test.ts --configLoader runner`
+- Result: `26 passed`
 
-No commit made. `src/roles/loader.test.ts` was already modified before my changes and remains untouched by me.
+No commit made. `src/intent/team-task-workflow.test.ts` was already modified before my work and I left it untouched.
