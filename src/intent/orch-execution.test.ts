@@ -91,6 +91,49 @@ describe('orch-run-record — required fields', () => {
     expect(rec.gates.objectionOpen).toBe(false);
     expect(rec.outcome).toBe('ready-for-closeout');
   });
+
+  it('carries pass-with-warnings findings and accepted-block rationales as task evidence', () => {
+    const warning = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+    } as const;
+    const acceptance = {
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale:
+        'Accepting because the remaining concern is non-blocking and the task contract is satisfied.',
+    } as const;
+
+    const warnings = [warning];
+    const rec: TaskRunRecord = buildTaskRunRecord({
+      taskId: 't3',
+      taskText: 'Cache repeated reads',
+      attemptId: 'a2',
+      rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'pm'],
+      transcriptIds: ['tr-3'],
+      modelChoices: { coder: 'claude', reviewer: 'codex' },
+      commitSha: 'abc1234',
+      verdicts: { reviewer: 'pass-with-warnings' },
+      warnings,
+      acceptance,
+      contextOutcome: 'updated',
+      gates: { objectionOpen: false },
+      outcome: 'ready-for-closeout',
+    });
+
+    expect(rec.verdicts.reviewer).toBe('pass-with-warnings');
+    expect(rec.warnings).toEqual([warning]);
+    expect(rec.acceptance).toEqual(acceptance);
+    expect(rec.gates.objectionOpen).toBe(false);
+
+    // The run record is durable evidence; callers must not be able to mutate it
+    // through the input arrays/objects they passed to the builder.
+    expect(rec.warnings).not.toBe(warnings);
+    expect(rec.warnings?.[0]).not.toBe(warning);
+    expect(rec.acceptance).not.toBe(acceptance);
+  });
 });
 
 // ---------------------------------------------------------------------------

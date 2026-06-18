@@ -96,6 +96,39 @@ describe('orchestrated run store', () => {
     await expect(readRecords(tmpDir, 'mut-orch-1')).resolves.toEqual([first, second]);
   });
 
+  it('persists pass-with-warnings findings and accepted-block rationales in TaskRunRecords', async () => {
+    expect(typeof store.appendOrchestratedTaskRunRecord).toBe('function');
+    expect(typeof store.readOrchestratedTaskRunRecords).toBe('function');
+
+    const warning = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+    } as const;
+    const acceptance = {
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale:
+        'Accepting because the remaining concern is non-blocking and the task contract is satisfied.',
+    } as const;
+    const record = readyRecord({
+      verdicts: { reviewer: 'pass-with-warnings' },
+      warnings: [warning],
+      acceptance,
+    });
+
+    await store.appendOrchestratedTaskRunRecord!(tmpDir, 'mut-orch-1', record);
+
+    await expect(readRecords(tmpDir, 'mut-orch-1')).resolves.toEqual([
+      expect.objectContaining({
+        verdicts: { reviewer: 'pass-with-warnings' },
+        warnings: [warning],
+        acceptance,
+      }),
+    ]);
+  });
+
   it('skips a torn trailing TaskRunRecord line without throwing or losing earlier records', async () => {
     expect(typeof store.readOrchestratedTaskRunRecords).toBe('function');
 

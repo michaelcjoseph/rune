@@ -98,7 +98,12 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npx vitest run --configLoader runner --maxWorkers=1 src/intent/project-orchestrator.test.ts` → 19/19 passed  
-`git diff --check` passed
+- axWorkers=1 src/intent/orch-execution.test.ts src/jobs/orchestrated-run-store.test.ts` → 23/23 passed
 
-No commit made. `src/intent/project-orchestrator.test.ts` was already modified/staged; I did not edit it.
+Also checked:
+
+`src/intent/project-orchestrator.test.ts` → 19/19 passed  
+`git diff --check` passed  
+`git diff --cached --check` passed
+
+I did not edit the staged QA test files and made no commit.
