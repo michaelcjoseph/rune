@@ -1,7 +1,7 @@
 # Product-Team Orchestrated Work Specification
 
-> **Status: REOPENED 2026-06-14/16 — Phases 10-13 (observability, resilience, learning,
-> outcome gating).**
+> **Status: REOPENED 2026-06-14/16/18 — Phases 10-14 (observability, resilience, learning,
+> outcome gating, severity convergence).**
 > Phases 1-9 shipped the role substrate, planning, per-task orchestration, the live
 > execution binding (Phase 8 — proof `live-acceptance-6abf35cf.md`), and the planning
 > critique pass (Phase 9). Orchestrated runs now do real work — but they do it blind:
@@ -9,12 +9,13 @@
 > role activity never reaches the cockpit stream, and the supervision heartbeat goes
 > stale mid-run (it advances only on `output`/`activity` events the orchestrated path
 > never emits). The same project-17 run also exposed blind retries, non-resumable crash
-> recovery, cold-start roles with no exemplars, and binary outcome gating that treats every
-> objection as a hard stop. Remaining scope is **Phases 10-13**
+> recovery, cold-start roles with no exemplars, binary outcome gating that treats every
+> objection as a hard stop, and human parking on findings the team can resolve itself. Remaining
+> scope is **Phases 10-14**
 > below: stream role activity and advance the heartbeat for both executors, produce the
 > finalizer substrate for gated auto-merge, make retries/restarts resilient, make gate
-> failures teach future runs, and make severity-aware outcomes preserve useful work. Both
-> Claude and Codex runs are observable and treated equally.
+> failures teach future runs, and drive findings to severity convergence without human parking.
+> Both Claude and Codex runs are observable and treated equally.
 >
 > *(Prior reopen, 2026-06-10: Phases 8-9 — live execution binding + planning critique —
 > now DONE.)*
@@ -266,11 +267,12 @@ owns the full project-level merge gate.
 
 ### Retry bounds
 
-Retries are bounded. Each selected task has an attempt cap from configuration or escalation
-policy. A retry can reuse the same task id with a new attempt id and the prior attempt's
-evidence. When the cap is reached, non-objection disagreement routes to PM wrap-up; unresolved
-PM decisions and all objection-class findings enter blocked-on-human. Jarvis must never spin
-indefinitely on one task.
+Retries are bounded by convergence, not by a human escalation cap. Each selected task runs the
+coder/reviewer severity loop with the findings ledger from prior rounds. The task exits when
+all open findings are `low` or resolved, when max severity stagnates for 3 consecutive rounds,
+or at the 4-round hard budget. Terminal handling logs unresolved `>low` findings and holds only
+for non-reversible high/critical residue. Jarvis must never spin indefinitely on one task, and
+no per-task path routes to PM wrap-up or `blocked-on-human`.
 
 ### Task test strategy
 
@@ -367,7 +369,7 @@ tech-lead validation. Product-intent changes require PM validation when flagged.
 > "Phase 14: Severity loop to convergence" and requirements 71-82.
 
 Some defects do not show up in normal usage until they matter: security holes, data-integrity
-bugs, concurrency races, irreversible operations, privacy leaks, and cost/perf regressions.
+bugs, concurrency races, outbound side effects, privacy leaks, and cost/perf regressions.
 These are the objection classes — the findings the reviewer is specifically charged to surface.
 
 - The reviewer role's verdict is structured: alongside the outcome it carries a
@@ -376,12 +378,14 @@ These are the objection classes — the findings the reviewer is specifically ch
   team-task workflow, not a change to the standalone `/review` skill — if the workflow later
   reuses `/review` as the reviewer harness, that skill must emit the same payload shape, and
   that wiring is its own task.
-- An objection's SEVERITY decides how hard it gates — see "Outcome gating" below (Phase 13).
-  Severity is not advisory metadata: `critical`/`high` block, `medium` is a fixable fail, `low`
-  ships as a recorded warning. A reviewer cannot halt the line on a trivial finding.
-- A blocking objection gets one dedicated corrective coder round; if it survives, the task parks
-  `blocked-on-human` with worktree and branch preserved, and a human can
-  accept-it-with-rationale. It is never silently failed-and-discarded.
+- An objection's SEVERITY decides how the loop behaves — see "Severity loop to convergence"
+  below (Phase 14). Severity is not advisory metadata: `critical`/`high`/`medium` drive another
+  coder/reviewer round, while `low` ships as a recorded warning.
+- Reversibility decides the terminal merge hold. Remaining high/critical findings with
+  `reversible: false` hold the branch; reversible findings are logged and the gated auto-merge may
+  proceed. No per-task path parks `blocked-on-human`. A finding that omits or malforms `reversible`
+  is normalized to `reversible: false` (the conservative value), so a missing flag fails safe to a
+  HOLD rather than a silent merge of a high/critical finding.
 - Per-product additions can extend the global baseline class list.
 
 ## Outcome gating
@@ -389,7 +393,7 @@ These are the objection classes — the findings the reviewer is specifically ch
 > **Phase 14 (2026-06-18) supersedes the `block` outcome and the human-park model below.** The team
 > resolves all findings itself; nothing escalates to a human. `block` is removed (`critical`/`high`
 > now map to `fail`), the per-task loop runs to severity convergence under a stagnation backstop and
-> a hard round budget, and the only non-merge terminal is a branch HOLD for an irreversible
+> a hard round budget, and the only non-merge terminal is a branch HOLD for a non-reversible
 > high/critical finding. The Phase 13 model below is the prior state. See "Phase 14: Severity loop to
 > convergence" and requirements 71-82.
 
@@ -516,10 +520,12 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     closeout commit, run closeout checks, verify the worktree is clean, and then advance.
 13. WHEN task closeout cannot produce a clean checkpoint THEN Jarvis blocks durably and does
     not advance.
-14. WHEN a task workflow returns blocked, failed, or objection-open THEN Jarvis retries only
-    within the configured attempt cap, escalates, or stops durably; it does not skip the task.
-15. WHEN the attempt cap is reached THEN non-objection disagreement routes to PM wrap-up, and
-    unresolved or objection-class cases enter blocked-on-human.
+14. WHEN a task workflow returns remaining findings above `low` THEN Jarvis continues the
+    severity loop until the all-low primary exit, the stagnation backstop, or the hard round
+    budget; it does not skip the task.
+15. WHEN the severity loop reaches terminal handling THEN Jarvis resolves through reqs 81-82:
+    remaining findings are logged, non-reversible high/critical findings hold the branch, and no
+    per-task path routes to PM wrap-up or `blocked-on-human`.
 16. WHEN no unchecked tasks remain THEN Jarvis hands branch/run facts to the Project 15
     finalizer.
 17. WHEN the real finalizer is unavailable THEN Jarvis records the handoff payload and stops
@@ -542,8 +548,10 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     review; independence is fail-closed, never silently downgraded.
 24. WHEN the tech-lead sizing flags a task as front-end / designer-needed THEN designer review
     is required; non-flagged tasks do not invoke the designer by default.
-25. WHEN a blocking objection-class finding (severity `high`/`critical`) remains open THEN the
-    task cannot complete autonomously; lower-severity findings gate per Outcome gating (reqs 63-70).
+25. WHEN objection-class findings remain open THEN they gate per the Phase 14 severity loop
+    (reqs 71-82): `critical`/`high`/`medium` findings continue the loop until terminal handling,
+    `low` findings proceed as warnings, and only non-reversible high/critical terminal findings
+    hold the branch.
 
 ### Context and recovery
 
@@ -601,10 +609,10 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 44. WHEN the finalizer gate passes THEN the branch merges `--no-ff` onto its base under the
     per-base merge lock and is pushed; WHEN the gate fails THEN the run holds branch-complete,
     records the gate reason, and never touches the base branch.
-45. WHEN a blocking objection-class finding (severity `high`/`critical`) is open OR the outcome is
-    not `branch-complete` THEN the run holds with the handoff payload recorded and does not merge
-    (reqs 17, 25, 63-70 preserved). A `pass-with-warnings` outcome does not block the merge but its
-    warnings are carried into the handoff.
+45. WHEN terminal handling finds a remaining `critical`/`high` finding with `reversible: false`
+    OR the work product is not `branch-complete` THEN the run holds with the handoff payload
+    recorded and does not merge (reqs 17, 25, 71-82 preserved). Reversible remaining findings are
+    logged to `docs/projects/bugs.md` and do not by themselves block the gated merge.
 46. WHEN the orchestrated finalizer wiring lands THEN the Phase 8 `unavailable` hold stub is
     gone and cannot reappear without failing a regression test.
 
@@ -619,9 +627,9 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 48. WHEN the tech lead rejects QA's test intent THEN QA revises against the feedback in a
     bounded rewrite loop before the task escalates, rather than the run blocking on the first
     rejection.
-49. WHEN a task cannot pass after its feedback-retry cap THEN it parks blocked-on-human with the
-    worktree and branch preserved; the committed work is not discarded and the project run holds
-    at that task rather than ending destructively.
+49. WHEN corrective retries still cannot clear the task THEN the worktree and branch are
+    preserved; Phase 14 supersedes the old `blocked-on-human` terminal with terminal handling
+    through reqs 81-82.
 50. WHEN the server restarts mid-run THEN a still-`running` orchestrated mutation resumes from
     durable state (persisted records + branch commits + `tasks.md`) rather than being orphaned.
 51. WHEN orchestrated run state is persisted THEN `TaskRunRecord`s and a run cursor are written
@@ -689,41 +697,62 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 72. WHEN an objection-class finding is present THEN its severity maps to an outcome:
     `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`; multiple findings resolve to
     the strictest mapped outcome.
-73. WHEN a reviewer emits a finding THEN it carries `{class, severity, location, rationale,
+73. WHEN a review gate emits a finding THEN it carries `{class, severity, location, rationale,
     reversible}`, where `class` is one of `security`, `privacy`, `data-integrity`, `concurrency`,
     `outbound`, `cost-perf` (the `irreversibility` class is removed, `outbound` is added) and
-    `reversible` states whether a git revert undoes the effect.
+    `reversible` states whether a git revert undoes the effect. A finding (from any gate — reviewer,
+    tech-lead diff, or designer) that omits or malforms `reversible` is normalized to
+    `reversible: false`, never dropped — a missing flag must not let a high/critical finding slip
+    past the terminal HOLD.
 74. WHEN the per-task loop runs THEN it has no outer attempt cap, no PM-wrap-up terminal, and no
-    `blocked-on-human` terminal; each round is coder → reviewer (supersedes the Phase 3 attempt cap
-    and reqs 49, 66, 69-70's human/PM terminals).
+    `blocked-on-human` terminal; each round is coder → review gates (reviewer plus tech-lead diff
+    and designer when applicable) (supersedes the Phase 3 attempt cap and reqs 49, 66, 69-70's
+    human/PM terminals).
 75. WHEN a round completes and the maximum open severity is `low` or none THEN the task exits the
     loop and proceeds to closeout (primary exit).
 76. WHEN the maximum open severity does not strictly decrease for 3 consecutive rounds THEN the loop
     stops (stagnation backstop) and routes to terminal handling.
 77. WHEN the loop reaches the hard round budget of 4 rounds with any open finding above `low` THEN
     the loop stops and routes to terminal handling.
-78. WHEN the coder addresses reviewer findings THEN it receives the ledger sorted by severity
+78. WHEN the coder addresses review-gate findings THEN it receives the ledger sorted by severity
     (highest first), attempts every open finding, prioritizes the highest severity, and reports
     which findings it addressed.
 79. WHEN the reviewer re-reviews after a coder round THEN it first verifies each open prior finding
     against the new diff (regression pass, citing the specific finding) before scanning for new
     issues (discovery pass); a previously `resolved` finding that reappears is marked `regressed`.
-80. WHEN the reviewer maintains per-task memory THEN a findings ledger persists across rounds with
-    `{id, class, severity, location, rationale, reversible, raisedRound, status:
-    open|resolved|regressed}` and is threaded into the reviewer input each round.
+80. WHEN the review gates maintain per-task memory THEN a findings ledger persists across rounds
+    with `{id, sourceGate, class, severity, location, rationale, reversible, raisedRound, status:
+    open|resolved|regressed}` and is threaded into reviewer input plus any gate prompt that can
+    verify prior findings each round; ids are stable across re-review so repeated sightings update
+    a row rather than creating duplicate findings.
+80a. WHEN tech-lead diff review or designer review runs THEN any findings they produce normalize
+     into the same findings ledger with `sourceGate` attribution; Phase 14 must not bypass those
+     gates merely because reviewer is the primary discovery gate.
 81. WHEN the loop reaches terminal handling THEN the orchestrator drains the ledger's remaining
-    findings above `low` and authors one detailed entry per finding in `docs/projects/bugs.md`
-    (class, severity, location, rationale, run/task id).
+    findings above `low` and authors one detailed entry per finding in the Jarvis orchestrating
+    repo's `docs/projects/bugs.md` (NOT the product worktree, which may not carry that convention),
+    written through the existing backlog safe-write substrate (`withFileLock` +
+    `assertBacklogWriteAllowed` + `writeFileAtomic` from `backlog-write-lock.ts`) so the record is
+    durable whether the run subsequently HOLDS or merges. Each entry carries finding id, source
+    gate, class, severity, location, rationale, reversible flag, and run/task id, deduped by
+    run/task/finding id.
 82. WHEN any remaining open finding at terminal is `critical`/`high` with `reversible: false` THEN
     the orchestrator HOLDS the branch (no auto-merge; finalizer handoff), preserving the work;
     otherwise the run proceeds through the gated auto-merge and advances to the next task, never
     blocking on a human (supersedes reqs 25, 45).
+83. WHEN a terminal is reached by an OPERATIONAL failure rather than a finding — malformed/unparseable
+    gate output, a closeout commit or checkpoint-persist failure, a rejected context update, or a
+    dirty worktree after closeout — THEN the run terminates as a durable non-merge HOLD with the
+    operational reason recorded and branch/worktree preserved; it never auto-merges a broken
+    closeout and never routes to a human-gated `blocked-on-human` park (the "no human gate" rule of
+    reqs 71-82 is about findings; an infrastructure failure still stops the run, it just is not a
+    findings HOLD).
 
 ---
 
 ## Implementation Phases
 
-**Autonomy constraint for reopened phases.** Phases 10-13 must be executable by an
+**Autonomy constraint for reopened phases.** Phases 10-14 must be executable by an
 autonomous `/work --auto` run with no operator decisions, no manual repo setup, no production
 push in tests, and no interactive approval. Where an implementation choice is needed, this
 spec names the default and a deterministic fallback. Live acceptance uses self-contained
@@ -735,9 +764,9 @@ FIRST and OUT OF BAND — a direct `/work` run in the CLI (codex or claude), or 
 orchestrator. It is the retry-with-feedback resilience the orchestrator lacks, so building it through
 the orchestrator hits the one-shot-gate deadlock it fixes: any mid-build gate rejection is terminal,
 and a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the
-orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 → Phase 13 — with
-gate rejections becoming corrective retries. Only Phases 10, 11B, 12, and 13 are `/work --auto`
-targets.
+orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 → Phase 13 →
+Phase 14 — with gate rejections becoming corrective retries. Only Phases 10, 11B, 12, 13, and 14
+are `/work --auto` targets.
 
 ### Phase 1: Role substrate
 
@@ -904,8 +933,8 @@ callback). Neither claude nor codex role activity is observable inside orchestra
 2. **Landable.** A clean orchestrated run auto-merges onto its base branch through the
    Project 15 gated finalizer — no operator hold — producing the full artifact substrate the
    finalizer needs (durable transcript, `summary.json`, work-product classification). A failing
-   gate or an open blocking objection-class finding still holds the branch; the merge always goes
-   through the finalizer's gates, never an independent path (spec req 17/25 preserved). This reverses
+   gate or a non-reversible high/critical terminal finding still holds the branch; the merge
+   always goes through the finalizer's gates, never an independent path (spec req 17/25 preserved). This reverses
    the Phase 8 deliberate-hold decision (`orchestrated-work-runner.ts:234`), which deferred the
    merge only because orchestrated runs did not yet produce that substrate.
 
@@ -991,9 +1020,9 @@ orchestrated runs is binding effects, not new merge logic.
     `mergeBranch`/`pushBranch`/`deleteBranch`. A `branch-complete` outcome that passes the gate
     merges `--no-ff` and pushes; any other outcome or a failed gate holds and alerts.
 15. **Preserve the no-self-merge and objection invariants.** The merge path is the finalizer's
-    gate, never an independent merge (req 17). An open blocking objection-class finding or a
-    failed gate holds the branch at branch-complete with the handoff payload recorded (req 25).
-    Auto-merge is the clean-run terminal, not an unconditional one.
+    gate, never an independent merge (req 17). A non-reversible high/critical terminal finding
+    or a failed gate holds the branch at branch-complete with the handoff payload recorded
+    (req 25). Auto-merge is the clean-run terminal, not an unconditional one.
 16. **Extend the live acceptance harness again** to drive a clean orchestrated run all the way
     to a merged base branch (gated) in a self-contained temp repo with a local bare remote, and
     a deliberately-gate-failing run to a recorded hold — proving both terminals without
@@ -1031,7 +1060,8 @@ two terminal records. (The feedback-retry definition of done moved to Phase 11A.
    (`orch-run-record.ts`'s header already promises it) plus a run cursor and resume marker
    keyed by mutation id/run id, so a partial run is reconstructable from disk. Reuse Phase 10's
    durable transcript as part of the record set. The marker must include enough product,
-   branch, base, worktree, cursor, and attempt-cap data to resume without asking an operator.
+   branch, base, worktree, cursor, findings ledger, and round-history data to resume without
+   asking an operator.
 6. **Resume, don't orphan, on boot.** Route a still-`running` or `resumable` orchestrated
    mutation through `reconstructRun` (`orch-reconstruct.ts`) + a re-dispatch against its
    existing branch, instead of the blind `reconcileOrphans` flip. Resume from `tasks.md` +
@@ -1143,12 +1173,12 @@ one shared verdict contract and severity-aware outcomes.
 ### Phase 14: Severity loop to convergence (reopened 2026-06-18)
 
 Runs via the orchestrator after Phase 13. Replaces the `block`/park-on-human model with a bounded
-coder↔reviewer convergence loop that never blocks on a human. Triggered by the 2026-06-17
+coder↔review-gates convergence loop that never blocks on a human. Triggered by the 2026-06-17
 orchestrated run, which built the full Phase 13 severity gate and then parked `blocked-on-human` on
-a real `high`/`irreversibility` finding — a gate the team is capable of resolving itself. The thesis:
-the coder and reviewer can resolve every finding; the loop should converge on severity, and the only
-thing a human gate ever bought was a backstop against an irreversible bad merge, which a cheap revert
-plus a branch HOLD covers.
+a real `high`/`irreversibility` finding — a gate the team is capable of resolving itself. The
+thesis: the coder and review gates can resolve findings; the loop should converge on severity, and
+the only thing a human gate ever bought was a backstop against a non-reversible bad merge, which a
+branch HOLD covers.
 
 1. **Remove the `block` outcome.** `GateVerdict.outcome` becomes `pass | pass-with-warnings | fail`.
    The severity mapper becomes `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`.
@@ -1160,26 +1190,41 @@ plus a branch HOLD covers.
    effect — decoupling "can we undo it" from the class name. Update `agents/reviewer/SOUL.md` to hunt
    the new class set and set `reversible` per finding.
 3. **Bound the loop by convergence, not a fixed cap.** Delete the outer attempt cap
-   (`decideAttemptOutcome`) and the PM-wrap-up-at-cap terminal. Each round is coder → reviewer. Exit
-   precedence: (a) max open severity ≤ `low` → pass to closeout; (b) no strict drop in max severity
-   for 3 consecutive rounds → terminal; (c) hard budget of 4 rounds → terminal.
-4. **Give the reviewer per-task memory.** A findings ledger `{id, class, severity, location,
+   (`decideAttemptOutcome`) and the PM-wrap-up-at-cap terminal. Each round is coder → review gates:
+   reviewer always, tech-lead diff always, designer when the task is designer-needed. All findings
+   feed the same ledger. Exit precedence: (a) max open severity ≤ `low` → pass to closeout; (b) no
+   strict drop in max severity for 3 consecutive rounds → terminal; (c) hard budget of 4 rounds →
+   terminal.
+4. **Give the review gates per-task memory.** A findings ledger `{id, sourceGate, class, severity, location,
    rationale, reversible, raisedRound, status}` persists across rounds and threads into
-   `ReviewerInput`. The reviewer runs regression-first (verify each open finding fixed, cite it; mark
-   a reappearing resolved finding `regressed`), then discovery.
+   `ReviewerInput` and any gate prompt that can verify prior findings. Finding ids are stable
+   across re-review and terminal bug logging. The reviewer runs regression-first (verify each open
+   finding fixed, cite it; mark a reappearing resolved finding `regressed`), then discovery. The
+   ledger is **intra-task in-memory state** — it lives for the rounds of one task, not across a
+   server restart. Crash recovery (Phase 11B) resumes at *task* granularity: a task interrupted
+   mid-loop re-runs from round 1 and rebuilds its ledger (no closeout commit was made mid-loop, so
+   no work is lost). The persisted run cursor therefore carries no ledger and no round history; it
+   also **drops the now-removed outer attempt-cap field** (see item 3), and cursor resume must stay
+   backward-tolerant of an older cursor that still carries `attemptCap`.
 5. **Fix in severity order.** The coder receives the ledger severity-sorted, must attempt every open
    finding highest-severity-first, and reports which it addressed — making the critical→low descent
    hold by construction rather than by luck.
 6. **Terminal handling is orchestrator-owned and never human-gated.** At terminal, the orchestrator
-   drains the remaining `>low` findings into `docs/projects/bugs.md` (one detailed entry each). If any
+   drains the remaining `>low` findings into the Jarvis repo's `docs/projects/bugs.md` (one
+   detailed, deduped entry each, via the backlog safe-write substrate — see req 81). If any
    remaining `critical`/`high` finding is `reversible: false`, it HOLDS the branch (no auto-merge,
-   finalizer handoff) — the sole non-merge path. Otherwise the gated auto-merge proceeds and the run
-   advances. No `blocked-on-human`, ever.
+   finalizer handoff). Otherwise the gated auto-merge proceeds and the run advances. No
+   `blocked-on-human` on a *finding*, ever. The one other non-merge terminal is an **operational
+   failure** (malformed gate output, a closeout/persist failure, or a dirty worktree — req 83):
+   that also HOLDS to preserve work, but it is an infrastructure stop, distinct from the findings
+   HOLD and still never a human-gated park. So the reversible-finding HOLD is the sole non-merge
+   path *driven by a finding*, not the sole non-merge terminal overall.
 
-This supersedes the Phase 13 `block` outcome and the still-open Phase 13 task "Update
-Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating": that consumer gate
-is rewritten on the `reversible` flag, which subsumes the multi-finding gate-bypass defect the
-2026-06-17 reviewer surfaced (single-finding `.find` check → all-blocking-findings `.every`).
+This supersedes the Phase 13 `block` outcome and retires the Phase 13 task "Update
+Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating" into Phase 14:
+that consumer gate is rewritten on the `reversible` flag, which subsumes the multi-finding
+gate-bypass defect the 2026-06-17 reviewer surfaced (single-finding `.find` check →
+all-blocking-findings `.every`).
 
 > **Sequencing:** runs via the orchestrator AFTER Phase 13. Depends on Phase 4 (team-task workflow),
 > Phase 11A (reuses `GateRejectionFeedback` for the coder rounds), and Phase 10 (the auto-merge /
@@ -1198,10 +1243,10 @@ is rewritten on the `reversible` flag, which subsumes the multi-finding gate-byp
 | Context stays useful | always | Required sections preserved, bounded, no transcript dumps |
 | Multi-task loop closes | yes | Fixture runs through at least two task closeouts, context update, and finalizer handoff |
 | Start surface is truthful | always | Cockpit Start/confirmation shows orchestrated vs legacy mode and fallback reason |
-| Objection classes gate by severity | always | Security/data/concurrency/irreversibility/cost findings map to warning, retry, or block by severity |
+| Objection classes gate by severity | always | Security/privacy/data/concurrency/outbound/cost findings map to warning or retry by severity |
 | Finalizer owns landing | always | Completed project hands off to Project 15; no independent merge path |
 | Branch stays finalizer-ready | always | Every advanced task has a clean closeout commit including task/context state |
-| Task retries are bounded | always | Attempt cap reached -> PM wrap-up or blocked-on-human, never infinite retry |
+| Severity loop is bounded | always | All-low exit, 3-round stagnation backstop, or 4-round hard budget; never infinite retry |
 | Learning compounds | yes | Fixture feedback writes a role lesson loaded into the next run |
 | Checklist closeout satisfied | always | Deferral ADRs and `agent-lessons.md` exist, and final completion rechecks user-reachability |
 | Orchestrated run is observable | always | Cockpit stream shows role activity between start and terminal for both executors |
@@ -1209,22 +1254,20 @@ is rewritten on the `reversible` flag, which subsumes the multi-finding gate-byp
 | Provider parity | always | Codex and claude role activity stream and are attributed equally (role/provider/model per line) |
 | Orchestrated run produces substrate | always | `transcript.jsonl` + `summary.json` + classification written under `WORK_RUNS_DIR`, as a legacy run does |
 | Clean run auto-merges | yes | A clean `branch-complete` orchestrated run lands on base through the Project 15 gated finalizer, no operator hold |
-| Merge stays gated | always | Failed gate or blocking objection holds the branch; merge only ever via the finalizer's gates, never an independent path |
+| Merge stays gated | always | Non-branch-complete work or non-reversible high/critical terminal findings hold the branch; merge only ever via the finalizer's gates |
 | Retries are corrective | always | A gate rejection threads its feedback into the role's next attempt; no blind same-input redo |
-| Rejection parks, not kills | always | A task that exhausts feedback-retries parks blocked-on-human with worktree preserved; work is never discarded |
+| Holds preserve work | always | A non-reversible high/critical terminal finding holds with branch/worktree preserved; work is never discarded |
 | Restart resumes | always | A restart mid-run resumes from durable state; no orphaned record, exactly one terminal per run id |
 | Roles have exemplars | always | Each role invocation includes reference exemplars of good output (baseline + per-project) |
 | Gate failures teach | always | Every gate rejection yields a neutral-validated lesson in the counterpart's memory at gate-time |
 | Neutral guard preserved | always | Roles never write memory directly; a neutral Jarvis pass attributes and filters every lesson |
 | Learning failures are non-blocking | always | Exemplar/lesson failures record durable skip/error metadata and do not block the current corrective retry |
-| Outcome gating is severity-aware | always | Low findings ship as recorded warnings, medium findings retry/PM-wrap, high/critical findings get one corrective round then park |
-| Accepted risk is auditable | always | Every accepted finding carries a rationale in the task/run record and finalizer handoff |
 | Loop never blocks on a human | always | No per-task path reaches `blocked-on-human`; `block` outcome, outer attempt cap, and PM-wrap-up terminal are removed |
 | Loop converges on severity | yes | A task exits when max open severity ≤ `low`, or on the stagnation backstop (no drop for 3 rounds), or at the 4-round hard budget |
 | Findings are reversibility-tagged | always | Every finding carries `class` + `severity` + `reversible`; the terminal HOLD keys on `reversible: false`, not on class name |
 | Coder fixes highest severity first | always | Coder receives the ledger severity-sorted, attempts every open finding, and reports which it addressed |
 | Reviewer verifies its own fixes | always | Re-review runs regression-first (each open finding checked + cited) before discovery; reappearing resolved findings mark `regressed` |
-| Unresolved findings are logged, not lost | always | At terminal the orchestrator writes each remaining `>low` finding to `docs/projects/bugs.md`; irreversible high/critical findings also HOLD the branch |
+| Unresolved findings are logged, not lost | always | At terminal the orchestrator writes each remaining `>low` finding to `docs/projects/bugs.md` with stable dedupe; non-reversible high/critical findings also HOLD the branch |
 
 ---
 

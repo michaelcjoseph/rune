@@ -11,7 +11,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
 > planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
 >
-> **Autonomy rule for reopened phases:** Phases 10-13 must be runnable by `/work --auto`
+> **Autonomy rule for reopened phases:** Phases 10-14 must be runnable by `/work --auto`
 > without human choices, manual repo setup, production push credentials in tests, or
 > interactive approval. If a task needs a choice, the default and fallback are named here.
 >
@@ -20,8 +20,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > because it is the retry resilience the orchestrator itself lacks. Building it through the
 > orchestrator hits the one-shot-gate deadlock it fixes: a mid-build gate rejection is terminal, and
 > a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the orchestrator
-> runs the rest in order: Phase 10 → Phase 11B → Phase 12 → Phase 13. Only Phases 10, 11B, 12, and
-> 13 are `/work --auto` targets; do not point `--auto` at 11A.
+> runs the rest in order: Phase 10 → Phase 11B → Phase 12 → Phase 13 → Phase 14. Only Phases 10,
+> 11B, 12, 13, and 14 are `/work --auto` targets; do not point `--auto` at 11A.
 
 ## Phase 1 - Role substrate
 
@@ -810,7 +810,11 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [x] Record-persistence test: `TaskRunRecord`s + a run cursor are written to a durable store and
       read back to reconstruct a partial run; the resume marker carries product, branch, base,
-      worktree, cursor, and attempt-cap data needed for autonomous restart.
+      worktree, and task-cursor data needed for autonomous *task-level* restart. (Resume is
+      task-granular: intra-task convergence state — the Phase 14 findings ledger and round history —
+      is in-memory and rebuilt by re-running the interrupted task, so it is deliberately NOT in the
+      cursor. Phase 14 also removes the persisted `attemptCap` cursor field; resume stays
+      backward-tolerant of an older cursor that still carries it.)
 - [x] Resume test: a still-`running` orchestrated mutation at boot is reconstructed
       (`reconstructRun`) and re-dispatched against its existing branch, resuming from the first
       unchecked task — not flipped to `failed/orphaned`; a single-run lease prevents two
@@ -980,7 +984,9 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Add an accept-with-rationale core override seam (injected for tests) that requires a
       rationale, records it durably, and resumes the task as `pass-with-warnings`; real
       cockpit/Telegram inbox wiring can be its own task.
-- [ ] Update Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating.
+- [x] Retire the Phase 13 Objection-Classes / Auto-merge consumer task into Phase 14. The
+      consumer gate now belongs to the `reversible` terminal handler below, not a standalone
+      severity-aware `block` gate.
 
 > **User-reachability:** YES — after this phase, a low-severity nit ships as a recorded warning
 > instead of killing the run, a real blocking defect parks for a human with the work preserved
@@ -995,8 +1001,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > are capable of resolving themselves. This phase removes `block` and every human terminal, runs the
 > per-task loop to severity convergence under a stagnation backstop + hard round budget, restructures
 > the objection taxonomy (drop `irreversibility`, add `outbound`, add a per-finding `reversible`
-> flag), gives the reviewer per-task findings memory, and makes the only non-merge terminal an
-> irreversible-finding branch HOLD. See spec.md §"Phase 14: Severity loop to convergence" and
+> flag), gives the review gates per-task findings memory, and makes the only non-merge terminal an
+> non-reversible-finding branch HOLD. See spec.md §"Phase 14: Severity loop to convergence" and
 > requirements 71-82.
 >
 > **Sequencing:** runs via the orchestrator AFTER Phase 13. Depends on Phase 4 (team-task workflow),
@@ -1010,11 +1016,26 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       type/normalization error.
 - [ ] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
       multiple findings resolve to the strictest mapped outcome; no input ever yields `block`.
-- [ ] Finding-shape test: a reviewer finding carries `{class, severity, location, rationale,
+- [ ] Finding-shape test: a review-gate finding carries `{class, severity, location, rationale,
       reversible}`; `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,
       `cost-perf`}; `irreversibility` is rejected; `reversible` is required.
+- [ ] Reversible-default test: a finding (from reviewer, tech-lead diff, or designer) that OMITS or
+      malforms `reversible` normalizes to `reversible: false` — never dropped and never defaulted to
+      mergeable — so a high/critical finding with a missing flag fails safe to the terminal HOLD.
 - [ ] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
       outer attempt cap; `decideAttemptOutcome` and the block-correction budget are gone.
+- [ ] No-block-residue test: `ReviewerOutcome`/`GateVerdict.outcome` no longer admits `block` and
+      no `ObjectionClass` admits `irreversibility` (compile-level guard); the Phase 13 tests that
+      asserted the `block` outcome, block-correction budget, and per-task `blocked-on-human`
+      terminals are retired/rewritten and the suite is green against the 3-value model.
+- [ ] Operational-terminal test: an operational failure that is NOT a finding (malformed/unparseable
+      gate output, closeout/persist failure, rejected context update, dirty worktree) terminates as
+      a durable non-merge HOLD with the operational reason recorded and branch/worktree preserved —
+      it does not auto-merge and does not route to `blocked-on-human` (req 83).
+- [ ] Evidence-carries-ledger test: `TaskEvidence` returned to the orchestrator carries the terminal
+      findings ledger and the loop-exit reason (all-low / stagnation / hard-budget / operational) so
+      the orchestrator's terminal handler can drain findings and decide HOLD vs gated merge without
+      re-deriving them.
 - [ ] Primary-exit test: a round whose max open severity is `low`/none exits the loop to closeout with
       the lows recorded as warnings.
 - [ ] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
@@ -1028,8 +1049,13 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [ ] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
       (citing it) before discovery; a previously `resolved` finding that reappears is marked
       `regressed`; the ledger persists across rounds.
-- [ ] Terminal-bugs.md test: at terminal the orchestrator writes one detailed `docs/projects/bugs.md`
-      entry per remaining `>low` finding (class, severity, location, rationale, run/task id).
+- [ ] Review-gates-preserved test: tech-lead diff review and designer review (when
+      designer-needed) still run inside each convergence round; their findings normalize into the
+      shared ledger with `sourceGate`, so Phase 14 does not bypass existing gates.
+- [ ] Terminal-bugs.md test: at terminal the orchestrator writes one detailed
+      `docs/projects/bugs.md` entry per remaining `>low` finding (finding id, source gate,
+      class, severity, location, rationale, run/task id, and reversible flag) and dedupes by
+      run/task/finding id.
 - [ ] Reversible-hold test: a remaining `critical`/`high` finding with `reversible: false` HOLDS the
       branch (no auto-merge, finalizer handoff); when all remaining `>low` findings are reversible the
       gated auto-merge proceeds and the run advances — never `blocked-on-human`.
@@ -1038,33 +1064,67 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 ### Implementation
 
 - [ ] Remove `block` from `GateVerdict`; rewrite `mapObjectionSeverityToOutcome`
-      (`team-task-workflow.ts:86`) to `critical`/`high`/`medium` → `fail`, `low` →
+      (`team-task-workflow.ts`) to `critical`/`high`/`medium` → `fail`, `low` →
       `pass-with-warnings`; delete the block branch + block-correction budget.
-- [ ] Restructure `ObjectionClass` (`team-task-workflow.ts:31`): drop `irreversibility`, add
-      `outbound`; add a `reversible: boolean` field to the `Objection` type.
+- [ ] Restructure `ObjectionClass` (`team-task-workflow.ts`): drop `irreversibility`, add
+      `outbound`; add a `reversible: boolean` field to `ObjectionFinding`.
 - [ ] Delete the outer attempt cap: remove `decideAttemptOutcome` (`orch-attempt-cap.ts`), the
-      PM-wrap-up-at-cap terminal, and every `blocked-on-human` per-task terminal.
-- [ ] Rewrite the round loop (`team-task-workflow.ts:267`): coder → reviewer per round with the
-      exit precedence — all-low primary exit, 3-round stagnation backstop on max severity, 4-round
-      hard budget. Set `DEFAULT_ROUND_CAP` to 4 (`team-task-deps.ts:72`) and track the per-round max
-      severity history for the stagnation check.
-- [ ] Add the per-task reviewer findings ledger `{id, class, severity, location, rationale,
+      PM-wrap-up-at-cap terminal, and every `blocked-on-human` per-task terminal. Collapse
+      `runTaskWithRetries` (`project-orchestrator.ts`) to a single workflow invocation (the workflow
+      now owns the convergence loop internally) and drop `OrchestrationDeps.attemptCap` /
+      `ORCHESTRATED_ATTEMPT_CAP`. Remove the `attemptCap` field from the persisted run cursor
+      (`orchestrated-work-runner.ts`, `sandbox-runtime.ts`) and its resume validators, keeping
+      cursor resume backward-tolerant of an older in-flight cursor that still carries `attemptCap`
+      (ignore the field, don't reject the cursor).
+- [ ] Rewrite the round loop (`team-task-workflow.ts`): coder → review gates per round
+      (reviewer, tech-lead diff, and designer when applicable) with the exit precedence — all-low
+      primary exit, 3-round stagnation backstop on max severity, 4-round hard budget. Set
+      `DEFAULT_ROUND_CAP` to 4 (`team-task-deps.ts`) and track the per-round max severity
+      history for the stagnation check.
+- [ ] Add the per-task findings ledger `{id, sourceGate, class, severity, location, rationale,
       reversible, raisedRound, status: open|resolved|regressed}`; thread it into `ReviewerInput`
-      (`team-task-workflow.ts:92`) each round.
+      (`team-task-workflow.ts`) and any gate prompt that can verify prior findings each round.
+- [ ] Add stable finding-id generation and dedupe semantics for the ledger and terminal bug
+      entries so re-reviews of the same finding update one ledger row instead of creating
+      duplicate bugs.
 - [ ] Update the reviewer harness to run regression-first then discovery, and update
       `agents/reviewer/SOUL.md` to hunt the new class set and set `reversible` per finding.
+- [ ] Update tech-lead diff and designer verdict normalization so their findings use the same
+      class/severity/reversible shape and enter the shared ledger with `sourceGate`; a finding that
+      omits `reversible` normalizes to `reversible: false` (fail-safe). Update `agents/tech-lead`
+      and `agents/designer` SOUL/prompt instructions to request `class`/`severity`/`reversible` per
+      finding (matching the reviewer SOUL update), so the conservative default is a backstop, not
+      the common path.
 - [ ] Update the coder harness to receive the ledger severity-sorted, fix highest-severity-first,
       attempt all findings, and report which it addressed.
-- [ ] Rewrite the auto-merge / finalizer consumer (`project-orchestrator.ts`
-      `activeBlockingObjectionReason`): replace the per-finding severity gate with the terminal
-      handler — drain remaining `>low` findings to `docs/projects/bugs.md`, HOLD the branch when any
-      remaining `critical`/`high` is `reversible: false`, else proceed through gated auto-merge. This
-      subsumes the multi-finding `.find` → `.every` gate-bypass defect.
+- [ ] Extend `TaskEvidence` so it carries the terminal findings ledger and the loop-exit reason
+      (`all-low` / `stagnation` / `hard-budget` / `operational`) out to the orchestrator; retire the
+      now-insufficient `objectionOpen` boolean in favor of the ledger so the terminal handler keys
+      on per-finding `reversible`, not a single flag.
+- [ ] Rewrite the operational fail-safe path: malformed/unparseable gate output and the
+      warning/acceptance-recording failures that Phase 13 mapped to `outcome: 'block'`
+      (`operationalBlockReason`) now produce an operational non-merge HOLD terminal (req 83), not a
+      `block` outcome and not a human-gated park.
+- [ ] Rewrite the auto-merge / finalizer consumers (`project-orchestrator.ts`
+      `maybeParkedRun` / objection-open handling, `operationalParkedRunField`, and
+      `orchestrated-work-runner.ts` terminal mapping): replace the per-finding severity gate with the
+      terminal handler — drain remaining `>low` findings to the Jarvis repo's `docs/projects/bugs.md`
+      via the backlog safe-write substrate (`withFileLock` + `assertBacklogWriteAllowed` +
+      `writeFileAtomic`, deduped by run/task/finding id), HOLD the branch when any remaining
+      `critical`/`high` is `reversible: false`, else proceed through gated auto-merge. This subsumes
+      the multi-finding `.find` → `.every` gate-bypass defect.
+- [ ] Retire/rewrite the Phase 13 block-model tests that the union changes break at compile or
+      assertion time (`team-task-workflow.test.ts`, `team-task-deps.test.ts`,
+      `orchestrated-work-runner.test.ts`, `project-orchestrator.test.ts`, `orch-execution.test.ts`):
+      drop the `block` outcome / `irreversibility` class / block-correction / per-task
+      `blocked-on-human` assertions and re-express them against the severity-convergence model. Leave
+      the LEGACY work-run parked-run machinery (`supervision-*`, `work-run-*`) untouched — Phase 14's
+      `blocked-on-human` removal is scoped to the per-task orchestration path only.
 
 > **User-reachability:** YES — after this phase, an orchestrated run resolves its own findings to
 > severity convergence and lands autonomously; nothing ever parks waiting on the user, unresolved
-> nits show up as `docs/projects/bugs.md` entries, and only a genuinely irreversible high/critical
-> finding holds a branch instead of merging.
+> nits show up as `docs/projects/bugs.md` entries, and only a genuinely non-reversible
+> high/critical finding holds a branch instead of merging.
 
 ---
 

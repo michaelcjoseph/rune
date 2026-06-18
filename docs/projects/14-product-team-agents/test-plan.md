@@ -69,8 +69,9 @@ acceptance criteria.
       `context.md`, runs closeout checks, records a closeout commit, and verifies the worktree
       is clean.
 - [ ] Critical: Closeout failure blocks durably and does not advance to the next task.
-- [ ] Critical: Repeated task failure stops at the configured attempt cap and routes to PM
-      wrap-up or blocked-on-human; it does not retry forever.
+- [ ] Critical: Repeated task non-convergence stops via the Phase 14 all-low exit,
+      stagnation backstop, or hard round budget; it does not retry forever or route to PM /
+      blocked-on-human.
 - [ ] Critical: After restart, Jarvis reconstructs partial project run state without replaying
       completed tasks.
 - [ ] High: Stale `tasks.md` state is detected and blocks or reloads safely.
@@ -89,18 +90,20 @@ acceptance criteria.
 - [ ] Critical: Reviewer input contains diff, spec, tests, task, and bounded context; it does
       not contain coder hidden reasoning.
 - [ ] Critical: Objection-class findings gate task completion by severity: low records a
-      warning, medium enters corrective retry/PM wrap-up, and high/critical blocks autonomous
-      completion after the dedicated corrective round.
+      warning; medium/high/critical drive another coder/reviewer round; only terminal
+      non-reversible high/critical residue holds the branch.
 - [ ] High: The reviewer verdict carries a machine-readable objection-class payload
       (class, severity, location, rationale) the orchestrator can gate on — distinct from a
       bare pass/fail.
-- [ ] Critical: PM wrap-up does not clear unresolved high/critical objection-class findings.
-- [ ] High: Non-objection disagreement at the configured cap routes to PM; unresolved PM
-      decisions enter blocked-on-human.
+- [ ] Critical: PM wrap-up is not part of the per-task terminal path; unresolved findings route
+      through Phase 14 terminal handling.
+- [ ] High: Non-objection disagreement above `low` participates in the same convergence loop and
+      terminal handling; it does not route to PM or blocked-on-human.
 - [ ] High: Designer is invoked when the tech-lead sizing flags a task front-end/designer-needed
       and skipped by default otherwise (routing keys off the flag, not runtime inference).
-- [ ] High: Task workflow returns ready-for-closeout/blocked/failed, role verdicts, and
-      handoff notes without marking tasks complete, writing context, or merging to main.
+- [ ] High: Task workflow returns ready-for-closeout or terminal-handling evidence, role
+      verdicts, findings ledger, and handoff notes without marking tasks complete, writing
+      context, or merging to main.
 - [ ] Low: Role invocation failures include structured reason data for retry/model swap.
 
 ## 5. Multi-task orchestration and finalizer handoff
@@ -193,11 +196,14 @@ acceptance criteria.
       feedback in the next QA input; it is not a one-shot block.
 - [ ] Critical: Coder retry inputs include reviewer and tech-lead-diff feedback from the
       failed round; no retry path repeats identical role inputs with no feedback.
-- [ ] Critical: Exhausted feedback retries park blocked-on-human with branch/worktree
-      preserved, and the project run holds at the selected task instead of ending
-      destructively.
+- [ ] Critical: Exhausted feedback retries preserve branch/worktree and route through Phase 14
+      terminal handling instead of ending destructively or parking blocked-on-human.
 - [ ] Critical: `TaskRunRecord`s, run cursor, and resume marker persist enough product,
-      branch, base, worktree, cursor, and attempt-cap data to reconstruct a partial run.
+      branch, base, worktree, and task-cursor data to reconstruct a partial run at task
+      granularity. (Intra-task convergence state — the Phase 14 findings ledger and round history —
+      is in-memory, rebuilt by re-running the interrupted task, and intentionally not persisted;
+      Phase 14 also removes the `attemptCap` cursor field, and resume tolerates an older cursor that
+      still carries it.)
 - [ ] Critical: Boot recovery reconstructs still-running/resumable orchestrated mutations and
       re-dispatches against the existing branch instead of orphaning them.
 - [ ] Critical: A single-run lease prevents two server processes from resuming the same
@@ -276,15 +282,34 @@ acceptance criteria.
 - [ ] Critical: Reversible hold — a remaining `critical`/`high` finding with `reversible: false`
       HOLDS the branch (no auto-merge); when all remaining `>low` findings are reversible the gated
       auto-merge proceeds and the run advances. Never `blocked-on-human`.
-- [ ] High: A reviewer finding carries `{class, severity, location, rationale, reversible}` with
+- [ ] Critical: Operational terminal — a non-finding failure (malformed/unparseable gate output,
+      closeout/persist failure, rejected context update, dirty worktree) terminates as a durable
+      non-merge HOLD with the operational reason recorded and branch/worktree preserved; it never
+      auto-merges a broken closeout and never routes to `blocked-on-human` (req 83). The legacy
+      work-run parked-run machinery is unaffected.
+- [ ] High: A review-gate finding that OMITS or malforms `reversible` normalizes to
+      `reversible: false` (fail-safe), is never dropped, and a high/critical such finding therefore
+      HOLDS at terminal rather than silently merging.
+- [ ] High: `TaskEvidence` returned to the orchestrator carries the terminal findings ledger and the
+      loop-exit reason; the orchestrator's terminal handler drains/decides from it without
+      re-deriving findings. `block` is no longer a producible outcome and the Phase 13 block-model
+      assertions are retired (suite green against the 3-value model).
+- [ ] High: A review-gate finding carries `{class, severity, location, rationale, reversible}` with
       `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,`cost-perf`};
       `irreversibility` is rejected and `reversible` is required.
-- [ ] High: The reviewer ledger persists across rounds; re-review verifies each open prior finding
-      (citing it) before discovery; a reappearing `resolved` finding is marked `regressed`.
+- [ ] High: The findings ledger persists across rounds; re-review verifies each open prior finding
+      (citing it) before discovery; a reappearing `resolved` finding is marked `regressed`, and
+      repeated sightings update a stable finding id rather than creating duplicate ledger rows.
+- [ ] High: Tech-lead diff review and designer review (when designer-needed) still run inside
+      each convergence round; their findings enter the shared ledger with `sourceGate`
+      attribution.
 - [ ] High: The coder receives the ledger severity-sorted, attempts every open finding, addresses
       the highest severity first, and reports which it addressed.
-- [ ] High: At terminal the orchestrator writes one detailed `docs/projects/bugs.md` entry per
-      remaining `>low` finding (class, severity, location, rationale, run/task id).
+- [ ] High: At terminal the orchestrator writes one detailed entry per remaining `>low` finding to
+      the Jarvis repo's `docs/projects/bugs.md` (finding id, source gate, class, severity, location,
+      rationale, reversible flag, run/task id), deduped by run/task/finding id, through the backlog
+      safe-write substrate (`withFileLock`/`assertBacklogWriteAllowed`/`writeFileAtomic`) — durable
+      whether the run subsequently HOLDS or merges, and not written into the product worktree.
 
 ---
 
