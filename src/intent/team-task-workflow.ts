@@ -132,6 +132,9 @@ export interface TeamTaskDeps {
     diff: string;
   }) => Promise<{ pass: boolean; notes?: string }>;
   pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{ resolved: boolean }>;
+  /** Optional gate-time learning hook. Awaited before a corrective retry so a
+   *  written lesson can load into the counterpart role's next invocation. */
+  onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
   /** Resolve a reviewer provider distinct from the coder's, or null when none is
    *  available (executor down). Null ⇒ the task blocks — independence is
    *  fail-closed, never a silent same-provider review. */
@@ -277,6 +280,7 @@ async function runGated(
       artifact: 'test-intent',
       reason,
     });
+    await deps.onGateRejection?.(qaFeedback);
     if (qaAttempt === input.cap - 1) {
       return block(task, roles, handoffNotes, {
         blockedReason: reason,
@@ -356,6 +360,7 @@ async function runGated(
         artifact: 'reviewer-verdict',
         reason: summarizeObjections(lastReviewer.objections),
       });
+      await deps.onGateRejection?.(feedback);
       return block(task, roles, handoffNotes, {
         blockedReason: 'open objection-class finding',
         rejectionFeedback: feedback,
@@ -372,6 +377,7 @@ async function runGated(
         reason:
           lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
       });
+      await deps.onGateRejection?.(feedback);
       lastRejectionFeedback = feedback;
       roundFeedback.push(feedback);
     }
@@ -392,6 +398,7 @@ async function runGated(
         artifact: 'implementation-diff',
         reason: tlDiff.notes ?? 'tech-lead did not pass the implementation diff',
       });
+      await deps.onGateRejection?.(feedback);
       lastRejectionFeedback = feedback;
       roundFeedback.push(feedback);
     }
@@ -423,6 +430,7 @@ async function runGated(
           artifact: 'design-review',
           reason: designer.notes ?? 'designer review failed',
         });
+        await deps.onGateRejection?.(feedback);
         lastRejectionFeedback = feedback;
         roundFeedback.push(feedback);
       }

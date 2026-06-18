@@ -35,8 +35,10 @@ import { randomUUID } from 'node:crypto';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
+import { writeRoleLesson } from '../roles/memory-writer.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
+import { runGateTriggeredLearning } from '../intent/gate-learning.js';
 import {
   runTeamTaskWorkflow,
   type ObjectionClass,
@@ -282,6 +284,34 @@ const PM_WRAPUP_INSTRUCTION = [
   '```',
 ].join('\n');
 
+const GATE_LESSON_DRAFT_INSTRUCTION = [
+  'You are the rejecting product-team role. Draft ONE candidate craft lesson for',
+  'the rejected counterpart role from the structured gate rejection below.',
+  'Do not write memory. Do not include names, links, paths, or project-specific',
+  'facts; keep the lesson abstract and reusable.',
+  '',
+  'Respond with EXACTLY ONE fenced ```gate-lesson-candidate block containing JSON:',
+  '```gate-lesson-candidate',
+  '{"kind":"candidate-lesson","draftedBy":"<your-role>","targetRole":"<counterpart-role>","lesson":"<abstract lesson>"}',
+  '```',
+].join('\n');
+
+const GATE_LESSON_VALIDATE_INSTRUCTION = [
+  'You are Jarvis running a neutral validation pass on ONE gate-triggered lesson',
+  'candidate. Decide whether it is privacy-safe, abstract, and worth adding to',
+  "the counterpart role's memory.",
+  '',
+  'Respond with EXACTLY ONE fenced ```gate-lesson-validation block containing JSON,',
+  'one of:',
+  '```gate-lesson-validation',
+  '{"kind":"lesson","stage":"<stage>","role":"<role>","lesson":"<validated abstract lesson>"}',
+  '```',
+  'or',
+  '```gate-lesson-validation',
+  '{"kind":"no-lesson","rationale":"<why>"}',
+  '```',
+].join('\n');
+
 /** Fail-closed: unparseable ⇒ pass:false (a verdict that cannot be read never
  *  passes a gate). Malformed objection entries are dropped — an invalid entry
  *  must not hard-block on garbage, and the pass flag still gates the round. */
@@ -401,6 +431,19 @@ function formatRejectionFeedback(
   ].join('\n').trim();
 }
 
+function formatGateLearningRejection(feedback: GateRejectionFeedback): string {
+  return [
+    '<gate-rejection>',
+    `rejectingRole: ${feedback.rejectingRole}`,
+    `counterpartRole: ${feedback.counterpartRole}`,
+    `rejectedRole: ${feedback.rejectedRole}`,
+    `rejectedArtifact: ${feedback.rejectedArtifact}`,
+    `whatFailed: ${feedback.whatFailed}`,
+    `actionableNotes: ${feedback.actionableNotes.join('; ')}`,
+    '</gate-rejection>',
+  ].join('\n');
+}
+
 /**
  * Build the production TeamTaskDeps: all eight seams live. Tests inject
  * `seams`; production omits it and gets the real judgment call + execution
@@ -418,6 +461,50 @@ export function buildProductionTeamTaskDeps(
   // content rather than bare file paths (QaResult carries only testIds).
   // Deps are built per task invocation, so this never leaks across tasks.
   let lastQaDiff = '';
+
+  const learnFromGateRejection = async (rejection: GateRejectionFeedback): Promise<void> => {
+    try {
+      await runGateTriggeredLearning(rejection, {
+        draftLesson: async ({ rejection: inputRejection }) => {
+          const binding = bindingForRole(models, inputRejection.rejectingRole);
+          if (binding === null) return null;
+          const reply = await judge(
+            inputRejection.rejectingRole,
+            binding,
+            GATE_LESSON_DRAFT_INSTRUCTION,
+            formatGateLearningRejection(inputRejection),
+          );
+          return extractFencedJson(reply, 'gate-lesson-candidate');
+        },
+        validateLesson: async ({ rejection: inputRejection, candidate }) => {
+          const body = [
+            formatGateLearningRejection(inputRejection),
+            '',
+            '<candidate>',
+            JSON.stringify(candidate),
+            '</candidate>',
+          ].join('\n');
+          const reply = await judge('pm', models.pm, GATE_LESSON_VALIDATE_INSTRUCTION, body);
+          return extractFencedJson(reply, 'gate-lesson-validation');
+        },
+        writeLesson: async (role, lesson, inputRejection) => {
+          const sourceSlug = `${sandbox.project}-gate-${inputRejection.rejectedArtifact}`;
+          const result = await writeRoleLesson({
+            role,
+            lesson,
+            sourceSlug,
+            fallbackTopic: sandbox.project,
+          });
+          return {
+            committed: result.committed,
+            ...(result.captured !== undefined ? { captured: result.captured } : {}),
+          };
+        },
+      });
+    } catch (err) {
+      log.warn('Gate-triggered learning failed', { error: (err as Error).message });
+    }
+  };
 
   // Two-channel split for artifact roles too: the role framing (SOUL + static
   // instruction) rides the executor's system channel; memory reference + task
@@ -549,6 +636,8 @@ export function buildProductionTeamTaskDeps(
       const { value } = parseFlagVerdict(reply, 'pm-wrapup', 'resolved');
       return { resolved: value };
     },
+
+    onGateRejection: learnFromGateRejection,
 
     resolveReviewerProvider: (coderProvider) =>
       models.reviewer !== null && models.reviewer.provider !== coderProvider

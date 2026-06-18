@@ -875,7 +875,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       no-lesson before any write — roles never write memory directly.
 - [x] Gate-time-write test: a passing validation writes the lesson to the COUNTERPART's memory
       via `writeRoleLesson`, synchronously at gate-time (not deferred to nightly).
-- [ ] Compounding test: a gate-time lesson loads into the counterpart role's next invocation
+- [x] Compounding test: a gate-time lesson loads into the counterpart role's next invocation
       reference context (the Phase 6 compounding path).
 - [ ] No-double-write test: the nightly loop and the gate-time path share one write path and do
       not double-write the same lesson (the `memory-writer.ts` dedupe is the guard).
