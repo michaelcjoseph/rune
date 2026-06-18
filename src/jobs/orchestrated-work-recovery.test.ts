@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 import type { MutationDescriptor } from '../transport/mutations.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
@@ -19,6 +19,10 @@ vi.mock('../intent/orch-reconstruct.js', () => ({
 }));
 
 import { recoverOrchestratedWorkRuns } from './orchestrated-work-runner.js';
+
+beforeEach(() => {
+  mockReconstructRun.mockReset();
+});
 
 function runningOrchestratedMutation(): MutationDescriptor<{ projectSlug: string; product: string }> {
   return {
@@ -128,6 +132,53 @@ describe('orchestrated-work boot recovery', () => {
       resumed: ['mut-orch-resume'],
       orphaned: [],
       skipped: [],
+    });
+  });
+
+  it('does not redispatch a resumable mutation when another process owns its recovery lease', async () => {
+    const mutation = runningOrchestratedMutation();
+    const runCursor = cursor();
+    const records = [readyRecord()];
+    const tasksMd = [
+      '# Tasks',
+      '',
+      '## Phase 11B',
+      '- [x] Persist records and cursor',
+      '- [ ] Resume boot',
+    ].join('\n');
+    mockReconstructRun.mockReturnValue({
+      completedTaskIds: ['persist-records-and-cursor'],
+      nextTask: selectedResumeTask(),
+      drift: false,
+    });
+
+    const deps = {
+      readRunningOrchestratedMutations: vi.fn(async () => [mutation]),
+      acquireRecoveryLease: vi.fn(async (runId: string) => {
+        expect(runId).toBe(mutation.id);
+        return false;
+      }),
+      releaseRecoveryLease: vi.fn(async () => {}),
+      readRunCursor: vi.fn(async () => runCursor),
+      readTaskRunRecords: vi.fn(async () => records),
+      readTasksMd: vi.fn(async () => tasksMd),
+      redispatchOrchestratedMutation: vi.fn(async () => {}),
+      markOrphaned: vi.fn(async () => {}),
+      writeTerminal: vi.fn(async () => {}),
+    };
+
+    const result = await recoverOrchestratedWorkRuns(deps);
+
+    expect(deps.acquireRecoveryLease).toHaveBeenCalledWith(mutation.id);
+    expect(mockReconstructRun).not.toHaveBeenCalled();
+    expect(deps.redispatchOrchestratedMutation).not.toHaveBeenCalled();
+    expect(deps.markOrphaned).not.toHaveBeenCalled();
+    expect(deps.writeTerminal).not.toHaveBeenCalled();
+    expect(deps.releaseRecoveryLease).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      resumed: [],
+      orphaned: [],
+      skipped: ['mut-orch-resume'],
     });
   });
 });

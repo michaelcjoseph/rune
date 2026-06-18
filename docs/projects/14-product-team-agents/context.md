@@ -98,11 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- rc/jobs/sandbox-runtime.ts src/jobs/sandbox-runtime.test.ts` passed.
-- `npm run build` still fails on unrelated existing repo type errors; none are in the touched implementation files.
+- 345 VAULT_DIR=/tmp/test-vault WORKSPACE_DIR=/tmp/test-workspace npx vitest run --configLoader runner src/jobs/orchestrated-work-runner.test.ts` passed, 29 tests.
+- `npm run build` still fails on existing repo-wide type errors; none were introduced by the touched implementation path.
 
-No commit made. Note: `src/jobs/sandbox-runtime.test.ts` was already staged; my implementation files are unstaged.
-- n existing unrelated repo-wide TypeScript errors; no `TS2305` cursor import error or `sandbox-runtime` error appeared.
-
-No commit made. Note: `src/index.ts`, `src/jobs/sandbox-runtime.ts`, and `src/jobs/sandbox-runtime.test.ts` already had staged changes; my retry edits are unstaged on top of those.
-- ild` still fails on unrelated existing repo type errors, but not on the rejected cursor import. Also, the two target files were already staged; my attempt to update the index failed because this sandbox cannot write `.git/.../index.lock`, so the files are fixed on disk but show `MM` in `git status`.
+No commit made.
+- tree content has no runner implementation change in `git diff HEAD`; only the test file is effective. The stale staged index still contains the prior runner implementation, and `git restore --staged src/jobs/orchestrated-work-runner.ts` failed because this sandbox cannot write `.git/.../index.lock`.

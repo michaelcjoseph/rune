@@ -819,7 +819,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       and the pipeline never lands two terminal records for one id (skip-if-terminal guard).
 - [x] Worktree-preserve test: the orphan-worktree sweep skips a run marked for resume (or the
       branch-resume path rebuilds it on re-dispatch).
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
