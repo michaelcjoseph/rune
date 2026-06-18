@@ -217,6 +217,38 @@ describe('mutations-log', () => {
       expect(terminalizedLegacy.error).toBe('orphaned');
     });
 
+    it('does not rewrite a mutation whose latest persisted state is already terminal', () => {
+      const historicalRunning = makeDescriptor({ id: 'already-terminal', status: 'running' });
+      const terminal = makeDescriptor({ id: 'already-terminal', status: 'completed' });
+
+      const raw = [historicalRunning, terminal].map(d => JSON.stringify(d)).join('\n') + '\n';
+      (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(raw);
+
+      reconcileOrphans();
+
+      expect(writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('only terminalizes latest-state running mutations and preserves historical running lines', () => {
+      const historicalRunning = makeDescriptor({ id: 'eventually-completed', status: 'running' });
+      const terminal = makeDescriptor({ id: 'eventually-completed', status: 'completed' });
+      const stillRunning = makeDescriptor({ id: 'actual-orphan', status: 'running' });
+
+      const raw = [historicalRunning, terminal, stillRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
+      (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(raw);
+
+      reconcileOrphans();
+
+      expect(writeFileSync).toHaveBeenCalledOnce();
+      const [, writtenContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const lines = writtenContent.split('\n').filter(Boolean).map(line => JSON.parse(line));
+
+      expect(lines[0]).toMatchObject({ id: 'eventually-completed', status: 'running' });
+      expect(lines[0].error).toBeUndefined();
+      expect(lines[1]).toMatchObject({ id: 'eventually-completed', status: 'completed' });
+      expect(lines[2]).toMatchObject({ id: 'actual-orphan', status: 'failed', error: 'orphaned' });
+    });
+
     it('does not rewrite when no running entries exist', () => {
       const completed = makeDescriptor({ id: 'c1', status: 'completed' });
       const failed = makeDescriptor({ id: 'f1', status: 'failed' });

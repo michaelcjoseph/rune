@@ -98,12 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ated-run-store.test.ts src/jobs/mutations-log.test.ts src/transport/mutations.test.ts` passed: 5 files, 51 tests.
-- `git diff --check` passed.
-- `npm run build` still fails on existing repo-wide type errors; the new `index.ts` logger type error found on the first run was fixed and no longer appears.
-- s passed: 4 files, 34 tests.
-- Existing mutations-log + recovery suites passed: 4 files, 17 tests.
-- `git diff --check` passed.
-- `npm run build` still fails on existing repo-wide type errors, including previously noted test type drift; no new failure showed from the recovery files.
-
-No commit made.
+-  src/jobs/mutations-log.test.ts` passed: 15 tests
+- `npx vitest run --configLoader runner src/jobs/mutations-log-recovery.test.ts` passed: 1 test
+- `git diff --check` passed
+- `npm run build` still fails on existing repo-wide test/type drift; no `src/jobs/mutations-log.ts` source error was reported.

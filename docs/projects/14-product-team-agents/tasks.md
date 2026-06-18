@@ -831,7 +831,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
       or `resumable` orchestrated mutation against its branch instead of the blind
       `reconcileOrphans` flip; guard with a single-run lease.
-- [ ] Make `reconcileOrphans` orchestration-aware + idempotent (never terminal-write a
+- [x] Make `reconcileOrphans` orchestration-aware + idempotent (never terminal-write a
       resumable run; skip-if-already-terminal), and add a graceful-shutdown drain that marks
       in-flight orchestrated runs `resumable` rather than leaving a bare `running` line.
 - [ ] Make `cleanupOrphanWorktrees` skip a resume-marked run's worktree.

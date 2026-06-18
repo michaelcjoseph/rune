@@ -77,12 +77,25 @@ export function reconcileOrphans(): void {
   }
 
   const lines = raw.split('\n');
+  const latestLineById = new Map<string, number>();
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line?.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as MutationDescriptor;
+      latestLineById.set(entry.id, i);
+    } catch {
+      // Malformed lines are preserved unchanged below and cannot be reconciled.
+    }
+  }
+
   let changed = false;
-  const updated = lines.map(line => {
+  const updated = lines.map((line, index) => {
     if (!line.trim()) return line;
     try {
       const entry = JSON.parse(line) as MutationDescriptor;
-      if (entry.status === 'running') {
+      const isLatestState = latestLineById.get(entry.id) === index;
+      if (isLatestState && entry.status === 'running') {
         if (entry.kind === 'orchestrated-work') {
           return line;
         }
