@@ -1748,6 +1748,94 @@ describe('team-task-workflow — round cap', () => {
     expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
   });
 
+  it('converges when max open severity strictly drops critical to high to medium to low, ignoring the legacy outer cap', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const severities: ObjectionSeverity[] = ['critical', 'high', 'medium', 'low'];
+    const roundFindings: ObjectionFinding[] = severities.map((severity) => ({
+      class: 'security',
+      severity,
+      location: 'src/auth.ts:88',
+      rationale: 'the same reversible auth guard finding is being reduced each round',
+      reversible: true,
+    }));
+    let reviewerCalls = 0;
+    let pmCalled = false;
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          const finding = roundFindings[reviewerCalls];
+          reviewerCalls += 1;
+          return {
+            outcome: finding?.severity === 'low' ? 'pass-with-warnings' : 'fail',
+            findings: finding === undefined ? [] : [finding],
+            notes: `round ${reviewerCalls} max severity is ${finding?.severity ?? 'none'}`,
+          };
+        },
+        pmWrapup: async () => {
+          pmCalled = true;
+          return {
+            resolved: true,
+            rationale: 'PM must not be consulted while a severity loop is converging.',
+          };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.loopExitReason).toBe('all-low');
+    expect(ev.objectionOpen).toBe(false);
+    expect(pmCalled).toBe(false);
+    expect(ev.rolesInvoked).not.toContain('pm');
+    expect(coderInputs).toHaveLength(4);
+    expect(reviewerCalls).toBe(4);
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: expect.stringContaining('security/critical'),
+      }),
+    ]);
+    expect(coderInputs[2]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: expect.stringContaining('security/high'),
+      }),
+    ]);
+    expect(coderInputs[3]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: expect.stringContaining('security/medium'),
+      }),
+    ]);
+    expect(ev.reviewerVerdict).toMatchObject({
+      outcome: 'pass-with-warnings',
+      findings: [roundFindings[3]],
+    });
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'low',
+        location: 'src/auth.ts:88',
+        raisedRound: 1,
+        status: 'open',
+      }),
+    ]);
+    expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
+  });
+
   it('stops at the 4-round hard budget when findings are still above low and emits terminal handling evidence', async () => {
     const events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }> = [];
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];

@@ -1042,7 +1042,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       stops and routes to terminal handling before reaching the 4-round budget.
 - [x] Hard-budget test: a run still above `low` at round 4 stops and routes to terminal handling;
       round 5 never executes.
-- [ ] Convergence test: a run whose max severity strictly drops each round (critical→high→medium→low)
+- [x] Convergence test: a run whose max severity strictly drops each round (critical→high→medium→low)
       runs past round 3 and exits via the primary all-low gate, not a backstop.
 - [ ] Coder-ordering test: the coder receives the ledger severity-sorted, attempts every open finding,
       addresses the highest severity first, and reports which findings it addressed.

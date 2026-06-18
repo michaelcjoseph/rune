@@ -403,13 +403,14 @@ async function runGated(
   let lastTechLeadDiff: GateVerdict | undefined;
   let lastDesigner: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
-  let coderAttemptsRemaining = input.cap;
+  const configuredRoundBudget = Math.min(input.cap, SEVERITY_LOOP_HARD_BUDGET);
   let round = 0;
   let previousMaxOpenSeverity: ObjectionSeverity | undefined;
   let flatMaxOpenSeverityRounds = 0;
+  let continueConvergingPastConfiguredCap = false;
   const findingsLedger: FindingsLedgerEntry[] = [];
-  while (coderAttemptsRemaining > 0) {
-    coderAttemptsRemaining -= 1;
+  while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
+    continueConvergingPastConfiguredCap = false;
     round += 1;
     roles.add('coder');
     previousRole = emitRoleTransition(
@@ -563,6 +564,9 @@ async function runGated(
       severityRank[maxOpenSeverity] > severityRank.low &&
       hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner)
     ) {
+      const strictSeverityDrop =
+        previousMaxOpenSeverity !== undefined &&
+        severityRank[maxOpenSeverity] < severityRank[previousMaxOpenSeverity];
       if (maxOpenSeverity === previousMaxOpenSeverity) {
         flatMaxOpenSeverityRounds += 1;
       } else {
@@ -584,6 +588,10 @@ async function runGated(
           ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
         };
       }
+      continueConvergingPastConfiguredCap =
+        strictSeverityDrop &&
+        round >= configuredRoundBudget &&
+        round < SEVERITY_LOOP_HARD_BUDGET;
     } else {
       previousMaxOpenSeverity = maxOpenSeverity;
       flatMaxOpenSeverityRounds = 0;
@@ -922,6 +930,8 @@ const severityRank: Record<ObjectionSeverity, number> = {
   high: 2,
   critical: 3,
 };
+
+const SEVERITY_LOOP_HARD_BUDGET = 4;
 
 function maxOpenFindingSeverity(
   ledger: FindingsLedgerEntry[],
