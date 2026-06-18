@@ -126,4 +126,50 @@ describe('gate-triggered learning — draft then neutral-validate', () => {
     expect(deps.validateLesson).toHaveBeenCalledTimes(1);
     expect(deps.writeLesson).not.toHaveBeenCalled();
   });
+
+  it("writes a passing validation to the rejection counterpart's memory, not the validator-selected role", async () => {
+    const record = rejection({
+      rejectingRole: 'reviewer',
+      counterpartRole: 'coder',
+      rejectedRole: 'coder',
+      artifact: 'implementation-diff',
+      rejectedArtifact: 'implementation-diff',
+      reason: 'implementation missed the validated empty-state behavior',
+      whatFailed: 'the diff passed review notes but omitted the behavior the tests covered',
+      notes: ['Carry the failing gate note into the next implementation attempt.'],
+      actionableNotes: ['Map each gate note to a concrete diff change before resubmitting.'],
+    });
+    const lesson =
+      'When retrying after a gate rejection, map each actionable note to a concrete diff change before resubmitting.';
+
+    const deps: GateLearningDeps = {
+      draftLesson: vi.fn(async () => ({
+        kind: 'candidate-lesson',
+        draftedBy: 'reviewer',
+        targetRole: 'reviewer',
+        lesson: 'Reviewer should remember this implementation miss.',
+      })),
+      validateLesson: vi.fn(async () => ({
+        kind: 'lesson',
+        stage: 'implementation',
+        role: 'reviewer',
+        lesson,
+      })),
+      writeLesson: vi.fn(async (role, writtenLesson, inputRecord) => {
+        expect(role).toBe('coder');
+        expect(writtenLesson).toBe(lesson);
+        expect(inputRecord.counterpartRole).toBe('coder');
+        return { committed: true, captured: `- [2026-06-17 · source: gate-test] ${writtenLesson}` };
+      }),
+    };
+
+    const result = await runGateTriggeredLearning(record, deps);
+
+    expect(result).toMatchObject({
+      kind: 'written',
+      role: 'coder',
+      lesson,
+    });
+    expect(deps.writeLesson).toHaveBeenCalledTimes(1);
+  });
 });

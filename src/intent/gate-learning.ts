@@ -43,7 +43,7 @@ export interface GateLearningDeps {
   /** Rejecting role drafts from the structured gate rejection only. */
   draftLesson: (input: {
     rejection: GateRejectionFeedback;
-  }) => GateLessonCandidate | Promise<GateLessonCandidate>;
+  }) => unknown | Promise<unknown>;
   /** Neutral Jarvis validation/privacy/dedup attribution step. */
   validateLesson: (input: {
     rejection: GateRejectionFeedback;
@@ -76,7 +76,10 @@ export async function runGateTriggeredLearning(
   rejection: GateRejectionFeedback,
   deps: GateLearningDeps,
 ): Promise<GateLearningResult> {
-  const candidate = await deps.draftLesson({ rejection });
+  const candidate = parseGateLessonCandidate(await deps.draftLesson({ rejection }));
+  if (!candidate) {
+    return { kind: 'no-lesson', rationale: 'draft lesson output could not be parsed' };
+  }
   const validation = parseGateValidationResult(
     await deps.validateLesson({ rejection, candidate }),
   );
@@ -85,20 +88,49 @@ export async function runGateTriggeredLearning(
     return validation;
   }
 
-  const write = await deps.writeLesson(validation.role, validation.lesson, rejection);
+  const targetRole = rejection.counterpartRole;
+  const write = await deps.writeLesson(targetRole, validation.lesson, rejection);
   if (!write.committed) {
     return {
       kind: 'filtered',
-      role: validation.role,
+      role: targetRole,
       lesson: validation.lesson,
     };
   }
 
   return {
     kind: 'written',
-    role: validation.role,
+    role: targetRole,
     lesson: validation.lesson,
     ...(write.captured !== undefined ? { captured: write.captured } : {}),
+  };
+}
+
+function parseGateLessonCandidate(value: unknown): GateLessonCandidate | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const obj = value as Record<string, unknown>;
+
+  const { kind, draftedBy, targetRole, lesson } = obj;
+  if (kind !== 'candidate-lesson') {
+    return null;
+  }
+  if (typeof draftedBy !== 'string' || !(ROLE_NAMES as readonly string[]).includes(draftedBy)) {
+    return null;
+  }
+  if (typeof targetRole !== 'string' || !(ROLE_NAMES as readonly string[]).includes(targetRole)) {
+    return null;
+  }
+  if (typeof lesson !== 'string' || !lesson.trim()) {
+    return null;
+  }
+
+  return {
+    kind: 'candidate-lesson',
+    draftedBy: draftedBy as RoleName,
+    targetRole: targetRole as RoleName,
+    lesson: lesson.trim(),
   };
 }
 

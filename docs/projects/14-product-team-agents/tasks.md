@@ -873,7 +873,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Draft-then-validate test: the rejecting role drafts a candidate lesson; a neutral Jarvis
       pass (`runPostMortem` model) privacy-filters, dedupes, attributes, and fails safe to
       no-lesson before any write — roles never write memory directly.
-- [ ] Gate-time-write test: a passing validation writes the lesson to the COUNTERPART's memory
+- [x] Gate-time-write test: a passing validation writes the lesson to the COUNTERPART's memory
       via `writeRoleLesson`, synchronously at gate-time (not deferred to nightly).
 - [ ] Compounding test: a gate-time lesson loads into the counterpart role's next invocation
       reference context (the Phase 6 compounding path).

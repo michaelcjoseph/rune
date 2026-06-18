@@ -98,7 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- -loop.test.ts src/intent/postmortem.test.ts --configLoader runner` passed: 23 tests
-- `npm run build` still fails on existing unrelated repo type errors, but no `gate-learning` errors remain after the fix.
+- nt/learning-loop.test.ts src/intent/postmortem.test.ts --configLoader runner` passed: 26 tests.
+- `npm run build` still fails on existing unrelated repo type errors, but no `gate-learning` errors remain.
 
-No commit made. Existing staged QA test remains staged; new implementation file is untracked.
+No commit made. The staged QA test remains staged; my implementation file is modified unstaged.
