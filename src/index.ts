@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import config from './config.js';
 import { initKB } from './kb/init.js';
 import { restoreSessions, persistSessions, getAllSessions } from './vault/sessions.js';
@@ -13,7 +14,11 @@ import { recoverSupervisedRuns } from './jobs/supervision-recovery.js';
 import { runRecoveryFinalize } from './jobs/recovery-finalize-runner.js';
 import { workRunApplier } from './jobs/work-runner.js';
 import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
-import { orchestratedWorkApplier } from './jobs/orchestrated-work-runner.js';
+import {
+  orchestratedWorkApplier,
+  recoverOrchestratedWorkRuns,
+  redispatchRecoveredOrchestratedMutation as redispatchRecoveredOrchestratedWorkMutation,
+} from './jobs/orchestrated-work-runner.js';
 import { workRunReleaseApplier } from './jobs/work-run-release.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSessions } from './reviews/planning.js';
@@ -30,8 +35,46 @@ import { loadModelPolicy } from './intent/model-policy.js';
 import { createLogger, flushLogger } from './utils/logger.js';
 import { NotificationBus } from './transport/notification-bus.js';
 import { createSenders } from './transport/sender.js';
+import type { OrchestrationRunCursor } from './intent/project-orchestrator.js';
+import type { MutationDescriptor, MutationEvent } from './transport/mutations.js';
 
 const log = createLogger('main');
+
+type OrchestratedWorkPayload = {
+  projectSlug: string;
+  product?: string;
+};
+
+async function readTasksMdForRecoveredCursor(cursor: OrchestrationRunCursor): Promise<string> {
+  const { readFileSync, readdirSync, statSync } = await import('node:fs');
+  const projectsDir = join(cursor.worktreePath, 'docs', 'projects');
+  const names = readdirSync(projectsDir);
+  for (const name of names) {
+    const dir = join(projectsDir, name);
+    if (name !== cursor.project && !name.endsWith(`-${cursor.project}`)) continue;
+    if (statSync(dir).isDirectory()) {
+      return readFileSync(join(dir, 'tasks.md'), 'utf8');
+    }
+  }
+  throw new Error(`tasks.md not found for recovered orchestrated project: ${cursor.project}`);
+}
+
+async function markRecoveredOrchestratedMutationFailed(
+  mutation: MutationDescriptor<OrchestratedWorkPayload>,
+  reason: string,
+): Promise<void> {
+  const { writeRecoveredTerminalMutation } = await import('./transport/mutations.js');
+  writeRecoveredTerminalMutation(mutation as MutationDescriptor, {
+    mutationId: mutation.id,
+    ts: new Date().toISOString(),
+    kind: 'failed',
+    data: {
+      reason,
+      projectSlug: mutation.payload.projectSlug,
+      ...(mutation.payload.product !== undefined ? { product: mutation.payload.product } : {}),
+    },
+  });
+}
 
 // Ensure logs directory exists
 mkdirSync(config.LOGS_DIR, { recursive: true });
@@ -66,7 +109,9 @@ try {
   });
 }
 
-// Flip any stale 'running' mutations from a prior interrupted run to 'failed'
+// Flip any stale non-resumable 'running' mutations from a prior interrupted run
+// to 'failed'. Orchestrated-work entries are skipped here and handled by the
+// dedicated cursor-based recovery below.
 reconcileOrphans();
 
 // Recover stale `running` supervised runs (project 15, P0.4). FIRST, drive each
@@ -83,23 +128,6 @@ try {
 } catch (err) {
   log.error('Supervision startup recovery threw', { error: (err as Error).message });
 }
-
-// Sweep orphan project worktrees from a prior interrupted run. Best-effort —
-// a missing products.json (fresh clone, no Regime B products registered yet)
-// or a missing worktree root returns []; a per-product failure is logged and
-// skipped inside cleanupOrphanWorktrees. Wrap in try/catch so an unexpected
-// fs error can't block startup either.
-void cleanupOrphanWorktrees({
-  worktreeRoot: config.WORKTREE_ROOT,
-  productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-  workRunsDir: config.WORK_RUNS_DIR,
-}).then((removed) => {
-  if (removed.length > 0) {
-    log.info('Cleaned up orphan worktrees', { count: removed.length, paths: removed });
-  }
-}).catch((err) => {
-  log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
-});
 
 // Prune retained work-run artifacts (transcripts + forensics + branch refs)
 // over the retention caps. Best-effort, fire-and-forget — `runWorkRunGc`
@@ -144,6 +172,62 @@ registerApplier(workRunReleaseApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;
+
+try {
+  const recovery = await recoverOrchestratedWorkRuns({
+    readRunningOrchestratedMutations: async () => {
+      const { readRunningOrchestratedMutations } = await import('./jobs/mutations-log.js');
+      return readRunningOrchestratedMutations() as MutationDescriptor<OrchestratedWorkPayload>[];
+    },
+    readRunCursor: async (runId) => {
+      const { readOrchestratedRunCursor } = await import('./jobs/orchestrated-work-runner.js');
+      return readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId);
+    },
+    readTaskRunRecords: async (runId) => {
+      const { readOrchestratedTaskRunRecords } = await import('./jobs/orchestrated-work-runner.js');
+      return readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId);
+    },
+    readTasksMd: readTasksMdForRecoveredCursor,
+    redispatchOrchestratedMutation: async (mutation, options) => {
+      const result = redispatchRecoveredOrchestratedWorkMutation(mutation, options);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+    },
+    markOrphaned: markRecoveredOrchestratedMutationFailed,
+    writeTerminal: async (mutation, event: MutationEvent) => {
+      const { writeRecoveredTerminalMutation } = await import('./transport/mutations.js');
+      writeRecoveredTerminalMutation(mutation as MutationDescriptor, event);
+    },
+  });
+  if (recovery.resumed.length > 0 || recovery.orphaned.length > 0 || recovery.skipped.length > 0) {
+    log.info('Orchestrated-work startup recovery completed', {
+      resumed: recovery.resumed,
+      orphaned: recovery.orphaned,
+      skipped: recovery.skipped,
+    });
+  }
+} catch (err) {
+  log.error('Orchestrated-work startup recovery threw', { error: (err as Error).message });
+}
+
+// Sweep orphan project worktrees from a prior interrupted run. Best-effort —
+// a missing products.json (fresh clone, no Regime B products registered yet)
+// or a missing worktree root returns []; a per-product failure is logged and
+// skipped inside cleanupOrphanWorktrees. This runs after orchestrated-work
+// recovery has reconstructed and re-dispatched any still-running resumable run.
+void cleanupOrphanWorktrees({
+  worktreeRoot: config.WORKTREE_ROOT,
+  productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+  workRunsDir: config.WORK_RUNS_DIR,
+}).then((removed) => {
+  if (removed.length > 0) {
+    log.info('Cleaned up orphan worktrees', { count: removed.length, paths: removed });
+  }
+}).catch((err) => {
+  log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
+});
+
 // /mcp Claude App connector (project 16): mounted only when the gate secret
 // exists — the OAuth consent flow is gated on JARVIS_HTTP_SECRET, and tokens
 // bind to the one known user id. Without the secret the route stays absent.

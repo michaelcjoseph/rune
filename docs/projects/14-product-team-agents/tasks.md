@@ -828,7 +828,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [x] Build the `TaskRunRecord` JSONL store + run cursor + resume marker (the persistence layer
       `orch-run-record.ts` promises); reuse Phase 10's transcript as part of the record set.
-- [ ] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
+- [x] Wire `reconstructRun` into the boot path: reconstruct + re-dispatch a still-`running`
       or `resumable` orchestrated mutation against its branch instead of the blind
       `reconcileOrphans` flip; guard with a single-run lease.
 - [ ] Make `reconcileOrphans` orchestration-aware + idempotent (never terminal-write a

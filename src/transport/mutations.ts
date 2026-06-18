@@ -214,6 +214,68 @@ export function getApplier(kind: MutationKind): MutationApplier<Record<string, u
   return applierRegistry.get(kind);
 }
 
+/** Re-dispatch a descriptor recovered from mutations.jsonl without creating a
+ *  new mutation id. Startup recovery uses this for still-running resumable
+ *  orchestrated-work runs after reconstructing their durable cursor. */
+export function redispatchMutation(
+  descriptor: MutationDescriptor,
+): { ok: true } | { ok: false; reason: string } {
+  const applier = applierRegistry.get(descriptor.kind);
+  if (!applier) {
+    return { ok: false, reason: `unknown mutation kind: ${descriptor.kind}` };
+  }
+  if (activeRuns.has(descriptor.id)) {
+    return { ok: false, reason: `mutation already running: ${descriptor.id}` };
+  }
+
+  const validResult = applier.validate(descriptor.payload as Record<string, unknown>);
+  if (!validResult.ok) {
+    return { ok: false, reason: validResult.reason };
+  }
+
+  void startApply(applier, descriptor);
+  return { ok: true };
+}
+
+/** Persist a terminal event for a recovered descriptor that cannot be
+ *  re-dispatched. Mirrors the terminal branch in startApply closely enough for
+ *  startup recovery paths that do not enter the async applier loop. */
+export function writeRecoveredTerminalMutation(
+  descriptor: MutationDescriptor,
+  event: MutationEvent,
+): void {
+  if (event.kind !== 'completed' && event.kind !== 'failed') {
+    throw new Error(`writeRecoveredTerminalMutation requires a terminal event, got ${event.kind}`);
+  }
+
+  descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
+  if (event.kind === 'failed' && event.data) {
+    descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');
+  }
+  if (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') {
+    applyOutcomeToDescriptor(descriptor, event);
+  }
+  appendMutationLine(descriptor);
+
+  const parked =
+    (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') &&
+    (event.data as Record<string, unknown> | undefined)?.['parked'] === true;
+  const supervisionStatus: SupervisedRun['status'] = parked
+    ? 'blocked-on-human'
+    : descriptor.status;
+  safeUpsertRun(buildSupervisedRun(descriptor, supervisionStatus, new Date().toISOString()));
+
+  (_bus ?? noopBus).publish({
+    kind: 'mutation-event',
+    mutationId: event.mutationId,
+    mutationKind: descriptor.kind,
+    subKind: event.kind,
+    ts: event.ts,
+    data: event.data,
+    userId: config.TELEGRAM_USER_ID,
+  });
+}
+
 /** Create, validate, persist, and (if autoApprove) start a mutation. */
 export async function createMutation(
   kind: MutationKind,

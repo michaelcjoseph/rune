@@ -70,6 +70,7 @@ import {
   __setOrchestratedRuntimeForTest,
   __resetOrchestratedRuntimeForTest,
   __getRuntimeDepsForTest,
+  redispatchRecoveredOrchestratedMutation,
 } from './orchestrated-work-runner.js';
 import {
   activeRuns,
@@ -269,6 +270,82 @@ describe('orchestratedWorkApplier', () => {
         runOrchestration: async () => result,
       });
     }
+
+    it('re-dispatches recovered mutations against the existing worktree instead of creating a new one', async () => {
+      const projectSlug = '14-product-team-agents';
+      const recovered = makeWorktree(projectSlug, [
+        '# Tasks',
+        '',
+        '## Phase 11B',
+        '- [x] Persist records and cursor',
+        '- [ ] Resume boot',
+      ].join('\n'));
+      wtDir = recovered.dir;
+      const createWorktree = vi.fn(async () => {
+        throw new Error('should not create a new worktree during recovery redispatch');
+      });
+      const destroyWorktree = vi.fn(async () => {
+        destroyed = true;
+      });
+      let seenDeps: {
+        branch: string;
+        baseBranch?: string;
+        worktreePath?: string;
+        attemptCap: number;
+      } | undefined;
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree,
+        destroyWorktree,
+        runOrchestration: async (deps) => {
+          seenDeps = {
+            branch: deps.branch,
+            baseBranch: deps.baseBranch,
+            worktreePath: deps.worktreePath,
+            attemptCap: deps.attemptCap,
+          };
+          return {
+            kind: 'blocked',
+            reason: 'stop after recovery assertion',
+            task: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+          };
+        },
+      });
+
+      registerApplier(orchestratedWorkApplier);
+      const descriptor = makeDescriptor({ projectSlug, product: 'jarvis' }, 'mut-recovered-redispatch');
+      const result = redispatchRecoveredOrchestratedMutation(descriptor, {
+        branch: 'jarvis-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        attemptCap: 7,
+        reconstruction: {
+          completedTaskIds: ['persist-records-and-cursor'],
+          nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
+          drift: false,
+        },
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      });
+
+      expect(result).toEqual({ ok: true });
+      await waitForCondition(() => !activeRuns.has(descriptor.id));
+
+      expect(createWorktree).not.toHaveBeenCalled();
+      expect(seenDeps).toEqual({
+        branch: 'jarvis-work/recovered-branch',
+        baseBranch: 'main',
+        worktreePath: recovered.dir,
+        attemptCap: 7,
+      });
+      expect(destroyWorktree).toHaveBeenCalledWith(
+        expect.objectContaining({
+          worktree: recovered.dir,
+          resumed: true,
+        }),
+        expect.any(Object),
+      );
+    });
 
     it('binds the production transcript sink to createTranscriptSink under WORK_RUNS_DIR/<runId>/transcript.jsonl', () => {
       const baseDir = mkdtempSync(join(tmpdir(), 'orch-transcript-binding-'));

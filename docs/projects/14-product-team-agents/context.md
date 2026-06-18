@@ -98,8 +98,12 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- s src/jobs/orchestrated-work-runner.test.ts` passed: 36 tests.
+- ated-run-store.test.ts src/jobs/mutations-log.test.ts src/transport/mutations.test.ts` passed: 5 files, 51 tests.
 - `git diff --check` passed.
-- `npm run build` still fails on existing repo-wide type errors in unrelated test files and previously noted orchestrated-runner test type drift; no new runtime test failure from this change.
+- `npm run build` still fails on existing repo-wide type errors; the new `index.ts` logger type error found on the first run was fixed and no longer appears.
+- s passed: 4 files, 34 tests.
+- Existing mutations-log + recovery suites passed: 4 files, 17 tests.
+- `git diff --check` passed.
+- `npm run build` still fails on existing repo-wide type errors, including previously noted test type drift; no new failure showed from the recovery files.
 
 No commit made.

@@ -59,7 +59,7 @@ import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
-import { activeRuns } from '../transport/mutations.js';
+import { activeRuns, redispatchMutation } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import { createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import {
@@ -131,6 +131,23 @@ export interface OrchestratedWorkRecoveryResult {
   resumed: string[];
   orphaned: string[];
   skipped: string[];
+}
+
+const recoveryRedispatchOptions = new WeakMap<
+  MutationDescriptor<OrchestratedWorkPayload>,
+  OrchestratedRecoveryRedispatch
+>();
+
+export function redispatchRecoveredOrchestratedMutation(
+  mutation: MutationDescriptor<OrchestratedWorkPayload>,
+  options: OrchestratedRecoveryRedispatch,
+): { ok: true } | { ok: false; reason: string } {
+  recoveryRedispatchOptions.set(mutation, options);
+  const result = redispatchMutation(mutation as MutationDescriptor);
+  if (!result.ok) {
+    recoveryRedispatchOptions.delete(mutation);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +259,7 @@ function buildOrchestrationDeps(args: {
   workRunsDir: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
+  attemptCap?: number;
   emit?: (event: OrchestrationActivityEvent) => void;
   finalize: FinalizerAdapter;
 }): OrchestrationDeps {
@@ -262,7 +280,7 @@ function buildOrchestrationDeps(args: {
     // Per-task attempt cap (re-invoke the whole workflow on a non-objection
     // failure). The team-task-workflow runs its own internal round cap; this
     // bounds the OUTER retries. 3 mirrors gen-eval-loop's default round cap.
-    attemptCap: ORCHESTRATED_ATTEMPT_CAP,
+    attemptCap: args.attemptCap ?? ORCHESTRATED_ATTEMPT_CAP,
     appendTaskRunRecord: async (record) => appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record),
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
 
@@ -524,7 +542,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     const { projectSlug } = descriptor.payload;
     const product = descriptor.payload.product ?? 'jarvis';
     const deps = runtimeDeps;
-    const branch = workBranchName(projectSlug);
+    const recovery = recoveryRedispatchOptions.get(descriptor);
+    recoveryRedispatchOptions.delete(descriptor);
+    const branch = recovery?.branch ?? workBranchName(projectSlug);
 
     if (ctx.cancel()) {
       yield term(descriptor.id, 'failed', { reason: 'cancelled before start', projectSlug, product });
@@ -538,13 +558,29 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     const startedAtMs = Date.now();
     try {
       try {
-        sandbox = await deps.createWorktree({
-          product,
-          project: projectSlug,
-          branch,
-          worktreeRoot: config.WORKTREE_ROOT,
-          productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-        });
+        if (recovery) {
+          let egressAllowlist: string[] = [];
+          try {
+            egressAllowlist = getProductConfig(product, config.PRODUCTS_CONFIG_FILE).egressAllowlist;
+          } catch {
+            /* keep recovery best-effort if products.json is temporarily unreadable */
+          }
+          sandbox = {
+            product,
+            project: projectSlug,
+            worktree: recovery.worktreePath,
+            egressAllowlist,
+            resumed: true,
+          };
+        } else {
+          sandbox = await deps.createWorktree({
+            product,
+            project: projectSlug,
+            branch,
+            worktreeRoot: config.WORKTREE_ROOT,
+            productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+          });
+        }
       } catch (err) {
         yield term(descriptor.id, 'failed', {
           reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
@@ -576,6 +612,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         validationCommands = productConfig.validationCommands ?? [];
       } catch {
         /* default to main if products.json is unreadable */
+      }
+      if (recovery) {
+        baseBranch = recovery.baseBranch;
       }
 
       try {
@@ -610,10 +649,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         product,
         projectSlug,
         branch,
-        baseBranch,
+        baseBranch: recovery?.baseBranch ?? baseBranch,
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
+        attemptCap: recovery?.attemptCap ?? ORCHESTRATED_ATTEMPT_CAP,
         emit,
         finalize: async () => {
           let gateTasksRemaining = 0;
