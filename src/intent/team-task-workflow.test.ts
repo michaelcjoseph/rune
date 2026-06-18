@@ -458,6 +458,149 @@ describe('team-task-workflow — gate rejection records', () => {
       expectStructuredGateRejection(ev.rejectionFeedback, c.expected);
     }
   });
+
+  it('emits the structured gate-rejection activity record at every blocking gate', async () => {
+    const objection: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/x.ts:10',
+      rationale: 'unsanitized shell interpolation',
+    };
+    const cases: Array<{
+      name: string;
+      task: SizedTask;
+      input?: typeof INPUT;
+      deps: Partial<TeamTaskDeps>;
+      expected: Partial<GateRejectionFeedback>;
+    }> = [
+      {
+        name: 'reviewer independence',
+        task: codeTask,
+        deps: { resolveReviewerProvider: () => null },
+        expected: {
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'reviewer-verdict',
+        },
+      },
+      {
+        name: 'tech-lead test intent',
+        task: codeTask,
+        deps: {
+          techLeadReviewTests: async () => ({
+            approved: false,
+            notes: 'tests miss the rollover case',
+          }),
+        },
+        expected: {
+          rejectingRole: 'tech-lead',
+          counterpartRole: 'qa',
+          rejectedRole: 'qa',
+          rejectedArtifact: 'test-intent',
+        },
+      },
+      {
+        name: 'reviewer objection',
+        task: codeTask,
+        deps: {
+          reviewer: async () => ({ pass: false, objections: [objection] }),
+        },
+        expected: {
+          rejectingRole: 'reviewer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'reviewer-verdict',
+        },
+      },
+      {
+        name: 'tech-lead implementation diff at PM-unresolved cap',
+        task: codeTask,
+        input: { ...INPUT, cap: 1 },
+        deps: {
+          techLeadReviewDiff: async () => ({
+            pass: false,
+            notes: 'implementation does not wire the empty-state guard',
+          }),
+          pmWrapup: async () => ({ resolved: false }),
+        },
+        expected: {
+          rejectingRole: 'tech-lead',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'implementation-diff',
+        },
+      },
+      {
+        name: 'designer review at cap',
+        task: frontEndTask,
+        input: { ...INPUT, cap: 1 },
+        deps: {
+          designer: async () => ({ pass: false, notes: 'control not reachable' }),
+        },
+        expected: {
+          rejectingRole: 'designer',
+          counterpartRole: 'coder',
+          rejectedRole: 'coder',
+          rejectedArtifact: 'design-review',
+        },
+      },
+    ];
+
+    for (const c of cases) {
+      const events: WorkflowActivityEvent[] = [];
+      const ev = await runTeamTaskWorkflow(
+        c.task,
+        {
+          ...(c.input ?? INPUT),
+          emit: (event: WorkflowActivityEvent) => {
+            events.push(event);
+          },
+        },
+        makeDeps(c.deps),
+      );
+
+      expect(ev.outcome, c.name).toBe('blocked');
+      expectStructuredGateRejection(ev.rejectionFeedback, c.expected);
+      const rejectionEvents = events.filter(
+        (event) => event.data?.['event'] === 'gate-rejection',
+      );
+      expect(rejectionEvents, c.name).toHaveLength(1);
+      expect(rejectionEvents[0]?.kind, c.name).toBe('activity');
+      expect(rejectionEvents[0]?.data?.['rejection'], c.name).toEqual(ev.rejectionFeedback);
+      expect(rejectionEvents[0]?.data, c.name).toMatchObject({
+        gate: ev.rejectionFeedback?.rejectedArtifact,
+        rejectingRole: ev.rejectionFeedback?.rejectingRole,
+        rejectedRole: ev.rejectionFeedback?.rejectedRole,
+        summary: ev.rejectionFeedback?.whatFailed,
+      });
+      expect(String(rejectionEvents[0]?.data?.['line']).trim(), c.name).not.toBe('');
+    }
+  });
+
+  it('records fail-closed reviewer-independence rejection through the gate-rejection hook', async () => {
+    const recorded: GateRejectionFeedback[] = [];
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      INPUT,
+      makeDeps({
+        resolveReviewerProvider: () => null,
+        onGateRejection: async (feedback) => {
+          recorded.push(feedback);
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('blocked');
+    expect(recorded).toEqual([ev.rejectionFeedback]);
+    expect(recorded[0]).toMatchObject({
+      rejectingRole: 'reviewer',
+      counterpartRole: 'coder',
+      rejectedRole: 'coder',
+      rejectedArtifact: 'reviewer-verdict',
+      reason: 'reviewer independence: no distinct-provider reviewer available',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -902,7 +902,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **B. Gate-triggered learning**
 
-- [ ] Emit the structured gate-rejection record at each gate block in `team-task-workflow.ts`,
+- [x] Emit the structured gate-rejection record at each gate block in `team-task-workflow.ts`,
       shared with the Phase 11A feedback object.
 - [ ] Have the rejecting role draft a candidate lesson from that record.
 - [ ] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and

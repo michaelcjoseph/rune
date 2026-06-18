@@ -98,10 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ader.ts` unchanged.
+- behavior best-effort and avoids duplicate blocking events during retries.
 
 Verification:
-- `npx vitest run src/roles/loader.test.ts --configLoader runner` passed: 51 tests.
-- `npm run build` still fails on unrelated existing TypeScript errors outside `loader.ts`.
+- `npx vitest run src/intent/team-task-workflow.test.ts --configLoader runner` passed: 29 tests.
 
-Worktree remains with only the pre-existing staged QA change: `src/roles/loader.test.ts`.
+Note: `src/intent/team-task-workflow.test.ts` was already staged/modified before my changes; I left it untouched.

@@ -227,6 +227,8 @@ async function runGated(
       artifact: 'reviewer-verdict',
       reason: 'reviewer independence: no distinct-provider reviewer available',
     });
+    await recordGateRejection(deps, feedback);
+    emitGateRejection(input, feedback);
     return block(task, roles, handoffNotes, {
       blockedReason: 'reviewer independence: no distinct-provider reviewer available',
       rejectionFeedback: feedback,
@@ -282,6 +284,7 @@ async function runGated(
     });
     await recordGateRejection(deps, qaFeedback);
     if (qaAttempt === input.cap - 1) {
+      emitGateRejection(input, qaFeedback);
       return block(task, roles, handoffNotes, {
         blockedReason: reason,
         rejectionFeedback: qaFeedback,
@@ -296,6 +299,8 @@ async function runGated(
       artifact: 'test-intent',
       reason: 'QA test intent was not produced',
     });
+    await recordGateRejection(deps, feedback);
+    emitGateRejection(input, feedback);
     return block(task, roles, handoffNotes, {
       blockedReason: 'QA test intent was not produced',
       rejectionFeedback: feedback,
@@ -361,6 +366,7 @@ async function runGated(
         reason: summarizeObjections(lastReviewer.objections),
       });
       await recordGateRejection(deps, feedback);
+      emitGateRejection(input, feedback);
       return block(task, roles, handoffNotes, {
         blockedReason: 'open objection-class finding',
         rejectionFeedback: feedback,
@@ -456,6 +462,9 @@ async function runGated(
   // Cap reached. A failed designer gate blocks (a UX defect is not PM-clearable);
   // otherwise non-objection disagreement routes to PM wrap-up.
   if (task.designerNeeded && !lastDesignerPass) {
+    if (lastRejectionFeedback !== undefined) {
+      emitGateRejection(input, lastRejectionFeedback);
+    }
     return block(task, roles, handoffNotes, {
       blockedReason: 'designer review failed at the round cap',
       ...(lastRejectionFeedback !== undefined
@@ -487,6 +496,9 @@ async function runGated(
       handoffNotes,
       ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
     };
+  }
+  if (lastRejectionFeedback !== undefined) {
+    emitGateRejection(input, lastRejectionFeedback);
   }
   return block(task, roles, handoffNotes, {
     blockedReason: 'PM decision unresolved at the round cap',
@@ -689,6 +701,34 @@ function emitObjection(input: TeamTaskRunInput, objection: ObjectionFinding): vo
         objection,
         summary,
         line: `reviewer objection: ${summary}`,
+      },
+    });
+  } catch {
+    /* activity sinks are observability-only; they must not fail the task. */
+  }
+}
+
+function emitGateRejection(
+  input: TeamTaskRunInput,
+  feedback: GateRejectionFeedback,
+): void {
+  if (input.emit === undefined) return;
+  const summary = feedback.whatFailed.trim() || feedback.reason.trim();
+  const line =
+    `${feedback.rejectingRole}: ${feedback.rejectedArtifact} rejected ` +
+    `${feedback.rejectedRole} - ${summary}`;
+  try {
+    input.emit({
+      kind: 'activity',
+      data: {
+        event: 'gate-rejection',
+        gate: feedback.rejectedArtifact,
+        rejectingRole: feedback.rejectingRole,
+        rejectedRole: feedback.rejectedRole,
+        counterpartRole: feedback.counterpartRole,
+        rejection: feedback,
+        summary,
+        line,
       },
     });
   } catch {
