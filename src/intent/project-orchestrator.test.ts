@@ -170,7 +170,6 @@ interface PersistedRunCursor {
   branch: string;
   baseBranch: string;
   worktreePath: string;
-  attemptCap: number;
   resumeMarker: 'resumable';
   cursor: {
     completedTaskIds: string[];
@@ -178,11 +177,6 @@ interface PersistedRunCursor {
     nextTaskId: string | null;
   };
 }
-
-type DurableRunStateDeps = OrchestrationDeps & {
-  appendTaskRunRecord: (record: TaskRunRecord) => Promise<void>;
-  writeRunCursor: (cursor: PersistedRunCursor) => Promise<void>;
-};
 
 interface TerminalBugEntry {
   runId: string;
@@ -328,7 +322,7 @@ describe('project-orchestrator — observability events', () => {
     });
   });
 
-  it('emits attempt-retry between failed and replacement attempts, carrying retry context', async () => {
+  it('does not re-run a blocked workflow through the legacy outer attempt cap', async () => {
     const feedback: GateRejectionFeedback = {
       rejectingRole: 'tech-lead',
       counterpartRole: 'qa',
@@ -342,21 +336,18 @@ describe('project-orchestrator — observability events', () => {
     };
     let calls = 0;
     const h = makeHarness({
-      attemptCap: 2,
+      attemptCap: 4,
       runTaskWorkflow: async (task) => {
         calls += 1;
-        if (calls === 1) {
-          return {
-            taskId: task.id,
-            outcome: 'blocked',
-            rolesInvoked: ['qa', 'tech-lead'],
-            objectionOpen: false,
-            handoffNotes: [],
-            blockedReason: feedback.reason,
-            rejectionFeedback: feedback,
-          };
-        }
-        return readyEvidence(task);
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'tech-lead'],
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: feedback.reason,
+          rejectionFeedback: feedback,
+        };
       },
     }, [
       '# Tasks',
@@ -367,14 +358,11 @@ describe('project-orchestrator — observability events', () => {
 
     const res = await runProjectOrchestration(h.deps);
 
-    expect(res.kind).toBe('finalized');
+    expect(res.kind).toBe('blocked');
+    expect(calls).toBe(1);
     expect(eventNames(h.state.events)).toEqual([
       'task-selected',
       'attempt-start',
-      'attempt-retry',
-      'attempt-start',
-      'closeout-start',
-      'closeout-complete',
     ]);
     expect(eventsByName(h.state.events, 'attempt-start')).toEqual([
       expect.objectContaining({
@@ -386,28 +374,8 @@ describe('project-orchestrator — observability events', () => {
           attemptId: 'run-1-build-the-streak-core-attempt-1',
         }),
       }),
-      expect.objectContaining({
-        kind: 'activity',
-        data: expect.objectContaining({
-          event: 'attempt-start',
-          taskId: 'build-the-streak-core',
-          attemptNumber: 2,
-          attemptId: 'run-1-build-the-streak-core-attempt-2',
-        }),
-      }),
     ]);
-    expect(eventsByName(h.state.events, 'attempt-retry')[0]).toMatchObject({
-      kind: 'activity',
-      data: {
-        event: 'attempt-retry',
-        taskId: 'build-the-streak-core',
-        previousAttemptNumber: 1,
-        nextAttemptNumber: 2,
-        previousOutcome: 'blocked',
-        reason: feedback.reason,
-        line: expect.stringContaining(feedback.reason),
-      },
-    });
+    expect(eventsByName(h.state.events, 'attempt-retry')).toEqual([]);
   });
 });
 
@@ -547,7 +515,7 @@ describe('project-orchestrator — block', () => {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — retry feedback', () => {
-  it('threads structured rejection feedback into the next task workflow attempt', async () => {
+  it('does not thread rejection feedback into a second whole-workflow attempt', async () => {
     const feedback: GateRejectionFeedback = {
       rejectingRole: 'tech-lead',
       counterpartRole: 'qa',
@@ -562,30 +530,29 @@ describe('project-orchestrator — retry feedback', () => {
     const workflowInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
     let calls = 0;
     const h = makeHarness({
-      attemptCap: 2,
+      attemptCap: 4,
       runTaskWorkflow: async (task, ctx) => {
         workflowInputs.push(ctx as { rejectionFeedback?: GateRejectionFeedback });
         calls += 1;
-        if (calls === 1) {
-          return {
-            taskId: task.id,
-            outcome: 'blocked',
-            rolesInvoked: ['qa', 'tech-lead'],
-            objectionOpen: false,
-            handoffNotes: [],
-            blockedReason: feedback.reason,
-            rejectionFeedback: feedback,
-          };
-        }
-        return readyEvidence(task);
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'tech-lead'],
+          objectionOpen: false,
+          handoffNotes: [],
+          blockedReason: feedback.reason,
+          rejectionFeedback: feedback,
+        };
       },
     });
 
     const res = await runProjectOrchestration(h.deps);
 
-    expect(res.kind).toBe('finalized');
-    expect(workflowInputs[0]?.rejectionFeedback).toBeUndefined();
-    expect(workflowInputs[1]?.rejectionFeedback).toEqual(feedback);
+    expect(res).toMatchObject({ kind: 'blocked', reason: feedback.reason });
+    expect(calls).toBe(1);
+    expect(workflowInputs).toEqual([
+      expect.objectContaining({ rejectionFeedback: undefined }),
+    ]);
   });
 });
 
@@ -638,10 +605,10 @@ describe('project-orchestrator — durable run state', () => {
       appendTaskRunRecord: async (record: TaskRunRecord) => {
         persistedRecords.push(record);
       },
-      writeRunCursor: async (cursor: PersistedRunCursor) => {
-        persistedCursors.push(cursor);
+      writeRunCursor: async (cursor: unknown) => {
+        persistedCursors.push(cursor as PersistedRunCursor);
       },
-    } satisfies DurableRunStateDeps;
+    };
 
     const res = await runProjectOrchestration(deps);
 
@@ -665,7 +632,6 @@ describe('project-orchestrator — durable run state', () => {
       branch: 'jarvis-work/14-x',
       baseBranch: 'main',
       worktreePath,
-      attemptCap: 2,
       resumeMarker: 'resumable',
       cursor: {
         completedTaskIds: ['build-the-streak-core'],
