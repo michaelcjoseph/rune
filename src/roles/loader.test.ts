@@ -18,7 +18,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +41,7 @@ import {
   ROLE_MEMORY_CHAR_BUDGET,
   SOUL_FILENAME,
   MEMORY_FILENAME,
+  EXAMPLES_DIRNAME,
   type RoleName,
 } from './loader.js';
 
@@ -68,6 +77,20 @@ function seedBaselineExemplar(filename: string, body: string): void {
 function seedProjectExemplar(projectDir: string, role: RoleName, body: string): void {
   mkdirSync(projectDir, { recursive: true });
   writeFileSync(join(projectDir, `${role}.md`), body);
+}
+
+function readRoleExampleFiles(role: RoleName): Array<{ name: string; body: string }> {
+  const examplesDir = join(roleDir(role), EXAMPLES_DIRNAME);
+  try {
+    return readdirSync(examplesDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => ({
+        name: entry.name,
+        body: readFileSync(join(examplesDir, entry.name), 'utf8'),
+      }));
+  } catch {
+    return [];
+  }
 }
 
 beforeEach(() => {
@@ -280,6 +303,29 @@ describe('roles/loader — charter inventory (real disk)', () => {
 
   it.each([...ROLE_NAMES])('role "%s" has a memory.md on disk', (role: RoleName) => {
     expect(existsSync(join(roleDir(role), MEMORY_FILENAME))).toBe(true);
+  });
+
+  it.each([...ROLE_NAMES])(
+    'role "%s" has a permanent non-empty examples baseline on disk',
+    (role: RoleName) => {
+      const examplesDir = join(roleDir(role), EXAMPLES_DIRNAME);
+      expect(existsSync(examplesDir)).toBe(true);
+
+      const examples = readRoleExampleFiles(role);
+      expect(examples.length).toBeGreaterThan(0);
+      expect(examples.every((example) => example.body.trim().length > 0)).toBe(true);
+    },
+  );
+
+  it('QA baseline examples include a correctly pinned redaction/security-boundary test', () => {
+    const examples = readRoleExampleFiles('qa');
+    const combined = examples.map((example) => `# ${example.name}\n${example.body}`).join('\n\n');
+
+    // The exemplar must model a realistic secret-shaped input, then assert the
+    // raw token is absent and a redacted placeholder/shape is present.
+    expect(combined).toMatch(/\b(?:sk|ghp|xoxb)-[A-Za-z0-9_-]{16,}\b/);
+    expect(combined).toMatch(/not\.to(?:Contain|Match|Equal)\([^)]*(?:raw|secret|token)/i);
+    expect(combined).toMatch(/to(?:Contain|Match)\([^)]*(?:redact|mask|placeholder)/i);
   });
 
   it.each([...ROLE_NAMES])(

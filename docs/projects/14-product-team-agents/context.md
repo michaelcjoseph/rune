@@ -98,6 +98,12 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
--  src/roles/loader.test.ts` hit the sandbox/Vitest config temp-file issue because `node_modules` symlinks outside the writable root; `--configLoader runner` avoids that.
-- Repo-wide `npx tsc --noEmit` still fails on existing unrelated errors; none referenced `src/roles/loader.ts`.
-- I did not commit.
+- includes a redaction/security-boundary test with a realistic raw token, an assertion that the raw token is absent, and an assertion that a redacted placeholder is present.
+
+Verified with:
+
+```bash
+npx vitest run src/roles/loader.test.ts --configLoader runner
+```
+
+Result: `43 passed`. No commit made.
