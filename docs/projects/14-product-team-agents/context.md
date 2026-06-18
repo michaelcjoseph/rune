@@ -98,8 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- f --check` passed.
+- postmortem-gate.test.ts` passed: 72 tests.
+- `npx vitest run --configLoader runner src/intent/learning-write-path.test.ts` passed.
+- `npx tsc --noEmit --pretty false` still fails on existing repo-wide issues outside this task.
 
-Notes:
-- Plain Vitest startup is sandbox-blocked because Vite tries to write under symlinked `node_modules/.vite-temp`; `--configLoader runner` avoids that.
-- Full `npx tsc --noEmit` still fails on existing repo-wide issues outside this task; no `team-task-deps.ts` errors remain.
+I left the existing staged QA test changes untouched and did not commit.

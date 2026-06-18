@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     validatedLesson,
     runPostMortem: vi.fn(),
     writeGateLearningLesson: vi.fn(),
+    writeRoleLesson: vi.fn(),
   };
 });
 
@@ -43,6 +44,10 @@ vi.mock('../intent/postmortem.js', () => ({
 
 vi.mock('../intent/learning-write-path.js', () => ({
   writeGateLearningLesson: h.writeGateLearningLesson,
+}));
+
+vi.mock('../roles/memory-writer.js', () => ({
+  writeRoleLesson: h.writeRoleLesson,
 }));
 
 vi.mock('../ai/claude.js', () => ({
@@ -134,6 +139,7 @@ describe('buildProductionTeamTaskDeps - gate-time runPostMortem validation', () 
   beforeEach(() => {
     h.runPostMortem.mockReset();
     h.writeGateLearningLesson.mockReset();
+    h.writeRoleLesson.mockReset();
   });
 
   it('validates the drafted lesson through runPostMortem before writing to counterpart memory', async () => {
@@ -173,6 +179,7 @@ describe('buildProductionTeamTaskDeps - gate-time runPostMortem validation', () 
       projectSlug: 'demo',
       rejection: record,
     });
+    expect(h.writeRoleLesson).not.toHaveBeenCalled();
   });
 
   it('treats a runPostMortem no-lesson as terminal and never writes memory', async () => {

@@ -8,6 +8,8 @@ vi.mock('../config.js', () => ({
     IMPLICIT_CRM_NAMES: ['alice', 'bob'],
     ESCALATION_POLICY_FILE: '/test/escalation-policy.json',
     LOGS_DIR: '/test/logs',
+    FEEDBACK_FILE: '/test/logs/feedback.jsonl',
+    FEEDBACK_PROCESSED_FILE: '/test/logs/feedback-processed.json',
   },
   PROJECT_ROOT: '/test/project',
 }));
@@ -39,6 +41,21 @@ vi.mock('../intent/escalation.js', () => ({
 }));
 vi.mock('../transport/mutations.js', () => ({
   createMutation: vi.fn(async () => ({ ok: true, descriptor: { id: 'm1' } })),
+}));
+vi.mock('../intent/feedback-reader.js', () => ({
+  readFeedbackRecords: vi.fn(() => []),
+  feedbackRecordId: vi.fn((record: unknown) => JSON.stringify(record)),
+  readProcessedFeedbackIds: vi.fn(() => new Set<string>()),
+  writeProcessedFeedbackIds: vi.fn(),
+}));
+vi.mock('../intent/postmortem.js', () => ({
+  runPostMortem: vi.fn(),
+}));
+vi.mock('../intent/learning-write-path.js', () => ({
+  writeNightlyLearningLesson: vi.fn(async () => ({ committed: false })),
+}));
+vi.mock('../roles/memory-writer.js', () => ({
+  writeRoleLesson: vi.fn(async () => ({ committed: false })),
 }));
 
 vi.mock('./capture.js', () => ({ captureSessions: vi.fn() }));
@@ -93,6 +110,15 @@ const { readVaultFile, writeVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
 const { getDayOfWeek } = await import('../utils/time.js');
 const { extractMeetings, appendProjectDecisions } = await import('./meeting-extract.js');
+const {
+  readFeedbackRecords,
+  feedbackRecordId,
+  readProcessedFeedbackIds,
+  writeProcessedFeedbackIds,
+} = await import('../intent/feedback-reader.js');
+const { runPostMortem } = await import('../intent/postmortem.js');
+const { writeNightlyLearningLesson } = await import('../intent/learning-write-path.js');
+const { writeRoleLesson } = await import('../roles/memory-writer.js');
 const { executeNightly, runNightly } = await import('./nightly.js');
 
 const captureMock = captureSessions as unknown as ReturnType<typeof vi.fn>;
@@ -107,6 +133,13 @@ const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 const dayMock = getDayOfWeek as unknown as ReturnType<typeof vi.fn>;
 const extractMeetingsMock = extractMeetings as unknown as ReturnType<typeof vi.fn>;
 const appendDecisionsMock = appendProjectDecisions as unknown as ReturnType<typeof vi.fn>;
+const readFeedbackRecordsMock = readFeedbackRecords as unknown as ReturnType<typeof vi.fn>;
+const feedbackRecordIdMock = feedbackRecordId as unknown as ReturnType<typeof vi.fn>;
+const readProcessedFeedbackIdsMock = readProcessedFeedbackIds as unknown as ReturnType<typeof vi.fn>;
+const writeProcessedFeedbackIdsMock = writeProcessedFeedbackIds as unknown as ReturnType<typeof vi.fn>;
+const postMortemMock = runPostMortem as unknown as ReturnType<typeof vi.fn>;
+const writeNightlyLessonMock = writeNightlyLearningLesson as unknown as ReturnType<typeof vi.fn>;
+const writeRoleLessonMock = writeRoleLesson as unknown as ReturnType<typeof vi.fn>;
 
 function setDefaults() {
   captureMock.mockResolvedValue({ captured: 0 });
@@ -118,6 +151,16 @@ function setDefaults() {
   // that points gitMock at a thrower would leak into the next test and add a
   // spurious 'Final commit' error step to its result. Reset to a no-op here.
   gitMock.mockReturnValue(undefined);
+  readFeedbackRecordsMock.mockReturnValue([]);
+  feedbackRecordIdMock.mockImplementation((record: unknown) => JSON.stringify(record));
+  readProcessedFeedbackIdsMock.mockReturnValue(new Set<string>());
+  writeProcessedFeedbackIdsMock.mockReturnValue(undefined);
+  postMortemMock.mockResolvedValue({
+    kind: 'no-lesson',
+    rationale: 'default test fixture has no learning record',
+  });
+  writeNightlyLessonMock.mockResolvedValue({ committed: false });
+  writeRoleLessonMock.mockResolvedValue({ committed: false });
 }
 
 describe('jobs/nightly', () => {
@@ -439,6 +482,39 @@ describe('jobs/nightly', () => {
 
       expect(agentMock).toHaveBeenCalledWith('json-updater', expect.any(String), undefined, false);
       expect(agentMock).toHaveBeenCalledWith('daily-content-updater', expect.any(String), undefined, false);
+    });
+
+    it('routes nightly learning writes through the shared write-path adapter, not the role memory writer directly', async () => {
+      const record = {
+        projectSlug: 'demo',
+        source: 'telegram',
+        createdAt: '2026-06-17T10:00:00.000Z',
+        issueSummary: 'QA missed a redaction edge case.',
+        evidence: 'The tests asserted a redacted placeholder instead of proving raw-value absence.',
+      };
+      const lesson =
+        'When testing redaction boundaries, assert raw-value absence plus redacted-shape presence.';
+      readFeedbackRecordsMock.mockReturnValue([record]);
+      feedbackRecordIdMock.mockReturnValue('feedback-demo-1');
+      postMortemMock.mockResolvedValue({
+        kind: 'lesson',
+        stage: 'test',
+        role: 'qa',
+        lesson,
+      });
+      writeNightlyLessonMock.mockResolvedValue({
+        committed: true,
+        captured: `- [2026-06-17 · source: demo-fb-2026-06-17] ${lesson}`,
+      });
+
+      const result = await executeNightly();
+
+      const step = result.steps.find((s) => s.step === 'Learning loop')!;
+      expect(step.status).toBe('success');
+      expect(writeNightlyLessonMock).toHaveBeenCalledTimes(1);
+      expect(writeNightlyLessonMock).toHaveBeenCalledWith({ role: 'qa', lesson, record });
+      expect(writeRoleLessonMock).not.toHaveBeenCalled();
+      expect(writeProcessedFeedbackIdsMock).toHaveBeenCalledWith(expect.any(String), new Set(['feedback-demo-1']));
     });
 
     it('accepts the new "No updates needed" phrasing as well as legacy "No JSON updates needed"', async () => {
