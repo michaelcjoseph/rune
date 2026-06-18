@@ -98,6 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- rk-runner.test.ts src/jobs/team-task-deps.test.ts src/transport/mutations.test.ts` passed: 4 files, 84 tests.
-- `npm run build` is still blocked by existing unrelated TypeScript errors outside these changes.
-- I did not run the live acceptance harness itself because it makes live Claude/Codex calls.
+- roduct-team-agents/docs/projects/14-product-team-agents/tasks.md:540) to mark the old Phase 8 hold decision as superseded and link to the new closeout decision record.
+
+I did not run tests because this was a prose-only documentation change, and I left the task checkbox untouched for Jarvis closeout.

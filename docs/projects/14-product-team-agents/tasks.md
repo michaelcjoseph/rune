@@ -787,7 +787,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       bare remote for merge/push assertions, so the harness needs no production credentials or
       operator action. Supersedes the Phase 8 branch-complete-held acceptance — stub-free proof
       both the observability and auto-merge gaps are closed.
-- [ ] Record the transcript/finalizer-substrate decisions at closeout (e.g. the WORK_RUNS_DIR
+- [x] Record the transcript/finalizer-substrate decisions at closeout (e.g. the WORK_RUNS_DIR
       layout reuse and any orchestrated-specific gate config), and reverse the Phase 8
       deliberate-hold ADR note.
 
