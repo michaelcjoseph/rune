@@ -98,8 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- t.ts` → 44/44 passed
-- `TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npx vitest run --configLoader runner --maxWorkers=1 src/jobs/team-task-deps.test.ts` → 21/21 passed
-- `git diff --check` passed
+- TELEGRAM_BOT_TOKEN=test TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npx vitest run --configLoader runner --maxWorkers=1 src/intent/project-orchestrator.test.ts` → 19/19 passed  
+`git diff --check` passed
 
-No commit made. The QA test file remains pre-existing staged/modified; I did not edit it.
+No commit made. `src/intent/project-orchestrator.test.ts` was already modified/staged; I did not edit it.

@@ -972,7 +972,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Replace the one-shot reviewer objection block: deliver the already-built
       `GateRejectionFeedback`, allow one corrective coder round from the dedicated
       block-correction budget, then park. Operational fail-safe blocks park immediately.
-- [ ] Fix `maybeParkedRun` to park objection-open blocks (drop the `objectionOpen` exclusion) and
+- [x] Fix `maybeParkedRun` to park objection-open blocks (drop the `objectionOpen` exclusion) and
       `mapResultToTerminal` to map a surviving block to a parked/`blocked-on-human` terminal, not
       `failed` (`project-orchestrator.ts`, `orchestrated-work-runner.ts`).
 - [ ] Thread `pass-with-warnings` findings + accepted-block rationales into the `TaskRunRecord` and

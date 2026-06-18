@@ -465,7 +465,7 @@ function maybeParkedRun(
   if (evidence.outcome !== 'blocked' || deps.worktreePath === undefined) {
     return undefined;
   }
-  if (hasHighCriticalObjection(evidence)) {
+  if (evidence.objectionOpen) {
     return {
       status: 'blocked-on-human',
       branch: deps.branch,
@@ -501,13 +501,6 @@ function operationalParkedRunField(
       preserveWorktree: true,
     },
   };
-}
-
-function hasHighCriticalObjection(evidence: TaskEvidence): boolean {
-  if (!evidence.objectionOpen) return false;
-  return reviewerFindings(evidence.reviewerVerdict).some(
-    (objection) => objection.severity === 'high' || objection.severity === 'critical',
-  );
 }
 
 function reviewerFindings(

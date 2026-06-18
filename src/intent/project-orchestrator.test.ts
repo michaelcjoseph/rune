@@ -437,6 +437,45 @@ describe('project-orchestrator — block', () => {
       expect(h.state.finalizeCalled).toBe(false);
     },
   );
+
+  it('parks and preserves the run when an objection-open block has no severity details', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x-objection-open';
+    const h = makeHarness({
+      attemptCap: 1,
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['qa', 'coder', 'reviewer'],
+        objectionOpen: true,
+        handoffNotes: ['the branch contains useful work that needs human objection handling'],
+        blockedReason: 'open objection-class finding',
+        reviewerVerdict: {
+          outcome: 'block',
+          objections: [],
+        },
+      }),
+    });
+
+    const res = await runProjectOrchestration({
+      ...h.deps,
+      worktreePath,
+    });
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: 'open objection-class finding',
+      parked: {
+        status: 'blocked-on-human',
+        branch: 'jarvis-work/14-x',
+        worktreePath,
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
+    });
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
