@@ -405,6 +405,8 @@ async function runGated(
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   let coderAttemptsRemaining = input.cap;
   let round = 0;
+  let previousMaxOpenSeverity: ObjectionSeverity | undefined;
+  let flatMaxOpenSeverityRounds = 0;
   const findingsLedger: FindingsLedgerEntry[] = [];
   while (coderAttemptsRemaining > 0) {
     coderAttemptsRemaining -= 1;
@@ -554,6 +556,38 @@ async function runGated(
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
       };
     }
+
+    const maxOpenSeverity = maxOpenFindingSeverity(findingsLedger);
+    if (
+      maxOpenSeverity !== undefined &&
+      severityRank[maxOpenSeverity] > severityRank.low &&
+      hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner)
+    ) {
+      if (maxOpenSeverity === previousMaxOpenSeverity) {
+        flatMaxOpenSeverityRounds += 1;
+      } else {
+        previousMaxOpenSeverity = maxOpenSeverity;
+        flatMaxOpenSeverityRounds = 1;
+      }
+      if (flatMaxOpenSeverityRounds >= 3) {
+        emitTerminalReviewerObjections(input, lastReviewer);
+        return {
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: roles.list(),
+          reviewerVerdict: lastReviewer,
+          gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+          findingsLedger,
+          loopExitReason: 'stagnation',
+          objectionOpen: false,
+          handoffNotes,
+          ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+        };
+      }
+    } else {
+      previousMaxOpenSeverity = maxOpenSeverity;
+      flatMaxOpenSeverityRounds = 0;
+    }
     // Non-objection disagreement → retry within the cap.
     if (roundFeedback.length > 0) {
       coderFeedback = roundFeedback;
@@ -570,11 +604,7 @@ async function runGated(
     isGatePass(lastTechLeadDiff) &&
     isGatePass(lastDesigner)
   ) {
-    for (const finding of lastReviewer.findings) {
-      if (finding.severity !== 'low') {
-        emitObjection(input, toPublicFinding(finding));
-      }
-    }
+    emitTerminalReviewerObjections(input, lastReviewer);
     return {
       taskId: task.id,
       outcome: 'ready-for-closeout',
@@ -887,6 +917,57 @@ function isGatePass(verdict: GateVerdict | undefined): boolean {
   return verdict === undefined ||
     verdict.outcome === 'pass' ||
     verdict.outcome === 'pass-with-warnings';
+}
+
+const severityRank: Record<ObjectionSeverity, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
+
+function maxOpenFindingSeverity(
+  ledger: FindingsLedgerEntry[],
+): ObjectionSeverity | undefined {
+  return ledger
+    .filter((entry) => entry.status === 'open')
+    .map((entry) => entry.severity)
+    .reduce<ObjectionSeverity | undefined>(
+      (max, severity) =>
+        max === undefined || severityRank[severity] > severityRank[max]
+          ? severity
+          : max,
+      undefined,
+    );
+}
+
+function hasOnlySeverityDerivedFailures(
+  reviewer: NormalizedReviewerVerdict | undefined,
+  techLeadDiff: GateVerdict | undefined,
+  designer: GateVerdict | undefined,
+): boolean {
+  const failureHasFindings: boolean[] = [];
+  if (reviewer !== undefined && !isReviewerPass(reviewer)) {
+    failureHasFindings.push(reviewer.findings.length > 0);
+  }
+  if (techLeadDiff !== undefined && !isGatePass(techLeadDiff)) {
+    failureHasFindings.push(techLeadDiff.findings.length > 0);
+  }
+  if (designer !== undefined && !isGatePass(designer)) {
+    failureHasFindings.push(designer.findings.length > 0);
+  }
+  return failureHasFindings.length > 0 && failureHasFindings.every(Boolean);
+}
+
+function emitTerminalReviewerObjections(
+  input: TeamTaskRunInput,
+  reviewer: NormalizedReviewerVerdict,
+): void {
+  for (const finding of reviewer.findings) {
+    if (finding.severity !== 'low') {
+      emitObjection(input, toPublicFinding(finding));
+    }
+  }
 }
 
 function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {

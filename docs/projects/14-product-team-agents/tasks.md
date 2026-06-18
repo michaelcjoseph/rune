@@ -1038,7 +1038,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       re-deriving them.
 - [x] Primary-exit test: a round whose max open severity is `low`/none exits the loop to closeout with
       the lows recorded as warnings.
-- [ ] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
+- [x] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
       stops and routes to terminal handling before reaching the 4-round budget.
 - [ ] Hard-budget test: a run still above `low` at round 4 stops and routes to terminal handling;
       round 5 never executes.

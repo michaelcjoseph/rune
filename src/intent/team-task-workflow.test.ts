@@ -1686,6 +1686,68 @@ describe('team-task-workflow — round cap', () => {
       .not.toBe('');
   });
 
+  it('stops on stagnation when max open severity is flat for 3 consecutive rounds before the 4-round hard budget', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const roundFindings: ObjectionFinding[] = [1, 2, 3, 4].map((round) => ({
+      class: 'security',
+      severity: 'high',
+      location: `src/auth.ts:${40 + round}`,
+      rationale: `round ${round} still leaves a reversible high-risk auth gap`,
+      reversible: true,
+    }));
+    let reviewerCalls = 0;
+    let pmCalled = false;
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 4 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          const finding = roundFindings[reviewerCalls];
+          reviewerCalls += 1;
+          return {
+            outcome: 'fail',
+            findings: finding === undefined ? [] : [finding],
+            notes: 'reviewer still sees high severity residue',
+          };
+        },
+        pmWrapup: async () => {
+          pmCalled = true;
+          return {
+            resolved: true,
+            rationale: 'PM must not be consulted for severity-loop terminal handling.',
+          };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.loopExitReason).toBe('stagnation');
+    expect(ev.objectionOpen).toBe(false);
+    expect(pmCalled).toBe(false);
+    expect(ev.rolesInvoked).not.toContain('pm');
+    expect(coderInputs).toHaveLength(3);
+    expect(reviewerCalls).toBe(3);
+    expect(ev.reviewerVerdict).toMatchObject({
+      outcome: 'fail',
+      findings: [roundFindings[2]],
+    });
+    expect(ev.findingsLedger?.map((entry) => ({
+      severity: entry.severity,
+      raisedRound: entry.raisedRound,
+      status: entry.status,
+    }))).toEqual([
+      { severity: 'high', raisedRound: 1, status: 'open' },
+      { severity: 'high', raisedRound: 2, status: 'open' },
+      { severity: 'high', raisedRound: 3, status: 'open' },
+    ]);
+    expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
+  });
+
   it('a still-open cap terminal does not enter blocked-on-human or mention PM in the block reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),
