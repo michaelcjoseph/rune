@@ -360,6 +360,12 @@ tech-lead validation. Product-intent changes require PM validation when flagged.
 
 ## Objection Classes
 
+> **Phase 14 (2026-06-18) restructures this taxonomy.** The `irreversibility` class is removed and
+> replaced by two orthogonal ideas: an `outbound` detection class (effects that leave the system)
+> and a per-finding `reversible` boolean (can a git revert undo the effect). The baseline classes
+> become `security`, `privacy`, `data-integrity`, `concurrency`, `outbound`, `cost-perf`. See
+> "Phase 14: Severity loop to convergence" and requirements 71-82.
+
 Some defects do not show up in normal usage until they matter: security holes, data-integrity
 bugs, concurrency races, irreversible operations, privacy leaks, and cost/perf regressions.
 These are the objection classes — the findings the reviewer is specifically charged to surface.
@@ -379,6 +385,13 @@ These are the objection classes — the findings the reviewer is specifically ch
 - Per-product additions can extend the global baseline class list.
 
 ## Outcome gating
+
+> **Phase 14 (2026-06-18) supersedes the `block` outcome and the human-park model below.** The team
+> resolves all findings itself; nothing escalates to a human. `block` is removed (`critical`/`high`
+> now map to `fail`), the per-task loop runs to severity convergence under a stagnation backstop and
+> a hard round budget, and the only non-merge terminal is a branch HOLD for an irreversible
+> high/critical finding. The Phase 13 model below is the prior state. See "Phase 14: Severity loop to
+> convergence" and requirements 71-82.
 
 > Refines the binary objection gate after the 2026-06-15 Codex-stream failure, where one reviewer
 > objection — caused by a redaction artifact, not a real defect — short-circuited retries and
@@ -667,6 +680,44 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 70. WHEN severity-to-outcome mapping or warning/acceptance recording fails THEN Jarvis fails safe
     to the stricter outcome (treat as an operational `block`), records a durable reason, and
     parks without consuming a coder corrective round.
+
+### Severity loop to convergence (Phase 14)
+
+71. WHEN a reviewing role returns its verdict THEN the outcome is exactly one of `pass`,
+    `pass-with-warnings`, or `fail`; the `block` outcome is removed and no gate maps any finding to
+    `block` (supersedes reqs 63-64, 67-68).
+72. WHEN an objection-class finding is present THEN its severity maps to an outcome:
+    `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`; multiple findings resolve to
+    the strictest mapped outcome.
+73. WHEN a reviewer emits a finding THEN it carries `{class, severity, location, rationale,
+    reversible}`, where `class` is one of `security`, `privacy`, `data-integrity`, `concurrency`,
+    `outbound`, `cost-perf` (the `irreversibility` class is removed, `outbound` is added) and
+    `reversible` states whether a git revert undoes the effect.
+74. WHEN the per-task loop runs THEN it has no outer attempt cap, no PM-wrap-up terminal, and no
+    `blocked-on-human` terminal; each round is coder → reviewer (supersedes the Phase 3 attempt cap
+    and reqs 49, 66, 69-70's human/PM terminals).
+75. WHEN a round completes and the maximum open severity is `low` or none THEN the task exits the
+    loop and proceeds to closeout (primary exit).
+76. WHEN the maximum open severity does not strictly decrease for 3 consecutive rounds THEN the loop
+    stops (stagnation backstop) and routes to terminal handling.
+77. WHEN the loop reaches the hard round budget of 4 rounds with any open finding above `low` THEN
+    the loop stops and routes to terminal handling.
+78. WHEN the coder addresses reviewer findings THEN it receives the ledger sorted by severity
+    (highest first), attempts every open finding, prioritizes the highest severity, and reports
+    which findings it addressed.
+79. WHEN the reviewer re-reviews after a coder round THEN it first verifies each open prior finding
+    against the new diff (regression pass, citing the specific finding) before scanning for new
+    issues (discovery pass); a previously `resolved` finding that reappears is marked `regressed`.
+80. WHEN the reviewer maintains per-task memory THEN a findings ledger persists across rounds with
+    `{id, class, severity, location, rationale, reversible, raisedRound, status:
+    open|resolved|regressed}` and is threaded into the reviewer input each round.
+81. WHEN the loop reaches terminal handling THEN the orchestrator drains the ledger's remaining
+    findings above `low` and authors one detailed entry per finding in `docs/projects/bugs.md`
+    (class, severity, location, rationale, run/task id).
+82. WHEN any remaining open finding at terminal is `critical`/`high` with `reversible: false` THEN
+    the orchestrator HOLDS the branch (no auto-merge; finalizer handoff), preserving the work;
+    otherwise the run proceeds through the gated auto-merge and advances to the next task, never
+    blocking on a human (supersedes reqs 25, 45).
 
 ---
 
@@ -1089,6 +1140,54 @@ one shared verdict contract and severity-aware outcomes.
 
 ---
 
+### Phase 14: Severity loop to convergence (reopened 2026-06-18)
+
+Runs via the orchestrator after Phase 13. Replaces the `block`/park-on-human model with a bounded
+coder↔reviewer convergence loop that never blocks on a human. Triggered by the 2026-06-17
+orchestrated run, which built the full Phase 13 severity gate and then parked `blocked-on-human` on
+a real `high`/`irreversibility` finding — a gate the team is capable of resolving itself. The thesis:
+the coder and reviewer can resolve every finding; the loop should converge on severity, and the only
+thing a human gate ever bought was a backstop against an irreversible bad merge, which a cheap revert
+plus a branch HOLD covers.
+
+1. **Remove the `block` outcome.** `GateVerdict.outcome` becomes `pass | pass-with-warnings | fail`.
+   The severity mapper becomes `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`.
+   Delete the `block` branch, the dedicated block-correction budget, and every `blocked-on-human`
+   terminal in the per-task path.
+2. **Restructure the objection taxonomy.** Drop the `irreversibility` class; add `outbound`. Classes
+   are detection lenses: `security`, `privacy`, `data-integrity`, `concurrency`, `outbound`,
+   `cost-perf`. Add a `reversible: boolean` to every finding — whether a git revert undoes the
+   effect — decoupling "can we undo it" from the class name. Update `agents/reviewer/SOUL.md` to hunt
+   the new class set and set `reversible` per finding.
+3. **Bound the loop by convergence, not a fixed cap.** Delete the outer attempt cap
+   (`decideAttemptOutcome`) and the PM-wrap-up-at-cap terminal. Each round is coder → reviewer. Exit
+   precedence: (a) max open severity ≤ `low` → pass to closeout; (b) no strict drop in max severity
+   for 3 consecutive rounds → terminal; (c) hard budget of 4 rounds → terminal.
+4. **Give the reviewer per-task memory.** A findings ledger `{id, class, severity, location,
+   rationale, reversible, raisedRound, status}` persists across rounds and threads into
+   `ReviewerInput`. The reviewer runs regression-first (verify each open finding fixed, cite it; mark
+   a reappearing resolved finding `regressed`), then discovery.
+5. **Fix in severity order.** The coder receives the ledger severity-sorted, must attempt every open
+   finding highest-severity-first, and reports which it addressed — making the critical→low descent
+   hold by construction rather than by luck.
+6. **Terminal handling is orchestrator-owned and never human-gated.** At terminal, the orchestrator
+   drains the remaining `>low` findings into `docs/projects/bugs.md` (one detailed entry each). If any
+   remaining `critical`/`high` finding is `reversible: false`, it HOLDS the branch (no auto-merge,
+   finalizer handoff) — the sole non-merge path. Otherwise the gated auto-merge proceeds and the run
+   advances. No `blocked-on-human`, ever.
+
+This supersedes the Phase 13 `block` outcome and the still-open Phase 13 task "Update
+Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating": that consumer gate
+is rewritten on the `reversible` flag, which subsumes the multi-finding gate-bypass defect the
+2026-06-17 reviewer surfaced (single-finding `.find` check → all-blocking-findings `.every`).
+
+> **Sequencing:** runs via the orchestrator AFTER Phase 13. Depends on Phase 4 (team-task workflow),
+> Phase 11A (reuses `GateRejectionFeedback` for the coder rounds), and Phase 10 (the auto-merge /
+> finalizer consumer it rewrites). A `/work --auto` target — no operator decisions in the automated
+> path, since the design removes every human terminal.
+
+---
+
 ## Success Metrics
 
 | Metric | Target | How measured |
@@ -1120,6 +1219,12 @@ one shared verdict contract and severity-aware outcomes.
 | Learning failures are non-blocking | always | Exemplar/lesson failures record durable skip/error metadata and do not block the current corrective retry |
 | Outcome gating is severity-aware | always | Low findings ship as recorded warnings, medium findings retry/PM-wrap, high/critical findings get one corrective round then park |
 | Accepted risk is auditable | always | Every accepted finding carries a rationale in the task/run record and finalizer handoff |
+| Loop never blocks on a human | always | No per-task path reaches `blocked-on-human`; `block` outcome, outer attempt cap, and PM-wrap-up terminal are removed |
+| Loop converges on severity | yes | A task exits when max open severity ≤ `low`, or on the stagnation backstop (no drop for 3 rounds), or at the 4-round hard budget |
+| Findings are reversibility-tagged | always | Every finding carries `class` + `severity` + `reversible`; the terminal HOLD keys on `reversible: false`, not on class name |
+| Coder fixes highest severity first | always | Coder receives the ledger severity-sorted, attempts every open finding, and reports which it addressed |
+| Reviewer verifies its own fixes | always | Re-review runs regression-first (each open finding checked + cited) before discovery; reappearing resolved findings mark `regressed` |
+| Unresolved findings are logged, not lost | always | At terminal the orchestrator writes each remaining `>low` finding to `docs/projects/bugs.md`; irreversible high/critical findings also HOLD the branch |
 
 ---
 

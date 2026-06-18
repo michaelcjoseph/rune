@@ -259,6 +259,35 @@ acceptance criteria.
 
 ---
 
+## 14. Severity loop to convergence
+
+- [ ] Critical: `GateVerdict.outcome` is exactly one of `pass`/`pass-with-warnings`/`fail`; `block`
+      is not a producible outcome and no severity maps to it. `critical`/`high`/`medium` → `fail`,
+      `low` → `pass-with-warnings`; multiple findings resolve to the strictest mapped outcome.
+- [ ] Critical: No per-task path returns `blocked-on-human`, routes to PM wrap-up, or consults an
+      outer attempt cap; `decideAttemptOutcome` and the block-correction budget are removed.
+- [ ] Critical: Primary exit — a round whose max open severity is `low`/none exits to closeout with
+      lows recorded as warnings.
+- [ ] Critical: Stagnation backstop — a run whose max open severity holds flat for 3 consecutive
+      rounds stops before round 4; a run that strictly drops each round runs past round 3 and exits
+      via the all-low gate, not the backstop.
+- [ ] Critical: Hard budget — a run still above `low` at round 4 stops and routes to terminal
+      handling; round 5 never executes.
+- [ ] Critical: Reversible hold — a remaining `critical`/`high` finding with `reversible: false`
+      HOLDS the branch (no auto-merge); when all remaining `>low` findings are reversible the gated
+      auto-merge proceeds and the run advances. Never `blocked-on-human`.
+- [ ] High: A reviewer finding carries `{class, severity, location, rationale, reversible}` with
+      `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,`cost-perf`};
+      `irreversibility` is rejected and `reversible` is required.
+- [ ] High: The reviewer ledger persists across rounds; re-review verifies each open prior finding
+      (citing it) before discovery; a reappearing `resolved` finding is marked `regressed`.
+- [ ] High: The coder receives the ledger severity-sorted, attempts every open finding, addresses
+      the highest severity first, and reports which it addressed.
+- [ ] High: At terminal the orchestrator writes one detailed `docs/projects/bugs.md` entry per
+      remaining `>low` finding (class, severity, location, rationale, run/task id).
+
+---
+
 ## Integration Verification
 
 Run a deterministic fixture through planning: PM writes a spec with assumptions, tech lead

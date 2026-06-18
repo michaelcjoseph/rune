@@ -988,6 +988,86 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ---
 
+## Phase 14 - Severity loop to convergence: no human blocks (reopened 2026-06-18)
+
+> Triggered by the 2026-06-17 orchestrated run, which built the full Phase 13 severity gate and then
+> parked `blocked-on-human` on a real `high`/`irreversibility` finding — a gate the coder and reviewer
+> are capable of resolving themselves. This phase removes `block` and every human terminal, runs the
+> per-task loop to severity convergence under a stagnation backstop + hard round budget, restructures
+> the objection taxonomy (drop `irreversibility`, add `outbound`, add a per-finding `reversible`
+> flag), gives the reviewer per-task findings memory, and makes the only non-merge terminal an
+> irreversible-finding branch HOLD. See spec.md §"Phase 14: Severity loop to convergence" and
+> requirements 71-82.
+>
+> **Sequencing:** runs via the orchestrator AFTER Phase 13. Depends on Phase 4 (team-task workflow),
+> Phase 11A (reuses `GateRejectionFeedback`), and Phase 10 (rewrites its auto-merge / finalizer
+> consumer). A `/work --auto` target — the design removes every operator decision from the path.
+
+### Red tests (confirm red before implementation)
+
+- [ ] Outcome-enum test: `GateVerdict.outcome` is exactly one of `pass`/`pass-with-warnings`/`fail`;
+      `block` is no longer a producible outcome and any attempt to map a finding to `block` is a
+      type/normalization error.
+- [ ] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
+      multiple findings resolve to the strictest mapped outcome; no input ever yields `block`.
+- [ ] Finding-shape test: a reviewer finding carries `{class, severity, location, rationale,
+      reversible}`; `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,
+      `cost-perf`}; `irreversibility` is rejected; `reversible` is required.
+- [ ] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
+      outer attempt cap; `decideAttemptOutcome` and the block-correction budget are gone.
+- [ ] Primary-exit test: a round whose max open severity is `low`/none exits the loop to closeout with
+      the lows recorded as warnings.
+- [ ] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
+      stops and routes to terminal handling before reaching the 4-round budget.
+- [ ] Hard-budget test: a run still above `low` at round 4 stops and routes to terminal handling;
+      round 5 never executes.
+- [ ] Convergence test: a run whose max severity strictly drops each round (critical→high→medium→low)
+      runs past round 3 and exits via the primary all-low gate, not a backstop.
+- [ ] Coder-ordering test: the coder receives the ledger severity-sorted, attempts every open finding,
+      addresses the highest severity first, and reports which findings it addressed.
+- [ ] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
+      (citing it) before discovery; a previously `resolved` finding that reappears is marked
+      `regressed`; the ledger persists across rounds.
+- [ ] Terminal-bugs.md test: at terminal the orchestrator writes one detailed `docs/projects/bugs.md`
+      entry per remaining `>low` finding (class, severity, location, rationale, run/task id).
+- [ ] Reversible-hold test: a remaining `critical`/`high` finding with `reversible: false` HOLDS the
+      branch (no auto-merge, finalizer handoff); when all remaining `>low` findings are reversible the
+      gated auto-merge proceeds and the run advances — never `blocked-on-human`.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] Remove `block` from `GateVerdict`; rewrite `mapObjectionSeverityToOutcome`
+      (`team-task-workflow.ts:86`) to `critical`/`high`/`medium` → `fail`, `low` →
+      `pass-with-warnings`; delete the block branch + block-correction budget.
+- [ ] Restructure `ObjectionClass` (`team-task-workflow.ts:31`): drop `irreversibility`, add
+      `outbound`; add a `reversible: boolean` field to the `Objection` type.
+- [ ] Delete the outer attempt cap: remove `decideAttemptOutcome` (`orch-attempt-cap.ts`), the
+      PM-wrap-up-at-cap terminal, and every `blocked-on-human` per-task terminal.
+- [ ] Rewrite the round loop (`team-task-workflow.ts:267`): coder → reviewer per round with the
+      exit precedence — all-low primary exit, 3-round stagnation backstop on max severity, 4-round
+      hard budget. Set `DEFAULT_ROUND_CAP` to 4 (`team-task-deps.ts:72`) and track the per-round max
+      severity history for the stagnation check.
+- [ ] Add the per-task reviewer findings ledger `{id, class, severity, location, rationale,
+      reversible, raisedRound, status: open|resolved|regressed}`; thread it into `ReviewerInput`
+      (`team-task-workflow.ts:92`) each round.
+- [ ] Update the reviewer harness to run regression-first then discovery, and update
+      `agents/reviewer/SOUL.md` to hunt the new class set and set `reversible` per finding.
+- [ ] Update the coder harness to receive the ledger severity-sorted, fix highest-severity-first,
+      attempt all findings, and report which it addressed.
+- [ ] Rewrite the auto-merge / finalizer consumer (`project-orchestrator.ts`
+      `activeBlockingObjectionReason`): replace the per-finding severity gate with the terminal
+      handler — drain remaining `>low` findings to `docs/projects/bugs.md`, HOLD the branch when any
+      remaining `critical`/`high` is `reversible: false`, else proceed through gated auto-merge. This
+      subsumes the multi-finding `.find` → `.every` gate-bypass defect.
+
+> **User-reachability:** YES — after this phase, an orchestrated run resolves its own findings to
+> severity convergence and lands autonomously; nothing ever parks waiting on the user, unresolved
+> nits show up as `docs/projects/bugs.md` entries, and only a genuinely irreversible high/critical
+> finding holds a branch instead of merging.
+
+---
+
 ## Out of scope
 
 - Roles beyond PM, tech lead, QA, coder, reviewer, and designer.
