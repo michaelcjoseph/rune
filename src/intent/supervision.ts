@@ -81,6 +81,11 @@ export interface SupervisedRun {
    * parked nudge to at most once per run — the run is NEVER auto-released.
    */
   parkedNudgedAt?: string;
+  /**
+   * Local-operator-only path to a preserved parked worktree, copied from a
+   * parked terminal event whose applier intentionally kept the worktree alive.
+   */
+  operatorWorktreePath?: string;
 }
 
 /** The visibility surface — the picture the cockpit and Telegram report from. */

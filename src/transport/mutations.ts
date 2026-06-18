@@ -35,6 +35,7 @@ function buildSupervisedRun(
   nowIso: string,
   lastChildAliveAt?: string,
   lastOutputAt?: string,
+  operatorWorktreePath?: string,
 ): SupervisedRun {
   const p = d.payload as Record<string, unknown>;
   const product = typeof p['product'] === 'string' ? p['product'] : 'jarvis';
@@ -61,7 +62,17 @@ function buildSupervisedRun(
   if (lastOutputAt !== undefined) {
     run.lastOutputAt = lastOutputAt;
   }
+  if (operatorWorktreePath !== undefined) {
+    run.operatorWorktreePath = operatorWorktreePath;
+  }
   return run;
+}
+
+function parkedOperatorWorktreePath(event: MutationEvent): string | undefined {
+  const data = event.data as Record<string, unknown> | undefined;
+  if (data?.['parked'] !== true) return undefined;
+  const value = data['operatorWorktreePath'];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
 /** Best-effort wrapper around upsertRun — persistence failure logs but
@@ -268,7 +279,16 @@ export function writeRecoveredTerminalMutation(
   const supervisionStatus: SupervisedRun['status'] = parked
     ? 'blocked-on-human'
     : descriptor.status;
-  safeUpsertRun(buildSupervisedRun(descriptor, supervisionStatus, new Date().toISOString()));
+  safeUpsertRun(
+    buildSupervisedRun(
+      descriptor,
+      supervisionStatus,
+      new Date().toISOString(),
+      undefined,
+      undefined,
+      parkedOperatorWorktreePath(event),
+    ),
+  );
 
   (_bus ?? noopBus).publish({
     kind: 'mutation-event',
@@ -511,6 +531,7 @@ async function startApply(
               new Date().toISOString(),
               currentChildAliveAt,
               currentOutputAt,
+              parkedOperatorWorktreePath(event),
             ),
           );
         }

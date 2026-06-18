@@ -98,4 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- .worktrees/jarvis/14-product-team-agents/src/intent/team-task-workflow.test.ts) was already modified; I did not edit it. An earlier Vitest attempt remains inaccessible because it was started without a TTY and the sandbox blocks `ps`/`pkill`, but the corrected verification run completed successfully.
+- er runner src/jobs/orchestrated-work-runner.test.ts`
+- `npm run build` is still blocked by existing unrelated repo-wide TypeScript errors in tests and other files; none were from this patch.
+
+Note: `src/jobs/orchestrated-work-runner.test.ts` was already staged before my changes; I left it untouched.

@@ -950,7 +950,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Block-one-round test: a reviewer-produced `block` delivers its feedback to the coder for
       exactly one corrective round from the dedicated block-correction budget before parking; it
       does not short-circuit with zero corrective attempts.
-- [ ] Block-parks-not-fails test: a surviving `block` parks `blocked-on-human` with worktree +
+- [x] Block-parks-not-fails test: a surviving `block` parks `blocked-on-human` with worktree +
       branch preserved; an open blocking objection is NEVER mapped to `failed` with a destroyed
       worktree (regression for the `maybeParkedRun` `objectionOpen` exclusion +
       `mapResultToTerminal` blocked→failed mapping).

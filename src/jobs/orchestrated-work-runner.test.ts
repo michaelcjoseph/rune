@@ -76,6 +76,7 @@ import {
   activeRuns,
   createMutation,
   registerApplier,
+  setMutationBus,
   type MutationDescriptor,
   type MutationEvent,
 } from '../transport/mutations.js';
@@ -1319,6 +1320,78 @@ describe('orchestratedWorkApplier', () => {
       expect(data['branch']).toBe('jarvis-work/demo');
       expect(data['preserveBranch']).toBe(true);
       expect(data['preserveWorktree']).toBe(true);
+      expect(destroyed).toBe(false);
+    });
+
+    it('a surviving parked block keeps orchestration supervision blocked-on-human with the live worktree path', async () => {
+      const projectSlug = '14-product-team-agents';
+      let runId: string | undefined;
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree(projectSlug);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async (deps) => ({
+          kind: 'blocked',
+          reason: 'open objection-class finding',
+          task: { id: 't1', text: 'task one', section: 'Phase 13' },
+          parked: {
+            status: 'blocked-on-human',
+            branch: deps.branch,
+            worktreePath: deps.worktreePath!,
+            preserveBranch: true,
+            preserveWorktree: true,
+          },
+        }),
+      });
+
+      (ctx.bus.publish as ReturnType<typeof vi.fn>).mockClear();
+      setMutationBus(ctx.bus);
+      registerApplier(orchestratedWorkApplier);
+      const createdMutation = await createMutation(
+        'orchestrated-work',
+        { projectSlug, product: 'jarvis' },
+        'webview',
+      );
+      if (!createdMutation.ok) throw new Error(createdMutation.reason);
+      runId = createdMutation.descriptor.id;
+
+      await waitForCondition(() => !activeRuns.has(runId!));
+
+      const statuses = mockUpsertRun.mock.calls
+        .map((call) => call[0] as SupervisedRun)
+        .filter((run) => run.id === runId)
+        .map((run) => run.status);
+      expect(statuses).toEqual(['running', 'running', 'blocked-on-human']);
+      expect(statuses).not.toContain('failed');
+      expect(statuses).not.toContain('completed');
+
+      const terminal = mockAppendMutationLine.mock.calls
+        .map((call) => call[0] as MutationDescriptor)
+        .filter((descriptor) => descriptor.id === runId)
+        .at(-1);
+      expect(terminal).toMatchObject({
+        kind: 'orchestrated-work',
+        status: 'completed',
+      });
+
+      const terminalEvent = (ctx.bus.publish as ReturnType<typeof vi.fn>).mock.calls
+        .map((call) => call[0] as { mutationId: string; subKind?: string; data?: Record<string, unknown> })
+        .find((event) => event.mutationId === runId && event.subKind === 'completed');
+      expect(terminalEvent?.data).toMatchObject({
+        parked: true,
+        operatorWorktreePath: wtDir,
+        branch: 'jarvis-work/14-product-team-agents',
+        preserveBranch: true,
+        preserveWorktree: true,
+        dispatchMode: 'orchestrated',
+      });
       expect(destroyed).toBe(false);
     });
 
