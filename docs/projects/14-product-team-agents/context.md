@@ -98,9 +98,8 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- behavior best-effort and avoids duplicate blocking events during retries.
+- 
+- Passed within adjacent run: `src/intent/gate-learning.test.ts`
+- Blocked: `src/jobs/team-task-deps.test.ts` fails at import because `TELEGRAM_BOT_TOKEN` is not set in this environment.
 
-Verification:
-- `npx vitest run src/intent/team-task-workflow.test.ts --configLoader runner` passed: 29 tests.
-
-Note: `src/intent/team-task-workflow.test.ts` was already staged/modified before my changes; I left it untouched.
+Note: `src/jobs/team-task-deps.gate-learning.test.ts` was already modified before my work; I left it untouched.

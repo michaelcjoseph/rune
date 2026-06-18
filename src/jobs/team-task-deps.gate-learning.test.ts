@@ -86,6 +86,7 @@ import {
   type TeamTaskSeams,
 } from './team-task-deps.js';
 import { runTeamTaskWorkflow } from '../intent/team-task-workflow.js';
+import type { GateRejectionFeedback } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
@@ -123,6 +124,61 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
   beforeEach(() => {
     h.roleMemory.clear();
     h.gateLearning.mockClear();
+  });
+
+  it('passes the full structured rejection notes into the rejecting-role draft prompt', async () => {
+    const record: GateRejectionFeedback = {
+      rejectingRole: 'reviewer',
+      counterpartRole: 'coder',
+      rejectedRole: 'coder',
+      artifact: 'reviewer-verdict',
+      rejectedArtifact: 'reviewer-verdict',
+      reason: 'implementation missed the required empty-state behavior',
+      whatFailed: 'the diff omitted the empty-state branch that the task required',
+      notes: [
+        'Reviewer note: the handler still returns the happy-path payload for empty input.',
+        'Reviewer note: the regression test proves the missing branch.',
+      ],
+      actionableNotes: ['Add an explicit empty-state branch and keep the regression test.'],
+    };
+    const draftMessages: string[] = [];
+
+    h.gateLearning.mockImplementationOnce(async (rejection, deps) => {
+      await deps.draftLesson({ rejection });
+      return { kind: 'no-lesson', rationale: 'draft prompt inspected' };
+    });
+
+    const judgmentCall: JudgmentModelCall = async (call) => {
+      if (call.role === 'reviewer' && call.message.includes('<gate-rejection>')) {
+        draftMessages.push(call.message);
+      }
+      return [
+        '```gate-lesson-candidate',
+        JSON.stringify({
+          kind: 'candidate-lesson',
+          draftedBy: 'reviewer',
+          targetRole: 'coder',
+          lesson: 'When a review rejection cites missing behavior, map each note to a concrete diff change before resubmitting.',
+        }),
+        '```',
+      ].join('\n');
+    };
+
+    const deps = buildProductionTeamTaskDeps(
+      { sandbox: sandbox(), productsConfigPath: '/nonexistent/products.json', models },
+      { judgmentCall },
+    );
+
+    await deps.onGateRejection?.(record);
+
+    expect(h.gateLearning).toHaveBeenCalledTimes(1);
+    expect(draftMessages).toHaveLength(1);
+    expect(draftMessages[0]).toContain('rejectingRole: reviewer');
+    expect(draftMessages[0]).toContain('counterpartRole: coder');
+    expect(draftMessages[0]).toContain('whatFailed: the diff omitted the empty-state branch');
+    expect(draftMessages[0]).toContain('Reviewer note: the handler still returns the happy-path payload for empty input.');
+    expect(draftMessages[0]).toContain('Reviewer note: the regression test proves the missing branch.');
+    expect(draftMessages[0]).toContain('actionableNotes: Add an explicit empty-state branch');
   });
 
   it("loads a gate-time QA lesson into QA's corrective retry prompt", async () => {

@@ -437,8 +437,11 @@ function formatGateLearningRejection(feedback: GateRejectionFeedback): string {
     `rejectingRole: ${feedback.rejectingRole}`,
     `counterpartRole: ${feedback.counterpartRole}`,
     `rejectedRole: ${feedback.rejectedRole}`,
+    `artifact: ${feedback.artifact}`,
     `rejectedArtifact: ${feedback.rejectedArtifact}`,
+    `reason: ${feedback.reason}`,
     `whatFailed: ${feedback.whatFailed}`,
+    `notes: ${feedback.notes.join('; ')}`,
     `actionableNotes: ${feedback.actionableNotes.join('; ')}`,
     '</gate-rejection>',
   ].join('\n');
