@@ -35,10 +35,10 @@ import { randomUUID } from 'node:crypto';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
-import { writeRoleLesson } from '../roles/memory-writer.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
 import { runGateTriggeredLearning } from '../intent/gate-learning.js';
+import { writeGateLearningLesson } from '../intent/learning-write-path.js';
 import {
   runTeamTaskWorkflow,
   type ObjectionClass,
@@ -488,12 +488,11 @@ export function buildProductionTeamTaskDeps(
           return extractFencedJson(reply, 'gate-lesson-validation');
         },
         writeLesson: async (role, lesson, inputRejection) => {
-          const sourceSlug = `${sandbox.project}-gate-${inputRejection.rejectedArtifact}`;
-          const result = await writeRoleLesson({
+          const result = await writeGateLearningLesson({
             role,
             lesson,
-            sourceSlug,
-            fallbackTopic: sandbox.project,
+            projectSlug: sandbox.project,
+            rejection: inputRejection,
           });
           return {
             committed: result.committed,

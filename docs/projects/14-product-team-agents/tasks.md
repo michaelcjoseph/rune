@@ -877,7 +877,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       via `writeRoleLesson`, synchronously at gate-time (not deferred to nightly).
 - [x] Compounding test: a gate-time lesson loads into the counterpart role's next invocation
       reference context (the Phase 6 compounding path).
-- [ ] No-double-write test: the nightly loop and the gate-time path share one write path and do
+- [x] No-double-write test: the nightly loop and the gate-time path share one write path and do
       not double-write the same lesson (the `memory-writer.ts` dedupe is the guard).
 - [ ] Learning-fail-safe test: lesson drafting, validation, or memory-write failure records a
       durable skip/error and does not block the current corrective retry path.

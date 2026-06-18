@@ -45,7 +45,7 @@ import {
   writeProcessedFeedbackIds,
 } from '../intent/feedback-reader.js';
 import { runPostMortem } from '../intent/postmortem.js';
-import { writeRoleLesson } from '../roles/memory-writer.js';
+import { writeNightlyLearningLesson } from '../intent/learning-write-path.js';
 
 const log = createLogger('nightly');
 
@@ -628,10 +628,7 @@ async function stepLearningLoop(): Promise<NightlyStepResult> {
     },
     writeLesson: async (role, lesson, record) => {
       try {
-        // Provenance slug ties the lesson back to its feedback origin; writeRoleLesson
-        // derives a safe fallback if this fails the slug shape.
-        const sourceSlug = `${record.projectSlug}-fb-${record.createdAt.slice(0, 10)}`;
-        const res = await writeRoleLesson({ role, lesson, sourceSlug, fallbackTopic: record.projectSlug });
+        const res = await writeNightlyLearningLesson({ role, lesson, record });
         return { committed: res.committed, captured: res.captured };
       } catch (err) {
         log.warn('Learning loop: lesson write threw', { error: String(err) });
