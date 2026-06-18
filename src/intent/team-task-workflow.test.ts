@@ -1775,6 +1775,82 @@ describe('team-task-workflow — round cap', () => {
     expect(ev.rejectionFeedback).toBeUndefined();
   });
 
+  it('runs coder then every review gate as one complete ordered round before starting the next coder round', async () => {
+    const order: string[] = [];
+    let reviewerCalls = 0;
+    let techLeadCalls = 0;
+    let designerCalls = 0;
+    const firstRoundReviewerFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'medium',
+      location: 'src/auth.ts:42',
+      rationale: 'auth retry still bypasses the allow-list',
+      reversible: true,
+    };
+    const firstRoundTechLeadFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/state.ts:55',
+      rationale: 'state checkpoint still misses failed-review evidence',
+      reversible: true,
+    };
+    const firstRoundDesignerFinding: ObjectionFinding = {
+      class: 'privacy',
+      severity: 'medium',
+      location: 'src/server/static/app.js:88',
+      rationale: 'review panel still exposes private branch metadata',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        coder: async () => {
+          order.push('coder');
+          return {
+            diff: `diff-${order.filter((item) => item === 'coder').length}`,
+            handoffNotes: [],
+          };
+        },
+        reviewer: async () => {
+          order.push('reviewer');
+          reviewerCalls += 1;
+          return reviewerCalls === 1
+            ? { outcome: 'fail', findings: [firstRoundReviewerFinding] }
+            : { outcome: 'pass', findings: [] };
+        },
+        techLeadReviewDiff: async () => {
+          order.push('tech-lead-diff');
+          techLeadCalls += 1;
+          return techLeadCalls === 1
+            ? { outcome: 'fail', findings: [firstRoundTechLeadFinding] }
+            : { outcome: 'pass', findings: [] };
+        },
+        designer: async () => {
+          order.push('designer');
+          designerCalls += 1;
+          return designerCalls === 1
+            ? { outcome: 'fail', findings: [firstRoundDesignerFinding] }
+            : { outcome: 'pass', findings: [] };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(order).toEqual([
+      'coder',
+      'reviewer',
+      'tech-lead-diff',
+      'designer',
+      'coder',
+      'reviewer',
+      'tech-lead-diff',
+      'designer',
+    ]);
+  });
+
   it('retries a structured reviewer fail with feedback threaded into the next coder round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;

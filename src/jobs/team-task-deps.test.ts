@@ -868,6 +868,68 @@ describe('no-stub regression (Phase 8)', () => {
     expect(runtime.createTaskWorkflowRunner).toBe(createProductionTaskWorkflowRunner);
   });
 
+  it('defaults the production workflow runner to four feedback rounds when no cap override is provided', async () => {
+    let executionCalls = 0;
+    let techLeadTestReviews = 0;
+    const judgment: JudgmentModelCall = async ({ role, message }) => {
+      if (message.includes('<gate-rejection>')) {
+        return 'no reusable lesson for this fixture';
+      }
+      if (role === 'tech-lead' && message.includes('## QA tests')) {
+        techLeadTestReviews += 1;
+        return [
+          '```tl-test-review',
+          JSON.stringify({
+            approved: techLeadTestReviews === 4,
+            notes: techLeadTestReviews === 4
+              ? 'fourth test intent covers the contract'
+              : `revision ${techLeadTestReviews} still misses the contract`,
+          }),
+          '```',
+        ].join('\n');
+      }
+      if (role === 'tech-lead' && message.includes('## Diff')) {
+        return ['```tl-diff-review', '{"outcome":"pass","findings":[]}', '```'].join('\n');
+      }
+      if (role === 'reviewer') {
+        return ['```reviewer-verdict', '{"outcome":"pass","findings":[]}', '```'].join('\n');
+      }
+      return GREEN_JUDGMENT_REPLY;
+    };
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: REAL_POLICY_PATH,
+      },
+      makeSeams({
+        judgmentCall: judgment,
+        runExecution: async () => {
+          executionCalls += 1;
+          return {
+            ok: true,
+            diff: [
+              `diff --git a/src/round-${executionCalls}.test.ts b/src/round-${executionCalls}.test.ts`,
+              `+++ b/src/round-${executionCalls}.test.ts`,
+              `+expect(${executionCalls}).toBe(${executionCalls})`,
+              '',
+            ].join('\n'),
+            output: `execution ${executionCalls}`,
+          };
+        },
+      }),
+    );
+
+    const evidence = await run(selectedTask, { handoff: 'bounded handoff', contextMd: 'ctx' });
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(techLeadTestReviews).toBe(4);
+    expect(executionCalls).toBe(5);
+    expect(evidence.rolesInvoked).toEqual(
+      expect.arrayContaining(['qa', 'tech-lead', 'coder', 'reviewer']),
+    );
+  });
+
   it('the production runner drives runTeamTaskWorkflow to ready-for-closeout — impossible for the old stub', async () => {
     const run = createProductionTaskWorkflowRunner(
       {

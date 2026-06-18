@@ -1076,7 +1076,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       (`orchestrated-work-runner.ts`, `sandbox-runtime.ts`) and its resume validators, keeping
       cursor resume backward-tolerant of an older in-flight cursor that still carries `attemptCap`
       (ignore the field, don't reject the cursor).
-- [ ] Rewrite the round loop (`team-task-workflow.ts`): coder → review gates per round
+- [x] Rewrite the round loop (`team-task-workflow.ts`): coder → review gates per round
       (reviewer, tech-lead diff, and designer when applicable) with the exit precedence — all-low
       primary exit, 3-round stagnation backstop on max severity, 4-round hard budget. Set
       `DEFAULT_ROUND_CAP` to 4 (`team-task-deps.ts`) and track the per-round max severity

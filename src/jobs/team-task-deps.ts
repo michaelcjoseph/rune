@@ -79,9 +79,9 @@ const log = createLogger('team-task-deps');
 // executor boundary, re-exported here so both layers share it.
 export type { RoleModelBinding } from './execution-agent.js';
 
-/** Per-task round cap for the inner workflow loop (coder → review rounds).
- *  Mirrors the orchestrator's outer attempt cap and gen-eval-loop's default. */
-const DEFAULT_ROUND_CAP = 3;
+/** Per-task round cap for the inner workflow loop (coder → review gates).
+ *  Phase 14 drives severity convergence up to the four-round hard budget. */
+const DEFAULT_ROUND_CAP = 4;
 
 /** Cap on free-text fields lifted from model output into evidence. */
 const NOTE_MAX_CHARS = 2_000;
