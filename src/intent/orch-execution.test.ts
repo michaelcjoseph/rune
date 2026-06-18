@@ -10,10 +10,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { assembleTaskContext } from './orch-context-assembly.js';
 import { buildTaskRunRecord, type TaskRunRecord } from './orch-run-record.js';
-import { decideAttemptOutcome } from './orch-attempt-cap.js';
 import {
   buildFinalizerHandoff,
   runFinalizerHandoff,
@@ -28,6 +30,7 @@ const CONTEXT_MD = seedProjectContext({
   specSummary: 'Track daily streaks.',
   assumptions: ['Reset at local midnight'],
 });
+const INTENT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Bounded context assembly — task N+1 gets a bounded slice, NOT a transcript
@@ -137,52 +140,17 @@ describe('orch-run-record — required fields', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Attempt caps — bounded retry, no human terminal
+// Attempt caps — removed outer cap, no human terminal
 // ---------------------------------------------------------------------------
 
-describe('orch-attempt-cap — bounded retry', () => {
-  const humanTerminalActions = ['pm-wrapup', 'blocked-on-human'];
-
-  it('retries below the cap on a non-objection failure', () => {
-    const d = decideAttemptOutcome({ attempts: 1, cap: 3, outcome: 'failed', objectionOpen: false });
-    expect(d.action).toBe('retry');
+describe('outer attempt cap removal', () => {
+  it('does not leave the obsolete decideAttemptOutcome module on disk', () => {
+    expect(existsSync(join(INTENT_DIR, 'orch-attempt-cap.ts'))).toBe(false);
   });
 
-  it('does not route non-objection disagreement at the cap to PM wrap-up or blocked-on-human', () => {
-    const d = decideAttemptOutcome({ attempts: 3, cap: 3, outcome: 'blocked', objectionOpen: false });
-    expect(d.action).not.toBe('retry');
-    expect(humanTerminalActions).not.toContain(d.action);
-  });
-
-  it('does not route an open objection-class finding to blocked-on-human', () => {
-    const d = decideAttemptOutcome({ attempts: 1, cap: 3, outcome: 'blocked', objectionOpen: true });
-    expect(humanTerminalActions).not.toContain(d.action);
-  });
-
-  it('never retries past the cap', () => {
-    const d = decideAttemptOutcome({ attempts: 5, cap: 3, outcome: 'failed', objectionOpen: false });
-    expect(d.action).not.toBe('retry');
-    expect(humanTerminalActions).not.toContain(d.action);
-  });
-
-  it('proceeds on a successful attempt, even on the final allowed attempt', () => {
-    const d = decideAttemptOutcome({
-      attempts: 3,
-      cap: 3,
-      outcome: 'ready-for-closeout',
-      objectionOpen: false,
-    });
-    expect(d.action).toBe('proceed');
-  });
-
-  it('an open objection does not turn a successful attempt into a human terminal', () => {
-    const d = decideAttemptOutcome({
-      attempts: 1,
-      cap: 3,
-      outcome: 'ready-for-closeout',
-      objectionOpen: true,
-    });
-    expect(humanTerminalActions).not.toContain(d.action);
+  it('does not import decideAttemptOutcome from the project orchestrator', () => {
+    const source = readFileSync(join(INTENT_DIR, 'project-orchestrator.ts'), 'utf8');
+    expect(source).not.toMatch(/decideAttemptOutcome|orch-attempt-cap/);
   });
 });
 

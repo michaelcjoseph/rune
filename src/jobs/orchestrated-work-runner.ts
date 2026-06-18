@@ -87,14 +87,7 @@ const log = createLogger('orchestrated-work-runner');
 
 const PROJECTS_SUBDIR = join('docs', 'projects');
 
-/** Outer per-task attempt cap — how many times the orchestrator re-invokes the
- *  whole team-task workflow for one task before escalating (the workflow runs
- *  its own internal round cap). 3 mirrors gen-eval-loop's default round cap. */
-const ORCHESTRATED_ATTEMPT_CAP = 3;
-
-/** INNER per-task round cap (coder → review rounds inside one workflow run) —
- *  distinct from the outer attempt cap so tuning one never silently moves the
- *  other. */
+/** Per-task round cap (coder → review rounds inside one workflow run). */
 const ORCHESTRATED_ROUND_CAP = 3;
 
 type OrchestratedWorkPayload = {
@@ -106,7 +99,6 @@ export interface OrchestratedRecoveryRedispatch {
   branch: string;
   baseBranch: string;
   worktreePath: string;
-  attemptCap: number;
   reconstruction: RunReconstruction;
   resumeFromTaskId: string | null;
   existingBranch: true;
@@ -259,7 +251,6 @@ function buildOrchestrationDeps(args: {
   workRunsDir: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
-  attemptCap?: number;
   emit?: (event: OrchestrationActivityEvent) => void;
   finalize: FinalizerAdapter;
 }): OrchestrationDeps {
@@ -277,10 +268,6 @@ function buildOrchestrationDeps(args: {
     worktreePath: sandbox.worktree,
     baseBranch,
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
-    // Per-task attempt cap (re-invoke the whole workflow on a non-objection
-    // failure). The team-task-workflow runs its own internal round cap; this
-    // bounds the OUTER retries. 3 mirrors gen-eval-loop's default round cap.
-    attemptCap: args.attemptCap ?? ORCHESTRATED_ATTEMPT_CAP,
     appendTaskRunRecord: async (record) => appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record),
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
 
@@ -409,8 +396,6 @@ function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCurs
     typeof cursor.branch === 'string' &&
     typeof cursor.baseBranch === 'string' &&
     typeof cursor.worktreePath === 'string' &&
-    typeof cursor.attemptCap === 'number' &&
-    Number.isFinite(cursor.attemptCap) &&
     !!position &&
     Array.isArray(position.completedTaskIds) &&
     position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
@@ -470,7 +455,6 @@ export async function recoverOrchestratedWorkRuns(
           branch: cursor.branch,
           baseBranch: cursor.baseBranch,
           worktreePath: cursor.worktreePath,
-          attemptCap: cursor.attemptCap,
           reconstruction,
           resumeFromTaskId: reconstruction.nextTask?.id ?? null,
           existingBranch: true,
@@ -653,7 +637,6 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
-        attemptCap: recovery?.attemptCap ?? ORCHESTRATED_ATTEMPT_CAP,
         emit,
         finalize: async () => {
           let gateTasksRemaining = 0;

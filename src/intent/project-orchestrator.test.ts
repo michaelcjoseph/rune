@@ -95,7 +95,6 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     product: 'aura',
     branch: 'jarvis-work/14-x',
     baseBranch: 'main',
-    attemptCap: 2,
     readTasksMd: async () => state.tasksMd,
     readContextMd: async () => state.contextMd,
     readSpec: async () => 'spec body',
@@ -336,7 +335,6 @@ describe('project-orchestrator — observability events', () => {
     };
     let calls = 0;
     const h = makeHarness({
-      attemptCap: 4,
       runTaskWorkflow: async (task) => {
         calls += 1;
         return {
@@ -406,7 +404,6 @@ describe('project-orchestrator — block', () => {
   it('stops without blocked-on-human parking when feedback retries exhaust', async () => {
     const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
     const h = makeHarness({
-      attemptCap: 1,
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
         outcome: 'blocked',
@@ -438,7 +435,6 @@ describe('project-orchestrator — block', () => {
     async (severity) => {
       const worktreePath = `/tmp/jarvis-worktrees/aura/14-x-${severity}`;
       const h = makeHarness({
-        attemptCap: 1,
         runTaskWorkflow: async (task) => ({
           taskId: task.id,
           outcome: 'blocked',
@@ -479,7 +475,6 @@ describe('project-orchestrator — block', () => {
   it('stops without blocked-on-human parking when an objection-open block has no severity details', async () => {
     const worktreePath = '/tmp/jarvis-worktrees/aura/14-x-objection-open';
     const h = makeHarness({
-      attemptCap: 1,
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
         outcome: 'blocked',
@@ -530,7 +525,6 @@ describe('project-orchestrator — retry feedback', () => {
     const workflowInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
     let calls = 0;
     const h = makeHarness({
-      attemptCap: 4,
       runTaskWorkflow: async (task, ctx) => {
         workflowInputs.push(ctx as { rejectionFeedback?: GateRejectionFeedback });
         calls += 1;
@@ -553,6 +547,61 @@ describe('project-orchestrator — retry feedback', () => {
     expect(workflowInputs).toEqual([
       expect.objectContaining({ rejectionFeedback: undefined }),
     ]);
+  });
+
+  it('treats severity-loop hard-budget evidence as terminal and does not re-run the whole workflow', async () => {
+    const terminalFinding: FindingsLedgerEntry = {
+      id: 'finding-auth-write-leak',
+      sourceGate: 'reviewer',
+      class: 'data-integrity',
+      severity: 'high',
+      location: 'src/state.ts:88',
+      rationale: 'accepted writes can persist incorrect project state after release',
+      reversible: false,
+      raisedRound: 4,
+      status: 'open',
+    };
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return {
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          objectionOpen: false,
+          handoffNotes: ['severity loop reached the hard budget with non-reversible residue'],
+          blockedReason: 'non-reversible high terminal residue must hold the branch',
+          loopExitReason: 'hard-budget',
+          reviewerVerdict: {
+            outcome: 'fail',
+            findings: [terminalFinding],
+            objections: [terminalFinding],
+          },
+          findingsLedger: [terminalFinding],
+        };
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Remove the outer attempt cap',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: expect.stringMatching(/non-reversible|high|terminal residue|hold/i),
+    });
+    expect(workflowCalls).toBe(1);
+    expect(res).not.toHaveProperty('parked');
+    expect(JSON.stringify(res)).not.toMatch(/blocked-on-human|PM|wrap-up/i);
+    expect(eventsByName(h.state.events, 'attempt-start')).toHaveLength(1);
+    expect(eventsByName(h.state.events, 'attempt-retry')).toEqual([]);
+    expect(h.state.tasksMd).toContain('- [ ] Remove the outer attempt cap');
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
   });
 });
 

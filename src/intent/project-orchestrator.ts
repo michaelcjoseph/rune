@@ -6,8 +6,7 @@
  *   while an unchecked task remains:
  *     select the first unchecked task            (orch-task-select)
  *     assemble bounded context                   (orch-context-assembly)
- *     run the team-task workflow, retrying within the attempt cap
- *                                                 (team-task-workflow + orch-attempt-cap)
+ *     run the team-task workflow                  (team-task-workflow)
  *     on ready-for-closeout, perform Jarvis-owned CLOSEOUT:
  *       update context.md                        (context-curator)
  *       mark EXACTLY the selected task complete  (orch-closeout)
@@ -30,7 +29,6 @@
 
 import { selectNextTask, type SelectedTask } from './orch-task-select.js';
 import { assembleTaskContext } from './orch-context-assembly.js';
-import { decideAttemptOutcome } from './orch-attempt-cap.js';
 import { applyContextUpdate, type ContextUpdate } from './context-curator.js';
 import { markSelectedTaskComplete } from './orch-closeout.js';
 import { buildTaskRunRecord, type TaskRunRecord } from './orch-run-record.js';
@@ -44,7 +42,6 @@ import type {
   FindingSourceGate,
   ObjectionFinding,
   ObjectionSeverity,
-  GateRejectionFeedback,
   TaskEvidence,
 } from './team-task-workflow.js';
 
@@ -60,7 +57,6 @@ export interface OrchestrationRunCursor {
   branch: string;
   baseBranch: string;
   worktreePath: string;
-  attemptCap: number;
   resumeMarker: 'resumable';
   cursor: {
     completedTaskIds: string[];
@@ -92,8 +88,6 @@ export interface OrchestrationDeps {
   worktreePath?: string;
   /** Base branch a gated merge would land on. */
   baseBranch?: string;
-  /** Per-task attempt cap. */
-  attemptCap: number;
   /** Optional live activity sink for appliers that need supervision heartbeats. */
   emit?: (event: OrchestrationActivityEvent) => void;
   /** Optional durable run-record sink used by restart reconstruction. */
@@ -111,7 +105,7 @@ export interface OrchestrationDeps {
   // --- per-task workflow (wraps team-task-workflow in production) ---
   runTaskWorkflow: (
     task: SelectedTask,
-    ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
+    ctx: { handoff: string; contextMd: string; rejectionFeedback?: undefined },
   ) => Promise<TaskEvidence>;
 
   // --- closeout effects ---
@@ -185,8 +179,7 @@ export async function runProjectOrchestration(
     const spec = await deps.readSpec();
     const assembled = assembleTaskContext({ task, contextMd, spec });
 
-    // Run the workflow, retrying within the attempt cap on non-objection failures.
-    const evidence = await runTaskWithRetries(deps, task, assembled.handoff, contextMd);
+    const evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
     if (evidence.outcome !== 'ready-for-closeout') {
       if (isOperationalTerminal(evidence)) {
         return buildOperationalHold(
@@ -253,43 +246,17 @@ export async function runProjectOrchestration(
   };
 }
 
-/** Run one task through the workflow, retrying within the cap on non-objection
- *  failures. Returns the final attempt's evidence.
- *
- *  NOTE: the team-task-workflow already runs its own internal round cap and
- *  returns terminal task evidence. This outer loop is the per-task ATTEMPT cap:
- *  how many times to re-invoke the whole workflow. `decideAttemptOutcome`
- *  returns `stop` for non-retry terminals, so this loop returns the evidence and
- *  lets the caller block. Only an objection short-circuits a retry below the cap. */
-async function runTaskWithRetries(
+/** Run one task through the workflow once. The workflow owns the per-task
+ * convergence loop internally; the orchestrator never re-invokes the whole
+ * workflow for an already-terminal task evidence result. */
+async function runTaskWorkflow(
   deps: OrchestrationDeps,
   task: SelectedTask,
   handoff: string,
   contextMd: string,
 ): Promise<TaskEvidence> {
-  let attempt = 1;
-  let rejectionFeedback: GateRejectionFeedback | undefined;
-
-  for (;;) {
-    emitAttemptStart(deps, task, attempt);
-    const evidence = await deps.runTaskWorkflow(task, {
-      handoff,
-      contextMd,
-      ...(rejectionFeedback !== undefined ? { rejectionFeedback } : {}),
-    });
-    if (evidence.outcome === 'ready-for-closeout') return evidence;
-    if (isOperationalTerminal(evidence)) return evidence;
-    const decision = decideAttemptOutcome({
-      attempts: attempt,
-      cap: deps.attemptCap,
-      outcome: evidence.outcome === 'failed' ? 'failed' : 'blocked',
-      objectionOpen: evidence.objectionOpen,
-    });
-    if (decision.action !== 'retry') return evidence;
-    emitAttemptRetry(deps, task, attempt, attempt + 1, evidence);
-    rejectionFeedback = evidence.rejectionFeedback;
-    attempt += 1;
-  }
+  emitAttemptStart(deps, task, 1);
+  return deps.runTaskWorkflow(task, { handoff, contextMd, rejectionFeedback: undefined });
 }
 
 type CloseoutResult =
@@ -422,7 +389,6 @@ function buildRunCursor(
     branch: deps.branch,
     baseBranch: deps.baseBranch ?? '',
     worktreePath: deps.worktreePath ?? '',
-    attemptCap: deps.attemptCap,
     resumeMarker: 'resumable',
     cursor: {
       completedTaskIds: taskRecords
@@ -456,32 +422,6 @@ function emitAttemptStart(deps: OrchestrationDeps, task: SelectedTask, attemptNu
       attemptNumber,
       attemptId: attemptId(deps, task, attemptNumber),
       line: `starting attempt ${attemptNumber} for ${task.text}`,
-    },
-  });
-}
-
-function emitAttemptRetry(
-  deps: OrchestrationDeps,
-  task: SelectedTask,
-  previousAttemptNumber: number,
-  nextAttemptNumber: number,
-  evidence: TaskEvidence,
-): void {
-  const reason =
-    evidence.blockedReason ??
-    evidence.failureReason ??
-    evidence.rejectionFeedback?.reason ??
-    'task attempt did not reach closeout';
-  deps.emit?.({
-    kind: 'activity',
-    data: {
-      event: 'attempt-retry',
-      taskId: task.id,
-      previousAttemptNumber,
-      nextAttemptNumber,
-      previousOutcome: evidence.outcome,
-      reason,
-      line: `retrying ${task.text}: attempt ${previousAttemptNumber} ${evidence.outcome}; attempt ${nextAttemptNumber} next (${reason})`,
     },
   });
 }

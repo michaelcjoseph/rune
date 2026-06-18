@@ -59,7 +59,6 @@ function cursor(overrides: Partial<OrchestrationRunCursor> = {}): OrchestrationR
     branch: 'jarvis-work/14-product-team-agents',
     baseBranch: 'main',
     worktreePath: '/tmp/jarvis-worktrees/jarvis/14-product-team-agents',
-    attemptCap: 3,
     resumeMarker: 'resumable',
     cursor: {
       completedTaskIds: ['persist-records-and-cursor'],

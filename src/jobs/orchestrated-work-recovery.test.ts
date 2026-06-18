@@ -61,7 +61,6 @@ function cursor(): OrchestrationRunCursor {
     branch: 'jarvis-work/14-product-team-agents',
     baseBranch: 'main',
     worktreePath: '/tmp/jarvis-worktrees/jarvis/14-product-team-agents',
-    attemptCap: 3,
     resumeMarker: 'resumable',
     cursor: {
       completedTaskIds: ['persist-records-and-cursor'],
@@ -120,7 +119,6 @@ describe('orchestrated-work boot recovery', () => {
         branch: runCursor.branch,
         baseBranch: runCursor.baseBranch,
         worktreePath: runCursor.worktreePath,
-        attemptCap: runCursor.attemptCap,
         reconstruction,
         resumeFromTaskId: 'resume-boot',
         existingBranch: true,

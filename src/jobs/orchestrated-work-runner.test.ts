@@ -292,7 +292,6 @@ describe('orchestratedWorkApplier', () => {
         branch: string;
         baseBranch?: string;
         worktreePath?: string;
-        attemptCap: number;
       } | undefined;
 
       __setOrchestratedRuntimeForTest({
@@ -303,7 +302,6 @@ describe('orchestratedWorkApplier', () => {
             branch: deps.branch,
             baseBranch: deps.baseBranch,
             worktreePath: deps.worktreePath,
-            attemptCap: deps.attemptCap,
           };
           return {
             kind: 'blocked',
@@ -319,7 +317,6 @@ describe('orchestratedWorkApplier', () => {
         branch: 'jarvis-work/recovered-branch',
         baseBranch: 'main',
         worktreePath: recovered.dir,
-        attemptCap: 7,
         reconstruction: {
           completedTaskIds: ['persist-records-and-cursor'],
           nextTask: { id: 'resume-boot', text: 'Resume boot', section: 'Phase 11B' },
@@ -337,7 +334,6 @@ describe('orchestratedWorkApplier', () => {
         branch: 'jarvis-work/recovered-branch',
         baseBranch: 'main',
         worktreePath: recovered.dir,
-        attemptCap: 7,
       });
       expect(destroyWorktree).toHaveBeenCalledWith(
         expect.objectContaining({

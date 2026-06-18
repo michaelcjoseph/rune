@@ -472,7 +472,6 @@ interface ResumableRunCursor {
   branch: string;
   baseBranch: string;
   worktreePath: string;
-  attemptCap: number;
   resumeMarker: 'resumable';
   cursor: {
     completedTaskIds: string[];
@@ -633,8 +632,6 @@ function isOrchestrationRunCursor(value: unknown): value is ResumableRunCursor {
     typeof cursor.baseBranch === 'string' &&
     typeof cursor.worktreePath === 'string' &&
     cursor.worktreePath.length > 0 &&
-    typeof cursor.attemptCap === 'number' &&
-    Number.isFinite(cursor.attemptCap) &&
     !!position &&
     Array.isArray(position.completedTaskIds) &&
     position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&

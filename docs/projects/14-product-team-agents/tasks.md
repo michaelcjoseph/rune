@@ -1068,7 +1068,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `pass-with-warnings`; delete the block branch + block-correction budget.
 - [x] Restructure `ObjectionClass` (`team-task-workflow.ts`): drop `irreversibility`, add
       `outbound`; add a `reversible: boolean` field to `ObjectionFinding`.
-- [ ] Delete the outer attempt cap: remove `decideAttemptOutcome` (`orch-attempt-cap.ts`), the
+- [x] Delete the outer attempt cap: remove `decideAttemptOutcome` (`orch-attempt-cap.ts`), the
       PM-wrap-up-at-cap terminal, and every `blocked-on-human` per-task terminal. Collapse
       `runTaskWithRetries` (`project-orchestrator.ts`) to a single workflow invocation (the workflow
       now owns the convergence loop internally) and drop `OrchestrationDeps.attemptCap` /
