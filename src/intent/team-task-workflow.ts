@@ -602,6 +602,7 @@ async function runGated(
         roundFindingsLedger,
         lastReviewer.verifiedFindings,
         findingsLedger,
+        round < configuredRoundBudget,
       )
     ) {
       return {
@@ -1214,12 +1215,13 @@ function mergeFindingsIntoLedger(
     }
     const existing = ledger.find((entry) => entry.id === id);
     if (existing !== undefined) {
+      const wasResolved = existing.status === 'resolved';
       existing.class = normalized.class;
       existing.severity = normalized.severity;
       existing.location = normalized.location;
       existing.rationale = normalized.rationale;
       existing.reversible = normalized.reversible;
-      existing.status = 'open';
+      existing.status = wasResolved ? 'regressed' : 'open';
       continue;
     }
     ledger.push({
@@ -1251,8 +1253,15 @@ function reviewerVerificationAllowsCloseout(
   priorFindings: FindingsLedgerEntry[],
   verifications: FindingVerification[] | undefined,
   ledger: FindingsLedgerEntry[],
+  hasRemainingConfiguredRound: boolean,
 ): boolean {
-  if (verifications === undefined) return true;
+  if (priorFindings.length === 0) return true;
+  if (verifications === undefined) {
+    const maxSeverity = maxOpenFindingSeverity(ledger);
+    return maxSeverity === undefined ||
+      severityRank[maxSeverity] <= severityRank.low ||
+      !hasRemainingConfiguredRound;
+  }
   const verifiedIds = new Set(verifications.map((verification) => verification.id));
   if (!priorFindings.every((finding) => verifiedIds.has(finding.id))) {
     return false;

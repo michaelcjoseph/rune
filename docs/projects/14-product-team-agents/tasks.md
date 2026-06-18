@@ -1081,7 +1081,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       primary exit, 3-round stagnation backstop on max severity, 4-round hard budget. Set
       `DEFAULT_ROUND_CAP` to 4 (`team-task-deps.ts`) and track the per-round max severity
       history for the stagnation check.
-- [ ] Add the per-task findings ledger `{id, sourceGate, class, severity, location, rationale,
+- [x] Add the per-task findings ledger `{id, sourceGate, class, severity, location, rationale,
       reversible, raisedRound, status: open|resolved|regressed}`; thread it into `ReviewerInput`
       (`team-task-workflow.ts`) and any gate prompt that can verify prior findings each round.
 - [ ] Add stable finding-id generation and dedupe semantics for the ledger and terminal bug

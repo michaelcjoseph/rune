@@ -1679,6 +1679,191 @@ describe('team-task-workflow — round cap', () => {
     );
   });
 
+  it('does not close out when the reviewer omits explicit verification for prior open ledger findings', async () => {
+    type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+    type ReviewerVerdictWithVerification = ReviewerVerdict & {
+      verifiedFindings?: Array<{
+        id: string;
+        status: 'resolved' | 'open' | 'regressed';
+        notes: string;
+      }>;
+    };
+
+    const coderInputs: Array<{ findingsLedger?: FindingsLedgerEntry[] }> = [];
+    const reviewerInputs: ReviewerInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    const priorFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 3 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { findingsLedger?: FindingsLedgerEntry[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async (input) => {
+          reviewerInputs.push(input as ReviewerInputWithLedger);
+          reviewerCalls += 1;
+          if (reviewerCalls === 1) {
+            return {
+              outcome: 'fail',
+              findings: [priorFinding],
+              notes: 'first pass found a high-severity security finding',
+            };
+          }
+          if (reviewerCalls === 2) {
+            return {
+              outcome: 'pass',
+              findings: [],
+              notes: 'reviewer forgot to cite the prior finding verification',
+            };
+          }
+          return {
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: (input.findingsLedger ?? []).map((finding) => ({
+              id: finding.id,
+              status: 'resolved',
+              notes: `verified resolved: ${finding.id}`,
+            })),
+          } as ReviewerVerdictWithVerification;
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(reviewerInputs).toHaveLength(3);
+    expect(coderInputs).toHaveLength(3);
+    expect(reviewerInputs[1]?.findingsLedger?.map((entry) => entry.id)).toEqual([
+      reviewerInputs[2]?.findingsLedger?.[0]?.id,
+    ]);
+    expect(coderInputs[2]?.findingsLedger).toEqual([
+      expect.objectContaining({
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'high',
+        location: 'src/auth.ts:42',
+        rationale: 'token comparison leaks timing information',
+        status: 'open',
+      }),
+    ]);
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        id: reviewerInputs[1]?.findingsLedger?.[0]?.id,
+        sourceGate: 'reviewer',
+        status: 'resolved',
+      }),
+    ]);
+  });
+
+  it('marks a previously resolved finding as regressed when it reappears with the same stable id', async () => {
+    type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+    type ReviewerVerdictWithVerification = ReviewerVerdict & {
+      verifiedFindings?: Array<{
+        id: string;
+        status: 'resolved' | 'open' | 'regressed';
+        notes: string;
+      }>;
+    };
+
+    const reviewerInputs: ReviewerInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    let techLeadCalls = 0;
+    let firstFindingId: string | undefined;
+    const recurringFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+      reversible: true,
+    };
+    const bridgeFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'high',
+      location: 'src/ledger.ts:12',
+      rationale: 'task ledger writes can drop an accepted finding',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 3 },
+      makeDeps({
+        reviewer: async (input) => {
+          reviewerInputs.push(input as ReviewerInputWithLedger);
+          reviewerCalls += 1;
+          if (reviewerCalls === 1) {
+            return {
+              outcome: 'fail',
+              findings: [recurringFinding],
+              notes: 'first pass found a high-severity security finding',
+            };
+          }
+          if (reviewerCalls === 2) {
+            firstFindingId = input.findingsLedger?.[0]?.id;
+            return {
+              outcome: 'pass',
+              findings: [],
+              verifiedFindings: (input.findingsLedger ?? []).map((finding) => ({
+                id: finding.id,
+                status: 'resolved',
+                notes: `verified resolved: ${finding.id}`,
+              })),
+            } as ReviewerVerdictWithVerification;
+          }
+          return {
+            outcome: 'fail',
+            findings: [recurringFinding],
+            verifiedFindings: (input.findingsLedger ?? []).map((finding) => ({
+              id: finding.id,
+              status: 'resolved',
+              notes: `verified bridge finding resolved: ${finding.id}`,
+            })),
+            notes: 'the previously resolved finding regressed',
+          } as ReviewerVerdictWithVerification;
+        },
+        techLeadReviewDiff: async () => {
+          techLeadCalls += 1;
+          return techLeadCalls === 2
+            ? {
+                outcome: 'fail',
+                findings: [bridgeFinding],
+                notes: 'keep the loop alive after the first finding is resolved',
+              }
+            : { outcome: 'pass', findings: [] };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(firstFindingId).toEqual(expect.stringMatching(/^finding-/));
+    expect(ev.loopExitReason).toBe('stagnation');
+    expect(ev.findingsLedger?.filter((entry) => entry.id === firstFindingId)).toEqual([
+      expect.objectContaining({
+        id: firstFindingId,
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'high',
+        location: 'src/auth.ts:42',
+        rationale: 'token comparison leaks timing information',
+        status: 'regressed',
+        reversible: true,
+      }),
+    ]);
+  });
+
   it('primary-exits to closeout after one all-low round and records lows in the ledger', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;
