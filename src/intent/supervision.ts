@@ -35,6 +35,8 @@ export type SupervisedRunStatus =
 export interface SupervisedRun {
   /** Stable run id. */
   id: string;
+  /** Optional mutation kind that owns this run, when the run came from the mutation pipeline. */
+  kind?: string;
   /** The product the run is for. */
   product: string;
   /** The project slug the run is executing. */

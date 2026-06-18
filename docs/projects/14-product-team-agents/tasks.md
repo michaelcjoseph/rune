@@ -835,7 +835,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       resumable run; skip-if-already-terminal), and add a graceful-shutdown drain that marks
       in-flight orchestrated runs `resumable` rather than leaving a bare `running` line.
 - [x] Make `cleanupOrphanWorktrees` skip a resume-marked run's worktree.
-- [ ] **Live acceptance:** a restart injected mid-run resumes to completion (no orphaned record,
+- [x] **Live acceptance:** a restart injected mid-run resumes to completion (no orphaned record,
       exactly one terminal); a forced gate rejection drives a corrective QA retry that PASSES on
       the feedback. Stub-free proof both failure modes are closed.
 

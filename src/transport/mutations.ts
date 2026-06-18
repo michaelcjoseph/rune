@@ -44,6 +44,7 @@ function buildSupervisedRun(
     : d.target.ref || d.id;
   const run: SupervisedRun = {
     id: d.id,
+    kind: d.kind,
     product,
     project,
     status,
@@ -75,6 +76,10 @@ function safeUpsertRun(run: SupervisedRun): void {
       error: (err as Error).message,
     });
   }
+}
+
+function isTerminalMutationStatus(status: MutationStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'rejected';
 }
 
 export type MutationKind =
@@ -396,6 +401,11 @@ async function startApply(
 
   try {
     for await (const event of applier.apply(descriptor, ctx)) {
+      const isTerminalEvent = event.kind === 'completed' || event.kind === 'failed';
+      if (isTerminalEvent && isTerminalMutationStatus(descriptor.status)) {
+        return;
+      }
+
       // `activity` is an internal work-liveness signal only — it advances the
       // supervision heartbeat below but is never forwarded to the bus, so a
       // run can emit one per stdout envelope without spamming Telegram/the
@@ -460,7 +470,7 @@ async function startApply(
         }
       }
 
-      if (event.kind === 'completed' || event.kind === 'failed') {
+      if (isTerminalEvent) {
         descriptor.status = event.kind === 'completed' ? 'completed' : 'failed';
         if (event.kind === 'failed' && event.data) {
           descriptor.error = String((event.data as Record<string, unknown>)['reason'] ?? '');

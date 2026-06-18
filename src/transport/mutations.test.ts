@@ -40,6 +40,7 @@ const {
   createMutation,
   cancelMutation,
   activeRuns,
+  writeRecoveredTerminalMutation,
 } = await import('./mutations.ts' as string);
 
 // --- Helpers ---
@@ -746,6 +747,75 @@ describe('mutations', () => {
       expect(terminalCall).toBeDefined();
       expect((terminalCall![0] as { outcome?: string; workProduct?: unknown }).outcome).toBe('branch-complete');
       expect((terminalCall![0] as { outcome?: string; workProduct?: unknown }).workProduct).toEqual(workProduct);
+    });
+
+    it('does not append a stale second terminal after recovered orchestrated-work already completed the run', async () => {
+      // Phase 11B restart acceptance: during an injected restart, recovery may
+      // re-dispatch and complete the persisted running mutation while the old
+      // applier is still draining. The mutation log must keep one latest
+      // terminal state for the logical run, not a recovered terminal followed by
+      // a stale second terminal from the pre-restart applier.
+      let releaseOriginal: () => void = () => {};
+      const originalMayFinish = new Promise<void>((resolve) => {
+        releaseOriginal = resolve;
+      });
+
+      async function* staleOriginalGen(): AsyncIterable<any> {
+        await originalMayFinish;
+        yield {
+          mutationId: 'stale-original-terminal',
+          ts: new Date().toISOString(),
+          kind: 'completed',
+          data: { outcome: 'branch-complete', reason: 'stale original drain' },
+        };
+      }
+
+      const applier = makeApplier({
+        kind: 'orchestrated-work',
+        autoApprove: true,
+        validateResult: { ok: true },
+        applyGen: staleOriginalGen(),
+      });
+      registerApplier(applier);
+
+      const result = await createMutation('orchestrated-work', { projectSlug: 'demo' }, 'webview');
+      expect(result.ok).toBe(true);
+      const descriptor = (result as any).descriptor;
+
+      await waitForUpserts(2);
+      expect(activeRuns.has(descriptor.id)).toBe(true);
+      mockAppendMutationLine.mockClear();
+      mockUpsertRun.mockClear();
+
+      writeRecoveredTerminalMutation(descriptor, {
+        mutationId: descriptor.id,
+        ts: new Date().toISOString(),
+        kind: 'completed',
+        data: { outcome: 'branch-complete', reason: 'recovered run completed' },
+      });
+
+      releaseOriginal();
+      const inactiveDeadline = Date.now() + 500;
+      while (activeRuns.has(descriptor.id) && Date.now() < inactiveDeadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(activeRuns.has(descriptor.id)).toBe(false);
+
+      const completedAppends = mockAppendMutationLine.mock.calls.filter(
+        ([entry]) => entry.id === descriptor.id && entry.kind === 'orchestrated-work' && entry.status === 'completed',
+      );
+      expect(completedAppends).toHaveLength(1);
+      expect((completedAppends[0]![0] as { error?: string }).error).toBeUndefined();
+
+      const postRecoverySupervisionWrites = mockUpsertRun.mock.calls.filter(
+        ([run]) => run.id === descriptor.id && run.kind === 'orchestrated-work',
+      );
+      expect(postRecoverySupervisionWrites).toHaveLength(1);
+      expect(postRecoverySupervisionWrites[0]![0]).toMatchObject({
+        id: descriptor.id,
+        kind: 'orchestrated-work',
+        status: 'completed',
+      });
     });
 
     it('copies outcome:failed off a failed terminal event onto the descriptor', async () => {

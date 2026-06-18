@@ -98,10 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
--  a `resumeMarker: 'resumable'` cursor under `workRunsDir`.
-
-Verification:
-- `npx vitest run --configLoader runner src/jobs/sandbox-runtime.test.ts` passed: 48 tests
+- d-work-recovery.test.ts` passed: 84 tests
 - `git diff --check` passed
 
-Worktree note: `src/jobs/sandbox-runtime.test.ts` was already modified before I started; I left it intact.
+`npm run build` still fails, but on existing unrelated TypeScript errors in test/nightly/orchestrated files; none reference these changes. `src/transport/mutations.test.ts` was already modified before my work and I left it as-is.
