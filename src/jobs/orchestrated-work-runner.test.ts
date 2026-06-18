@@ -1628,7 +1628,10 @@ describe('orchestratedWorkApplier', () => {
           blockedReason: 'test cleanup hard block',
         });
         await waitForCondition(() => runId !== undefined && !activeRuns.has(runId));
-        expect(destroyed).toBe(true);
+        // Phase 13: an objection-open block parks blocked-on-human and PRESERVES the
+        // worktree (maybeParkedRun no longer excludes objectionOpen), so cleanup via an
+        // objection-open block does not destroy the sandbox.
+        expect(destroyed).toBe(false);
       } finally {
         finishRole?.({
           taskId: 'placeholder',
