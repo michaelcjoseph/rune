@@ -98,10 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- strated-work-runner.test.ts --configLoader runner`
-- `git diff --check -- src/jobs/orchestrated-work-runner.ts src/intent/orch-task-select.ts`
+- jobs/mutations-log.test.ts --configLoader runner` passed: 13 tests.
+- `git diff --check -- src/jobs/mutations-log.ts src/jobs/mutations-log.test.ts` passed.
 
-`npx tsc --noEmit --pretty false` still fails on existing unrelated repo-wide typing errors; it no longer reports the recovery test `SelectedTask` mismatch.
-- jobs/orchestrated-work-recovery.test.ts --configLoader runner` passed.
-
-Note: the prior attempt had files staged. I tried to unstage them, but the sandbox cannot write the git index lock outside the workspace. `git diff HEAD` shows the correct net diff and no `orch-task-select.ts` production change.
+No commit made. Note: `src/jobs/mutations-log.test.ts` was already staged before my change; `src/jobs/mutations-log.ts` is currently unstaged.

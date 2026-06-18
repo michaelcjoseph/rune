@@ -187,6 +187,36 @@ describe('mutations-log', () => {
       expect(untouchedCompleted.status).toBe('completed');
     });
 
+    it('does not terminalize running orchestrated-work entries; dedicated recovery decides resume vs orphan', () => {
+      const resumableOrchestrated = makeDescriptor({
+        id: 'orch-resume-1',
+        kind: 'orchestrated-work',
+        status: 'running',
+        payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
+      });
+      const legacyRunning = makeDescriptor({ id: 'legacy-run-1', status: 'running' });
+
+      const raw = [resumableOrchestrated, legacyRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
+      (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(raw);
+
+      reconcileOrphans();
+
+      expect(writeFileSync).toHaveBeenCalledOnce();
+      const [, writtenContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      const lines = writtenContent.split('\n').filter(Boolean);
+      const untouchedOrchestrated = JSON.parse(lines[0]!);
+      const terminalizedLegacy = JSON.parse(lines[1]!);
+
+      expect(untouchedOrchestrated.id).toBe('orch-resume-1');
+      expect(untouchedOrchestrated.kind).toBe('orchestrated-work');
+      expect(untouchedOrchestrated.status).toBe('running');
+      expect(untouchedOrchestrated.error).toBeUndefined();
+
+      expect(terminalizedLegacy.id).toBe('legacy-run-1');
+      expect(terminalizedLegacy.status).toBe('failed');
+      expect(terminalizedLegacy.error).toBe('orphaned');
+    });
+
     it('does not rewrite when no running entries exist', () => {
       const completed = makeDescriptor({ id: 'c1', status: 'completed' });
       const failed = makeDescriptor({ id: 'f1', status: 'failed' });

@@ -40,7 +40,7 @@ export function readRecentMutations(n: number): MutationDescriptor[] {
   return terminal.slice(-n).reverse();
 }
 
-/** On startup, flip any descriptors still in 'running' status to 'failed' with reason 'orphaned'.
+/** On startup, flip non-resumable descriptors still in 'running' status to 'failed' with reason 'orphaned'.
  *  These represent mutations that were interrupted by a server restart mid-run. */
 export function reconcileOrphans(): void {
   let raw: string;
@@ -57,6 +57,9 @@ export function reconcileOrphans(): void {
     try {
       const entry = JSON.parse(line) as MutationDescriptor;
       if (entry.status === 'running') {
+        if (entry.kind === 'orchestrated-work') {
+          return line;
+        }
         changed = true;
         return JSON.stringify({ ...entry, status: 'failed', error: 'orphaned' } satisfies MutationDescriptor);
       }
