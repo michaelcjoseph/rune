@@ -1278,7 +1278,6 @@ function buildFindingId(
     sourceGate,
     finding.class,
     finding.location.trim(),
-    finding.rationale.trim(),
   ].join('|');
   let hash = 0x811c9dc5;
   for (let i = 0; i < seed.length; i += 1) {

@@ -1679,6 +1679,63 @@ describe('team-task-workflow — round cap', () => {
     );
   });
 
+  it('uses a stable finding id to update a repeated sighting instead of appending a duplicate row', async () => {
+    type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+
+    const reviewerInputs: ReviewerInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    const firstSighting: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+      reversible: true,
+    };
+    const repeatedSighting: ObjectionFinding = {
+      class: 'security',
+      severity: 'critical',
+      location: 'src/auth.ts:42',
+      rationale: 'timing side channel remains exploitable after the retry change',
+      reversible: false,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        reviewer: async (input) => {
+          reviewerInputs.push(input as ReviewerInputWithLedger);
+          reviewerCalls += 1;
+          return {
+            outcome: 'fail',
+            findings: [reviewerCalls === 1 ? firstSighting : repeatedSighting],
+            notes: `review pass ${reviewerCalls} still sees the same auth timing finding`,
+          };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    const stableId = reviewerInputs[1]?.findingsLedger?.[0]?.id;
+    expect(stableId).toEqual(expect.stringMatching(/^finding-/));
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        id: stableId,
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'critical',
+        location: 'src/auth.ts:42',
+        rationale: 'timing side channel remains exploitable after the retry change',
+        reversible: false,
+        raisedRound: 1,
+        status: 'open',
+      }),
+    ]);
+    expect(ev.findingsLedger?.map((entry) => entry.id)).toEqual([stableId]);
+  });
+
   it('does not close out when the reviewer omits explicit verification for prior open ledger findings', async () => {
     type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
       findingsLedger?: FindingsLedgerEntry[];

@@ -1083,6 +1083,76 @@ describe('project-orchestrator — terminal bug recording', () => {
       },
     ]);
   });
+
+  it('dedupes terminal bug entries by run/task/finding id using the latest terminal finding facts', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    const staleFinding: FindingsLedgerEntry = {
+      id: 'finding-auth-timing',
+      sourceGate: 'reviewer',
+      class: 'security',
+      severity: 'medium',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison may leak timing information',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+    };
+    const terminalFinding: FindingsLedgerEntry = {
+      id: 'finding-auth-timing',
+      sourceGate: 'reviewer',
+      class: 'security',
+      severity: 'critical',
+      location: 'src/auth.ts:42',
+      rationale: 'timing side channel remains exploitable at terminal handling',
+      reversible: false,
+      raisedRound: 1,
+      status: 'regressed',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: {
+          outcome: 'fail',
+          findings: [terminalFinding],
+          objections: [terminalFinding],
+        },
+        findingsLedger: [staleFinding, terminalFinding],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: ['terminal severity handling found one repeated auth finding'],
+      }),
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Drive terminal severity handling',
+    ].join('\n'));
+    const deps: TerminalBugRecordingDeps = {
+      ...h.deps,
+      appendTerminalBugEntries: async (entries) => {
+        bugEntries.push(...entries);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(bugEntries).toEqual([
+      {
+        runId: 'run-1',
+        taskId: 'drive-terminal-severity-handling',
+        findingId: 'finding-auth-timing',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'critical',
+        location: 'src/auth.ts:42',
+        rationale: 'timing side channel remains exploitable at terminal handling',
+        reversible: false,
+      },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

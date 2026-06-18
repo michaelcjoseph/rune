@@ -354,14 +354,17 @@ function terminalBugEntries(
   runId: string,
   evidence: TaskEvidence,
 ): OrchestrationTerminalBugEntry[] {
-  const seen = new Set<string>();
-  const entries: OrchestrationTerminalBugEntry[] = [];
+  const entriesById = new Map<string, OrchestrationTerminalBugEntry>();
   for (const finding of evidence.findingsLedger ?? []) {
-    if (finding.status !== 'open' && finding.status !== 'regressed') continue;
-    if (finding.severity === 'low') continue;
-    if (seen.has(finding.id)) continue;
-    seen.add(finding.id);
-    entries.push({
+    const key = `${runId}|${evidence.taskId}|${finding.id}`;
+    if (
+      (finding.status !== 'open' && finding.status !== 'regressed') ||
+      finding.severity === 'low'
+    ) {
+      entriesById.delete(key);
+      continue;
+    }
+    entriesById.set(key, {
       runId,
       taskId: evidence.taskId,
       findingId: finding.id,
@@ -373,7 +376,7 @@ function terminalBugEntries(
       reversible: finding.reversible,
     });
   }
-  return entries;
+  return [...entriesById.values()];
 }
 
 function buildRunCursor(

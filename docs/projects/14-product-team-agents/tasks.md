@@ -1084,7 +1084,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Add the per-task findings ledger `{id, sourceGate, class, severity, location, rationale,
       reversible, raisedRound, status: open|resolved|regressed}`; thread it into `ReviewerInput`
       (`team-task-workflow.ts`) and any gate prompt that can verify prior findings each round.
-- [ ] Add stable finding-id generation and dedupe semantics for the ledger and terminal bug
+- [x] Add stable finding-id generation and dedupe semantics for the ledger and terminal bug
       entries so re-reviews of the same finding update one ledger row instead of creating
       duplicate bugs.
 - [ ] Update the reviewer harness to run regression-first then discovery, and update
