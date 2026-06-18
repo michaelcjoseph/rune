@@ -310,22 +310,26 @@ describe('team-task-workflow — objection gate', () => {
     rationale: 'unsanitized shell interpolation',
   };
 
-  it('an open objection-class finding blocks task completion', async () => {
+  it('maps a high objection-class finding to fail, not block', async () => {
     const deps = makeDeps({ reviewer: async () => ({ pass: false, objections: [objection] }) });
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.objectionOpen).toBe(true);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.objectionOpen).toBe(false);
   });
 
-  it('PM wrap-up cannot clear an open objection-class finding', async () => {
+  it('does not expose a high severity finding as an open human block', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [objection] }),
-      pmWrapup: async () => ({ resolved: true }), // PM says resolved...
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'The finding remains in the verdict ledger for the severity loop.',
+      }),
     });
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
-    // ...but the objection still blocks; PM authority does not extend here.
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.objectionOpen).toBe(true);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.objectionOpen).toBe(false);
   });
 
   it('surfaces the structured objection payload (class/severity/location/rationale)', async () => {
@@ -355,8 +359,8 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     if (typeof mapSeverity !== 'function') {
       throw new Error('mapObjectionSeverityToOutcome must be exported');
     }
-    expect(mapSeverity('critical')).toBe('block');
-    expect(mapSeverity('high')).toBe('block');
+    expect(mapSeverity('critical')).toBe('fail');
+    expect(mapSeverity('high')).toBe('fail');
     expect(mapSeverity('medium')).toBe('fail');
     expect(mapSeverity('low')).toBe('pass-with-warnings');
   });
@@ -440,7 +444,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev.outcome).toBe('blocked');
     expect(ev.objectionOpen).toBe(false);
     expect(ev.blockedReason).toMatch(/operational|unknown outcome|unsupported outcome/i);
-    expect(ev.reviewerVerdict?.outcome).toBe('block');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
@@ -454,7 +458,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     };
   }
 
-  it('maps objection severity to reviewer outcomes: critical/high block, medium fails, low passes with warnings', async () => {
+  it('maps objection severity to reviewer outcomes: critical/high/medium fail, low passes with warnings', async () => {
     const cases: Array<{
       severity: ObjectionSeverity;
       expectedOutcome: ReviewerOutcome;
@@ -463,15 +467,15 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }> = [
       {
         severity: 'critical',
-        expectedOutcome: 'block',
-        expectedWorkflowOutcome: 'blocked',
-        expectedObjectionOpen: true,
+        expectedOutcome: 'fail',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
       },
       {
         severity: 'high',
-        expectedOutcome: 'block',
-        expectedWorkflowOutcome: 'blocked',
-        expectedObjectionOpen: true,
+        expectedOutcome: 'fail',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
       },
       {
         severity: 'medium',
@@ -505,9 +509,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       expect(ev.reviewerVerdict?.outcome, c.severity).toBe(c.expectedOutcome);
       expect(ev.outcome, c.severity).toBe(c.expectedWorkflowOutcome);
       expect(ev.objectionOpen, c.severity).toBe(c.expectedObjectionOpen);
-      if (c.severity === 'low' || c.severity === 'medium') {
-        expect(ev.reviewerVerdict?.outcome, c.severity).not.toBe('block');
-      }
+      expect(ev.reviewerVerdict?.outcome, c.severity).not.toBe('block');
     }
   });
 
@@ -529,9 +531,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       {
         name: 'low + critical',
         severities: ['low', 'critical'],
-        expectedOutcome: 'block',
-        expectedWorkflowOutcome: 'blocked',
-        expectedObjectionOpen: true,
+        expectedOutcome: 'fail',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
       },
     ];
 
@@ -668,12 +670,12 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       rejectedArtifact: 'reviewer-verdict',
       reason: expect.stringMatching(/malformed severity|unsupported severity/i),
     });
-    expect(ev.reviewerVerdict?.outcome).toBe('block');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
 
-  it('gives a reviewer-produced block exactly one feedback-threaded coder correction before parking', async () => {
+  it('normalizes a reviewer-produced block with a high finding to fail without a block-correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const reviewerObjection: ObjectionFinding = {
       class: 'security',
@@ -707,22 +709,13 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.objectionOpen).toBe(true);
-    expect(pmCalled).toBe(false);
-    expect(reviewerCalls).toBe(2);
-    expect(coderInputs).toHaveLength(2);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.objectionOpen).toBe(false);
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(pmCalled).toBe(true);
+    expect(reviewerCalls).toBe(1);
+    expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
-    expect(coderInputs[1]?.rejectionFeedback).toEqual([
-      expect.objectContaining({
-        rejectingRole: 'reviewer',
-        counterpartRole: 'coder',
-        rejectedRole: 'coder',
-        rejectedArtifact: 'reviewer-verdict',
-        reason: 'security/high at src/auth.ts:42: token comparison leaks timing information',
-        actionableNotes: ['security/high at src/auth.ts:42: token comparison leaks timing information'],
-      }),
-    ]);
   });
 
   it('accept-with-rationale resumes a non-objection fail as pass-with-warnings', async () => {
@@ -752,11 +745,9 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev.objectionOpen).toBe(false);
   });
 
-  it('accept-with-rationale override can resume a surviving block as pass-with-warnings', async () => {
+  it('does not route a severity-derived high fail through accept-with-rationale override', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const overrideInputs: unknown[] = [];
-    const rationale =
-      'Human accepts this known deployment risk because the route is internal-only and the follow-up hardening task is already filed.';
     const blockingFinding: ObjectionFinding = {
       class: 'security',
       severity: 'high',
@@ -773,16 +764,17 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         findings: [blockingFinding],
         notes: 'blocking security finding remains open',
       }),
-      pmWrapup: async () => {
-        throw new Error('PM wrap-up must not clear high/critical block outcomes');
-      },
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM accepts this non-objection disagreement at the cap.',
+      }),
       ...({
         acceptWithRationale: async (input: unknown) => {
           overrideInputs.push(input);
           return {
             accepted: true,
             actor: 'human',
-            rationale,
+            rationale: 'Human accepts this known deployment risk.',
           };
         },
       } as Partial<TeamTaskDeps>),
@@ -790,20 +782,20 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
-    expect(coderInputs).toHaveLength(2);
-    expect(overrideInputs).toHaveLength(1);
+    expect(coderInputs).toHaveLength(1);
+    expect(overrideInputs).toHaveLength(0);
     expect(ev.outcome).toBe('ready-for-closeout');
     expect(ev.objectionOpen).toBe(false);
-    expect(ev.reviewerVerdict?.outcome).toBe('pass-with-warnings');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(ev.reviewerVerdict?.findings).toEqual([blockingFinding]);
     expect(ev.acceptance).toEqual({
-      actor: 'human',
+      actor: 'pm',
       decision: 'accepted-with-rationale',
-      rationale,
+      rationale: 'PM accepts this non-objection disagreement at the cap.',
     });
   });
 
-  it('accept-with-rationale override blocks when the acceptance rationale is empty', async () => {
+  it('does not invoke accept-with-rationale override for a severity-derived critical fail', async () => {
     const overrideInputs: unknown[] = [];
     const blockingFinding: ObjectionFinding = {
       class: 'data-integrity',
@@ -815,6 +807,10 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       reviewer: async () => ({
         outcome: 'block',
         findings: [blockingFinding],
+      }),
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM keeps the critical finding in the severity loop ledger.',
       }),
       ...({
         acceptWithRationale: async (input: unknown) => {
@@ -830,12 +826,14 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
 
-    expect(overrideInputs).toHaveLength(1);
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.blockedReason).toMatch(/rationale/i);
-    expect(ev.objectionOpen).toBe(true);
-    expect(ev.reviewerVerdict?.outcome).toBe('block');
-    expect(ev).not.toHaveProperty('acceptance');
+    expect(overrideInputs).toHaveLength(0);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.objectionOpen).toBe(false);
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.acceptance).toMatchObject({
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+    });
   });
 });
 
@@ -867,12 +865,6 @@ describe('team-task-workflow — gate rejection records', () => {
   }
 
   it('emits a structured rejection for every blocking role gate', async () => {
-    const objection: ObjectionFinding = {
-      class: 'security',
-      severity: 'high',
-      location: 'src/x.ts:10',
-      rationale: 'unsanitized shell interpolation',
-    };
     const cases: Array<{
       name: string;
       task: SizedTask;
@@ -907,20 +899,6 @@ describe('team-task-workflow — gate rejection records', () => {
           rejectedRole: 'qa',
           artifact: 'test-intent',
           rejectedArtifact: 'test-intent',
-        },
-      },
-      {
-        name: 'reviewer objection',
-        task: codeTask,
-        deps: {
-          reviewer: async () => ({ pass: false, objections: [objection] }),
-        },
-        expected: {
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          rejectedRole: 'coder',
-          artifact: 'reviewer-verdict',
-          rejectedArtifact: 'reviewer-verdict',
         },
       },
       {
@@ -972,12 +950,6 @@ describe('team-task-workflow — gate rejection records', () => {
   });
 
   it('emits the structured gate-rejection activity record at every blocking gate', async () => {
-    const objection: ObjectionFinding = {
-      class: 'security',
-      severity: 'high',
-      location: 'src/x.ts:10',
-      rationale: 'unsanitized shell interpolation',
-    };
     const cases: Array<{
       name: string;
       task: SizedTask;
@@ -1010,19 +982,6 @@ describe('team-task-workflow — gate rejection records', () => {
           counterpartRole: 'qa',
           rejectedRole: 'qa',
           rejectedArtifact: 'test-intent',
-        },
-      },
-      {
-        name: 'reviewer objection',
-        task: codeTask,
-        deps: {
-          reviewer: async () => ({ pass: false, objections: [objection] }),
-        },
-        expected: {
-          rejectingRole: 'reviewer',
-          counterpartRole: 'coder',
-          rejectedRole: 'coder',
-          rejectedArtifact: 'reviewer-verdict',
         },
       },
       {
@@ -1570,7 +1529,7 @@ describe('team-task-workflow — execution observability', () => {
     expect(verdicts.every((event) => String(event.data?.['line']).trim().length > 0)).toBe(true);
   });
 
-  it('emits structured objection events before blocking on objection-class findings', async () => {
+  it('emits a failing reviewer verdict for severity findings without opening a human block', async () => {
     const events: WorkflowActivityEvent[] = [];
     const objection: ObjectionFinding = {
       class: 'security',
@@ -1589,34 +1548,31 @@ describe('team-task-workflow — execution observability', () => {
         pass: false,
         objections: [objection],
       }),
-      pmWrapup: async () => {
-        throw new Error('PM must not run for objection-class findings');
-      },
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM keeps this high-severity finding in the convergence ledger.',
+      }),
     });
 
     const ev = await runTeamTaskWorkflow(codeTask, inputWithEmitter, deps);
 
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.objectionOpen).toBe(true);
-    const objectionEvents = events.filter((event) => event.data?.['event'] === 'objection');
-    expect(objectionEvents).toHaveLength(1);
-    expect(objectionEvents[0]?.data).toMatchObject({
-      role: 'reviewer',
-      gate: 'reviewer-verdict',
-      objection,
-    });
-    expect(String(objectionEvents[0]?.data?.['line'])).toContain('security/high');
-    expect(String(objectionEvents[0]?.data?.['line'])).toContain('src/auth.ts:42');
-
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.objectionOpen).toBe(false);
     const reviewerVerdictIndex = events.findIndex(
       (event) =>
         event.data?.['event'] === 'role-verdict' &&
         event.data?.['role'] === 'reviewer' &&
         event.data?.['verdict'] === 'fail',
     );
-    const objectionIndex = events.findIndex((event) => event.data?.['event'] === 'objection');
     expect(reviewerVerdictIndex).toBeGreaterThanOrEqual(0);
-    expect(objectionIndex).toBeGreaterThan(reviewerVerdictIndex);
+    expect(events[reviewerVerdictIndex]?.data).toMatchObject({
+      role: 'reviewer',
+      gate: 'reviewer-verdict',
+      verdict: 'fail',
+    });
+    expect(String(events[reviewerVerdictIndex]?.data?.['summary'])).toContain('security/high');
+    expect(String(events[reviewerVerdictIndex]?.data?.['summary'])).toContain('src/auth.ts:42');
   });
 });
 

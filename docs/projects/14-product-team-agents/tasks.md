@@ -1014,7 +1014,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Outcome-enum test: `GateVerdict.outcome` is exactly one of `pass`/`pass-with-warnings`/`fail`;
       `block` is no longer a producible outcome and any attempt to map a finding to `block` is a
       type/normalization error.
-- [ ] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
+- [x] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
       multiple findings resolve to the strictest mapped outcome; no input ever yields `block`.
 - [ ] Finding-shape test: a review-gate finding carries `{class, severity, location, rationale,
       reversible}`; `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,

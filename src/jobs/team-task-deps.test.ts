@@ -415,6 +415,12 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
   });
 
   it('routes severity-derived outcomes through every production review gate parser', async () => {
+    const criticalFinding = {
+      class: 'privacy',
+      severity: 'critical',
+      location: 'src/profile.ts:7',
+      rationale: 'private notes can be exposed to another user',
+    };
     const highFinding = {
       class: 'security',
       severity: 'high',
@@ -438,7 +444,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
         if (role === 'reviewer') {
           return [
             '```reviewer-verdict',
-            JSON.stringify({ pass: true, findings: [highFinding] }),
+            JSON.stringify({ pass: true, findings: [criticalFinding, highFinding] }),
             '```',
           ].join('\n');
         }
@@ -471,7 +477,7 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
     const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
 
-    expect(reviewer).toMatchObject({ outcome: 'fail', findings: [highFinding] });
+    expect(reviewer).toMatchObject({ outcome: 'fail', findings: [criticalFinding, highFinding] });
     expect(techLead).toMatchObject({ outcome: 'fail', findings: [mediumFinding] });
     expect(designer).toMatchObject({ outcome: 'pass-with-warnings', findings: [lowFinding] });
   });
