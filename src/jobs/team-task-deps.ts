@@ -31,9 +31,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
+import { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
@@ -369,9 +371,9 @@ export interface BuildTeamTaskDepsArgs {
 }
 
 /** Compose a judgment role's two-channel charter prompt and run one call. */
-function makeJudge(seams: TeamTaskSeams) {
+function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string) {
   return (role: RoleName, binding: RoleModelBinding, instruction: string, body: string) => {
-    const ctx = composeRoleContext(role, instruction);
+    const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const message = ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body;
     return seams.judgmentCall({
       role,
@@ -479,7 +481,8 @@ export function buildProductionTeamTaskDeps(
 ): TeamTaskDeps {
   const seams: TeamTaskSeams = { ...defaultSeams, ...seamOverrides };
   const { sandbox, productsConfigPath, models } = args;
-  const judge = makeJudge(seams);
+  const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
+  const judge = makeJudge(seams, projectExemplarsDir);
 
   // The QA work product, retained so the tech-lead reviews actual test
   // content rather than bare file paths (QaResult carries only testIds).
@@ -544,7 +547,7 @@ export function buildProductionTeamTaskDeps(
     instruction: string,
     body: string,
   ): Promise<ExecutionAgentResult> => {
-    const ctx = composeRoleContext(role, instruction);
+    const ctx = composeRoleContext(role, instruction, { projectExemplarsDir });
     const emit = args.emit
       ? attributeRoleEvents(args.emit, role, binding)
       : undefined;
