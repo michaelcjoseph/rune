@@ -409,6 +409,70 @@ describe('team-task-workflow — objection gate', () => {
     expect(ev.gateVerdicts?.designer?.findings).toEqual([designerFinding]);
   });
 
+  it('defaults omitted or malformed reversible flags to false without dropping findings from any review gate', async () => {
+    const reviewerFinding = {
+      class: 'outbound',
+      severity: 'high',
+      location: 'src/egress.ts:27',
+      rationale: 'unapproved network egress can leave the sandbox',
+    };
+    const techLeadFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/state.ts:91',
+      rationale: 'checkpoint write can leave a partial cursor',
+      reversible: 'unknown',
+    };
+    const designerFinding = {
+      class: 'cost-perf',
+      severity: 'critical',
+      location: 'src/server/static/app.js:114',
+      rationale: 'render loop can freeze the cockpit during active review',
+      reversible: null,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        reviewer: async () => ({
+          outcome: 'fail',
+          findings: [reviewerFinding],
+        } as unknown as ReviewerVerdict),
+        techLeadReviewDiff: async () => ({
+          outcome: 'fail',
+          findings: [techLeadFinding],
+        } as unknown as { pass: boolean; notes?: string }),
+        designer: async () => ({
+          outcome: 'fail',
+          findings: [designerFinding],
+        } as unknown as { pass: boolean; notes?: string }),
+      }),
+    );
+
+    expect(ev.gateVerdicts?.reviewer?.findings).toEqual([
+      { ...reviewerFinding, reversible: false },
+    ]);
+    expect(ev.gateVerdicts?.techLeadDiff?.findings).toEqual([
+      {
+        class: 'data-integrity',
+        severity: 'medium',
+        location: 'src/state.ts:91',
+        rationale: 'checkpoint write can leave a partial cursor',
+        reversible: false,
+      },
+    ]);
+    expect(ev.gateVerdicts?.designer?.findings).toEqual([
+      {
+        class: 'cost-perf',
+        severity: 'critical',
+        location: 'src/server/static/app.js:114',
+        rationale: 'render loop can freeze the cockpit during active review',
+        reversible: false,
+      },
+    ]);
+  });
+
   it('rejects the retired irreversibility class as malformed review-gate output', async () => {
     const deps = makeDeps({
       reviewer: async () => ({

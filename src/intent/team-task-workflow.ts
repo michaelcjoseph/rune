@@ -894,8 +894,15 @@ function buildWorkflowGateVerdicts(
 function toPublicGateVerdict(verdict: GateVerdict): GateVerdict {
   return {
     outcome: verdict.outcome,
-    findings: verdict.findings.map((finding) => ({ ...finding })),
+    findings: verdict.findings.map(toPublicFinding),
     ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
+  };
+}
+
+function toPublicFinding(finding: ObjectionFinding): ObjectionFinding {
+  return {
+    ...finding,
+    reversible: typeof finding.reversible === 'boolean' ? finding.reversible : false,
   };
 }
 

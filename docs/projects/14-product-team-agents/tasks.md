@@ -1019,7 +1019,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Finding-shape test: a review-gate finding carries `{class, severity, location, rationale,
       reversible}`; `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,
       `cost-perf`}; `irreversibility` is rejected; `reversible` is required.
-- [ ] Reversible-default test: a finding (from reviewer, tech-lead diff, or designer) that OMITS or
+- [x] Reversible-default test: a finding (from reviewer, tech-lead diff, or designer) that OMITS or
       malforms `reversible` normalizes to `reversible: false` — never dropped and never defaulted to
       mergeable — so a high/critical finding with a missing flag fails safe to the terminal HOLD.
 - [ ] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
