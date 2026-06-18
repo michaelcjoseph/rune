@@ -25,6 +25,8 @@ import {
   type ObjectionFinding,
   type ObjectionSeverity,
   type ReviewerOutcome,
+  type GateOutcome,
+  type GateVerdict,
   type GateRejectionFeedback,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
@@ -80,7 +82,7 @@ const INPUT = {
   cap: 2,
 };
 
-const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail', 'block'] as const;
+const REVIEW_OUTCOMES = ['pass', 'pass-with-warnings', 'fail'] as const;
 type GateVerdictRecord = {
   outcome?: unknown;
   findings?: unknown;
@@ -88,6 +90,16 @@ type GateVerdictRecord = {
   pass?: unknown;
   objections?: unknown;
 };
+
+type TypeEqual<A, B> = (
+  (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false
+);
+type IsNever<T> = [T] extends [never] ? true : false;
+type Assert<T extends true> = T;
+type ReviewerOutcomeMatchesGateOutcome = Assert<TypeEqual<ReviewerOutcome, GateOutcome>>;
+type ReviewerOutcomeHasNoBlock = Assert<IsNever<Extract<ReviewerOutcome, 'block'>>>;
+type GateVerdictOutcomeHasNoBlock = Assert<IsNever<Extract<GateVerdict['outcome'], 'block'>>>;
 
 // ---------------------------------------------------------------------------
 // QA-first
@@ -505,6 +517,13 @@ describe('team-task-workflow — objection gate', () => {
 // ---------------------------------------------------------------------------
 
 describe('team-task-workflow — reviewing verdict outcome enum', () => {
+  it('does not admit legacy block in ReviewerOutcome or GateVerdict.outcome', () => {
+    const publicOutcomes = [...REVIEW_OUTCOMES];
+
+    expect(publicOutcomes).toEqual(['pass', 'pass-with-warnings', 'fail']);
+    expect(publicOutcomes).not.toContain('block');
+  });
+
   it('exports one severity-to-outcome mapper as the shared source of truth', () => {
     const mapSeverity = (
       teamTaskWorkflow as typeof teamTaskWorkflow & {
@@ -604,6 +623,31 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+  });
+
+  it('normalizes a legacy reviewer block payload to public fail evidence without block residue', async () => {
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        reviewer: async () => ({
+          outcome: 'block',
+          findings: [],
+          notes: 'legacy hard block residue',
+        } as unknown as ReviewerVerdict),
+      }),
+    );
+
+    expect(ev.reviewerVerdict?.outcome).toBe('fail');
+    expect(ev.gateVerdicts?.reviewer?.outcome).toBe('fail');
+    expect(ev.reviewerVerdict?.outcome).not.toBe('block');
+    expect(ev.gateVerdicts?.reviewer?.outcome).not.toBe('block');
+    expect(REVIEW_OUTCOMES).toContain(
+      ev.reviewerVerdict?.outcome as (typeof REVIEW_OUTCOMES)[number],
+    );
+    expect(REVIEW_OUTCOMES).toContain(
+      ev.gateVerdicts?.reviewer?.outcome as (typeof REVIEW_OUTCOMES)[number],
+    );
   });
 
   function objectionWithSeverity(severity: ObjectionSeverity): ObjectionFinding {
@@ -734,7 +778,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
             outcome: 'block',
             findings: [lowFinding],
             notes: 'reviewer tried to block on a low-severity follow-up',
-          };
+          } as unknown as ReviewerVerdict;
         },
         pmWrapup: async () => {
           pmCalled = true;
@@ -769,7 +813,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           outcome: 'block',
           findings: [mediumFinding],
           notes: 'reviewer tried to block on a medium-severity fixable finding',
-        }),
+        } as unknown as ReviewerVerdict),
         pmWrapup: async () => {
           pmCalled = true;
           return {

@@ -1024,7 +1024,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       mergeable — so a high/critical finding with a missing flag fails safe to the terminal HOLD.
 - [x] No-human-terminal test: no per-task path returns `blocked-on-human`, PM-wrap-up, or consults the
       outer attempt cap; `decideAttemptOutcome` and the block-correction budget are gone.
-- [ ] No-block-residue test: `ReviewerOutcome`/`GateVerdict.outcome` no longer admits `block` and
+- [x] No-block-residue test: `ReviewerOutcome`/`GateVerdict.outcome` no longer admits `block` and
       no `ObjectionClass` admits `irreversibility` (compile-level guard); the Phase 13 tests that
       asserted the `block` outcome, block-correction budget, and per-task `blocked-on-human`
       terminals are retired/rewritten and the suite is green against the 3-value model.

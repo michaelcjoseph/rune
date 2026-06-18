@@ -50,7 +50,7 @@ export interface ObjectionFinding {
 }
 
 export type GateOutcome = 'pass' | 'pass-with-warnings' | 'fail';
-export type ReviewerOutcome = GateOutcome | 'block';
+export type ReviewerOutcome = GateOutcome;
 
 export interface GateVerdict {
   outcome: GateOutcome;
@@ -70,7 +70,7 @@ export interface NormalizedReviewerVerdict extends GateVerdict {
  *  seams migrate; workflow evidence is normalized to `NormalizedReviewerVerdict`
  *  before any gate or caller observes it. */
 export interface ReviewerVerdict {
-  outcome?: ReviewerOutcome;
+  outcome?: ReviewerOutcome | 'block';
   pass?: boolean;
   findings?: ObjectionFinding[];
   objections?: ObjectionFinding[];
@@ -688,7 +688,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
     };
   }
   const rawOutcome = raw['outcome'];
-  if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome)) {
+  if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome) && rawOutcome !== 'block') {
     const reason = `operational block: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
     return {
       outcome: 'fail',
@@ -812,7 +812,7 @@ function isObjectionClass(objectionClass: unknown): objectionClass is ObjectionC
 }
 
 function isReviewerOutcome(outcome: unknown): outcome is ReviewerOutcome {
-  return isGateOutcome(outcome) || outcome === 'block';
+  return isGateOutcome(outcome);
 }
 
 function isGateOutcome(outcome: unknown): outcome is GateOutcome {
