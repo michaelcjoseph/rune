@@ -33,10 +33,8 @@ describe('planning-roles-wiring — tech-lead prompt', () => {
     expect(ctx.systemInstructions.toLowerCase()).toContain('tech lead');
   });
 
-  it('starts cold — empty role memory yields an empty reference channel', () => {
-    // The six role memory.md files ship empty (cold start), so the reference
-    // channel is empty until the learning loop populates them.
-    expect(buildTechLeadRolePrompt(BASE).referenceContext).toBe('');
+  it('keeps base planner instructions out of the reference channel', () => {
+    expect(buildTechLeadRolePrompt(BASE).referenceContext).not.toContain(BASE);
   });
 });
 
@@ -139,6 +137,28 @@ const SPLIT_BREAKDOWN_REPLY = [
   '```',
 ].join('\n');
 
+const QA_PROJECT_EXEMPLAR = [
+  '# QA exemplar for Jarvis',
+  '',
+  'For security-boundary work, use a raw token-shaped fixture and assert the output removes it.',
+].join('\n');
+
+const BREAKDOWN_WITH_EXEMPLARS_REPLY = [
+  '```tech-breakdown',
+  JSON.stringify({
+    tasks: [
+      { id: 'p1-core', text: 'Run model', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
+    ],
+    perProjectExemplars: {
+      qa: QA_PROJECT_EXEMPLAR,
+    },
+  }),
+  '```',
+  '```tech-spec',
+  HAZARDOUS_TECH_SPEC,
+  '```',
+].join('\n');
+
 describe('planning-roles-wiring — PM assessment seam', () => {
   it('parses a specified-enough reply into title/spec/assumptions', async () => {
     const { call, seenSystem } = stubModelCall({ pm: [SPECIFIED_REPLY] });
@@ -208,6 +228,17 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     expect(result.techSpec).toContain('```ts');
     expect(result.techSpec).toContain('interface Run');
     expect(result.techSpec).toContain('"active" | "idle"');
+  });
+
+  it('parses per-project exemplars emitted by the tech lead for relevant roles', async () => {
+    const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_EXEMPLARS_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'jarvis',
+      spec: 's',
+    });
+
+    expect((result as any).perProjectExemplars).toMatchObject({ qa: QA_PROJECT_EXEMPLAR });
   });
 
   it('defaults an invalid testStrategy to code-tests-required', async () => {

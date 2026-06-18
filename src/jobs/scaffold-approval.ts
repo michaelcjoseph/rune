@@ -30,7 +30,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runAgent as realRunAgent } from '../ai/claude.js';
 import config from '../config.js';
 import { isContainedIn } from '../intent/sandbox.js';
@@ -54,6 +54,7 @@ import {
 } from '../intent/backlog-write-lock.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
 import { readProductsConfig, defaultRunGit, type GitRunner } from './sandbox-runtime.js';
+import { ROLE_NAMES } from '../roles/loader.js';
 import type { StoredPlanningSession } from '../reviews/planning.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -169,7 +170,10 @@ export function defaultScaffoldApprovalDeps(): ScaffoldApprovalDeps {
       mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
       writeFileAtomic(absPath, content);
     },
-    writeProjectFile: (absPath, content) => writeFileAtomic(absPath, content),
+    writeProjectFile: (absPath, content) => {
+      mkdirSync(dirname(absPath), { recursive: true });
+      writeFileAtomic(absPath, content);
+    },
     auditBacklogWrite: (entry) => {
       try {
         appendBacklogMutationLog(config.BACKLOG_MUTATIONS_FILE, entry);
@@ -183,11 +187,13 @@ export function defaultScaffoldApprovalDeps(): ScaffoldApprovalDeps {
 }
 
 /**
- * Write the role-flow artifacts (tech spec + seeded context) into the scaffolded
+ * Write the role-flow artifacts (tech spec + seeded context + per-project
+ * exemplars) into the scaffolded
  * project dir (project 14). Each is optional — legacy single-shot proposals carry
- * neither, so this is a no-op for them. `context.md` is Jarvis-owned orchestration
- * state seeded at planning time; writing it here (not via the setup-writer agent)
- * keeps the spec's "roles/agents never author context.md" invariant intact.
+ * none, so this is a no-op for them. `context.md` is Jarvis-owned orchestration
+ * state seeded at planning time, and exemplars are tech-lead planning output;
+ * writing both here (not via the setup-writer agent) keeps those artifacts
+ * deterministic once the project slug is verified.
  */
 function writeRoleArtifacts(
   artifact: SpecArtifact | undefined,
@@ -200,6 +206,14 @@ function writeRoleArtifacts(
   }
   if (artifact.context) {
     deps.writeProjectFile(join(projectDir, 'context.md'), artifact.context);
+  }
+  if (artifact.perProjectExemplars) {
+    for (const role of ROLE_NAMES) {
+      const body = artifact.perProjectExemplars[role];
+      if (typeof body === 'string' && body.trim()) {
+        deps.writeProjectFile(join(projectDir, 'examples', `${role}.md`), body);
+      }
+    }
   }
 }
 
@@ -300,9 +314,9 @@ export async function runScaffoldApproval(
   }
 
   // Project 14: when planning ran the PM/tech-lead role flow, the artifact carries
-  // a tech spec and a Jarvis-seeded context.md. Write them DETERMINISTICALLY here —
-  // never via the setup-writer agent — so the "roles/agents never author context.md"
-  // invariant holds. No-op for legacy artifacts that carry neither.
+  // a tech spec, a Jarvis-seeded context.md, and possibly per-project role
+  // exemplars. Write them DETERMINISTICALLY here — never via the setup-writer
+  // agent — so role/context artifacts do not depend on agent formatting.
   writeRoleArtifacts(session.planning.artifact, join(projectsDir, slug), deps);
 
   // No linked promotion — a plain /plan session. Scaffold succeeded; nothing else to drive.

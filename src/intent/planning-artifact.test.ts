@@ -29,6 +29,12 @@ const PLANNED: Extract<PlanningRolesOutcome, { kind: 'planned' }> = {
   codexCritiqueSkipped: false,
 };
 
+const QA_PROJECT_EXEMPLAR = [
+  '# QA exemplar for Streak tracker',
+  '',
+  'Pin timezone edge cases with one failing assertion before implementation starts.',
+].join('\n');
+
 describe('sizedTasksToMarkdown', () => {
   it('emits a Tests (write first) block listing the code-tests-required tasks', () => {
     const md = sizedTasksToMarkdown(TASKS);
@@ -95,5 +101,16 @@ describe('plannedOutcomeToArtifact', () => {
     expect(artifact.techSpec).toBe('Pure core + REST + card.');
     expect(artifact.context).toContain('# Project Context');
     expect(artifact.assumptions).toContain('Resets at midnight');
+  });
+
+  it('preserves per-project exemplars so scaffolding can persist them with the project', () => {
+    const plannedWithExemplars = {
+      ...PLANNED,
+      perProjectExemplars: { qa: QA_PROJECT_EXEMPLAR },
+    } as Extract<PlanningRolesOutcome, { kind: 'planned' }>;
+
+    const artifact = plannedOutcomeToArtifact('aura', plannedWithExemplars);
+
+    expect((artifact as any).perProjectExemplars).toMatchObject({ qa: QA_PROJECT_EXEMPLAR });
   });
 });

@@ -223,6 +223,28 @@ describe('planning-roles — task sizing', () => {
     if (outcome.kind !== 'planned') throw new Error('expected planned');
     expect(outcome.tasks.find((t) => t.id === 'p3-docs')?.testStrategy).toBe('docs-or-config-only');
   });
+
+  it('planned outcome carries tech-lead per-project exemplars for role context loading', async () => {
+    const qaExemplar = [
+      '# QA exemplar for Aura',
+      '',
+      'Write redaction tests with a raw secret-shaped fixture and assert the raw value is absent.',
+    ].join('\n');
+    const outcome = await runPlannerRoles(
+      INPUT,
+      makeDeps({
+        techLeadBreakdown: async () =>
+          ({
+            techSpec: 'Pure core + REST route + card component.',
+            tasks: SIZED_TASKS,
+            perProjectExemplars: { qa: qaExemplar },
+          }) as TechLeadResult,
+      }),
+    );
+
+    if (outcome.kind !== 'planned') throw new Error('expected planned');
+    expect((outcome as any).perProjectExemplars).toMatchObject({ qa: qaExemplar });
+  });
 });
 
 // ---------------------------------------------------------------------------

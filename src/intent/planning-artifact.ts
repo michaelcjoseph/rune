@@ -134,5 +134,6 @@ export function plannedOutcomeToArtifact(product: string, outcome: PlannedOutcom
     techSpec: outcome.techSpec,
     context: outcome.context,
     assumptions: outcome.assumptions,
+    perProjectExemplars: outcome.perProjectExemplars,
   };
 }

@@ -114,6 +114,28 @@ describe('runScaffoldApproval — plain session (no promotion)', () => {
     expect(h.projectWrites.find((w) => w.path.endsWith('tech-spec.md'))?.content).toBe('The tech spec body.');
   });
 
+  it('writes per-project role exemplars into the project examples directory', async () => {
+    const h = makeHarness();
+    const session = makeSession();
+    const qaExemplar = [
+      '# QA exemplar',
+      '',
+      'For auth work, assert raw tokens are absent and a redacted shape remains.',
+    ].join('\n');
+    session.planning.artifact = {
+      ...session.planning.artifact!,
+      perProjectExemplars: { qa: qaExemplar },
+    } as typeof session.planning.artifact;
+
+    const out = await runScaffoldApproval(session, h.deps);
+
+    expect(out.ok).toBe(true);
+    expect(h.projectWrites).toContainEqual({
+      path: `/ws/jarvis/docs/projects/${SLUG}/examples/qa.md`,
+      content: qaExemplar,
+    });
+  });
+
   it('writes no role artifacts for a legacy artifact carrying neither', async () => {
     const h = makeHarness();
     const out = await runScaffoldApproval(makeSession(), h.deps);

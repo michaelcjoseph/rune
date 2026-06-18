@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
 import { runCodex, probeCodexProvider } from '../ai/codex.js';
 import { getBaseEnv } from '../jobs/credential-injector.js';
-import { composeRoleContext, type RoleContext, type RoleName } from '../roles/loader.js';
+import { ROLE_NAMES, composeRoleContext, type RoleContext, type RoleName } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import type {
   PlanningRoleDeps,
@@ -31,6 +31,7 @@ import type {
   SpecMatchResult,
   TechLeadResult,
   TestStrategy,
+  PerProjectExemplars,
 } from './planning-roles.js';
 import {
   runPlanningCritique,
@@ -219,14 +220,16 @@ const TECH_LEAD_INSTRUCTION = [
   'keeping it in its own fence means it needs no escaping. Emit the JSON first,',
   'the tech spec last, and nothing after it:',
   '```tech-breakdown',
-  '{"tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}]}',
+  '{"tasks": [{"id": "<stable-slug>", "text": "<what this task delivers>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable", "designerNeeded": false, "roles": ["qa", "coder", "reviewer", "tech-lead"]}], "perProjectExemplars": {"qa": "<markdown exemplar for this project, if useful>"}}',
   '```',
   '```tech-spec',
   '<markdown technical spec: interfaces, contracts, data shapes, sequencing>',
   '```',
   '',
   'Set designerNeeded true ONLY for front-end / UX tasks. Every task needs a',
-  'testStrategy from the three allowed values and a phase label.',
+  'testStrategy from the three allowed values and a phase label. Include',
+  '`perProjectExemplars` only for roles that would benefit from a project-specific',
+  'example of good output; keys must be role slugs and values must be markdown.',
 ].join('\n');
 
 const TEST_STRATEGIES: readonly TestStrategy[] = [
@@ -256,7 +259,24 @@ function parseTechLeadBreakdown(text: string): TechLeadResult {
   if (tasks.length === 0) {
     throw new Error('tech-lead breakdown: produced zero tasks');
   }
-  return { techSpec, tasks };
+  const perProjectExemplars = parsePerProjectExemplars(v['perProjectExemplars']);
+  return {
+    techSpec,
+    tasks,
+    ...(perProjectExemplars ? { perProjectExemplars } : {}),
+  };
+}
+
+function parsePerProjectExemplars(raw: unknown): PerProjectExemplars | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: PerProjectExemplars = {};
+  for (const role of ROLE_NAMES) {
+    const value = (raw as Record<string, unknown>)[role];
+    if (typeof value === 'string' && value.trim()) {
+      out[role] = value.trim();
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function parseSizedTask(raw: unknown, index: number): SizedTask {

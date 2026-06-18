@@ -98,12 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- includes a redaction/security-boundary test with a realistic raw token, an assertion that the raw token is absent, and an assertion that a redacted placeholder is present.
+-  src/jobs/scaffold-approval.test.ts --configLoader runner`
+- Result: `54 passed`
+- Focused TypeScript check over changed implementation files passed.
 
-Verified with:
-
-```bash
-npx vitest run src/roles/loader.test.ts --configLoader runner
-```
-
-Result: `43 passed`. No commit made.
+Full `npm run build` is still blocked by unrelated repo-wide TypeScript errors in existing tests/modules, not by these changed files. No commit made.
+- ked by existing unrelated repo type errors; a filtered check produced no diagnostics for the files touched by this task. No commit made. Note: `git add` was blocked by sandbox permissions on the shared git index, so `planning-roles-wiring.test.ts` shows `MM`; the working tree has the corrected test.

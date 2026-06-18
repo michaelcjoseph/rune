@@ -102,6 +102,10 @@ function smokeDeps(env: ReturnType<typeof setup>): ScaffoldApprovalDeps {
       mkdirSync(dirname(absPath), { recursive: true });
       writeFileAtomic(absPath, content);
     },
+    writeProjectFile: (absPath, content) => {
+      mkdirSync(dirname(absPath), { recursive: true });
+      writeFileAtomic(absPath, content);
+    },
     auditBacklogWrite: (entry) => appendBacklogMutationLog(env.auditFile, entry),
     git: async () => ({ stdout: '', stderr: '' }),
     now: () => '2026-06-04T12:00:00.000Z',

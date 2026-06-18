@@ -25,6 +25,7 @@
 
 import { seedProjectContext } from './project-context.js';
 import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.js';
+import type { RoleName } from '../roles/loader.js';
 
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
  *  strategy"). Drives whether QA writes code tests, records a no-code-test
@@ -52,6 +53,11 @@ export interface SizedTask {
   phase?: string;
 }
 
+/** Project-local good-output exemplars the tech lead can tailor during planning.
+ *  Persisted with the project and later loaded into each role's low-authority
+ *  reference channel alongside the permanent baseline exemplars. */
+export type PerProjectExemplars = Partial<Record<RoleName, string>>;
+
 /** The PM's assessment of a brief — a discriminated union so the type enforces
  *  what each branch carries. A specified-enough brief yields title + spec +
  *  assumptions; an underspecified one yields the interview needs (the explicit
@@ -77,6 +83,7 @@ export type PmSpecResult =
 export interface TechLeadResult {
   techSpec: string;
   tasks: SizedTask[];
+  perProjectExemplars?: PerProjectExemplars;
 }
 
 /** The PM's review of the tech spec against the product spec. */
@@ -138,6 +145,7 @@ export type PlanningRolesOutcome =
       techSpec: string;
       tasks: SizedTask[];
       context: string;
+      perProjectExemplars?: PerProjectExemplars;
       /** Phase 9: true when the cross-model critique degraded to the Claude pass
        *  alone (Codex unavailable). Surfaced so the planning record can note it. */
       codexCritiqueSkipped: boolean;
@@ -255,6 +263,7 @@ export async function runPlannerRoles(
     techSpec: critiquedTechSpec,
     tasks: critiquedTasks,
     context,
+    perProjectExemplars: techLead.perProjectExemplars,
     codexCritiqueSkipped,
   };
 }

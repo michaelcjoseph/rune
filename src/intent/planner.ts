@@ -19,6 +19,8 @@
  * See docs/projects/08-intent-layer/{spec.md (§"Layer 1"), test-plan.md (§9)}.
  */
 
+import type { PerProjectExemplars } from './planning-roles.js';
+
 /** Lifecycle of a planning conversation. */
 export type PlanningStatus = 'scoping' | 'spec-proposed' | 'approved' | 'abandoned';
 
@@ -48,6 +50,10 @@ export interface SpecArtifact {
   context?: string;
   /** PM assumptions surfaced during role planning. Optional. */
   assumptions?: string[];
+  /** Project-local role exemplars emitted by the tech lead during planning.
+   *  Written under `docs/projects/<slug>/examples/` and loaded as low-authority
+   *  reference context on later role invocations. Optional for legacy proposals. */
+  perProjectExemplars?: PerProjectExemplars;
 }
 
 /** A planning conversation in progress — the unit the Planner state machine transitions. */
