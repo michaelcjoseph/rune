@@ -751,6 +751,92 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev.reviewerVerdict?.outcome).toBe('pass-with-warnings');
     expect(ev.objectionOpen).toBe(false);
   });
+
+  it('accept-with-rationale override can resume a surviving block as pass-with-warnings', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const overrideInputs: unknown[] = [];
+    const rationale =
+      'Human accepts this known deployment risk because the route is internal-only and the follow-up hardening task is already filed.';
+    const blockingFinding: ObjectionFinding = {
+      class: 'security',
+      severity: 'high',
+      location: 'src/internal-route.ts:27',
+      rationale: 'internal route lacks the final allow-list guard',
+    };
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        outcome: 'block',
+        findings: [blockingFinding],
+        notes: 'blocking security finding remains open',
+      }),
+      pmWrapup: async () => {
+        throw new Error('PM wrap-up must not clear high/critical block outcomes');
+      },
+      ...({
+        acceptWithRationale: async (input: unknown) => {
+          overrideInputs.push(input);
+          return {
+            accepted: true,
+            actor: 'human',
+            rationale,
+          };
+        },
+      } as Partial<TeamTaskDeps>),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(coderInputs).toHaveLength(2);
+    expect(overrideInputs).toHaveLength(1);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.objectionOpen).toBe(false);
+    expect(ev.reviewerVerdict?.outcome).toBe('pass-with-warnings');
+    expect(ev.reviewerVerdict?.findings).toEqual([blockingFinding]);
+    expect(ev.acceptance).toEqual({
+      actor: 'human',
+      decision: 'accepted-with-rationale',
+      rationale,
+    });
+  });
+
+  it('accept-with-rationale override blocks when the acceptance rationale is empty', async () => {
+    const overrideInputs: unknown[] = [];
+    const blockingFinding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'critical',
+      location: 'src/state-store.ts:88',
+      rationale: 'accepted write can corrupt persisted project state',
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'block',
+        findings: [blockingFinding],
+      }),
+      ...({
+        acceptWithRationale: async (input: unknown) => {
+          overrideInputs.push(input);
+          return {
+            accepted: true,
+            actor: 'human',
+            rationale: '   ',
+          };
+        },
+      } as Partial<TeamTaskDeps>),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(overrideInputs).toHaveLength(1);
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toMatch(/rationale/i);
+    expect(ev.objectionOpen).toBe(true);
+    expect(ev.reviewerVerdict?.outcome).toBe('block');
+    expect(ev).not.toHaveProperty('acceptance');
+  });
 });
 
 // ---------------------------------------------------------------------------

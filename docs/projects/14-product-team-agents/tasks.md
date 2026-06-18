@@ -977,7 +977,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `failed` (`project-orchestrator.ts`, `orchestrated-work-runner.ts`).
 - [x] Thread `pass-with-warnings` findings + accepted-block rationales into the `TaskRunRecord` and
       finalizer handoff.
-- [ ] Add an accept-with-rationale core override seam (injected for tests) that requires a
+- [x] Add an accept-with-rationale core override seam (injected for tests) that requires a
       rationale, records it durably, and resumes the task as `pass-with-warnings`; real
       cockpit/Telegram inbox wiring can be its own task.
 - [ ] Update Objection-Classes / Auto-merge consumers (reqs 25, 45) to severity-aware gating.

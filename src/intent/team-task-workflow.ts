@@ -87,10 +87,25 @@ export type ReviewerEvidence =
   | NormalizedReviewerVerdict
   | (ReviewerVerdict & { objections: ObjectionFinding[] });
 
+export type AcceptanceActor = 'pm' | 'human';
+
 export interface PmAcceptance {
-  actor: 'pm';
+  actor: AcceptanceActor;
   decision: 'accepted-with-rationale';
   rationale: string;
+}
+
+export interface AcceptWithRationaleInput {
+  task: SizedTask;
+  reason: string;
+  reviewerVerdict: GateVerdict;
+  rejectionFeedback: GateRejectionFeedback;
+}
+
+export interface AcceptWithRationaleResult {
+  accepted: boolean;
+  actor: AcceptanceActor;
+  rationale?: string;
 }
 
 /** Machine-readable feedback from a role gate rejection. This is the object
@@ -173,6 +188,13 @@ export interface TeamTaskDeps {
     resolved: boolean;
     rationale?: string;
   }>;
+  /** Optional core override seam for tests/operator surfaces. A high/critical
+   *  reviewer block still gets the normal coder correction first; only a
+   *  surviving block reaches this seam, and acceptance requires a non-empty
+   *  rationale recorded in the evidence. */
+  acceptWithRationale?: (
+    input: AcceptWithRationaleInput,
+  ) => Promise<AcceptWithRationaleResult>;
   /** Optional gate-time learning hook. Awaited before a corrective retry so a
    *  written lesson can load into the counterpart role's next invocation. */
   onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
@@ -436,6 +458,37 @@ async function runGated(
         coderFeedback = [feedback];
         coderAttemptsRemaining += 1;
         continue;
+      }
+      const acceptance = await maybeAcceptWithRationale(deps, {
+        task,
+        reason: feedback.whatFailed,
+        reviewerVerdict: lastReviewer,
+        rejectionFeedback: feedback,
+      });
+      if (acceptance === null) {
+        emitGateRejection(input, feedback);
+        return block(task, roles, handoffNotes, {
+          blockedReason: 'accept-with-rationale override requires a non-empty rationale',
+          rejectionFeedback: feedback,
+          reviewerVerdict: lastReviewer,
+          gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
+          objectionOpen: true,
+          noCodeTestRationale,
+        });
+      }
+      if (acceptance !== undefined) {
+        const acceptedReviewer = reviewerAcceptedWithWarnings(lastReviewer);
+        return {
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: roles.list(),
+          reviewerVerdict: acceptedReviewer,
+          gateVerdicts: buildWorkflowGateVerdicts(acceptedReviewer, undefined, undefined),
+          objectionOpen: false,
+          handoffNotes,
+          ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+          acceptance,
+        };
       }
       for (const objection of lastReviewer.objections) {
         emitObjection(input, objection);
@@ -879,7 +932,10 @@ function toPublicGateVerdict(verdict: GateVerdict): GateVerdict {
 function reviewerAcceptedWithWarnings(
   verdict: NormalizedReviewerVerdict | undefined,
 ): NormalizedReviewerVerdict | undefined {
-  if (verdict === undefined || verdict.outcome !== 'fail' || verdict.findings.length > 0) {
+  if (
+    verdict === undefined ||
+    (verdict.outcome !== 'block' && (verdict.outcome !== 'fail' || verdict.findings.length > 0))
+  ) {
     return verdict;
   }
   return {
@@ -904,6 +960,22 @@ function acceptanceFromPmWrapup(pm: {
   if (rationale.length === 0) return null;
   return {
     actor: 'pm',
+    decision: 'accepted-with-rationale',
+    rationale,
+  };
+}
+
+async function maybeAcceptWithRationale(
+  deps: TeamTaskDeps,
+  input: AcceptWithRationaleInput,
+): Promise<PmAcceptance | undefined | null> {
+  if (deps.acceptWithRationale === undefined) return undefined;
+  const result = await deps.acceptWithRationale(input);
+  if (!result.accepted) return undefined;
+  const rationale = result.rationale?.trim() ?? '';
+  if (rationale.length === 0) return null;
+  return {
+    actor: result.actor,
     decision: 'accepted-with-rationale',
     rationale,
   };
