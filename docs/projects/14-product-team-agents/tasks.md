@@ -1032,7 +1032,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       gate output, closeout/persist failure, rejected context update, dirty worktree) terminates as
       a durable non-merge HOLD with the operational reason recorded and branch/worktree preserved —
       it does not auto-merge and does not route to `blocked-on-human` (req 83).
-- [ ] Evidence-carries-ledger test: `TaskEvidence` returned to the orchestrator carries the terminal
+- [x] Evidence-carries-ledger test: `TaskEvidence` returned to the orchestrator carries the terminal
       findings ledger and the loop-exit reason (all-low / stagnation / hard-budget / operational) so
       the orchestrator's terminal handler can drain findings and decide HOLD vs gated merge without
       re-deriving them.

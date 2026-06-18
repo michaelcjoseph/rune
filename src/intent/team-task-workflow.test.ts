@@ -1551,6 +1551,45 @@ describe('team-task-workflow — round cap', () => {
     expect(ev).not.toHaveProperty('acceptance');
   });
 
+  it('carries the terminal findings ledger and loop-exit reason on TaskEvidence', async () => {
+    const terminalFinding: ObjectionFinding = {
+      class: 'outbound',
+      severity: 'medium',
+      location: 'src/egress.ts:27',
+      rationale: 'egress allow-list is incomplete',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        objections: [terminalFinding],
+        notes: 'reviewer still wants the egress guard tightened',
+      }),
+      pmWrapup: forbidPmWrapup(),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(ev).toMatchObject({
+      loopExitReason: 'hard-budget',
+      findingsLedger: [
+        {
+          id: expect.any(String),
+          sourceGate: 'reviewer',
+          class: 'outbound',
+          severity: 'medium',
+          location: 'src/egress.ts:27',
+          rationale: 'egress allow-list is incomplete',
+          reversible: true,
+          raisedRound: 1,
+          status: 'open',
+        },
+      ],
+    });
+    expect((ev as { findingsLedger?: Array<{ id: string }> }).findingsLedger?.[0]?.id.trim())
+      .not.toBe('');
+  });
+
   it('a still-open cap terminal does not enter blocked-on-human or mention PM in the block reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),

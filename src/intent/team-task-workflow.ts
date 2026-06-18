@@ -86,6 +86,18 @@ export interface WorkflowGateVerdicts {
   designer?: GateVerdict;
 }
 
+export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer';
+export type FindingStatus = 'open' | 'resolved' | 'regressed';
+export type LoopExitReason = 'all-low' | 'stagnation' | 'hard-budget' | 'operational';
+
+export interface FindingsLedgerEntry extends ObjectionFinding {
+  id: string;
+  sourceGate: FindingSourceGate;
+  reversible: boolean;
+  raisedRound: number;
+  status: FindingStatus;
+}
+
 export type ReviewerEvidence =
   | NormalizedReviewerVerdict
   | (ReviewerVerdict & { objections: ObjectionFinding[] });
@@ -233,6 +245,8 @@ export interface TaskEvidence {
   rolesInvoked: string[];
   reviewerVerdict?: ReviewerEvidence;
   gateVerdicts?: WorkflowGateVerdicts;
+  findingsLedger?: FindingsLedgerEntry[];
+  loopExitReason?: LoopExitReason;
   objectionOpen: boolean;
   handoffNotes: string[];
   noCodeTestRationale?: string;
@@ -275,6 +289,8 @@ export async function runTeamTaskWorkflow(
       objectionOpen: false,
       handoffNotes,
       failureReason: (err as Error).message,
+      findingsLedger: [],
+      loopExitReason: 'operational',
     };
   }
 }
@@ -301,6 +317,8 @@ async function runGated(
     return block(task, roles, handoffNotes, {
       blockedReason: 'reviewer independence: no distinct-provider reviewer available',
       rejectionFeedback: feedback,
+      findingsLedger: [],
+      loopExitReason: 'operational',
     });
   }
 
@@ -358,6 +376,8 @@ async function runGated(
         blockedReason: reason,
         rejectionFeedback: qaFeedback,
         noCodeTestRationale,
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
       });
     }
   }
@@ -373,6 +393,8 @@ async function runGated(
     return block(task, roles, handoffNotes, {
       blockedReason: 'QA test intent was not produced',
       rejectionFeedback: feedback,
+      findingsLedger: [],
+      loopExitReason: 'operational',
     });
   }
 
@@ -382,8 +404,11 @@ async function runGated(
   let lastDesigner: GateVerdict | undefined;
   let lastRejectionFeedback: GateRejectionFeedback | undefined;
   let coderAttemptsRemaining = input.cap;
+  let round = 0;
+  const findingsLedger: FindingsLedgerEntry[] = [];
   while (coderAttemptsRemaining > 0) {
     coderAttemptsRemaining -= 1;
+    round += 1;
     roles.add('coder');
     previousRole = emitRoleTransition(
       input,
@@ -418,6 +443,7 @@ async function runGated(
       context: input.contextMd,
       reviewerProvider,
     }));
+    mergeFindingsIntoLedger(findingsLedger, 'reviewer', lastReviewer.findings, round);
     emitRoleVerdict(input, {
       role: 'reviewer',
       gate: 'reviewer-verdict',
@@ -438,6 +464,8 @@ async function runGated(
         rejectionFeedback: feedback,
         reviewerVerdict: lastReviewer,
         gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
+        findingsLedger,
+        loopExitReason: 'operational',
         objectionOpen: false,
         noCodeTestRationale,
       });
@@ -458,6 +486,7 @@ async function runGated(
     }
 
     lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({ task, diff: coder.diff }));
+    mergeFindingsIntoLedger(findingsLedger, 'tech-lead', lastTechLeadDiff.findings, round);
     emitRoleVerdict(input, {
       role: 'tech-lead',
       gate: 'implementation-diff',
@@ -489,6 +518,7 @@ async function runGated(
         'designer-review',
       );
       lastDesigner = normalizeGateVerdict(await deps.designer({ task, diff: coder.diff }));
+      mergeFindingsIntoLedger(findingsLedger, 'designer', lastDesigner.findings, round);
       emitRoleVerdict(input, {
         role: 'designer',
         gate: 'design-review',
@@ -517,6 +547,8 @@ async function runGated(
         rolesInvoked: roles.list(),
         reviewerVerdict: lastReviewer,
         gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        findingsLedger,
+        loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes,
         ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
@@ -549,6 +581,8 @@ async function runGated(
       rolesInvoked: roles.list(),
       reviewerVerdict: lastReviewer,
       gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+      findingsLedger,
+      loopExitReason: 'hard-budget',
       objectionOpen: false,
       handoffNotes,
       ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
@@ -566,6 +600,8 @@ async function runGated(
         : {}),
       reviewerVerdict: lastReviewer,
       gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+      findingsLedger,
+      loopExitReason: 'hard-budget',
       noCodeTestRationale,
     });
   }
@@ -582,6 +618,8 @@ async function runGated(
       : {}),
     reviewerVerdict: lastReviewer,
     gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+    findingsLedger,
+    loopExitReason: 'hard-budget',
     noCodeTestRationale,
   });
 }
@@ -610,6 +648,8 @@ function block(
     rejectionFeedback?: GateRejectionFeedback;
     reviewerVerdict?: ReviewerEvidence;
     gateVerdicts?: WorkflowGateVerdicts;
+    findingsLedger?: FindingsLedgerEntry[];
+    loopExitReason?: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
   },
@@ -626,6 +666,8 @@ function block(
       : {}),
     ...(extra.reviewerVerdict !== undefined ? { reviewerVerdict: extra.reviewerVerdict } : {}),
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
+    ...(extra.findingsLedger !== undefined ? { findingsLedger: extra.findingsLedger } : {}),
+    ...(extra.loopExitReason !== undefined ? { loopExitReason: extra.loopExitReason } : {}),
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
@@ -889,6 +931,57 @@ function toPublicFinding(finding: ObjectionFinding): ObjectionFinding {
     ...finding,
     reversible: typeof finding.reversible === 'boolean' ? finding.reversible : false,
   };
+}
+
+function mergeFindingsIntoLedger(
+  ledger: FindingsLedgerEntry[],
+  sourceGate: FindingSourceGate,
+  findings: ObjectionFinding[],
+  round: number,
+): void {
+  for (const finding of findings) {
+    const normalized = toPublicFinding(finding) as ObjectionFinding & { reversible: boolean };
+    const id = buildFindingId(sourceGate, normalized);
+    const existing = ledger.find((entry) => entry.id === id);
+    if (existing !== undefined) {
+      existing.class = normalized.class;
+      existing.severity = normalized.severity;
+      existing.location = normalized.location;
+      existing.rationale = normalized.rationale;
+      existing.reversible = normalized.reversible;
+      existing.status = 'open';
+      continue;
+    }
+    ledger.push({
+      id,
+      sourceGate,
+      class: normalized.class,
+      severity: normalized.severity,
+      location: normalized.location,
+      rationale: normalized.rationale,
+      reversible: normalized.reversible,
+      raisedRound: round,
+      status: 'open',
+    });
+  }
+}
+
+function buildFindingId(
+  sourceGate: FindingSourceGate,
+  finding: ObjectionFinding,
+): string {
+  const seed = [
+    sourceGate,
+    finding.class,
+    finding.location.trim(),
+    finding.rationale.trim(),
+  ].join('|');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `finding-${(hash >>> 0).toString(36)}`;
 }
 
 function normalizeFeedback(
