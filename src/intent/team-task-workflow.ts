@@ -33,7 +33,7 @@ export type ObjectionClass =
   | 'privacy'
   | 'data-integrity'
   | 'concurrency'
-  | 'irreversibility'
+  | 'outbound'
   | 'cost-perf';
 
 export type ObjectionSeverity = 'low' | 'medium' | 'high' | 'critical';
@@ -45,6 +45,8 @@ export interface ObjectionFinding {
   severity: ObjectionSeverity;
   location: string;
   rationale: string;
+  /** Phase 14: whether a plain git revert fully undoes the effect. */
+  reversible?: boolean;
 }
 
 export type GateOutcome = 'pass' | 'pass-with-warnings' | 'fail';
@@ -674,6 +676,19 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
+  const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
+  if (malformedClass !== undefined) {
+    const reason =
+      `operational block: reviewer-verdict contained unsupported class ` +
+      `"${String(malformedClass.class)}" at ${malformedClass.location}`;
+    return {
+      outcome: 'fail',
+      findings,
+      objections: findings,
+      notes: reason,
+      operationalBlockReason: reason,
+    };
+  }
   const malformedSeverity = findings.find((finding) => !isObjectionSeverity(finding.severity));
   if (malformedSeverity !== undefined) {
     const reason =
@@ -721,6 +736,14 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
   }
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
+  const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
+  if (malformedClass !== undefined) {
+    return {
+      outcome: 'fail',
+      findings,
+      notes: `unsupported finding class "${String(malformedClass.class)}" at ${malformedClass.location}`,
+    };
+  }
   const rawOutcome = raw['outcome'];
   const outcome = isGateOutcome(rawOutcome)
     ? rawOutcome
@@ -760,6 +783,9 @@ function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
       severity: finding['severity'] as ObjectionSeverity,
       location: finding['location'],
       rationale: finding['rationale'],
+      ...(typeof finding['reversible'] === 'boolean'
+        ? { reversible: finding['reversible'] }
+        : {}),
     }];
   });
 }
@@ -786,6 +812,17 @@ function isObjectionSeverity(severity: unknown): severity is ObjectionSeverity {
     severity === 'medium' ||
     severity === 'high' ||
     severity === 'critical'
+  );
+}
+
+function isObjectionClass(objectionClass: unknown): objectionClass is ObjectionClass {
+  return (
+    objectionClass === 'security' ||
+    objectionClass === 'privacy' ||
+    objectionClass === 'data-integrity' ||
+    objectionClass === 'concurrency' ||
+    objectionClass === 'outbound' ||
+    objectionClass === 'cost-perf'
   );
 }
 

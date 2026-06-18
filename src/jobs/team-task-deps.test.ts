@@ -326,6 +326,71 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(structured).not.toHaveProperty('objections');
   });
 
+  it('parses Phase 14 review-gate findings with outbound class and reversible preserved', async () => {
+    const reviewerFinding = {
+      class: 'outbound',
+      severity: 'high',
+      location: 'src/egress.ts:27',
+      rationale: 'unapproved network egress can leave the sandbox',
+      reversible: false,
+    };
+    const techLeadFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:19',
+      rationale: 'stale writes can corrupt the task ledger',
+      reversible: true,
+    };
+    const designerFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/server/static/app.js:114',
+      rationale: 'extra repaint is visible on slow devices',
+      reversible: true,
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'reviewer') {
+          return [
+            '```reviewer-verdict',
+            JSON.stringify({ outcome: 'fail', findings: [reviewerFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            JSON.stringify({ outcome: 'fail', findings: [techLeadFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            JSON.stringify({ outcome: 'pass-with-warnings', findings: [designerFinding] }),
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const reviewer = await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+    });
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    expect(reviewer).toMatchObject({ outcome: 'fail', findings: [reviewerFinding] });
+    expect(techLead).toMatchObject({ outcome: 'fail', findings: [techLeadFinding] });
+    expect(designer).toMatchObject({ outcome: 'pass-with-warnings', findings: [designerFinding] });
+  });
+
   it('parses tech-lead diff and designer reviews as shared GateVerdict records', async () => {
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role }) => {

@@ -1016,7 +1016,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       type/normalization error.
 - [x] Severity-mapping test: `critical`/`high`/`medium` → `fail`, `low` → `pass-with-warnings`;
       multiple findings resolve to the strictest mapped outcome; no input ever yields `block`.
-- [ ] Finding-shape test: a review-gate finding carries `{class, severity, location, rationale,
+- [x] Finding-shape test: a review-gate finding carries `{class, severity, location, rationale,
       reversible}`; `class` ∈ {`security`,`privacy`,`data-integrity`,`concurrency`,`outbound`,
       `cost-perf`}; `irreversibility` is rejected; `reversible` is required.
 - [ ] Reversible-default test: a finding (from reviewer, tech-lead diff, or designer) that OMITS or

@@ -212,7 +212,7 @@ const OBJECTION_CLASSES: ReadonlySet<string> = new Set([
   'privacy',
   'data-integrity',
   'concurrency',
-  'irreversibility',
+  'outbound',
   'cost-perf',
 ]);
 const OBJECTION_SEVERITIES: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'critical']);
@@ -228,7 +228,7 @@ const REVIEWER_INSTRUCTION = [
   'artifacts only — never the coder\'s reasoning.',
   '',
   'Weight your review toward OBJECTION-CLASS defects normal usage cannot surface:',
-  'security, privacy, data-integrity, concurrency, irreversibility, cost-perf.',
+  'security, privacy, data-integrity, concurrency, outbound, cost-perf.',
   'Raise an objection ONLY for those classes; ordinary quality problems are a',
   'fail outcome without objections.',
   '',
@@ -236,7 +236,7 @@ const REVIEWER_INSTRUCTION = [
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
   'value: pass, pass-with-warnings, or fail:',
   '```reviewer-verdict',
-  '{"outcome": "pass", "notes": "<short non-objection feedback>", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>"}]}',
+  '{"outcome": "pass", "notes": "<short non-objection feedback>", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "reversible": true}]}',
   '```',
   'An empty findings array means no objection-class finding.',
 ].join('\n');
@@ -258,7 +258,7 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
-  '{"outcome": "pass", "findings": [], "notes": "<short reason>"}',
+  '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "reversible": true}], "notes": "<short reason>"}',
   '```',
 ].join('\n');
 
@@ -268,7 +268,7 @@ const DESIGNER_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```designer-review block containing JSON:',
   '```designer-review',
-  '{"outcome": "pass", "findings": [], "notes": "<short reason>"}',
+  '{"outcome": "pass", "findings": [{"class": "cost-perf", "severity": "low", "location": "<file:line>", "rationale": "<why>", "reversible": true}], "notes": "<short reason>"}',
   '```',
 ].join('\n');
 
@@ -318,8 +318,15 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
     return { outcome: 'fail', findings: [] };
   }
   const v = parsed as Record<string, unknown>;
-  const findings = parseFindings(v);
+  const { findings, malformedReason } = parseFindings(v);
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  if (malformedReason !== undefined) {
+    return {
+      outcome: 'fail',
+      findings,
+      notes: notes ?? malformedReason,
+    };
+  }
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
   const parsedOutcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as GateOutcome
@@ -352,34 +359,48 @@ function hasAggregateFixtureFences(text: string): boolean {
     text.includes('```designer-review') || text.includes('```pm-wrapup');
 }
 
-function parseFindings(v: Record<string, unknown>): ObjectionFinding[] {
+function parseFindings(v: Record<string, unknown>): {
+  findings: ObjectionFinding[];
+  malformedReason?: string;
+} {
   const source = Array.isArray(v['findings'])
     ? v['findings']
     : Array.isArray(v['objections'])
       ? v['objections']
       : [];
-  return (source as unknown[]).flatMap((raw): ObjectionFinding[] => {
-    if (!raw || typeof raw !== 'object') return [];
+  const findings: ObjectionFinding[] = [];
+  for (const raw of source as unknown[]) {
+    if (!raw || typeof raw !== 'object') continue;
     const o = raw as Record<string, unknown>;
     if (
       typeof o['class'] !== 'string' ||
-      !OBJECTION_CLASSES.has(o['class']) ||
       typeof o['severity'] !== 'string' ||
-      !OBJECTION_SEVERITIES.has(o['severity']) ||
       typeof o['location'] !== 'string' ||
       typeof o['rationale'] !== 'string'
     ) {
-      return [];
+      return { findings, malformedReason: 'malformed finding shape' };
     }
-    return [
-      {
-        class: o['class'] as ObjectionClass,
-        severity: o['severity'] as ObjectionSeverity,
-        location: o['location'].slice(0, NOTE_MAX_CHARS),
-        rationale: o['rationale'].slice(0, NOTE_MAX_CHARS),
-      },
-    ];
-  });
+    if (!OBJECTION_CLASSES.has(o['class'])) {
+      return {
+        findings,
+        malformedReason: `unsupported finding class "${o['class']}"`,
+      };
+    }
+    if (!OBJECTION_SEVERITIES.has(o['severity'])) {
+      return {
+        findings,
+        malformedReason: `unsupported finding severity "${o['severity']}"`,
+      };
+    }
+    findings.push({
+      class: o['class'] as ObjectionClass,
+      severity: o['severity'] as ObjectionSeverity,
+      location: o['location'].slice(0, NOTE_MAX_CHARS),
+      rationale: o['rationale'].slice(0, NOTE_MAX_CHARS),
+      ...(typeof o['reversible'] === 'boolean' ? { reversible: o['reversible'] } : {}),
+    });
+  }
+  return { findings };
 }
 
 function parseGateVerdict(text: string, tag: string): GateVerdict {
@@ -393,7 +414,14 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
     ? v['outcome'] as GateOutcome
     : undefined;
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
-  const findings = parseFindings(v);
+  const { findings, malformedReason } = parseFindings(v);
+  if (malformedReason !== undefined) {
+    return {
+      outcome: 'fail',
+      findings,
+      notes: notes ?? malformedReason,
+    };
+  }
   const severityOutcome = outcomeForFindings(findings);
   const baseOutcome = outcome ??
     (legacyPass !== undefined

@@ -310,6 +310,14 @@ describe('team-task-workflow — objection gate', () => {
     rationale: 'unsanitized shell interpolation',
   };
 
+  const phase14Finding = {
+    class: 'outbound',
+    severity: 'high',
+    location: 'src/egress.ts:27',
+    rationale: 'unapproved network egress can leave the sandbox',
+    reversible: true,
+  };
+
   it('maps a high objection-class finding to fail, not block', async () => {
     const deps = makeDeps({ reviewer: async () => ({ pass: false, objections: [objection] }) });
     const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
@@ -339,6 +347,91 @@ describe('team-task-workflow — objection gate', () => {
       class: 'security',
       severity: 'high',
       location: 'src/x.ts:10',
+    });
+  });
+
+  it('normalizes reviewer findings to the Phase 14 shape including outbound class and reversible', async () => {
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [phase14Finding],
+      } as unknown as ReviewerVerdict),
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM records the high outbound finding for terminal severity handling.',
+      }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.reviewerVerdict?.findings).toEqual([phase14Finding]);
+    expect(ev.gateVerdicts?.reviewer?.findings).toEqual([phase14Finding]);
+  });
+
+  it('normalizes tech-lead and designer review findings to the same Phase 14 shape', async () => {
+    const techLeadFinding = {
+      class: 'concurrency',
+      severity: 'low',
+      location: 'src/queue.ts:61',
+      rationale: 'duplicate starts can race but are harmless after retry',
+      reversible: false,
+    };
+    const designerFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/server/static/app.js:114',
+      rationale: 'extra repaint is visible on slow devices',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'pass-with-warnings',
+        findings: [{ ...phase14Finding, severity: 'low' }],
+      } as unknown as ReviewerVerdict),
+      techLeadReviewDiff: async () => ({
+        outcome: 'pass-with-warnings',
+        findings: [techLeadFinding],
+      } as unknown as { pass: boolean; notes?: string }),
+      designer: async () => ({
+        outcome: 'pass-with-warnings',
+        findings: [designerFinding],
+      } as unknown as { pass: boolean; notes?: string }),
+    });
+
+    const ev = await runTeamTaskWorkflow(frontEndTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.gateVerdicts?.reviewer?.findings).toEqual([
+      { ...phase14Finding, severity: 'low' },
+    ]);
+    expect(ev.gateVerdicts?.techLeadDiff?.findings).toEqual([techLeadFinding]);
+    expect(ev.gateVerdicts?.designer?.findings).toEqual([designerFinding]);
+  });
+
+  it('rejects the retired irreversibility class as malformed review-gate output', async () => {
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        findings: [{
+          class: 'irreversibility',
+          severity: 'high',
+          location: 'src/delete.ts:12',
+          rationale: 'the old class name must not survive Phase 14',
+          reversible: false,
+        }],
+      } as unknown as ReviewerVerdict),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toMatch(/operational|malformed class|unsupported class/i);
+    expect(ev.rejectionFeedback).toMatchObject({
+      rejectingRole: 'reviewer',
+      rejectedRole: 'coder',
+      rejectedArtifact: 'reviewer-verdict',
+      reason: expect.stringMatching(/irreversibility|malformed class|unsupported class/i),
     });
   });
 });
