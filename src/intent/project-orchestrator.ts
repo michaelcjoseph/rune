@@ -187,6 +187,7 @@ export async function runProjectOrchestration(
         ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
         : {},
       ...reviewerWarningsField(evidence.reviewerVerdict),
+      ...acceptanceField(evidence),
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
       outcome: 'ready-for-closeout',
@@ -426,6 +427,13 @@ function reviewerWarningsField(
     return {};
   }
   return { warnings: verdict.objections };
+}
+
+function acceptanceField(
+  evidence: TaskEvidence,
+): Pick<TaskRunRecord, 'acceptance'> | Record<string, never> {
+  if (evidence.acceptance === undefined) return {};
+  return { acceptance: evidence.acceptance };
 }
 
 function maybeParkedRun(

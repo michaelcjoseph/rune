@@ -954,7 +954,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       branch preserved; an open blocking objection is NEVER mapped to `failed` with a destroyed
       worktree (regression for the `maybeParkedRun` `objectionOpen` exclusion +
       `mapResultToTerminal` blocked→failed mapping).
-- [ ] Accept-with-rationale test: an injected human/PM acceptance requires a rationale, records
+- [x] Accept-with-rationale test: an injected human/PM acceptance requires a rationale, records
       it in the task/run record, and the task proceeds as `pass-with-warnings`.
 - [ ] Fail-safe test: a malformed severity or a recording failure degrades to an operational
       `block`, records a durable reason, and parks without consuming a coder corrective round.

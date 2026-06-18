@@ -292,7 +292,7 @@ const PM_WRAPUP_INSTRUCTION = [
   '',
   'Respond with EXACTLY ONE fenced ```pm-wrapup block containing JSON:',
   '```pm-wrapup',
-  '{"resolved": false, "notes": "<short reason>"}',
+  '{"resolved": true, "rationale": "<required non-empty if resolved true>", "notes": "<short reason if resolved false>"}',
   '```',
 ].join('\n');
 
@@ -390,6 +390,22 @@ function parseFlagVerdict(
   const v = parsed as Record<string, unknown>;
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
   return { value: v[flag] === true, ...(notes !== undefined ? { notes } : {}) };
+}
+
+function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } {
+  const parsed = extractFencedJson(text, 'pm-wrapup');
+  if (!parsed || typeof parsed !== 'object') {
+    return { resolved: false };
+  }
+  const v = parsed as Record<string, unknown>;
+  const resolved = v['resolved'] === true;
+  const rationale = typeof v['rationale'] === 'string'
+    ? v['rationale'].slice(0, NOTE_MAX_CHARS)
+    : undefined;
+  return {
+    resolved,
+    ...(rationale !== undefined ? { rationale } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -701,8 +717,7 @@ export function buildProductionTeamTaskDeps(
     pmWrapup: async ({ task, reason }) => {
       const body = [`## Task\n\n${task.text}`, '', `## Situation\n\n${reason}`].join('\n');
       const reply = await judge('pm', models.pm, PM_WRAPUP_INSTRUCTION, body);
-      const { value } = parseFlagVerdict(reply, 'pm-wrapup', 'resolved');
-      return { resolved: value };
+      return parsePmWrapup(reply);
     },
 
     onGateRejection: learnFromGateRejection,

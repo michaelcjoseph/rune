@@ -68,6 +68,12 @@ export interface ReviewerVerdict {
   notes?: string;
 }
 
+export interface PmAcceptance {
+  actor: 'pm';
+  decision: 'accepted-with-rationale';
+  rationale: string;
+}
+
 /** Machine-readable feedback from a role gate rejection. This is the object
  *  future retries and gate-time learning consume; `blockedReason` remains the
  *  human-readable summary. */
@@ -144,7 +150,10 @@ export interface TeamTaskDeps {
     task: SizedTask;
     diff: string;
   }) => Promise<{ pass: boolean; notes?: string }>;
-  pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{ resolved: boolean }>;
+  pmWrapup: (input: { task: SizedTask; reason: string }) => Promise<{
+    resolved: boolean;
+    rationale?: string;
+  }>;
   /** Optional gate-time learning hook. Awaited before a corrective retry so a
    *  written lesson can load into the counterpart role's next invocation. */
   onGateRejection?: (feedback: GateRejectionFeedback) => Promise<void>;
@@ -189,6 +198,8 @@ export interface TaskEvidence {
   /** Set on a `failed` outcome — the structured reason a role seam rejected
    *  (for the Phase 5 retry / model-swap decision). */
   failureReason?: string;
+  /** Human/PM acceptance evidence when non-objection disagreement is cleared. */
+  acceptance?: PmAcceptance;
 }
 
 /** Run the team-task workflow for one selected task. */
@@ -514,6 +525,17 @@ async function runGated(
       : 'PM left non-objection disagreement unresolved at the round cap',
   });
   if (pm.resolved) {
+    const acceptance = acceptanceFromPmWrapup(pm);
+    if (acceptance === null) {
+      return block(task, roles, handoffNotes, {
+        blockedReason: 'PM acceptance requires a non-empty rationale',
+        ...(lastRejectionFeedback !== undefined
+          ? { rejectionFeedback: lastRejectionFeedback }
+          : {}),
+        reviewerVerdict: lastReviewer,
+        noCodeTestRationale,
+      });
+    }
     return {
       taskId: task.id,
       outcome: 'ready-for-closeout',
@@ -522,6 +544,7 @@ async function runGated(
       objectionOpen: false,
       handoffNotes,
       ...(noCodeTestRationale !== undefined ? { noCodeTestRationale } : {}),
+      ...(acceptance !== undefined ? { acceptance } : {}),
     };
   }
   if (lastRejectionFeedback !== undefined) {
@@ -690,6 +713,20 @@ function normalizeFeedback(
 ): GateRejectionFeedback[] {
   if (feedback === undefined) return [];
   return Array.isArray(feedback) ? feedback : [feedback];
+}
+
+function acceptanceFromPmWrapup(pm: {
+  resolved: boolean;
+  rationale?: string;
+}): PmAcceptance | undefined | null {
+  if (!Object.hasOwn(pm, 'rationale')) return undefined;
+  const rationale = pm.rationale?.trim() ?? '';
+  if (rationale.length === 0) return null;
+  return {
+    actor: 'pm',
+    decision: 'accepted-with-rationale',
+    rationale,
+  };
 }
 
 async function recordGateRejection(

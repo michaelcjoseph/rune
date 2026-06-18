@@ -396,7 +396,10 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           reviewer: async () => ({
             objections: [objectionWithSeverity(c.severity)],
           }),
-          pmWrapup: async () => ({ resolved: true }),
+          pmWrapup: async () => ({
+            resolved: true,
+            rationale: 'PM accepts the non-objection disagreement for this severity-mapping case.',
+          }),
         }),
       );
 
@@ -441,7 +444,10 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
           reviewer: async () => ({
             objections: c.severities.map(objectionWithSeverity),
           }),
-          pmWrapup: async () => ({ resolved: true }),
+          pmWrapup: async () => ({
+            resolved: true,
+            rationale: 'PM accepts the non-objection disagreement for this strictest-outcome case.',
+          }),
         }),
       );
 
@@ -476,7 +482,10 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       },
       pmWrapup: async () => {
         pmCalled = true;
-        return { resolved: true };
+        return {
+          resolved: true,
+          rationale: 'PM accepts this non-objection disagreement at the cap.',
+        };
       },
     });
 
@@ -975,6 +984,46 @@ describe('team-task-workflow — round cap', () => {
     expect(ev.outcome).toBe('ready-for-closeout');
   });
 
+  it('requires a non-empty PM acceptance rationale before clearing non-objection disagreement', async () => {
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        objections: [],
+        notes: 'reviewer still wants the empty-state branch covered',
+      }),
+      pmWrapup: async () => ({ resolved: true, rationale: '   ' }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.blockedReason).toMatch(/rationale/i);
+    expect(ev).not.toHaveProperty('acceptance');
+  });
+
+  it('records the PM acceptance rationale when PM clears non-objection disagreement', async () => {
+    const rationale =
+      'Accepting because the remaining reviewer concern is product copy polish, not a task-blocking contract defect.';
+    const deps = makeDeps({
+      reviewer: async () => ({
+        outcome: 'fail',
+        objections: [],
+        notes: 'reviewer still wants the empty-state wording tightened',
+      }),
+      pmWrapup: async () => ({ resolved: true, rationale }),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 1 }, deps);
+    const acceptance = (ev as unknown as Record<string, unknown>)['acceptance'];
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(acceptance).toEqual({
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale,
+    });
+  });
+
   it('an unresolved PM decision at the cap enters blocked-on-human', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),
@@ -1068,7 +1117,10 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true }),
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM accepts this non-objection disagreement for observability coverage.',
+      }),
     });
 
     const ev = await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -1109,7 +1161,10 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true }),
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM accepts this non-objection disagreement for transition coverage.',
+      }),
     });
 
     await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);
@@ -1161,7 +1216,10 @@ describe('team-task-workflow — execution observability', () => {
         objections: [],
         notes: 'reviewer wants one more assertion',
       }),
-      pmWrapup: async () => ({ resolved: true }),
+      pmWrapup: async () => ({
+        resolved: true,
+        rationale: 'PM accepts this non-objection disagreement for verdict coverage.',
+      }),
     });
 
     const ev = await runTeamTaskWorkflow(frontEndTask, inputWithEmitter, deps);

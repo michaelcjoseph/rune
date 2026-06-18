@@ -634,6 +634,62 @@ describe('project-orchestrator — durable run state', () => {
       }),
     ]);
   });
+
+  it('records accepted PM rationale in the TaskRunRecord and finalizer handoff while proceeding', async () => {
+    const persistedRecords: TaskRunRecord[] = [];
+    const acceptance = {
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale:
+        'Accepting because the remaining concern is a low-risk copy preference and the task contract is satisfied.',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'pm'],
+        reviewerVerdict: {
+          outcome: 'fail',
+          objections: [],
+          notes: 'reviewer wanted copy polish beyond the task contract',
+        },
+        objectionOpen: false,
+        handoffNotes: ['PM accepted the remaining non-objection review concern'],
+        acceptance,
+      } as TaskEvidence),
+      appendTaskRunRecord: async (record) => {
+        persistedRecords.push(record);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Ship acceptable empty-state copy',
+    ].join('\n'));
+    let finalizerRecords: TaskRunRecord[] | undefined;
+    h.deps.finalize = async (handoff) => {
+      finalizerRecords = handoff.taskRecords;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(persistedRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'ship-acceptable-empty-state-copy',
+        outcome: 'ready-for-closeout',
+        verdicts: { reviewer: 'fail' },
+        acceptance,
+      }),
+    ]);
+    expect(finalizerRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'ship-acceptable-empty-state-copy',
+        acceptance,
+      }),
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

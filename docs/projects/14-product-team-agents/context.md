@@ -98,7 +98,6 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- er runner src/jobs/orchestrated-work-runner.test.ts`
-- `npm run build` is still blocked by existing unrelated repo-wide TypeScript errors in tests and other files; none were from this patch.
-
-Note: `src/jobs/orchestrated-work-runner.test.ts` was already staged before my changes; I left it untouched.
+- -orchestrator.test.ts` passed: 54 tests.
+- `TELEGRAM_BOT_TOKEN=dummy TELEGRAM_USER_ID=1 VAULT_DIR=/tmp npm test -- --configLoader runner src/jobs/team-task-deps.test.ts` passed: 18 tests.
+- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the modified files.
