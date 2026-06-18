@@ -346,6 +346,47 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(verdict).not.toHaveProperty('pass');
   });
 
+  it('normalizes reviewer, tech-lead diff, and designer gates to the shared outcome verdict shape', async () => {
+    const ev = await runTeamTaskWorkflow(frontEndTask, INPUT, makeDeps());
+    const gateVerdicts = (ev as unknown as {
+      gateVerdicts?: Record<string, Record<string, unknown>>;
+    }).gateVerdicts;
+
+    expect(gateVerdicts).toMatchObject({
+      reviewer: { outcome: 'pass' },
+      techLeadDiff: { outcome: 'pass' },
+      designer: { outcome: 'pass' },
+    });
+    for (const verdict of Object.values(gateVerdicts ?? {})) {
+      expect(REVIEW_OUTCOMES).toContain(verdict['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
+      expect(verdict).not.toHaveProperty('pass');
+    }
+  });
+
+  it('fails closed to an operational block on an unknown reviewer outcome without spending a coder correction round', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => ({
+        outcome: 'ship-it',
+        objections: [],
+        notes: 'unsupported outcome should never pass a gate',
+      } as unknown as ReviewerVerdict),
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
+
+    expect(ev.outcome).toBe('blocked');
+    expect(ev.objectionOpen).toBe(false);
+    expect(ev.blockedReason).toMatch(/operational|unknown outcome|unsupported outcome/i);
+    expect(ev.reviewerVerdict?.outcome).toBe('block');
+    expect(coderInputs).toHaveLength(1);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+  });
+
   function objectionWithSeverity(severity: ObjectionSeverity): ObjectionFinding {
     return {
       class: 'security',
@@ -541,6 +582,33 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
         actionableNotes: ['security/high at src/auth.ts:42: token comparison leaks timing information'],
       }),
     ]);
+  });
+
+  it('accept-with-rationale resumes a non-objection fail as pass-with-warnings', async () => {
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 1 },
+      makeDeps({
+        reviewer: async () => ({
+          outcome: 'fail',
+          objections: [],
+          notes: 'copy polish remains outside the hard task contract',
+        }),
+        pmWrapup: async () => ({
+          resolved: true,
+          rationale: 'Accepting because correctness is satisfied and the remaining concern is non-blocking.',
+        }),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.acceptance).toMatchObject({
+      actor: 'pm',
+      decision: 'accepted-with-rationale',
+      rationale: expect.stringContaining('correctness is satisfied'),
+    });
+    expect(ev.reviewerVerdict?.outcome).toBe('pass-with-warnings');
+    expect(ev.objectionOpen).toBe(false);
   });
 });
 

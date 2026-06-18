@@ -98,7 +98,9 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- workflow.test.ts src/intent/project-orchestrator.test.ts` passed: 56 tests.
-- `npm run build` still fails on existing unrelated repo-wide TypeScript errors; none are in the touched implementation files.
+- t.ts --configLoader runner` passes: 41/41.
 
-I did not commit. The QA test files were already staged; my implementation changes are unstaged.
+`npm run build` still fails on existing repo-wide TypeScript errors outside the touched implementation file, matching the handoff. `git diff --check` passes. I did not commit. The QA test file remains staged from before; my implementation file is unstaged.
+- tance does not convert reviewer `fail` to `pass-with-warnings`.
+
+Note: the git index is stale because this sandbox cannot write the parent worktree index lock, so `git status` still shows `MM src/intent/team-task-workflow.ts`. The reliable diff for the handoff is `git diff HEAD`, which is test-only.

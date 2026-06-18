@@ -958,7 +958,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       it in the task/run record, and the task proceeds as `pass-with-warnings`.
 - [x] Fail-safe test: a malformed severity or a recording failure degrades to an operational
       `block`, records a durable reason, and parks without consuming a coder corrective round.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
