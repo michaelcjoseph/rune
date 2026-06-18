@@ -1282,6 +1282,102 @@ describe('team-task-workflow — round cap', () => {
     };
   }
 
+  it('primary-exits to closeout after one all-low round and records lows in the ledger', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let reviewerCalls = 0;
+    let techLeadDiffCalls = 0;
+    let designerCalls = 0;
+    let pmCalled = false;
+    const reviewerWarning: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+      reversible: true,
+    };
+    const techLeadWarning: ObjectionFinding = {
+      class: 'concurrency',
+      severity: 'low',
+      location: 'src/queue.ts:61',
+      rationale: 'duplicate starts can race but retry makes them harmless',
+      reversible: true,
+    };
+    const designerWarning: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/server/static/app.js:114',
+      rationale: 'extra repaint is visible on slow devices',
+      reversible: true,
+    };
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 4 },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          reviewerCalls += 1;
+          return {
+            outcome: 'pass-with-warnings',
+            findings: [reviewerWarning],
+          };
+        },
+        techLeadReviewDiff: async () => {
+          techLeadDiffCalls += 1;
+          return {
+            outcome: 'pass-with-warnings',
+            findings: [techLeadWarning],
+          };
+        },
+        designer: async () => {
+          designerCalls += 1;
+          return {
+            outcome: 'pass-with-warnings',
+            findings: [designerWarning],
+          };
+        },
+        pmWrapup: async () => {
+          pmCalled = true;
+          return { resolved: true, rationale: 'PM must not be consulted for all-low exit.' };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.loopExitReason).toBe('all-low');
+    expect(ev.objectionOpen).toBe(false);
+    expect(coderInputs).toHaveLength(1);
+    expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
+    expect(reviewerCalls).toBe(1);
+    expect(techLeadDiffCalls).toBe(1);
+    expect(designerCalls).toBe(1);
+    expect(pmCalled).toBe(false);
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        sourceGate: 'reviewer',
+        severity: 'low',
+        location: 'src/cache.ts:44',
+        status: 'open',
+      }),
+      expect.objectContaining({
+        sourceGate: 'tech-lead',
+        severity: 'low',
+        location: 'src/queue.ts:61',
+        status: 'open',
+      }),
+      expect.objectContaining({
+        sourceGate: 'designer',
+        severity: 'low',
+        location: 'src/server/static/app.js:114',
+        status: 'open',
+      }),
+    ]);
+    expect(ev.rejectionFeedback).toBeUndefined();
+  });
+
   it('retries a structured reviewer fail with feedback threaded into the next coder round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;

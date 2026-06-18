@@ -201,7 +201,7 @@ export async function runProjectOrchestration(
       verdicts: evidence.reviewerVerdict
         ? { reviewer: reviewerOutcome(evidence.reviewerVerdict) }
         : {},
-      ...reviewerWarningsField(evidence.reviewerVerdict),
+      ...warningsField(evidence),
       ...acceptanceField(evidence),
       contextOutcome: 'updated',
       gates: { objectionOpen: evidence.objectionOpen },
@@ -450,9 +450,23 @@ function reviewerOutcome(verdict: NonNullable<TaskEvidence['reviewerVerdict']>):
   return verdict.pass === true ? 'pass' : 'fail';
 }
 
-function reviewerWarningsField(
-  verdict: TaskEvidence['reviewerVerdict'],
+function warningsField(
+  evidence: TaskEvidence,
 ): Pick<TaskRunRecord, 'warnings'> | Record<string, never> {
+  const ledgerWarnings = evidence.findingsLedger
+    ?.filter((finding) => finding.status === 'open' && finding.severity === 'low')
+    .map(({
+      id: _id,
+      sourceGate: _sourceGate,
+      raisedRound: _raisedRound,
+      status: _status,
+      ...warning
+    }) => warning);
+  if (evidence.loopExitReason === 'all-low' && ledgerWarnings !== undefined) {
+    return ledgerWarnings.length > 0 ? { warnings: ledgerWarnings } : {};
+  }
+
+  const verdict = evidence.reviewerVerdict;
   const warnings = reviewerFindings(verdict);
   if (verdict?.outcome !== 'pass-with-warnings' || warnings.length === 0) {
     return {};

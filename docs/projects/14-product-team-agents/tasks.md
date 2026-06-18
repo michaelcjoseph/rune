@@ -1036,7 +1036,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       findings ledger and the loop-exit reason (all-low / stagnation / hard-budget / operational) so
       the orchestrator's terminal handler can drain findings and decide HOLD vs gated merge without
       re-deriving them.
-- [ ] Primary-exit test: a round whose max open severity is `low`/none exits the loop to closeout with
+- [x] Primary-exit test: a round whose max open severity is `low`/none exits the loop to closeout with
       the lows recorded as warnings.
 - [ ] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
       stops and routes to terminal handling before reaching the 4-round budget.

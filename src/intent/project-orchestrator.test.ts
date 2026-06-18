@@ -26,7 +26,7 @@ import {
   type OrchestrationDeps,
   type OrchestrationResult,
 } from './project-orchestrator.js';
-import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
+import type { GateRejectionFeedback, ObjectionFinding, TaskEvidence } from './team-task-workflow.js';
 import type { SelectedTask } from './orch-task-select.js';
 import type { FinalizerAdapter } from './finalizer-handoff.js';
 import type { TaskRunRecord } from './orch-run-record.js';
@@ -711,6 +711,99 @@ describe('project-orchestrator — durable run state', () => {
       expect.objectContaining({
         taskId: 'cache-repeated-reads',
         warnings: [warningFinding],
+      }),
+    ]);
+  });
+
+  it('records all low findings from a primary-exit round as warnings in records and finalizer handoff', async () => {
+    const persistedRecords: TaskRunRecord[] = [];
+    const reviewerWarning: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/cache.ts:44',
+      rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+      reversible: true,
+    };
+    const techLeadWarning: ObjectionFinding = {
+      class: 'concurrency',
+      severity: 'low',
+      location: 'src/queue.ts:61',
+      rationale: 'duplicate starts can race but retry makes them harmless',
+      reversible: true,
+    };
+    const designerWarning: ObjectionFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/server/static/app.js:114',
+      rationale: 'extra repaint is visible on slow devices',
+      reversible: true,
+    };
+    const allWarnings = [reviewerWarning, techLeadWarning, designerWarning];
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer'],
+        reviewerVerdict: {
+          outcome: 'pass-with-warnings',
+          findings: [reviewerWarning],
+          objections: [reviewerWarning],
+        },
+        gateVerdicts: {
+          reviewer: {
+            outcome: 'pass-with-warnings',
+            findings: [reviewerWarning],
+          },
+          techLeadDiff: {
+            outcome: 'pass-with-warnings',
+            findings: [techLeadWarning],
+          },
+          designer: {
+            outcome: 'pass-with-warnings',
+            findings: [designerWarning],
+          },
+        },
+        findingsLedger: allWarnings.map((finding, index) => ({
+          id: `low-${index}`,
+          sourceGate: index === 0 ? 'reviewer' : index === 1 ? 'tech-lead' : 'designer',
+          ...finding,
+          reversible: finding.reversible ?? false,
+          status: 'open',
+          raisedRound: 1,
+        })),
+        loopExitReason: 'all-low',
+        objectionOpen: false,
+        handoffNotes: ['all open findings were low severity'],
+      }),
+      appendTaskRunRecord: async (record) => {
+        persistedRecords.push(record);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Polish all-low gates',
+    ].join('\n'));
+    let finalizerRecords: TaskRunRecord[] | undefined;
+    h.deps.finalize = async (handoff) => {
+      finalizerRecords = handoff.taskRecords;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(persistedRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'polish-all-low-gates',
+        outcome: 'ready-for-closeout',
+        warnings: allWarnings,
+      }),
+    ]);
+    expect(finalizerRecords).toEqual([
+      expect.objectContaining({
+        taskId: 'polish-all-low-gates',
+        warnings: allWarnings,
       }),
     ]);
   });
