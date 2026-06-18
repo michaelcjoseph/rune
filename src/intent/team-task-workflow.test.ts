@@ -1748,6 +1748,91 @@ describe('team-task-workflow — round cap', () => {
     expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
   });
 
+  it('stops at the 4-round hard budget when findings are still above low and emits terminal handling evidence', async () => {
+    const events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }> = [];
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    const severities: ObjectionSeverity[] = ['medium', 'high', 'medium', 'critical'];
+    const roundFindings: ObjectionFinding[] = severities.map((severity) => ({
+      class: 'security',
+      severity,
+      location: 'src/auth.ts:88',
+      rationale: 'the authorization guard can still be bypassed on retry',
+      reversible: true,
+    }));
+    let reviewerCalls = 0;
+    let pmCalled = false;
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      {
+        ...INPUT,
+        cap: 4,
+        emit: (event) => {
+          events.push(event);
+        },
+      },
+      makeDeps({
+        coder: async (input) => {
+          coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+          return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+        },
+        reviewer: async () => {
+          const finding = roundFindings[reviewerCalls];
+          reviewerCalls += 1;
+          return {
+            outcome: 'fail',
+            findings: finding === undefined ? [] : [finding],
+            notes: `round ${reviewerCalls} still leaves above-low residue`,
+          };
+        },
+        pmWrapup: async () => {
+          pmCalled = true;
+          return {
+            resolved: true,
+            rationale: 'PM must not be consulted for hard-budget terminal handling.',
+          };
+        },
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.loopExitReason).toBe('hard-budget');
+    expect(ev.objectionOpen).toBe(false);
+    expect(pmCalled).toBe(false);
+    expect(ev.rolesInvoked).not.toContain('pm');
+    expect(coderInputs).toHaveLength(4);
+    expect(reviewerCalls).toBe(4);
+    expect(coderInputs[3]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        reason: expect.stringContaining('security/medium'),
+      }),
+    ]);
+    expect(ev.reviewerVerdict).toMatchObject({
+      outcome: 'fail',
+      findings: [roundFindings[3]],
+    });
+    expect(ev.findingsLedger).toEqual([
+      expect.objectContaining({
+        severity: 'critical',
+        raisedRound: 1,
+        status: 'open',
+      }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'activity',
+      data: expect.objectContaining({
+        event: 'objection',
+        gate: 'reviewer-verdict',
+        objection: roundFindings[3],
+        summary: expect.stringContaining('critical'),
+      }),
+    }));
+    expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
+  });
+
   it('a still-open cap terminal does not enter blocked-on-human or mention PM in the block reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),

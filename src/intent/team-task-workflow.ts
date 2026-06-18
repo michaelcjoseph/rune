@@ -570,7 +570,7 @@ async function runGated(
         flatMaxOpenSeverityRounds = 1;
       }
       if (flatMaxOpenSeverityRounds >= 3) {
-        emitTerminalReviewerObjections(input, lastReviewer);
+        emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
         return {
           taskId: task.id,
           outcome: 'ready-for-closeout',
@@ -598,13 +598,10 @@ async function runGated(
   // structured verdicts/feedback, but do not route to PM wrap-up or a human
   // blocked state.
   if (
-    lastReviewer !== undefined &&
-    lastReviewer.outcome === 'fail' &&
-    lastReviewer.findings.length > 0 &&
-    isGatePass(lastTechLeadDiff) &&
-    isGatePass(lastDesigner)
+    hasOnlySeverityDerivedFailures(lastReviewer, lastTechLeadDiff, lastDesigner) &&
+    maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
-    emitTerminalReviewerObjections(input, lastReviewer);
+    emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
     return {
       taskId: task.id,
       outcome: 'ready-for-closeout',
@@ -959,13 +956,25 @@ function hasOnlySeverityDerivedFailures(
   return failureHasFindings.length > 0 && failureHasFindings.every(Boolean);
 }
 
-function emitTerminalReviewerObjections(
+function emitTerminalObjections(
   input: TeamTaskRunInput,
-  reviewer: NormalizedReviewerVerdict,
+  reviewer: NormalizedReviewerVerdict | undefined,
+  techLeadDiff: GateVerdict | undefined,
+  designer: GateVerdict | undefined,
 ): void {
-  for (const finding of reviewer.findings) {
+  for (const finding of reviewer?.findings ?? []) {
     if (finding.severity !== 'low') {
-      emitObjection(input, toPublicFinding(finding));
+      emitObjection(input, toPublicFinding(finding), 'reviewer', 'reviewer-verdict');
+    }
+  }
+  for (const finding of techLeadDiff?.findings ?? []) {
+    if (finding.severity !== 'low') {
+      emitObjection(input, toPublicFinding(finding), 'tech-lead', 'implementation-diff');
+    }
+  }
+  for (const finding of designer?.findings ?? []) {
+    if (finding.severity !== 'low') {
+      emitObjection(input, toPublicFinding(finding), 'designer', 'design-review');
     }
   }
 }
@@ -1160,7 +1169,12 @@ function emitRoleVerdict(
   }
 }
 
-function emitObjection(input: TeamTaskRunInput, objection: ObjectionFinding): void {
+function emitObjection(
+  input: TeamTaskRunInput,
+  objection: ObjectionFinding,
+  role: RoleName,
+  gate: GateRejectedArtifact,
+): void {
   if (input.emit === undefined) return;
   const summary =
     `${objection.class}/${objection.severity} at ${objection.location}: ${objection.rationale}`;
@@ -1169,11 +1183,11 @@ function emitObjection(input: TeamTaskRunInput, objection: ObjectionFinding): vo
       kind: 'activity',
       data: {
         event: 'objection',
-        role: 'reviewer',
-        gate: 'reviewer-verdict',
+        role,
+        gate,
         objection,
         summary,
-        line: `reviewer objection: ${summary}`,
+        line: `${role} objection: ${summary}`,
       },
     });
   } catch {

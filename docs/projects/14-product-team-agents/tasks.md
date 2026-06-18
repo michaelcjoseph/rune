@@ -1040,7 +1040,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the lows recorded as warnings.
 - [x] Stagnation-backstop test: a run whose max open severity holds flat for 3 consecutive rounds
       stops and routes to terminal handling before reaching the 4-round budget.
-- [ ] Hard-budget test: a run still above `low` at round 4 stops and routes to terminal handling;
+- [x] Hard-budget test: a run still above `low` at round 4 stops and routes to terminal handling;
       round 5 never executes.
 - [ ] Convergence test: a run whose max severity strictly drops each round (critical→high→medium→low)
       runs past round 3 and exits via the primary all-low gate, not a backstop.
