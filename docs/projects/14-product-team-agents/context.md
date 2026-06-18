@@ -98,7 +98,10 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
--  src/jobs/mutations-log.test.ts` passed: 15 tests
-- `npx vitest run --configLoader runner src/jobs/mutations-log-recovery.test.ts` passed: 1 test
+-  a `resumeMarker: 'resumable'` cursor under `workRunsDir`.
+
+Verification:
+- `npx vitest run --configLoader runner src/jobs/sandbox-runtime.test.ts` passed: 48 tests
 - `git diff --check` passed
-- `npm run build` still fails on existing repo-wide test/type drift; no `src/jobs/mutations-log.ts` source error was reported.
+
+Worktree note: `src/jobs/sandbox-runtime.test.ts` was already modified before I started; I left it intact.

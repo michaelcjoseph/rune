@@ -948,6 +948,55 @@ describe('cleanupOrphanWorktrees', () => {
     expect(existsSync(resumableDir)).toBe(true);
   });
 
+  it('does not preserve an unregistered worktree when its cursor is not resume-marked', async () => {
+    const configPath = writeProductsJson(tmpDir);
+
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const staleDir = worktreePathFor('aura', '14-product-team-agents', worktreeRoot);
+    mkdirSync(staleDir, { recursive: true });
+
+    const workRunsDir = join(tmpDir, 'work-runs');
+    const runId = 'mut-orch-stale';
+    mkdirSync(join(workRunsDir, runId), { recursive: true });
+    const cursor = {
+      runId,
+      product: 'aura',
+      project: '14-product-team-agents',
+      branch: 'jarvis-work/14-product-team-agents',
+      baseBranch: 'main',
+      worktreePath: staleDir,
+      attemptCap: 3,
+      resumeMarker: 'running',
+      cursor: {
+        completedTaskIds: ['persist-records-and-cursor'],
+        currentTaskId: null,
+        nextTaskId: 'resume-boot',
+      },
+    };
+    writeFileSync(join(workRunsDir, runId, 'cursor.json'), JSON.stringify(cursor));
+
+    const runGit = vi.fn().mockImplementation(async (args: string[]) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain')) {
+        return {
+          stdout: 'worktree /some/other/path\nHEAD abc\nbranch refs/heads/main\n\n',
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await cleanupOrphanWorktrees({
+      worktreeRoot,
+      productsConfigPath: configPath,
+      runGit,
+      workRunsDir,
+    });
+
+    expect(result).toContain(staleDir);
+    expect(existsSync(staleDir)).toBe(false);
+  });
+
   it('continues to the next product and does not throw when one product\'s prune fails', async () => {
     // Two-product fixture: aura's prune fails, assay's prune succeeds.
     // The test is order-independent — we identify which product's invocation
