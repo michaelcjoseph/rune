@@ -26,7 +26,14 @@ import {
   type OrchestrationDeps,
   type OrchestrationResult,
 } from './project-orchestrator.js';
-import type { GateRejectionFeedback, ObjectionFinding, TaskEvidence } from './team-task-workflow.js';
+import type {
+  FindingSourceGate,
+  FindingsLedgerEntry,
+  GateRejectionFeedback,
+  ObjectionFinding,
+  ObjectionSeverity,
+  TaskEvidence,
+} from './team-task-workflow.js';
 import type { SelectedTask } from './orch-task-select.js';
 import type { FinalizerAdapter } from './finalizer-handoff.js';
 import type { TaskRunRecord } from './orch-run-record.js';
@@ -175,6 +182,22 @@ interface PersistedRunCursor {
 type DurableRunStateDeps = OrchestrationDeps & {
   appendTaskRunRecord: (record: TaskRunRecord) => Promise<void>;
   writeRunCursor: (cursor: PersistedRunCursor) => Promise<void>;
+};
+
+interface TerminalBugEntry {
+  runId: string;
+  taskId: string;
+  findingId: string;
+  sourceGate: FindingSourceGate;
+  class: ObjectionFinding['class'];
+  severity: Exclude<ObjectionSeverity, 'low'>;
+  location: string;
+  rationale: string;
+  reversible: boolean;
+}
+
+type TerminalBugRecordingDeps = OrchestrationDeps & {
+  appendTerminalBugEntries: (entries: TerminalBugEntry[]) => Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -914,6 +937,136 @@ describe('project-orchestrator — durable run state', () => {
     });
     expect(workflowCalls).toBe(1);
     expect(finalizeCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal bug recording — unresolved >low findings become Jarvis bugs
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — terminal bug recording', () => {
+  it('writes one detailed Jarvis bugs.md entry per remaining open >low finding before finalization', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    const order: string[] = [];
+    const terminalFindings: FindingsLedgerEntry[] = [
+      {
+        id: 'finding-auth-bypass',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'critical',
+        location: 'src/auth.ts:88',
+        rationale: 'the authorization guard can still be bypassed on retry',
+        reversible: true,
+        raisedRound: 4,
+        status: 'open',
+      },
+      {
+        id: 'finding-worker-race',
+        sourceGate: 'tech-lead',
+        class: 'concurrency',
+        severity: 'medium',
+        location: 'src/worker.ts:41',
+        rationale: 'two concurrent terminal handlers can append duplicate state',
+        reversible: false,
+        raisedRound: 3,
+        status: 'open',
+      },
+      {
+        id: 'finding-low-follow-up',
+        sourceGate: 'designer',
+        class: 'cost-perf',
+        severity: 'low',
+        location: 'src/server/static/app.js:120',
+        rationale: 'minor repaint remains after the terminal banner changes',
+        reversible: true,
+        raisedRound: 4,
+        status: 'open',
+      },
+      {
+        id: 'finding-resolved-egress',
+        sourceGate: 'reviewer',
+        class: 'outbound',
+        severity: 'high',
+        location: 'src/egress.ts:27',
+        rationale: 'stale egress finding was resolved before terminal handling',
+        reversible: true,
+        raisedRound: 2,
+        status: 'resolved',
+      },
+      {
+        id: 'finding-auth-bypass',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'critical',
+        location: 'src/auth.ts:88',
+        rationale: 'the authorization guard can still be bypassed on retry',
+        reversible: true,
+        raisedRound: 4,
+        status: 'open',
+      },
+    ];
+    const authBypassFinding = terminalFindings[0]!;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead', 'designer'],
+        reviewerVerdict: {
+          outcome: 'fail',
+          findings: [authBypassFinding],
+          objections: [authBypassFinding],
+        },
+        findingsLedger: terminalFindings,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: ['terminal severity handling drained the unresolved findings ledger'],
+      }),
+      finalize: async () => {
+        order.push('finalize');
+        return { kind: 'finalized', outcome: 'branch-complete' };
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Drive terminal severity handling',
+    ].join('\n'));
+    const deps: TerminalBugRecordingDeps = {
+      ...h.deps,
+      appendTerminalBugEntries: async (entries) => {
+        order.push('bugs');
+        bugEntries.push(...entries);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(order).toEqual(['bugs', 'finalize']);
+    expect(bugEntries).toEqual([
+      {
+        runId: 'run-1',
+        taskId: 'drive-terminal-severity-handling',
+        findingId: 'finding-auth-bypass',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'critical',
+        location: 'src/auth.ts:88',
+        rationale: 'the authorization guard can still be bypassed on retry',
+        reversible: true,
+      },
+      {
+        runId: 'run-1',
+        taskId: 'drive-terminal-severity-handling',
+        findingId: 'finding-worker-race',
+        sourceGate: 'tech-lead',
+        class: 'concurrency',
+        severity: 'medium',
+        location: 'src/worker.ts:41',
+        rationale: 'two concurrent terminal handlers can append duplicate state',
+        reversible: false,
+      },
+    ]);
   });
 });
 

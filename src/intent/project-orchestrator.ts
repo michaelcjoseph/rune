@@ -40,7 +40,13 @@ import {
   type FinalizerAdapter,
   type FinalizerHandoff,
 } from './finalizer-handoff.js';
-import type { GateRejectionFeedback, TaskEvidence } from './team-task-workflow.js';
+import type {
+  FindingSourceGate,
+  ObjectionFinding,
+  ObjectionSeverity,
+  GateRejectionFeedback,
+  TaskEvidence,
+} from './team-task-workflow.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output';
@@ -63,6 +69,18 @@ export interface OrchestrationRunCursor {
   };
 }
 
+export interface OrchestrationTerminalBugEntry {
+  runId: string;
+  taskId: string;
+  findingId: string;
+  sourceGate: FindingSourceGate;
+  class: ObjectionFinding['class'];
+  severity: Exclude<ObjectionSeverity, 'low'>;
+  location: string;
+  rationale: string;
+  reversible: boolean;
+}
+
 /** Everything the orchestrator needs, all injected so the loop is fixture-testable. */
 export interface OrchestrationDeps {
   runId: string;
@@ -82,6 +100,8 @@ export interface OrchestrationDeps {
   appendTaskRunRecord?: (record: TaskRunRecord) => Promise<void>;
   /** Optional durable cursor sink used to resume a still-running mutation. */
   writeRunCursor?: (cursor: OrchestrationRunCursor) => Promise<void>;
+  /** Optional durable bug sink for unresolved terminal findings. */
+  appendTerminalBugEntries?: (entries: OrchestrationTerminalBugEntry[]) => Promise<void>;
 
   // --- state reads (re-read each iteration so restart/reconstruction is safe) ---
   readTasksMd: () => Promise<string>;
@@ -217,6 +237,10 @@ export async function runProjectOrchestration(
     if (checkpoint.kind === 'blocked') {
       return buildOperationalHold(deps, checkpoint.reason, taskRecords);
     }
+    const terminalBugRecording = await recordTerminalBugs(deps, evidence);
+    if (terminalBugRecording.kind === 'blocked') {
+      return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
+    }
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
 
@@ -335,6 +359,54 @@ async function persistRunCheckpoint(
     const message = (err as Error).message.trim() || 'unknown checkpoint write failure';
     return { kind: 'blocked', reason: `operational recording failure: ${message}` };
   }
+}
+
+async function recordTerminalBugs(
+  deps: OrchestrationDeps,
+  evidence: TaskEvidence,
+): Promise<CheckpointResult> {
+  const entries = terminalBugEntries(deps.runId, evidence);
+  if (entries.length === 0) return { kind: 'ok' };
+  if (deps.appendTerminalBugEntries === undefined) {
+    return {
+      kind: 'blocked',
+      reason: 'operational terminal bug recording failure: writer not configured',
+    };
+  }
+
+  try {
+    await deps.appendTerminalBugEntries(entries);
+    return { kind: 'ok' };
+  } catch (err) {
+    const message = (err as Error).message.trim() || 'unknown terminal bug write failure';
+    return { kind: 'blocked', reason: `operational terminal bug recording failure: ${message}` };
+  }
+}
+
+function terminalBugEntries(
+  runId: string,
+  evidence: TaskEvidence,
+): OrchestrationTerminalBugEntry[] {
+  const seen = new Set<string>();
+  const entries: OrchestrationTerminalBugEntry[] = [];
+  for (const finding of evidence.findingsLedger ?? []) {
+    if (finding.status !== 'open' && finding.status !== 'regressed') continue;
+    if (finding.severity === 'low') continue;
+    if (seen.has(finding.id)) continue;
+    seen.add(finding.id);
+    entries.push({
+      runId,
+      taskId: evidence.taskId,
+      findingId: finding.id,
+      sourceGate: finding.sourceGate,
+      class: finding.class,
+      severity: finding.severity,
+      location: finding.location,
+      rationale: finding.rationale,
+      reversible: finding.reversible,
+    });
+  }
+  return entries;
 }
 
 function buildRunCursor(

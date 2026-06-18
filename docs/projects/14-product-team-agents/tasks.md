@@ -1052,7 +1052,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Review-gates-preserved test: tech-lead diff review and designer review (when
       designer-needed) still run inside each convergence round; their findings normalize into the
       shared ledger with `sourceGate`, so Phase 14 does not bypass existing gates.
-- [ ] Terminal-bugs.md test: at terminal the orchestrator writes one detailed
+- [x] Terminal-bugs.md test: at terminal the orchestrator writes one detailed
       `docs/projects/bugs.md` entry per remaining `>low` finding (finding id, source gate,
       class, severity, location, rationale, run/task id, and reversible flag) and dedupes by
       run/task/finding id.
