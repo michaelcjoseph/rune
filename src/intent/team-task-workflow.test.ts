@@ -1393,6 +1393,110 @@ describe('team-task-workflow — round cap', () => {
     );
   });
 
+  it('passes every open prior finding to the reviewer on re-review and requires explicit verification', async () => {
+    type ReviewerInputWithLedger = Parameters<TeamTaskDeps['reviewer']>[0] & {
+      findingsLedger?: FindingsLedgerEntry[];
+    };
+    type ReviewerVerdictWithVerification = ReviewerVerdict & {
+      verifiedFindings?: Array<{
+        id: string;
+        status: 'resolved' | 'open' | 'regressed';
+        notes: string;
+      }>;
+    };
+
+    const reviewerInputs: ReviewerInputWithLedger[] = [];
+    let reviewerCalls = 0;
+    const firstRoundFindings: ObjectionFinding[] = [
+      {
+        class: 'security',
+        severity: 'high',
+        location: 'src/auth.ts:42',
+        rationale: 'token comparison leaks timing information',
+        reversible: true,
+      },
+      {
+        class: 'outbound',
+        severity: 'medium',
+        location: 'src/sync.ts:18',
+        rationale: 'retry path can call the external API after cancellation',
+        reversible: true,
+      },
+    ];
+
+    const ev = await runTeamTaskWorkflow(
+      codeTask,
+      { ...INPUT, cap: 2 },
+      makeDeps({
+        coder: async () => ({ diff: `diff-${reviewerCalls + 1}`, handoffNotes: [] }),
+        reviewer: async (input) => {
+          reviewerInputs.push(input as ReviewerInputWithLedger);
+          reviewerCalls += 1;
+          if (reviewerCalls === 1) {
+            return {
+              outcome: 'fail',
+              findings: firstRoundFindings,
+              notes: 'first pass found two above-low findings',
+            };
+          }
+
+          const priorFindings = reviewerInputs[1]?.findingsLedger ?? [];
+          return {
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: priorFindings.map((finding) => ({
+              id: finding.id,
+              status: 'resolved',
+              notes: `verified fixed: ${finding.id} at ${finding.location}`,
+            })),
+          } as ReviewerVerdictWithVerification;
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(reviewerInputs).toHaveLength(2);
+    expect(reviewerInputs[0]?.findingsLedger).toBeUndefined();
+    expect(reviewerInputs[1]?.findingsLedger?.map((entry) => ({
+      sourceGate: entry.sourceGate,
+      class: entry.class,
+      severity: entry.severity,
+      location: entry.location,
+      rationale: entry.rationale,
+      status: entry.status,
+      raisedRound: entry.raisedRound,
+    }))).toEqual([
+      {
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'high',
+        location: 'src/auth.ts:42',
+        rationale: 'token comparison leaks timing information',
+        status: 'open',
+        raisedRound: 1,
+      },
+      {
+        sourceGate: 'reviewer',
+        class: 'outbound',
+        severity: 'medium',
+        location: 'src/sync.ts:18',
+        rationale: 'retry path can call the external API after cancellation',
+        status: 'open',
+        raisedRound: 1,
+      },
+    ]);
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(ev.findingsLedger?.map((entry) => ({
+      id: entry.id,
+      status: entry.status,
+    }))).toEqual(
+      reviewerInputs[1]?.findingsLedger?.map((entry) => ({
+        id: entry.id,
+        status: 'resolved',
+      })),
+    );
+  });
+
   it('primary-exits to closeout after one all-low round and records lows in the ledger', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     let reviewerCalls = 0;

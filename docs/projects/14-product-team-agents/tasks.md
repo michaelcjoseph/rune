@@ -1046,7 +1046,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       runs past round 3 and exits via the primary all-low gate, not a backstop.
 - [x] Coder-ordering test: the coder receives the ledger severity-sorted, attempts every open finding,
       addresses the highest severity first, and reports which findings it addressed.
-- [ ] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
+- [x] Reviewer-regression-first test: on re-review the reviewer verifies each open prior finding
       (citing it) before discovery; a previously `resolved` finding that reappears is marked
       `regressed`; the ledger persists across rounds.
 - [ ] Review-gates-preserved test: tech-lead diff review and designer review (when

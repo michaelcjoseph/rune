@@ -62,6 +62,8 @@ export interface GateVerdict {
 export interface NormalizedReviewerVerdict extends GateVerdict {
   /** Legacy reviewer-evidence field retained for existing run-record consumers. */
   objections: ObjectionFinding[];
+  /** Explicit reviewer verification of prior open ledger findings. */
+  verifiedFindings?: FindingVerification[];
   /** Set when the reviewer payload itself is malformed and must fail closed operationally. */
   operationalBlockReason?: string;
 }
@@ -74,6 +76,7 @@ export interface ReviewerVerdict {
   pass?: boolean;
   findings?: ObjectionFinding[];
   objections?: ObjectionFinding[];
+  verifiedFindings?: FindingVerification[];
   /** Optional notes for non-objection failures; finding details live in `findings`. */
   notes?: string;
 }
@@ -89,6 +92,12 @@ export interface WorkflowGateVerdicts {
 export type FindingSourceGate = 'reviewer' | 'tech-lead' | 'designer';
 export type FindingStatus = 'open' | 'resolved' | 'regressed';
 export type LoopExitReason = 'all-low' | 'stagnation' | 'hard-budget' | 'operational';
+
+export interface FindingVerification {
+  id: string;
+  status: FindingStatus;
+  notes: string;
+}
 
 export interface FindingsLedgerEntry extends ObjectionFinding {
   id: string;
@@ -164,6 +173,7 @@ export interface ReviewerInput {
   task: SizedTask;
   context: string;
   reviewerProvider: DispatchProvider;
+  findingsLedger?: FindingsLedgerEntry[];
 }
 
 export type WorkflowActivityEvent = {
@@ -440,15 +450,21 @@ async function runGated(
       'review',
       'reviewer-review',
     );
-    lastReviewer = normalizeReviewerVerdict(await deps.reviewer({
+    const reviewerFindingsLedger = openFindingsLedger(findingsLedger);
+    const rawReviewerVerdict = await deps.reviewer({
       diff: coder.diff,
       spec: input.spec,
       tests,
       task,
       context: input.contextMd,
       reviewerProvider,
-    }));
+      ...(reviewerFindingsLedger.length > 0
+        ? { findingsLedger: reviewerFindingsLedger }
+        : {}),
+    });
+    lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
     mergeFindingsIntoLedger(findingsLedger, 'reviewer', lastReviewer.findings, round);
+    applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
     emitRoleVerdict(input, {
       role: 'reviewer',
       gate: 'reviewer-verdict',
@@ -545,7 +561,16 @@ async function runGated(
       }
     }
 
-    if (isReviewerPass(lastReviewer) && isGatePass(lastTechLeadDiff) && isGatePass(lastDesigner)) {
+    if (
+      isReviewerPass(lastReviewer) &&
+      isGatePass(lastTechLeadDiff) &&
+      isGatePass(lastDesigner) &&
+      reviewerVerificationAllowsCloseout(
+        reviewerFindingsLedger,
+        lastReviewer.verifiedFindings,
+        findingsLedger,
+      )
+    ) {
       return {
         taskId: task.id,
         outcome: 'ready-for-closeout',
@@ -740,6 +765,8 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
+  const verifiedFindings = findingVerificationsFromVerdict(raw);
+  const hasVerifiedFindings = Array.isArray(raw['verifiedFindings']);
   const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
   if (malformedClass !== undefined) {
     const reason =
@@ -750,6 +777,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalBlockReason: reason,
     };
   }
@@ -763,6 +791,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalBlockReason: reason,
     };
   }
@@ -774,6 +803,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalBlockReason: reason,
     };
   }
@@ -790,6 +820,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
     outcome,
     findings,
     objections: findings,
+    ...(hasVerifiedFindings ? { verifiedFindings } : {}),
     ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
   };
 }
@@ -852,6 +883,30 @@ function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
         : {}),
     }];
   });
+}
+
+function findingVerificationsFromVerdict(raw: Record<string, unknown>): FindingVerification[] {
+  const source = Array.isArray(raw['verifiedFindings']) ? raw['verifiedFindings'] : [];
+  return source.flatMap((item): FindingVerification[] => {
+    if (!item || typeof item !== 'object') return [];
+    const verification = item as Record<string, unknown>;
+    if (
+      typeof verification['id'] !== 'string' ||
+      !isFindingStatus(verification['status']) ||
+      typeof verification['notes'] !== 'string'
+    ) {
+      return [];
+    }
+    return [{
+      id: verification['id'],
+      status: verification['status'],
+      notes: verification['notes'],
+    }];
+  });
+}
+
+function isFindingStatus(status: unknown): status is FindingStatus {
+  return status === 'open' || status === 'resolved' || status === 'regressed';
 }
 
 function outcomeForObjectionSeverities(objections: ObjectionFinding[]): GateOutcome {
@@ -939,7 +994,7 @@ function maxOpenFindingSeverity(
   ledger: FindingsLedgerEntry[],
 ): ObjectionSeverity | undefined {
   return ledger
-    .filter((entry) => entry.status === 'open')
+    .filter(isUnresolvedFinding)
     .map((entry) => entry.severity)
     .reduce<ObjectionSeverity | undefined>(
       (max, severity) =>
@@ -953,11 +1008,19 @@ function maxOpenFindingSeverity(
 function coderFindingsLedger(
   ledger: FindingsLedgerEntry[],
 ): { findingsLedger?: FindingsLedgerEntry[] } {
-  const open = ledger
-    .filter((entry) => entry.status === 'open')
+  const open = openFindingsLedger(ledger);
+  return open.length > 0 ? { findingsLedger: open } : {};
+}
+
+function openFindingsLedger(ledger: FindingsLedgerEntry[]): FindingsLedgerEntry[] {
+  return ledger
+    .filter(isUnresolvedFinding)
     .sort(compareFindingsForCoder)
     .map((entry) => ({ ...entry }));
-  return open.length > 0 ? { findingsLedger: open } : {};
+}
+
+function isUnresolvedFinding(entry: FindingsLedgerEntry): boolean {
+  return entry.status === 'open' || entry.status === 'regressed';
 }
 
 function compareFindingsForCoder(
@@ -1095,6 +1158,31 @@ function mergeFindingsIntoLedger(
       status: 'open',
     });
   }
+}
+
+function applyFindingVerifications(
+  ledger: FindingsLedgerEntry[],
+  verifications: FindingVerification[],
+): void {
+  for (const verification of verifications) {
+    const existing = ledger.find((entry) => entry.id === verification.id);
+    if (existing === undefined) continue;
+    existing.status = verification.status;
+  }
+}
+
+function reviewerVerificationAllowsCloseout(
+  priorFindings: FindingsLedgerEntry[],
+  verifications: FindingVerification[] | undefined,
+  ledger: FindingsLedgerEntry[],
+): boolean {
+  if (verifications === undefined) return true;
+  const verifiedIds = new Set(verifications.map((verification) => verification.id));
+  if (!priorFindings.every((finding) => verifiedIds.has(finding.id))) {
+    return false;
+  }
+  const maxSeverity = maxOpenFindingSeverity(ledger);
+  return maxSeverity === undefined || severityRank[maxSeverity] <= severityRank.low;
 }
 
 function buildFindingId(
