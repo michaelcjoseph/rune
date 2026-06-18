@@ -817,7 +817,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       processes from resuming the same mutation concurrently.
 - [x] No-double-terminal test: crash recovery never writes a terminal for a run that will resume,
       and the pipeline never lands two terminal records for one id (skip-if-terminal guard).
-- [ ] Worktree-preserve test: the orphan-worktree sweep skips a run marked for resume (or the
+- [x] Worktree-preserve test: the orphan-worktree sweep skips a run marked for resume (or the
       branch-resume path rebuilds it on re-dispatch).
 - [ ] Confirm red before implementation.
 

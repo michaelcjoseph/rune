@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
  * IMPORTANT: No test shells out to real git. All tests stub the `runGit` seam.
  */
 
-import type { SandboxSpec } from '../intent/sandbox.js';
+import { worktreePathFor, type SandboxSpec } from '../intent/sandbox.js';
 
 import {
   readProductsConfig,
@@ -893,6 +893,59 @@ describe('cleanupOrphanWorktrees', () => {
     expect(result).not.toContain(registeredDir);
     expect(existsSync(orphanDir)).toBe(false);
     expect(existsSync(registeredDir)).toBe(true);
+  });
+
+  it('preserves an unregistered worktree when a durable orchestrated cursor marks it resumable', async () => {
+    const configPath = writeProductsJson(tmpDir);
+
+    const worktreeRoot = join(tmpDir, 'worktrees');
+    const resumableDir = worktreePathFor('aura', '14-product-team-agents', worktreeRoot);
+    const ordinaryOrphanDir = join(worktreeRoot, 'aura', '99-orphan');
+    mkdirSync(resumableDir, { recursive: true });
+    mkdirSync(ordinaryOrphanDir, { recursive: true });
+
+    const workRunsDir = join(tmpDir, 'work-runs');
+    const runId = 'mut-orch-resume';
+    mkdirSync(join(workRunsDir, runId), { recursive: true });
+    const cursor = {
+      runId,
+      product: 'aura',
+      project: '14-product-team-agents',
+      branch: 'jarvis-work/14-product-team-agents',
+      baseBranch: 'main',
+      worktreePath: resumableDir,
+      attemptCap: 3,
+      resumeMarker: 'resumable',
+      cursor: {
+        completedTaskIds: ['persist-records-and-cursor'],
+        currentTaskId: null,
+        nextTaskId: 'resume-boot',
+      },
+    };
+    writeFileSync(join(workRunsDir, runId, 'cursor.json'), JSON.stringify(cursor));
+
+    const runGit = vi.fn().mockImplementation(async (args: string[]) => {
+      if (args.includes('prune')) return { stdout: '', stderr: '' };
+      if (args.includes('--porcelain')) {
+        return {
+          stdout: 'worktree /some/other/path\nHEAD abc\nbranch refs/heads/main\n\n',
+          stderr: '',
+        };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await cleanupOrphanWorktrees({
+      worktreeRoot,
+      productsConfigPath: configPath,
+      runGit,
+      workRunsDir,
+    });
+
+    expect(result).toContain(ordinaryOrphanDir);
+    expect(result).not.toContain(resumableDir);
+    expect(existsSync(ordinaryOrphanDir)).toBe(false);
+    expect(existsSync(resumableDir)).toBe(true);
   });
 
   it('continues to the next product and does not throw when one product\'s prune fails', async () => {

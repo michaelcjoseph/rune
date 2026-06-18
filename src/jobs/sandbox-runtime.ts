@@ -458,7 +458,27 @@ export async function destroyWorktree(
 export interface CleanupOpts {
   worktreeRoot: string;
   productsConfigPath: string;
+  /** Optional orchestrated-run artifact dir. When supplied, resumable
+   *  `cursor.json` files under it protect their worktree path from the orphan
+   *  sweep even if git no longer lists the worktree as registered. */
+  workRunsDir?: string;
   runGit?: GitRunner;
+}
+
+interface ResumableRunCursor {
+  runId: string;
+  product: string;
+  project: string;
+  branch: string;
+  baseBranch: string;
+  worktreePath: string;
+  attemptCap: number;
+  resumeMarker: 'resumable';
+  cursor: {
+    completedTaskIds: string[];
+    currentTaskId: string | null;
+    nextTaskId: string | null;
+  };
 }
 
 /**
@@ -480,6 +500,7 @@ export async function cleanupOrphanWorktrees(opts: CleanupOpts): Promise<string[
 
   const runGit = opts.runGit ?? defaultRunGit;
   const products = readProductsConfig(opts.productsConfigPath);
+  const resumableWorktrees = readResumableWorktreePaths(opts.workRunsDir, opts.worktreeRoot);
   const removed: string[] = [];
 
   for (const [slug, product] of Object.entries(products)) {
@@ -526,6 +547,7 @@ export async function cleanupOrphanWorktrees(opts: CleanupOpts): Promise<string[
 
     for (const dir of onDisk) {
       if (registered.has(dir)) continue;
+      if (resumableWorktrees.has(dir)) continue;
       try {
         rmSync(dir, { recursive: true, force: true });
         removed.push(dir);
@@ -551,4 +573,72 @@ function parseRegisteredWorktrees(porcelain: string): Set<string> {
     if (m && m[1]) out.add(m[1].trim());
   }
   return out;
+}
+
+function readResumableWorktreePaths(
+  workRunsDir: string | undefined,
+  worktreeRoot: string,
+): Set<string> {
+  const out = new Set<string>();
+  if (!workRunsDir || !existsSync(workRunsDir)) return out;
+
+  let runDirs: string[];
+  try {
+    runDirs = readdirSync(workRunsDir);
+  } catch {
+    return out;
+  }
+
+  for (const name of runDirs) {
+    const cursorPath = join(workRunsDir, name, 'cursor.json');
+    let raw: string;
+    try {
+      if (!statSync(join(workRunsDir, name)).isDirectory() || !existsSync(cursorPath)) continue;
+      raw = readFileSync(cursorPath, 'utf8');
+    } catch {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!isOrchestrationRunCursor(parsed)) continue;
+    let expectedPath: string;
+    try {
+      expectedPath = worktreePathFor(parsed.product, parsed.project, worktreeRoot);
+    } catch {
+      continue;
+    }
+    if (parsed.worktreePath === expectedPath) {
+      out.add(parsed.worktreePath);
+    }
+  }
+
+  return out;
+}
+
+function isOrchestrationRunCursor(value: unknown): value is ResumableRunCursor {
+  if (!value || typeof value !== 'object') return false;
+  const cursor = value as Partial<ResumableRunCursor>;
+  const position = cursor.cursor as Partial<ResumableRunCursor['cursor']> | undefined;
+  return (
+    cursor.resumeMarker === 'resumable' &&
+    typeof cursor.runId === 'string' &&
+    typeof cursor.product === 'string' &&
+    typeof cursor.project === 'string' &&
+    typeof cursor.branch === 'string' &&
+    typeof cursor.baseBranch === 'string' &&
+    typeof cursor.worktreePath === 'string' &&
+    cursor.worktreePath.length > 0 &&
+    typeof cursor.attemptCap === 'number' &&
+    Number.isFinite(cursor.attemptCap) &&
+    !!position &&
+    Array.isArray(position.completedTaskIds) &&
+    position.completedTaskIds.every((taskId) => typeof taskId === 'string') &&
+    (position.currentTaskId === null || typeof position.currentTaskId === 'string') &&
+    (position.nextTaskId === null || typeof position.nextTaskId === 'string')
+  );
 }

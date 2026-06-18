@@ -98,7 +98,11 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- jobs/mutations-log.test.ts --configLoader runner` passed: 13 tests.
-- `git diff --check -- src/jobs/mutations-log.ts src/jobs/mutations-log.test.ts` passed.
+- rc/jobs/sandbox-runtime.ts src/jobs/sandbox-runtime.test.ts` passed.
+- `npm run build` still fails on unrelated existing repo type errors; none are in the touched implementation files.
 
-No commit made. Note: `src/jobs/mutations-log.test.ts` was already staged before my change; `src/jobs/mutations-log.ts` is currently unstaged.
+No commit made. Note: `src/jobs/sandbox-runtime.test.ts` was already staged; my implementation files are unstaged.
+- n existing unrelated repo-wide TypeScript errors; no `TS2305` cursor import error or `sandbox-runtime` error appeared.
+
+No commit made. Note: `src/index.ts`, `src/jobs/sandbox-runtime.ts`, and `src/jobs/sandbox-runtime.test.ts` already had staged changes; my retry edits are unstaged on top of those.
+- ild` still fails on unrelated existing repo type errors, but not on the rejected cursor import. Also, the two target files were already staged; my attempt to update the index failed because this sandbox cannot write `.git/.../index.lock`, so the files are fixed on disk but show `MM` in `git status`.

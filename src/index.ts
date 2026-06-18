@@ -92,6 +92,7 @@ try {
 void cleanupOrphanWorktrees({
   worktreeRoot: config.WORKTREE_ROOT,
   productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+  workRunsDir: config.WORK_RUNS_DIR,
 }).then((removed) => {
   if (removed.length > 0) {
     log.info('Cleaned up orphan worktrees', { count: removed.length, paths: removed });
