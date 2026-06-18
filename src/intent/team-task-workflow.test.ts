@@ -2299,6 +2299,89 @@ describe('team-task-workflow — round cap', () => {
     expect(ev.blockedReason ?? '').not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
   });
 
+  it('holds when hard-budget terminal residue includes a non-reversible high or critical finding', async () => {
+    for (const severity of ['high', 'critical'] satisfies ObjectionSeverity[]) {
+      const events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }> = [];
+      const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+      const nonReversibleFinding: ObjectionFinding = {
+        class: 'data-integrity',
+        severity,
+        location: `src/state-store.ts:${severity === 'critical' ? 88 : 89}`,
+        rationale: `accepted write can leave ${severity} persisted project-state damage after release`,
+        reversible: false,
+      };
+      let reviewerCalls = 0;
+      let pmCalled = false;
+
+      const ev = await runTeamTaskWorkflow(
+        codeTask,
+        {
+          ...INPUT,
+          cap: 4,
+          emit: (event) => {
+            events.push(event);
+          },
+        },
+        makeDeps({
+          coder: async (input) => {
+            coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+            return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+          },
+          reviewer: async () => {
+            reviewerCalls += 1;
+            return {
+              outcome: 'fail',
+              findings: [nonReversibleFinding],
+              notes: `round ${reviewerCalls} still leaves non-reversible ${severity} residue`,
+            };
+          },
+          pmWrapup: async () => {
+            pmCalled = true;
+            return {
+              resolved: true,
+              rationale: 'PM must not be consulted for non-reversible terminal residue.',
+            };
+          },
+        }),
+      );
+
+      expect(ev.outcome, severity).toBe('blocked');
+      expect(ev.loopExitReason, severity).toBe('hard-budget');
+      expect(ev.objectionOpen, severity).toBe(false);
+      expect(pmCalled, severity).toBe(false);
+      expect(ev.rolesInvoked, severity).not.toContain('pm');
+      expect(coderInputs, severity).toHaveLength(4);
+      expect(reviewerCalls, severity).toBe(4);
+      expect(ev.blockedReason, severity).toMatch(new RegExp(`non-reversible|${severity}|hold`, 'i'));
+      expect(ev.blockedReason ?? '', severity).not.toMatch(/PM|human|blocked-on-human|wrap-up/i);
+      expect(ev.reviewerVerdict, severity).toMatchObject({
+        outcome: 'fail',
+        findings: [nonReversibleFinding],
+      });
+      expect(ev.findingsLedger, severity).toEqual([
+        expect.objectContaining({
+          sourceGate: 'reviewer',
+          class: 'data-integrity',
+          severity,
+          location: nonReversibleFinding.location,
+          rationale: nonReversibleFinding.rationale,
+          reversible: false,
+          raisedRound: 1,
+          status: 'open',
+        }),
+      ]);
+      expect(events, severity).toContainEqual(expect.objectContaining({
+        kind: 'activity',
+        data: expect.objectContaining({
+          event: 'objection',
+          gate: 'reviewer-verdict',
+          objection: nonReversibleFinding,
+          summary: expect.stringContaining(severity),
+        }),
+      }));
+    }
+  });
+
   it('a still-open cap terminal does not enter blocked-on-human or mention PM in the block reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),

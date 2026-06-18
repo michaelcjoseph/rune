@@ -422,6 +422,7 @@ async function runGated(
   let flatMaxOpenSeverityRounds = 0;
   let continueConvergingPastConfiguredCap = false;
   const findingsLedger: FindingsLedgerEntry[] = [];
+  const explicitNonReversibleFindingIds = new Set<string>();
   while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
     continueConvergingPastConfiguredCap = false;
     round += 1;
@@ -465,7 +466,13 @@ async function runGated(
         : {}),
     });
     lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
-    mergeFindingsIntoLedger(findingsLedger, 'reviewer', lastReviewer.findings, round);
+    mergeFindingsIntoLedger(
+      findingsLedger,
+      explicitNonReversibleFindingIds,
+      'reviewer',
+      lastReviewer.findings,
+      round,
+    );
     applyFindingVerifications(findingsLedger, lastReviewer.verifiedFindings ?? []);
     emitRoleVerdict(input, {
       role: 'reviewer',
@@ -515,7 +522,13 @@ async function runGated(
         ? { findingsLedger: roundFindingsLedger }
         : {}),
     }));
-    mergeFindingsIntoLedger(findingsLedger, 'tech-lead', lastTechLeadDiff.findings, round);
+    mergeFindingsIntoLedger(
+      findingsLedger,
+      explicitNonReversibleFindingIds,
+      'tech-lead',
+      lastTechLeadDiff.findings,
+      round,
+    );
     emitRoleVerdict(input, {
       role: 'tech-lead',
       gate: 'implementation-diff',
@@ -553,7 +566,13 @@ async function runGated(
           ? { findingsLedger: roundFindingsLedger }
           : {}),
       }));
-      mergeFindingsIntoLedger(findingsLedger, 'designer', lastDesigner.findings, round);
+      mergeFindingsIntoLedger(
+        findingsLedger,
+        explicitNonReversibleFindingIds,
+        'designer',
+        lastDesigner.findings,
+        round,
+      );
       emitRoleVerdict(input, {
         role: 'designer',
         gate: 'design-review',
@@ -614,7 +633,13 @@ async function runGated(
         previousMaxOpenSeverity = maxOpenSeverity;
         flatMaxOpenSeverityRounds = 1;
       }
-      if (flatMaxOpenSeverityRounds >= 3) {
+      if (
+        flatMaxOpenSeverityRounds >= 3 &&
+        firstNonReversibleHighSeverityFinding(
+          findingsLedger,
+          explicitNonReversibleFindingIds,
+        ) === undefined
+      ) {
         emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
         return {
           taskId: task.id,
@@ -651,6 +676,21 @@ async function runGated(
     maxOpenFindingSeverity(findingsLedger) !== undefined
   ) {
     emitTerminalObjections(input, lastReviewer, lastTechLeadDiff, lastDesigner);
+    const holdFinding = firstNonReversibleHighSeverityFinding(
+      findingsLedger,
+      explicitNonReversibleFindingIds,
+    );
+    if (holdFinding !== undefined) {
+      return block(task, roles, handoffNotes, {
+        blockedReason: terminalHoldReason(holdFinding),
+        reviewerVerdict: lastReviewer,
+        gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, lastTechLeadDiff, lastDesigner),
+        findingsLedger,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        noCodeTestRationale,
+      });
+    }
     return {
       taskId: task.id,
       outcome: 'ready-for-closeout',
@@ -1019,6 +1059,21 @@ function maxOpenFindingSeverity(
     );
 }
 
+function firstNonReversibleHighSeverityFinding(
+  ledger: FindingsLedgerEntry[],
+  explicitNonReversibleFindingIds: Set<string>,
+): FindingsLedgerEntry | undefined {
+  return openFindingsLedger(ledger).find((entry) =>
+    explicitNonReversibleFindingIds.has(entry.id) &&
+    entry.reversible === false &&
+    severityRank[entry.severity] >= severityRank.high);
+}
+
+function terminalHoldReason(finding: FindingsLedgerEntry): string {
+  return `hold: non-reversible ${finding.severity} finding remains at terminal severity loop: ` +
+    `${finding.class} at ${finding.location}: ${finding.rationale}`;
+}
+
 function coderFindingsLedger(
   ledger: FindingsLedgerEntry[],
 ): { findingsLedger?: FindingsLedgerEntry[] } {
@@ -1143,6 +1198,7 @@ function toPublicFinding(finding: ObjectionFinding): ObjectionFinding {
 
 function mergeFindingsIntoLedger(
   ledger: FindingsLedgerEntry[],
+  explicitNonReversibleFindingIds: Set<string>,
   sourceGate: FindingSourceGate,
   findings: ObjectionFinding[],
   round: number,
@@ -1150,6 +1206,11 @@ function mergeFindingsIntoLedger(
   for (const finding of findings) {
     const normalized = toPublicFinding(finding) as ObjectionFinding & { reversible: boolean };
     const id = buildFindingId(sourceGate, normalized);
+    if (finding.reversible === false) {
+      explicitNonReversibleFindingIds.add(id);
+    } else {
+      explicitNonReversibleFindingIds.delete(id);
+    }
     const existing = ledger.find((entry) => entry.id === id);
     if (existing !== undefined) {
       existing.class = normalized.class;

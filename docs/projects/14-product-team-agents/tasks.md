@@ -1056,7 +1056,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `docs/projects/bugs.md` entry per remaining `>low` finding (finding id, source gate,
       class, severity, location, rationale, run/task id, and reversible flag) and dedupes by
       run/task/finding id.
-- [ ] Reversible-hold test: a remaining `critical`/`high` finding with `reversible: false` HOLDS the
+- [x] Reversible-hold test: a remaining `critical`/`high` finding with `reversible: false` HOLDS the
       branch (no auto-merge, finalizer handoff); when all remaining `>low` findings are reversible the
       gated auto-merge proceeds and the run advances — never `blocked-on-human`.
 - [ ] Confirm red before implementation.
