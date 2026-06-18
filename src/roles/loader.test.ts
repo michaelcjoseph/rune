@@ -155,6 +155,35 @@ describe('roles/loader — authority boundary', () => {
 // ---------------------------------------------------------------------------
 
 describe('roles/loader — exemplar channel', () => {
+  it('composes charter/base as system authority and memory before exemplars as reference', () => {
+    seed(SOUL_BODY, MEMORY_BODY);
+    seedBaselineExemplar('qa-redaction.md', BASELINE_EXEMPLAR_BODY);
+    const projectExemplarsDir = join(dir, 'project-exemplars');
+    seedProjectExemplar(projectExemplarsDir, 'qa', PROJECT_EXEMPLAR_BODY);
+
+    const ctx = composeRoleContext('qa', BASE, {
+      dir,
+      projectExemplarsDir,
+      charBudget: 500,
+    });
+
+    expect(ctx.systemInstructions).toContain('ROLE-SOUL-MARKER');
+    expect(ctx.systemInstructions).toContain('BASE-ROLE-INSTRUCTIONS');
+    expect(ctx.systemInstructions).not.toContain('<qa-memory>');
+    expect(ctx.systemInstructions).not.toContain('<qa-exemplars>');
+
+    const memoryIndex = ctx.referenceContext.indexOf('<qa-memory>');
+    const exemplarIndex = ctx.referenceContext.indexOf('<qa-exemplars>');
+
+    expect(memoryIndex).toBeGreaterThanOrEqual(0);
+    expect(exemplarIndex).toBeGreaterThan(memoryIndex);
+    expect(ctx.referenceContext).toContain('</qa-memory>');
+    expect(ctx.referenceContext).toContain('</qa-exemplars>');
+    expect(ctx.referenceContext).toContain('ROLE-MEMORY-MARKER');
+    expect(ctx.referenceContext).toContain('## baseline/qa-redaction.md');
+    expect(ctx.referenceContext).toContain('## project/qa.md');
+  });
+
   it('includes baseline and per-project exemplars in referenceContext, never systemInstructions', () => {
     seed(SOUL_BODY, MEMORY_BODY);
     seedBaselineExemplar('qa-redaction.md', BASELINE_EXEMPLAR_BODY);

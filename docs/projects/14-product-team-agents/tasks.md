@@ -896,7 +896,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       with QA (a correctly-pinned redaction/security-boundary test).
 - [x] Extend the tech-lead planning output to emit per-project exemplars (alongside test
       strategy), persisted with the project.
-- [ ] Add the exemplar channel to `composeRoleContext` (`loader.ts`): charter + memory +
+- [x] Add the exemplar channel to `composeRoleContext` (`loader.ts`): charter + memory +
       exemplars, budget-bounded as low-authority reference; missing/invalid exemplars degrade
       visibly and never block a role call.
 

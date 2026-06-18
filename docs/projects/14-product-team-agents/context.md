@@ -98,8 +98,10 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- ader runner`
+- ader.ts` unchanged.
 
-Result: `3 passed`, `41 passed`.
+Verification:
+- `npx vitest run src/roles/loader.test.ts --configLoader runner` passed: 51 tests.
+- `npm run build` still fails on unrelated existing TypeScript errors outside `loader.ts`.
 
-Worktree note: the only modified file remains the pre-existing staged QA test update, [planning-roles-wiring.test.ts](/Users/jarvis/workspace/jarvis/.worktrees/jarvis/14-product-team-agents/src/intent/planning-roles-wiring.test.ts). I did not touch it.
+Worktree remains with only the pre-existing staged QA change: `src/roles/loader.test.ts`.
