@@ -109,7 +109,15 @@ export interface OrchestrationDeps {
 
 export type OrchestrationResult =
   | { kind: 'finalized'; outcome: string }
-  | { kind: 'held'; handoff: FinalizerHandoff }
+  | {
+      kind: 'held';
+      reason?: string;
+      handoff: FinalizerHandoff;
+      branch?: string;
+      worktreePath?: string;
+      preserveBranch?: true;
+      preserveWorktree?: true;
+    }
   | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun };
 
 export interface ParkedTaskRun {
@@ -148,7 +156,7 @@ export async function runProjectOrchestration(
       const res = await runFinalizerHandoff(handoff, deps.finalize);
       return res.kind === 'finalized'
         ? { kind: 'finalized', outcome: res.outcome }
-        : { kind: 'held', handoff: res.handoff };
+        : { kind: 'held', reason: res.reason, handoff: res.handoff };
     }
 
     const task = selection.task;
@@ -160,6 +168,13 @@ export async function runProjectOrchestration(
     // Run the workflow, retrying within the attempt cap on non-objection failures.
     const evidence = await runTaskWithRetries(deps, task, assembled.handoff, contextMd);
     if (evidence.outcome !== 'ready-for-closeout') {
+      if (isOperationalTerminal(evidence)) {
+        return buildOperationalHold(
+          deps,
+          evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
+          taskRecords,
+        );
+      }
       const parked = maybeParkedRun(deps, evidence);
       return {
         kind: 'blocked',
@@ -172,7 +187,7 @@ export async function runProjectOrchestration(
     // --- Jarvis-owned closeout ---
     const closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
     if (closeout.kind === 'blocked') {
-      return { kind: 'blocked', reason: closeout.reason, task };
+      return buildOperationalHold(deps, closeout.reason, taskRecords);
     }
 
     const taskRecord = buildTaskRunRecord({
@@ -200,12 +215,7 @@ export async function runProjectOrchestration(
       closeout.tasksMd,
     );
     if (checkpoint.kind === 'blocked') {
-      return {
-        kind: 'blocked',
-        reason: checkpoint.reason,
-        task,
-        ...operationalParkedRunField(deps),
-      };
+      return buildOperationalHold(deps, checkpoint.reason, taskRecords);
     }
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
@@ -244,6 +254,7 @@ async function runTaskWithRetries(
       ...(rejectionFeedback !== undefined ? { rejectionFeedback } : {}),
     });
     if (evidence.outcome === 'ready-for-closeout') return evidence;
+    if (isOperationalTerminal(evidence)) return evidence;
     const decision = decideAttemptOutcome({
       attempts: attempt,
       cap: deps.attemptCap,
@@ -456,6 +467,35 @@ function acceptanceField(
   return { acceptance: evidence.acceptance };
 }
 
+function isOperationalTerminal(evidence: TaskEvidence): boolean {
+  const reason = evidence.blockedReason ?? evidence.failureReason ?? '';
+  return /\boperational\b|malformed|unparseable/i.test(reason);
+}
+
+function buildOperationalHold(
+  deps: OrchestrationDeps,
+  reason: string,
+  taskRecords: TaskRunRecord[],
+): Extract<OrchestrationResult, { kind: 'held' }> {
+  const handoff = buildFinalizerHandoff({
+    runId: deps.runId,
+    project: deps.project,
+    product: deps.product,
+    branch: deps.branch,
+    ...(deps.baseBranch !== undefined ? { baseBranch: deps.baseBranch } : {}),
+    taskRecords,
+  });
+  return {
+    kind: 'held',
+    reason,
+    handoff,
+    branch: deps.branch,
+    ...(deps.worktreePath !== undefined ? { worktreePath: deps.worktreePath } : {}),
+    preserveBranch: true,
+    preserveWorktree: true,
+  };
+}
+
 function maybeParkedRun(
   deps: OrchestrationDeps,
   evidence: TaskEvidence,
@@ -466,21 +506,6 @@ function maybeParkedRun(
   // closeout still stops the run, but it is no longer converted into a
   // supervision `blocked-on-human` row from task evidence.
   return undefined;
-}
-
-function operationalParkedRunField(
-  deps: OrchestrationDeps,
-): Pick<Extract<OrchestrationResult, { kind: 'blocked' }>, 'parked'> | Record<string, never> {
-  if (deps.worktreePath === undefined) return {};
-  return {
-    parked: {
-      status: 'blocked-on-human',
-      branch: deps.branch,
-      worktreePath: deps.worktreePath,
-      preserveBranch: true,
-      preserveWorktree: true,
-    },
-  };
 }
 
 function reviewerFindings(

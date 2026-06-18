@@ -1028,7 +1028,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       no `ObjectionClass` admits `irreversibility` (compile-level guard); the Phase 13 tests that
       asserted the `block` outcome, block-correction budget, and per-task `blocked-on-human`
       terminals are retired/rewritten and the suite is green against the 3-value model.
-- [ ] Operational-terminal test: an operational failure that is NOT a finding (malformed/unparseable
+- [x] Operational-terminal test: an operational failure that is NOT a finding (malformed/unparseable
       gate output, closeout/persist failure, rejected context update, dirty worktree) terminates as
       a durable non-merge HOLD with the operational reason recorded and branch/worktree preserved —
       it does not auto-merge and does not route to `blocked-on-human` (req 83).

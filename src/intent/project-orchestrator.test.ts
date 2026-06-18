@@ -136,6 +136,26 @@ function eventNames(events: Array<{ kind: 'activity' | 'output'; data?: Record<s
     .filter((name): name is string => typeof name === 'string');
 }
 
+function expectOperationalHold(
+  res: OrchestrationResult,
+  opts: { reason: RegExp; worktreePath: string },
+): void {
+  const raw = res as unknown as Record<string, unknown>;
+  const handoff =
+    raw['handoff'] && typeof raw['handoff'] === 'object'
+      ? (raw['handoff'] as Record<string, unknown>)
+      : {};
+
+  expect(raw['kind']).toBe('held');
+  expect(String(raw['reason'] ?? '')).toMatch(opts.reason);
+  expect(raw).not.toHaveProperty('parked');
+  expect(JSON.stringify(raw)).not.toMatch(/blocked-on-human/i);
+  expect(raw['branch'] ?? handoff['branch']).toBe('jarvis-work/14-x');
+  expect(raw['worktreePath'] ?? handoff['worktreePath']).toBe(opts.worktreePath);
+  expect(raw['preserveBranch'] ?? handoff['preserveBranch']).toBe(true);
+  expect(raw['preserveWorktree'] ?? handoff['preserveWorktree']).toBe(true);
+}
+
 interface PersistedRunCursor {
   runId: string;
   product: string;
@@ -173,13 +193,52 @@ describe('project-orchestrator — closeout', () => {
     expect(res.kind).toBe('finalized');
   });
 
-  it('blocks durably without advancing when closeout cannot produce a clean checkpoint', async () => {
+  it('holds durably without advancing when closeout cannot produce a clean checkpoint', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-dirty-worktree';
     const h = makeHarness({ verifyCleanWorktree: async () => false });
-    const res = await runProjectOrchestration(h.deps);
-    expect(res.kind).toBe('blocked');
+    const res = await runProjectOrchestration({ ...h.deps, worktreePath });
+    expectOperationalHold(res, {
+      reason: /operational|dirty|worktree|clean/i,
+      worktreePath,
+    });
     // A dirty worktree halts the run: it does NOT advance to the second task,
     // and it never finalizes.
     expect(h.state.tasksMd).toContain('- [ ] Render the streak card');
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operational terminal — non-finding failures hold, never human-park
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — operational terminal', () => {
+  it('treats malformed gate output as a non-finding operational HOLD with branch/worktree preserved', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-malformed-gate-output';
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return {
+          taskId: task.id,
+          outcome: 'failed',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          objectionOpen: false,
+          handoffNotes: [],
+          failureReason: 'operational failure: reviewer-verdict was malformed/unparseable JSON',
+        };
+      },
+    });
+
+    const res = await runProjectOrchestration({ ...h.deps, worktreePath });
+
+    expectOperationalHold(res, {
+      reason: /operational|malformed|unparseable|reviewer-verdict/i,
+      worktreePath,
+    });
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+    expect(h.state.commits).toEqual([]);
+    expect(workflowCalls).toBe(1);
     expect(h.state.finalizeCalled).toBe(false);
   });
 });
@@ -712,7 +771,7 @@ describe('project-orchestrator — durable run state', () => {
     ]);
   });
 
-  it('parks as an operational block when warning recording fails, without re-running the coder workflow', async () => {
+  it('holds as an operational terminal when warning recording fails, without re-running the coder workflow', async () => {
     const worktreePath = '/tmp/jarvis-worktrees/aura/14-recording-failure';
     const warningFinding = {
       class: 'cost-perf',
@@ -756,16 +815,9 @@ describe('project-orchestrator — durable run state', () => {
       worktreePath,
     });
 
-    expect(res).toMatchObject({
-      kind: 'blocked',
-      reason: expect.stringMatching(/operational|record/i),
-      parked: {
-        status: 'blocked-on-human',
-        branch: 'jarvis-work/14-x',
-        worktreePath,
-        preserveBranch: true,
-        preserveWorktree: true,
-      },
+    expectOperationalHold(res, {
+      reason: /operational|record/i,
+      worktreePath,
     });
     expect(workflowCalls).toBe(1);
     expect(finalizeCalled).toBe(false);
@@ -803,11 +855,15 @@ describe('project-orchestrator — finalizer handoff', () => {
     expect(h.state.commits).toHaveLength(2);
   });
 
-  it('does not finalize when starting from an already-complete task list with a blocked task mid-way', async () => {
-    // A run that blocks never reaches the finalizer.
+  it('does not finalize when an operational closeout failure holds mid-way', async () => {
+    // A run that holds on an operational terminal never reaches the finalizer.
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-closeout-checks';
     const h = makeHarness({ runCloseoutChecks: async () => false });
-    const res = await runProjectOrchestration(h.deps);
-    expect(res.kind).toBe('blocked');
+    const res = await runProjectOrchestration({ ...h.deps, worktreePath });
+    expectOperationalHold(res, {
+      reason: /operational|closeout checks/i,
+      worktreePath,
+    });
     expect(h.state.finalizeCalled).toBe(false);
   });
 });
