@@ -811,7 +811,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Record-persistence test: `TaskRunRecord`s + a run cursor are written to a durable store and
       read back to reconstruct a partial run; the resume marker carries product, branch, base,
       worktree, cursor, and attempt-cap data needed for autonomous restart.
-- [ ] Resume test: a still-`running` orchestrated mutation at boot is reconstructed
+- [x] Resume test: a still-`running` orchestrated mutation at boot is reconstructed
       (`reconstructRun`) and re-dispatched against its existing branch, resuming from the first
       unchecked task — not flipped to `failed/orphaned`; a single-run lease prevents two
       processes from resuming the same mutation concurrently.

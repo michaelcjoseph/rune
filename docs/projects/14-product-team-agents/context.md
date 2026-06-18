@@ -98,6 +98,10 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- `npx vitest run src/intent/project-orchestrator.test.ts --configLoader runner` passed: 15 tests.
-- Focused TypeScript check on `src/intent/project-orchestrator.ts` passed.
-- `npm run build` still fails on existing unrelated repo-wide type errors; the prior cursor-type error from this change is gone.
+- strated-work-runner.test.ts --configLoader runner`
+- `git diff --check -- src/jobs/orchestrated-work-runner.ts src/intent/orch-task-select.ts`
+
+`npx tsc --noEmit --pretty false` still fails on existing unrelated repo-wide typing errors; it no longer reports the recovery test `SelectedTask` mismatch.
+- jobs/orchestrated-work-recovery.test.ts --configLoader runner` passed.
+
+Note: the prior attempt had files staged. I tried to unstage them, but the sandbox cannot write the git index lock outside the workspace. `git diff HEAD` shows the correct net diff and no `orch-task-select.ts` production change.

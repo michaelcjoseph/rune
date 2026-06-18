@@ -32,7 +32,7 @@
  * regression in team-task-deps.test.ts pins the production binding.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import {
@@ -46,10 +46,13 @@ import {
   runProjectOrchestration,
   type OrchestrationActivityEvent,
   type OrchestrationDeps,
+  type OrchestrationRunCursor,
   type OrchestrationResult,
 } from '../intent/project-orchestrator.js';
+import { reconstructRun, type RunReconstruction } from '../intent/orch-reconstruct.js';
 import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
+import type { TaskRunRecord } from '../intent/orch-run-record.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
@@ -98,6 +101,35 @@ type OrchestratedWorkPayload = {
   projectSlug: string;
   product?: string;
 };
+
+export interface OrchestratedRecoveryRedispatch {
+  branch: string;
+  baseBranch: string;
+  worktreePath: string;
+  attemptCap: number;
+  reconstruction: RunReconstruction;
+  resumeFromTaskId: string | null;
+  existingBranch: true;
+}
+
+export interface OrchestratedWorkRecoveryDeps {
+  readRunningOrchestratedMutations: () => Promise<MutationDescriptor<OrchestratedWorkPayload>[]>;
+  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
+  readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
+  readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  redispatchOrchestratedMutation: (
+    mutation: MutationDescriptor<OrchestratedWorkPayload>,
+    options: OrchestratedRecoveryRedispatch,
+  ) => Promise<void>;
+  markOrphaned: (mutation: MutationDescriptor<OrchestratedWorkPayload>, reason: string) => Promise<void>;
+  writeTerminal: (mutation: MutationDescriptor<OrchestratedWorkPayload>, event: MutationEvent) => Promise<void>;
+}
+
+export interface OrchestratedWorkRecoveryResult {
+  resumed: string[];
+  orphaned: string[];
+  skipped: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Runtime seam (injected so the apply→event mapping is fixture-testable)
@@ -205,6 +237,7 @@ function buildOrchestrationDeps(args: {
   projectSlug: string;
   branch: string;
   baseBranch: string;
+  workRunsDir: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
@@ -228,6 +261,8 @@ function buildOrchestrationDeps(args: {
     // failure). The team-task-workflow runs its own internal round cap; this
     // bounds the OUTER retries. 3 mirrors gen-eval-loop's default round cap.
     attemptCap: ORCHESTRATED_ATTEMPT_CAP,
+    appendTaskRunRecord: async (record) => appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record),
+    writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
 
     readTasksMd: async () => readFileSafe(tasksPath),
     readContextMd: async () => readFileSafe(contextPath),
@@ -287,6 +322,84 @@ function readFileSafe(path: string): string {
   } catch {
     return '';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Durable run checkpoints + boot recovery
+// ---------------------------------------------------------------------------
+
+const ORCHESTRATED_TASK_RECORDS_FILE = 'task-records.jsonl';
+const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
+
+function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, record: TaskRunRecord): void {
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, ORCHESTRATED_TASK_RECORDS_FILE), JSON.stringify(record) + '\n', 'utf8');
+}
+
+function writeOrchestratedRunCursor(baseDir: string, runId: string, cursor: OrchestrationRunCursor): void {
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  const target = join(dir, ORCHESTRATED_CURSOR_FILE);
+  const tmp = join(dir, `.${ORCHESTRATED_CURSOR_FILE}.${process.pid}.tmp`);
+  writeFileSync(tmp, JSON.stringify(cursor, null, 2), 'utf8');
+  renameSync(tmp, target);
+}
+
+export async function recoverOrchestratedWorkRuns(
+  deps: OrchestratedWorkRecoveryDeps,
+): Promise<OrchestratedWorkRecoveryResult> {
+  const result: OrchestratedWorkRecoveryResult = { resumed: [], orphaned: [], skipped: [] };
+  const mutations = await deps.readRunningOrchestratedMutations();
+
+  for (const mutation of mutations) {
+    if (mutation.kind !== 'orchestrated-work' || mutation.status !== 'running') {
+      result.skipped.push(mutation.id);
+      continue;
+    }
+
+    const cursor = await deps.readRunCursor(mutation.id);
+    if (!cursor || cursor.resumeMarker !== 'resumable') {
+      await deps.markOrphaned(mutation, 'missing resumable orchestrated cursor');
+      result.orphaned.push(mutation.id);
+      continue;
+    }
+
+    try {
+      const [records, tasksMd] = await Promise.all([
+        deps.readTaskRunRecords(mutation.id),
+        deps.readTasksMd(cursor),
+      ]);
+      const reconstruction = reconstructRun({ tasksMd, records });
+
+      if (reconstruction.drift) {
+        const terminal = term(mutation.id, 'failed', {
+          projectSlug: mutation.payload.projectSlug,
+          product: mutation.payload.product ?? cursor.product,
+          reason: 'orchestrated recovery drift: completed task records disagree with tasks.md',
+        });
+        await deps.writeTerminal(mutation, terminal);
+        result.orphaned.push(mutation.id);
+        continue;
+      }
+
+      await deps.redispatchOrchestratedMutation(mutation, {
+        branch: cursor.branch,
+        baseBranch: cursor.baseBranch,
+        worktreePath: cursor.worktreePath,
+        attemptCap: cursor.attemptCap,
+        reconstruction,
+        resumeFromTaskId: reconstruction.nextTask?.id ?? null,
+        existingBranch: true,
+      });
+      result.resumed.push(mutation.id);
+    } catch (err) {
+      await deps.markOrphaned(mutation, (err as Error).message);
+      result.orphaned.push(mutation.id);
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +541,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         projectSlug,
         branch,
         baseBranch,
+        workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         emit,
