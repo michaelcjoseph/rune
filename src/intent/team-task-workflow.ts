@@ -595,9 +595,16 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
 
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
   const objections = [...verdict.objections];
-  const outcome = objections.length > 0
-    ? 'block'
-    : verdict.outcome ?? (verdict.pass === true ? 'pass' : 'fail');
+  const outcomes: ReviewerOutcome[] = [];
+  if (objections.length > 0) {
+    outcomes.push(outcomeForObjectionSeverities(objections));
+  }
+  if (verdict.outcome !== undefined) {
+    outcomes.push(verdict.outcome);
+  } else if (objections.length === 0) {
+    outcomes.push(verdict.pass === true ? 'pass' : 'fail');
+  }
+  const outcome = strictestReviewerOutcome(outcomes);
   return {
     outcome,
     objections,
@@ -605,12 +612,44 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
   };
 }
 
+function outcomeForObjectionSeverities(objections: ObjectionFinding[]): ReviewerOutcome {
+  return strictestReviewerOutcome(objections.map((objection) =>
+    outcomeForObjectionSeverity(objection.severity)));
+}
+
+function outcomeForObjectionSeverity(severity: ObjectionSeverity): ReviewerOutcome {
+  switch (severity) {
+    case 'critical':
+    case 'high':
+      return 'block';
+    case 'medium':
+      return 'fail';
+    case 'low':
+      return 'pass-with-warnings';
+  }
+}
+
+function strictestReviewerOutcome(outcomes: ReviewerOutcome[]): ReviewerOutcome {
+  return outcomes.reduce(
+    (strictest, outcome) =>
+      reviewerOutcomeRank[outcome] > reviewerOutcomeRank[strictest] ? outcome : strictest,
+    'pass',
+  );
+}
+
+const reviewerOutcomeRank: Record<ReviewerOutcome, number> = {
+  pass: 0,
+  'pass-with-warnings': 1,
+  fail: 2,
+  block: 3,
+};
+
 function isReviewerPass(verdict: NormalizedReviewerVerdict): boolean {
   return verdict.outcome === 'pass' || verdict.outcome === 'pass-with-warnings';
 }
 
 function isReviewerBlock(verdict: NormalizedReviewerVerdict): boolean {
-  return verdict.outcome === 'block' || verdict.objections.length > 0;
+  return verdict.outcome === 'block';
 }
 
 function summarizeReviewerVerdict(verdict: NormalizedReviewerVerdict): string {

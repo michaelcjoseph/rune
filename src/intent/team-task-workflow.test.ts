@@ -22,6 +22,8 @@ import {
   type TeamTaskDeps,
   type ReviewerVerdict,
   type ObjectionFinding,
+  type ObjectionSeverity,
+  type ReviewerOutcome,
   type GateRejectionFeedback,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
@@ -342,6 +344,111 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(verdict).toHaveProperty('outcome');
     expect(REVIEW_OUTCOMES).toContain(verdict?.['outcome'] as (typeof REVIEW_OUTCOMES)[number]);
     expect(verdict).not.toHaveProperty('pass');
+  });
+
+  function objectionWithSeverity(severity: ObjectionSeverity): ObjectionFinding {
+    return {
+      class: 'security',
+      severity,
+      location: `src/x.ts:${severity.length}`,
+      rationale: `${severity} severity finding`,
+    };
+  }
+
+  it('maps objection severity to reviewer outcomes: critical/high block, medium fails, low passes with warnings', async () => {
+    const cases: Array<{
+      severity: ObjectionSeverity;
+      expectedOutcome: ReviewerOutcome;
+      expectedWorkflowOutcome: 'ready-for-closeout' | 'blocked';
+      expectedObjectionOpen: boolean;
+    }> = [
+      {
+        severity: 'critical',
+        expectedOutcome: 'block',
+        expectedWorkflowOutcome: 'blocked',
+        expectedObjectionOpen: true,
+      },
+      {
+        severity: 'high',
+        expectedOutcome: 'block',
+        expectedWorkflowOutcome: 'blocked',
+        expectedObjectionOpen: true,
+      },
+      {
+        severity: 'medium',
+        expectedOutcome: 'fail',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
+      },
+      {
+        severity: 'low',
+        expectedOutcome: 'pass-with-warnings',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
+      },
+    ];
+
+    for (const c of cases) {
+      const ev = await runTeamTaskWorkflow(
+        codeTask,
+        { ...INPUT, cap: 1 },
+        makeDeps({
+          reviewer: async () => ({
+            objections: [objectionWithSeverity(c.severity)],
+          }),
+          pmWrapup: async () => ({ resolved: true }),
+        }),
+      );
+
+      expect(ev.reviewerVerdict?.outcome, c.severity).toBe(c.expectedOutcome);
+      expect(ev.outcome, c.severity).toBe(c.expectedWorkflowOutcome);
+      expect(ev.objectionOpen, c.severity).toBe(c.expectedObjectionOpen);
+      if (c.severity === 'low' || c.severity === 'medium') {
+        expect(ev.reviewerVerdict?.outcome, c.severity).not.toBe('block');
+      }
+    }
+  });
+
+  it('resolves multiple objection severities to the strictest mapped outcome', async () => {
+    const cases: Array<{
+      name: string;
+      severities: ObjectionSeverity[];
+      expectedOutcome: ReviewerOutcome;
+      expectedWorkflowOutcome: 'ready-for-closeout' | 'blocked';
+      expectedObjectionOpen: boolean;
+    }> = [
+      {
+        name: 'low + medium',
+        severities: ['low', 'medium'],
+        expectedOutcome: 'fail',
+        expectedWorkflowOutcome: 'ready-for-closeout',
+        expectedObjectionOpen: false,
+      },
+      {
+        name: 'low + critical',
+        severities: ['low', 'critical'],
+        expectedOutcome: 'block',
+        expectedWorkflowOutcome: 'blocked',
+        expectedObjectionOpen: true,
+      },
+    ];
+
+    for (const c of cases) {
+      const ev = await runTeamTaskWorkflow(
+        codeTask,
+        { ...INPUT, cap: 1 },
+        makeDeps({
+          reviewer: async () => ({
+            objections: c.severities.map(objectionWithSeverity),
+          }),
+          pmWrapup: async () => ({ resolved: true }),
+        }),
+      );
+
+      expect(ev.reviewerVerdict?.outcome, c.name).toBe(c.expectedOutcome);
+      expect(ev.outcome, c.name).toBe(c.expectedWorkflowOutcome);
+      expect(ev.objectionOpen, c.name).toBe(c.expectedObjectionOpen);
+    }
   });
 });
 

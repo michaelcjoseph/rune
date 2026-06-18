@@ -940,7 +940,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Outcome-enum test: a reviewing role's verdict carries exactly one of
       `pass`/`pass-with-warnings`/`fail`/`block` as a structured field; a bare boolean is
       normalized/rejected, never silently coerced.
-- [ ] Severity-mapping test: `critical`/`high` objection → `block`; `medium` → `fail`; `low` →
+- [x] Severity-mapping test: `critical`/`high` objection → `block`; `medium` → `fail`; `low` →
       `pass-with-warnings`. A `low`/`medium` finding can never produce `block`, and multiple
       findings resolve to the strictest mapped outcome.
 - [ ] Warnings-recorded test: a `pass-with-warnings` outcome proceeds and the warnings land in the
