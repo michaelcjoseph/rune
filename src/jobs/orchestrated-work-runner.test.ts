@@ -1704,6 +1704,30 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('stamps outcome + workProduct on a non-finalized terminal so the notification renders an outcome (not "no outcome recorded")', async () => {
+      // Regression: only the `finalized` branch of mapResultToTerminal carried an
+      // outcome, so held/partial/blocked terminals reached Telegram without one
+      // and rendered the generic "… finished" / "completed (no outcome recorded)"
+      // fallback. The terminal event must carry the same outcome + workProduct
+      // the summary records.
+      inject({
+        kind: 'held',
+        handoff: {
+          runId: 'mut-1',
+          project: 'demo',
+          product: 'jarvis',
+          branch: 'jarvis-work/demo',
+          taskRecords: [],
+        },
+      });
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      const data = terminal?.data as Record<string, unknown>;
+      expect(typeof data['outcome']).toBe('string');
+      expect(data['outcome']).toBeTruthy();
+      expect(data['workProduct']).toBeDefined();
+    });
+
     it('finding-driven held terminals preserve the live worktree and do not run the finalizer', async () => {
       const worktreePath = '/tmp/jarvis-worktrees/jarvis/demo-non-reversible';
       inject({

@@ -1122,6 +1122,20 @@ async function persistTerminalArtifacts(args: {
     workProduct,
     result,
   });
+  // Backfill the terminal bus event with the outcome + work-product the summary
+  // recorded, so the Telegram formatter renders the real outcome instead of the
+  // "completed (no outcome recorded)" fallback (or the legacy generic
+  // "/work --auto … finished"). Only the `finalized` branch of
+  // mapResultToTerminal already carries these — held/parked/blocked/partial
+  // terminals did not. FILL-MISSING only: the finalizer's own workProduct
+  // (with the project-marked-done commit) is authoritative and must not be
+  // clobbered by the recomputed summary view.
+  const existingTerminalData = (terminal.data ?? {}) as Record<string, unknown>;
+  terminal.data = {
+    ...existingTerminalData,
+    outcome: existingTerminalData['outcome'] ?? summary.outcome,
+    workProduct: existingTerminalData['workProduct'] ?? summary.workProduct,
+  };
   try {
     deps.writeSummary(join(deps.workRunsDir, descriptor.id), summary);
   } catch (err) {
