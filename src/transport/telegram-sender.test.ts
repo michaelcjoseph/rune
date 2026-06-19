@@ -291,7 +291,7 @@ describe('TelegramSender', () => {
       expect(text.toLowerCase()).not.toContain('not yet');
     });
 
-    it('a successful orchestrated gated merge sends exactly one Telegram message to the operator', async () => {
+    it('an orchestrated terminal after gated merge does not itself claim the branch landed (Phase 15)', async () => {
       sender.onMutationEvent({
         ...workRunEvent('completed', {
           outcome: 'branch-complete',
@@ -309,10 +309,32 @@ describe('TelegramSender', () => {
       const [sentBot, userId, text] = mockSendLongMessage.mock.calls[0]!;
       expect(sentBot).toBe(bot);
       expect(userId).toBe(123);
-      expect(text.toLowerCase()).toContain('merged to trunk');
+      expect(text.toLowerCase()).not.toContain('merged to trunk');
       expect(text.toLowerCase()).not.toContain('finished');
-      expect(text.toLowerCase()).not.toContain('not yet');
       expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('delivers the orchestrated merge-success landing claim as a separate operator notification (Phase 15)', async () => {
+      sender.onMutationEvent({
+        ...workRunEvent('completed', {}),
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: {
+          event: 'merge-success',
+          projectSlug: 'demo',
+          product: 'jarvis',
+          baseBranch: 'trunk',
+          branch: 'jarvis-work/demo',
+        },
+      } as any);
+      await flush();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text.toLowerCase()).toContain('demo');
+      expect(text.toLowerCase()).toContain('merged to trunk');
+      expect(text.toLowerCase()).not.toContain('branch-complete');
+      expect(text.toLowerCase()).not.toContain('finished');
     });
 
     it('a branch-complete run HELD at the gate surfaces the held reason (never a silent drop) (Phase 3.5)', async () => {

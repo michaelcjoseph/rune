@@ -1220,7 +1220,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       send failure is logged by the sender and also never blocks or fails the run.
 - [x] Progress-replay-dedupe test: orchestrator resume/replay after a closeout commit does not
       send a second progress alert for the same commit sha; a new closeout commit still sends once.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 

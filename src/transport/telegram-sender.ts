@@ -84,7 +84,7 @@ function formatWorkRunStart(event: BusMutationEvent): string | null {
  *  project-not-found / spec-read failure) renders by `subKind` — never the bare
  *  generic finished-in-Ns format — so a work run can't read as success without
  *  a verified outcome. */
-function formatWorkRunTerminal(event: BusMutationEvent): string {
+function formatWorkRunTerminal(event: BusMutationEvent, opts: { suppressMergeClaim?: boolean } = {}): string {
   const data = (event.data ?? {}) as Record<string, unknown>;
   const slug = String(data['projectSlug'] ?? event.mutationId.slice(0, 8));
   const reason = String(data['reason'] ?? '');
@@ -137,6 +137,9 @@ function formatWorkRunTerminal(event: BusMutationEvent): string {
       // wording. The base branch is stamped on the event (defaults to `main`).
       const base = typeof data['baseBranch'] === 'string' ? (data['baseBranch'] as string) : 'main';
       if (data['merged'] === true) {
+        if (opts.suppressMergeClaim) {
+          return `✅ ${slug} branch-complete · ${commits} commit(s) · id=${id}`;
+        }
         const branchNote = data['branchDeleted'] === true ? 'branch deleted' : 'branch retained';
         return `✅ ${slug} merged to ${base} · ${commits} commit(s) · ${branchNote} · id=${id}`;
       }
@@ -158,6 +161,22 @@ function formatWorkRunTerminal(event: BusMutationEvent): string {
       // Unknown outcome — surface it rather than silently dropping to success.
       return `⚠️ ${slug} ${outcome} · ${reason} · id=${id}`;
   }
+}
+
+function formatMergeSuccessProgress(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (data['event'] !== 'merge-success') return null;
+  const slug = String(data['projectSlug'] ?? event.mutationId.slice(0, 8));
+  const base = typeof data['baseBranch'] === 'string' ? data['baseBranch'] : 'main';
+  const branch = typeof data['branch'] === 'string' ? data['branch'] : '';
+  const product = typeof data['product'] === 'string' ? data['product'] : '';
+  const target = product ? `${product}/${slug}` : slug;
+  const parts = [
+    `✅ ${target} merged to ${base}`,
+    branch ? `branch ${branch}` : '',
+    `id=${shortMutationId(event.mutationId)}`,
+  ].filter((part) => part !== '');
+  return parts.join(' · ');
 }
 
 function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
@@ -293,7 +312,7 @@ export class TelegramSender implements MessageSender {
       return;
     }
     if (event.mutationKind === 'orchestrated-work' && event.subKind === 'progress') {
-      const text = formatCloseoutCommitProgress(event);
+      const text = formatMergeSuccessProgress(event) ?? formatCloseoutCommitProgress(event);
       if (text) {
         void this.send(event.userId, text).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent orchestrated progress send failed', {
@@ -310,7 +329,7 @@ export class TelegramSender implements MessageSender {
       // outcome payload as work-run, so render them through the outcome-aware
       // formatter rather than the generic "/work --auto on <uuid>" fallback.
       : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release' || event.mutationKind === 'orchestrated-work'
-        ? formatWorkRunTerminal(event)
+        ? formatWorkRunTerminal(event, { suppressMergeClaim: event.mutationKind === 'orchestrated-work' })
         : formatGenericTerminal(event);
     // Project 13 Phase 1c: a PARKED work-run terminal gets a one-tap Release
     // button whose callback id (`work-run-release:<id>`) routes through the same
