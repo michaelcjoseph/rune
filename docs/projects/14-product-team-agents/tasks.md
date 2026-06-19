@@ -1295,6 +1295,90 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > remaining" ping at every commit, and when the project finishes, its index row reads **Done** and
 > a single "merged to `main`" message lands. The silent auto-merge becomes a narrated one.
 
+### Bug: orchestrated runs strand at `running` — non-atomic two-phase terminal write (found 2026-06-18)
+
+> **Symptom.** The cockpit shows an "active" orchestrated run for `14-product-team-agents` that is
+> not actually running. Run `0620f39e` (dispatched from the webview at `2026-06-19T03:12:25Z`,
+> classified `noop`, durationMs 186) is wedged: `summary.json` + the work-runs `index.jsonl` row
+> say terminal (`noop`), but `mutations.jsonl` has only `pending` + `running` (no terminal line) and
+> `supervised-runs.json` still reads `status: running`. The cockpit projects that stale supervised
+> record as `active:1` — and has read it as active continuously since dispatch (`work-run-projection`
+> logged `active:1` from `03:12:26` through the end of the log ~21 min later).
+>
+> **Root cause — the terminal state is written by two actors, non-atomically.** (1) The applier
+> writes the work-product artifacts inline: the finalizer / `persistTerminalArtifacts`
+> (`orchestrated-work-runner.ts:893`) writes `summary.json` + `index.jsonl`, then `yield terminal`
+> (`:907`). (2) The *consumer* `startApply` (`transport/mutations.ts:493-538`) writes the lifecycle
+> status — flips the mutation status (`appendMutationLine`) and the supervised status
+> (`safeUpsertRun`) — but only when it *consumes* that yielded terminal event. For `0620f39e` step 1
+> ran and step 2 never did: the work product is persisted but the run status is forever `running`.
+>
+> **Pinned from the logs, NOT a guess:** the applier did **not** throw (no `"Mutation applier threw"`
+> error line — `startApply`'s catch at `transport/mutations.ts:550` never fired), and the dispatch did
+> **not** bypass `startApply` (`createMutation` → `autoApprove:true` → `void startApply`, and the
+> `running` supervised seed at `:392` proves it started). The `for await` at `transport/mutations.ts:423`
+> simply never received the terminal `yield` from `orchestrated-work-runner.ts:907` — an un-terminated
+> consumer of a floating, un-awaited `void startApply` promise. The asymmetry is the proof: the
+> work-product layer (written before the yield) is present; the lifecycle layer (written after consuming
+> the yield) is absent; no error surfaced.
+>
+> **Why nothing self-heals.** The only mechanisms that terminalize a stranded orchestrated run are
+> startup-only: `reconcileOrphans` (`mutations-log.ts:71`) **intentionally skips orchestrated-work**
+> (`:99-100`), and supervision-recovery (`index.ts:66`, `supervision-recovery.ts`) runs only at boot.
+> Both ran at the `03:11:11` restart — `74s before` `0620f39e` was dispatched — so they missed it, and
+> nothing has run since. (Those sweeps are what flipped the earlier stuck runs `74452a40` / `869d9e09`
+> to terminal `failed` — note `74452a40`'s work product says `branch-complete` but its lifecycle status
+> was force-flipped to `failed`: the same two-actor disagreement, opposite direction.)
+>
+> **Second-order:** `stall-check-runner` (5-min threshold, live since `03:11:11`) never flagged the run
+> despite 20+ min "running" — it inspects live `activeRuns` handles, not the persisted supervised store,
+> so an abandoned record with no live handle is invisible to the one backstop meant to catch quiet runs.
+
+**Red tests (confirm red before implementation)**
+
+- [ ] Atomic-terminal test: when the orchestrated applier reaches a terminal outcome
+      (`finalized`/`held`/`blocked`/`failed`), the mutation status AND the supervised status are
+      persisted terminal **by the applier itself**, in the same step that writes the work-product
+      artifacts — not contingent on a downstream consumer observing the yielded event. Assert that
+      after the applier's terminal step, `mutations.jsonl` (latest line) and `supervised-runs.json`
+      both read the terminal status even if the yielded event is dropped/never consumed.
+- [ ] Lost-yield-no-strand test: simulate the consumer abandoning the `for await` immediately after
+      the work-product write (no terminal event consumed); the run must NOT be left at `running` —
+      the supervised store reflects the classified outcome (`noop`/`branch-complete`/`failed`).
+- [ ] Work-product-vs-lifecycle-agreement test: for every terminal outcome, the work-runs
+      `summary.json` outcome and the supervised/mutation status are consistent (a `branch-complete`
+      work product is never paired with a `failed` lifecycle status, and a terminal work product is
+      never paired with a `running` lifecycle status).
+- [ ] Periodic-reconciler test: a supervised entry still `running` whose
+      `work-runs/<id>/summary.json` already shows a terminal outcome is flipped to that outcome by a
+      timer-driven reconciler (NOT startup-only), with no restart and no live handle required. An
+      entry with no terminal summary is left untouched (still genuinely in flight).
+- [ ] Stall-check-store-source test: stall detection reads the persisted supervised store (not only
+      live `activeRuns` handles), so an abandoned `running` record past the stall threshold with no
+      live handle is surfaced rather than silently ignored.
+- [ ] Reconcile-orchestrated-mutations test: `reconcileOrphans` (or its replacement) no longer
+      exempts `orchestrated-work` — a stale `running` orchestrated mutation with a terminal work
+      product is terminalized, not left `running` forever in `mutations.jsonl`.
+
+**Implementation**
+
+- [ ] Move the lifecycle-terminal write into the applier's terminal path so work product and run
+      status are persisted together (single owner, atomic): the applier writes the terminal mutation
+      line + supervised status alongside `persistTerminalArtifacts`; the yielded event becomes
+      notification-only (bus/Telegram/cockpit-stream), no longer the sole carrier of the status write.
+- [ ] Add a periodic, store-driven reconciler (timer, not startup-only) that flips any supervised
+      `running` whose run-artifact `summary.json` shows a terminal outcome to that outcome, and
+      terminalizes the matching mutation-log line.
+- [ ] Point stall-check at the persisted supervised store (in addition to live handles) so abandoned
+      runs past threshold are caught.
+- [ ] Stop exempting `orchestrated-work` in `reconcileOrphans` (`mutations-log.ts:99-100`), or fold
+      its responsibility into the periodic reconciler above.
+- [ ] One-time cleanup: terminalize the currently-stranded `0620f39e` (its work product is `noop`)
+      so the cockpit clears the phantom active run.
+
+> **Provenance:** same defect class as Phase 11 ("persist run state, exactly one terminal" / the
+> double-terminal incident); surfaced 2026-06-18 while diagnosing a phantom active run in the cockpit.
+
 ---
 
 ## Out of scope
