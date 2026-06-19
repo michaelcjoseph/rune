@@ -1174,7 +1174,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
       multiple matches produces an operational HOLD with branch/worktree preserved; it does not
       guess, edit the base branch, or merge a completed project whose index was not safely finalized.
-- [ ] Index-status-tokens-only test: the writer changes only the matched project's two status tokens
+- [x] Index-status-tokens-only test: the writer changes only the matched project's two status tokens
       (table Status cell + section heading, preserving any `(…)` heading suffix), and preserves the
       project link, summary text, table header/alignment row, section body, row order, and unrelated
       project rows/headings byte-for-byte.

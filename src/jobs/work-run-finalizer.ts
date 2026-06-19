@@ -227,7 +227,24 @@ function isProjectHeadingLine(line: string, slug: string): boolean {
   return new RegExp(`^##\\s+${escapeRegExp(slug)}\\s+—\\s+.*$`).test(bareLine);
 }
 
-function hasProjectLink(cells: string[], slug: string): boolean {
+function hasProjectLink(cell: string, slug: string): boolean {
+  return new RegExp(`\\(${escapeRegExp(slug)}/?\\)`).test(cell);
+}
+
+function hasProjectLinkInColumn(
+  cells: string[],
+  column: number | null,
+  slug: string,
+): boolean {
+  return column !== null && column < cells.length && hasProjectLink(cells[column]!, slug);
+}
+
+function findTableColumn(cells: string[], name: string): number | null {
+  const index = cells.findIndex((cell) => cell.trim() === name);
+  return index >= 0 ? index : null;
+}
+
+function hasProjectLinkAnywhere(cells: string[], slug: string): boolean {
   return cells.some((cell) => new RegExp(`\\(${escapeRegExp(slug)}/?\\)`).test(cell));
 }
 
@@ -252,6 +269,7 @@ export function markProjectIndexDoneInText(
 ): MarkProjectIndexDoneResult {
   const lines = content.split('\n');
   let statusColumn: number | null = null;
+  let projectColumn: number | null = null;
   let inTable = false;
   let malformedTable = false;
   let matchingRows = 0;
@@ -261,6 +279,7 @@ export function markProjectIndexDoneInText(
     if (!line.trimStart().startsWith('|')) {
       inTable = false;
       statusColumn = null;
+      projectColumn = null;
       if (isProjectHeadingLine(line, slug)) matchingHeadings += 1;
       continue;
     }
@@ -268,16 +287,21 @@ export function markProjectIndexDoneInText(
     if (!inTable) {
       inTable = true;
       statusColumn = null;
+      projectColumn = null;
     }
 
     const cells = line.split('|');
-    const statusIdx = cells.findIndex((cell) => cell.trim() === 'Status');
-    if (statusIdx >= 0) {
+    const statusIdx = findTableColumn(cells, 'Status');
+    const projectIdx = findTableColumn(cells, 'Project');
+    if (statusIdx !== null || projectIdx !== null) {
       statusColumn = statusIdx;
+      projectColumn = projectIdx;
       continue;
     }
 
-    if (hasProjectLink(cells, slug)) {
+    if (projectColumn === null && statusColumn === null && hasProjectLinkAnywhere(cells, slug)) {
+      malformedTable = true;
+    } else if (hasProjectLinkInColumn(cells, projectColumn, slug)) {
       if (statusColumn === null || statusColumn >= cells.length) {
         malformedTable = true;
       } else {
@@ -297,6 +321,7 @@ export function markProjectIndexDoneInText(
   }
 
   statusColumn = null;
+  projectColumn = null;
   inTable = false;
   let changed = false;
 
@@ -305,16 +330,23 @@ export function markProjectIndexDoneInText(
       if (!inTable) {
         inTable = true;
         statusColumn = null;
+        projectColumn = null;
       }
 
       const cells = line.split('|');
-      const statusIdx = cells.findIndex((cell) => cell.trim() === 'Status');
-      if (statusIdx >= 0) {
+      const statusIdx = findTableColumn(cells, 'Status');
+      const projectIdx = findTableColumn(cells, 'Project');
+      if (statusIdx !== null || projectIdx !== null) {
         statusColumn = statusIdx;
+        projectColumn = projectIdx;
         return line;
       }
 
-      if (hasProjectLink(cells, slug) && statusColumn !== null && statusColumn < cells.length) {
+      if (
+        hasProjectLinkInColumn(cells, projectColumn, slug) &&
+        statusColumn !== null &&
+        statusColumn < cells.length
+      ) {
         const current = cells[statusColumn]!;
         if (current.trim() !== 'Done') {
           cells[statusColumn] = setTrimmedCell(current, 'Done');
@@ -328,6 +360,7 @@ export function markProjectIndexDoneInText(
 
     inTable = false;
     statusColumn = null;
+    projectColumn = null;
     const heading = markHeadingDone(line, slug);
     if (heading.changed) changed = true;
     return heading.line;

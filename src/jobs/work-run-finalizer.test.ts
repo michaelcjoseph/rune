@@ -227,6 +227,55 @@ describe('markProjectIndexDoneInText — Phase 15 project completion writer', ()
     expect(result.content).toContain('Section body stays byte-for-byte.');
   });
 
+  it('changes only the matched project status tokens, preserving unrelated rows even when their summaries mention the project', async () => {
+    const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
+    const before = [
+      '# Projects',
+      '',
+      'Introductory copy stays untouched.',
+      '',
+      '| Project | Status | Summary |',
+      '| :--- | :---: | ---: |',
+      '| [Product Team](14-product-team-agents/) | In Progress | Simulated product-team loop |',
+      '| [Release Notes](99-release-notes/) | Active | Mentions [Product Team](14-product-team-agents/) as related work |',
+      '| [Other](98-other/) | Paused | Leave this row byte-for-byte |',
+      '',
+      '## 14-product-team-agents — In Progress (reopened 2026-06-14)',
+      '',
+      'Body text says In Progress and Active; those words are not status tokens.',
+      '',
+      '## 99-release-notes — Active',
+      '',
+      'Unrelated section body links to [Product Team](14-product-team-agents/) and stays unchanged.',
+      '',
+    ].join('\n');
+    const expected = [
+      '# Projects',
+      '',
+      'Introductory copy stays untouched.',
+      '',
+      '| Project | Status | Summary |',
+      '| :--- | :---: | ---: |',
+      '| [Product Team](14-product-team-agents/) | Done | Simulated product-team loop |',
+      '| [Release Notes](99-release-notes/) | Active | Mentions [Product Team](14-product-team-agents/) as related work |',
+      '| [Other](98-other/) | Paused | Leave this row byte-for-byte |',
+      '',
+      '## 14-product-team-agents — Done (reopened 2026-06-14)',
+      '',
+      'Body text says In Progress and Active; those words are not status tokens.',
+      '',
+      '## 99-release-notes — Active',
+      '',
+      'Unrelated section body links to [Product Team](14-product-team-agents/) and stays unchanged.',
+      '',
+    ].join('\n');
+
+    const result = markProjectIndexDoneInText(before, '14-product-team-agents');
+
+    expect(result.kind).toBe('updated');
+    expect(result.content).toBe(expected);
+  });
+
   it('is idempotent for an already-Done project: returns unchanged content and no update signal', async () => {
     const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
     const alreadyDone = [
