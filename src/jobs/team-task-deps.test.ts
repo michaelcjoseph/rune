@@ -333,6 +333,87 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     });
   });
 
+  it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {
+    const coderPrompts: string[] = [];
+    const unorderedLedger: FindingsLedgerEntry[] = [
+      {
+        id: 'finding-low-cache',
+        sourceGate: 'designer',
+        class: 'cost-perf',
+        severity: 'low',
+        location: 'src/cache.ts:12',
+        rationale: 'extra repaint remains but correctness is unaffected',
+        reversible: true,
+        raisedRound: 1,
+        status: 'open',
+      },
+      {
+        id: 'finding-high-auth',
+        sourceGate: 'reviewer',
+        class: 'security',
+        severity: 'high',
+        location: 'src/auth.ts:42',
+        rationale: 'authorization bypass remains possible after retry',
+        reversible: true,
+        raisedRound: 2,
+        status: 'open',
+      },
+      {
+        id: 'finding-critical-data',
+        sourceGate: 'tech-lead',
+        class: 'data-integrity',
+        severity: 'critical',
+        location: 'src/store.ts:7',
+        rationale: 'accepted writes can corrupt project state',
+        reversible: true,
+        raisedRound: 3,
+        status: 'open',
+      },
+      {
+        id: 'finding-medium-egress',
+        sourceGate: 'reviewer',
+        class: 'outbound',
+        severity: 'medium',
+        location: 'src/egress.ts:27',
+        rationale: 'egress allow-list still misses one provider endpoint',
+        reversible: true,
+        raisedRound: 1,
+        status: 'open',
+      },
+    ];
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      runExecution: async (opts) => {
+        coderPrompts.push(opts.prompt);
+        return {
+          ok: true,
+          diff: 'diff --git a/src/auth.ts b/src/auth.ts\n+++ b/src/auth.ts\n+fixed\n',
+          output: 'fixed highest severity finding first',
+        };
+      },
+    }));
+
+    await deps.coder({
+      task: sizedTask,
+      spec: 'Fix the task without leaving objection-class residue.',
+      context: 'ctx',
+      tests: ['src/auth.test.ts'],
+      findingsLedger: unorderedLedger,
+    });
+
+    expect(coderPrompts).toHaveLength(1);
+    const prompt = coderPrompts[0] ?? '';
+    const criticalIndex = prompt.indexOf('finding-critical-data');
+    const highIndex = prompt.indexOf('finding-high-auth');
+    const mediumIndex = prompt.indexOf('finding-medium-egress');
+    const lowIndex = prompt.indexOf('finding-low-cache');
+
+    expect(prompt).toMatch(/highest[- ]severity[- ]first|fix .*highest severity/i);
+    expect(criticalIndex).toBeGreaterThanOrEqual(0);
+    expect(highIndex).toBeGreaterThan(criticalIndex);
+    expect(mediumIndex).toBeGreaterThan(highIndex);
+    expect(lowIndex).toBeGreaterThan(mediumIndex);
+  });
+
   it('normalizes a legacy reviewer boolean verdict to the shared outcome enum at the role boundary', async () => {
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role }) => {

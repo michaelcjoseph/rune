@@ -223,6 +223,12 @@ const GATE_OUTCOMES: ReadonlySet<string> = new Set([
   'pass-with-warnings',
   'fail',
 ]);
+const OBJECTION_SEVERITY_RANK: Record<ObjectionSeverity, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
 
 const REVIEWER_INSTRUCTION = [
   'You are the independent code reviewer for one task. Review the diff against the',
@@ -594,10 +600,13 @@ function formatRejectionFeedback(
 
 function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined): string {
   if (findingsLedger === undefined || findingsLedger.length === 0) return '';
+  const sortedLedger = [...findingsLedger].sort(
+    (a, b) => OBJECTION_SEVERITY_RANK[b.severity] - OBJECTION_SEVERITY_RANK[a.severity],
+  );
   return [
     '## Open findings ledger for this round',
     '',
-    ...findingsLedger.flatMap((finding, index) => [
+    ...sortedLedger.flatMap((finding, index) => [
       `${index + 1}. ${finding.id}: ${finding.sourceGate} ${finding.class}/${finding.severity} at ` +
         `${finding.location}`,
       `Status: ${finding.status}; reversible: ${finding.reversible ? 'yes' : 'no'}`,
@@ -803,6 +812,13 @@ export function buildProductionTeamTaskDeps(
         '',
         `## QA tests\n\n${testsBlock}`,
         ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
+        ...(findingsBlock !== ''
+          ? [
+              '',
+              'Fix open findings highest-severity-first; do not spend the round on lower-severity ' +
+                'residue before higher-severity findings are addressed.',
+            ]
+          : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const result = await execute('coder', models.coder, CODER_EXEC_INSTRUCTION, body);
