@@ -88,11 +88,20 @@ export interface FinalizerInput {
   baseBranch?: string;
 }
 
-export interface MarkProjectDoneResult {
-  kind: 'committed' | 'already-done' | 'skipped';
-  commitSha?: string | null;
-  changedTokens?: string[];
-}
+export type ProjectIndexAmbiguousReason = 'malformed-table' | 'no-match' | 'multiple-matches';
+
+export type MarkProjectDoneResult =
+  | {
+      kind: 'committed' | 'already-done' | 'skipped';
+      commitSha?: string | null;
+      changedTokens?: string[];
+    }
+  | {
+      kind: 'ambiguous';
+      reason: ProjectIndexAmbiguousReason;
+      commitSha?: string | null;
+      changedTokens?: string[];
+    };
 
 /**
  * Injected side-effects + the durable phase store. Every effect is a seam so the
@@ -213,22 +222,91 @@ function markHeadingDone(line: string, slug: string): { line: string; changed: b
   return { line: `${prefix}Done${suffix}${eol}`, changed: true };
 }
 
+function isProjectHeadingLine(line: string, slug: string): boolean {
+  const bareLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+  return new RegExp(`^##\\s+${escapeRegExp(slug)}\\s+—\\s+.*$`).test(bareLine);
+}
+
+function hasProjectLink(cells: string[], slug: string): boolean {
+  return cells.some((cell) => new RegExp(`\\(${escapeRegExp(slug)}/?\\)`).test(cell));
+}
+
+export type MarkProjectIndexDoneResult =
+  | { kind: 'updated' | 'already-done'; content: string }
+  | {
+      kind: 'ambiguous';
+      reason: ProjectIndexAmbiguousReason;
+      content: string;
+    };
+
 /**
  * Pure docs/projects/index.md completion writer. It updates the matching
  * project's table Status cell and matching `## <slug> — <status>` section
- * heading, preserving unrelated bytes. Missing or already-Done content returns
- * `already-done` so callers can skip empty commits.
+ * heading, preserving unrelated bytes. Already-Done content returns
+ * `already-done`; missing, duplicated, or malformed content returns
+ * `ambiguous` with the original content unchanged.
  */
 export function markProjectIndexDoneInText(
   content: string,
   slug: string,
-): { kind: 'updated' | 'already-done'; content: string } {
+): MarkProjectIndexDoneResult {
   const lines = content.split('\n');
-  let statusColumn = -1;
+  let statusColumn: number | null = null;
+  let inTable = false;
+  let malformedTable = false;
+  let matchingRows = 0;
+  let matchingHeadings = 0;
+
+  for (const line of lines) {
+    if (!line.trimStart().startsWith('|')) {
+      inTable = false;
+      statusColumn = null;
+      if (isProjectHeadingLine(line, slug)) matchingHeadings += 1;
+      continue;
+    }
+
+    if (!inTable) {
+      inTable = true;
+      statusColumn = null;
+    }
+
+    const cells = line.split('|');
+    const statusIdx = cells.findIndex((cell) => cell.trim() === 'Status');
+    if (statusIdx >= 0) {
+      statusColumn = statusIdx;
+      continue;
+    }
+
+    if (hasProjectLink(cells, slug)) {
+      if (statusColumn === null || statusColumn >= cells.length) {
+        malformedTable = true;
+      } else {
+        matchingRows += 1;
+      }
+    }
+  }
+
+  if (malformedTable) {
+    return { kind: 'ambiguous', reason: 'malformed-table', content };
+  }
+  if (matchingRows === 0 && matchingHeadings === 0) {
+    return { kind: 'ambiguous', reason: 'no-match', content };
+  }
+  if (matchingRows > 1 || matchingHeadings > 1) {
+    return { kind: 'ambiguous', reason: 'multiple-matches', content };
+  }
+
+  statusColumn = null;
+  inTable = false;
   let changed = false;
 
   const next = lines.map((line) => {
     if (line.trimStart().startsWith('|')) {
+      if (!inTable) {
+        inTable = true;
+        statusColumn = null;
+      }
+
       const cells = line.split('|');
       const statusIdx = cells.findIndex((cell) => cell.trim() === 'Status');
       if (statusIdx >= 0) {
@@ -236,10 +314,7 @@ export function markProjectIndexDoneInText(
         return line;
       }
 
-      const hasProjectLink = cells.some((cell) =>
-        new RegExp(`\\(${escapeRegExp(slug)}/?\\)`).test(cell),
-      );
-      if (hasProjectLink && statusColumn > 0 && statusColumn < cells.length) {
+      if (hasProjectLink(cells, slug) && statusColumn !== null && statusColumn < cells.length) {
         const current = cells[statusColumn]!;
         if (current.trim() !== 'Done') {
           cells[statusColumn] = setTrimmedCell(current, 'Done');
@@ -247,8 +322,12 @@ export function markProjectIndexDoneInText(
           return cells.join('|');
         }
       }
+
+      return line;
     }
 
+    inTable = false;
+    statusColumn = null;
     const heading = markHeadingDone(line, slug);
     if (heading.changed) changed = true;
     return heading.line;
@@ -459,6 +538,19 @@ async function runGatedMerge(
       let markProjectDoneResult: MarkProjectDoneResult | undefined;
       if (shouldMarkProjectDone) {
         markProjectDoneResult = await effects.markProjectDone?.(input, terminalEvent);
+      }
+      if (markProjectDoneResult?.kind === 'ambiguous') {
+        const supervisionStatus: FinalizerSupervisionStatus =
+          terminalEvent.kind === 'completed' ? 'completed' : 'failed';
+        return {
+          outcome,
+          terminalEvent,
+          supervisionStatus,
+          worktreeRemoved: false,
+          merged: false,
+          branchDeleted: false,
+          phases,
+        };
       }
 
       const verdict = await gate();

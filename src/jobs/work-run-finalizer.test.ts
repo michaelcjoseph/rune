@@ -173,7 +173,13 @@ function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
 type MarkProjectIndexDoneInText = (
   content: string,
   slug: string,
-) => { kind: 'updated' | 'already-done'; content: string };
+) =>
+  | { kind: 'updated' | 'already-done'; content: string }
+  | {
+      kind: 'ambiguous';
+      reason: 'malformed-table' | 'no-match' | 'multiple-matches';
+      content: string;
+    };
 
 async function loadMarkProjectIndexDoneInText(): Promise<MarkProjectIndexDoneInText> {
   const mod = await import('./work-run-finalizer.js') as typeof import('./work-run-finalizer.js') & {
@@ -237,6 +243,62 @@ describe('markProjectIndexDoneInText — Phase 15 project completion writer', ()
     expect(result.kind).toBe('already-done');
     expect(result.content).toBe(alreadyDone);
   });
+
+  it.each([
+    {
+      label: 'present-but-malformed table',
+      reason: 'malformed-table',
+      content: [
+        '| Project | Summary |',
+        '| --- | --- |',
+        '| [Product Team](14-product-team-agents/) | Simulated team loop |',
+        '',
+        '## 14-product-team-agents — Active (reopened 2026-06-14)',
+        '',
+      ].join('\n'),
+    },
+    {
+      label: 'zero matching rows/headings',
+      reason: 'no-match',
+      content: [
+        '| Project | Status | Summary |',
+        '| --- | --- | --- |',
+        '| [Other](99-other/) | Active | Leave alone |',
+        '',
+        '## 99-other — Active',
+        '',
+      ].join('\n'),
+    },
+    {
+      label: 'multiple matching rows/headings',
+      reason: 'multiple-matches',
+      content: [
+        '| Project | Status | Summary |',
+        '| --- | --- | --- |',
+        '| [Product Team](14-product-team-agents/) | Active | First duplicate |',
+        '| [Product Team again](14-product-team-agents/) | Active | Second duplicate |',
+        '',
+        '## 14-product-team-agents — Active (reopened 2026-06-14)',
+        'First section body.',
+        '',
+        '## 14-product-team-agents — In Progress',
+        'Second section body.',
+        '',
+      ].join('\n'),
+    },
+  ] as const)(
+    '$label returns an ambiguous result and leaves index content untouched',
+    async ({ content, reason }) => {
+      const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
+
+      const result = markProjectIndexDoneInText(content, '14-product-team-agents');
+
+      expect(result.kind).toBe('ambiguous');
+      if (result.kind !== 'ambiguous') return;
+      expect(result.reason).toBe(reason);
+      expect(result.content).toBe(content);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -453,6 +515,36 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(result.branchDeleted).toBe(true);
     expect(result.supervisionStatus).toBe('completed');
     expect(phases).not.toContain('project-marked-done');
+  });
+
+  it('ambiguous docs/projects/index.md produces an operational HOLD: no gate, no merge, worktree preserved (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'ambiguous',
+      reason: 'multiple-matches',
+      commitSha: null,
+      changedTokens: [],
+    }));
+    const { effects, phases } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(effects.writeSummary).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.removeWorktree).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+    expect(result.worktreeRemoved).toBe(false);
+    expect(phases).not.toContain('project-marked-done');
+    expect(phases).not.toContain('summary-written');
+    expect(phases).not.toContain('index-appended');
+    expect(phases).not.toContain('merged-not-pushed');
   });
 
   it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {

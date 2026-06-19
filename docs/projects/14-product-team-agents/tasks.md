@@ -1171,7 +1171,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `branch-complete` outcome, not on all-tasks-checked alone.
 - [x] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the
       finalizer still merges (the index convention is Jarvis-repo-specific), no HOLD, no commit.
-- [ ] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
+- [x] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
       multiple matches produces an operational HOLD with branch/worktree preserved; it does not
       guess, edit the base branch, or merge a completed project whose index was not safely finalized.
 - [ ] Index-status-tokens-only test: the writer changes only the matched project's two status tokens
