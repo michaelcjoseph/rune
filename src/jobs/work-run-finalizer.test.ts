@@ -800,6 +800,31 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     ]);
   });
 
+  it('success notification receives the run/project/base payload after push and cleanup (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const onLanded = vi.fn();
+    const { effects } = makeEffects(ev, { onLanded } as Partial<FinalizerEffects>);
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(onLanded).toHaveBeenCalledOnce();
+    expect(onLanded).toHaveBeenCalledWith({
+      event: 'merge-success',
+      runId: DEFAULT_RUN_ID,
+      projectSlug: '15-work-run-finalizer',
+      product: 'jarvis',
+      branch: 'jarvis-work/15-work-run-finalizer',
+      baseBranch: 'main',
+    });
+    const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
+    const cleanupOrder = vi.mocked(effects.removeWorktree).mock.invocationCallOrder[0]!;
+    const notifyOrder = onLanded.mock.invocationCallOrder[0]!;
+    const terminalOrder = vi.mocked(effects.writeSupervisionTerminal).mock.invocationCallOrder[0]!;
+    expect(pushOrder).toBeLessThan(notifyOrder);
+    expect(cleanupOrder).toBeLessThan(notifyOrder);
+    expect(notifyOrder).toBeLessThan(terminalOrder);
+  });
+
   it('records durable merge-success publication error metadata and still finalizes when the success notification publish fails (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const recordNotificationPublication = vi.fn();

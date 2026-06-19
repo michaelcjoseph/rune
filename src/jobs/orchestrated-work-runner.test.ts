@@ -1134,6 +1134,83 @@ describe('orchestratedWorkApplier', () => {
       expect(created).toBe(true);
     });
 
+    it('wires onLanded to one merge-success progress event naming the project and base branch', async () => {
+      const runId = 'mut-orch-merge-success-notify';
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+      mockRunFinalizer.mockImplementationOnce(async (_input, effects) => {
+        const terminalEvent = await effects.classify();
+        await effects.flushTranscript();
+        effects.writeSummary(terminalEvent);
+        effects.appendIndexRow(terminalEvent);
+        if (effects.onLanded) effects.onLanded();
+        effects.writeSupervisionTerminal('completed', terminalEvent);
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: true,
+          merged: true,
+          branchDeleted: true,
+          phases: [
+            'classified',
+            'transcript-flushed',
+            'summary-written',
+            'index-appended',
+            'merged-not-pushed',
+            'pushed-not-deleted',
+            'worktree-resolved',
+            'finalized',
+          ],
+        };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-notify-123' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+      const finalizerEffects = mockRunFinalizer.mock.calls[0]![1];
+      const notifications = events.filter((event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        return event.kind === 'progress' && data['event'] === 'merge-success';
+      });
+      const terminalIndex = events.findIndex((event) => event.kind === 'completed' || event.kind === 'failed');
+      const notificationIndex = events.findIndex((event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        return event.kind === 'progress' && data['event'] === 'merge-success';
+      });
+
+      expect(typeof finalizerEffects.onLanded).toBe('function');
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toMatchObject({
+        mutationId: runId,
+        kind: 'progress',
+        data: {
+          event: 'merge-success',
+          projectSlug: 'demo',
+          product: 'jarvis',
+          branch: 'jarvis-work/demo',
+          baseBranch: 'main',
+        },
+      });
+      expect(notificationIndex).toBeGreaterThanOrEqual(0);
+      expect(terminalIndex).toBeGreaterThan(notificationIndex);
+      expect(destroyed).toBe(true);
+    });
+
     it('wires abortMerge to git merge --abort so apply-time index conflicts can clean the base checkout', async () => {
       const runId = 'mut-orch-abort-merge';
       const baseSha = 'base-abort-merge-123';

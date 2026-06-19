@@ -900,6 +900,21 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             deleteBranch: async () => {
               await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
             },
+            onLanded: (notification) => {
+              enqueue({
+                mutationId: descriptor.id,
+                ts: new Date().toISOString(),
+                kind: 'progress',
+                data: notification ?? {
+                  event: 'merge-success',
+                  runId: descriptor.id,
+                  projectSlug,
+                  product,
+                  branch,
+                  baseBranch,
+                },
+              });
+            },
           };
 
           const finalizerResult = await runFinalizer(

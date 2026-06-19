@@ -160,6 +160,15 @@ export interface NotificationPublicationRecord {
   error: string;
 }
 
+export interface MergeSuccessNotification {
+  event: NotificationPublicationKind;
+  runId: string;
+  projectSlug: string;
+  product: string;
+  branch: string;
+  baseBranch: string;
+}
+
 export type ProjectIndexAmbiguousReason = 'malformed-table' | 'no-match' | 'multiple-matches';
 
 export type MarkProjectDoneResult =
@@ -230,7 +239,7 @@ export interface FinalizerEffects {
   ) => Promise<MarkProjectDoneResult>;
   /** Optional notification seam for a clean gated merge after the branch has
    *  landed and cleanup/delete have been attempted, before the terminal write. */
-  onLanded?: () => void;
+  onLanded?: (notification?: MergeSuccessNotification) => void;
   /** Durable best-effort record for notification publication failures. */
   recordNotificationPublication?: (record: NotificationPublicationRecord) => void;
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
@@ -589,6 +598,17 @@ function recordNotificationPublicationFailure(
   }
 }
 
+function mergeSuccessNotification(input: FinalizerInput): MergeSuccessNotification {
+  return {
+    event: 'merge-success',
+    runId: input.runId,
+    projectSlug: input.project,
+    product: input.product,
+    branch: input.branch,
+    baseBranch: input.baseBranch ?? 'main',
+  };
+}
+
 /**
  * The shared finalize tail used by BOTH modes: resolve the worktree (best-effort
  * removal — a failure must never block the terminal write, req 17), then — in
@@ -645,7 +665,7 @@ async function resolveWorktreeAndFinalize(
   }
   if (merged) {
     try {
-      effects.onLanded?.();
+      effects.onLanded?.(mergeSuccessNotification(input));
     } catch (err) {
       const error = scrubAbsolutePaths((err as Error).message);
       recordNotificationPublicationFailure(
