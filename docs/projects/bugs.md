@@ -156,4 +156,7 @@
     - New `src/jobs/registry-rebuild.ts`: scans `policies/products.json`, reads each product repo's `docs/projects/index.md` (lifecycle status) and each project's `tasks.md` (task progress), and writes a fresh registry.
     - Wired to run on daemon startup (`src/index.ts`) — so the "Restart server" button also refreshes the cockpit — and as a nightly step (`Registry rebuild` in `src/jobs/nightly.ts`, before the journal-intent producer).
     - The registry now carries per-project task progress (`RegistryProject.progress`), so the cockpit renders progress bars for **every** product, not just jarvis. `handleApiCockpit` overlays a live read of jarvis's own `tasks.md` so jarvis cards stay real-time.
-  
+
+## Loop-filed
+
+- [ ] [team-loop] security/high @ src/security.ts:42 — token material can be written to disk without redaction (finding finding-token-disk-write · task close-the-objection)
