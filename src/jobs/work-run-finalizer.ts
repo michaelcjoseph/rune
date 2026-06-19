@@ -399,7 +399,7 @@ export function markProjectIndexDoneInText(
   if (malformedTable) {
     return { kind: 'ambiguous', reason: 'malformed-table', content };
   }
-  if (matchingRows === 0 && matchingHeadings === 0) {
+  if (matchingRows === 0 || matchingHeadings === 0) {
     return { kind: 'ambiguous', reason: 'no-match', content };
   }
   if (matchingRows > 1 || matchingHeadings > 1) {

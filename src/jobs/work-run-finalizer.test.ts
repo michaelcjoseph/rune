@@ -348,6 +348,43 @@ describe('markProjectIndexDoneInText — Phase 15 project completion writer', ()
 
   it.each([
     {
+      label: 'matching table row but no matching section heading',
+      content: [
+        '| Project | Status | Summary |',
+        '| --- | --- | --- |',
+        '| [Product Team](14-product-team-agents/) | Active | Simulated team loop |',
+        '',
+        '## 99-other — Active',
+        '',
+      ].join('\n'),
+    },
+    {
+      label: 'matching section heading but no matching table row',
+      content: [
+        '| Project | Status | Summary |',
+        '| --- | --- | --- |',
+        '| [Other](99-other/) | Active | Leave alone |',
+        '',
+        '## 14-product-team-agents — Active (reopened 2026-06-14)',
+        '',
+      ].join('\n'),
+    },
+  ] as const)(
+    '$label is ambiguous and does not make a one-sided best-effort edit',
+    async ({ content }) => {
+      const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
+
+      const result = markProjectIndexDoneInText(content, '14-product-team-agents');
+
+      expect(result.kind).toBe('ambiguous');
+      if (result.kind !== 'ambiguous') return;
+      expect(result.reason).toBe('no-match');
+      expect(result.content).toBe(content);
+    },
+  );
+
+  it.each([
+    {
       label: 'present-but-malformed table',
       reason: 'malformed-table',
       content: [

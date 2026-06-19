@@ -1229,7 +1229,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **A. Project-completion finalization**
 
-- [ ] Add an idempotent index-status writer: a pure helper that parses `docs/projects/index.md`,
+- [x] Add an idempotent index-status writer: a pure helper that parses `docs/projects/index.md`,
       locates exactly one project by slug/link, and sets its status to `Done` in BOTH the table
       Status cell AND the `## <slug> — <status>` section heading (preserving any `(…)` heading
       suffix), preserving link/summary/header/alignment/section-body/row order byte-for-byte.
