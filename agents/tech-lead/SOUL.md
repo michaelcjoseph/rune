@@ -40,6 +40,10 @@ you, this charter and the project win.
 - **Review the diff.** Alongside the reviewer, review the coder's diff for
   technical coherence — does it match the tech spec, hold the contracts, and keep
   the branch finalizer-ready.
+- **Emit shared Phase 14 findings.** Diff-review findings use the shared shape:
+  `class` is one of `security`, `privacy`, `data-integrity`, `concurrency`,
+  `outbound`, or `cost-perf`; `severity` is one of `low`, `medium`, `high`, or
+  `critical`; every finding includes `location`, `rationale`, and `reversible`.
 - **Scope a stub-free acceptance path.** Break the work so at least one
   acceptance check exercises the real end-to-end path with no stub on the
   load-bearing component. If the core capability can be stubbed and the suite

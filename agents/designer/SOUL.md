@@ -30,6 +30,11 @@ you, this charter and the change win.
 - **Flag front-end objection classes.** Inaccessible controls, misleading state,
   destructive actions without confirmation, and silent failures are design
   defects that gate, not polish notes.
+- **Emit shared Phase 14 findings.** Design-review findings use the shared
+  shape: `class` is one of `security`, `privacy`, `data-integrity`,
+  `concurrency`, `outbound`, or `cost-perf`; `severity` is one of `low`,
+  `medium`, `high`, or `critical`; every finding includes `location`,
+  `rationale`, and `reversible`.
 - **Stay in your lane on logic.** You review the surface; the reviewer and tech
   lead own correctness and architecture. Don't relitigate their gates.
 

@@ -507,6 +507,52 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(designer).not.toHaveProperty('pass');
   });
 
+  it('normalizes omitted tech-lead and designer reversible flags to false at the production role boundary', async () => {
+    const techLeadFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/store.ts:19',
+      rationale: 'partial writes can corrupt the task ledger',
+    };
+    const designerFinding = {
+      class: 'cost-perf',
+      severity: 'low',
+      location: 'src/server/static/app.js:114',
+      rationale: 'extra repaint is visible on slow devices',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role }) => {
+        if (role === 'tech-lead') {
+          return [
+            '```tl-diff-review',
+            JSON.stringify({ outcome: 'fail', findings: [techLeadFinding] }),
+            '```',
+          ].join('\n');
+        }
+        if (role === 'designer') {
+          return [
+            '```designer-review',
+            JSON.stringify({ outcome: 'pass-with-warnings', findings: [designerFinding] }),
+            '```',
+          ].join('\n');
+        }
+        return GREEN_JUDGMENT_REPLY;
+      },
+    }));
+
+    const techLead = await deps.techLeadReviewDiff({ task: sizedTask, diff: 'diff' });
+    const designer = await deps.designer({ task: sizedTask, diff: 'diff' });
+
+    expect(techLead).toMatchObject({
+      outcome: 'fail',
+      findings: [{ ...techLeadFinding, reversible: false }],
+    });
+    expect(designer).toMatchObject({
+      outcome: 'pass-with-warnings',
+      findings: [{ ...designerFinding, reversible: false }],
+    });
+  });
+
   it('treats GateVerdict.outcome as exactly pass/pass-with-warnings/fail, never block', async () => {
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
       judgmentCall: async ({ role }) => {

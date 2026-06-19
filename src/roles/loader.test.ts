@@ -422,6 +422,27 @@ describe('roles/loader — charter inventory (real disk)', () => {
     expect(soul).not.toMatch(/irreversible operations/i);
   });
 
+  it.each(['tech-lead', 'designer'] as const)(
+    '%s SOUL names the shared Phase 14 finding shape',
+    (role) => {
+      const soul = readFileSync(join(roleDir(role), SOUL_FILENAME), 'utf8');
+
+      for (const className of [
+        'security',
+        'privacy',
+        'data-integrity',
+        'concurrency',
+        'outbound',
+        'cost-perf',
+      ]) {
+        expect(soul).toContain(className);
+      }
+      expect(soul).toContain('severity');
+      expect(soul).toContain('reversible');
+      expect(soul).not.toMatch(/irreversibility/i);
+    },
+  );
+
   it.each([...ROLE_NAMES])(
     'role "%s" SOUL states a mandate and review edges',
     (role: RoleName) => {

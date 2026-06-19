@@ -445,6 +445,7 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
   }
   const v = parsed as Record<string, unknown>;
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  const rawOutcome = typeof v['outcome'] === 'string' ? v['outcome'] : undefined;
   const outcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as GateOutcome
     : undefined;
@@ -457,14 +458,21 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
       notes: notes ?? malformedReason,
     };
   }
+  const normalizedFindings =
+    rawOutcome === 'block'
+      ? findings
+      : findings.map((finding) => ({
+          ...finding,
+          reversible: finding.reversible ?? false,
+        }));
   return {
-    outcome: findings.length > 0
-      ? outcomeForFindings(findings) ?? 'fail'
+    outcome: normalizedFindings.length > 0
+      ? outcomeForFindings(normalizedFindings) ?? 'fail'
       : outcome ??
         (legacyPass !== undefined
           ? legacyPass === true ? 'pass' : 'fail'
           : 'fail'),
-    findings,
+    findings: normalizedFindings,
     ...(notes !== undefined ? { notes } : {}),
   };
 }

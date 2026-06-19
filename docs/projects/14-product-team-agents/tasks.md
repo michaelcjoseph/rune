@@ -1089,7 +1089,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       duplicate bugs.
 - [x] Update the reviewer harness to run regression-first then discovery, and update
       `agents/reviewer/SOUL.md` to hunt the new class set and set `reversible` per finding.
-- [ ] Update tech-lead diff and designer verdict normalization so their findings use the same
+- [x] Update tech-lead diff and designer verdict normalization so their findings use the same
       class/severity/reversible shape and enter the shared ledger with `sourceGate`; a finding that
       omits `reversible` normalizes to `reversible: false` (fail-safe). Update `agents/tech-lead`
       and `agents/designer` SOUL/prompt instructions to request `class`/`severity`/`reversible` per
