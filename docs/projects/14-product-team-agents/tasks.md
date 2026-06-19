@@ -1194,7 +1194,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical
       finding, or an operational HOLD) does NOT flip the index to `Done`; the flip happens only on a
       merge-bound terminal.
-- [ ] Merge-success-notify test: a successful gated merge sends exactly one Telegram message to the
+- [x] Merge-success-notify test: a successful gated merge sends exactly one Telegram message to the
       operator naming the project and the base branch it landed on, after push succeeds and finalizer
       cleanup has been attempted; the orchestrated terminal mutation message does NOT also claim a
       merge (single landing claim); a gate-fail HOLD still sends only the existing fail alert and

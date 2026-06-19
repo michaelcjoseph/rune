@@ -269,10 +269,10 @@ export class TelegramSender implements MessageSender {
     if (event.subKind !== 'completed' && event.subKind !== 'failed') return;
     const text = event.mutationKind === 'gen-eval-loop'
       ? formatGenEvalLoopTerminal(event)
-      // A `work-run-release` terminal carries the cold-finalize work-run outcome
-      // (+ projectSlug), so render it through the same work-run formatter rather
-      // than the generic "/work --auto on <uuid>" fallback (project 13 Phase 1c).
-      : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release'
+      // `orchestrated-work` and `work-run-release` terminals carry the same
+      // outcome payload as work-run, so render them through the outcome-aware
+      // formatter rather than the generic "/work --auto on <uuid>" fallback.
+      : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release' || event.mutationKind === 'orchestrated-work'
         ? formatWorkRunTerminal(event)
         : formatGenericTerminal(event);
     // Project 13 Phase 1c: a PARKED work-run terminal gets a one-tap Release

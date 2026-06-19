@@ -291,6 +291,30 @@ describe('TelegramSender', () => {
       expect(text.toLowerCase()).not.toContain('not yet');
     });
 
+    it('a successful orchestrated gated merge sends exactly one Telegram message to the operator', async () => {
+      sender.onMutationEvent({
+        ...workRunEvent('completed', {
+          outcome: 'branch-complete',
+          reason: '2 commit(s), all original tasks checked',
+          workProduct: { ...noopWorkProduct, commitCount: 2, transitions: { tasksNewlyChecked: 3, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 } },
+          merged: true,
+          branchDeleted: true,
+          baseBranch: 'trunk',
+        }),
+        mutationKind: 'orchestrated-work',
+      });
+      await flush();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const [sentBot, userId, text] = mockSendLongMessage.mock.calls[0]!;
+      expect(sentBot).toBe(bot);
+      expect(userId).toBe(123);
+      expect(text.toLowerCase()).toContain('merged to trunk');
+      expect(text.toLowerCase()).not.toContain('finished');
+      expect(text.toLowerCase()).not.toContain('not yet');
+      expect(bot.sendMessage).not.toHaveBeenCalled();
+    });
+
     it('a branch-complete run HELD at the gate surfaces the held reason (never a silent drop) (Phase 3.5)', async () => {
       sender.onMutationEvent(
         workRunEvent('completed', {
