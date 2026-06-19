@@ -837,6 +837,54 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('emits no closeout progress alert when a task blocks before any closeout commit exists', async () => {
+      const { runGit, calls: gitCalls } = makeWorkProductGitStub({
+        commitShas: [],
+        diffstat: '',
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '## Phase 1',
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'blocked',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
+          objectionOpen: true,
+          handoffNotes: ['blocked before closeout'],
+          blockedReason: 'reviewer objection remains open',
+        }),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const progress = events.filter((event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        return event.kind === 'progress' && data['event'] === 'closeout-commit';
+      });
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+      expect(progress).toEqual([]);
+      expect(terminal?.kind).toBe('failed');
+      expect(gitCalls.map((call) => call.args[0])).not.toContain('commit');
+      expect(gitCalls.map((call) => call.args[0])).not.toContain('rev-parse');
+      expect(destroyed).toBe(true);
+    });
+
     it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
       const runId = 'mut-orch-substrate';
       const runDir = join(process.cwd(), 'logs', 'work-runs', runId);

@@ -1213,7 +1213,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `orchestrated-work-runner.ts:306`) emits one Telegram message naming the just-completed
       task and a remaining/total breakdown (e.g. "3/12 done, 9 remaining") derived from the live
       `tasks.md` checkbox counts / `transitions.tasksRemaining`, not a hardcoded number.
-- [ ] No-commit-no-alert test: a task that blocks/holds without a closeout commit emits no
+- [x] No-commit-no-alert test: a task that blocks/holds without a closeout commit emits no
       progress alert — the alert is bound to a real commit, not to task selection.
 - [ ] Alert-fail-safe test: an event publication failure (per-commit OR merge-success) records a
       durable skip/error and never blocks or fails the run; a downstream Telegram/webview transport

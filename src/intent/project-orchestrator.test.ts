@@ -52,7 +52,7 @@ interface Harness {
     commits: string[];
     contextHandoffs: string[]; // the context each task saw at workflow time
     finalizeCalled: boolean;
-    events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>;
+    events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>;
   };
 }
 
@@ -83,7 +83,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     commits: [] as string[],
     contextHandoffs: [] as string[],
     finalizeCalled: false,
-    events: [] as Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>,
+    events: [] as Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
   };
 
   const finalize: FinalizerAdapter = async () => {
@@ -123,7 +123,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     verifyCleanWorktree: async () => true,
     finalize,
     emit: (event) => {
-      state.events.push(event as { kind: 'activity' | 'output'; data?: Record<string, unknown> });
+      state.events.push(event);
     },
     ...over,
   };
@@ -132,16 +132,27 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
 }
 
 function eventsByName(
-  events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>,
+  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
   name: string,
-): Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }> {
+): Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }> {
   return events.filter((event) => event.data?.['event'] === name);
 }
 
-function eventNames(events: Array<{ kind: 'activity' | 'output'; data?: Record<string, unknown> }>): string[] {
+function eventNames(
+  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
+): string[] {
   return events
     .map((event) => event.data?.['event'])
     .filter((name): name is string => typeof name === 'string');
+}
+
+function closeoutProgressEvents(
+  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
+): Array<{ kind: 'progress'; data?: Record<string, unknown> }> {
+  return events.filter(
+    (event): event is { kind: 'progress'; data?: Record<string, unknown> } =>
+      event.kind === 'progress' && event.data?.['event'] === 'closeout-commit',
+  );
 }
 
 function expectOperationalHold(
@@ -351,8 +362,7 @@ describe('project-orchestrator — observability events', () => {
     const res = await runProjectOrchestration(h.deps);
 
     expect(res.kind).toBe('finalized');
-    const progress = (h.state.events as Array<{ kind: string; data?: Record<string, unknown> }>)
-      .filter((event) => event.kind === 'progress' && event.data?.['event'] === 'closeout-commit');
+    const progress = closeoutProgressEvents(h.state.events);
 
     expect(progress).toHaveLength(2);
     expect(progress[0]).toMatchObject({
@@ -1522,6 +1532,8 @@ describe('project-orchestrator — finalizer handoff', () => {
       worktreePath,
     });
     expect(h.state.finalizeCalled).toBe(false);
+    expect(h.state.commits).toEqual([]);
+    expect(closeoutProgressEvents(h.state.events)).toEqual([]);
   });
 });
 
