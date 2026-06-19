@@ -1227,6 +1227,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
 
     const result = await runFinalizer(gatedMergeInput(), effects);
 
+    expect(markProjectDone).toHaveBeenCalledOnce();
     expect(result.merged).toBe(false);
     expect(result.worktreeRemoved).toBe(false);
     expect(effects.alert).toHaveBeenCalledWith('merge-conflict');
@@ -1242,6 +1243,101 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
       },
     });
     expect(JSON.stringify(result.terminalEvent.data)).not.toContain('project-done-commit-must-not-survive-hold');
+  });
+
+  it('every HOLD path prevents a surviving project-Done commit and skips merge-success notification (Phase 15 selected task)', async () => {
+    type HoldCase = {
+      label: string;
+      event: MutationEvent;
+      effects?: Partial<FinalizerEffects>;
+      expectMarkAttempt?: boolean;
+    };
+
+    const terminalOperationalHold = branchCompleteEvent();
+    terminalOperationalHold.data = {
+      ...(terminalOperationalHold.data as Record<string, unknown>),
+      held: true,
+      preserveBranch: true,
+      preserveWorktree: true,
+      reason: 'checkpoint-persist-failure',
+    };
+
+    const cases: HoldCase[] = [
+      {
+        label: 'finding HOLD',
+        event: branchCompleteEventWithFindings([
+          {
+            id: 'finding-high-nonreversible',
+            severity: 'high',
+            reversible: false,
+            status: 'open',
+          },
+        ]),
+      },
+      {
+        label: 'operational HOLD',
+        event: terminalOperationalHold,
+      },
+      {
+        label: 'gate-fail HOLD',
+        event: branchCompleteEvent(),
+        effects: {
+          gate: vi.fn(async (): Promise<GateResult> => ({ ok: false, reason: 'tests-red' })),
+        },
+      },
+      {
+        label: 'ambiguous-index HOLD',
+        event: branchCompleteEvent(),
+        effects: {
+          markProjectDone: vi.fn(async () => ({
+            kind: 'ambiguous',
+            reason: 'multiple-matches',
+            commitSha: null,
+            changedTokens: [],
+          })),
+        },
+        expectMarkAttempt: true,
+      },
+      {
+        label: 'merge-conflict HOLD',
+        event: branchCompleteEvent(),
+        effects: {
+          mergeBranch: vi.fn(async () => {
+            throw new Error('CONFLICT (content): Merge conflict in docs/projects/index.md');
+          }),
+          abortMerge: vi.fn(async () => {}),
+        },
+        expectMarkAttempt: true,
+      },
+    ];
+
+    for (const holdCase of cases) {
+      const projectDoneCommitSha = `${holdCase.label.replaceAll(/[^a-z]+/g, '-')}-done-commit`;
+      const markProjectDone = holdCase.effects?.markProjectDone ?? vi.fn(async () => ({
+        kind: 'committed' as const,
+        commitSha: projectDoneCommitSha,
+        changedTokens: ['table-status', 'section-heading-status'],
+      }));
+      const onLanded = vi.fn();
+      const { effects, phases } = makeEffects(holdCase.event, {
+        markProjectDone,
+        onLanded,
+        ...holdCase.effects,
+      } as Partial<FinalizerEffects>);
+
+      const result = await runFinalizer(gatedMergeInput(), effects);
+
+      expect(result.merged, holdCase.label).toBe(false);
+      expect(result.branchDeleted, holdCase.label).toBe(false);
+      expect(onLanded, holdCase.label).not.toHaveBeenCalled();
+      expect(phases, holdCase.label).not.toContain('project-marked-done');
+      expect(JSON.stringify(result.terminalEvent.data ?? {}), holdCase.label).not.toContain(projectDoneCommitSha);
+      if (holdCase.expectMarkAttempt) {
+        expect(markProjectDone, holdCase.label).toHaveBeenCalledOnce();
+      } else {
+        expect(markProjectDone, holdCase.label).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {

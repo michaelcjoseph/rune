@@ -1266,7 +1266,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       merge-success publication. Use it for replay/restart dedupe and to record publication
       skip/error metadata; transport delivery errors stay in the sender logs because the bus has no
       acknowledgement channel.
-- [ ] Confirm the merge-bound path order (eligibility classify → index-`Done` commit → refreshed
+- [x] Confirm the merge-bound path order (eligibility classify → index-`Done` commit → refreshed
       terminal summary/index writes → gate → merge → push → remove worktree → delete branch →
       success notify → run-end) and that every HOLD path (finding, operational, gate-fail,
       ambiguous-index, merge-conflict) skips BOTH the index flip and the success notify.
