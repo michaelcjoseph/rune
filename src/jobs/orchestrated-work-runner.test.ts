@@ -83,7 +83,9 @@ import {
   __resetOrchestratedRuntimeForTest,
   __getRuntimeDepsForTest,
   redispatchRecoveredOrchestratedMutation,
+  fileTerminalBugsToBacklog,
 } from './orchestrated-work-runner.js';
+import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
 import {
   activeRuns,
   createMutation,
@@ -2131,5 +2133,83 @@ describe('orchestratedWorkApplier', () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe('fileTerminalBugsToBacklog', () => {
+  let repoPath: string;
+  let mutationsLog: string;
+  const bugsRel = join('docs', 'projects', 'bugs.md');
+  const noopGit: GitRunner = async () => ({ stdout: 'jarvis-work/x', stderr: '' });
+
+  function bug(over: Partial<OrchestrationTerminalBugEntry> = {}): OrchestrationTerminalBugEntry {
+    return {
+      runId: 'run-1',
+      taskId: 'wire-the-index-writer',
+      findingId: 'finding-abc',
+      sourceGate: 'reviewer',
+      class: 'data-integrity',
+      severity: 'critical',
+      location: 'src/finalizer.ts:285',
+      rationale: 'project index never marked Done',
+      reversible: true,
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    repoPath = mkdtempSync(join(tmpdir(), 'jarvis-bugs-'));
+    mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
+    writeFileSync(join(repoPath, bugsRel), '# Bugs\n', 'utf8');
+    mutationsLog = join(repoPath, 'mutations.jsonl');
+  });
+  afterEach(() => {
+    rmSync(repoPath, { recursive: true, force: true });
+  });
+
+  it('writes a Loop-filed bullet to the canonical bugs.md and audits it', async () => {
+    const res = await fileTerminalBugsToBacklog({
+      repoPath,
+      product: 'jarvis',
+      entries: [bug()],
+      runGit: noopGit,
+      mutationsLogFile: mutationsLog,
+    });
+    expect(res.appended).toBe(1);
+    const content = readFileSync(join(repoPath, bugsRel), 'utf8');
+    expect(content).toContain('## Loop-filed');
+    expect(content).toContain('src/finalizer.ts:285');
+    expect(existsSync(mutationsLog)).toBe(true);
+  });
+
+  it('does not re-file a defect already present (dedup through disk)', async () => {
+    await fileTerminalBugsToBacklog({
+      repoPath,
+      product: 'jarvis',
+      entries: [bug()],
+      runGit: noopGit,
+      mutationsLogFile: mutationsLog,
+    });
+    const first = readFileSync(join(repoPath, bugsRel), 'utf8');
+    const res = await fileTerminalBugsToBacklog({
+      repoPath,
+      product: 'jarvis',
+      entries: [bug({ findingId: 'finding-new-id' })],
+      runGit: noopGit,
+      mutationsLogFile: mutationsLog,
+    });
+    expect(res.appended).toBe(0);
+    expect(readFileSync(join(repoPath, bugsRel), 'utf8')).toBe(first);
+  });
+
+  it('is a no-op for an empty entry list', async () => {
+    const res = await fileTerminalBugsToBacklog({
+      repoPath,
+      product: 'jarvis',
+      entries: [],
+      runGit: noopGit,
+      mutationsLogFile: mutationsLog,
+    });
+    expect(res.appended).toBe(0);
   });
 });

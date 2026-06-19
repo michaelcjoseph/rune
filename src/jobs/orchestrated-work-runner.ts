@@ -49,8 +49,16 @@ import {
   type OrchestrationDeps,
   type OrchestrationRunCursor,
   type OrchestrationResult,
+  type OrchestrationTerminalBugEntry,
 } from '../intent/project-orchestrator.js';
 import { reconstructRun, type RunReconstruction } from '../intent/orch-reconstruct.js';
+import {
+  withFileLock,
+  writeFileAtomic,
+  assertBacklogWriteAllowed,
+  appendBacklogMutationLog,
+} from '../intent/backlog-write-lock.js';
+import { appendTerminalBugsToBacklog } from '../intent/terminal-bug-backlog.js';
 import { createProductionTaskWorkflowRunner } from './team-task-deps.js';
 import type { ContextUpdate } from '../intent/context-curator.js';
 import type { TaskRunRecord } from '../intent/orch-run-record.js';
@@ -280,6 +288,20 @@ function buildOrchestrationDeps(args: {
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
     appendTaskRunRecord: async (record) => appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record),
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
+    appendTerminalBugEntries: async (entries) => {
+      // File to the CANONICAL product repo's bugs.md, NEVER the throwaway
+      // worktree: a non-merge run (hold/partial/parked) GCs its branch, and an
+      // in-loop worktree write would also dirty the tree against closeout's
+      // clean-tree invariant. The cockpit drawer reads this canonical file, so
+      // the bug surfaces immediately regardless of the run's outcome.
+      await fileTerminalBugsToBacklog({
+        repoPath: getProductConfig(product, config.PRODUCTS_CONFIG_FILE).repoPath,
+        product,
+        entries,
+        runGit,
+        mutationsLogFile: config.BACKLOG_MUTATIONS_FILE,
+      });
+    },
 
     readTasksMd: async () => readFileSafe(tasksPath),
     readContextMd: async () => readFileSafe(contextPath),
@@ -339,6 +361,59 @@ function readFileSafe(path: string): string {
   } catch {
     return '';
   }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal-bug filing → canonical bugs.md
+// ---------------------------------------------------------------------------
+
+/** Persist the run's open-at-terminal findings to the CANONICAL product repo's
+ *  `docs/projects/bugs.md` under `## Loop-filed`, deduped by defect signature.
+ *  The I/O glue around the pure `appendTerminalBugsToBacklog`: one file-lock
+ *  critical section (serialized against cockpit `+` adds on the same path),
+ *  guard → read → append → atomic write → best-effort audit. Targets the live
+ *  repo, never the worktree, so a non-merge run's bug survives teardown.
+ *  Returns the number of bullets actually written (0 when all were duplicates). */
+export async function fileTerminalBugsToBacklog(opts: {
+  repoPath: string;
+  product: string;
+  entries: readonly OrchestrationTerminalBugEntry[];
+  runGit: GitRunner;
+  mutationsLogFile: string;
+}): Promise<{ appended: number }> {
+  if (opts.entries.length === 0) return { appended: 0 };
+  const filePath = join(opts.repoPath, 'docs/projects/bugs.md');
+  return withFileLock(filePath, async () => {
+    assertBacklogWriteAllowed(opts.repoPath, filePath);
+    const before = readFileSafe(filePath);
+    const { content, appended } = appendTerminalBugsToBacklog(before, opts.entries);
+    if (appended === 0) return { appended: 0 }; // every entry already filed
+    // Capture pre-write git state for the audit, then write atomically.
+    let branch = 'unknown';
+    let dirty = false;
+    try {
+      branch = (await opts.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: opts.repoPath })).stdout.trim() || 'unknown';
+      dirty = (await opts.runGit(['status', '--porcelain'], { cwd: opts.repoPath })).stdout.trim() !== '';
+    } catch {
+      // Best-effort audit metadata; a git read failure must not lose the bug.
+    }
+    writeFileAtomic(filePath, content);
+    try {
+      appendBacklogMutationLog(opts.mutationsLogFile, {
+        product: opts.product,
+        file: 'docs/projects/bugs.md',
+        branch,
+        dirty,
+        before,
+        after: content,
+      });
+    } catch (err) {
+      log.warn('orchestrated-work-runner: terminal-bug audit log failed', {
+        error: (err as Error).message,
+      });
+    }
+    return { appended };
+  });
 }
 
 // ---------------------------------------------------------------------------
