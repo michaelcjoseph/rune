@@ -20,6 +20,51 @@ type OrchestratedRunStoreExports = {
   readOrchestratedTaskRunRecords?: (baseDir: string, runId: string) => TaskRunRecord[] | Promise<TaskRunRecord[]>;
   writeOrchestratedRunCursor?: (baseDir: string, runId: string, cursor: OrchestrationRunCursor) => void | Promise<void>;
   readOrchestratedRunCursor?: (baseDir: string, runId: string) => OrchestrationRunCursor | null | Promise<OrchestrationRunCursor | null>;
+  claimOrchestratedNotificationPublication?: (
+    baseDir: string,
+    runId: string,
+    publication: {
+      kind: 'closeout-progress' | 'merge-success';
+      key: string;
+      commitSha?: string;
+      branch?: string;
+      phase?: string;
+    },
+  ) => { shouldPublish: boolean; key: string } | Promise<{ shouldPublish: boolean; key: string }>;
+  recordOrchestratedNotificationPublicationError?: (
+    baseDir: string,
+    runId: string,
+    publication: {
+      kind: 'closeout-progress' | 'merge-success';
+      key: string;
+      error: string;
+      commitSha?: string;
+      branch?: string;
+      phase?: string;
+    },
+  ) => void | Promise<void>;
+  readOrchestratedNotificationPublications?: (
+    baseDir: string,
+    runId: string,
+  ) => Array<{
+    kind: 'closeout-progress' | 'merge-success';
+    key: string;
+    status: 'published' | 'skipped' | 'error';
+    commitSha?: string;
+    branch?: string;
+    phase?: string;
+    reason?: string;
+    error?: string;
+  }> | Promise<Array<{
+    kind: 'closeout-progress' | 'merge-success';
+    key: string;
+    status: 'published' | 'skipped' | 'error';
+    commitSha?: string;
+    branch?: string;
+    phase?: string;
+    reason?: string;
+    error?: string;
+  }>>;
 };
 
 const store = runnerModule as OrchestratedRunStoreExports;
@@ -75,6 +120,10 @@ async function readRecords(baseDir: string, runId: string): Promise<TaskRunRecor
 
 async function readCursor(baseDir: string, runId: string): Promise<OrchestrationRunCursor | null> {
   return Promise.resolve(store.readOrchestratedRunCursor!(baseDir, runId));
+}
+
+async function readPublications(baseDir: string, runId: string) {
+  return Promise.resolve(store.readOrchestratedNotificationPublications!(baseDir, runId));
 }
 
 describe('orchestrated run store', () => {
@@ -179,5 +228,76 @@ describe('orchestrated run store', () => {
     expect(typeof store.readOrchestratedRunCursor).toBe('function');
 
     await expect(readCursor(tmpDir, 'mut-orch-1')).resolves.toBeNull();
+  });
+
+  it('claims closeout progress publication by commit sha once and records a durable duplicate skip', async () => {
+    expect(typeof store.claimOrchestratedNotificationPublication).toBe('function');
+    expect(typeof store.readOrchestratedNotificationPublications).toBe('function');
+
+    const publication = {
+      kind: 'closeout-progress' as const,
+      key: 'closeout-progress:abc1234',
+      commitSha: 'abc1234',
+    };
+
+    await expect(
+      Promise.resolve(store.claimOrchestratedNotificationPublication!(tmpDir, 'mut-orch-1', publication)),
+    ).resolves.toEqual({ shouldPublish: true, key: publication.key });
+    await expect(
+      Promise.resolve(store.claimOrchestratedNotificationPublication!(tmpDir, 'mut-orch-1', publication)),
+    ).resolves.toEqual({ shouldPublish: false, key: publication.key });
+
+    await expect(readPublications(tmpDir, 'mut-orch-1')).resolves.toEqual([
+      expect.objectContaining({
+        kind: 'closeout-progress',
+        key: publication.key,
+        commitSha: 'abc1234',
+        status: 'published',
+      }),
+      expect.objectContaining({
+        kind: 'closeout-progress',
+        key: publication.key,
+        commitSha: 'abc1234',
+        status: 'skipped',
+        reason: expect.stringMatching(/duplicate|already/i),
+      }),
+    ]);
+  });
+
+  it('records merge-success publication errors under the run artifact directory without clearing the published claim', async () => {
+    expect(typeof store.claimOrchestratedNotificationPublication).toBe('function');
+    expect(typeof store.recordOrchestratedNotificationPublicationError).toBe('function');
+    expect(typeof store.readOrchestratedNotificationPublications).toBe('function');
+
+    const publication = {
+      kind: 'merge-success' as const,
+      key: 'mut-orch-1:merge-success:jarvis-work/demo:pushed-not-deleted',
+      branch: 'jarvis-work/demo',
+      phase: 'pushed-not-deleted',
+    };
+
+    await store.claimOrchestratedNotificationPublication!(tmpDir, 'mut-orch-1', publication);
+    await store.recordOrchestratedNotificationPublicationError!(tmpDir, 'mut-orch-1', {
+      ...publication,
+      error: 'operator event bus down',
+    });
+
+    await expect(readPublications(tmpDir, 'mut-orch-1')).resolves.toEqual([
+      expect.objectContaining({
+        kind: 'merge-success',
+        key: publication.key,
+        branch: 'jarvis-work/demo',
+        phase: 'pushed-not-deleted',
+        status: 'published',
+      }),
+      expect.objectContaining({
+        kind: 'merge-success',
+        key: publication.key,
+        branch: 'jarvis-work/demo',
+        phase: 'pushed-not-deleted',
+        status: 'error',
+        error: 'operator event bus down',
+      }),
+    ]);
   });
 });

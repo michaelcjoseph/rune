@@ -908,56 +908,64 @@ describe('orchestratedWorkApplier', () => {
           })
           .map((event) => String(((event.data ?? {}) as Record<string, unknown>)['commitSha']));
 
-      __setOrchestratedRuntimeForTest({
-        workRunsDir: artifactsDir,
-        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
-        createWorktree: async () => {
-          applierRun += 1;
-          created = true;
-          const { sandbox, dir } = makeWorktree('demo', [
-            '## Phase 1',
-            '- [ ] Build the streak core',
-            '- [ ] Render the streak card',
-            '',
-          ].join('\n'));
-          createdDirs.push(dir);
-          wtDir = dir;
-          writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), validContext, 'utf8');
-          return sandbox;
-        },
-        destroyWorktree: async () => {
-          destroyed = true;
-        },
-        runGit,
-        createTaskWorkflowRunner: () => async (task): Promise<TaskEvidence> => {
-          if (applierRun === 1 && task.id === 'render-the-streak-card') {
+      const installRuntime = () => {
+        __setOrchestratedRuntimeForTest({
+          workRunsDir: artifactsDir,
+          workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+          createWorktree: async () => {
+            applierRun += 1;
+            created = true;
+            const { sandbox, dir } = makeWorktree('demo', [
+              '## Phase 1',
+              '- [ ] Build the streak core',
+              '- [ ] Render the streak card',
+              '',
+            ].join('\n'));
+            createdDirs.push(dir);
+            wtDir = dir;
+            writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), validContext, 'utf8');
+            return sandbox;
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runGit,
+          createTaskWorkflowRunner: () => async (task): Promise<TaskEvidence> => {
+            if (applierRun === 1 && task.id === 'render-the-streak-card') {
+              return {
+                taskId: task.id,
+                outcome: 'blocked',
+                rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+                findingsLedger: [],
+                loopExitReason: 'hard-budget',
+                objectionOpen: true,
+                handoffNotes: ['blocked after first closeout commit'],
+                blockedReason: 'simulated stop before the next closeout commit',
+              };
+            }
+
             return {
               taskId: task.id,
-              outcome: 'blocked',
+              outcome: 'ready-for-closeout',
               rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
               findingsLedger: [],
-              loopExitReason: 'hard-budget',
-              objectionOpen: true,
-              handoffNotes: ['blocked after first closeout commit'],
-              blockedReason: 'simulated stop before the next closeout commit',
+              loopExitReason: 'all-low',
+              objectionOpen: false,
+              handoffNotes: [`completed ${task.text}`],
+              reviewerVerdict: { pass: true, objections: [] },
             };
-          }
+          },
+        });
+      };
 
-          return {
-            taskId: task.id,
-            outcome: 'ready-for-closeout',
-            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
-            findingsLedger: [],
-            loopExitReason: 'all-low',
-            objectionOpen: false,
-            handoffNotes: [`completed ${task.text}`],
-            reviewerVerdict: { pass: true, objections: [] },
-          };
-        },
-      });
+      installRuntime();
 
       try {
         const firstPass = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        // Simulate a daemon restart: process memory is gone, but the run artifact
+        // directory is still present and must carry the delivery-state dedupe.
+        __resetOrchestratedRuntimeForTest();
+        installRuntime();
         const replayPass = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
 
         expect(progressCommitShas(firstPass)).toEqual(['1111111aaaaaaa']);

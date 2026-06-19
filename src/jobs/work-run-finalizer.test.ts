@@ -190,6 +190,10 @@ function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
   return holdInput({ mode: 'gated-merge', ...over });
 }
 
+function mergeSuccessPublicationKey(): string {
+  return `${DEFAULT_RUN_ID}:merge-success:jarvis-work/15-work-run-finalizer:pushed-not-deleted`;
+}
+
 type MarkProjectIndexDoneInText = (
   content: string,
   slug: string,
@@ -823,6 +827,61 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(pushOrder).toBeLessThan(notifyOrder);
     expect(cleanupOrder).toBeLessThan(notifyOrder);
     expect(notifyOrder).toBeLessThan(terminalOrder);
+  });
+
+  it('records the merge-success publication claim before publishing the operator notification (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const order: string[] = [];
+    const recordNotificationPublication = vi.fn(() => {
+      order.push('record-published');
+    });
+    const onLanded = vi.fn(() => {
+      order.push('publish-event');
+    });
+    const { effects } = makeEffects(ev, {
+      onLanded,
+      recordNotificationPublication,
+    } as Partial<FinalizerEffects>);
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(recordNotificationPublication).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'merge-success',
+      key: mergeSuccessPublicationKey(),
+      status: 'published',
+    }));
+    expect(onLanded).toHaveBeenCalledOnce();
+    expect(order).toEqual(['record-published', 'publish-event']);
+  });
+
+  it('on pushed-phase replay skips an already-published merge-success notification and records skip metadata (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const key = mergeSuccessPublicationKey();
+    const readNotificationPublication = vi.fn(() => ({
+      kind: 'merge-success',
+      key,
+      status: 'published',
+    }));
+    const recordNotificationPublication = vi.fn();
+    const onLanded = vi.fn();
+    const { effects } = makeEffects(ev, {
+      readLastPhase: vi.fn(() => 'pushed-not-deleted' as FinalizerPhase),
+      onLanded,
+      recordNotificationPublication,
+    } as Partial<FinalizerEffects>);
+    Object.assign(effects, { readNotificationPublication });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(readNotificationPublication).toHaveBeenCalledWith(key);
+    expect(onLanded).not.toHaveBeenCalled();
+    expect(recordNotificationPublication).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'merge-success',
+      key,
+      status: 'skipped',
+      reason: expect.stringMatching(/duplicate|already/i),
+    }));
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
   });
 
   it('records durable merge-success publication error metadata and still finalizes when the success notification publish fails (Phase 15)', async () => {

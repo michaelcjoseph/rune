@@ -150,14 +150,18 @@ export interface FinalizerInput {
   baseBranch?: string;
 }
 
-export type NotificationPublicationKind = 'merge-success';
-export type NotificationPublicationStatus = 'error';
+export type NotificationPublicationKind = 'closeout-progress' | 'merge-success';
+export type NotificationPublicationStatus = 'published' | 'skipped' | 'error';
 
 export interface NotificationPublicationRecord {
   kind: NotificationPublicationKind;
   key: string;
   status: NotificationPublicationStatus;
-  error: string;
+  commitSha?: string;
+  branch?: string;
+  phase?: string;
+  reason?: string;
+  error?: string;
 }
 
 export interface MergeSuccessNotification {
@@ -240,6 +244,9 @@ export interface FinalizerEffects {
   /** Optional notification seam for a clean gated merge after the branch has
    *  landed and cleanup/delete have been attempted, before the terminal write. */
   onLanded?: (notification?: MergeSuccessNotification) => void;
+  /** Durable lookup used to suppress duplicate notification publications during
+   *  crash/replay after a publishable phase has already been recorded. */
+  readNotificationPublication?: (key: string) => NotificationPublicationRecord | null;
   /** Durable best-effort record for notification publication failures. */
   recordNotificationPublication?: (record: NotificationPublicationRecord) => void;
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
@@ -588,6 +595,7 @@ function recordNotificationPublicationFailure(
       kind,
       key: notificationPublicationKey(input, kind, phase),
       status: 'error',
+      ...(kind === 'merge-success' ? { branch: input.branch, phase } : {}),
       error,
     });
   } catch (err) {
@@ -607,6 +615,63 @@ function mergeSuccessNotification(input: FinalizerInput): MergeSuccessNotificati
     branch: input.branch,
     baseBranch: input.baseBranch ?? 'main',
   };
+}
+
+function publishMergeSuccessNotification(
+  input: FinalizerInput,
+  effects: FinalizerEffects,
+): void {
+  const kind: NotificationPublicationKind = 'merge-success';
+  const phase: FinalizerPhase = 'pushed-not-deleted';
+  const key = notificationPublicationKey(input, kind, phase);
+  const metadata = { kind, key, branch: input.branch, phase };
+
+  try {
+    const existing = effects.readNotificationPublication?.(key);
+    if (existing?.status === 'published') {
+      try {
+        effects.recordNotificationPublication?.({
+          ...metadata,
+          status: 'skipped',
+          reason: 'duplicate publication already recorded',
+        });
+      } catch (err) {
+        log.warn('notification publication skip record failed; finalizing anyway', {
+          runId: input.runId,
+          error: scrubAbsolutePaths((err as Error).message),
+        });
+      }
+      return;
+    }
+  } catch (err) {
+    log.warn('notification publication read failed; publishing anyway', {
+      runId: input.runId,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+  }
+
+  try {
+    effects.recordNotificationPublication?.({
+      ...metadata,
+      status: 'published',
+    });
+  } catch (err) {
+    log.warn('notification publication claim failed; publishing anyway', {
+      runId: input.runId,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+  }
+
+  try {
+    effects.onLanded?.(mergeSuccessNotification(input));
+  } catch (err) {
+    const error = scrubAbsolutePaths((err as Error).message);
+    recordNotificationPublicationFailure(input, effects, kind, phase, error);
+    log.warn('landed notification failed after push; finalizing anyway', {
+      runId: input.runId,
+      error,
+    });
+  }
 }
 
 /**
@@ -664,22 +729,7 @@ async function resolveWorktreeAndFinalize(
     }
   }
   if (merged) {
-    try {
-      effects.onLanded?.(mergeSuccessNotification(input));
-    } catch (err) {
-      const error = scrubAbsolutePaths((err as Error).message);
-      recordNotificationPublicationFailure(
-        input,
-        effects,
-        'merge-success',
-        'pushed-not-deleted',
-        error,
-      );
-      log.warn('landed notification failed after push; finalizing anyway', {
-        runId: input.runId,
-        error,
-      });
-    }
+    publishMergeSuccessNotification(input, effects);
   }
 
   const supervisionStatus: FinalizerSupervisionStatus =

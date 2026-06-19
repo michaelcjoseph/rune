@@ -145,7 +145,6 @@ const recoveryRedispatchOptions = new WeakMap<
   MutationDescriptor<OrchestratedWorkPayload>,
   OrchestratedRecoveryRedispatch
 >();
-const announcedCloseoutProgressByRun = new Map<string, Set<string>>();
 
 export function redispatchRecoveredOrchestratedMutation(
   mutation: MutationDescriptor<OrchestratedWorkPayload>,
@@ -222,7 +221,6 @@ export function __setOrchestratedRuntimeForTest(partial: Partial<OrchestratedRun
 /** Test-only: restore the production seam. */
 export function __resetOrchestratedRuntimeForTest(): void {
   runtimeDeps = productionRuntimeDeps();
-  announcedCloseoutProgressByRun.clear();
 }
 
 /** Test-only: read the current runtime seam (the no-stub regression test
@@ -422,6 +420,32 @@ export async function fileTerminalBugsToBacklog(opts: {
 
 const ORCHESTRATED_TASK_RECORDS_FILE = 'task-records.jsonl';
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
+const ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE = 'notification-publications.jsonl';
+
+type OrchestratedNotificationPublicationKind = 'closeout-progress' | 'merge-success';
+type OrchestratedNotificationPublicationStatus = 'published' | 'skipped' | 'error';
+
+export interface OrchestratedNotificationPublication {
+  kind: OrchestratedNotificationPublicationKind;
+  key: string;
+  status: OrchestratedNotificationPublicationStatus;
+  commitSha?: string;
+  branch?: string;
+  phase?: string;
+  reason?: string;
+  error?: string;
+}
+
+type OrchestratedNotificationPublicationInput = {
+  kind: OrchestratedNotificationPublicationKind;
+  key: string;
+  commitSha?: string;
+  branch?: string;
+  phase?: string;
+};
+
+type OrchestratedNotificationPublicationErrorInput =
+  OrchestratedNotificationPublicationInput & { error: string };
 
 export function appendOrchestratedTaskRunRecord(baseDir: string, runId: string, record: TaskRunRecord): void {
   const dir = join(baseDir, runId);
@@ -467,6 +491,97 @@ export function readOrchestratedRunCursor(baseDir: string, runId: string): Orche
   }
   if (!isOrchestrationRunCursor(parsed) || parsed.runId !== runId) return null;
   return parsed;
+}
+
+export function claimOrchestratedNotificationPublication(
+  baseDir: string,
+  runId: string,
+  publication: OrchestratedNotificationPublicationInput,
+): { shouldPublish: boolean; key: string } {
+  const existing = readOrchestratedNotificationPublications(baseDir, runId)
+    .find((record) => record.key === publication.key && record.status === 'published');
+  if (existing) {
+    appendOrchestratedNotificationPublication(baseDir, runId, {
+      ...publication,
+      status: 'skipped',
+      reason: 'duplicate publication already recorded',
+    });
+    return { shouldPublish: false, key: publication.key };
+  }
+
+  appendOrchestratedNotificationPublication(baseDir, runId, {
+    ...publication,
+    status: 'published',
+  });
+  return { shouldPublish: true, key: publication.key };
+}
+
+export function recordOrchestratedNotificationPublicationError(
+  baseDir: string,
+  runId: string,
+  publication: OrchestratedNotificationPublicationErrorInput,
+): void {
+  appendOrchestratedNotificationPublication(baseDir, runId, {
+    ...publication,
+    status: 'error',
+  });
+}
+
+export function readOrchestratedNotificationPublications(
+  baseDir: string,
+  runId: string,
+): OrchestratedNotificationPublication[] {
+  let raw: string;
+  try {
+    raw = readFileSync(join(baseDir, runId, ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE), 'utf8');
+  } catch {
+    return [];
+  }
+
+  const records: OrchestratedNotificationPublication[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as Partial<OrchestratedNotificationPublication>;
+      if (isNotificationPublication(parsed)) {
+        records.push(parsed);
+      } else {
+        log.warn('orchestrated notification-publications.jsonl: skipped malformed row', { runId });
+      }
+    } catch {
+      log.warn('orchestrated notification-publications.jsonl: skipped malformed line', { runId });
+    }
+  }
+  return records;
+}
+
+function appendOrchestratedNotificationPublication(
+  baseDir: string,
+  runId: string,
+  publication: OrchestratedNotificationPublication,
+): void {
+  const dir = join(baseDir, runId);
+  mkdirSync(dir, { recursive: true });
+  appendFileSync(
+    join(dir, ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE),
+    JSON.stringify(publication) + '\n',
+    'utf8',
+  );
+}
+
+function isNotificationPublication(
+  value: Partial<OrchestratedNotificationPublication>,
+): value is OrchestratedNotificationPublication {
+  return (
+    (value.kind === 'closeout-progress' || value.kind === 'merge-success') &&
+    typeof value.key === 'string' &&
+    (value.status === 'published' || value.status === 'skipped' || value.status === 'error') &&
+    (value.commitSha === undefined || typeof value.commitSha === 'string') &&
+    (value.branch === undefined || typeof value.branch === 'string') &&
+    (value.phase === undefined || typeof value.phase === 'string') &&
+    (value.reason === undefined || typeof value.reason === 'string') &&
+    (value.error === undefined || typeof value.error === 'string')
+  );
 }
 
 function isOrchestrationRunCursor(value: unknown): value is OrchestrationRunCursor {
@@ -707,12 +822,6 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       };
       let finalizerTerminal: MutationEvent | null = null;
       let gateHeldReason: GateFailReason | null = null;
-      const announcedCloseoutCommitShas = getAnnouncedCloseoutCommitShas(
-        deps.workRunsDir,
-        descriptor.id,
-        recovery !== undefined,
-      );
-
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
         sandbox: runSandbox,
@@ -726,7 +835,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
         emit: (event) => {
           const mutationEvent = toMutationEvent(descriptor.id, event);
-          if (isDuplicateCloseoutProgress(mutationEvent, announcedCloseoutCommitShas)) return;
+          if (!shouldPublishCloseoutProgress(deps.workRunsDir, descriptor.id, mutationEvent)) return;
           enqueue(mutationEvent);
         },
         finalize: async () => {
@@ -899,6 +1008,31 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
             },
             deleteBranch: async () => {
               await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
+            },
+            readNotificationPublication: (key) =>
+              readOrchestratedNotificationPublications(deps.workRunsDir, descriptor.id)
+                .find((record) => record.key === key) ?? null,
+            recordNotificationPublication: (record) => {
+              if (record.status === 'error') {
+                recordOrchestratedNotificationPublicationError(deps.workRunsDir, descriptor.id, {
+                  kind: record.kind,
+                  key: record.key,
+                  error: record.error ?? 'unknown notification publication error',
+                  ...(record.commitSha !== undefined ? { commitSha: record.commitSha } : {}),
+                  ...(record.branch !== undefined ? { branch: record.branch } : {}),
+                  ...(record.phase !== undefined ? { phase: record.phase } : {}),
+                });
+                return;
+              }
+              appendOrchestratedNotificationPublication(deps.workRunsDir, descriptor.id, {
+                kind: record.kind,
+                key: record.key,
+                status: record.status,
+                ...(record.commitSha !== undefined ? { commitSha: record.commitSha } : {}),
+                ...(record.branch !== undefined ? { branch: record.branch } : {}),
+                ...(record.phase !== undefined ? { phase: record.phase } : {}),
+                ...(record.reason !== undefined ? { reason: record.reason } : {}),
+              });
             },
             onLanded: (notification) => {
               enqueue({
@@ -1329,30 +1463,23 @@ function toMutationEvent(mutationId: string, event: OrchestrationActivityEvent):
   };
 }
 
-function getAnnouncedCloseoutCommitShas(workRunsDir: string, runId: string, seedFromRecords: boolean): Set<string> {
-  const key = `${workRunsDir}\0${runId}`;
-  let announced = announcedCloseoutProgressByRun.get(key);
-  if (!announced) {
-    announced = new Set();
-    announcedCloseoutProgressByRun.set(key, announced);
-  }
-  if (!seedFromRecords) return announced;
-
-  for (const record of readOrchestratedTaskRunRecords(workRunsDir, runId)) {
-    if (typeof record.commitSha === 'string' && record.commitSha.length > 0) {
-      announced.add(record.commitSha);
-    }
-  }
-  return announced;
-}
-
-function isDuplicateCloseoutProgress(event: MutationEvent, announced: Set<string>): boolean {
-  if (event.kind !== 'progress') return false;
+function shouldPublishCloseoutProgress(workRunsDir: string, runId: string, event: MutationEvent): boolean {
+  if (event.kind !== 'progress') return true;
   const data = event.data as Record<string, unknown> | undefined;
-  if (data?.['event'] !== 'closeout-commit') return false;
+  if (data?.['event'] !== 'closeout-commit') return true;
   const commitSha = data['commitSha'];
-  if (typeof commitSha !== 'string' || commitSha.length === 0) return false;
-  if (announced.has(commitSha)) return true;
-  announced.add(commitSha);
-  return false;
+  if (typeof commitSha !== 'string' || commitSha.length === 0) return true;
+  try {
+    return claimOrchestratedNotificationPublication(workRunsDir, runId, {
+      kind: 'closeout-progress',
+      key: `closeout-progress:${commitSha}`,
+      commitSha,
+    }).shouldPublish;
+  } catch (err) {
+    log.warn('orchestrated-work-runner: closeout progress publication claim failed; publishing anyway', {
+      id: runId,
+      error: (err as Error).message,
+    });
+    return true;
+  }
 }

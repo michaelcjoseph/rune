@@ -1260,7 +1260,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       to the existing gate-fail `alert`; bind it in `orchestrated-work-runner.ts` to an operator
       message naming the project + the base branch it landed on. Ensure the orchestrated terminal
       message does not separately claim a merge. Leave the gate-fail `alert` path unchanged.
-- [ ] Persist notification delivery state under the run artifact directory (or the existing
+- [x] Persist notification delivery state under the run artifact directory (or the existing
       finalizer phase store if that is the cleaner fit): one record keyed by closeout commit sha
       for progress-alert publication and one keyed by run id + branch + pushed phase for
       merge-success publication. Use it for replay/restart dedupe and to record publication
