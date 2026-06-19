@@ -322,6 +322,9 @@ acceptance criteria.
 - [ ] Critical: The index writer changes only the matched project's two status tokens; project link,
       summary text, table header/alignment row, section body, `(…)` heading suffix, row order, and
       unrelated rows/headings are preserved byte-for-byte.
+- [ ] Critical: `summary.json`, the work-runs index row, and the terminal payload include the
+      project-Done commit's head sha/commit count; the finalizer does not persist stale
+      pre-index-flip work-product facts.
 - [ ] Critical: An all-tasks-checked run with zero commits classifies `noop` — the index flip never
       fires and the run never merges (the flip is gated on the classified `branch-complete` outcome).
 - [ ] Critical: A worktree with NO `docs/projects/index.md` is a graceful skip — the finalizer still
@@ -331,6 +334,9 @@ acceptance criteria.
       guess a row, or merge with the index unresolved.
 - [ ] Critical: A `git merge` conflict on `docs/projects/index.md` (concurrent landing) aborts the
       merge and HOLDs operationally with work preserved — never a half-merged dirty base.
+- [ ] Critical: Crash/restart after `project-marked-done` but before `merged-not-pushed` resumes the
+      gated finalizer, skips the already-committed index flip, runs gate/merge/push/delete, and
+      reaches exactly one terminal without human release or manual retry.
 - [ ] Critical: HOLD terminals (finding HOLD, operational HOLD, ambiguous-index HOLD, merge-conflict
       HOLD, or finalizer gate-fail HOLD) do not flip the project index to `Done` and do not emit a
       merge-success notification.
@@ -346,8 +352,10 @@ acceptance criteria.
       alert.
 - [ ] High: Progress alerts are deduped across orchestrator resume/replay by closeout commit sha;
       a new closeout commit still alerts once.
-- [ ] High: Notification delivery failures for progress or merge-success paths record durable
-      skip/error metadata and never fail, hold, roll back, or otherwise change run outcome.
+- [ ] High: Notification event-publication failures for progress or merge-success paths record
+      durable skip/error metadata and never fail, hold, roll back, or otherwise change run outcome;
+      downstream Telegram/webview delivery failures are logged by the sender and are also
+      non-blocking.
 - [ ] High: Telegram formatting is exercised through the existing mutation/activity sender path
       with an injected sender; no real Telegram bot is required.
 - [ ] High: The Phase 8/10 live acceptance harness runs a multi-task throwaway project (whose
