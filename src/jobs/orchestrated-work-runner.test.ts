@@ -837,6 +837,127 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('dedupes closeout progress alerts across replay by commit sha while still alerting for a new closeout commit', async () => {
+      const runId = 'mut-progress-replay-dedupe';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-progress-dedupe-'));
+      const createdDirs: string[] = [];
+      const closeoutShas = [
+        '1111111aaaaaaa',
+        '1111111aaaaaaa',
+        '2222222bbbbbbb',
+      ];
+      let revParseCalls = 0;
+      let applierRun = 0;
+
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'rev-parse') {
+          const sha = closeoutShas[revParseCalls] ?? closeoutShas[closeoutShas.length - 1]!;
+          revParseCalls += 1;
+          return { stdout: `${sha}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'rev-list') {
+          return { stdout: `${closeoutShas.slice(0, revParseCalls).join('\n')}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+          return { stdout: ' src/feature.ts | 2 ++\n 1 file changed, 2 insertions(+)\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const validContext = [
+        '# Project Context',
+        '',
+        '## Current State',
+        'Initial state.',
+        '',
+        '## Key Decisions',
+        'None yet.',
+        '',
+        '## Interfaces & Contracts',
+        'Use the existing orchestration seams.',
+        '',
+        '## Known Risks',
+        'None yet.',
+        '',
+        '## Next Task Handoff',
+        'Start with the first unchecked task.',
+        '',
+      ].join('\n');
+
+      const progressCommitShas = (events: MutationEvent[]): string[] =>
+        events
+          .filter((event) => {
+            const data = (event.data ?? {}) as Record<string, unknown>;
+            return event.kind === 'progress' && data['event'] === 'closeout-commit';
+          })
+          .map((event) => String(((event.data ?? {}) as Record<string, unknown>)['commitSha']));
+
+      __setOrchestratedRuntimeForTest({
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createWorktree: async () => {
+          applierRun += 1;
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '## Phase 1',
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          createdDirs.push(dir);
+          wtDir = dir;
+          writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), validContext, 'utf8');
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        createTaskWorkflowRunner: () => async (task): Promise<TaskEvidence> => {
+          if (applierRun === 1 && task.id === 'render-the-streak-card') {
+            return {
+              taskId: task.id,
+              outcome: 'blocked',
+              rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+              findingsLedger: [],
+              loopExitReason: 'hard-budget',
+              objectionOpen: true,
+              handoffNotes: ['blocked after first closeout commit'],
+              blockedReason: 'simulated stop before the next closeout commit',
+            };
+          }
+
+          return {
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+            findingsLedger: [],
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes: [`completed ${task.text}`],
+            reviewerVerdict: { pass: true, objections: [] },
+          };
+        },
+      });
+
+      try {
+        const firstPass = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const replayPass = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+
+        expect(progressCommitShas(firstPass)).toEqual(['1111111aaaaaaa']);
+        expect(progressCommitShas(replayPass)).toEqual(['2222222bbbbbbb']);
+        expect([...progressCommitShas(firstPass), ...progressCommitShas(replayPass)]).toEqual([
+          '1111111aaaaaaa',
+          '2222222bbbbbbb',
+        ]);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+        for (const dir of createdDirs) {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    });
+
     it('emits no closeout progress alert when a task blocks before any closeout commit exists', async () => {
       const { runGit, calls: gitCalls } = makeWorkProductGitStub({
         commitShas: [],

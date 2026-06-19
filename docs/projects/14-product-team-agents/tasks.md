@@ -1218,7 +1218,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Alert-fail-safe test: an event publication failure (per-commit OR merge-success) records a
       durable skip/error and never blocks or fails the run; a downstream Telegram/webview transport
       send failure is logged by the sender and also never blocks or fails the run.
-- [ ] Progress-replay-dedupe test: orchestrator resume/replay after a closeout commit does not
+- [x] Progress-replay-dedupe test: orchestrator resume/replay after a closeout commit does not
       send a second progress alert for the same commit sha; a new closeout commit still sends once.
 - [ ] Confirm red before implementation.
 

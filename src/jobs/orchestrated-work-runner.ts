@@ -130,6 +130,7 @@ const recoveryRedispatchOptions = new WeakMap<
   MutationDescriptor<OrchestratedWorkPayload>,
   OrchestratedRecoveryRedispatch
 >();
+const announcedCloseoutProgressByRun = new Map<string, Set<string>>();
 
 export function redispatchRecoveredOrchestratedMutation(
   mutation: MutationDescriptor<OrchestratedWorkPayload>,
@@ -206,6 +207,7 @@ export function __setOrchestratedRuntimeForTest(partial: Partial<OrchestratedRun
 /** Test-only: restore the production seam. */
 export function __resetOrchestratedRuntimeForTest(): void {
   runtimeDeps = productionRuntimeDeps();
+  announcedCloseoutProgressByRun.clear();
 }
 
 /** Test-only: read the current runtime seam (the no-stub regression test
@@ -621,11 +623,13 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         wakeStream?.();
         wakeStream = undefined;
       };
-      const emit = (event: OrchestrationActivityEvent): void => {
-        enqueue(toMutationEvent(descriptor.id, event));
-      };
       let finalizerTerminal: MutationEvent | null = null;
       let gateHeldReason: GateFailReason | null = null;
+      const announcedCloseoutCommitShas = getAnnouncedCloseoutCommitShas(
+        deps.workRunsDir,
+        descriptor.id,
+        recovery !== undefined,
+      );
 
       const orchestrationDeps = buildOrchestrationDeps({
         descriptor,
@@ -638,7 +642,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
-        emit,
+        emit: (event) => {
+          const mutationEvent = toMutationEvent(descriptor.id, event);
+          if (isDuplicateCloseoutProgress(mutationEvent, announcedCloseoutCommitShas)) return;
+          enqueue(mutationEvent);
+        },
         finalize: async () => {
           let gateTasksRemaining = 0;
           let endedAt = '';
@@ -1199,4 +1207,32 @@ function toMutationEvent(mutationId: string, event: OrchestrationActivityEvent):
     kind: event.kind,
     ...(event.data !== undefined ? { data: event.data } : {}),
   };
+}
+
+function getAnnouncedCloseoutCommitShas(workRunsDir: string, runId: string, seedFromRecords: boolean): Set<string> {
+  const key = `${workRunsDir}\0${runId}`;
+  let announced = announcedCloseoutProgressByRun.get(key);
+  if (!announced) {
+    announced = new Set();
+    announcedCloseoutProgressByRun.set(key, announced);
+  }
+  if (!seedFromRecords) return announced;
+
+  for (const record of readOrchestratedTaskRunRecords(workRunsDir, runId)) {
+    if (typeof record.commitSha === 'string' && record.commitSha.length > 0) {
+      announced.add(record.commitSha);
+    }
+  }
+  return announced;
+}
+
+function isDuplicateCloseoutProgress(event: MutationEvent, announced: Set<string>): boolean {
+  if (event.kind !== 'progress') return false;
+  const data = event.data as Record<string, unknown> | undefined;
+  if (data?.['event'] !== 'closeout-commit') return false;
+  const commitSha = data['commitSha'];
+  if (typeof commitSha !== 'string' || commitSha.length === 0) return false;
+  if (announced.has(commitSha)) return true;
+  announced.add(commitSha);
+  return false;
 }
