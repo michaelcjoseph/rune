@@ -1134,6 +1134,41 @@ describe('orchestratedWorkApplier', () => {
       expect(created).toBe(true);
     });
 
+    it('wires abortMerge to git merge --abort so apply-time index conflicts can clean the base checkout', async () => {
+      const runId = 'mut-orch-abort-merge';
+      const baseSha = 'base-abort-merge-123';
+      const { runGit, calls } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' docs/projects/index.md | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n',
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+      });
+
+      await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+
+      expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
+      const [, effects] = mockRunFinalizer.mock.calls[0]!;
+      expect(typeof effects.abortMerge).toBe('function');
+
+      await effects.abortMerge!();
+
+      expect(calls).toEqual(expect.arrayContaining([
+        expect.objectContaining({ args: ['merge', '--abort'] }),
+      ]));
+      expect(created).toBe(true);
+    });
+
     it('wires the project-index Done writer as a finalizer effect, not as an orchestrator terminal side effect', async () => {
       const runId = 'mut-orch-index-writer-finalizer-effect';
       const baseSha = 'base-index-writer-123';

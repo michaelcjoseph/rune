@@ -17,6 +17,7 @@ vi.mock('../utils/logger.js', () => ({
 const mockSpawn = vi.fn();
 vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
+  execFile: vi.fn(),
   execFileSync: vi.fn(() => '/usr/local/bin/claude'),
 }));
 
@@ -1991,6 +1992,22 @@ describe('workRunApplier', () => {
       // durable backup before the local branch ref is removed).
       expect(mergeIdx).toBeLessThan(pushIdx);
       expect(pushIdx).toBeLessThan(deleteIdx);
+    });
+
+    it('wires abortMerge to git merge --abort so apply-time conflicts can clean the base checkout', async () => {
+      const { gitCalls } = setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      for await (const _ of workRunApplier.apply(descriptorFor('mut-gm-abort-merge'), { bus: null as any, cancel: () => false })) {
+        // consume
+      }
+
+      const effects = finalizerHarness.runFinalizerSpy.mock.calls.at(-1)![1];
+      expect(typeof effects.abortMerge).toBe('function');
+
+      await effects.abortMerge!();
+
+      expect(gitCalls).toContainEqual(['merge', '--abort']);
     });
 
     it('stamps the merged disposition onto the terminal event + re-writes summary.json (Phase 3.5 notification)', async () => {

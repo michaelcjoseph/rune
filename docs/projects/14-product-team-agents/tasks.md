@@ -1250,7 +1250,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `gated-merge` state for a branch-complete run, re-running the gate/merge/push/delete path
       without human release. It must not downgrade a clean run to HOLD just because the crash
       happened before `merged-not-pushed`.
-- [ ] Handle an index merge conflict: when `mergeBranch` fails with a conflict on
+- [x] Handle an index merge conflict: when `mergeBranch` fails with a conflict on
       `docs/projects/index.md`, abort the in-progress merge in the base checkout and surface an
       operational HOLD (work preserved on the branch) rather than leaving a half-merged dirty base.
 - [ ] Add a merge-success notification: extend the gated-merge effects in `work-run-finalizer.ts`
