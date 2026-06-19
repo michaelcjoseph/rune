@@ -498,6 +498,35 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('index-appended'));
   });
 
+  it('refreshes terminal work-product facts after the project-Done commit before summary/index/terminal persistence (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'project-done-head-sha',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    const persistedEvents = [
+      vi.mocked(effects.writeSummary).mock.calls[0]?.[0],
+      vi.mocked(effects.appendIndexRow).mock.calls[0]?.[0],
+      vi.mocked(effects.writeSupervisionTerminal).mock.calls[0]?.[1],
+      result.terminalEvent,
+    ];
+
+    for (const event of persistedEvents) {
+      expect(event).toBeDefined();
+      expect(event!.data).toMatchObject({
+        workProduct: {
+          commitCount: 6,
+          commitShas: ['a1', 'b2', 'c3', 'd4', 'e5', 'project-done-head-sha'],
+        },
+      });
+    }
+  });
+
   it('already-Done projects are idempotent: finalizer checks once, records no empty commit, and still gates/merges (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({

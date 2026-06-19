@@ -33,7 +33,7 @@
  */
 
 import type { MutationEvent } from '../transport/mutations.js';
-import type { WorkOutcome } from './work-run-classify.js';
+import type { WorkOutcome, WorkProductFacts } from './work-run-classify.js';
 import type { GateFailReason, GateResult } from './work-run-gate.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
@@ -47,6 +47,30 @@ const log = createLogger('work-run-finalizer');
 export function readOutcome(terminalEvent: MutationEvent): WorkOutcome {
   const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
   return typeof data['outcome'] === 'string' ? (data['outcome'] as WorkOutcome) : 'failed';
+}
+
+function refreshWorkProductForProjectDoneCommit(
+  terminalEvent: MutationEvent,
+  markResult: MarkProjectDoneResult | undefined,
+): MutationEvent {
+  if (markResult?.kind !== 'committed' || typeof markResult.commitSha !== 'string') {
+    return terminalEvent;
+  }
+
+  const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
+  const workProduct = data['workProduct'] as WorkProductFacts | undefined;
+  if (!workProduct) return terminalEvent;
+
+  const commitShas = workProduct.commitShas.includes(markResult.commitSha)
+    ? workProduct.commitShas
+    : [...workProduct.commitShas, markResult.commitSha];
+  data['workProduct'] = {
+    ...workProduct,
+    commitShas,
+    commitCount: commitShas.length,
+  };
+  terminalEvent.data = data;
+  return terminalEvent;
 }
 
 /** Terminal-write strategy. `hold` never touches `main`; `gated-merge` lands the
@@ -572,6 +596,7 @@ async function runGatedMerge(
       if (shouldMarkProjectDone) {
         markProjectDoneResult = await effects.markProjectDone?.(input, terminalEvent);
       }
+      refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
       if (markProjectDoneResult?.kind === 'ambiguous') {
         const supervisionStatus: FinalizerSupervisionStatus =
           terminalEvent.kind === 'completed' ? 'completed' : 'failed';

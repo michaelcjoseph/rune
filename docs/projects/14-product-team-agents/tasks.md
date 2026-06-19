@@ -1178,7 +1178,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       (table Status cell + section heading, preserving any `(…)` heading suffix), and preserves the
       project link, summary text, table header/alignment row, section body, row order, and unrelated
       project rows/headings byte-for-byte.
-- [ ] Terminal-summary-refresh test: because the index flip creates a new commit after the initial
+- [x] Terminal-summary-refresh test: because the index flip creates a new commit after the initial
       eligibility classification, `summary.json`, the work-runs index row, and the terminal payload
       include the project-Done commit's head sha/commit count (no stale pre-finalizer summary).
 - [ ] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
