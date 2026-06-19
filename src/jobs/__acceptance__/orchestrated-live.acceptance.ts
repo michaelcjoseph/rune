@@ -51,6 +51,7 @@ import { randomUUID } from 'node:crypto';
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
   existsSync,
   rmSync,
@@ -59,7 +60,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
-// Fixture content — one small REAL task: implement an absent `sum` function.
+// Fixture content — two small REAL tasks: implement absent math helpers.
 // ---------------------------------------------------------------------------
 
 const CLEAN_PRODUCT = 'accept-live-clean';
@@ -73,38 +74,52 @@ const TEST_COMMAND = ['node', TEST_FILE] as const;
 const MIN_STREAM_EVENTS_PER_PROVIDER = 1;
 const APPLY_TERMINAL_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
-/** The seed implementation: present but unimplemented, so the seeded test is
- *  red until the coder fills it in. */
-const SEED_IMPL = `// Arithmetic helper for the orchestrated live-acceptance fixture.
-// TODO: implement sum so that sum(a, b) returns a + b.
+/** The seed implementation: present but unimplemented, so the seeded tests are
+ *  red until the coder fills each helper in. */
+const SEED_IMPL = `// Arithmetic helpers for the orchestrated live-acceptance fixture.
+// TODO task 1: implement sum so that sum(a, b) returns a + b.
 export function sum(a, b) {
   throw new Error('sum is not implemented');
+}
+
+// TODO task 2: implement difference so that difference(a, b) returns a - b.
+export function difference(a, b) {
+  throw new Error('difference is not implemented');
 }
 `;
 
 const SPEC_MD = `# live-accept-sum — Spec
 
-A deliberately tiny, real task that proves the orchestrated product-team loop
-drives a real diff with live models.
+A deliberately tiny, real two-task project that proves the orchestrated
+product-team loop drives multiple real closeout commits with live models.
 
 ## Goal
 
-Implement the \`sum(a, b)\` function exported from \`${TARGET_FILE}\` so it returns
-the arithmetic sum of its two numeric arguments. The function currently throws
-\`'sum is not implemented'\`.
+Implement both arithmetic helpers exported from \`${TARGET_FILE}\`:
+
+- \`sum(a, b)\` returns the arithmetic sum of its two numeric arguments.
+- \`difference(a, b)\` returns the arithmetic difference \`a - b\`.
+
+Both functions currently throw "not implemented" errors. The two tasks are
+intentionally separate: the first task implements only \`sum\`; the second task
+implements \`difference\` and extends the same test file.
 
 ## Contract
 
 - \`sum(2, 3)\` returns \`5\`.
 - \`sum(-1, 1)\` returns \`0\`.
-- The function takes exactly two numbers and returns their sum. No side effects.
+- \`difference(5, 3)\` returns \`2\`.
+- \`difference(-1, 1)\` returns \`-2\`.
+- The functions take exactly two numbers and return arithmetic results. No side
+  effects.
 
 ## Test
 
 A QA-authored test lives at \`${TEST_FILE}\`. It imports \`sum\` from
-\`./sum.mjs\`, asserts the contract above, and calls \`process.exit(1)\` on any
-failure / \`process.exit(0)\` on success, so \`${TEST_COMMAND.join(' ')}\` is a
-self-contained pass/fail check with no test framework or dependencies.
+\`./sum.mjs\` for the first task, then is extended to import \`difference\` for
+the second task. It asserts the contract above and calls \`process.exit(1)\` on
+any failure / \`process.exit(0)\` on success, so \`${TEST_COMMAND.join(' ')}\` is
+a self-contained pass/fail check with no test framework or dependencies.
 
 ## Assumptions
 
@@ -114,6 +129,20 @@ self-contained pass/fail check with no test framework or dependencies.
 const TASKS_MD = `# live-accept-sum — Tasks
 
 - [ ] Implement the \`sum(a, b)\` function in \`${TARGET_FILE}\` so it returns the arithmetic sum of its two numeric arguments, and ensure a QA test at \`${TEST_FILE}\` imports \`sum\` and verifies \`sum(2, 3) === 5\` and \`sum(-1, 1) === 0\`, exiting non-zero on failure (\`process.exit(1)\`) and zero on success (\`process.exit(0)\`).
+- [ ] Implement the \`difference(a, b)\` function in \`${TARGET_FILE}\` so it returns \`a - b\`, and extend the QA test at \`${TEST_FILE}\` to import \`difference\` and verify \`difference(5, 3) === 2\` and \`difference(-1, 1) === -2\`, exiting non-zero on failure (\`process.exit(1)\`) and zero on success (\`process.exit(0)\`).
+`;
+
+const INDEX_MD = `# Projects
+
+| Project | Status | Summary |
+|---|---|---|
+| [live-accept-sum](live-accept-sum/spec.md) | In Progress | Throwaway two-task orchestrated acceptance fixture. |
+
+## live-accept-sum — In Progress (acceptance fixture)
+
+[Spec](live-accept-sum/spec.md)
+
+Throwaway two-task orchestrated acceptance fixture.
 `;
 
 /** context.md must carry the five CONTEXT_SECTIONS or the closeout curator's
@@ -126,18 +155,21 @@ No test exists yet.
 
 ## Key Decisions
 Pure ES module, no test framework — a hand-rolled assertion script keeps the
-fixture dependency-free and fast.
+fixture dependency-free and fast. The two helpers are separate closeout tasks so
+the acceptance harness can verify one progress alert per closeout commit.
 
 ## Interfaces & Contracts
-\`sum(a: number, b: number): number\` returns \`a + b\`. \`${TEST_COMMAND.join(' ')}\`
-exits 0 on pass, non-zero on fail.
+\`sum(a: number, b: number): number\` returns \`a + b\`.
+\`difference(a: number, b: number): number\` returns \`a - b\`.
+\`${TEST_COMMAND.join(' ')}\` exits 0 on pass, non-zero on fail.
 
 ## Known Risks
-The implementation must not change the export name or signature; downstream test
-imports \`{ sum }\` from \`./sum.mjs\`.
+The implementation must not change export names or signatures; downstream tests
+import \`{ sum, difference }\` from \`./sum.mjs\`. The first task should not
+collapse the second task by implementing \`difference\` early.
 
 ## Next Task Handoff
-Implement \`sum\` and land the QA test green.
+Implement \`sum\`, then \`difference\`, landing the QA test green after each task.
 `;
 
 // ---------------------------------------------------------------------------
@@ -273,6 +305,7 @@ async function makeFixture(args: {
   const projectDir = join(repoPath, 'docs', 'projects', PROJECT_SLUG);
   mkdirSync(projectDir, { recursive: true });
   writeFileSync(join(repoPath, TARGET_FILE), SEED_IMPL);
+  writeFileSync(join(repoPath, 'docs', 'projects', 'index.md'), INDEX_MD);
   writeFileSync(join(projectDir, 'spec.md'), SPEC_MD);
   writeFileSync(join(projectDir, 'tasks.md'), TASKS_MD);
   writeFileSync(join(projectDir, 'context.md'), CONTEXT_MD);
@@ -353,6 +386,7 @@ async function makeFixture(args: {
 
 interface DriveResult {
   events: Array<Record<string, unknown>>;
+  busEvents: Array<Record<string, unknown>>;
   terminal: Record<string, unknown> | null;
   runId: string;
   createdAt: string;
@@ -389,8 +423,10 @@ async function driveApplier(fixture: Fixture): Promise<DriveResult> {
   const payload = { projectSlug: PROJECT_SLUG, product: fixture.product };
   log('apply', `creating orchestrated-work mutation for ${fixture.product}`);
 
-  setMutationBus(new NotificationBus());
+  const bus = new NotificationBus();
+  setMutationBus(bus);
   const events: Array<Record<string, unknown>> = [];
+  const busEvents: Array<Record<string, unknown>> = [];
   let terminal: Record<string, unknown> | null = null;
   let resolveTerminal: (() => void) | undefined;
   const terminalSeen = new Promise<void>((resolve, reject) => {
@@ -409,6 +445,12 @@ async function driveApplier(fixture: Fixture): Promise<DriveResult> {
   // apply() at a throwaway product repo in /tmp, so validation is bypassed here
   // only; createMutation/startApply still own supervision, active-runs, and
   // terminal persistence for the run.
+  bus.on('mutation-event', (event) => {
+    const e = event as unknown as Record<string, unknown>;
+    busEvents.push(e);
+    log('bus', JSON.stringify(e));
+  });
+
   registerApplier({
     ...orchestratedWorkApplier,
     validate: () => ({ ok: true as const }),
@@ -435,6 +477,7 @@ async function driveApplier(fixture: Fixture): Promise<DriveResult> {
   await terminalSeen;
   return {
     events,
+    busEvents,
     terminal,
     runId: created.descriptor.id,
     createdAt: created.descriptor.createdAt,
@@ -453,6 +496,9 @@ interface VerifyResult {
   merged: boolean;
   branchDeleted: boolean;
   remotePushed: boolean;
+  closeoutProgressAlerts: ProgressAlertProof[];
+  projectIndexDone: boolean;
+  mergeSuccessNotifications: number;
 }
 
 interface GateHoldVerifyResult {
@@ -460,6 +506,15 @@ interface GateHoldVerifyResult {
   touchedTarget: boolean;
   baseUnchanged: boolean;
   gateHeldReason: string;
+}
+
+interface ProgressAlertProof {
+  taskText: string;
+  commitSha: string;
+  shortSha: string;
+  tasksDone: number;
+  tasksTotal: number;
+  tasksRemaining: number;
 }
 
 function streamEvents(drive: DriveResult): Array<Record<string, unknown>> {
@@ -539,6 +594,115 @@ async function assertSupervisionHeartbeatAdvanced(drive: DriveResult, label: str
   log('verify', `${label}: supervision heartbeat advanced to ${run.lastHeartbeatAt}`);
 }
 
+function progressEvents(drive: DriveResult, eventName: string): Array<Record<string, unknown>> {
+  return drive.busEvents.filter((event) => {
+    const data = dataOf(event);
+    return event.kind === 'mutation-event' && event.subKind === 'progress' && data['event'] === eventName;
+  });
+}
+
+function assertCloseoutProgressAlerts(drive: DriveResult): ProgressAlertProof[] {
+  const terminalIndex = drive.busEvents.findIndex(
+    (event) => event.kind === 'mutation-event' && (event.subKind === 'completed' || event.subKind === 'failed'),
+  );
+  const progress = progressEvents(drive, 'closeout-commit');
+  if (terminalIndex >= 0) {
+    const lateProgress = progress.filter((event) => drive.busEvents.indexOf(event) > terminalIndex);
+    if (lateProgress.length > 0) {
+      throw new AcceptanceError(
+        `closeout progress alert(s) arrived after terminal event: ${JSON.stringify(lateProgress)}`,
+      );
+    }
+  }
+  if (progress.length !== 2) {
+    throw new AcceptanceError(
+        `expected exactly one injected notification-sink closeout progress alert per ` +
+        `task/closeout commit (2 total), got ${progress.length}: ${JSON.stringify(progress)}`,
+    );
+  }
+
+  const expectedRemaining = [1, 0];
+  const seenCommits = new Set<string>();
+  const proofs = progress.map((event, index) => {
+    const data = dataOf(event);
+    const taskText = typeof data['taskText'] === 'string' ? data['taskText'] : '';
+    const commitSha = typeof data['commitSha'] === 'string' ? data['commitSha'] : '';
+    const shortSha = typeof data['shortSha'] === 'string' ? data['shortSha'] : '';
+    const tasksDone = typeof data['tasksDone'] === 'number' ? data['tasksDone'] : NaN;
+    const tasksTotal = typeof data['tasksTotal'] === 'number' ? data['tasksTotal'] : NaN;
+    const tasksRemaining = typeof data['tasksRemaining'] === 'number' ? data['tasksRemaining'] : NaN;
+    if (taskText === '' || commitSha === '' || shortSha === '') {
+      throw new AcceptanceError(
+        `closeout progress alert ${index + 1} is missing task/sha fields: ${JSON.stringify(data)}`,
+      );
+    }
+    if (!commitSha.startsWith(shortSha)) {
+      throw new AcceptanceError(
+        `closeout progress alert ${index + 1} shortSha=${shortSha} does not match commitSha=${commitSha}`,
+      );
+    }
+    if (seenCommits.has(commitSha)) {
+      throw new AcceptanceError(`duplicate closeout progress alert for commit ${commitSha}`);
+    }
+    seenCommits.add(commitSha);
+    if (tasksDone !== index + 1 || tasksTotal !== 2 || tasksRemaining !== expectedRemaining[index]) {
+      throw new AcceptanceError(
+        `closeout progress alert ${index + 1} has wrong live task counts: ` +
+          `done=${tasksDone} total=${tasksTotal} remaining=${tasksRemaining}`,
+      );
+    }
+    return { taskText, commitSha, shortSha, tasksDone, tasksTotal, tasksRemaining };
+  });
+
+  log(
+    'verify',
+    `closeout progress alerts: ${proofs.map((p) => `${p.shortSha} ${p.tasksDone}/${p.tasksTotal}`).join(', ')}`,
+  );
+  return proofs;
+}
+
+function assertSingleMergeSuccessNotification(drive: DriveResult): number {
+  const notifications = progressEvents(drive, 'merge-success');
+  if (notifications.length !== 1) {
+    throw new AcceptanceError(
+      `expected exactly one injected notification-sink merge-success notification, got ${notifications.length}: ` +
+        `${JSON.stringify(notifications)}`,
+    );
+  }
+  const data = dataOf(notifications[0]!);
+  if (data['projectSlug'] !== PROJECT_SLUG || data['baseBranch'] !== 'main') {
+    throw new AcceptanceError(
+      `merge-success notification does not name project ${PROJECT_SLUG} and base main: ` +
+        `${JSON.stringify(data)}`,
+    );
+  }
+  log('verify', `merge-success notification fired once for ${PROJECT_SLUG} -> main`);
+  return notifications.length;
+}
+
+function assertProjectIndexDoneOnMergedBase(fixture: Fixture): boolean {
+  const indexPath = join(fixture.repoPath, 'docs', 'projects', 'index.md');
+  const index = readFileSync(indexPath, 'utf8');
+  const doneTableCell =
+    '| [live-accept-sum](live-accept-sum/spec.md) | Done | Throwaway two-task orchestrated acceptance fixture. |';
+  const doneHeading = '## live-accept-sum — Done (acceptance fixture)';
+  if (!index.includes(doneTableCell)) {
+    throw new AcceptanceError(
+      `merged index does not mark ${PROJECT_SLUG} Done in the table Status cell:\n${index}`,
+    );
+  }
+  if (!index.includes(doneHeading)) {
+    throw new AcceptanceError(
+      `merged index does not mark ${PROJECT_SLUG} Done in the section heading:\n${index}`,
+    );
+  }
+  if (index.includes('## live-accept-sum — In Progress')) {
+    throw new AcceptanceError(`merged index still contains an In Progress section heading:\n${index}`);
+  }
+  log('verify', 'project index marks the fixture Done in both the table cell and section heading');
+  return true;
+}
+
 async function verifyCleanMerged(fixture: Fixture, drive: DriveResult): Promise<VerifyResult> {
   const { terminal } = drive;
   if (!terminal) {
@@ -565,7 +729,7 @@ async function verifyCleanMerged(fixture: Fixture, drive: DriveResult): Promise<
     data.merged === true &&
     data.branchDeleted === true &&
     branch !== '' &&
-    taskCount >= 1;
+    taskCount >= 2;
   if (!outcomeOk) {
     throw new AcceptanceError(
       `terminal completed but the payload is not a well-formed merged branch-complete run: ` +
@@ -645,6 +809,10 @@ async function verifyCleanMerged(fixture: Fixture, drive: DriveResult): Promise<
   }
   log('verify', `QA test PASSES against the coder's diff (${TEST_COMMAND.join(' ')})`);
 
+  const closeoutProgressAlerts = assertCloseoutProgressAlerts(drive);
+  const projectIndexDone = assertProjectIndexDoneOnMergedBase(fixture);
+  const mergeSuccessNotifications = assertSingleMergeSuccessNotification(drive);
+
   return {
     branch,
     diffstat,
@@ -653,6 +821,9 @@ async function verifyCleanMerged(fixture: Fixture, drive: DriveResult): Promise<
     merged: true,
     branchDeleted: true,
     remotePushed,
+    closeoutProgressAlerts,
+    projectIndexDone,
+    mergeSuccessNotifications,
   };
 }
 
@@ -744,16 +915,19 @@ async function emitProof(
 
   const stamp = new Date().toISOString();
   const eventLines = drive.events.map((e) => `    ${JSON.stringify(e)}`).join('\n');
+  const busEventLines = drive.busEvents.map((e) => `    ${JSON.stringify(e)}`).join('\n');
   const body = `# Project 14 — Live Orchestrated Acceptance Proof
 
 **Run id:** \`${runId}\`
 **Recorded:** ${stamp}
-**Result:** PASS — a live, non-stub orchestrated run drove a real task to a real diff.
+**Result:** PASS — a live, non-stub orchestrated run drove a two-task project to
+merge with narrated closeout progress.
 
-This is the stub-free proof required by Phase 8 (spec.md §"Phase 8"): the
-production \`orchestratedWorkApplier\` ran end-to-end against an ephemeral repo
-with LIVE models (Opus 4.8 judgment roles, GPT-5.5/Codex artifact roles), and
-the harness self-verified real work with zero human intervention.
+This is the live proof required by Phase 15 (spec.md §"Phase 15"): the
+production \`orchestratedWorkApplier\` ran end-to-end against an ephemeral
+multi-task repo with LIVE models (Opus 4.8 judgment roles, GPT-5.5/Codex
+artifact roles), and the harness self-verified progress alerts, project-index
+completion, merge, push, and landing notification with zero human intervention.
 
 ## Asserted outcome
 
@@ -764,6 +938,11 @@ the harness self-verified real work with zero human intervention.
 - **Work branch deleted after push:** ${verifyResult.branchDeleted ? 'yes' : 'NO'}
 - **Diff touches target (\`${TARGET_FILE}\`):** ${verifyResult.touchedTarget ? 'yes' : 'NO'}
 - **QA test passes against the coder's diff (\`${TEST_COMMAND.join(' ')}\`):** ${verifyResult.testPassed ? 'yes' : 'NO'}
+- **Closeout progress alerts:** ${verifyResult.closeoutProgressAlerts
+    .map((alert) => `\`${alert.shortSha}\` ${alert.tasksDone}/${alert.tasksTotal} done, ${alert.tasksRemaining} remaining`)
+    .join('; ')}
+- **Project index Done on merged base:** ${verifyResult.projectIndexDone ? 'yes' : 'NO'}
+- **Merge-success notifications:** ${verifyResult.mergeSuccessNotifications}
 - **Stream parity:** provider-attributed activity/output from both OpenAI and
   Anthropic was observed before terminal.
 - **Heartbeat:** supervision \`lastHeartbeatAt\`/\`lastOutputAt\` advanced during
@@ -785,6 +964,12 @@ ${verifyResult.diffstat || '<none>'}
 
 \`\`\`jsonl
 ${eventLines || '    <none>'}
+\`\`\`
+
+## Injected notification-sink events
+
+\`\`\`jsonl
+${busEventLines || '    <none>'}
 \`\`\`
 
 > The throwaway repo, its worktrees, and the temp product entry were created in

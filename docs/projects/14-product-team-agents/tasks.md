@@ -1284,7 +1284,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       event is published, so the sender stays stateless and a redelivered/replayed event cannot
       double-send. Webview forwarding may pass the same event through, but Phase 15 acceptance only
       requires the injected operator-notification sink plus Telegram formatting.
-- [ ] **Live acceptance:** a multi-task orchestrated run on a throwaway fixture project (reuse the
+- [x] **Live acceptance:** a multi-task orchestrated run on a throwaway fixture project (reuse the
       Phase 8/10 `__acceptance__` temp-repo + local bare remote harness, notification surface
       injected so no real Telegram is needed) drives ≥2 tasks and asserts: one progress alert per
       closeout commit with a correct remaining/total; on the final task the project status flips to
