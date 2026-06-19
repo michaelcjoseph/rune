@@ -1342,7 +1342,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       artifacts — not contingent on a downstream consumer observing the yielded event. Assert that
       after the applier's terminal step, `mutations.jsonl` (latest line) and `supervised-runs.json`
       both read the terminal status even if the yielded event is dropped/never consumed.
-- [ ] Lost-yield-no-strand test: simulate the consumer abandoning the `for await` immediately after
+- [x] Lost-yield-no-strand test: simulate the consumer abandoning the `for await` immediately after
       the work-product write (no terminal event consumed); the run must NOT be left at `running` —
       the supervised store reflects the classified outcome (`noop`/`branch-complete`/`failed`).
 - [ ] Work-product-vs-lifecycle-agreement test: for every terminal outcome, the work-runs

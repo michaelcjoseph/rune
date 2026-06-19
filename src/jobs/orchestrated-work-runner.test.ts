@@ -535,6 +535,117 @@ describe('orchestratedWorkApplier', () => {
       },
     );
 
+    it('does not strand a run when the consumer abandons after work-product artifacts are written but before the terminal event is consumed', async () => {
+      const runId = 'mut-orch-lost-yield-no-strand';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-lost-yield-'));
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+      let releaseFinalizer!: () => void;
+      const allowFinalizerReturn = new Promise<void>((resolve) => {
+        releaseFinalizer = resolve;
+      });
+      let summaryWritten!: () => void;
+      const summaryWrittenPromise = new Promise<void>((resolve) => {
+        summaryWritten = resolve;
+      });
+
+      mockRunFinalizer.mockImplementationOnce(async (_input, effects) => {
+        const terminalEvent = await effects.classify();
+        await effects.flushTranscript();
+        effects.writeSummary(terminalEvent);
+        effects.appendIndexRow(terminalEvent);
+        effects.writeSupervisionTerminal('completed', terminalEvent);
+        summaryWritten();
+        await allowFinalizerReturn;
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: false,
+          merged: false,
+          branchDeleted: false,
+          phases: ['classified', 'transcript-flushed', 'summary-written', 'index-appended'],
+        };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-lost-yield' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
+      });
+
+      const iterator = orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx)[Symbol.asyncIterator]();
+      let terminalConsumed = false;
+      let abandon: Promise<IteratorResult<MutationEvent>> | undefined;
+      const terminalStep = iterator.next().then((step) => {
+        terminalConsumed = step.done !== true && (step.value.kind === 'completed' || step.value.kind === 'failed');
+        return step;
+      });
+
+      try {
+        const start = await terminalStep;
+        expect(start.value).toMatchObject({ kind: 'log', mutationId: runId });
+
+        mockAppendMutationLine.mockClear();
+        mockUpsertRun.mockClear();
+        terminalConsumed = false;
+        const droppedTerminal = iterator.next().then((step) => {
+          terminalConsumed = step.done !== true && (step.value.kind === 'completed' || step.value.kind === 'failed');
+          return step;
+        });
+
+        await summaryWrittenPromise;
+        expect(existsSync(join(artifactsDir, runId, 'summary.json'))).toBe(true);
+
+        abandon = iterator.return?.(undefined as never);
+        await Promise.resolve();
+        expect(terminalConsumed, 'the terminal event must not be consumed in this lost-yield scenario').toBe(false);
+
+        const terminalMutationWrites = mockAppendMutationLine.mock.calls
+          .map(([entry]) => entry as MutationDescriptor)
+          .filter((entry) => entry.id === runId);
+        expect(
+          terminalMutationWrites.at(-1),
+          'once work-product artifacts are written, abandoning the iterator must not leave the mutation running',
+        ).toMatchObject({
+          id: runId,
+          kind: 'orchestrated-work',
+          status: 'completed',
+        });
+
+        const terminalSupervisionWrites = mockUpsertRun.mock.calls
+          .map(([run]) => run as SupervisedRun)
+          .filter((run) => run.id === runId);
+        expect(
+          terminalSupervisionWrites.at(-1),
+          'once work-product artifacts are written, abandoning the iterator must not leave supervision running',
+        ).toMatchObject({
+          id: runId,
+          kind: 'orchestrated-work',
+          status: 'completed',
+        });
+
+        releaseFinalizer();
+        await Promise.allSettled([droppedTerminal, abandon ?? Promise.resolve({ done: true, value: undefined as never })]);
+      } finally {
+        releaseFinalizer?.();
+        await abandon?.catch(() => undefined);
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it('pumps reported role activity between the starting log and terminal event', async () => {
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {

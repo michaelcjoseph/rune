@@ -733,10 +733,16 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     const recovery = recoveryRedispatchOptions.get(descriptor);
     recoveryRedispatchOptions.delete(descriptor);
     const branch = recovery?.branch ?? workBranchName(projectSlug);
+    let terminalStatePersisted = false;
+    const persistTerminalStateOnce = (terminal: MutationEvent): void => {
+      if (terminalStatePersisted) return;
+      persistTerminalMutationState(descriptor, terminal);
+      terminalStatePersisted = true;
+    };
 
     if (ctx.cancel()) {
       const terminal = term(descriptor.id, 'failed', { reason: 'cancelled before start', projectSlug, product });
-      persistTerminalMutationState(descriptor, terminal);
+      persistTerminalStateOnce(terminal);
       yield terminal;
       return;
     }
@@ -777,7 +783,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           projectSlug,
           product,
         });
-        persistTerminalMutationState(descriptor, terminal);
+        persistTerminalStateOnce(terminal);
         yield terminal;
         return;
       }
@@ -789,7 +795,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           projectSlug,
           product,
         });
-        persistTerminalMutationState(descriptor, terminal);
+        persistTerminalStateOnce(terminal);
         yield terminal;
         return;
       }
@@ -959,7 +965,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                     }),
                 }
               : {}),
-            writeSupervisionTerminal: () => {},
+            writeSupervisionTerminal: (_status, terminalEvent) => {
+              persistTerminalStateOnce(terminalEvent);
+            },
             removeWorktree: async () => {
               await deps.destroyWorktree(runSandbox, {
                 productsConfigPath: config.PRODUCTS_CONFIG_FILE,
@@ -1143,7 +1151,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           baselineTasks,
           result: null,
         });
-        persistTerminalMutationState(descriptor, terminal);
+        persistTerminalStateOnce(terminal);
         yield terminal;
         return;
       }
@@ -1167,7 +1175,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         baselineTasks,
         result,
       });
-      persistTerminalMutationState(descriptor, terminal);
+      persistTerminalStateOnce(terminal);
       yield terminal;
     } finally {
       sink?.destroy();
