@@ -79,6 +79,38 @@ function refreshWorkProductForProjectDoneCommit(
   return terminalEvent;
 }
 
+function hasNonReversibleSevereFinding(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasNonReversibleSevereFinding);
+  }
+  if (!value || typeof value !== 'object') return false;
+
+  const record = value as Record<string, unknown>;
+  const severity = record['severity'];
+  const status = record['status'];
+  if (
+    record['reversible'] === false &&
+    (severity === 'high' || severity === 'critical') &&
+    (status === 'open' || status === 'regressed')
+  ) {
+    return true;
+  }
+
+  for (const key of ['findingsLedger', 'terminalFindings', 'openFindings', 'findings']) {
+    if (hasNonReversibleSevereFinding(record[key])) return true;
+  }
+  return false;
+}
+
+function isPreMergeHoldTerminal(terminalEvent: MutationEvent): boolean {
+  const data = (terminalEvent.data ?? {}) as Record<string, unknown>;
+  return data['held'] === true ||
+    data['parked'] === true ||
+    data['preserveBranch'] === true ||
+    data['preserveWorktree'] === true ||
+    hasNonReversibleSevereFinding(data);
+}
+
 /** Terminal-write strategy. `hold` never touches `main`; `gated-merge` lands the
  *  branch through the hard gate. */
 export type FinalizerMode = 'hold' | 'gated-merge';
@@ -725,20 +757,25 @@ async function runGatedMerge(
   let gateAllowedBranchComplete = false;
   let mergeConflictHold = false;
 
-  // Only a branch-complete run is eligible to land on the base branch; anything
-  // else (partial/noop/dirty/failed) never merges and never consults the gate.
   if (outcome === 'branch-complete') {
     if (reached('merged-not-pushed')) {
       // A prior attempt already merged — NEVER re-merge (exactly-once).
       merged = true;
       gateAllowedBranchComplete = true;
+    } else if (isPreMergeHoldTerminal(terminalEvent)) {
+      // A terminal that already carries a hold signal (for example an open
+      // non-reversible high/critical finding from the severity loop) is
+      // branch-complete work, but it is not merge-bound and must not flip
+      // docs/projects/index.md to Done. This guard is pre-merge only: once a
+      // prior attempt recorded `merged-not-pushed`, recovery must finish the
+      // push/delete sequence.
+      return writeOperationalHoldTerminal(effects, terminalEvent, phases);
     } else {
       const shouldMarkProjectDone = !reached('project-marked-done');
       let markProjectDoneResult: MarkProjectDoneResult | undefined;
       if (shouldMarkProjectDone) {
         markProjectDoneResult = await effects.markProjectDone?.(input, terminalEvent);
       }
-      refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
       if (markProjectDoneResult?.kind === 'ambiguous') {
         const supervisionStatus: FinalizerSupervisionStatus =
           terminalEvent.kind === 'completed' ? 'completed' : 'failed';
@@ -757,17 +794,6 @@ async function runGatedMerge(
         const verdict = await gate();
         if (verdict.ok === true) {
           gateAllowedBranchComplete = true;
-          if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
-            record('project-marked-done');
-          }
-          if (!reached('summary-written')) {
-            effects.writeSummary(terminalEvent);
-            record('summary-written');
-          }
-          if (!reached('index-appended')) {
-            effects.appendIndexRow(terminalEvent);
-            record('index-appended');
-          }
           try {
             await mergeBranch();
           } catch (err) {
@@ -778,6 +804,18 @@ async function runGatedMerge(
             alert('merge-conflict');
             mergeConflictHold = true;
             return;
+          }
+          refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
+          if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
+            record('project-marked-done');
+          }
+          if (!reached('summary-written')) {
+            effects.writeSummary(terminalEvent);
+            record('summary-written');
+          }
+          if (!reached('index-appended')) {
+            effects.appendIndexRow(terminalEvent);
+            record('index-appended');
           }
           record('merged-not-pushed');
           merged = true;

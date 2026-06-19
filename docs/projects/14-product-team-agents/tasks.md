@@ -1191,7 +1191,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Index-merge-conflict test: when the finalizer's `git merge` of the branch hits a conflict on
       `docs/projects/index.md` (a concurrent landing changed it on the base), the merge is aborted
       and the run HOLDs operationally with work preserved — never a half-merged dirty base.
-- [ ] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical
+- [x] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical
       finding, or an operational HOLD) does NOT flip the index to `Done`; the flip happens only on a
       merge-bound terminal.
 - [ ] Merge-success-notify test: a successful gated merge sends exactly one Telegram message to the

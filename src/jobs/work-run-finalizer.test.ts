@@ -98,6 +98,15 @@ function branchCompleteEvent(): MutationEvent {
   };
 }
 
+function branchCompleteEventWithFindings(findingsLedger: Array<Record<string, unknown>>): MutationEvent {
+  const ev = branchCompleteEvent();
+  ev.data = {
+    ...(ev.data as Record<string, unknown>),
+    findingsLedger,
+  };
+  return ev;
+}
+
 /** A classified terminal event for a failed run. */
 function failedEvent(): MutationEvent {
   return {
@@ -741,6 +750,70 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(result.branchDeleted).toBe(false);
   });
 
+  it('branch-complete with open non-reversible high residue HOLDs before project-index Done and work-run index writes (Phase 15)', async () => {
+    const ev = branchCompleteEventWithFindings([
+      {
+        id: 'finding-auth-bypass',
+        severity: 'high',
+        reversible: false,
+        status: 'open',
+        rationale: 'remaining non-reversible high terminal residue',
+      },
+    ]);
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'must-not-happen',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects, phases } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).not.toHaveBeenCalled();
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(effects.writeSummary).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.removeWorktree).not.toHaveBeenCalled();
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    expect(phases).not.toContain('project-marked-done');
+    expect(phases).not.toContain('summary-written');
+    expect(phases).not.toContain('index-appended');
+    expect(phases).not.toContain('merged-not-pushed');
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+    expect(result.worktreeRemoved).toBe(false);
+  });
+
+  it('resolved non-reversible high findings do not trigger the pre-merge HOLD heuristic (Phase 15)', async () => {
+    const ev = branchCompleteEventWithFindings([
+      {
+        id: 'finding-resolved-auth-bypass',
+        severity: 'high',
+        reversible: false,
+        status: 'resolved',
+        rationale: 'stale terminal residue verified resolved',
+      },
+    ]);
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'resolved-finding-project-done-commit',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+  });
+
   it('absent docs/projects/index.md gracefully skips the project-Done commit and still merges (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({
@@ -897,6 +970,43 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
         outcome: 'branch-complete',
       }),
     }));
+  });
+
+  it('operational HOLD from an index merge conflict does not record or persist the project-Done flip (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'project-done-commit-must-not-survive-hold',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects, phases } = makeEffects(ev, {
+      markProjectDone,
+      mergeBranch: vi.fn(async () => {
+        throw new Error([
+          'git merge failed: CONFLICT (content): Merge conflict in docs/projects/index.md',
+          'Automatic merge failed; fix conflicts and then commit the result.',
+        ].join('\n'));
+      }),
+      abortMerge: vi.fn(async () => {}),
+    } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(result.merged).toBe(false);
+    expect(result.worktreeRemoved).toBe(false);
+    expect(effects.alert).toHaveBeenCalledWith('merge-conflict');
+    expect(phases).not.toContain('project-marked-done');
+    expect(effects.writeSummary).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', result.terminalEvent);
+    expect(result.terminalEvent.data).toMatchObject({
+      outcome: 'branch-complete',
+      workProduct: {
+        commitCount: 5,
+        commitShas: ['a1', 'b2', 'c3', 'd4', 'e5'],
+      },
+    });
+    expect(JSON.stringify(result.terminalEvent.data)).not.toContain('project-done-commit-must-not-survive-hold');
   });
 
   it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {
@@ -1079,6 +1189,39 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
     expect(pushOrder).toBeLessThan(deleteOrder);
     expect(result.merged).toBe(true);
     expect(result.branchDeleted).toBe(true);
+  });
+
+  it('resume from `merged-not-pushed` completes push/delete even if the reclassified terminal carries a hold signal', async () => {
+    const ev = branchCompleteEventWithFindings([
+      {
+        id: 'finding-late-terminal-hold',
+        severity: 'critical',
+        reversible: false,
+        status: 'open',
+        rationale: 'terminal reclassification still carries severe residue',
+      },
+    ]);
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'must-not-happen-on-resume',
+      changedTokens: ['table-status'],
+    }));
+    const { effects } = makeEffects(ev, {
+      readLastPhase: vi.fn((): FinalizerPhase => 'merged-not-pushed'),
+      markProjectDone,
+    } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).not.toHaveBeenCalled();
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.worktreeRemoved).toBe(true);
   });
 
   it('resume from `pushed-not-deleted`: does NOT re-merge OR re-push — only completes the branch delete', async () => {
