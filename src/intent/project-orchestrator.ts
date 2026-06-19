@@ -181,6 +181,21 @@ export async function runProjectOrchestration(
 
     const evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
     if (evidence.outcome !== 'ready-for-closeout') {
+      if (hasNonReversibleSevereTerminalFinding(evidence)) {
+        const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
+          missingWriter: 'ok',
+        });
+        if (terminalBugRecording.kind === 'blocked') {
+          return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
+        }
+        return buildFindingHold(
+          deps,
+          evidence.blockedReason ??
+            evidence.failureReason ??
+            'non-reversible high/critical terminal finding must hold the branch',
+          taskRecords,
+        );
+      }
       if (isOperationalTerminal(evidence)) {
         return buildOperationalHold(
           deps,
@@ -331,10 +346,12 @@ async function persistRunCheckpoint(
 async function recordTerminalBugs(
   deps: OrchestrationDeps,
   evidence: TaskEvidence,
+  opts: { missingWriter: 'blocked' | 'ok' } = { missingWriter: 'blocked' },
 ): Promise<CheckpointResult> {
   const entries = terminalBugEntries(deps.runId, evidence);
   if (entries.length === 0) return { kind: 'ok' };
   if (deps.appendTerminalBugEntries === undefined) {
+    if (opts.missingWriter === 'ok') return { kind: 'ok' };
     return {
       kind: 'blocked',
       reason: 'operational terminal bug recording failure: writer not configured',
@@ -377,6 +394,14 @@ function terminalBugEntries(
     });
   }
   return [...entriesById.values()];
+}
+
+function hasNonReversibleSevereTerminalFinding(evidence: TaskEvidence): boolean {
+  return terminalBugEntries('', evidence).some(
+    (entry) =>
+      entry.reversible === false &&
+      (entry.severity === 'high' || entry.severity === 'critical'),
+  );
 }
 
 function buildRunCursor(
@@ -502,6 +527,30 @@ function isOperationalTerminal(evidence: TaskEvidence): boolean {
 }
 
 function buildOperationalHold(
+  deps: OrchestrationDeps,
+  reason: string,
+  taskRecords: TaskRunRecord[],
+): Extract<OrchestrationResult, { kind: 'held' }> {
+  const handoff = buildFinalizerHandoff({
+    runId: deps.runId,
+    project: deps.project,
+    product: deps.product,
+    branch: deps.branch,
+    ...(deps.baseBranch !== undefined ? { baseBranch: deps.baseBranch } : {}),
+    taskRecords,
+  });
+  return {
+    kind: 'held',
+    reason,
+    handoff,
+    branch: deps.branch,
+    ...(deps.worktreePath !== undefined ? { worktreePath: deps.worktreePath } : {}),
+    preserveBranch: true,
+    preserveWorktree: true,
+  };
+}
+
+function buildFindingHold(
   deps: OrchestrationDeps,
   reason: string,
   taskRecords: TaskRunRecord[],

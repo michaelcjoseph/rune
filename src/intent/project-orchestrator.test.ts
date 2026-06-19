@@ -164,6 +164,26 @@ function expectOperationalHold(
   expect(raw['preserveWorktree'] ?? handoff['preserveWorktree']).toBe(true);
 }
 
+function expectFindingHold(
+  res: OrchestrationResult,
+  opts: { reason: RegExp; worktreePath: string },
+): void {
+  const raw = res as unknown as Record<string, unknown>;
+  const handoff =
+    raw['handoff'] && typeof raw['handoff'] === 'object'
+      ? (raw['handoff'] as Record<string, unknown>)
+      : {};
+
+  expect(raw['kind']).toBe('held');
+  expect(String(raw['reason'] ?? '')).toMatch(opts.reason);
+  expect(raw).not.toHaveProperty('parked');
+  expect(JSON.stringify(raw)).not.toMatch(/blocked-on-human|PM|wrap-up/i);
+  expect(raw['branch'] ?? handoff['branch']).toBe('jarvis-work/14-x');
+  expect(raw['worktreePath'] ?? handoff['worktreePath']).toBe(opts.worktreePath);
+  expect(raw['preserveBranch'] ?? handoff['preserveBranch']).toBe(true);
+  expect(raw['preserveWorktree'] ?? handoff['preserveWorktree']).toBe(true);
+}
+
 interface PersistedRunCursor {
   runId: string;
   product: string;
@@ -565,7 +585,9 @@ describe('project-orchestrator — retry feedback', () => {
     ]);
   });
 
-  it('treats severity-loop hard-budget evidence as terminal and does not re-run the whole workflow', async () => {
+  it('holds before finalization when terminal evidence has a non-reversible high finding', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-non-reversible-terminal';
+    const bugEntries: TerminalBugEntry[] = [];
     const terminalFinding: FindingsLedgerEntry = {
       id: 'finding-auth-write-leak',
       sourceGate: 'reviewer',
@@ -604,20 +626,114 @@ describe('project-orchestrator — retry feedback', () => {
       '- [ ] Remove the outer attempt cap',
     ].join('\n'));
 
-    const res = await runProjectOrchestration(h.deps);
+    const res = await runProjectOrchestration({
+      ...h.deps,
+      worktreePath,
+      appendTerminalBugEntries: async (entries) => {
+        bugEntries.push(...entries);
+      },
+    });
 
-    expect(res).toMatchObject({
-      kind: 'blocked',
-      reason: expect.stringMatching(/non-reversible|high|terminal residue|hold/i),
+    expectFindingHold(res, {
+      reason: /non-reversible|high|terminal residue|hold/i,
+      worktreePath,
     });
     expect(workflowCalls).toBe(1);
-    expect(res).not.toHaveProperty('parked');
-    expect(JSON.stringify(res)).not.toMatch(/blocked-on-human|PM|wrap-up/i);
+    expect(bugEntries).toEqual([
+      {
+        runId: 'run-1',
+        taskId: 'remove-the-outer-attempt-cap',
+        findingId: 'finding-auth-write-leak',
+        sourceGate: 'reviewer',
+        class: 'data-integrity',
+        severity: 'high',
+        location: 'src/state.ts:88',
+        rationale: 'accepted writes can persist incorrect project state after release',
+        reversible: false,
+      },
+    ]);
     expect(eventsByName(h.state.events, 'attempt-start')).toHaveLength(1);
     expect(eventsByName(h.state.events, 'attempt-retry')).toEqual([]);
     expect(h.state.tasksMd).toContain('- [ ] Remove the outer attempt cap');
     expect(h.state.commits).toEqual([]);
     expect(h.state.finalizeCalled).toBe(false);
+  });
+
+  it('logs reversible high/critical terminal findings and still proceeds to the gated finalizer', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    const terminalFindings: FindingsLedgerEntry[] = [
+      {
+        id: 'finding-egress-timeout',
+        sourceGate: 'reviewer',
+        class: 'outbound',
+        severity: 'critical',
+        location: 'src/egress.ts:22',
+        rationale: 'retry egress can temporarily exceed the outbound budget',
+        reversible: true,
+        raisedRound: 4,
+        status: 'open',
+      },
+      {
+        id: 'finding-cache-fanout',
+        sourceGate: 'tech-lead',
+        class: 'cost-perf',
+        severity: 'high',
+        location: 'src/cache.ts:47',
+        rationale: 'cache miss fanout can spike compute cost under load',
+        reversible: true,
+        raisedRound: 4,
+        status: 'open',
+      },
+    ];
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: {
+          outcome: 'fail',
+          findings: terminalFindings,
+          objections: terminalFindings,
+        },
+        findingsLedger: terminalFindings,
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: ['terminal findings are reversible and logged for follow-up'],
+      }),
+      appendTerminalBugEntries: async (entries) => {
+        bugEntries.push(...entries);
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Log reversible terminal findings',
+    ].join('\n'));
+    let finalizerHandoff: { branch: string; taskRecords: TaskRunRecord[] } | undefined;
+    h.deps.finalize = async (handoff) => {
+      finalizerHandoff = handoff;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(finalizerHandoff).toMatchObject({
+      branch: 'jarvis-work/14-x',
+      taskRecords: [expect.objectContaining({ taskId: 'log-reversible-terminal-findings' })],
+    });
+    expect(bugEntries).toEqual([
+      expect.objectContaining({
+        findingId: 'finding-egress-timeout',
+        severity: 'critical',
+        reversible: true,
+      }),
+      expect.objectContaining({
+        findingId: 'finding-cache-fanout',
+        severity: 'high',
+        reversible: true,
+      }),
+    ]);
   });
 });
 

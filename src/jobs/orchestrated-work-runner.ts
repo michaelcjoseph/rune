@@ -886,7 +886,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
       }
 
       const result = outcome.result;
-      preserveWorktree = result.kind === 'blocked' && result.parked?.preserveWorktree === true;
+      preserveWorktree =
+        (result.kind === 'blocked' && result.parked?.preserveWorktree === true) ||
+        (result.kind === 'held' && result.preserveWorktree === true);
       const terminal = finalizerTerminal ?? mapResultToTerminal(descriptor.id, result, projectSlug, product, baseBranch);
       await persistTerminalArtifacts({
         deps,
@@ -1150,10 +1152,13 @@ function mapResultToTerminal(
     return term(mutationId, 'completed', {
       ...base,
       held: true,
-      reason: 'branch-complete; held for the Project 15 finalizer (not wired)',
+      reason: result.reason ?? 'branch-complete; held for the Project 15 finalizer',
       branch: result.handoff.branch,
       baseBranch,
       taskCount: result.handoff.taskRecords.length,
+      ...(result.worktreePath !== undefined ? { operatorWorktreePath: result.worktreePath } : {}),
+      ...(result.preserveBranch === true ? { preserveBranch: true } : {}),
+      ...(result.preserveWorktree === true ? { preserveWorktree: true } : {}),
     });
   }
   if (result.parked !== undefined) {

@@ -1261,6 +1261,39 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('finding-driven held terminals preserve the live worktree and do not run the finalizer', async () => {
+      const worktreePath = '/tmp/jarvis-worktrees/jarvis/demo-non-reversible';
+      inject({
+        kind: 'held',
+        reason: 'non-reversible high terminal finding remains after severity convergence',
+        branch: 'jarvis-work/demo',
+        worktreePath,
+        preserveBranch: true,
+        preserveWorktree: true,
+        handoff: {
+          runId: 'mut-1',
+          project: 'demo',
+          product: 'jarvis',
+          branch: 'jarvis-work/demo',
+          taskRecords: [],
+        },
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+
+      expect(mockRunFinalizer).not.toHaveBeenCalled();
+      expect(terminal?.kind).toBe('completed');
+      const data = terminal?.data as Record<string, unknown>;
+      expect(data['held']).toBe(true);
+      expect(String(data['reason'] ?? '')).toMatch(/non-reversible|terminal finding|hold/i);
+      expect(data['branch']).toBe('jarvis-work/demo');
+      expect(data['operatorWorktreePath']).toBe(worktreePath);
+      expect(data['preserveBranch']).toBe(true);
+      expect(data['preserveWorktree']).toBe(true);
+      expect(destroyed).toBe(false);
+    });
+
     it('blocked → failed terminal event carrying the block reason', async () => {
       inject({
         kind: 'blocked',
@@ -1393,7 +1426,7 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(false);
     });
 
-    it('an open high/critical objection holds the branch with handoff payload recorded and never merges', async () => {
+    it('a non-reversible high terminal finding completes as a held terminal with work preserved and never merges', async () => {
       const runId = 'mut-orch-objection-held';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-objection-held-artifacts-'));
       const { runGit, calls } = makeWorkProductGitStub({
@@ -1414,27 +1447,34 @@ describe('orchestratedWorkApplier', () => {
         runGit,
         workRunsDir: artifactsDir,
         workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
-        createTaskWorkflowRunner: () => async (task) => ({
-          taskId: task.id,
-          outcome: 'blocked',
-          rolesInvoked: ['qa', 'coder', 'reviewer'],
-          findingsLedger: [],
-          loopExitReason: 'hard-budget',
-          objectionOpen: true,
-          reviewerVerdict: {
-            pass: false,
-            objections: [
-              {
-                class: 'security',
-                severity: 'high',
-                location: 'src/security.ts:42',
-                rationale: 'token material can be written to disk without redaction',
-              },
-            ],
-          },
-          handoffNotes: ['partial fix is on the branch and needs human objection handling'],
-          blockedReason: 'open objection-class finding',
-        }),
+        createTaskWorkflowRunner: () => async (task) => {
+          const terminalFinding = {
+            id: 'finding-token-disk-write',
+            sourceGate: 'reviewer' as const,
+            class: 'security' as const,
+            severity: 'high' as const,
+            location: 'src/security.ts:42',
+            rationale: 'token material can be written to disk without redaction',
+            reversible: false,
+            raisedRound: 4,
+            status: 'open' as const,
+          };
+          return {
+            taskId: task.id,
+            outcome: 'blocked',
+            rolesInvoked: ['qa', 'coder', 'reviewer'],
+            findingsLedger: [terminalFinding],
+            loopExitReason: 'hard-budget',
+            objectionOpen: false,
+            reviewerVerdict: {
+              outcome: 'fail',
+              findings: [terminalFinding],
+              objections: [terminalFinding],
+            },
+            handoffNotes: ['partial fix is on the branch and the terminal finding is non-reversible'],
+            blockedReason: 'non-reversible high terminal finding must hold the branch',
+          };
+        },
       });
 
       try {
@@ -1442,8 +1482,8 @@ describe('orchestratedWorkApplier', () => {
         const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
         expect(terminal?.kind).toBe('completed');
         expect(terminal?.data).toMatchObject({
-          parked: true,
-          reason: expect.stringContaining('open objection-class finding'),
+          held: true,
+          reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           operatorWorktreePath: wtDir,
           branch: 'jarvis-work/demo',
           baseBranch: 'main',
@@ -1456,7 +1496,7 @@ describe('orchestratedWorkApplier', () => {
         expect(summary).toMatchObject({
           id: runId,
           branch: 'jarvis-work/demo',
-          reason: expect.stringContaining('open objection-class finding'),
+          reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           baseSha: 'base-objection-123',
         });
 
@@ -1630,10 +1670,9 @@ describe('orchestratedWorkApplier', () => {
           blockedReason: 'test cleanup hard block',
         });
         await waitForCondition(() => runId !== undefined && !activeRuns.has(runId));
-        // Phase 13: an objection-open block parks blocked-on-human and PRESERVES the
-        // worktree (maybeParkedRun no longer excludes objectionOpen), so cleanup via an
-        // objection-open block does not destroy the sandbox.
-        expect(destroyed).toBe(false);
+        // This test is about child-liveness heartbeat, not terminal preservation.
+        // A plain cleanup block is no longer a Phase 14 parked-human terminal.
+        expect(destroyed).toBe(true);
       } finally {
         finishRole?.({
           taskId: 'placeholder',

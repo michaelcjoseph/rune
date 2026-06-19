@@ -1105,7 +1105,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       warning/acceptance-recording failures that Phase 13 mapped to `outcome: 'block'`
       (`operationalBlockReason`) now produce an operational non-merge HOLD terminal (req 83), not a
       `block` outcome and not a human-gated park.
-- [ ] Rewrite the auto-merge / finalizer consumers (`project-orchestrator.ts`
+- [x] Rewrite the auto-merge / finalizer consumers (`project-orchestrator.ts`
       `maybeParkedRun` / objection-open handling, `operationalParkedRunField`, and
       `orchestrated-work-runner.ts` terminal mapping): replace the per-finding severity gate with the
       terminal handler — drain remaining `>low` findings to the Jarvis repo's `docs/projects/bugs.md`
