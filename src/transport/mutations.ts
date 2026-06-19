@@ -422,9 +422,6 @@ async function startApply(
   try {
     for await (const event of applier.apply(descriptor, ctx)) {
       const isTerminalEvent = event.kind === 'completed' || event.kind === 'failed';
-      if (isTerminalEvent && isTerminalMutationStatus(descriptor.status)) {
-        return;
-      }
 
       // `activity` is an internal work-liveness signal only — it advances the
       // supervision heartbeat below but is never forwarded to the bus, so a
@@ -442,6 +439,10 @@ async function startApply(
         data: event.data,
         userId: config.TELEGRAM_USER_ID,
       });
+
+      if (isTerminalEvent && isTerminalMutationStatus(descriptor.status)) {
+        return;
+      }
 
       // Heartbeat: each output line refreshes lastHeartbeatAt so a long-quiet
       // run gets flagged stalled while a chatty run does not. Throttled —

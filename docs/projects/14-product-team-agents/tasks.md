@@ -1336,7 +1336,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **Red tests (confirm red before implementation)**
 
-- [ ] Atomic-terminal test: when the orchestrated applier reaches a terminal outcome
+- [x] Atomic-terminal test: when the orchestrated applier reaches a terminal outcome
       (`finalized`/`held`/`blocked`/`failed`), the mutation status AND the supervised status are
       persisted terminal **by the applier itself**, in the same step that writes the work-product
       artifacts — not contingent on a downstream consumer observing the yielded event. Assert that

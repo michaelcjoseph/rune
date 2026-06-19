@@ -426,6 +426,115 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it.each([
+      {
+        label: 'finalized',
+        runId: 'mut-orch-atomic-finalized',
+        expectedStatus: 'completed' as const,
+        runOrchestration: async (): Promise<OrchestrationResult> => ({ kind: 'finalized', outcome: 'branch-complete' }),
+      },
+      {
+        label: 'held',
+        runId: 'mut-orch-atomic-held',
+        expectedStatus: 'completed' as const,
+        runOrchestration: async (): Promise<OrchestrationResult> => ({
+          kind: 'held',
+          reason: 'branch complete; held for terminal verification',
+          handoff: {
+            runId: 'mut-orch-atomic-held',
+            project: 'demo',
+            product: 'jarvis',
+            branch: 'jarvis-work/demo',
+            taskRecords: [],
+          },
+        }),
+      },
+      {
+        label: 'blocked',
+        runId: 'mut-orch-atomic-blocked',
+        expectedStatus: 'failed' as const,
+        runOrchestration: async (): Promise<OrchestrationResult> => ({
+          kind: 'blocked',
+          reason: 'closeout checks failed',
+          task: { id: 't1', text: 'task one', section: 'Phase 1' },
+        }),
+      },
+      {
+        label: 'failed',
+        runId: 'mut-orch-atomic-failed',
+        expectedStatus: 'failed' as const,
+        runOrchestration: async (): Promise<OrchestrationResult> => {
+          throw new Error('orchestration loop failed after work product');
+        },
+      },
+    ])(
+      'persists terminal mutation + supervision in the applier terminal step for $label, independent of startApply consuming the event',
+      async ({ runId, expectedStatus, runOrchestration }) => {
+        const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-atomic-terminal-'));
+        const { runGit } = makeWorkProductGitStub({
+          commitShas: [],
+          diffstat: '',
+        });
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree();
+            wtDir = dir;
+            return { ...sandbox, baseSha: 'base-atomic-terminal' };
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runGit,
+          workRunsDir: artifactsDir,
+          workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+          runOrchestration,
+        });
+
+        try {
+          const descriptor = makeDescriptor(undefined, runId);
+          const iterator = orchestratedWorkApplier.apply(descriptor, ctx)[Symbol.asyncIterator]();
+          const start = await iterator.next();
+          expect(start.value).toMatchObject({ kind: 'log', mutationId: runId });
+
+          mockAppendMutationLine.mockClear();
+          mockUpsertRun.mockClear();
+
+          const terminalStep = await iterator.next();
+          const terminal = terminalStep.value as MutationEvent;
+          expect(terminalStep.done).toBe(false);
+          expect(terminal.kind).toBe(expectedStatus === 'completed' ? 'completed' : 'failed');
+          expect(existsSync(join(artifactsDir, runId, 'summary.json'))).toBe(true);
+
+          const terminalMutationWrites = mockAppendMutationLine.mock.calls
+            .map(([entry]) => entry as MutationDescriptor)
+            .filter((entry) => entry.id === runId);
+          expect(
+            terminalMutationWrites.at(-1),
+            'the applier must persist the terminal mutation status before yielding a terminal event to startApply',
+          ).toMatchObject({
+            id: runId,
+            kind: 'orchestrated-work',
+            status: expectedStatus,
+          });
+
+          const terminalSupervisionWrites = mockUpsertRun.mock.calls
+            .map(([run]) => run as SupervisedRun)
+            .filter((run) => run.id === runId);
+          expect(
+            terminalSupervisionWrites.at(-1),
+            'the applier must persist supervised-runs terminal status in the same terminal step as work-product artifacts',
+          ).toMatchObject({
+            id: runId,
+            kind: 'orchestrated-work',
+            status: expectedStatus,
+          });
+        } finally {
+          rmSync(artifactsDir, { recursive: true, force: true });
+        }
+      },
+    );
+
     it('pumps reported role activity between the starting log and terminal event', async () => {
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {
@@ -2075,6 +2184,7 @@ describe('orchestratedWorkApplier', () => {
         finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });
         await waitForUpserts(3);
         expect(latestRun(runId).status).toBe('completed');
+        await waitForCondition(() => destroyed);
         expect(destroyed).toBe(true);
       } finally {
         finishRun?.({ kind: 'finalized', outcome: 'branch-complete' });

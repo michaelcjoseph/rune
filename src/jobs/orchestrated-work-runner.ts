@@ -70,6 +70,8 @@ import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { activeRuns, redispatchMutation } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
+import { appendMutationLine } from './mutations-log.js';
+import { upsertRun } from './supervision-store.js';
 import { createTranscriptSink, redactSecrets, type TranscriptSink } from './work-run-transcript.js';
 import {
   writeSummary,
@@ -83,6 +85,7 @@ import {
   classifyOutcome,
   computeWorkProduct,
   finalizeWorkRun,
+  applyOutcomeToDescriptor,
   type ExitFacts,
   type WorkOutcome,
   type WorkProductFacts,
@@ -98,6 +101,7 @@ import {
 } from './work-run-finalizer.js';
 import { runGate as defaultRunGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
+import type { SupervisedRun } from '../intent/supervision.js';
 
 const log = createLogger('orchestrated-work-runner');
 
@@ -731,7 +735,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     const branch = recovery?.branch ?? workBranchName(projectSlug);
 
     if (ctx.cancel()) {
-      yield term(descriptor.id, 'failed', { reason: 'cancelled before start', projectSlug, product });
+      const terminal = term(descriptor.id, 'failed', { reason: 'cancelled before start', projectSlug, product });
+      persistTerminalMutationState(descriptor, terminal);
+      yield terminal;
       return;
     }
 
@@ -766,21 +772,25 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           });
         }
       } catch (err) {
-        yield term(descriptor.id, 'failed', {
+        const terminal = term(descriptor.id, 'failed', {
           reason: scrubPathsInText(`worktree create failed: ${(err as Error).message}`),
           projectSlug,
           product,
         });
+        persistTerminalMutationState(descriptor, terminal);
+        yield terminal;
         return;
       }
 
       const projectDir = findProjectDir(projectSlug, sandbox.worktree);
       if (!projectDir) {
-        yield term(descriptor.id, 'failed', {
+        const terminal = term(descriptor.id, 'failed', {
           reason: `project not found in worktree: ${projectSlug}`,
           projectSlug,
           product,
         });
+        persistTerminalMutationState(descriptor, terminal);
+        yield terminal;
         return;
       }
       const runSandbox = sandbox;
@@ -1133,6 +1143,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           baselineTasks,
           result: null,
         });
+        persistTerminalMutationState(descriptor, terminal);
         yield terminal;
         return;
       }
@@ -1156,6 +1167,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         baselineTasks,
         result,
       });
+      persistTerminalMutationState(descriptor, terminal);
       yield terminal;
     } finally {
       sink?.destroy();
@@ -1398,6 +1410,76 @@ function orchestratedOutcome(result: OrchestrationResult | null, terminal: Mutat
 
 function isWorkOutcome(value: unknown): value is WorkOutcome {
   return value === 'branch-complete' || value === 'partial' || value === 'noop' || value === 'dirty-uncommitted' || value === 'failed';
+}
+
+function persistTerminalMutationState(
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>,
+  terminal: MutationEvent,
+): void {
+  const terminalStatus = terminal.kind === 'completed' ? 'completed' : 'failed';
+  descriptor.status = terminalStatus;
+  if (terminal.kind === 'failed' && terminal.data) {
+    descriptor.error = String((terminal.data as Record<string, unknown>)['reason'] ?? '');
+  }
+  applyOutcomeToDescriptor(descriptor, terminal);
+  appendMutationLine(descriptor);
+
+  try {
+    upsertRun(
+      buildTerminalSupervisedRun(
+        descriptor,
+        terminalSupervisionStatus(descriptor, terminal, terminalStatus),
+        terminal,
+      ),
+      config.SUPERVISED_RUNS_FILE,
+    );
+  } catch (err) {
+    log.warn('orchestrated-work-runner: terminal supervision upsert failed', {
+      id: descriptor.id,
+      error: (err as Error).message,
+    });
+  }
+}
+
+function terminalSupervisionStatus(
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>,
+  terminal: MutationEvent,
+  terminalStatus: 'completed' | 'failed',
+): SupervisedRun['status'] {
+  const parked =
+    descriptor.kind === 'orchestrated-work' &&
+    (terminal.data as Record<string, unknown> | undefined)?.['parked'] === true;
+  return parked ? 'blocked-on-human' : terminalStatus;
+}
+
+function buildTerminalSupervisedRun(
+  descriptor: MutationDescriptor<OrchestratedWorkPayload>,
+  status: SupervisedRun['status'],
+  terminal: MutationEvent,
+): SupervisedRun {
+  const product = descriptor.payload.product ?? 'jarvis';
+  const project = descriptor.payload.projectSlug || descriptor.target.ref || descriptor.id;
+  const run: SupervisedRun = {
+    id: descriptor.id,
+    kind: descriptor.kind,
+    product,
+    project,
+    status,
+    startedAt: descriptor.createdAt,
+    lastHeartbeatAt: new Date().toISOString(),
+  };
+  const operatorWorktreePath = parkedOperatorWorktreePath(terminal);
+  if (operatorWorktreePath !== undefined) {
+    run.operatorWorktreePath = operatorWorktreePath;
+  }
+  return run;
+}
+
+function parkedOperatorWorktreePath(event: MutationEvent): string | undefined {
+  const data = event.data as Record<string, unknown> | undefined;
+  if (data?.['parked'] !== true) return undefined;
+  const value = data['operatorWorktreePath'];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
 /** Map the terminal OrchestrationResult to the single MutationEvent apply yields.
