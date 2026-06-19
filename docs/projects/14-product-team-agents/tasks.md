@@ -11,7 +11,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
 > planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
 >
-> **Autonomy rule for reopened phases:** Phases 10-14 must be runnable by `/work --auto`
+> **Autonomy rule for reopened phases:** Phases 10-15 must be runnable by `/work --auto`
 > without human choices, manual repo setup, production push credentials in tests, or
 > interactive approval. If a task needs a choice, the default and fallback are named here.
 >
@@ -20,8 +20,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > because it is the retry resilience the orchestrator itself lacks. Building it through the
 > orchestrator hits the one-shot-gate deadlock it fixes: a mid-build gate rejection is terminal, and
 > a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the orchestrator
-> runs the rest in order: Phase 10 → Phase 11B → Phase 12 → Phase 13 → Phase 14. Only Phases 10,
-> 11B, 12, 13, and 14 are `/work --auto` targets; do not point `--auto` at 11A.
+> runs the rest in order: Phase 10 → Phase 11B → Phase 12 → Phase 13 → Phase 14 → Phase 15. Only
+> Phases 10, 11B, 12, 13, 14, and 15 are `/work --auto` targets; do not point `--auto` at 11A.
 
 ## Phase 1 - Role substrate
 
@@ -1139,13 +1139,17 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > alert.
 >
 > **Mostly wiring over existing substrate, not new merge machinery.** The gated merge, push,
-> worktree removal, and branch delete already exist (`work-run-finalizer.ts` `finalizeGatedMerge`:
-> `mergeBranch` → `pushBranch` → `removeWorktree` → `deleteBranch`), and Phase 14's terminal
+> worktree removal, and branch delete already exist (`work-run-finalizer.ts` `runFinalizer` /
+> `runGatedMerge`: `mergeBranch` → `pushBranch` → `removeWorktree` → `deleteBranch`), and Phase 14's terminal
 > handler already routes a clean `branch-complete` run through them and ends the run. Phase 15
-> adds two steps to that path — an index-status commit BEFORE the merge and a success
-> notification AFTER it — plus one alert at the per-task closeout commit. It does NOT add a
-> second merge path, a new bot, or new chat plumbing (reuses the operator notification surface in
-> `transport/telegram-sender.ts`, the same path the gate-fail `alert` already reaches).
+> adds two steps INSIDE `runGatedMerge` — an index-status commit recorded as a new
+> `project-marked-done` phase AFTER `classify()` and BEFORE the gate, and a success notification
+> fired AFTER push + cleanup — plus one alert at the per-task closeout commit. Both new steps are
+> finalizer-owned (so they inherit the crash-resume phase machine and the no-self-merge invariant);
+> the index step gracefully skips a worktree with no `docs/projects/index.md` and HOLDs on an
+> ambiguous one. It does NOT add a second merge path, a new bot, or new chat plumbing (reuses the
+> operator notification surface in `transport/telegram-sender.ts`, the same path the gate-fail
+> `alert` already reaches).
 >
 > **Sequencing:** runs via the orchestrator AFTER Phase 14. Depends on Phase 5 (orchestrator
 > loop), Phase 10 (finalizer wiring + durable transcript), Phase 14 (terminal handler). A
@@ -1155,24 +1159,44 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **A. Project-completion finalization**
 
-- [ ] Index-Done test: when the orchestrated terminal handler resolves a clean `branch-complete`
-      (all tasks checked, no `reversible:false` hold), it flips the project's Status cell in
-      `docs/projects/index.md` to `Done` and records ONE closeout commit on the feature branch
-      carrying that edit, BEFORE the finalizer merges. An already-`Done` row is left unchanged
-      (idempotent — no empty commit).
+- [ ] Index-Done test: when the gated finalizer classifies a clean `branch-complete` run (all tasks
+      checked, no `reversible:false` hold) and the worktree carries `docs/projects/index.md`, it sets
+      the project's status to `Done` in BOTH the table Status cell AND the `## <slug> — <status>`
+      section heading and records ONE dedicated commit on the feature branch carrying that edit,
+      AFTER classification and BEFORE the gate. An already-`Done` project is left unchanged
+      (idempotent — no empty commit, safe on crash-resume re-read).
+- [ ] Noop-skips-index test: an all-tasks-checked run with zero commits classifies `noop`, so the
+      index flip never fires and the run never merges — the flip is gated on the classified
+      `branch-complete` outcome, not on all-tasks-checked alone.
+- [ ] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the
+      finalizer still merges (the index convention is Jarvis-repo-specific), no HOLD, no commit.
+- [ ] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
+      multiple matches produces an operational HOLD with branch/worktree preserved; it does not
+      guess, edit the base branch, or merge a completed project whose index was not safely finalized.
+- [ ] Index-status-tokens-only test: the writer changes only the matched project's two status tokens
+      (table Status cell + section heading, preserving any `(…)` heading suffix), and preserves the
+      project link, summary text, table header/alignment row, section body, row order, and unrelated
+      project rows/headings byte-for-byte.
 - [ ] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
-      worktree, so it is part of what merges to `main` — not written to `main` directly and not
-      left uncommitted in the worktree.
+      worktree, so it is part of what merges to the base branch — not written to the base directly
+      and not left uncommitted in the worktree (a writer failure leaves no unstaged index edit).
+- [ ] Index-merge-conflict test: when the finalizer's `git merge` of the branch hits a conflict on
+      `docs/projects/index.md` (a concurrent landing changed it on the base), the merge is aborted
+      and the run HOLDs operationally with work preserved — never a half-merged dirty base.
 - [ ] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical
-      finding, or an operational HOLD) does NOT flip the index to `Done`; the row flips only on a
+      finding, or an operational HOLD) does NOT flip the index to `Done`; the flip happens only on a
       merge-bound terminal.
-- [ ] Merge-success-notify test: a successful gated merge to `main` sends exactly one Telegram
-      message to the operator naming the project and that it landed on `main`; a gate-fail HOLD
-      still sends only the existing fail alert and never the success message (no double-send,
-      no success message on a hold).
-- [ ] Order test: for a clean run the sequence is index-`Done` commit → gate → merge → push →
-      remove worktree → delete branch → success notify → run-end; the success notify fires only
-      after `mergeBranch`/`pushBranch` resolve.
+- [ ] Merge-success-notify test: a successful gated merge sends exactly one Telegram message to the
+      operator naming the project and the base branch it landed on, after push succeeds and finalizer
+      cleanup has been attempted; the orchestrated terminal mutation message does NOT also claim a
+      merge (single landing claim); a gate-fail HOLD still sends only the existing fail alert and
+      never the success message (no double-send, no success message on a hold).
+- [ ] Merge-success-resume-dedupe test: crash/restart after `pushed-not-deleted` resumes finalizer
+      cleanup and sends at most one merge-success notification for the run; a replay after the
+      notification was recorded sends none.
+- [ ] Order test: for a clean run the sequence is classify → index-`Done` commit → gate → merge →
+      push → remove worktree → delete branch → success notify → run-end; the success notify fires
+      only after `mergeBranch`/`pushBranch` resolve.
 
 **B. Per-commit progress alerts**
 
@@ -1184,6 +1208,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       progress alert — the alert is bound to a real commit, not to task selection.
 - [ ] Alert-fail-safe test: a Telegram send failure (per-commit OR merge-success) records a
       durable skip/error and never blocks or fails the run — notification is best-effort.
+- [ ] Progress-replay-dedupe test: orchestrator resume/replay after a closeout commit does not
+      send a second progress alert for the same commit sha; a new closeout commit still sends once.
 - [ ] Confirm red before implementation.
 
 ### Implementation
@@ -1193,32 +1219,57 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **A. Project-completion finalization**
 
-- [ ] Add an idempotent index-status writer: a helper that flips a project's Status cell in
-      `docs/projects/index.md` to `Done` (no-op + no commit when already `Done`), run in the
-      worktree against the feature branch and committed as a dedicated closeout commit. Insert it
-      into the Phase 14 terminal handler on the merge-bound (`branch-complete`, no
-      `reversible:false` hold) path, BEFORE the finalizer's `mergeBranch`.
+- [ ] Add an idempotent index-status writer: a pure helper that parses `docs/projects/index.md`,
+      locates exactly one project by slug/link, and sets its status to `Done` in BOTH the table
+      Status cell AND the `## <slug> — <status>` section heading (preserving any `(…)` heading
+      suffix), preserving link/summary/header/alignment/section-body/row order byte-for-byte.
+      Already-`Done` → no edit, no empty commit. Return a typed result distinguishing
+      `done`/`already-done`/`absent` (graceful skip) from `ambiguous`/`malformed` (operational HOLD)
+      — never a best-effort guess.
+- [ ] Wire the index writer as a finalizer step, NOT in the orchestrator terminal handler: invoke it
+      inside `runGatedMerge` AFTER `classify()` returns `branch-complete` and BEFORE the gate, record
+      a new `project-marked-done` `FinalizerPhase` (between `index-appended` and the gate) so a
+      crash-resume skips an already-committed flip, and commit only the index edit as one dedicated
+      commit in the worktree. An `absent` index skips the step (still merges); an `ambiguous`/
+      `malformed` index returns an operational-HOLD terminal that preserves the branch/worktree and
+      leaves no unstaged index edit behind.
+- [ ] Handle an index merge conflict: when `mergeBranch` fails with a conflict on
+      `docs/projects/index.md`, abort the in-progress merge in the base checkout and surface an
+      operational HOLD (work preserved on the branch) rather than leaving a half-merged dirty base.
 - [ ] Add a merge-success notification: extend the gated-merge effects in `work-run-finalizer.ts`
-      `finalizeGatedMerge` with an `onMerged` success callback that fires after `pushBranch`
-      resolves, symmetric to the existing gate-fail `alert`; bind it in `orchestrated-work-runner.ts`
-      to an operator Telegram message naming the project + that it landed on `main`. Leave the
-      gate-fail `alert` path unchanged.
-- [ ] Confirm the merge-bound path order (index-`Done` commit → gate → merge → push → remove
-      worktree → delete branch → success notify → run-end) and that a HOLD path skips BOTH the
-      index flip and the success notify.
+      `runGatedMerge`/`FinalizerEffects` with an `onLanded` success callback that fires after
+      `pushBranch` resolves (or a `pushed-not-deleted` crash-resume proves it landed) and cleanup has
+      been attempted — placed in the shared post-cleanup tail gated on `merged === true`, symmetric
+      to the existing gate-fail `alert`; bind it in `orchestrated-work-runner.ts` to an operator
+      message naming the project + the base branch it landed on. Ensure the orchestrated terminal
+      message does not separately claim a merge. Leave the gate-fail `alert` path unchanged.
+- [ ] Persist notification delivery state under the run artifact directory (or the existing
+      finalizer phase store if that is the cleaner fit): one record keyed by closeout commit sha
+      for progress alerts and one keyed by run id + branch + pushed phase for merge-success. Use it
+      for replay/restart dedupe and to record delivery skip/error metadata.
+- [ ] Confirm the merge-bound path order (classify → index-`Done` commit → gate → merge → push →
+      remove worktree → delete branch → success notify → run-end) and that every HOLD path (finding,
+      operational, gate-fail, ambiguous-index, merge-conflict) skips BOTH the index flip and the
+      success notify.
 
 **B. Per-commit progress alerts**
 
 - [ ] Emit a per-commit progress alert at `commitCloseout`: after the closeout commit succeeds,
-      send one operator Telegram message with the just-completed task title + remaining/total
-      from the live `tasks.md` checkbox counts. Bind it to the commit; fail-safe (a send error is
-      recorded, never fatal).
+      publish one operator progress event with the just-completed task title, short sha, commit
+      subject, and remaining/total from the live `tasks.md` checkbox counts. Bind it to the commit
+      sha; fail-safe (a send error is recorded, never fatal).
+- [ ] Bind the progress and merge-success events through the existing mutation/activity bus and
+      `transport/telegram-sender.ts` formatting instead of calling Telegram from orchestration code.
+      Enforce the dedupe (the Part A delivery-state records) at the run/artifact layer BEFORE the
+      event is published, so the sender stays stateless and a redelivered/replayed event cannot
+      double-send. Webview forwarding may pass the same event through, but Phase 15 acceptance only
+      requires the injected operator-notification sink plus Telegram formatting.
 - [ ] **Live acceptance:** a multi-task orchestrated run on a throwaway fixture project (reuse the
       Phase 8/10 `__acceptance__` temp-repo + local bare remote harness, notification surface
       injected so no real Telegram is needed) drives ≥2 tasks and asserts: one progress alert per
-      closeout commit with a correct remaining/total; on the final task the index row flips to
-      `Done` on the branch; the branch merges to the bare remote; and exactly one merge-success
-      notification fires.
+      closeout commit with a correct remaining/total; on the final task the project status flips to
+      `Done` in BOTH the index table cell and the section heading on the branch; the branch merges to
+      the bare remote base branch; and exactly one merge-success notification fires.
 
 > **User-reachability:** YES — after this phase, an operator watching a run gets a "task done, N
 > remaining" ping at every commit, and when the project finishes, its index row reads **Done** and

@@ -1,7 +1,7 @@
 # Product-Team Orchestrated Work Specification
 
-> **Status: REOPENED 2026-06-14/16/18 — Phases 10-14 (observability, resilience, learning,
-> outcome gating, severity convergence).**
+> **Status: REOPENED 2026-06-14/16/18 — Phases 10-15 (observability, resilience, learning,
+> outcome gating, severity convergence, project-completion finalization).**
 > Phases 1-9 shipped the role substrate, planning, per-task orchestration, the live
 > execution binding (Phase 8 — proof `live-acceptance-6abf35cf.md`), and the planning
 > critique pass (Phase 9). Orchestrated runs now do real work — but they do it blind:
@@ -10,8 +10,8 @@
 > stale mid-run (it advances only on `output`/`activity` events the orchestrated path
 > never emits). The same project-17 run also exposed blind retries, non-resumable crash
 > recovery, cold-start roles with no exemplars, binary outcome gating that treats every
-> objection as a hard stop, and human parking on findings the team can resolve itself. Remaining
-> scope is **Phases 10-14**
+> objection as a hard stop, human parking on findings the team can resolve itself, and silent
+> project completion. Remaining scope is **Phases 10-15**
 > below: stream role activity and advance the heartbeat for both executors, produce the
 > finalizer substrate for gated auto-merge, make retries/restarts resilient, make gate
 > failures teach future runs, and drive findings to severity convergence without human parking.
@@ -747,12 +747,41 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     closeout and never routes to a human-gated `blocked-on-human` park (the "no human gate" rule of
     reqs 71-82 is about findings; an infrastructure failure still stops the run, it just is not a
     findings HOLD).
+84. WHEN an orchestrated run is classified `branch-complete` inside the gated finalizer (all tasks
+    checked, finder/operational HOLDs already excluded, gate not yet run) AND the feature worktree
+    contains a `docs/projects/index.md` THEN Jarvis sets the matching project's status to `Done` in
+    BOTH the table Status cell AND the `## <slug> — <status>` section heading (preserving any
+    parenthetical suffix on the heading) and records exactly one dedicated commit for that edit on
+    the feature branch as a finalizer step, AFTER classification and BEFORE the gate, so the gate
+    validates and the merge carries the exact `Done` content. The writer edits only the matched
+    project's two status tokens, preserves the project link/summary columns, table header/alignment
+    row, section body, and row order byte-for-byte, and is idempotent when the project is already
+    `Done` (no edit, no empty commit). A `docs/projects/index.md` that is ABSENT from the worktree
+    is a graceful skip — the run still merges, because the project-index convention is
+    Jarvis-repo-specific and a product need not carry it. An index that is PRESENT but malformed, or
+    has zero or multiple rows/headings matching the slug, is an operational HOLD: do not guess, do
+    not edit the base branch, and leave no uncommitted index edit behind. A merge conflict on
+    `docs/projects/index.md` when the finalizer merges to the base branch aborts the merge and HOLDs
+    operationally (work preserved on the branch), never a half-merged base.
+85. WHEN the gated finalizer successfully merges and pushes a merge-bound orchestrated run to its
+    base branch THEN Jarvis emits exactly one best-effort operator success notification naming the
+    project and base branch. The notification fires only after `pushBranch` succeeds and finalizer
+    cleanup has been attempted (including crash-resume from an already-pushed phase), before
+    run-end; it is deduped by run id + branch + pushed phase, and a notification failure records
+    durable skip/error metadata without failing or rolling back the run. This success notification
+    is the single operator claim that the run landed — the orchestrated terminal mutation message
+    must not independently assert a merge, so the operator never sees a double "merged" alert.
+86. WHEN a per-task closeout commit succeeds THEN Jarvis emits one best-effort progress event bound
+    to that commit sha, carrying project slug, selected task label/text, short sha, commit subject,
+    and live `tasks.md` remaining/total counts. The event is deduped by commit sha across replay,
+    never emitted for a task without a closeout commit, and notification delivery failures never
+    block task advancement.
 
 ---
 
 ## Implementation Phases
 
-**Autonomy constraint for reopened phases.** Phases 10-14 must be executable by an
+**Autonomy constraint for reopened phases.** Phases 10-15 must be executable by an
 autonomous `/work --auto` run with no operator decisions, no manual repo setup, no production
 push in tests, and no interactive approval. Where an implementation choice is needed, this
 spec names the default and a deterministic fallback. Live acceptance uses self-contained
@@ -765,8 +794,8 @@ orchestrator. It is the retry-with-feedback resilience the orchestrator lacks, s
 the orchestrator hits the one-shot-gate deadlock it fixes: any mid-build gate rejection is terminal,
 and a blind restart re-runs identical inputs with no feedback. Once 11A lands on main, the
 orchestrator runs the rest in dependency order — Phase 10 → Phase 11B → Phase 12 → Phase 13 →
-Phase 14 — with gate rejections becoming corrective retries. Only Phases 10, 11B, 12, 13, and 14
-are `/work --auto` targets.
+Phase 14 → Phase 15 — with gate rejections becoming corrective retries. Only Phases 10, 11B, 12,
+13, 14, and 15 are `/work --auto` targets.
 
 ### Phase 1: Role substrate
 
@@ -1233,6 +1262,62 @@ all-blocking-findings `.every`).
 
 ---
 
+### Phase 15: Project-completion finalization and progress alerts (reopened 2026-06-18)
+
+Runs via the orchestrator after Phase 14. Closes the last operator-visibility gaps in the
+auto-merge path: a finished project must mark its project-index row `Done` as part of the branch
+that lands, and a long run must narrate closeout commits as they happen.
+
+1. **Mark the project Done on the branch, before merge.** Add an idempotent `docs/projects/index.md`
+   writer that locates the single project by slug/link and sets its status to `Done` in BOTH the
+   table Status cell AND the `## <slug> — <status>` section heading (the index carries the status
+   twice — flipping only the table cell leaves the prose heading lying). The heading's parenthetical
+   suffix (e.g. `(reopened 2026-06-14)`) is preserved. It runs as a finalizer step inside the
+   gated-merge sequence — AFTER `classify()` (so it fires only when the run is actually
+   `branch-complete`; an all-tasks-checked-but-zero-commit run classifies `noop` and must not flip
+   or merge) and BEFORE the gate (so the gate validates and the merge carries the exact `Done`
+   content) — and creates one dedicated commit. Already-`Done` is a no-op with no empty commit, which
+   also makes crash-resume safe (a resume re-reads the worktree and sees `Done`). An **absent**
+   `docs/projects/index.md` is a graceful skip — the run still merges, because the index convention
+   is Jarvis-repo-specific and a target product need not carry it. A **present-but-ambiguous** index
+   (malformed table, zero matching rows/headings, or multiple) is an operational HOLD: do not guess,
+   write the base branch directly, or leave an uncommitted edit behind.
+2. **Keep finalizer ownership.** The index-Done step is a new finalizer phase (recorded for
+   crash-resume, e.g. `project-marked-done`, slotted between `index-appended` and the gate), not a
+   new merge path. The Project 15 gated finalizer still owns classify → … → gate → merge → push →
+   worktree removal → branch delete → terminal. A gate HOLD, finding HOLD, or operational HOLD skips
+   both the index flip and the success notification. Because every completing project now writes the
+   same shared `docs/projects/index.md`, a merge of two near-simultaneous landings can conflict on
+   that one file: the finalizer's merge step must abort a conflicting `git merge` and HOLD
+   operationally (work preserved on the branch), never leave a half-merged dirty base.
+3. **Announce successful landing after push and cleanup.** Add a finalizer success callback
+   symmetrical to the existing gate-fail `alert`, but fire it only after `pushBranch` succeeds (or
+   crash recovery resumes from a phase proving the push already landed) and worktree/branch cleanup
+   has been attempted. Deduplicate by run id + branch + pushed phase so restart/replay cannot
+   double-send. Telegram/webview delivery remains best-effort: record a durable skip/error if
+   delivery fails, but never fail or roll back a landed merge because a notification could not be
+   sent.
+4. **Emit closeout-commit progress.** After each successful `commitCloseout`, emit a progress event
+   bound to the returned commit sha. The payload includes project slug, task label/text, short sha,
+   commit subject, and live remaining/total counts derived from the checked `tasks.md` state after
+   closeout. No commit means no progress alert. Deduplicate by commit sha across resume/replay, and
+   make notification delivery failures non-blocking.
+5. **Use existing local-operator plumbing.** Reuse the mutation/activity event stream and
+   `transport/telegram-sender.ts` sender surface instead of introducing a second bot or direct
+   Telegram dependency inside orchestration. The dedupe (commit sha for progress, run id + branch +
+   pushed phase for merge-success) is enforced at the run/artifact layer — the layer that owns the
+   per-run artifact dir and finalizer phase store — BEFORE the event is published, so the
+   `telegram-sender` stays stateless and a redelivered or replayed event cannot double-send. The
+   orchestrated terminal must route so it does not itself claim a merge (req 85), keeping the
+   merge-success notification the single landing alert. Automated acceptance injects the
+   notification sink; it never requires real Telegram or a production push.
+
+> **Sequencing:** runs via the orchestrator AFTER Phase 14. Depends on Phase 10 finalizer wiring and
+> durable transcript, Phase 11B resume state, and Phase 14 terminal HOLD semantics. A `/work --auto`
+> target — no operator decisions in the path.
+
+---
+
 ## Success Metrics
 
 | Metric | Target | How measured |
@@ -1268,6 +1353,8 @@ all-blocking-findings `.every`).
 | Coder fixes highest severity first | always | Coder receives the ledger severity-sorted, attempts every open finding, and reports which it addressed |
 | Reviewer verifies its own fixes | always | Re-review runs regression-first (each open finding checked + cited) before discovery; reappearing resolved findings mark `regressed` |
 | Unresolved findings are logged, not lost | always | At terminal the orchestrator writes each remaining `>low` finding to `docs/projects/bugs.md` with stable dedupe; non-reversible high/critical findings also HOLD the branch |
+| Project index completion is branch-owned | always | A merge-bound `branch-complete` run commits the `docs/projects/index.md` Status→Done edit (table cell + section heading) on the feature branch before the finalizer gate; an absent index skips gracefully, an ambiguous index HOLDs, and HOLD paths skip the flip |
+| Operator progress is narrated | always | Each closeout commit emits one deduped progress alert, and a pushed merge emits exactly one success alert; delivery failures are recorded but non-blocking |
 
 ---
 

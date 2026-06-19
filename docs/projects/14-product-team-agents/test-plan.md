@@ -313,6 +313,51 @@ acceptance criteria.
 
 ---
 
+## 15. Project completion and progress alerts
+
+- [ ] Critical: A clean merge-bound `branch-complete` terminal sets the matching project's status to
+      `Done` in BOTH the `docs/projects/index.md` table Status cell AND the `## <slug> — <status>`
+      section heading, in the feature worktree, with exactly one dedicated commit after
+      classification and before the finalizer gate/merge.
+- [ ] Critical: The index writer changes only the matched project's two status tokens; project link,
+      summary text, table header/alignment row, section body, `(…)` heading suffix, row order, and
+      unrelated rows/headings are preserved byte-for-byte.
+- [ ] Critical: An all-tasks-checked run with zero commits classifies `noop` — the index flip never
+      fires and the run never merges (the flip is gated on the classified `branch-complete` outcome).
+- [ ] Critical: A worktree with NO `docs/projects/index.md` is a graceful skip — the finalizer still
+      merges, with no HOLD and no index commit.
+- [ ] Critical: A PRESENT-but-malformed table, zero matching rows/headings, or multiple matches
+      produces an operational HOLD with branch/worktree preserved; it does not edit the base branch,
+      guess a row, or merge with the index unresolved.
+- [ ] Critical: A `git merge` conflict on `docs/projects/index.md` (concurrent landing) aborts the
+      merge and HOLDs operationally with work preserved — never a half-merged dirty base.
+- [ ] Critical: HOLD terminals (finding HOLD, operational HOLD, ambiguous-index HOLD, merge-conflict
+      HOLD, or finalizer gate-fail HOLD) do not flip the project index to `Done` and do not emit a
+      merge-success notification.
+- [ ] Critical: A successful gated merge emits exactly one operator success notification naming the
+      project and base branch, after the base branch push succeeds and finalizer cleanup has been
+      attempted; the orchestrated terminal mutation message does not also claim a merge (single
+      landing claim). Crash/restart resume from `pushed-not-deleted` does not double-send after the
+      notification record exists.
+- [ ] Critical: Each successful per-task closeout commit emits exactly one progress event keyed by
+      commit sha with project slug, task label/text, short sha, commit subject, and live
+      remaining/total counts from `tasks.md`.
+- [ ] Critical: A task that reaches terminal handling without a closeout commit emits no progress
+      alert.
+- [ ] High: Progress alerts are deduped across orchestrator resume/replay by closeout commit sha;
+      a new closeout commit still alerts once.
+- [ ] High: Notification delivery failures for progress or merge-success paths record durable
+      skip/error metadata and never fail, hold, roll back, or otherwise change run outcome.
+- [ ] High: Telegram formatting is exercised through the existing mutation/activity sender path
+      with an injected sender; no real Telegram bot is required.
+- [ ] High: The Phase 8/10 live acceptance harness runs a multi-task throwaway project (whose
+      fixture carries a `docs/projects/index.md` row + section heading) against a local bare remote
+      and asserts: one progress alert per closeout commit, correct remaining/total counts, final
+      project status `Done` in BOTH the table cell and section heading on the merged base branch,
+      remote base branch pushed, and exactly one merge-success notification.
+
+---
+
 ## Integration Verification
 
 Run a deterministic fixture through planning: PM writes a spec with assumptions, tech lead
@@ -327,6 +372,10 @@ flag requires it, objection-class gates resolve per Outcome gating, Jarvis perfo
 advances to task 2 with that context included, then hands the completed project to an injected
 Project 15 finalizer adapter. No live model call, Telegram interaction, or production push is
 required.
+
+For Phase 15, extend the injected finalizer fixture to the local bare remote harness: no real
+Telegram or production push is required, but the acceptance run must exercise the real branch
+index-Done commit, finalizer gate/merge/push/delete ordering, and injected notification sink.
 
 Feed a valid fixture feedback record into the nightly post-mortem seam. Jarvis attributes the
 miss and writes one atomic lesson into the relevant role memory. Feed a malformed record and
