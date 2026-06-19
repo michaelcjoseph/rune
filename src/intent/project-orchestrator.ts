@@ -46,9 +46,14 @@ import type {
 } from './team-task-workflow.js';
 
 export type OrchestrationActivityEvent = {
-  kind: 'activity' | 'output';
+  kind: 'activity' | 'output' | 'progress';
   data?: unknown;
 };
+
+export interface CloseoutCommit {
+  sha: string;
+  subject: string;
+}
 
 export interface OrchestrationRunCursor {
   runId: string;
@@ -114,7 +119,7 @@ export interface OrchestrationDeps {
   writeContextMd: (content: string) => Promise<void>;
   writeTasksMd: (content: string) => Promise<void>;
   runCloseoutChecks: (task: SelectedTask) => Promise<boolean>;
-  commitCloseout: (task: SelectedTask) => Promise<string>;
+  commitCloseout: (task: SelectedTask) => Promise<CloseoutCommit>;
   verifyCleanWorktree: () => Promise<boolean>;
 
   // --- finalizer ---
@@ -314,15 +319,16 @@ async function performCloseout(
   }
 
   // 4. Record the closeout commit.
-  const commitSha = await deps.commitCloseout(task);
+  const commit = await deps.commitCloseout(task);
+  emitCloseoutCommit(deps, task, commit, tick.content);
 
   // 5. Verify the worktree is clean (finalizer-ready).
   if (!(await deps.verifyCleanWorktree())) {
     return { kind: 'blocked', reason: 'worktree not clean after closeout' };
   }
 
-  emitCloseoutComplete(deps, task, commitSha);
-  return { kind: 'ok', commitSha, tasksMd: tick.content };
+  emitCloseoutComplete(deps, task, commit.sha);
+  return { kind: 'ok', commitSha: commit.sha, tasksMd: tick.content };
 }
 
 type CheckpointResult = { kind: 'ok' } | { kind: 'blocked'; reason: string };
@@ -477,12 +483,59 @@ function emitCloseoutComplete(deps: OrchestrationDeps, task: SelectedTask, commi
   });
 }
 
+function emitCloseoutCommit(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  commit: CloseoutCommit,
+  tasksMd: string,
+): void {
+  const progress = countTaskProgress(tasksMd);
+  if (progress.tasksTotal <= 1) return;
+  const shortSha = commit.sha.slice(0, 7);
+  deps.emit?.({
+    kind: 'progress',
+    data: {
+      event: 'closeout-commit',
+      projectSlug: deps.project,
+      product: deps.product,
+      taskId: task.id,
+      taskText: task.text,
+      commitSha: commit.sha,
+      shortSha,
+      commitSubject: commit.subject,
+      ...progress,
+      line: `${task.text} committed ${shortSha} · ${progress.tasksDone}/${progress.tasksTotal} done · ${progress.tasksRemaining} remaining`,
+    },
+  });
+}
+
 function attemptId(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: number): string {
   return `${deps.runId}-${task.id}-attempt-${attemptNumber}`;
 }
 
 function countTasks(tasksMd: string): number {
   return (tasksMd.match(/^\s*-\s*\[[ xX]\]/gm) ?? []).length;
+}
+
+function countTaskProgress(tasksMd: string): {
+  tasksDone: number;
+  tasksTotal: number;
+  tasksRemaining: number;
+} {
+  let tasksDone = 0;
+  let tasksRemaining = 0;
+  for (const line of tasksMd.split('\n')) {
+    if (/^\s*-\s*\[[xX]\]/.test(line)) {
+      tasksDone += 1;
+    } else if (/^\s*-\s*\[\s\]/.test(line)) {
+      tasksRemaining += 1;
+    }
+  }
+  return {
+    tasksDone,
+    tasksTotal: tasksDone + tasksRemaining,
+    tasksRemaining,
+  };
 }
 
 function reviewerOutcome(verdict: NonNullable<TaskEvidence['reviewerVerdict']>): string {

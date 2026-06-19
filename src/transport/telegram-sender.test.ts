@@ -413,6 +413,34 @@ describe('TelegramSender', () => {
       expect(mockSendLongMessage.mock.calls[0]![2]).toContain('add the widget');
     });
 
+    it('delivers an orchestrated closeout-commit progress alert with task and remaining counts', async () => {
+      sender.onMutationEvent({
+        ...workRunEvent('completed', {}),
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: {
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          taskText: 'Render the streak card',
+          commitSha: 'abc123456789',
+          shortSha: 'abc1234',
+          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+          tasksDone: 3,
+          tasksTotal: 12,
+          tasksRemaining: 9,
+        },
+      } as any);
+      await flush();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('Render the streak card');
+      expect(text).toContain('abc1234');
+      expect(text).toMatch(/3\/12 done/i);
+      expect(text).toMatch(/9 remaining/i);
+      expect(text).toContain('jarvis(jarvis): closeout');
+    });
+
     it('does not deliver a progress event for a non-work-run mutation', async () => {
       sender.onMutationEvent({
         kind: 'mutation-event',

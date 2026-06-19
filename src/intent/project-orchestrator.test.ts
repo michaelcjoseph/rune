@@ -118,7 +118,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     commitCloseout: async (task) => {
       const sha = `sha-${task.id}`;
       state.commits.push(sha);
-      return sha;
+      return { sha, subject: `actual closeout subject for ${task.id}` };
     },
     verifyCleanWorktree: async () => true,
     finalize,
@@ -341,6 +341,52 @@ describe('project-orchestrator — observability events', () => {
         taskId: 'build-the-streak-core',
         commitSha: 'sha-build-the-streak-core',
         line: expect.stringContaining('sha-build-the-streak-core'),
+      },
+    });
+  });
+
+  it('emits one closeout progress event per successful closeout commit with live task counts', async () => {
+    const h = makeHarness();
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    const progress = (h.state.events as Array<{ kind: string; data?: Record<string, unknown> }>)
+      .filter((event) => event.kind === 'progress' && event.data?.['event'] === 'closeout-commit');
+
+    expect(progress).toHaveLength(2);
+    expect(progress[0]).toMatchObject({
+      kind: 'progress',
+      data: {
+        event: 'closeout-commit',
+        projectSlug: '14-x',
+        product: 'aura',
+        taskId: 'build-the-streak-core',
+        taskText: 'Build the streak core',
+        commitSha: 'sha-build-the-streak-core',
+        shortSha: 'sha-bui',
+        commitSubject: 'actual closeout subject for build-the-streak-core',
+        tasksDone: 1,
+        tasksTotal: 2,
+        tasksRemaining: 1,
+        line: expect.stringMatching(/Build the streak core.*1\/2 done.*1 remaining/i),
+      },
+    });
+    expect(progress[1]).toMatchObject({
+      kind: 'progress',
+      data: {
+        event: 'closeout-commit',
+        projectSlug: '14-x',
+        product: 'aura',
+        taskId: 'render-the-streak-card',
+        taskText: 'Render the streak card',
+        commitSha: 'sha-render-the-streak-card',
+        shortSha: 'sha-ren',
+        commitSubject: 'actual closeout subject for render-the-streak-card',
+        tasksDone: 2,
+        tasksTotal: 2,
+        tasksRemaining: 0,
+        line: expect.stringMatching(/Render the streak card.*2\/2 done.*0 remaining/i),
       },
     });
   });

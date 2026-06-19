@@ -44,6 +44,7 @@ import {
 } from './sandbox-runtime.js';
 import {
   runProjectOrchestration,
+  type CloseoutCommit,
   type OrchestrationActivityEvent,
   type OrchestrationDeps,
   type OrchestrationRunCursor,
@@ -303,7 +304,7 @@ function buildOrchestrationDeps(args: {
     // pass — the project-level finalizer gate still owns the full merge gate.
     runCloseoutChecks: async () => true,
 
-    commitCloseout: async (task: SelectedTask): Promise<string> => {
+    commitCloseout: async (task: SelectedTask): Promise<CloseoutCommit> => {
       const message = `jarvis(${product}): closeout — ${task.text}`.slice(0, 200);
       // `-A` (not `-u`) is deliberate: a task's work product routinely includes
       // NEW files (new source/test modules), which `-u` would miss. This runs in
@@ -312,7 +313,7 @@ function buildOrchestrationDeps(args: {
       await runGit(['add', '-A'], { cwd });
       await runGit(['commit', '-m', message], { cwd });
       const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd });
-      return stdout.trim();
+      return { sha: stdout.trim(), subject: message };
     },
     verifyCleanWorktree: async (): Promise<boolean> => {
       const { stdout } = await runGit(['status', '--porcelain'], { cwd });

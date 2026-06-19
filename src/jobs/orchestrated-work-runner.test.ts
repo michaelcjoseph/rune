@@ -725,6 +725,118 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('emits one closeout progress event for each successful commitCloseout with live remaining counts', async () => {
+      const commitShas = ['1111111aaaaaaa', '2222222bbbbbbb'];
+      let revParseCalls = 0;
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'rev-parse') {
+          const sha = commitShas[revParseCalls] ?? commitShas[commitShas.length - 1]!;
+          revParseCalls += 1;
+          return { stdout: `${sha}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'rev-list') {
+          return { stdout: `${commitShas.join('\n')}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs.includes('--stat')) {
+          return { stdout: ' src/feature.ts | 2 ++\n 1 file changed, 2 insertions(+)\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '## Phase 1',
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          wtDir = dir;
+          writeFileSync(join(dir, 'docs', 'projects', 'demo', 'context.md'), [
+            '# Project Context',
+            '',
+            '## Current State',
+            'Initial state.',
+            '',
+            '## Key Decisions',
+            'None yet.',
+            '',
+            '## Interfaces & Contracts',
+            'Use the existing orchestration seams.',
+            '',
+            '## Known Risks',
+            'None yet.',
+            '',
+            '## Next Task Handoff',
+            'Start with the first unchecked task.',
+            '',
+          ].join('\n'), 'utf8');
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+        }),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
+      const terminalIndex = events.findIndex((event) => event.kind === 'completed' || event.kind === 'failed');
+      const progress = events.slice(0, terminalIndex).filter((event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        return event.kind === 'progress' && data['event'] === 'closeout-commit';
+      });
+
+      expect(progress).toHaveLength(2);
+      expect(progress[0]).toMatchObject({
+        mutationId: 'mut-1',
+        kind: 'progress',
+        data: {
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          product: 'jarvis',
+          taskId: 'build-the-streak-core',
+          taskText: 'Build the streak core',
+          commitSha: '1111111aaaaaaa',
+          shortSha: '1111111',
+          commitSubject: 'jarvis(jarvis): closeout — Build the streak core',
+          tasksDone: 1,
+          tasksTotal: 2,
+          tasksRemaining: 1,
+          line: expect.stringMatching(/Build the streak core.*1\/2 done.*1 remaining/i),
+        },
+      });
+      expect(progress[1]).toMatchObject({
+        mutationId: 'mut-1',
+        kind: 'progress',
+        data: {
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          product: 'jarvis',
+          taskId: 'render-the-streak-card',
+          taskText: 'Render the streak card',
+          commitSha: '2222222bbbbbbb',
+          shortSha: '2222222',
+          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+          tasksDone: 2,
+          tasksTotal: 2,
+          tasksRemaining: 0,
+          line: expect.stringMatching(/Render the streak card.*2\/2 done.*0 remaining/i),
+        },
+      });
+      expect(destroyed).toBe(true);
+    });
+
     it('writes a durable transcript.jsonl and summary.json for a completed orchestrated run', async () => {
       const runId = 'mut-orch-substrate';
       const runDir = join(process.cwd(), 'logs', 'work-runs', runId);
@@ -967,6 +1079,7 @@ describe('orchestratedWorkApplier', () => {
         expect(phases).toEqual([
           'classified',
           'transcript-flushed',
+          'project-marked-done',
           'summary-written',
           'index-appended',
           'merged-not-pushed',

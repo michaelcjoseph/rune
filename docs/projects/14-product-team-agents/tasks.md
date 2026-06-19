@@ -1209,7 +1209,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **B. Per-commit progress alerts**
 
-- [ ] Per-commit-alert test: each successful closeout commit (`commitCloseout`,
+- [x] Per-commit-alert test: each successful closeout commit (`commitCloseout`,
       `orchestrated-work-runner.ts:306`) emits one Telegram message naming the just-completed
       task and a remaining/total breakdown (e.g. "3/12 done, 9 remaining") derived from the live
       `tasks.md` checkbox counts / `transitions.tasksRemaining`, not a hardcoded number.

@@ -160,6 +160,32 @@ function formatWorkRunTerminal(event: BusMutationEvent): string {
   }
 }
 
+function formatCloseoutCommitProgress(event: BusMutationEvent): string | null {
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  if (data['event'] !== 'closeout-commit') return null;
+  const taskText = typeof data['taskText'] === 'string' ? data['taskText'] : '';
+  const shortSha = typeof data['shortSha'] === 'string'
+    ? data['shortSha']
+    : typeof data['commitSha'] === 'string'
+      ? data['commitSha'].slice(0, 7)
+      : '';
+  const subject = typeof data['commitSubject'] === 'string' ? data['commitSubject'] : '';
+  const done = typeof data['tasksDone'] === 'number' ? data['tasksDone'] : null;
+  const total = typeof data['tasksTotal'] === 'number' ? data['tasksTotal'] : null;
+  const remaining = typeof data['tasksRemaining'] === 'number' ? data['tasksRemaining'] : null;
+  const counts = done !== null && total !== null && remaining !== null
+    ? `${done}/${total} done · ${remaining} remaining`
+    : '';
+  const parts = [
+    '📌 closeout commit',
+    taskText,
+    shortSha,
+    counts,
+    subject,
+  ].filter((part) => part !== '');
+  return parts.length > 1 ? parts.join(' · ') : null;
+}
+
 /** Legacy generic format for non-gen-eval-loop mutations — unchanged behavior. */
 function formatGenericTerminal(event: BusMutationEvent): string {
   const data = event.data as Record<string, unknown> | undefined;
@@ -260,6 +286,17 @@ export class TelegramSender implements MessageSender {
       if (line) {
         void this.send(event.userId, line).catch((err: unknown) => {
           log.error('TelegramSender.onMutationEvent progress send failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return;
+    }
+    if (event.mutationKind === 'orchestrated-work' && event.subKind === 'progress') {
+      const text = formatCloseoutCommitProgress(event);
+      if (text) {
+        void this.send(event.userId, text).catch((err: unknown) => {
+          log.error('TelegramSender.onMutationEvent orchestrated progress send failed', {
             error: err instanceof Error ? err.message : String(err),
           });
         });
