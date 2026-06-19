@@ -288,6 +288,51 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(lastSummary.baseBranch).toBe('main');
   });
 
+  it('treats `project-marked-done` as authoritative even when boot-time task scanning would classify partial', async () => {
+    const run = makeRun();
+    const gitCalls: string[][] = [];
+    const recordedPhases: string[] = [];
+    const runGate = vi.fn(async () => ({ ok: true as const }));
+    const { io, captured } = makeIO({
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\nprojectDone3\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+      readTasks: () => '## Phase A\n- [x] Task 1\n## Phase B\n- [ ] Future task\n',
+      readLastPhase: () => 'project-marked-done',
+      recordPhase: (_id, phase) => { recordedPhases.push(phase); },
+      runGate,
+    });
+
+    const status = await __finalizeStaleRunForTest(run, io);
+
+    expect(status).toBe('completed');
+    expect(runGate).toHaveBeenCalledTimes(1);
+    expect(runGate).toHaveBeenCalledWith(expect.objectContaining({ tasksRemaining: 0 }));
+    expect(recordedPhases).not.toContain('project-marked-done');
+    expect(recordedPhases).toEqual(expect.arrayContaining([
+      'summary-written',
+      'index-appended',
+      'merged-not-pushed',
+      'pushed-not-deleted',
+      'worktree-resolved',
+      'finalized',
+    ]));
+
+    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(1);
+    expect(gitCalls.filter(a => a.includes('push'))).toHaveLength(1);
+    expect(gitCalls.filter(a => a.includes('branch') && a.includes('-d'))).toHaveLength(1);
+    expect(captured.removed).toHaveLength(1);
+
+    const lastSummary = captured.summaries.at(-1)!.summary;
+    expect(lastSummary.outcome).toBe('branch-complete');
+    expect(lastSummary.workProduct.transitions.tasksRemaining).toBe(1);
+    expect(lastSummary.merged).toBe(true);
+    expect(lastSummary.branchDeleted).toBe(true);
+  });
+
   it('keeps the project-marked-done recovery gate and merge under the same base-branch lock', async () => {
     const runA = makeRun({ id: 'mut-recover-a', project: '15-work-run-finalizer-a' });
     const runB = makeRun({ id: 'mut-recover-b', project: '15-work-run-finalizer-b' });

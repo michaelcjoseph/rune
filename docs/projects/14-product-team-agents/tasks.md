@@ -1245,7 +1245,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the persisted summary and terminal include the project-Done commit. An `absent` index skips
       the step (still merges); an `ambiguous`/`malformed` index returns an operational-HOLD terminal
       that preserves the branch/worktree and leaves no unstaged index edit behind.
-- [ ] Extend finalizer crash recovery: `recovery-finalize-runner` must treat `project-marked-done`
+- [x] Extend finalizer crash recovery: `recovery-finalize-runner` must treat `project-marked-done`
       and any later pre-merge phase (`summary-written`/`index-appended`) as a resumable
       `gated-merge` state for a branch-complete run, re-running the gate/merge/push/delete path
       without human release. It must not downgrade a clean run to HOLD just because the crash

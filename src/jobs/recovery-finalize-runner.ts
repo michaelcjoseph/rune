@@ -232,20 +232,26 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   const resumeGatedMerge = resumeAfterProjectDone || resumeAfterMerge;
 
   const classified = classifyOutcome({ exit, product: productFacts });
-  // On a gated-merge RESUME the recorded phase is authoritative: the merge landed,
-  // so the run WAS branch-complete. Recovery's absolute unchecked-task count
-  // would otherwise mis-read it as `partial` (the project's later-phase boxes are
-  // unchecked) and the finalizer would skip the push, stranding origin behind.
-  // Force branch-complete so `runGatedMerge` completes the push/delete.
+  // On a gated-merge RESUME the recorded phase is authoritative: once the
+  // project index flip landed, the run WAS branch-complete. Recovery's absolute
+  // unchecked-task count can otherwise mis-read it as `partial` (later-phase
+  // boxes may remain unchecked) and the finalizer would skip the gated merge or
+  // push tail, stranding already-recorded project completion work.
   const outcome =
-    resumeAfterMerge && classified.outcome !== 'branch-complete' ? 'branch-complete' : classified.outcome;
+    resumeGatedMerge && classified.outcome !== 'branch-complete' ? 'branch-complete' : classified.outcome;
   const reason =
     outcome === classified.outcome
       ? classified.reason
-      : `gated-merge resume from ${lastPhase} (merge already landed)`;
+      : `gated-merge resume from ${lastPhase} (recorded phase is authoritative)`;
   if (resumeGatedMerge) {
     log.info('recovery: resuming a crashed gated-merge run', { id: run.id, lastPhase, outcome });
   }
+  // The summary should preserve the boot-time work-product facts, but the
+  // merge gate must honor `project-marked-done` as a post-completion phase.
+  // Otherwise recovery can force the terminal outcome back to
+  // `branch-complete` and then immediately hold at `tasks-remaining`, leaving
+  // the already-committed project-Done branch unmerged.
+  const gateTasksRemaining = resumeAfterProjectDone ? 0 : productFacts.transitions.tasksRemaining;
   const scrubbedReason = scrubPathsInText(`recovered: ${reason}`);
   const endedAtMs = io.now();
   const endedAt = new Date(endedAtMs).toISOString();
@@ -340,7 +346,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             branch,
             integrationWorktree,
             validationCommands: product.validationCommands ?? [],
-            tasksRemaining: productFacts.transitions.tasksRemaining,
+            tasksRemaining: gateTasksRemaining,
             concurrentRun: false,
             commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
           });
