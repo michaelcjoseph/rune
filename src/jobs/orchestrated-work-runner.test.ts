@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -125,6 +126,19 @@ function makeWorktree(project = 'demo', tasks = '- [ ] task one\n'): { sandbox: 
     },
     dir,
   };
+}
+
+function initGitRepo(dir: string): void {
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'test',
+    GIT_COMMITTER_EMAIL: 'test@example.com',
+  };
+  execFileSync('git', ['init', '-b', 'main'], { cwd: dir, env, stdio: 'ignore' });
+  execFileSync('git', ['add', '.'], { cwd: dir, env, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir, env, stdio: 'ignore' });
 }
 
 function makeDescriptor(
@@ -1116,6 +1130,110 @@ describe('orchestratedWorkApplier', () => {
       expect((terminal?.data as Record<string, unknown>)['outcome']).toBe('branch-complete');
       expect((terminal?.data as Record<string, unknown>)['held']).toBeUndefined();
       expect(created).toBe(true);
+    });
+
+    it('wires the project-index Done writer as a finalizer effect, not as an orchestrator terminal side effect', async () => {
+      const runId = 'mut-orch-index-writer-finalizer-effect';
+      const baseSha = 'base-index-writer-123';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-index-writer-artifacts-'));
+      const phases: string[] = [];
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+
+      mockRunFinalizer.mockImplementationOnce(async (input, effects) => {
+        expect(input).toMatchObject({
+          mode: 'gated-merge',
+          runId,
+          project: 'demo',
+          product: 'jarvis',
+          branch: 'jarvis-work/demo',
+          baseBranch: 'main',
+        });
+        expect(effects.markProjectDone).toEqual(expect.any(Function));
+        const actual = await vi.importActual<typeof import('./work-run-finalizer.js')>('./work-run-finalizer.js');
+        return actual.runFinalizer(input, effects);
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          mkdirSync(join(dir, 'docs', 'projects'), { recursive: true });
+          writeFileSync(join(dir, 'docs/projects/index.md'), [
+            '# Projects',
+            '',
+            '| Project | Status | Summary |',
+            '| --- | --- | --- |',
+            '| [Demo](demo/) | Active | Demo project |',
+            '',
+            '## demo — Active',
+            '',
+            'Keep this body unchanged.',
+            '',
+          ].join('\n'), 'utf8');
+          initGitRepo(dir);
+          wtDir = dir;
+          return { ...sandbox, baseSha };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        recordWorkRunPhase: (id, phase) => {
+          expect(id).toBe(runId);
+          phases.push(phase);
+        },
+        readLastWorkRunPhase: (id) => {
+          expect(id).toBe(runId);
+          return null;
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+
+        expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const terminalData = (terminal?.data ?? {}) as Record<string, unknown>;
+        const workProduct = terminalData['workProduct'] as { commitShas?: string[] } | undefined;
+
+        expect(terminal?.kind).toBe('completed');
+        expect(terminalData).toMatchObject({
+          outcome: 'branch-complete',
+          merged: true,
+          branchDeleted: true,
+        });
+        expect(readFileSync(join(wtDir!, 'docs/projects/index.md'), 'utf8')).toEqual([
+          '# Projects',
+          '',
+          '| Project | Status | Summary |',
+          '| --- | --- | --- |',
+          '| [Demo](demo/) | Done | Demo project |',
+          '',
+          '## demo — Done',
+          '',
+          'Keep this body unchanged.',
+          '',
+        ].join('\n'));
+        const headCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: wtDir!,
+          encoding: 'utf8',
+        }).trim();
+        const headMessage = execFileSync('git', ['log', '-1', '--pretty=%s'], {
+          cwd: wtDir!,
+          encoding: 'utf8',
+        }).trim();
+        expect(headMessage).toBe('Mark demo Done in project index');
+        expect(workProduct?.commitShas).toContain(headCommit);
+        expect(phases).toContain('project-marked-done');
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it('no-stub regression: production finalize wiring cannot return the old unavailable hold terminal', async () => {

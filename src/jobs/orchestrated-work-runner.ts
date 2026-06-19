@@ -80,7 +80,14 @@ import {
   type WorkProductFacts,
 } from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
-import { runFinalizer, readOutcome, type FinalizerEffects, type FinalizerPhase, type GateFailReason } from './work-run-finalizer.js';
+import {
+  markProjectDoneOnBranch,
+  runFinalizer,
+  readOutcome,
+  type FinalizerEffects,
+  type FinalizerPhase,
+  type GateFailReason,
+} from './work-run-finalizer.js';
 import { runGate as defaultRunGate } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 
@@ -749,6 +756,15 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 });
               }
             },
+            ...(existsSync(join(runSandbox.worktree, 'docs', 'projects', 'index.md'))
+              ? {
+                  markProjectDone: (input) =>
+                    markProjectDoneOnBranch({
+                      worktreePath: runSandbox.worktree,
+                      project: input.project,
+                    }),
+                }
+              : {}),
             writeSupervisionTerminal: () => {},
             removeWorktree: async () => {
               await deps.destroyWorktree(runSandbox, {

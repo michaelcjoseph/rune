@@ -1236,7 +1236,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       Already-`Done` → no edit, no empty commit. Return a typed result distinguishing
       `done`/`already-done`/`absent` (graceful skip) from `ambiguous`/`malformed` (operational HOLD)
       — never a best-effort guess.
-- [ ] Wire the index writer as a finalizer step, NOT in the orchestrator terminal handler: invoke it
+- [x] Wire the index writer as a finalizer step, NOT in the orchestrator terminal handler: invoke it
       inside `runGatedMerge` AFTER `classify()` returns `branch-complete` and BEFORE the gate, record
       a new `project-marked-done` `FinalizerPhase` (after the eligibility classification and before
       `summary-written`/`index-appended`) so a crash-resume skips an already-committed flip, and
