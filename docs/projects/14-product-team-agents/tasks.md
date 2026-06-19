@@ -1184,7 +1184,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
       worktree, so it is part of what merges to the base branch — not written to the base directly
       and not left uncommitted in the worktree (a writer failure leaves no unstaged index edit).
-- [ ] Project-marked-done-resume test: crash/restart after `project-marked-done` (and before
+- [x] Project-marked-done-resume test: crash/restart after `project-marked-done` (and before
       `merged-not-pushed`) re-enters the gated finalizer, skips the already-committed index flip,
       runs the gate/merge/push/delete path, and reaches exactly one terminal without any human
       release or manual retry.

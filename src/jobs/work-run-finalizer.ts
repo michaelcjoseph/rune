@@ -166,6 +166,11 @@ export interface FinalizerEffects {
    *  `runFinalizer` to resume at the next step instead of re-running a mutating
    *  one (e.g. a re-merge or double-push). */
   readLastPhase: () => FinalizerPhase | null;
+  /** Optional critical section for callers that must hold a shared base-branch
+   *  lock across the gate-through-merge sequence. Existing live callers may
+   *  keep locking inside their gate effect; recovery uses this to avoid a
+   *  stale-base window between validation and merge. */
+  baseBranchCriticalSection?: <T>(fn: () => Promise<T>) => Promise<T>;
   // --- gated-merge only (P1) — MUST NOT be invoked in `hold` mode. ---
   /** Evaluate the hard merge gate (tests green, clean tree, zero tasks
    *  remaining, no conflict/bad-base, no concurrent owner, product has
@@ -703,26 +708,33 @@ async function runGatedMerge(
         };
       }
 
-      const verdict = await gate();
-      if (verdict.ok === true) {
-        gateAllowedBranchComplete = true;
-        if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
-          record('project-marked-done');
+      const gateThroughMerge = async () => {
+        const verdict = await gate();
+        if (verdict.ok === true) {
+          gateAllowedBranchComplete = true;
+          if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
+            record('project-marked-done');
+          }
+          if (!reached('summary-written')) {
+            effects.writeSummary(terminalEvent);
+            record('summary-written');
+          }
+          if (!reached('index-appended')) {
+            effects.appendIndexRow(terminalEvent);
+            record('index-appended');
+          }
+          await mergeBranch();
+          record('merged-not-pushed');
+          merged = true;
+        } else {
+          // Gate refused — STOP at branch-complete: alert, never touch the base.
+          alert(verdict.reason);
         }
-        if (!reached('summary-written')) {
-          effects.writeSummary(terminalEvent);
-          record('summary-written');
-        }
-        if (!reached('index-appended')) {
-          effects.appendIndexRow(terminalEvent);
-          record('index-appended');
-        }
-        await mergeBranch();
-        record('merged-not-pushed');
-        merged = true;
+      };
+      if (effects.baseBranchCriticalSection) {
+        await effects.baseBranchCriticalSection(gateThroughMerge);
       } else {
-        // Gate refused — STOP at branch-complete: alert, never touch the base.
-        alert(verdict.reason);
+        await gateThroughMerge();
       }
     }
   }

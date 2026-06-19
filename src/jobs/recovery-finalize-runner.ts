@@ -46,6 +46,9 @@ import {
   type FinalizerPhase,
   type FinalizerSupervisionStatus,
 } from './work-run-finalizer.js';
+import type { GateResult } from './work-run-gate.js';
+import { runGate, type GateRuntimeOpts } from './work-run-gate-runtime.js';
+import { withBaseBranchLock } from './work-run-merge-lock.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { sweepWorktreeProcesses } from './worktree-sweep.js';
 import {
@@ -110,6 +113,9 @@ export interface RecoveryFinalizeIO {
   readLastPhase: (runId: string) => FinalizerPhase | null;
   /** Persist a finalize phase as recovery advances a resumed gated-merge. */
   recordPhase: (runId: string, phase: FinalizerPhase) => void;
+  /** Evaluate the gated-merge hard gate. Production wires the real gate
+   *  runtime; tests must inject an explicit seam so a missing gate fails loud. */
+  runGate: (opts: GateRuntimeOpts) => Promise<GateResult>;
   /** Wall clock — injected so the test is deterministic. */
   now: () => number;
 }
@@ -142,6 +148,7 @@ function defaultIO(): RecoveryFinalizeIO {
     },
     readLastPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
     recordPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
+    runGate,
     now: () => Date.now(),
   };
 }
@@ -203,12 +210,16 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     exitFact: 'reaped-after-terminal-result',
   };
   // Gated-merge crash-resume decision (read the durable phase BEFORE classifying
-  // so a resume can override the verdict): a run whose phase shows the merge
-  // already landed (`merged-not-pushed`/`pushed-not-deleted`) is re-driven in
-  // `gated-merge` mode to COMPLETE the interrupted push/branch-delete — never to
-  // initiate a merge at boot (a run with no merge phase re-drives in hold mode).
+  // so a resume can choose the correct finalizer mode): `project-marked-done`
+  // has already committed the project index flip, so recovery must continue the
+  // gated finalizer from the next side-effect rather than falling back to hold
+  // mode and stranding the Done commit on an unmerged branch. Once the merge has
+  // landed (`merged-not-pushed`/`pushed-not-deleted`), the recorded phase is
+  // authoritative and recovery completes only the remaining push/delete tail.
   const lastPhase = io.readLastPhase(run.id);
-  const resumeGatedMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
+  const resumeAfterProjectDone = lastPhase === 'project-marked-done';
+  const resumeAfterMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
+  const resumeGatedMerge = resumeAfterProjectDone || resumeAfterMerge;
 
   const classified = classifyOutcome({ exit, product: productFacts });
   // On a gated-merge RESUME the recorded phase is authoritative: the merge landed,
@@ -217,7 +228,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   // unchecked) and the finalizer would skip the push, stranding origin behind.
   // Force branch-complete so `runGatedMerge` completes the push/delete.
   const outcome =
-    resumeGatedMerge && classified.outcome !== 'branch-complete' ? 'branch-complete' : classified.outcome;
+    resumeAfterMerge && classified.outcome !== 'branch-complete' ? 'branch-complete' : classified.outcome;
   const reason =
     outcome === classified.outcome
       ? classified.reason
@@ -295,22 +306,45 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
     readLastPhase: () => lastPhase,
   };
 
+  const integrationWorktree = join(config.WORKTREE_ROOT, `gate-${run.product}-${run.id}`);
+
   // In `gated-merge` resume mode, supply the merge effects. On resume from
   // `merged-not-pushed`/`pushed-not-deleted` the finalizer SKIPS the gate +
-  // merge (via `readLastPhase`), so `gate`/`mergeBranch` are never invoked —
-  // they throw defensively so a contract violation fails loudly (caught per-run
-  // → unknown-relabel fallback) rather than silently re-gating/re-merging at
-  // boot. Only `pushBranch`/`deleteBranch` actually run, completing the
-  // interrupted merge; `deleteBranch` is best-effort (the finalizer's
-  // onBranchDelete guard swallows it).
+  // merge (via `readLastPhase`), so `gate`/`mergeBranch` throw defensively if a
+  // contract violation tries to re-run them. On resume from `project-marked-done`,
+  // the merge has NOT happened yet: the finalizer re-runs the gate, writes
+  // summary/index, then merges/pushes/deletes exactly once, with the
+  // gate-through-merge sequence under the base-branch lock.
   const effects: FinalizerEffects = resumeGatedMerge
     ? {
         ...baseEffects,
+        baseBranchCriticalSection: (fn) => withBaseBranchLock(run.product, product.baseBranch, fn),
         gate: async () => {
-          throw new Error('recovery resume must not re-run the gate (merge already landed)');
+          if (resumeAfterMerge) {
+            throw new Error('recovery resume must not re-run the gate (merge already landed)');
+          }
+          return io.runGate({
+            product: run.product,
+            repoPath: product.repoPath,
+            baseBranch: product.baseBranch,
+            branch,
+            integrationWorktree,
+            validationCommands: product.validationCommands ?? [],
+            tasksRemaining: productFacts.transitions.tasksRemaining,
+            concurrentRun: false,
+            commandTimeoutMs: config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+          });
         },
         mergeBranch: async () => {
-          throw new Error('recovery resume must not re-merge (merge already landed)');
+          if (resumeAfterMerge) {
+            throw new Error('recovery resume must not re-merge (merge already landed)');
+          }
+          const message = `jarvis(${run.product}): merge recovered work-run branch ${branch}`;
+          try {
+            await io.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: product.repoPath });
+          } catch (err) {
+            throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
+          }
         },
         alert: () => {},
         pushBranch: async () => {
