@@ -1188,7 +1188,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `merged-not-pushed`) re-enters the gated finalizer, skips the already-committed index flip,
       runs the gate/merge/push/delete path, and reaches exactly one terminal without any human
       release or manual retry.
-- [ ] Index-merge-conflict test: when the finalizer's `git merge` of the branch hits a conflict on
+- [x] Index-merge-conflict test: when the finalizer's `git merge` of the branch hits a conflict on
       `docs/projects/index.md` (a concurrent landing changed it on the base), the merge is aborted
       and the run HOLDs operationally with work preserved — never a half-merged dirty base.
 - [ ] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical

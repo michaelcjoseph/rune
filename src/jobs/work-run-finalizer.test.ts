@@ -858,6 +858,47 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(phases).not.toContain('pushed-not-deleted');
   });
 
+  it('index merge conflict at apply time aborts the merge and operationally holds with the branch/worktree preserved (Phase 15)', async () => {
+    // The gate's dry-run merge can pass, then a concurrent finalizer can update
+    // docs/projects/index.md on the base before the real merge applies. That
+    // conflict must be treated as an operational HOLD, not as a thrown finalizer
+    // failure and never as a landed merge.
+    const abortMerge = vi.fn(async () => {});
+    const { effects, phases } = makeEffects(branchCompleteEvent(), {
+      mergeBranch: vi.fn(async () => {
+        throw new Error([
+          'git merge failed: CONFLICT (content): Merge conflict in docs/projects/index.md',
+          'Automatic merge failed; fix conflicts and then commit the result.',
+        ].join('\n'));
+      }),
+      abortMerge,
+    } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(abortMerge).toHaveBeenCalledOnce();
+    expect(effects.alert).toHaveBeenCalledWith('merge-conflict');
+
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(effects.removeWorktree).not.toHaveBeenCalled();
+    expect(phases).not.toContain('merged-not-pushed');
+    expect(phases).not.toContain('pushed-not-deleted');
+
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
+    expect(result.worktreeRemoved).toBe(false);
+    expect(result.supervisionStatus).toBe('completed');
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', expect.objectContaining({
+      data: expect.objectContaining({
+        outcome: 'branch-complete',
+      }),
+    }));
+  });
+
   it('pushes BEFORE deleting the branch (origin is the durable backup)', async () => {
     const { effects } = makeEffects(branchCompleteEvent());
     await runFinalizer(gatedMergeInput(), effects);

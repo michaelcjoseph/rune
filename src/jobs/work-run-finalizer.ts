@@ -189,6 +189,10 @@ export interface FinalizerEffects {
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
    *  worktree / on the base). */
   mergeBranch?: () => Promise<void>;
+  /** Abort an in-progress real merge after `mergeBranch` reports a conflict.
+   *  Optional so existing callers that wrap merge in a self-cleaning runtime do
+   *  not need a no-op seam. */
+  abortMerge?: () => Promise<void>;
   /** Push the merged base branch to origin (the durable backup BEFORE delete). */
   pushBranch?: () => Promise<void>;
   /** Delete the work branch — only AFTER a successful push. */
@@ -579,6 +583,46 @@ async function resolveWorktreeAndFinalize(
   };
 }
 
+function isMergeConflictError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /\bCONFLICT\b/i.test(message) ||
+    /automatic merge failed/i.test(message) ||
+    /merge conflict/i.test(message);
+}
+
+async function abortConflictedMerge(input: FinalizerInput, effects: FinalizerEffects): Promise<void> {
+  try {
+    await effects.abortMerge?.();
+  } catch (err) {
+    log.warn('merge abort failed after conflict; preserving worktree for operator', {
+      runId: input.runId,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+  }
+}
+
+function writeOperationalHoldTerminal(
+  effects: FinalizerEffects,
+  terminalEvent: MutationEvent,
+  phases: FinalizerPhase[],
+): FinalizerResult {
+  // Do not record `finalized` here: in PHASE_ORDER it implies the merge/push
+  // checkpoints were reached, but this operational hold preserves the branch
+  // and worktree for a human to resolve the conflict.
+  const supervisionStatus: FinalizerSupervisionStatus =
+    terminalEvent.kind === 'completed' ? 'completed' : 'failed';
+  effects.writeSupervisionTerminal(supervisionStatus, terminalEvent);
+  return {
+    outcome: readOutcome(terminalEvent),
+    terminalEvent,
+    supervisionStatus,
+    worktreeRemoved: false,
+    merged: false,
+    branchDeleted: false,
+    phases,
+  };
+}
+
 /**
  * Drive a work run to a correct terminal state through the shared, idempotent,
  * phase-recorded state machine.
@@ -679,6 +723,7 @@ async function runGatedMerge(
   const outcome = readOutcome(terminalEvent);
   let merged = false;
   let gateAllowedBranchComplete = false;
+  let mergeConflictHold = false;
 
   // Only a branch-complete run is eligible to land on the base branch; anything
   // else (partial/noop/dirty/failed) never merges and never consults the gate.
@@ -723,7 +768,17 @@ async function runGatedMerge(
             effects.appendIndexRow(terminalEvent);
             record('index-appended');
           }
-          await mergeBranch();
+          try {
+            await mergeBranch();
+          } catch (err) {
+            if (!isMergeConflictError(err)) {
+              throw err;
+            }
+            await abortConflictedMerge(input, effects);
+            alert('merge-conflict');
+            mergeConflictHold = true;
+            return;
+          }
           record('merged-not-pushed');
           merged = true;
         } else {
@@ -737,6 +792,10 @@ async function runGatedMerge(
         await gateThroughMerge();
       }
     }
+  }
+
+  if (mergeConflictHold) {
+    return writeOperationalHoldTerminal(effects, terminalEvent, phases);
   }
 
   if (!gateAllowedBranchComplete) {

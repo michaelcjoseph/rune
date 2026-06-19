@@ -782,6 +782,9 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
                 throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
               }
             },
+            abortMerge: async () => {
+              await deps.runGit(['merge', '--abort'], { cwd: repoPath });
+            },
             pushBranch: async () => {
               try {
                 await deps.runGit(['push', 'origin', baseBranch], { cwd: repoPath });

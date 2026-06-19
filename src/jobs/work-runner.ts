@@ -854,6 +854,9 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
               throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
             }
           },
+          abortMerge: async () => {
+            await deps.runGit(['merge', '--abort'], { cwd: repoPath });
+          },
           pushBranch: async () => {
             try {
               // Explicit remote + refspec so the push target is independent of

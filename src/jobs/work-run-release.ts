@@ -513,6 +513,9 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
         throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
       }
     },
+    abortMerge: async () => {
+      await defaultRunGit(['merge', '--abort'], { cwd: repoPath });
+    },
     pushBranch: async () => {
       try {
         await defaultRunGit(['push', 'origin', baseBranch], { cwd: repoPath });

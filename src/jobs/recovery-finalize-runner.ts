@@ -346,6 +346,9 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
             throw new Error(redactSecrets(`git merge failed: ${(err as Error).message}`));
           }
         },
+        abortMerge: async () => {
+          await io.runGit(['merge', '--abort'], { cwd: product.repoPath });
+        },
         alert: () => {},
         pushBranch: async () => {
           try {

@@ -98,10 +98,7 @@ Key seams (file:symbol references are the source of truth; do not reinvent):
 
 ## Next Task Handoff
 
-- x item.completed
-codex item.completed
-codex item.started
-codex item.started
+- x item.started
 codex item.completed
 codex item.completed
 codex item.started
@@ -111,18 +108,6 @@ codex item.completed
 codex item.completed
 codex item.started
 codex item.completed
-codex item.completed
-codex turn.completed
-- x item.completed
-codex item.started
-codex item.completed
-codex item.completed
-codex item.started
-codex item.completed
-codex item.completed
-codex item.started
-codex item.completed
-codex item.started
 codex item.completed
 codex item.started
 codex item.completed
