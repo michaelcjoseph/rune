@@ -456,14 +456,17 @@ async function runGatedMerge(
       gateAllowedBranchComplete = true;
     } else {
       const shouldMarkProjectDone = !reached('project-marked-done');
+      let markProjectDoneResult: MarkProjectDoneResult | undefined;
       if (shouldMarkProjectDone) {
-        await effects.markProjectDone?.(input, terminalEvent);
+        markProjectDoneResult = await effects.markProjectDone?.(input, terminalEvent);
       }
 
       const verdict = await gate();
       if (verdict.ok === true) {
         gateAllowedBranchComplete = true;
-        if (shouldMarkProjectDone) record('project-marked-done');
+        if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
+          record('project-marked-done');
+        }
         if (!reached('summary-written')) {
           effects.writeSummary(terminalEvent);
           record('summary-written');

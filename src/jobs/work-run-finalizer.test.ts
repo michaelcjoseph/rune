@@ -431,6 +431,30 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(result.branchDeleted).toBe(false);
   });
 
+  it('absent docs/projects/index.md gracefully skips the project-Done commit and still merges (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'skipped',
+      commitSha: null,
+      changedTokens: [],
+    }));
+    const { effects, phases } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(effects.alert).not.toHaveBeenCalled();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(effects.deleteBranch).toHaveBeenCalledOnce();
+    expect(result.outcome).toBe('branch-complete');
+    expect(result.merged).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.supervisionStatus).toBe('completed');
+    expect(phases).not.toContain('project-marked-done');
+  });
+
   it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {
     const ev = branchCompleteEvent();
     const { effects } = makeEffects(ev);

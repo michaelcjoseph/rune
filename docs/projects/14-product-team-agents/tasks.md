@@ -1169,7 +1169,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Noop-skips-index test: an all-tasks-checked run with zero commits classifies `noop`, so the
       index flip never fires and the run never merges — the flip is gated on the classified
       `branch-complete` outcome, not on all-tasks-checked alone.
-- [ ] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the
+- [x] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the
       finalizer still merges (the index convention is Jarvis-repo-specific), no HOLD, no commit.
 - [ ] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
       multiple matches produces an operational HOLD with branch/worktree preserved; it does not
