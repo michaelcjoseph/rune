@@ -64,6 +64,7 @@ export type FinalizerMode = 'hold' | 'gated-merge';
 export type FinalizerPhase =
   | 'classified'
   | 'transcript-flushed'
+  | 'project-marked-done'
   | 'summary-written'
   | 'index-appended'
   | 'merged-not-pushed'
@@ -85,6 +86,12 @@ export interface FinalizerInput {
   /** The base branch a `gated-merge` would land on (e.g. `main`). Optional in
    *  `hold` mode, which never reads it. */
   baseBranch?: string;
+}
+
+export interface MarkProjectDoneResult {
+  kind: 'committed' | 'already-done' | 'skipped';
+  commitSha?: string | null;
+  changedTokens?: string[];
 }
 
 /**
@@ -129,6 +136,12 @@ export interface FinalizerEffects {
   /** Alert the operator that a `gated-merge` run STOPPED at `branch-complete`
    *  (gate failed) instead of landing on `main`. */
   alert?: (reason: GateFailReason) => void;
+  /** Idempotently mark the project `Done` in docs/projects/index.md on the work
+   *  branch before a clean branch-complete gated merge lands. */
+  markProjectDone?: (
+    input: FinalizerInput,
+    terminalEvent: MutationEvent,
+  ) => Promise<MarkProjectDoneResult>;
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
    *  worktree / on the base). */
   mergeBranch?: () => Promise<void>;
@@ -167,6 +180,7 @@ export interface FinalizerResult {
 export const PHASE_ORDER: FinalizerPhase[] = [
   'classified',
   'transcript-flushed',
+  'project-marked-done',
   'summary-written',
   'index-appended',
   'merged-not-pushed',
@@ -174,6 +188,75 @@ export const PHASE_ORDER: FinalizerPhase[] = [
   'worktree-resolved',
   'finalized',
 ];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function setTrimmedCell(cell: string, value: string): string {
+  const leading = cell.match(/^\s*/)?.[0] ?? '';
+  const trailing = cell.match(/\s*$/)?.[0] ?? '';
+  return `${leading}${value}${trailing}`;
+}
+
+function markHeadingDone(line: string, slug: string): { line: string; changed: boolean } {
+  const eol = line.endsWith('\r') ? '\r' : '';
+  const bareLine = eol ? line.slice(0, -1) : line;
+  const match = bareLine.match(new RegExp(`^(##\\s+${escapeRegExp(slug)}\\s+—\\s+)(.*)$`));
+  if (!match) return { line, changed: false };
+
+  const prefix = match[1]!;
+  const rest = match[2]!;
+  if (rest === 'Done' || rest.startsWith('Done ')) return { line, changed: false };
+
+  const suffix = rest.match(/(\s+\(.*\)\s*)$/)?.[1] ?? '';
+  return { line: `${prefix}Done${suffix}${eol}`, changed: true };
+}
+
+/**
+ * Pure docs/projects/index.md completion writer. It updates the matching
+ * project's table Status cell and matching `## <slug> — <status>` section
+ * heading, preserving unrelated bytes. Missing or already-Done content returns
+ * `already-done` so callers can skip empty commits.
+ */
+export function markProjectIndexDoneInText(
+  content: string,
+  slug: string,
+): { kind: 'updated' | 'already-done'; content: string } {
+  const lines = content.split('\n');
+  let statusColumn = -1;
+  let changed = false;
+
+  const next = lines.map((line) => {
+    if (line.trimStart().startsWith('|')) {
+      const cells = line.split('|');
+      const statusIdx = cells.findIndex((cell) => cell.trim() === 'Status');
+      if (statusIdx >= 0) {
+        statusColumn = statusIdx;
+        return line;
+      }
+
+      const hasProjectLink = cells.some((cell) =>
+        new RegExp(`\\(${escapeRegExp(slug)}/?\\)`).test(cell),
+      );
+      if (hasProjectLink && statusColumn > 0 && statusColumn < cells.length) {
+        const current = cells[statusColumn]!;
+        if (current.trim() !== 'Done') {
+          cells[statusColumn] = setTrimmedCell(current, 'Done');
+          changed = true;
+          return cells.join('|');
+        }
+      }
+    }
+
+    const heading = markHeadingDone(line, slug);
+    if (heading.changed) changed = true;
+    return heading.line;
+  });
+
+  const nextContent = next.join('\n');
+  return { kind: changed ? 'updated' : 'already-done', content: nextContent };
+}
 
 /** Build the durable-phase recorder both modes use: each `record(phase)` writes
  *  the phase to the durable store AND appends it to the returned `phases` array
@@ -316,13 +399,14 @@ export async function runFinalizer(
  * `gated-merge` mode (P1.5): the policy path that lands a clean, complete run on
  * the base branch through the hard gate. Sequence (fresh run):
  *
- *   classify → flush → summary → index → gate → merge → push → delete → terminal
+ *   classify → flush → mark project Done → gate → summary → index → merge → push → delete → terminal
  *
- * recording `merged-not-pushed` after the merge and `pushed-not-deleted` after
- * the push so a crash mid-finalize resumes at the right step (push happens
- * BEFORE delete — origin is the durable backup before the local branch is
- * removed). A failed gate STOPS at `branch-complete`: it alerts and never
- * touches the base branch. A non-`branch-complete` run never consults the gate.
+ * recording `project-marked-done` before summary/index persistence,
+ * `merged-not-pushed` after the merge, and `pushed-not-deleted` after the push
+ * so a crash mid-finalize resumes at the right step (push happens BEFORE
+ * delete — origin is the durable backup before the local branch is removed). A
+ * failed gate STOPS at `branch-complete`: it alerts and never touches the base
+ * branch. A non-`branch-complete` run never consults the gate.
  *
  * Resume: `readLastPhase()` is consulted so an already-committed step is skipped
  * — never a re-merge of an already-merged branch, a double-push, or a duplicate
@@ -358,17 +442,10 @@ async function runGatedMerge(
     await effects.flushTranscript();
     record('transcript-flushed');
   }
-  if (!reached('summary-written')) {
-    effects.writeSummary(terminalEvent);
-    record('summary-written');
-  }
-  if (!reached('index-appended')) {
-    effects.appendIndexRow(terminalEvent);
-    record('index-appended');
-  }
 
   const outcome = readOutcome(terminalEvent);
   let merged = false;
+  let gateAllowedBranchComplete = false;
 
   // Only a branch-complete run is eligible to land on the base branch; anything
   // else (partial/noop/dirty/failed) never merges and never consults the gate.
@@ -376,9 +453,25 @@ async function runGatedMerge(
     if (reached('merged-not-pushed')) {
       // A prior attempt already merged — NEVER re-merge (exactly-once).
       merged = true;
+      gateAllowedBranchComplete = true;
     } else {
+      const shouldMarkProjectDone = !reached('project-marked-done');
+      if (shouldMarkProjectDone) {
+        await effects.markProjectDone?.(input, terminalEvent);
+      }
+
       const verdict = await gate();
-      if (verdict.ok) {
+      if (verdict.ok === true) {
+        gateAllowedBranchComplete = true;
+        if (shouldMarkProjectDone) record('project-marked-done');
+        if (!reached('summary-written')) {
+          effects.writeSummary(terminalEvent);
+          record('summary-written');
+        }
+        if (!reached('index-appended')) {
+          effects.appendIndexRow(terminalEvent);
+          record('index-appended');
+        }
         await mergeBranch();
         record('merged-not-pushed');
         merged = true;
@@ -387,15 +480,35 @@ async function runGatedMerge(
         alert(verdict.reason);
       }
     }
+  }
 
-    // Push BEFORE delete: origin is the durable backup before the local branch
-    // ref is removed. Skip the push on resume if it already landed. The branch
-    // DELETE itself is deferred to the shared tail (after worktree removal) so
-    // `git branch -d` doesn't trip on the still-checked-out run worktree.
-    if (merged && !reached('pushed-not-deleted')) {
-      await pushBranch();
-      record('pushed-not-deleted');
+  if (!gateAllowedBranchComplete) {
+    if (!reached('summary-written')) {
+      effects.writeSummary(terminalEvent);
+      record('summary-written');
     }
+    if (!reached('index-appended')) {
+      effects.appendIndexRow(terminalEvent);
+      record('index-appended');
+    }
+  } else if (reached('merged-not-pushed')) {
+    if (!reached('summary-written')) {
+      effects.writeSummary(terminalEvent);
+      record('summary-written');
+    }
+    if (!reached('index-appended')) {
+      effects.appendIndexRow(terminalEvent);
+      record('index-appended');
+    }
+  }
+
+  // Push BEFORE delete: origin is the durable backup before the local branch
+  // ref is removed. Skip the push on resume if it already landed. The branch
+  // DELETE itself is deferred to the shared tail (after worktree removal) so
+  // `git branch -d` doesn't trip on the still-checked-out run worktree.
+  if (merged && !reached('pushed-not-deleted')) {
+    await pushBranch();
+    record('pushed-not-deleted');
   }
 
   // The shared tail removes the worktree, THEN deletes the branch (only when the

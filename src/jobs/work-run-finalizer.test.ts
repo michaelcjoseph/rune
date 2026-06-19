@@ -153,6 +153,75 @@ function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
   return holdInput({ mode: 'gated-merge', ...over });
 }
 
+type MarkProjectIndexDoneInText = (
+  content: string,
+  slug: string,
+) => { kind: 'updated' | 'already-done'; content: string };
+
+async function loadMarkProjectIndexDoneInText(): Promise<MarkProjectIndexDoneInText> {
+  const mod = await import('./work-run-finalizer.js') as typeof import('./work-run-finalizer.js') & {
+    markProjectIndexDoneInText?: unknown;
+  };
+  expect(mod.markProjectIndexDoneInText).toEqual(expect.any(Function));
+  return mod.markProjectIndexDoneInText as MarkProjectIndexDoneInText;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 15 — Project index Done writer. WRITE-FIRST: this export does not exist
+// yet, so these fail as a clean missing-symbol assertion until the pure writer
+// lands. The finalizer wiring tests below prove this writer is invoked as a
+// finalizer phase after branch-complete classification and before the gate.
+// ---------------------------------------------------------------------------
+
+describe('markProjectIndexDoneInText — Phase 15 project completion writer', () => {
+  it('sets the matching project to Done in both the table Status cell and section heading', async () => {
+    const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
+    const before = [
+      '# Projects',
+      '',
+      '| Project | Status | Summary |',
+      '| --- | --- | --- |',
+      '| [Product Team](14-product-team-agents/) | Active | Simulated team loop |',
+      '| [Other](99-other/) | Active | Leave alone |',
+      '',
+      '## 14-product-team-agents — Active (reopened 2026-06-14)',
+      '',
+      'Section body stays byte-for-byte.',
+      '',
+      '## 99-other — Active',
+      '',
+    ].join('\n');
+
+    const result = markProjectIndexDoneInText(before, '14-product-team-agents');
+
+    expect(result.kind).toBe('updated');
+    expect(result.content).toContain(
+      '| [Product Team](14-product-team-agents/) | Done | Simulated team loop |',
+    );
+    expect(result.content).toContain('## 14-product-team-agents — Done (reopened 2026-06-14)');
+    expect(result.content).toContain('| [Other](99-other/) | Active | Leave alone |');
+    expect(result.content).toContain('## 99-other — Active');
+    expect(result.content).toContain('Section body stays byte-for-byte.');
+  });
+
+  it('is idempotent for an already-Done project: returns unchanged content and no update signal', async () => {
+    const markProjectIndexDoneInText = await loadMarkProjectIndexDoneInText();
+    const alreadyDone = [
+      '| Project | Status | Summary |',
+      '| --- | --- | --- |',
+      '| [Product Team](14-product-team-agents/) | Done | Simulated team loop |',
+      '',
+      '## 14-product-team-agents — Done (reopened 2026-06-14)',
+      '',
+    ].join('\n');
+
+    const result = markProjectIndexDoneInText(alreadyDone, '14-product-team-agents');
+
+    expect(result.kind).toBe('already-done');
+    expect(result.content).toBe(alreadyDone);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // §4 — Finalizer hold mode
 // ---------------------------------------------------------------------------
@@ -261,6 +330,64 @@ describe('runFinalizer — hold mode (P0.4a)', () => {
 // ---------------------------------------------------------------------------
 
 describe('runFinalizer — gated-merge mode (P1.5)', () => {
+  it('branch-complete project completion marks docs/projects/index.md Done exactly once before summary/index persistence and gate (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'done-commit-sha',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects, phases } = makeEffects(ev, { markProjectDone } as never);
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(markProjectDone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'gated-merge',
+        runId: DEFAULT_RUN_ID,
+        project: '15-work-run-finalizer',
+        product: 'jarvis',
+        branch: 'jarvis-work/15-work-run-finalizer',
+        baseBranch: 'main',
+      }),
+      ev,
+    );
+    const markOrder = markProjectDone.mock.invocationCallOrder[0]!;
+    const classifyOrder = vi.mocked(effects.classify).mock.invocationCallOrder[0]!;
+    const summaryOrder = vi.mocked(effects.writeSummary).mock.invocationCallOrder[0]!;
+    const indexOrder = vi.mocked(effects.appendIndexRow).mock.invocationCallOrder[0]!;
+    const gateOrder = vi.mocked(effects.gate!).mock.invocationCallOrder[0]!;
+    expect(classifyOrder).toBeLessThan(markOrder);
+    expect(markOrder).toBeLessThan(summaryOrder);
+    expect(markOrder).toBeLessThan(indexOrder);
+    expect(markOrder).toBeLessThan(gateOrder);
+
+    const recorded = phases as string[];
+    expect(recorded).toContain('project-marked-done');
+    expect(recorded.indexOf('classified')).toBeLessThan(recorded.indexOf('project-marked-done'));
+    expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('summary-written'));
+    expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('index-appended'));
+  });
+
+  it('already-Done projects are idempotent: finalizer checks once, records no empty commit, and still gates/merges (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'already-done',
+      commitSha: null,
+      changedTokens: [],
+    }));
+    const { effects } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.pushBranch).toHaveBeenCalledOnce();
+    expect(result.merged).toBe(true);
+  });
+
   it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {
     const ev = branchCompleteEvent();
     const { effects } = makeEffects(ev);
@@ -292,6 +419,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(phases).toEqual([
       'classified',
       'transcript-flushed',
+      'project-marked-done',
       'summary-written',
       'index-appended',
       'merged-not-pushed',

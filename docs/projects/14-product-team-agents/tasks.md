@@ -1160,7 +1160,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **A. Project-completion finalization**
 
-- [ ] Index-Done test: when the gated finalizer classifies a clean `branch-complete` run (all tasks
+- [x] Index-Done test: when the gated finalizer classifies a clean `branch-complete` run (all tasks
       checked, no `reversible:false` hold) and the worktree carries `docs/projects/index.md`, it sets
       the project's status to `Done` in BOTH the table Status cell AND the `## <slug> — <status>`
       section heading and records ONE dedicated commit on the feature branch carrying that edit,
