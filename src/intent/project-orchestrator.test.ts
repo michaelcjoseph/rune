@@ -791,6 +791,58 @@ describe('project-orchestrator — retry feedback', () => {
       }),
     ]);
   });
+
+  it('does not fail-close the run when a committed task carries an open finding but no terminal-bug writer is wired', async () => {
+    // Regression: the per-task loop recorded terminal bugs fail-closed, so a
+    // committed task carrying any open objection-class finding halted the WHOLE
+    // run as an operational hold ("writer not configured") because
+    // appendTerminalBugEntries is an optional dep not wired in production. A
+    // missing writer must be tolerated after a clean closeout.
+    const terminalFinding: FindingsLedgerEntry = {
+      id: 'finding-stale-objection',
+      sourceGate: 'reviewer',
+      class: 'data-integrity',
+      severity: 'critical',
+      location: 'src/finalizer.ts:285',
+      rationale: 'reviewer objection raised against a partial diff; the symbol exists in the committed tree',
+      reversible: true,
+      raisedRound: 4,
+      status: 'open',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: {
+          outcome: 'fail',
+          findings: [terminalFinding],
+          objections: [terminalFinding],
+        },
+        findingsLedger: [terminalFinding],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: ['open objection carried past the round cap'],
+      }),
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Wire the index writer',
+    ].join('\n'));
+    // No appendTerminalBugEntries wired — the production default.
+    let finalized = false;
+    h.deps.finalize = async () => {
+      finalized = true;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(finalized).toBe(true);
+    expect(h.state.commits).toEqual(['sha-wire-the-index-writer']);
+  });
 });
 
 // ---------------------------------------------------------------------------

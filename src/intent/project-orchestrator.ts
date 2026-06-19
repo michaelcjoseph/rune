@@ -250,7 +250,16 @@ export async function runProjectOrchestration(
     if (checkpoint.kind === 'blocked') {
       return buildOperationalHold(deps, checkpoint.reason, taskRecords);
     }
-    const terminalBugRecording = await recordTerminalBugs(deps, evidence);
+    // The task already committed; recording any open objection-class finding to
+    // the bug backlog is best-effort. The terminal-bug writer is an optional dep
+    // not yet wired in production, and a missing writer must NOT fail-close the
+    // whole run after a clean closeout — that would halt the loop the first time
+    // any task carries an open finding (matching the tolerant non-reversible
+    // path above). A genuine writer FAILURE (writer present but throws) still
+    // blocks. The finding stays durable in the task record + run transcript.
+    const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
+      missingWriter: 'ok',
+    });
     if (terminalBugRecording.kind === 'blocked') {
       return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
     }
