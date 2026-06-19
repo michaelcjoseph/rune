@@ -183,6 +183,57 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(gitCalls.some(a => a.includes('branch') && a.includes('-d'))).toBe(true);
   });
 
+  it('dedupes a second startup pass after `pushed-not-deleted` recovery reaches `finalized`', async () => {
+    const run = makeRun();
+    const gitCalls: string[][] = [];
+    const recordedPhases: string[] = [];
+    let lastPhase: string | null = 'pushed-not-deleted';
+    const { io, captured } = makeIO({
+      runGit: vi.fn(async (args: string[]) => {
+        gitCalls.push([...args]);
+        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
+        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      }),
+      readLastPhase: () => lastPhase as never,
+      recordPhase: (_id, phase) => {
+        recordedPhases.push(phase);
+        lastPhase = phase;
+      },
+    });
+
+    const firstStatus = await __finalizeStaleRunForTest(run, io);
+    expect(firstStatus).toBe('completed');
+    expect(lastPhase).toBe('finalized');
+
+    const countsAfterFirstPass = {
+      branchDeletes: gitCalls.filter(a => a.includes('branch') && a.includes('-d')).length,
+      pushes: gitCalls.filter(a => a.includes('push')).length,
+      merges: gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base')).length,
+      summaries: captured.summaries.length,
+      indexRows: captured.indexRows.length,
+      supervisionWrites: captured.upserts.length,
+      removals: captured.removed.length,
+      phases: recordedPhases.length,
+    };
+
+    const secondStatus = await __finalizeStaleRunForTest(run, io);
+
+    expect(secondStatus).toBe('completed');
+    expect(gitCalls.filter(a => a.includes('branch') && a.includes('-d'))).toHaveLength(
+      countsAfterFirstPass.branchDeletes,
+    );
+    expect(gitCalls.filter(a => a.includes('push'))).toHaveLength(countsAfterFirstPass.pushes);
+    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(
+      countsAfterFirstPass.merges,
+    );
+    expect(captured.summaries).toHaveLength(countsAfterFirstPass.summaries);
+    expect(captured.indexRows).toHaveLength(countsAfterFirstPass.indexRows);
+    expect(captured.upserts).toHaveLength(countsAfterFirstPass.supervisionWrites);
+    expect(captured.removed).toHaveLength(countsAfterFirstPass.removals);
+    expect(recordedPhases).toHaveLength(countsAfterFirstPass.phases);
+  });
+
   it('resumes from `project-marked-done`: skips the already-committed index flip, then gates/merges/pushes/deletes exactly once (Phase 15)', async () => {
     const run = makeRun();
     const gitCalls: string[][] = [];

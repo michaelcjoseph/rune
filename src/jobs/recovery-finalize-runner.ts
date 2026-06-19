@@ -170,6 +170,17 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
       throw new Error(`recovery: invalid ${label} slug '${slug}' on supervised run`);
     }
   }
+
+  const lastPhase = io.readLastPhase(run.id);
+  // `finalized` is the durable idempotency marker: the prior finalizer attempt
+  // already wrote terminal supervision before recording it. A stale `running`
+  // row can still be handed to this helper by the recovery core; return the
+  // terminal status so the core can rewrite that row, but do not re-run any
+  // summary/index/worktree side effects.
+  if (lastPhase === 'finalized') {
+    return 'completed';
+  }
+
   const product = io.getProduct(run.product); // throws on unknown product
   const worktree = io.worktreeFor(run.product, run.project); // throws on bad slug
   if (!io.worktreeExists(worktree)) {
@@ -216,7 +227,6 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
   // mode and stranding the Done commit on an unmerged branch. Once the merge has
   // landed (`merged-not-pushed`/`pushed-not-deleted`), the recorded phase is
   // authoritative and recovery completes only the remaining push/delete tail.
-  const lastPhase = io.readLastPhase(run.id);
   const resumeAfterProjectDone = lastPhase === 'project-marked-done';
   const resumeAfterMerge = lastPhase === 'merged-not-pushed' || lastPhase === 'pushed-not-deleted';
   const resumeGatedMerge = resumeAfterProjectDone || resumeAfterMerge;

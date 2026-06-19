@@ -1199,7 +1199,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       cleanup has been attempted; the orchestrated terminal mutation message does NOT also claim a
       merge (single landing claim); a gate-fail HOLD still sends only the existing fail alert and
       never the success message (no double-send, no success message on a hold).
-- [ ] Merge-success-resume-dedupe test: crash/restart after `pushed-not-deleted` resumes finalizer
+- [x] Merge-success-resume-dedupe test: crash/restart after `pushed-not-deleted` resumes finalizer
       cleanup and sends at most one merge-success notification for the run; a replay after the
       notification was recorded sends none.
 - [ ] Order test: for a clean run the sequence is eligibility classify → index-`Done` commit →
