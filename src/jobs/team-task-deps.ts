@@ -49,6 +49,7 @@ import {
   type ObjectionClass,
   type ObjectionFinding,
   type ObjectionSeverity,
+  type FindingVerification,
   type FindingsLedgerEntry,
   type QaResult,
   type GateRejectionFeedback,
@@ -228,6 +229,13 @@ const REVIEWER_INSTRUCTION = [
   'spec, the QA tests, the task, and the project context below. You see the',
   'artifacts only — never the coder\'s reasoning.',
   '',
+  'If an open findings ledger is present, review in this order:',
+  '1. Regression pass: verify every prior finding by id before looking for new',
+  '   issues. For each prior finding, return a `verifiedFindings` entry with',
+  '   status exactly resolved, open, or regressed and cite what you checked.',
+  '2. Discovery pass: only after the regression pass, look for new findings in',
+  '   the current diff.',
+  '',
   'Weight your review toward OBJECTION-CLASS defects normal usage cannot surface:',
   'security, privacy, data-integrity, concurrency, outbound, cost-perf.',
   'Raise an objection ONLY for those classes; ordinary quality problems are a',
@@ -237,7 +245,7 @@ const REVIEWER_INSTRUCTION = [
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
   'value: pass, pass-with-warnings, or fail:',
   '```reviewer-verdict',
-  '{"outcome": "pass", "notes": "<short non-objection feedback>", "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "reversible": true}]}',
+  '{"outcome": "pass", "notes": "<short non-objection feedback>", "verifiedFindings": [{"id": "finding-...", "status": "resolved", "notes": "<what you verified>"}], "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "reversible": true}]}',
   '```',
   'An empty findings array means no objection-class finding.',
 ].join('\n');
@@ -320,11 +328,14 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
   }
   const v = parsed as Record<string, unknown>;
   const { findings, malformedReason } = parseFindings(v);
+  const verifiedFindings = parseFindingVerifications(v);
+  const hasVerifiedFindings = Array.isArray(v['verifiedFindings']);
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
   if (malformedReason !== undefined) {
     return {
       outcome: 'fail',
       findings,
+      ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       notes: notes ?? malformedReason,
     };
   }
@@ -342,12 +353,14 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
     return {
       pass: legacyPass,
       objections: findings,
+      ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       ...(notes !== undefined ? { notes } : {}),
     };
   }
   return {
     outcome,
     findings,
+    ...(hasVerifiedFindings ? { verifiedFindings } : {}),
     ...(notes !== undefined ? { notes } : {}),
   };
 }
@@ -399,6 +412,30 @@ function parseFindings(v: Record<string, unknown>): {
     });
   }
   return { findings };
+}
+
+function parseFindingVerifications(v: Record<string, unknown>): FindingVerification[] {
+  const source = Array.isArray(v['verifiedFindings']) ? v['verifiedFindings'] : [];
+  return source.flatMap((raw): FindingVerification[] => {
+    if (!raw || typeof raw !== 'object') return [];
+    const o = raw as Record<string, unknown>;
+    if (
+      typeof o['id'] !== 'string' ||
+      !isFindingStatus(o['status']) ||
+      typeof o['notes'] !== 'string'
+    ) {
+      return [];
+    }
+    return [{
+      id: o['id'].slice(0, NOTE_MAX_CHARS),
+      status: o['status'],
+      notes: o['notes'].slice(0, NOTE_MAX_CHARS),
+    }];
+  });
+}
+
+function isFindingStatus(status: unknown): status is FindingVerification['status'] {
+  return status === 'open' || status === 'resolved' || status === 'regressed';
 }
 
 function parseGateVerdict(text: string, tag: string): GateVerdict {
@@ -553,7 +590,7 @@ function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined)
     '## Open findings ledger for this round',
     '',
     ...findingsLedger.flatMap((finding, index) => [
-      `${index + 1}. ${finding.sourceGate} ${finding.class}/${finding.severity} at ` +
+      `${index + 1}. ${finding.id}: ${finding.sourceGate} ${finding.class}/${finding.severity} at ` +
         `${finding.location}`,
       `Status: ${finding.status}; reversible: ${finding.reversible ? 'yes' : 'no'}`,
       `Rationale: ${finding.rationale.slice(0, NOTE_MAX_CHARS)}`,

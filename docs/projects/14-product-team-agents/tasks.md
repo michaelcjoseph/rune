@@ -1087,7 +1087,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Add stable finding-id generation and dedupe semantics for the ledger and terminal bug
       entries so re-reviews of the same finding update one ledger row instead of creating
       duplicate bugs.
-- [ ] Update the reviewer harness to run regression-first then discovery, and update
+- [x] Update the reviewer harness to run regression-first then discovery, and update
       `agents/reviewer/SOUL.md` to hunt the new class set and set `reversible` per finding.
 - [ ] Update tech-lead diff and designer verdict normalization so their findings use the same
       class/severity/reversible shape and enter the shared ledger with `sourceGate`; a finding that

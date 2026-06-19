@@ -37,7 +37,11 @@ import {
   __resetOrchestratedRuntimeForTest,
 } from './orchestrated-work-runner.js';
 import { parsePolicy, type ModelPolicy } from '../intent/model-policy.js';
-import { runTeamTaskWorkflow, type TeamTaskDeps } from '../intent/team-task-workflow.js';
+import {
+  runTeamTaskWorkflow,
+  type FindingsLedgerEntry,
+  type TeamTaskDeps,
+} from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
@@ -253,6 +257,80 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(calls.map((c) => c.role)).toEqual(['reviewer', 'tech-lead']);
     // Judgment roles run on the policy-resolved opus binding.
     expect(calls.every((c) => c.model === 'opus')).toBe(true);
+  });
+
+  it('prompts reviewer re-review to verify prior findings before discovery and return cited verification statuses', async () => {
+    const reviewerPrompts: Array<{ systemPrompt: string; message: string }> = [];
+    const priorFinding: FindingsLedgerEntry = {
+      id: 'finding-reviewer-security-auth-42',
+      sourceGate: 'reviewer',
+      class: 'security',
+      severity: 'high',
+      location: 'src/auth.ts:42',
+      rationale: 'token comparison leaks timing information',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, systemPrompt, message }) => {
+        if (role !== 'reviewer') return GREEN_JUDGMENT_REPLY;
+        reviewerPrompts.push({ systemPrompt, message });
+        return [
+          '```reviewer-verdict',
+          JSON.stringify({
+            outcome: 'pass',
+            findings: [],
+            verifiedFindings: [
+              {
+                id: priorFinding.id,
+                status: 'resolved',
+                notes: 'verified the timing-safe comparison now covers this finding',
+              },
+            ],
+          }),
+          '```',
+        ].join('\n');
+      },
+    }));
+
+    const verdictPromise = deps.reviewer({
+      diff: 'diff --git a/src/auth.ts b/src/auth.ts\n+++ b/src/auth.ts\n+timingSafeEqual(a, b)\n',
+      spec: 'Auth comparisons must not leak timing information.',
+      tests: ['src/auth.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+      findingsLedger: [priorFinding],
+    });
+
+    const verdict = await verdictPromise;
+    expect(reviewerPrompts).toHaveLength(1);
+    const prompt = `${reviewerPrompts[0]?.systemPrompt ?? ''}\n\n${reviewerPrompts[0]?.message ?? ''}`;
+    const lowerPrompt = prompt.toLowerCase();
+    const regressionIndex = lowerPrompt.indexOf('regression pass');
+    const discoveryIndex = lowerPrompt.indexOf('discovery pass');
+
+    expect(regressionIndex).toBeGreaterThanOrEqual(0);
+    expect(discoveryIndex).toBeGreaterThanOrEqual(0);
+    expect(regressionIndex).toBeLessThan(discoveryIndex);
+    expect(prompt).toContain('verifiedFindings');
+    expect(prompt).toContain('resolved');
+    expect(prompt).toContain('open');
+    expect(prompt).toContain('regressed');
+    expect(prompt).toContain(priorFinding.id);
+    expect(prompt).toContain(priorFinding.location);
+    expect(prompt).toContain(priorFinding.rationale);
+    expect(verdict).toMatchObject({
+      outcome: 'pass',
+      verifiedFindings: [
+        {
+          id: priorFinding.id,
+          status: 'resolved',
+          notes: expect.stringContaining('timing-safe'),
+        },
+      ],
+    });
   });
 
   it('normalizes a legacy reviewer boolean verdict to the shared outcome enum at the role boundary', async () => {

@@ -405,6 +405,23 @@ describe('roles/loader — charter inventory (real disk)', () => {
     expect(combined).toMatch(/to(?:Contain|Match)\([^)]*(?:redact|mask|placeholder)/i);
   });
 
+  it('reviewer SOUL names the Phase 14 finding classes and requires reversible per finding', () => {
+    const soul = readFileSync(join(roleDir('reviewer'), SOUL_FILENAME), 'utf8');
+
+    for (const className of [
+      'security',
+      'privacy',
+      'data-integrity',
+      'concurrency',
+      'outbound',
+      'cost-perf',
+    ]) {
+      expect(soul).toContain(className);
+    }
+    expect(soul).toContain('reversible');
+    expect(soul).not.toMatch(/irreversible operations/i);
+  });
+
   it.each([...ROLE_NAMES])(
     'role "%s" SOUL states a mandate and review edges',
     (role: RoleName) => {
