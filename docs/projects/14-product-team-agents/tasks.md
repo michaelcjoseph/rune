@@ -1113,7 +1113,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `writeFileAtomic`, deduped by run/task/finding id), HOLD the branch when any remaining
       `critical`/`high` is `reversible: false`, else proceed through gated auto-merge. This subsumes
       the multi-finding `.find` → `.every` gate-bypass defect.
-- [ ] Retire/rewrite the Phase 13 block-model tests that the union changes break at compile or
+- [x] Retire/rewrite the Phase 13 block-model tests that the union changes break at compile or
       assertion time (`team-task-workflow.test.ts`, `team-task-deps.test.ts`,
       `orchestrated-work-runner.test.ts`, `project-orchestrator.test.ts`, `orch-execution.test.ts`):
       drop the `block` outcome / `irreversibility` class / block-correction / per-task

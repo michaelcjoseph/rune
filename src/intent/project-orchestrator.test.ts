@@ -844,7 +844,6 @@ describe('project-orchestrator — durable run state', () => {
     const warningLedger: FindingsLedgerEntry[] = [{
       id: 'finding-cache-duplicate-reads',
       sourceGate: 'reviewer',
-      reversible: true,
       raisedRound: 1,
       status: 'open',
       ...warningFinding,

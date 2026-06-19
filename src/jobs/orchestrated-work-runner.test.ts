@@ -2,12 +2,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { GitRunner } from './sandbox-runtime.js';
+import type {
+  FinalizerEffects,
+  FinalizerInput,
+  FinalizerResult,
+  GateResult,
+} from './work-run-finalizer.js';
+import type { FinalizerHandoff } from '../intent/finalizer-handoff.js';
 
 const mockAppendMutationLine = vi.hoisted(() => vi.fn());
 const mockUpsertRun = vi.hoisted(() => vi.fn());
 const mockCreateTranscriptSink = vi.hoisted(() => vi.fn());
 const mockRunFinalizer = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (
+    _input: FinalizerInput,
+    _effects: FinalizerEffects,
+  ): Promise<FinalizerResult> => ({
     outcome: 'branch-complete',
     terminalEvent: {
       mutationId: 'mut-orch-automerge',
@@ -35,7 +46,7 @@ const mockRunFinalizer = vi.hoisted(() =>
     ],
   })),
 );
-const mockRunGate = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({ ok: true })));
 
 vi.mock('./mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
@@ -80,7 +91,7 @@ import {
   type MutationDescriptor,
   type MutationEvent,
 } from '../transport/mutations.js';
-import type { OrchestrationResult } from '../intent/project-orchestrator.js';
+import type { OrchestrationDeps, OrchestrationResult } from '../intent/project-orchestrator.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { isStalled, planQuietCancel, planQuietNudges, type SupervisedRun } from '../intent/supervision.js';
 import type { TaskEvidence } from '../intent/team-task-workflow.js';
@@ -145,11 +156,11 @@ function makeWorkProductGitStub(args: {
   diffstat: string;
   status?: string;
 }): {
-  runGit: ReturnType<typeof vi.fn>;
+  runGit: GitRunner;
   calls: Array<{ args: string[]; cwd?: string }>;
 } {
   const calls: Array<{ args: string[]; cwd?: string }> = [];
-  const runGit = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
+  const runGit: GitRunner = vi.fn(async (gitArgs: string[], opts?: { cwd?: string }) => {
     calls.push({ args: [...gitArgs], cwd: opts?.cwd });
     if (gitArgs[0] === 'rev-list') {
       return { stdout: args.commitShas.length > 0 ? `${args.commitShas.join('\n')}\n` : '', stderr: '' };
@@ -163,6 +174,24 @@ function makeWorkProductGitStub(args: {
     return { stdout: '', stderr: '' };
   });
   return { runGit, calls };
+}
+
+async function finalizeAsOrchestrationResult(
+  deps: Pick<OrchestrationDeps, 'finalize'>,
+): Promise<OrchestrationResult> {
+  const handoff: FinalizerHandoff = {
+    runId: 'test-run',
+    project: 'demo',
+    product: 'jarvis',
+    branch: 'jarvis-work/demo',
+    baseBranch: 'main',
+    taskRecords: [],
+  };
+  const result = await deps.finalize(handoff);
+  if (result.kind !== 'finalized') {
+    throw new Error(`expected finalizer adapter to finalize, got ${result.kind}`);
+  }
+  return { kind: 'finalized', outcome: result.outcome };
 }
 
 async function waitForUpserts(n: number): Promise<unknown[][]> {
@@ -821,7 +850,7 @@ describe('orchestratedWorkApplier', () => {
         destroyWorktree: async () => {
           destroyed = true;
         },
-        runOrchestration: async (deps) => deps.finalize(),
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
       });
 
       const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
@@ -908,7 +937,7 @@ describe('orchestratedWorkApplier', () => {
         },
         runOrchestration: async (deps) => {
           await deps.writeTasksMd('- [x] task one\n');
-          return deps.finalize();
+          return finalizeAsOrchestrationResult(deps);
         },
       });
 
@@ -1013,7 +1042,7 @@ describe('orchestratedWorkApplier', () => {
         },
         runOrchestration: async (deps) => {
           await deps.writeTasksMd('- [x] task one\n');
-          return deps.finalize();
+          return finalizeAsOrchestrationResult(deps);
         },
       });
 
@@ -1309,8 +1338,8 @@ describe('orchestratedWorkApplier', () => {
     });
 
     it('ordinary blocked orchestrated runs are FAILED + worktree destroyed, never parked', async () => {
-      // Only explicit parked orchestration results preserve the worktree. A
-      // normal block still fails terminally and tears down the sandbox.
+      // A normal operational block still fails terminally and tears down the
+      // sandbox; Phase 14 finding terminals use the held branch path instead.
       inject({
         kind: 'blocked',
         reason: 'a task needs a human decision',
@@ -1326,104 +1355,6 @@ describe('orchestratedWorkApplier', () => {
       expect(data['operatorWorktreePath']).toBeUndefined();
       // The worktree is unconditionally torn down (never left live for a human).
       expect(destroyed).toBe(true);
-    });
-
-    it('parked blocked-on-human orchestrated runs complete with parked metadata and preserve the worktree', async () => {
-      const parkedPath = '/tmp/jarvis-worktrees/jarvis/demo';
-      inject({
-        kind: 'blocked',
-        reason: 'feedback retry cap exhausted',
-        task: { id: 't1', text: 'task one', section: 'Phase 1' },
-        parked: {
-          status: 'blocked-on-human',
-          branch: 'jarvis-work/demo',
-          worktreePath: parkedPath,
-          preserveBranch: true,
-          preserveWorktree: true,
-        },
-      });
-      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
-      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
-      expect(terminal?.kind).toBe('completed');
-      const data = (terminal?.data ?? {}) as Record<string, unknown>;
-      expect(data['parked']).toBe(true);
-      expect(data['operatorWorktreePath']).toBe(parkedPath);
-      expect(data['branch']).toBe('jarvis-work/demo');
-      expect(data['preserveBranch']).toBe(true);
-      expect(data['preserveWorktree']).toBe(true);
-      expect(destroyed).toBe(false);
-    });
-
-    it('a surviving parked block keeps orchestration supervision blocked-on-human with the live worktree path', async () => {
-      const projectSlug = '14-product-team-agents';
-      let runId: string | undefined;
-
-      __setOrchestratedRuntimeForTest({
-        createWorktree: async () => {
-          created = true;
-          const { sandbox, dir } = makeWorktree(projectSlug);
-          wtDir = dir;
-          return sandbox;
-        },
-        destroyWorktree: async () => {
-          destroyed = true;
-        },
-        runOrchestration: async (deps) => ({
-          kind: 'blocked',
-          reason: 'open objection-class finding',
-          task: { id: 't1', text: 'task one', section: 'Phase 13' },
-          parked: {
-            status: 'blocked-on-human',
-            branch: deps.branch,
-            worktreePath: deps.worktreePath!,
-            preserveBranch: true,
-            preserveWorktree: true,
-          },
-        }),
-      });
-
-      (ctx.bus.publish as ReturnType<typeof vi.fn>).mockClear();
-      setMutationBus(ctx.bus);
-      registerApplier(orchestratedWorkApplier);
-      const createdMutation = await createMutation(
-        'orchestrated-work',
-        { projectSlug, product: 'jarvis' },
-        'webview',
-      );
-      if (!createdMutation.ok) throw new Error(createdMutation.reason);
-      runId = createdMutation.descriptor.id;
-
-      await waitForCondition(() => !activeRuns.has(runId!));
-
-      const statuses = mockUpsertRun.mock.calls
-        .map((call) => call[0] as SupervisedRun)
-        .filter((run) => run.id === runId)
-        .map((run) => run.status);
-      expect(statuses).toEqual(['running', 'running', 'blocked-on-human']);
-      expect(statuses).not.toContain('failed');
-      expect(statuses).not.toContain('completed');
-
-      const terminal = mockAppendMutationLine.mock.calls
-        .map((call) => call[0] as MutationDescriptor)
-        .filter((descriptor) => descriptor.id === runId)
-        .at(-1);
-      expect(terminal).toMatchObject({
-        kind: 'orchestrated-work',
-        status: 'completed',
-      });
-
-      const terminalEvent = (ctx.bus.publish as ReturnType<typeof vi.fn>).mock.calls
-        .map((call) => call[0] as { mutationId: string; subKind?: string; data?: Record<string, unknown> })
-        .find((event) => event.mutationId === runId && event.subKind === 'completed');
-      expect(terminalEvent?.data).toMatchObject({
-        parked: true,
-        operatorWorktreePath: wtDir,
-        branch: 'jarvis-work/14-product-team-agents',
-        preserveBranch: true,
-        preserveWorktree: true,
-        dispatchMode: 'orchestrated',
-      });
-      expect(destroyed).toBe(false);
     });
 
     it('a non-reversible high terminal finding completes as a held terminal with work preserved and never merges', async () => {

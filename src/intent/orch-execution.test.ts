@@ -95,7 +95,7 @@ describe('orch-run-record — required fields', () => {
     expect(rec.outcome).toBe('ready-for-closeout');
   });
 
-  it('carries pass-with-warnings findings and accepted-block rationales as task evidence', () => {
+  it('carries pass-with-warnings findings and low-severity acceptance rationales as task evidence', () => {
     const warning = {
       class: 'cost-perf',
       severity: 'low',
@@ -106,7 +106,7 @@ describe('orch-run-record — required fields', () => {
       actor: 'pm',
       decision: 'accepted-with-rationale',
       rationale:
-        'Accepting because the remaining concern is non-blocking and the task contract is satisfied.',
+        'Accepting because the remaining concern is low severity and the task contract is satisfied.',
     } as const;
 
     const warnings = [warning];

@@ -2739,7 +2739,7 @@ describe('team-task-workflow — round cap', () => {
     }
   });
 
-  it('a still-open cap terminal does not enter blocked-on-human or mention PM in the block reason', async () => {
+  it('a still-open terminal does not enter blocked-on-human or mention PM in the hold reason', async () => {
     const deps = makeDeps({
       reviewer: async () => ({ pass: false, objections: [] }),
       pmWrapup: forbidPmWrapup(),
