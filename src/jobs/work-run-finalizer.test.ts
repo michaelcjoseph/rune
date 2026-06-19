@@ -126,6 +126,23 @@ function outcomeEvent(
   };
 }
 
+function noopAllTasksCheckedEvent(): MutationEvent {
+  const ev = outcomeEvent('noop', 'no commits, all original tasks checked, clean tree');
+  ev.data = {
+    ...(ev.data as Record<string, unknown>),
+    workProduct: {
+      commitCount: 0,
+      commitShas: [],
+      filesChanged: [],
+      diffstat: '',
+      dirty: false,
+      untracked: false,
+      transitions: { tasksNewlyChecked: 2, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+    },
+  };
+  return ev;
+}
+
 /** Effects bag: every seam a spy, the durable phase store an array. */
 function makeEffects(terminalEvent: MutationEvent, over: Partial<FinalizerEffects> = {}) {
   const phases: FinalizerPhase[] = [];
@@ -386,6 +403,32 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(effects.mergeBranch).toHaveBeenCalledOnce();
     expect(effects.pushBranch).toHaveBeenCalledOnce();
     expect(result.merged).toBe(true);
+  });
+
+  it('noop with all original tasks checked skips project-index Done flip and never merges (Phase 15)', async () => {
+    const ev = noopAllTasksCheckedEvent();
+    const markProjectDone = vi.fn(async () => ({
+      kind: 'committed',
+      commitSha: 'must-not-happen',
+      changedTokens: ['table-status', 'section-heading-status'],
+    }));
+    const { effects, phases } = makeEffects(ev, { markProjectDone } as never);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(markProjectDone).not.toHaveBeenCalled();
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.pushBranch).not.toHaveBeenCalled();
+    expect(effects.deleteBranch).not.toHaveBeenCalled();
+    expect(effects.writeSummary).toHaveBeenCalledWith(ev);
+    expect(effects.appendIndexRow).toHaveBeenCalledWith(ev);
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    expect(phases).not.toContain('project-marked-done');
+    expect(phases).not.toContain('merged-not-pushed');
+    expect(result.outcome).toBe('noop');
+    expect(result.merged).toBe(false);
+    expect(result.branchDeleted).toBe(false);
   });
 
   it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {

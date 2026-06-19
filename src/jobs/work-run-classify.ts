@@ -263,7 +263,8 @@ export async function computeWorkProduct(opts: ComputeWorkProductOpts): Promise<
  *  - commits + no original tasks remain -> `branch-complete`
  *  - commits + unchecked tasks remain   -> `partial`
  *  - zero commits + dirty/untracked tree -> `dirty-uncommitted`
- *  - zero commits + zero transitions + clean tree -> `noop`
+ *  - zero commits + clean tree -> `noop` (even if tasks.md checkboxes changed;
+ *    without a commit there is no durable branch work to merge)
  * Only ever returns a `WorkOutcome` (never `parked`/`blocked-on-human`, which are
  * supervision state, not a work-product verdict).
  */
@@ -276,6 +277,9 @@ function classifyWorkProduct(product: WorkProductFacts): ClassifyResult {
   }
   if (dirty || untracked) {
     return { outcome: 'dirty-uncommitted', reason: 'no commits but the working tree is dirty/untracked' };
+  }
+  if (transitions.tasksNewlyChecked > 0 && transitions.tasksRemaining === 0) {
+    return { outcome: 'noop', reason: 'no commits, all original tasks checked, clean tree' };
   }
   return { outcome: 'noop', reason: 'no commits, no task transitions, clean tree' };
 }

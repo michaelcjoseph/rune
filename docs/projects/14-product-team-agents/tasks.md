@@ -1166,7 +1166,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       section heading and records ONE dedicated commit on the feature branch carrying that edit,
       AFTER classification and BEFORE the gate. An already-`Done` project is left unchanged
       (idempotent — no empty commit, safe on crash-resume re-read).
-- [ ] Noop-skips-index test: an all-tasks-checked run with zero commits classifies `noop`, so the
+- [x] Noop-skips-index test: an all-tasks-checked run with zero commits classifies `noop`, so the
       index flip never fires and the run never merges — the flip is gated on the classified
       `branch-complete` outcome, not on all-tasks-checked alone.
 - [ ] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the

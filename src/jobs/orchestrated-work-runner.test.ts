@@ -1203,6 +1203,18 @@ describe('orchestratedWorkApplier', () => {
         expectedTransitions: { tasksNewlyChecked: 0, tasksRemaining: 1, tasksAdded: 0, tasksRemoved: 0 },
         expectedFilesChanged: [],
       },
+      {
+        label: 'zero commits with all original tasks checked',
+        runId: 'mut-orch-classify-checkbox-only-noop',
+        declaredOutcome: 'branch-complete' as const,
+        initialTasks: '- [ ] write classifier tests\n- [ ] wire classifier\n',
+        finalTasks: '- [x] write classifier tests\n- [x] wire classifier\n',
+        commitShas: [],
+        diffstat: '',
+        expectedOutcome: 'noop',
+        expectedTransitions: { tasksNewlyChecked: 2, tasksRemaining: 0, tasksAdded: 0, tasksRemoved: 0 },
+        expectedFilesChanged: [],
+      },
     ])(
       'writes summary.json from computed orchestrated branch work product: $label',
       async ({
