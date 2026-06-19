@@ -14,7 +14,18 @@
  *   pushes, or deletes the branch; supervision ends terminal, never `running`.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // work-run-finalizer.ts is type-only at the scaffold stage, but the P0.4a impl
 // will import config-bearing modules (mutations/classify/store). Mock config so
@@ -189,6 +200,39 @@ async function loadMarkProjectIndexDoneInText(): Promise<MarkProjectIndexDoneInT
   return mod.markProjectIndexDoneInText as MarkProjectIndexDoneInText;
 }
 
+type MarkProjectDoneOnBranch = (opts: {
+  worktreePath: string;
+  project: string;
+  commitMessage?: string;
+}) => Promise<{
+  kind: 'committed' | 'already-done' | 'skipped' | 'ambiguous';
+  reason?: string;
+  commitSha?: string | null;
+  changedTokens?: string[];
+}>;
+
+async function loadMarkProjectDoneOnBranch(): Promise<MarkProjectDoneOnBranch> {
+  const mod = await import('./work-run-finalizer.js') as typeof import('./work-run-finalizer.js') & {
+    markProjectDoneOnBranch?: unknown;
+  };
+  expect(mod.markProjectDoneOnBranch).toEqual(expect.any(Function));
+  return mod.markProjectDoneOnBranch as MarkProjectDoneOnBranch;
+}
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  }).trim();
+}
+
 // ---------------------------------------------------------------------------
 // Phase 15 — Project index Done writer. WRITE-FIRST: this export does not exist
 // yet, so these fail as a clean missing-symbol assertion until the pure writer
@@ -348,6 +392,132 @@ describe('markProjectIndexDoneInText — Phase 15 project completion writer', ()
       expect(result.content).toBe(content);
     },
   );
+});
+
+describe('markProjectDoneOnBranch — Phase 15 branch-owned project completion commit', () => {
+  let tmpRoot: string | null = null;
+
+  afterEach(() => {
+    if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+    tmpRoot = null;
+  });
+
+  function makeRepo(indexContent: string): { repoPath: string; branch: string; baseSha: string } {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'jarvis-project-done-branch-test-'));
+    const repoPath = join(tmpRoot, 'repo');
+    const branch = 'jarvis-work/14-product-team-agents';
+    mkdirSync(join(repoPath, 'docs/projects'), { recursive: true });
+    git(tmpRoot, 'init', '-q', '-b', 'main', repoPath);
+    writeFileSync(join(repoPath, 'docs/projects/index.md'), indexContent, 'utf8');
+    git(repoPath, 'add', '.');
+    git(repoPath, 'commit', '-q', '-m', 'seed project index');
+    const baseSha = git(repoPath, 'rev-parse', 'main');
+
+    git(repoPath, 'checkout', '-q', '-b', branch);
+    writeFileSync(join(repoPath, 'feature.txt'), 'feature work\n', 'utf8');
+    git(repoPath, 'add', '.');
+    git(repoPath, 'commit', '-q', '-m', 'feature work');
+
+    return { repoPath, branch, baseSha };
+  }
+
+  it('commits the Status→Done edit on the checked-out feature branch, leaving base untouched and the worktree clean', async () => {
+    const markProjectDoneOnBranch = await loadMarkProjectDoneOnBranch();
+    const { repoPath, branch, baseSha } = makeRepo([
+      '# Projects',
+      '',
+      '| Project | Status | Summary |',
+      '| --- | --- | --- |',
+      '| [Product Team](14-product-team-agents/) | Active | Simulated team loop |',
+      '',
+      '## 14-product-team-agents — Active (reopened 2026-06-14)',
+      '',
+    ].join('\n'));
+    const featureHeadBefore = git(repoPath, 'rev-parse', 'HEAD');
+
+    const result = await markProjectDoneOnBranch({
+      worktreePath: repoPath,
+      project: '14-product-team-agents',
+      commitMessage: 'Mark 14-product-team-agents Done in project index',
+    });
+
+    const featureHeadAfter = git(repoPath, 'rev-parse', 'HEAD');
+    expect(result.kind).toBe('committed');
+    expect(result.commitSha).toBe(featureHeadAfter);
+    expect(featureHeadAfter).not.toBe(featureHeadBefore);
+    expect(git(repoPath, 'rev-parse', 'HEAD^')).toBe(featureHeadBefore);
+    expect(git(repoPath, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+    expect(git(repoPath, 'rev-parse', 'main')).toBe(baseSha);
+    expect(git(repoPath, 'status', '--porcelain')).toBe('');
+    expect(git(repoPath, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD')).toBe(
+      'docs/projects/index.md',
+    );
+    expect(git(repoPath, 'show', '--format=%s', '--no-patch', 'HEAD')).toBe(
+      'Mark 14-product-team-agents Done in project index',
+    );
+    expect(readFileSync(join(repoPath, 'docs/projects/index.md'), 'utf8')).toContain(
+      '| [Product Team](14-product-team-agents/) | Done | Simulated team loop |',
+    );
+    expect(git(repoPath, 'show', `${branch}:docs/projects/index.md`)).toContain(
+      '## 14-product-team-agents — Done (reopened 2026-06-14)',
+    );
+    expect(git(repoPath, 'show', 'main:docs/projects/index.md')).toContain(
+      '## 14-product-team-agents — Active (reopened 2026-06-14)',
+    );
+  });
+
+  it('on an ambiguous index writer failure, leaves no unstaged project-index edit behind', async () => {
+    const markProjectDoneOnBranch = await loadMarkProjectDoneOnBranch();
+    const ambiguousIndex = [
+      '# Projects',
+      '',
+      '| Project | Status | Summary |',
+      '| --- | --- | --- |',
+      '| [Product Team](14-product-team-agents/) | Active | First duplicate |',
+      '| [Product Team again](14-product-team-agents/) | Active | Second duplicate |',
+      '',
+      '## 14-product-team-agents — Active',
+      '',
+      '## 14-product-team-agents — In Progress',
+      '',
+    ].join('\n');
+    const { repoPath } = makeRepo(ambiguousIndex);
+    const headBefore = git(repoPath, 'rev-parse', 'HEAD');
+
+    const result = await markProjectDoneOnBranch({
+      worktreePath: repoPath,
+      project: '14-product-team-agents',
+    });
+
+    expect(result.kind).toBe('ambiguous');
+    expect(result.commitSha ?? null).toBeNull();
+    expect(git(repoPath, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(git(repoPath, 'status', '--porcelain')).toBe('');
+    expect(readFileSync(join(repoPath, 'docs/projects/index.md'), 'utf8')).toBe(ambiguousIndex);
+  });
+
+  it('skips gracefully when the worktree has no docs/projects/index.md', async () => {
+    const markProjectDoneOnBranch = await loadMarkProjectDoneOnBranch();
+    tmpRoot = mkdtempSync(join(tmpdir(), 'jarvis-project-done-branch-test-'));
+    const repoPath = join(tmpRoot, 'repo');
+    git(tmpRoot, 'init', '-q', '-b', 'main', repoPath);
+    writeFileSync(join(repoPath, 'README.md'), 'no project index here\n', 'utf8');
+    git(repoPath, 'add', '.');
+    git(repoPath, 'commit', '-q', '-m', 'seed repo');
+    git(repoPath, 'checkout', '-q', '-b', 'jarvis-work/no-index');
+    const headBefore = git(repoPath, 'rev-parse', 'HEAD');
+
+    const result = await markProjectDoneOnBranch({
+      worktreePath: repoPath,
+      project: '14-product-team-agents',
+    });
+
+    expect(result.kind).toBe('skipped');
+    expect(result.commitSha ?? null).toBeNull();
+    expect(git(repoPath, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(git(repoPath, 'status', '--porcelain')).toBe('');
+    expect(existsSync(join(repoPath, 'docs/projects/index.md'))).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

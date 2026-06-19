@@ -32,6 +32,10 @@
  * See docs/projects/15-work-run-finalizer/{spec.md, tasks.md, test-plan.md}.
  */
 
+import { execFile as execFileCb } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { MutationEvent } from '../transport/mutations.js';
 import type { WorkOutcome, WorkProductFacts } from './work-run-classify.js';
 import type { GateFailReason, GateResult } from './work-run-gate.js';
@@ -39,6 +43,8 @@ import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 
 const log = createLogger('work-run-finalizer');
+const execFile = promisify(execFileCb);
+const PROJECT_INDEX_REPO_PATH = 'docs/projects/index.md';
 
 /** Read the typed `outcome` off a classified terminal event (mirrors
  *  applyOutcomeToDescriptor / buildSummary). Falls back to `failed` if absent
@@ -392,6 +398,92 @@ export function markProjectIndexDoneInText(
 
   const nextContent = next.join('\n');
   return { kind: changed ? 'updated' : 'already-done', content: nextContent };
+}
+
+function changedProjectIndexTokens(before: string, after: string, slug: string): string[] {
+  const beforeLines = before.split('\n');
+  const afterLines = after.split('\n');
+  const changed = new Set<string>();
+  const length = Math.max(beforeLines.length, afterLines.length);
+
+  for (let i = 0; i < length; i += 1) {
+    const beforeLine = beforeLines[i] ?? '';
+    const afterLine = afterLines[i] ?? '';
+    if (beforeLine === afterLine) continue;
+
+    if (beforeLine.trimStart().startsWith('|') || afterLine.trimStart().startsWith('|')) {
+      if (
+        hasProjectLinkAnywhere(beforeLine.split('|'), slug) ||
+        hasProjectLinkAnywhere(afterLine.split('|'), slug)
+      ) {
+        changed.add('table-status');
+      }
+    }
+    if (isProjectHeadingLine(beforeLine, slug) || isProjectHeadingLine(afterLine, slug)) {
+      changed.add('section-heading-status');
+    }
+  }
+
+  return [...changed];
+}
+
+function gitIdentityEnv(): NodeJS.ProcessEnv {
+  const committerName = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? 'Jarvis';
+  const committerEmail =
+    process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? 'jarvis@example.com';
+  return {
+    ...process.env,
+    GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? committerName,
+    GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? committerEmail,
+    GIT_COMMITTER_NAME: committerName,
+    GIT_COMMITTER_EMAIL: committerEmail,
+  };
+}
+
+async function git(worktreePath: string, args: string[]): Promise<string> {
+  const { stdout } = await execFile('git', args, {
+    cwd: worktreePath,
+    encoding: 'utf8',
+    env: gitIdentityEnv(),
+  });
+  return stdout.trim();
+}
+
+export async function markProjectDoneOnBranch(opts: {
+  worktreePath: string;
+  project: string;
+  commitMessage?: string;
+}): Promise<MarkProjectDoneResult> {
+  const indexPath = join(opts.worktreePath, PROJECT_INDEX_REPO_PATH);
+  if (!existsSync(indexPath)) {
+    return { kind: 'skipped', commitSha: null, changedTokens: [] };
+  }
+
+  const before = readFileSync(indexPath, 'utf8');
+  const result = markProjectIndexDoneInText(before, opts.project);
+  if (result.kind === 'ambiguous') {
+    return { kind: 'ambiguous', reason: result.reason, commitSha: null, changedTokens: [] };
+  }
+  if (result.kind === 'already-done') {
+    return { kind: 'already-done', commitSha: null, changedTokens: [] };
+  }
+
+  writeFileSync(indexPath, result.content, 'utf8');
+  await git(opts.worktreePath, ['add', '--', PROJECT_INDEX_REPO_PATH]);
+  await git(opts.worktreePath, [
+    'commit',
+    '-m',
+    opts.commitMessage ?? `Mark ${opts.project} Done in project index`,
+    '--',
+    PROJECT_INDEX_REPO_PATH,
+  ]);
+  const commitSha = await git(opts.worktreePath, ['rev-parse', 'HEAD']);
+
+  return {
+    kind: 'committed',
+    commitSha,
+    changedTokens: changedProjectIndexTokens(before, result.content, opts.project),
+  };
 }
 
 /** Build the durable-phase recorder both modes use: each `record(phase)` writes

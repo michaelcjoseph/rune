@@ -1181,7 +1181,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Terminal-summary-refresh test: because the index flip creates a new commit after the initial
       eligibility classification, `summary.json`, the work-runs index row, and the terminal payload
       include the project-Done commit's head sha/commit count (no stale pre-finalizer summary).
-- [ ] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
+- [x] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
       worktree, so it is part of what merges to the base branch — not written to the base directly
       and not left uncommitted in the worktree (a writer failure leaves no unstaged index edit).
 - [ ] Project-marked-done-resume test: crash/restart after `project-marked-done` (and before
