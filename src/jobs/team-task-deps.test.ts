@@ -333,6 +333,41 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     });
   });
 
+  it('instructs the reviewer it has no repo access and must not object to absence inferred from a partial diff', async () => {
+    // Regression: the reviewer is a text-only judge with no tools, yet it raised
+    // a critical objection claiming a symbol was "exported nowhere (verified via
+    // grep over src/)" — a fabricated verification against a partial diff that
+    // did not match the committed tree. The instruction must forbid both.
+    let reviewerSystemPrompt = '';
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, systemPrompt }) => {
+        if (role !== 'reviewer') return GREEN_JUDGMENT_REPLY;
+        reviewerSystemPrompt = systemPrompt;
+        return ['```reviewer-verdict', JSON.stringify({ outcome: 'pass', findings: [] }), '```'].join('\n');
+      },
+    }));
+
+    await deps.reviewer({
+      diff: 'diff --git a/src/x.ts b/src/x.ts\n+++ b/src/x.ts\n+export const x = 1;\n',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'ctx',
+      reviewerProvider: 'anthropic',
+      findingsLedger: [],
+    });
+
+    const lower = reviewerSystemPrompt.toLowerCase();
+    // No fabricated verification — the reviewer has no tools.
+    expect(lower).toContain('no tools');
+    expect(lower).toContain('no repository access');
+    expect(lower).toContain('fabrication');
+    // No objection-class finding from mere absence in a partial diff.
+    expect(lower).toContain('partial view');
+    expect(lower).toContain('exported nowhere');
+    expect(lower).toContain('never as an objection-class finding');
+  });
+
   it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {
     const coderPrompts: string[] = [];
     const unorderedLedger: FindingsLedgerEntry[] = [
