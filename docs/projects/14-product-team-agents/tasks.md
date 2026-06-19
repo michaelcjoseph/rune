@@ -1128,6 +1128,104 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ---
 
+## Phase 15 - Project-completion finalization & per-commit progress alerts (added 2026-06-18)
+
+> Phase 15 wrap-up. Two operator-visibility gaps the Phase 10/14 auto-merge path left open:
+> (1) when a project's last task lands and the run merges clean, nothing flips the project's
+> `index.md` Status to **Done** and nothing tells the operator the branch reached `main` — the
+> merge is silent; (2) the per-task closeout commits stream by with no notification, so there is
+> no live "task N of M done" signal while a run is in flight. This phase makes project completion
+> finalize the index row and announce itself, and makes every closeout commit emit a progress
+> alert.
+>
+> **Mostly wiring over existing substrate, not new merge machinery.** The gated merge, push,
+> worktree removal, and branch delete already exist (`work-run-finalizer.ts` `finalizeGatedMerge`:
+> `mergeBranch` → `pushBranch` → `removeWorktree` → `deleteBranch`), and Phase 14's terminal
+> handler already routes a clean `branch-complete` run through them and ends the run. Phase 15
+> adds two steps to that path — an index-status commit BEFORE the merge and a success
+> notification AFTER it — plus one alert at the per-task closeout commit. It does NOT add a
+> second merge path, a new bot, or new chat plumbing (reuses the operator notification surface in
+> `transport/telegram-sender.ts`, the same path the gate-fail `alert` already reaches).
+>
+> **Sequencing:** runs via the orchestrator AFTER Phase 14. Depends on Phase 5 (orchestrator
+> loop), Phase 10 (finalizer wiring + durable transcript), Phase 14 (terminal handler). A
+> `/work --auto` target — no operator decisions in the path.
+
+### Red tests (confirm red before implementation)
+
+**A. Project-completion finalization**
+
+- [ ] Index-Done test: when the orchestrated terminal handler resolves a clean `branch-complete`
+      (all tasks checked, no `reversible:false` hold), it flips the project's Status cell in
+      `docs/projects/index.md` to `Done` and records ONE closeout commit on the feature branch
+      carrying that edit, BEFORE the finalizer merges. An already-`Done` row is left unchanged
+      (idempotent — no empty commit).
+- [ ] Index-on-branch test: the Status→`Done` edit is committed on the feature branch in the
+      worktree, so it is part of what merges to `main` — not written to `main` directly and not
+      left uncommitted in the worktree.
+- [ ] Hold-skips-index test: a run that HOLDs (a remaining `reversible:false` high/critical
+      finding, or an operational HOLD) does NOT flip the index to `Done`; the row flips only on a
+      merge-bound terminal.
+- [ ] Merge-success-notify test: a successful gated merge to `main` sends exactly one Telegram
+      message to the operator naming the project and that it landed on `main`; a gate-fail HOLD
+      still sends only the existing fail alert and never the success message (no double-send,
+      no success message on a hold).
+- [ ] Order test: for a clean run the sequence is index-`Done` commit → gate → merge → push →
+      remove worktree → delete branch → success notify → run-end; the success notify fires only
+      after `mergeBranch`/`pushBranch` resolve.
+
+**B. Per-commit progress alerts**
+
+- [ ] Per-commit-alert test: each successful closeout commit (`commitCloseout`,
+      `orchestrated-work-runner.ts:306`) emits one Telegram message naming the just-completed
+      task and a remaining/total breakdown (e.g. "3/12 done, 9 remaining") derived from the live
+      `tasks.md` checkbox counts / `transitions.tasksRemaining`, not a hardcoded number.
+- [ ] No-commit-no-alert test: a task that blocks/holds without a closeout commit emits no
+      progress alert — the alert is bound to a real commit, not to task selection.
+- [ ] Alert-fail-safe test: a Telegram send failure (per-commit OR merge-success) records a
+      durable skip/error and never blocks or fails the run — notification is best-effort.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+> Part A and Part B are independent; land each as a unit. Both reuse the existing operator
+> notification surface — no new bot or chat plumbing.
+
+**A. Project-completion finalization**
+
+- [ ] Add an idempotent index-status writer: a helper that flips a project's Status cell in
+      `docs/projects/index.md` to `Done` (no-op + no commit when already `Done`), run in the
+      worktree against the feature branch and committed as a dedicated closeout commit. Insert it
+      into the Phase 14 terminal handler on the merge-bound (`branch-complete`, no
+      `reversible:false` hold) path, BEFORE the finalizer's `mergeBranch`.
+- [ ] Add a merge-success notification: extend the gated-merge effects in `work-run-finalizer.ts`
+      `finalizeGatedMerge` with an `onMerged` success callback that fires after `pushBranch`
+      resolves, symmetric to the existing gate-fail `alert`; bind it in `orchestrated-work-runner.ts`
+      to an operator Telegram message naming the project + that it landed on `main`. Leave the
+      gate-fail `alert` path unchanged.
+- [ ] Confirm the merge-bound path order (index-`Done` commit → gate → merge → push → remove
+      worktree → delete branch → success notify → run-end) and that a HOLD path skips BOTH the
+      index flip and the success notify.
+
+**B. Per-commit progress alerts**
+
+- [ ] Emit a per-commit progress alert at `commitCloseout`: after the closeout commit succeeds,
+      send one operator Telegram message with the just-completed task title + remaining/total
+      from the live `tasks.md` checkbox counts. Bind it to the commit; fail-safe (a send error is
+      recorded, never fatal).
+- [ ] **Live acceptance:** a multi-task orchestrated run on a throwaway fixture project (reuse the
+      Phase 8/10 `__acceptance__` temp-repo + local bare remote harness, notification surface
+      injected so no real Telegram is needed) drives ≥2 tasks and asserts: one progress alert per
+      closeout commit with a correct remaining/total; on the final task the index row flips to
+      `Done` on the branch; the branch merges to the bare remote; and exactly one merge-success
+      notification fires.
+
+> **User-reachability:** YES — after this phase, an operator watching a run gets a "task done, N
+> remaining" ping at every commit, and when the project finishes, its index row reads **Done** and
+> a single "merged to `main`" message lands. The silent auto-merge becomes a narrated one.
+
+---
+
 ## Out of scope
 
 - Roles beyond PM, tech lead, QA, coder, reviewer, and designer.
