@@ -150,6 +150,16 @@ export interface FinalizerInput {
   baseBranch?: string;
 }
 
+export type NotificationPublicationKind = 'merge-success';
+export type NotificationPublicationStatus = 'error';
+
+export interface NotificationPublicationRecord {
+  kind: NotificationPublicationKind;
+  key: string;
+  status: NotificationPublicationStatus;
+  error: string;
+}
+
 export type ProjectIndexAmbiguousReason = 'malformed-table' | 'no-match' | 'multiple-matches';
 
 export type MarkProjectDoneResult =
@@ -221,6 +231,8 @@ export interface FinalizerEffects {
   /** Optional notification seam for a clean gated merge after the branch has
    *  landed and cleanup/delete have been attempted, before the terminal write. */
   onLanded?: () => void;
+  /** Durable best-effort record for notification publication failures. */
+  recordNotificationPublication?: (record: NotificationPublicationRecord) => void;
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
    *  worktree / on the base). */
   mergeBranch?: () => Promise<void>;
@@ -547,6 +559,36 @@ function makeRecorder(effects: FinalizerEffects): {
   };
 }
 
+function notificationPublicationKey(
+  input: FinalizerInput,
+  kind: NotificationPublicationKind,
+  phase: FinalizerPhase,
+): string {
+  return `${input.runId}:${kind}:${input.branch}:${phase}`;
+}
+
+function recordNotificationPublicationFailure(
+  input: FinalizerInput,
+  effects: FinalizerEffects,
+  kind: NotificationPublicationKind,
+  phase: FinalizerPhase,
+  error: string,
+): void {
+  try {
+    effects.recordNotificationPublication?.({
+      kind,
+      key: notificationPublicationKey(input, kind, phase),
+      status: 'error',
+      error,
+    });
+  } catch (err) {
+    log.warn('notification publication failure record failed; finalizing anyway', {
+      runId: input.runId,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+  }
+}
+
 /**
  * The shared finalize tail used by BOTH modes: resolve the worktree (best-effort
  * removal — a failure must never block the terminal write, req 17), then — in
@@ -605,9 +647,17 @@ async function resolveWorktreeAndFinalize(
     try {
       effects.onLanded?.();
     } catch (err) {
+      const error = scrubAbsolutePaths((err as Error).message);
+      recordNotificationPublicationFailure(
+        input,
+        effects,
+        'merge-success',
+        'pushed-not-deleted',
+        error,
+      );
       log.warn('landed notification failed after push; finalizing anyway', {
         runId: input.runId,
-        error: scrubAbsolutePaths((err as Error).message),
+        error,
       });
     }
   }

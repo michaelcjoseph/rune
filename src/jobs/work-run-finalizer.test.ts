@@ -763,6 +763,34 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     ]);
   });
 
+  it('records durable merge-success publication error metadata and still finalizes when the success notification publish fails (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const recordNotificationPublication = vi.fn();
+    const onLanded = vi.fn(() => {
+      throw new Error('operator event bus down');
+    });
+    const { effects } = makeEffects(ev, {
+      onLanded,
+      recordNotificationPublication,
+    } as Partial<FinalizerEffects>);
+
+    const result = await runFinalizer(gatedMergeInput(), effects);
+
+    expect(result).toMatchObject({
+      outcome: 'branch-complete',
+      merged: true,
+      branchDeleted: true,
+      supervisionStatus: 'completed',
+    });
+    expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
+    expect(recordNotificationPublication).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'merge-success',
+      key: expect.stringMatching(new RegExp(`${DEFAULT_RUN_ID}.*jarvis-work/15-work-run-finalizer.*pushed-not-deleted`)),
+      status: 'error',
+      error: expect.stringMatching(/operator event bus down/),
+    }));
+  });
+
   it('refreshes terminal work-product facts after the project-Done commit before summary/index/terminal persistence (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({
