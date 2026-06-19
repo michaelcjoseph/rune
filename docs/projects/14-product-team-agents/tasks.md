@@ -1278,7 +1278,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       subject, and remaining/total from the live `tasks.md` checkbox counts. Bind it to the commit
       sha; fail-safe (a publication error is recorded, never fatal; sender delivery errors are
       logged by the sender, never fatal).
-- [ ] Bind the progress and merge-success events through the existing mutation/activity bus and
+- [x] Bind the progress and merge-success events through the existing mutation/activity bus and
       `transport/telegram-sender.ts` formatting instead of calling Telegram from orchestration code.
       Enforce the dedupe (the Part A publication-state records) at the run/artifact layer BEFORE the
       event is published, so the sender stays stateless and a redelivered/replayed event cannot

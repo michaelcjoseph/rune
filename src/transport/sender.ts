@@ -45,8 +45,20 @@ export function createSenders(
   bus.on('agent-event', agentEventHandler);
 
   const mutationEventHandler = (event: BusMutationEvent) => {
-    webview.onMutationEvent(event);
-    tg.onMutationEvent(event);
+    try {
+      webview.onMutationEvent(event);
+    } catch (err) {
+      log.error('WebviewSender.onMutationEvent failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      tg.onMutationEvent(event);
+    } catch (err) {
+      log.error('TelegramSender.onMutationEvent failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
   bus.on('mutation-event', mutationEventHandler);
 

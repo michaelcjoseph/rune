@@ -28,13 +28,23 @@ vi.mock('../integrations/telegram/client.js', () => ({
 
 const { createSenders } = await import('./sender.js');
 const { NotificationBus } = await import('./notification-bus.js');
+const telegramClient = await import('../integrations/telegram/client.js');
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+const mockSendLongMessage = vi.mocked(telegramClient.sendLongMessage);
 
 function mockBot() {
   return {
     sendMessage: vi.fn().mockResolvedValue({}),
     sendChatAction: vi.fn().mockResolvedValue(true),
+  } as any;
+}
+
+function mockWs() {
+  return {
+    readyState: 1,
+    send: vi.fn(),
+    close: vi.fn(),
   } as any;
 }
 
@@ -45,6 +55,7 @@ describe('createSenders', () => {
   beforeEach(() => {
     bot = mockBot();
     bus = new NotificationBus();
+    vi.clearAllMocks();
   });
 
   describe('return shape', () => {
@@ -136,6 +147,90 @@ describe('createSenders', () => {
       await flushMicrotasks();
 
       expect(webviewSendSpy).toHaveBeenCalledWith(1, 'error test');
+    });
+  });
+
+  describe('bus "mutation-event" Phase 15 progress fan-out', () => {
+    it('publishes orchestrated closeout progress through the existing Telegram and webview senders', async () => {
+      const { webview } = createSenders(bot, bus);
+      const ws = mockWs();
+      webview.register(123, ws);
+
+      bus.publish({
+        kind: 'mutation-event',
+        mutationId: 'mut-orch-closeout-123456',
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        ts: '2026-06-19T12:00:00.000Z',
+        userId: 123,
+        data: {
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          taskText: 'Render the streak card',
+          commitSha: 'abc123456789',
+          shortSha: 'abc1234',
+          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+          tasksDone: 3,
+          tasksTotal: 12,
+          tasksRemaining: 9,
+        },
+      });
+
+      await flushMicrotasks();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text).toContain('Render the streak card');
+      expect(text).toContain('abc1234');
+      expect(text).toMatch(/3\/12 done/i);
+      expect(text).toMatch(/9 remaining/i);
+
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse(ws.send.mock.calls[0]![0]);
+      expect(frame).toMatchObject({
+        kind: 'mutation-event',
+        mutationId: 'mut-orch-closeout-123456',
+        mutationKind: 'orchestrated-work',
+        subKind: 'progress',
+        data: expect.objectContaining({
+          event: 'closeout-commit',
+          projectSlug: 'demo',
+          commitSha: 'abc123456789',
+        }),
+      });
+      expect('userId' in frame).toBe(false);
+    });
+
+    it('a webview delivery failure does not block the Telegram merge-success alert', async () => {
+      const { webview } = createSenders(bot, bus);
+      vi.spyOn(webview, 'onMutationEvent').mockImplementation(() => {
+        throw new Error('ws delivery failed');
+      });
+
+      expect(() =>
+        bus.publish({
+          kind: 'mutation-event',
+          mutationId: 'mut-orch-merge-123456',
+          mutationKind: 'orchestrated-work',
+          subKind: 'progress',
+          ts: '2026-06-19T12:00:00.000Z',
+          userId: 123,
+          data: {
+            event: 'merge-success',
+            projectSlug: 'demo',
+            product: 'jarvis',
+            branch: 'jarvis-work/demo',
+            baseBranch: 'main',
+          },
+        }),
+      ).not.toThrow();
+
+      await flushMicrotasks();
+
+      expect(mockSendLongMessage).toHaveBeenCalledOnce();
+      const text = mockSendLongMessage.mock.calls[0]![2] as string;
+      expect(text.toLowerCase()).toContain('jarvis/demo');
+      expect(text.toLowerCase()).toContain('merged to main');
     });
   });
 
