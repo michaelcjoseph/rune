@@ -258,8 +258,8 @@ export interface TaskEvidence {
   rolesInvoked: string[];
   reviewerVerdict?: ReviewerEvidence;
   gateVerdicts?: WorkflowGateVerdicts;
-  findingsLedger?: FindingsLedgerEntry[];
-  loopExitReason?: LoopExitReason;
+  findingsLedger: FindingsLedgerEntry[];
+  loopExitReason: LoopExitReason;
   objectionOpen: boolean;
   handoffNotes: string[];
   noCodeTestRationale?: string;
@@ -765,8 +765,8 @@ function block(
     rejectionFeedback?: GateRejectionFeedback;
     reviewerVerdict?: ReviewerEvidence;
     gateVerdicts?: WorkflowGateVerdicts;
-    findingsLedger?: FindingsLedgerEntry[];
-    loopExitReason?: LoopExitReason;
+    findingsLedger: FindingsLedgerEntry[];
+    loopExitReason: LoopExitReason;
     objectionOpen?: boolean;
     noCodeTestRationale?: string;
   },
@@ -783,8 +783,8 @@ function block(
       : {}),
     ...(extra.reviewerVerdict !== undefined ? { reviewerVerdict: extra.reviewerVerdict } : {}),
     ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
-    ...(extra.findingsLedger !== undefined ? { findingsLedger: extra.findingsLedger } : {}),
-    ...(extra.loopExitReason !== undefined ? { loopExitReason: extra.loopExitReason } : {}),
+    findingsLedger: extra.findingsLedger,
+    loopExitReason: extra.loopExitReason,
     ...(extra.noCodeTestRationale !== undefined
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),

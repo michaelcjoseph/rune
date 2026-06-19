@@ -1097,7 +1097,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       the common path.
 - [x] Update the coder harness to receive the ledger severity-sorted, fix highest-severity-first,
       attempt all findings, and report which it addressed.
-- [ ] Extend `TaskEvidence` so it carries the terminal findings ledger and the loop-exit reason
+- [x] Extend `TaskEvidence` so it carries the terminal findings ledger and the loop-exit reason
       (`all-low` / `stagnation` / `hard-budget` / `operational`) out to the orchestrator; retire the
       now-insufficient `objectionOpen` boolean in favor of the ledger so the terminal handler keys
       on per-finding `reversible`, not a single flag.

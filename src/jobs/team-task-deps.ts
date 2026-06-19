@@ -933,6 +933,8 @@ function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
     objectionOpen: false,
     handoffNotes: [],
     blockedReason: reason,
+    findingsLedger: [],
+    loopExitReason: 'operational',
   };
 }
 

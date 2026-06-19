@@ -69,6 +69,8 @@ function readyEvidence(task: SelectedTask): TaskEvidence {
     taskId: task.id,
     outcome: 'ready-for-closeout',
     rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+    findingsLedger: [],
+    loopExitReason: 'all-low',
     objectionOpen: false,
     handoffNotes: [`did ${task.text}`],
   };
@@ -239,6 +241,8 @@ describe('project-orchestrator — operational terminal', () => {
           taskId: task.id,
           outcome: 'failed',
           rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'operational',
           objectionOpen: false,
           handoffNotes: [],
           failureReason: 'operational failure: reviewer-verdict was malformed/unparseable JSON',
@@ -341,6 +345,8 @@ describe('project-orchestrator — observability events', () => {
           taskId: task.id,
           outcome: 'blocked',
           rolesInvoked: ['qa', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
           objectionOpen: false,
           handoffNotes: [],
           blockedReason: feedback.reason,
@@ -388,6 +394,8 @@ describe('project-orchestrator — block', () => {
         taskId: task.id,
         outcome: 'blocked',
         rolesInvoked: ['qa', 'coder', 'reviewer'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
         objectionOpen: true,
         handoffNotes: [],
         blockedReason: 'open objection',
@@ -408,6 +416,8 @@ describe('project-orchestrator — block', () => {
         taskId: task.id,
         outcome: 'blocked',
         rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
         objectionOpen: false,
         handoffNotes: ['partial corrective work remains in the run worktree'],
         blockedReason: 'feedback retry cap exhausted',
@@ -439,6 +449,8 @@ describe('project-orchestrator — block', () => {
           taskId: task.id,
           outcome: 'blocked',
           rolesInvoked: ['qa', 'coder', 'reviewer'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
           objectionOpen: true,
           handoffNotes: ['partial fix remains inspectable on the held branch'],
           blockedReason: 'open objection-class finding',
@@ -479,6 +491,8 @@ describe('project-orchestrator — block', () => {
         taskId: task.id,
         outcome: 'blocked',
         rolesInvoked: ['qa', 'coder', 'reviewer'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
         objectionOpen: true,
         handoffNotes: ['the branch contains useful work that needs human objection handling'],
         blockedReason: 'open objection-class finding',
@@ -532,6 +546,8 @@ describe('project-orchestrator — retry feedback', () => {
           taskId: task.id,
           outcome: 'blocked',
           rolesInvoked: ['qa', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
           objectionOpen: false,
           handoffNotes: [],
           blockedReason: feedback.reason,
@@ -642,6 +658,8 @@ describe('project-orchestrator — durable run state', () => {
           taskId: task.id,
           outcome: 'blocked',
           rolesInvoked: ['qa', 'coder', 'reviewer'],
+          findingsLedger: [],
+          loopExitReason: 'hard-budget',
           objectionOpen: false,
           handoffNotes: [],
           blockedReason: 'pause after one persisted task',
@@ -705,7 +723,16 @@ describe('project-orchestrator — durable run state', () => {
       severity: 'low',
       location: 'src/cache.ts:44',
       rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
+      reversible: true,
     } as const;
+    const warningLedger: FindingsLedgerEntry[] = [{
+      id: 'finding-cache-duplicate-reads',
+      sourceGate: 'reviewer',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+      ...warningFinding,
+    }];
     const h = makeHarness({
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
@@ -715,6 +742,8 @@ describe('project-orchestrator — durable run state', () => {
           outcome: 'pass-with-warnings',
           objections: [warningFinding],
         },
+        findingsLedger: warningLedger,
+        loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes: ['shipped with a low-severity performance caveat'],
       }),
@@ -864,6 +893,8 @@ describe('project-orchestrator — durable run state', () => {
           objections: [],
           notes: 'reviewer wanted copy polish beyond the task contract',
         },
+        findingsLedger: [],
+        loopExitReason: 'all-low',
         objectionOpen: false,
         handoffNotes: ['PM accepted the remaining non-objection review concern'],
         acceptance,
@@ -910,6 +941,14 @@ describe('project-orchestrator — durable run state', () => {
       location: 'src/cache.ts:44',
       rationale: 'follow-up can reduce duplicate reads; correctness is unaffected',
     } as const;
+    const warningLedger: FindingsLedgerEntry[] = [{
+      id: 'finding-cache-duplicate-reads',
+      sourceGate: 'reviewer',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+      ...warningFinding,
+    }];
     let workflowCalls = 0;
     const h = makeHarness({
       runTaskWorkflow: async (task) => {
@@ -922,6 +961,8 @@ describe('project-orchestrator — durable run state', () => {
             outcome: 'pass-with-warnings',
             objections: [warningFinding],
           },
+          findingsLedger: warningLedger,
+          loopExitReason: 'all-low',
           objectionOpen: false,
           handoffNotes: ['shipped with a low-severity performance caveat'],
         };
@@ -960,6 +1001,75 @@ describe('project-orchestrator — durable run state', () => {
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — terminal bug recording', () => {
+  it('drains terminal findings from TaskEvidence even when reviewerVerdict has no findings', async () => {
+    const bugEntries: TerminalBugEntry[] = [];
+    let curatedEvidence: TaskEvidence | undefined;
+    const terminalFinding: FindingsLedgerEntry = {
+      id: 'finding-terminal-worker-race',
+      sourceGate: 'tech-lead',
+      class: 'concurrency',
+      severity: 'medium',
+      location: 'src/worker.ts:41',
+      rationale: 'terminal handling can still race when two workers close the same task',
+      reversible: true,
+      raisedRound: 3,
+      status: 'open',
+    };
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'ready-for-closeout',
+        rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+        reviewerVerdict: {
+          outcome: 'pass',
+          findings: [],
+          objections: [],
+        },
+        findingsLedger: [terminalFinding],
+        loopExitReason: 'stagnation',
+        objectionOpen: false,
+        handoffNotes: ['terminal severity loop stopped on stagnation'],
+      }),
+      curateContext: (_current, evidence) => {
+        curatedEvidence = evidence;
+        return {
+          kind: 'neutral',
+          sections: { 'Current State': 'terminal findings carried' },
+        };
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 14',
+      '- [ ] Drain terminal findings from evidence',
+    ].join('\n'));
+    const deps: TerminalBugRecordingDeps = {
+      ...h.deps,
+      appendTerminalBugEntries: async (entries) => {
+        bugEntries.push(...entries);
+      },
+    };
+
+    const res = await runProjectOrchestration(deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(curatedEvidence?.loopExitReason).toBe('stagnation');
+    expect(curatedEvidence?.findingsLedger).toEqual([terminalFinding]);
+    expect(bugEntries).toEqual([
+      {
+        runId: 'run-1',
+        taskId: 'drain-terminal-findings-from-evidence',
+        findingId: 'finding-terminal-worker-race',
+        sourceGate: 'tech-lead',
+        class: 'concurrency',
+        severity: 'medium',
+        location: 'src/worker.ts:41',
+        rationale: 'terminal handling can still race when two workers close the same task',
+        reversible: true,
+      },
+    ]);
+  });
+
   it('writes one detailed Jarvis bugs.md entry per remaining open >low finding before finalization', async () => {
     const bugEntries: TerminalBugEntry[] = [];
     const order: string[] = [];

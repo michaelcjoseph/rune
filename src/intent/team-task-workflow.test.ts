@@ -30,6 +30,8 @@ import {
   type GateRejectionFeedback,
   type FindingsLedgerEntry,
   type ObjectionClass,
+  type LoopExitReason,
+  type TaskEvidence,
 } from './team-task-workflow.js';
 import type { SizedTask } from './planning-roles.js';
 
@@ -117,6 +119,16 @@ type ObjectionClassIncludesOutbound = Assert<Extract<ObjectionClass, 'outbound'>
   : false>;
 type ObjectionClassRetiresIrreversibility = Assert<
   IsNever<Extract<ObjectionClass, 'irreversibility'>>
+>;
+type ExpectedLoopExitReason = 'all-low' | 'stagnation' | 'hard-budget' | 'operational';
+type LoopExitReasonMatchesPhase14Reasons = Assert<
+  TypeEqual<LoopExitReason, ExpectedLoopExitReason>
+>;
+type TaskEvidenceRequiresFindingsLedger = Assert<
+  undefined extends TaskEvidence['findingsLedger'] ? false : true
+>;
+type TaskEvidenceRequiresLoopExitReason = Assert<
+  undefined extends TaskEvidence['loopExitReason'] ? false : true
 >;
 
 // ---------------------------------------------------------------------------
