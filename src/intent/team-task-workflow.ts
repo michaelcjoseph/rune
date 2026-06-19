@@ -65,7 +65,7 @@ export interface NormalizedReviewerVerdict extends GateVerdict {
   /** Explicit reviewer verification of prior open ledger findings. */
   verifiedFindings?: FindingVerification[];
   /** Set when the reviewer payload itself is malformed and must fail closed operationally. */
-  operationalBlockReason?: string;
+  operationalFailureReason?: string;
 }
 
 /** The reviewer role boundary accepts legacy boolean verdicts while production
@@ -480,17 +480,17 @@ async function runGated(
       verdict: isReviewerPass(lastReviewer) ? 'pass' : 'fail',
       summary: summarizeReviewerVerdict(lastReviewer),
     });
-    if (lastReviewer.operationalBlockReason !== undefined) {
+    if (lastReviewer.operationalFailureReason !== undefined) {
       const feedback = buildGateRejectionFeedback({
         rejectingRole: 'reviewer',
         counterpartRole: 'coder',
         artifact: 'reviewer-verdict',
-        reason: lastReviewer.operationalBlockReason,
+        reason: lastReviewer.operationalFailureReason,
       });
       await recordGateRejection(deps, feedback);
       emitGateRejection(input, feedback);
-      return block(task, roles, handoffNotes, {
-        blockedReason: lastReviewer.operationalBlockReason,
+      return fail(task, roles, handoffNotes, {
+        failureReason: lastReviewer.operationalFailureReason,
         rejectionFeedback: feedback,
         reviewerVerdict: lastReviewer,
         gateVerdicts: buildWorkflowGateVerdicts(lastReviewer, undefined, undefined),
@@ -791,6 +791,41 @@ function block(
   };
 }
 
+function fail(
+  task: SizedTask,
+  roles: RoleLog,
+  handoffNotes: string[],
+  extra: {
+    failureReason: string;
+    rejectionFeedback?: GateRejectionFeedback;
+    reviewerVerdict?: ReviewerEvidence;
+    gateVerdicts?: WorkflowGateVerdicts;
+    findingsLedger: FindingsLedgerEntry[];
+    loopExitReason: LoopExitReason;
+    objectionOpen?: boolean;
+    noCodeTestRationale?: string;
+  },
+): TaskEvidence {
+  return {
+    taskId: task.id,
+    outcome: 'failed',
+    rolesInvoked: roles.list(),
+    objectionOpen: extra.objectionOpen ?? false,
+    handoffNotes,
+    failureReason: extra.failureReason,
+    ...(extra.rejectionFeedback !== undefined
+      ? { rejectionFeedback: extra.rejectionFeedback }
+      : {}),
+    ...(extra.reviewerVerdict !== undefined ? { reviewerVerdict: extra.reviewerVerdict } : {}),
+    ...(extra.gateVerdicts !== undefined ? { gateVerdicts: extra.gateVerdicts } : {}),
+    findingsLedger: extra.findingsLedger,
+    loopExitReason: extra.loopExitReason,
+    ...(extra.noCodeTestRationale !== undefined
+      ? { noCodeTestRationale: extra.noCodeTestRationale }
+      : {}),
+  };
+}
+
 function buildGateRejectionFeedback(input: {
   rejectingRole: RoleName;
   counterpartRole: RoleName;
@@ -825,7 +860,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
   const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
   if (malformedClass !== undefined) {
     const reason =
-      `operational block: reviewer-verdict contained unsupported class ` +
+      `operational failure: reviewer-verdict contained unsupported class ` +
       `"${String(malformedClass.class)}" at ${malformedClass.location}`;
     return {
       outcome: 'fail',
@@ -833,13 +868,13 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       objections: findings,
       notes: reason,
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
-      operationalBlockReason: reason,
+      operationalFailureReason: reason,
     };
   }
   const malformedSeverity = findings.find((finding) => !isObjectionSeverity(finding.severity));
   if (malformedSeverity !== undefined) {
     const reason =
-      `operational block: reviewer-verdict contained malformed severity ` +
+      `operational failure: reviewer-verdict contained malformed severity ` +
       `"${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`;
     return {
       outcome: 'fail',
@@ -847,19 +882,19 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       objections: findings,
       notes: reason,
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
-      operationalBlockReason: reason,
+      operationalFailureReason: reason,
     };
   }
   const rawOutcome = raw['outcome'];
   if (rawOutcome !== undefined && !isReviewerOutcome(rawOutcome)) {
-    const reason = `operational block: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
+    const reason = `operational failure: reviewer-verdict contained unsupported outcome "${String(rawOutcome)}"`;
     return {
       outcome: 'fail',
       findings,
       objections: findings,
       notes: reason,
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
-      operationalBlockReason: reason,
+      operationalFailureReason: reason,
     };
   }
   const outcome = findings.length > 0

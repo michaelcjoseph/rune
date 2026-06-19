@@ -994,6 +994,61 @@ describe('project-orchestrator — durable run state', () => {
     expect(workflowCalls).toBe(1);
     expect(finalizeCalled).toBe(false);
   });
+
+  it('holds as an operational terminal when acceptance recording fails, without parking blocked-on-human', async () => {
+    const worktreePath = '/tmp/jarvis-worktrees/aura/14-acceptance-recording-failure';
+    let workflowCalls = 0;
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => {
+        workflowCalls += 1;
+        return {
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          reviewerVerdict: {
+            outcome: 'fail',
+            findings: [],
+            objections: [],
+            notes: 'non-objection disagreement accepted with rationale',
+          },
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: ['accepted a non-objection disagreement with rationale'],
+          acceptance: {
+            actor: 'pm',
+            decision: 'accepted-with-rationale',
+            rationale: 'The remaining disagreement is outside this task contract.',
+          },
+        };
+      },
+      appendTaskRunRecord: async () => {
+        throw new Error('acceptance record store unavailable');
+      },
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [ ] Ship accepted non-objection diff',
+    ].join('\n'));
+    let finalizeCalled = false;
+    h.deps.finalize = async () => {
+      finalizeCalled = true;
+      return { kind: 'finalized', outcome: 'branch-complete' };
+    };
+
+    const res = await runProjectOrchestration({
+      ...h.deps,
+      worktreePath,
+    });
+
+    expectOperationalHold(res, {
+      reason: /operational|record|acceptance/i,
+      worktreePath,
+    });
+    expect(workflowCalls).toBe(1);
+    expect(finalizeCalled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

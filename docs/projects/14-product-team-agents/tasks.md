@@ -1101,7 +1101,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       (`all-low` / `stagnation` / `hard-budget` / `operational`) out to the orchestrator; retire the
       now-insufficient `objectionOpen` boolean in favor of the ledger so the terminal handler keys
       on per-finding `reversible`, not a single flag.
-- [ ] Rewrite the operational fail-safe path: malformed/unparseable gate output and the
+- [x] Rewrite the operational fail-safe path: malformed/unparseable gate output and the
       warning/acceptance-recording failures that Phase 13 mapped to `outcome: 'block'`
       (`operationalBlockReason`) now produce an operational non-merge HOLD terminal (req 83), not a
       `block` outcome and not a human-gated park.

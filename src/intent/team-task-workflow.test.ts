@@ -531,8 +531,10 @@ describe('team-task-workflow — objection gate', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.blockedReason).toMatch(/operational|malformed class|unsupported class/i);
+    expect(ev.outcome).toBe('failed');
+    expect(ev.loopExitReason).toBe('operational');
+    expect(ev.failureReason).toMatch(/operational|malformed class|unsupported class/i);
+    expect(ev).not.toHaveProperty('blockedReason');
     expect(ev.rejectionFeedback).toMatchObject({
       rejectingRole: 'reviewer',
       rejectedRole: 'coder',
@@ -631,7 +633,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     }
   });
 
-  it('fails closed to an operational block on an unknown reviewer outcome without spending a coder correction round', async () => {
+  it('fails closed to operational failed evidence on an unknown reviewer outcome without spending a coder correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const deps = makeDeps({
       coder: async (input) => {
@@ -647,15 +649,17 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('blocked');
+    expect(ev.outcome).toBe('failed');
+    expect(ev.loopExitReason).toBe('operational');
     expect(ev.objectionOpen).toBe(false);
-    expect(ev.blockedReason).toMatch(/operational|unknown outcome|unsupported outcome/i);
+    expect(ev.failureReason).toMatch(/operational|unknown outcome|unsupported outcome/i);
+    expect(ev).not.toHaveProperty('blockedReason');
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(coderInputs).toHaveLength(1);
     expect(coderInputs[0]?.rejectionFeedback).toBeUndefined();
   });
 
-  it('fails closed on an unsupported reviewer outcome without public block residue', async () => {
+  it('fails closed on an unsupported reviewer outcome without public block residue or a blocked task outcome', async () => {
     const ev = await runTeamTaskWorkflow(
       codeTask,
       { ...INPUT, cap: 1 },
@@ -668,8 +672,10 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
       }),
     );
 
-    expect(ev.outcome).toBe('blocked');
-    expect(ev.blockedReason).toMatch(/unsupported outcome/i);
+    expect(ev.outcome).toBe('failed');
+    expect(ev.loopExitReason).toBe('operational');
+    expect(ev.failureReason).toMatch(/unsupported outcome/i);
+    expect(ev).not.toHaveProperty('blockedReason');
     expect(ev.reviewerVerdict?.outcome).toBe('fail');
     expect(ev.gateVerdicts?.reviewer?.outcome).toBe('fail');
     expect(ev.reviewerVerdict?.outcome).not.toBe('block');
@@ -866,7 +872,7 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
     expect(ev).not.toHaveProperty('acceptance');
   });
 
-  it('fails safe to an operational block when reviewer severity is malformed, without spending a coder correction round', async () => {
+  it('fails safe to operational failed evidence when reviewer severity is malformed, without spending a coder correction round', async () => {
     const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
     const malformedFinding = {
       class: 'security',
@@ -886,9 +892,11 @@ describe('team-task-workflow — reviewing verdict outcome enum', () => {
 
     const ev = await runTeamTaskWorkflow(codeTask, { ...INPUT, cap: 2 }, deps);
 
-    expect(ev.outcome).toBe('blocked');
+    expect(ev.outcome).toBe('failed');
+    expect(ev.loopExitReason).toBe('operational');
     expect(ev.objectionOpen).toBe(false);
-    expect(ev.blockedReason).toMatch(/operational|malformed severity/i);
+    expect(ev.failureReason).toMatch(/operational|malformed severity/i);
+    expect(ev).not.toHaveProperty('blockedReason');
     expect(ev.rejectionFeedback).toMatchObject({
       rejectingRole: 'reviewer',
       rejectedRole: 'coder',
