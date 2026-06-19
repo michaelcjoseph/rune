@@ -1202,7 +1202,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Merge-success-resume-dedupe test: crash/restart after `pushed-not-deleted` resumes finalizer
       cleanup and sends at most one merge-success notification for the run; a replay after the
       notification was recorded sends none.
-- [ ] Order test: for a clean run the sequence is eligibility classify → index-`Done` commit →
+- [x] Order test: for a clean run the sequence is eligibility classify → index-`Done` commit →
       refreshed terminal summary/index writes → gate → merge → push → remove worktree → delete
       branch → success notify → run-end; the success notify fires only after `mergeBranch`/
       `pushBranch` resolve.

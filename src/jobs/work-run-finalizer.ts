@@ -218,6 +218,9 @@ export interface FinalizerEffects {
     input: FinalizerInput,
     terminalEvent: MutationEvent,
   ) => Promise<MarkProjectDoneResult>;
+  /** Optional notification seam for a clean gated merge after the branch has
+   *  landed and cleanup/delete have been attempted, before the terminal write. */
+  onLanded?: () => void;
   /** `git merge --no-ff <branch>` onto the base branch (in an integration
    *  worktree / on the base). */
   mergeBranch?: () => Promise<void>;
@@ -598,6 +601,16 @@ async function resolveWorktreeAndFinalize(
       });
     }
   }
+  if (merged) {
+    try {
+      effects.onLanded?.();
+    } catch (err) {
+      log.warn('landed notification failed after push; finalizing anyway', {
+        runId: input.runId,
+        error: scrubAbsolutePaths((err as Error).message),
+      });
+    }
+  }
 
   const supervisionStatus: FinalizerSupervisionStatus =
     terminalEvent.kind === 'completed' ? 'completed' : 'failed';
@@ -708,7 +721,7 @@ export async function runFinalizer(
  * `gated-merge` mode (P1.5): the policy path that lands a clean, complete run on
  * the base branch through the hard gate. Sequence (fresh run):
  *
- *   classify → flush → mark project Done → gate → summary → index → merge → push → delete → terminal
+ *   classify → flush → mark project Done → summary → index → gate → merge → push → delete → terminal
  *
  * recording `project-marked-done` before summary/index persistence,
  * `merged-not-pushed` after the merge, and `pushed-not-deleted` after the push
@@ -740,6 +753,7 @@ async function runGatedMerge(
   const lastPhase = effects.readLastPhase();
   const reached = (phase: FinalizerPhase): boolean =>
     lastPhase !== null && PHASE_ORDER.indexOf(lastPhase) >= PHASE_ORDER.indexOf(phase);
+  const completed = (phase: FinalizerPhase): boolean => reached(phase) || phases.includes(phase);
 
   // Prologue. `classify()` is ALWAYS re-run — it returns the in-memory terminal
   // event every downstream step needs (it is not persisted), so it is exempt
@@ -790,6 +804,20 @@ async function runGatedMerge(
         };
       }
 
+      const projectDoneCommitted = markProjectDoneResult?.kind === 'committed';
+      if (projectDoneCommitted) {
+        refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
+        record('project-marked-done');
+        if (!completed('summary-written')) {
+          effects.writeSummary(terminalEvent);
+          record('summary-written');
+        }
+        if (!completed('index-appended')) {
+          effects.appendIndexRow(terminalEvent);
+          record('index-appended');
+        }
+      }
+
       const gateThroughMerge = async () => {
         const verdict = await gate();
         if (verdict.ok === true) {
@@ -805,15 +833,14 @@ async function runGatedMerge(
             mergeConflictHold = true;
             return;
           }
-          refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
-          if (shouldMarkProjectDone && markProjectDoneResult?.kind !== 'skipped') {
+          if (shouldMarkProjectDone && !markProjectDoneResult) {
             record('project-marked-done');
           }
-          if (!reached('summary-written')) {
+          if (!projectDoneCommitted && !completed('summary-written')) {
             effects.writeSummary(terminalEvent);
             record('summary-written');
           }
-          if (!reached('index-appended')) {
+          if (!projectDoneCommitted && !completed('index-appended')) {
             effects.appendIndexRow(terminalEvent);
             record('index-appended');
           }
@@ -837,20 +864,20 @@ async function runGatedMerge(
   }
 
   if (!gateAllowedBranchComplete) {
-    if (!reached('summary-written')) {
+    if (!completed('summary-written')) {
       effects.writeSummary(terminalEvent);
       record('summary-written');
     }
-    if (!reached('index-appended')) {
+    if (!completed('index-appended')) {
       effects.appendIndexRow(terminalEvent);
       record('index-appended');
     }
   } else if (reached('merged-not-pushed')) {
-    if (!reached('summary-written')) {
+    if (!completed('summary-written')) {
       effects.writeSummary(terminalEvent);
       record('summary-written');
     }
-    if (!reached('index-appended')) {
+    if (!completed('index-appended')) {
       effects.appendIndexRow(terminalEvent);
       record('index-appended');
     }

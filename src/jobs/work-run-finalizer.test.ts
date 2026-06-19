@@ -677,6 +677,92 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('index-appended'));
   });
 
+  it('clean run orders finalizer effects: classify → index-Done commit → refreshed persistence → gate → merge → push → cleanup → notify → run-end (Phase 15)', async () => {
+    const ev = branchCompleteEvent();
+    const order: string[] = [];
+    const classify = vi.fn(async () => {
+      order.push('eligibility-classify');
+      return ev;
+    });
+    const markProjectDone = vi.fn(async () => {
+      order.push('index-done-commit');
+      return {
+        kind: 'committed' as const,
+        commitSha: 'project-done-head-sha',
+        changedTokens: ['table-status', 'section-heading-status'],
+      };
+    });
+    const writeSummary = vi.fn((terminalEvent: MutationEvent) => {
+      order.push('refreshed-summary-write');
+      expect(terminalEvent.data).toMatchObject({
+        workProduct: {
+          commitCount: 6,
+          commitShas: ['a1', 'b2', 'c3', 'd4', 'e5', 'project-done-head-sha'],
+        },
+      });
+    });
+    const appendIndexRow = vi.fn((terminalEvent: MutationEvent) => {
+      order.push('refreshed-index-write');
+      expect(terminalEvent.data).toMatchObject({
+        workProduct: {
+          commitCount: 6,
+          commitShas: ['a1', 'b2', 'c3', 'd4', 'e5', 'project-done-head-sha'],
+        },
+      });
+    });
+    const gate = vi.fn(async () => {
+      order.push('gate');
+      return { ok: true } as GateResult;
+    });
+    const mergeBranch = vi.fn(async () => {
+      order.push('merge');
+    });
+    const pushBranch = vi.fn(async () => {
+      order.push('push');
+    });
+    const removeWorktree = vi.fn(async () => {
+      order.push('remove-worktree');
+    });
+    const deleteBranch = vi.fn(async () => {
+      order.push('delete-branch');
+    });
+    const onLanded = vi.fn(() => {
+      order.push('success-notify');
+    });
+    const writeSupervisionTerminal = vi.fn(() => {
+      order.push('run-end');
+    });
+    const { effects } = makeEffects(ev, {
+      classify,
+      markProjectDone,
+      writeSummary,
+      appendIndexRow,
+      gate,
+      mergeBranch,
+      pushBranch,
+      removeWorktree,
+      deleteBranch,
+      onLanded,
+      writeSupervisionTerminal,
+    } as Partial<FinalizerEffects> & { onLanded: typeof onLanded });
+
+    await runFinalizer(gatedMergeInput(), effects);
+
+    expect(order).toEqual([
+      'eligibility-classify',
+      'index-done-commit',
+      'refreshed-summary-write',
+      'refreshed-index-write',
+      'gate',
+      'merge',
+      'push',
+      'remove-worktree',
+      'delete-branch',
+      'success-notify',
+      'run-end',
+    ]);
+  });
+
   it('refreshes terminal work-product facts after the project-Done commit before summary/index/terminal persistence (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({
