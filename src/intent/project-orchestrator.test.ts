@@ -23,6 +23,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   runProjectOrchestration,
+  type CloseoutCommit,
   type OrchestrationDeps,
   type OrchestrationResult,
 } from './project-orchestrator.js';
@@ -397,6 +398,57 @@ describe('project-orchestrator — observability events', () => {
         tasksTotal: 2,
         tasksRemaining: 0,
         line: expect.stringMatching(/Render the streak card.*2\/2 done.*0 remaining/i),
+      },
+    });
+  });
+
+  it('waits for commitCloseout to succeed before emitting closeout progress', async () => {
+    let resolveFirstCommit: (commit: CloseoutCommit) => void = () => {};
+    let firstCommitStarted: () => void = () => {};
+    const firstCommitStartedPromise = new Promise<void>((resolve) => {
+      firstCommitStarted = resolve;
+    });
+    const firstCommit = new Promise<CloseoutCommit>((resolve) => {
+      resolveFirstCommit = resolve;
+    });
+    let commitCalls = 0;
+
+    const h = makeHarness({
+      commitCloseout: async (task) => {
+        commitCalls += 1;
+        if (commitCalls === 1) {
+          firstCommitStarted();
+          return firstCommit;
+        }
+        const sha = `sha-${task.id}`;
+        return { sha, subject: `actual closeout subject for ${task.id}` };
+      },
+    });
+
+    const run = runProjectOrchestration(h.deps);
+    await firstCommitStartedPromise;
+
+    expect(closeoutProgressEvents(h.state.events)).toEqual([]);
+
+    resolveFirstCommit({
+      sha: 'late-closeout-sha',
+      subject: 'actual closeout subject for build-the-streak-core',
+    });
+
+    const res = await run;
+
+    expect(res.kind).toBe('finalized');
+    expect(closeoutProgressEvents(h.state.events)[0]).toMatchObject({
+      kind: 'progress',
+      data: {
+        event: 'closeout-commit',
+        taskId: 'build-the-streak-core',
+        commitSha: 'late-closeout-sha',
+        shortSha: 'late-cl',
+        commitSubject: 'actual closeout subject for build-the-streak-core',
+        tasksDone: 1,
+        tasksTotal: 2,
+        tasksRemaining: 1,
       },
     });
   });

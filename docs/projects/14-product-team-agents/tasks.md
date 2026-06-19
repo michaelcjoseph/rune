@@ -1273,7 +1273,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **B. Per-commit progress alerts**
 
-- [ ] Emit a per-commit progress alert at `commitCloseout`: after the closeout commit succeeds,
+- [x] Emit a per-commit progress alert at `commitCloseout`: after the closeout commit succeeds,
       publish one operator progress event with the just-completed task title, short sha, commit
       subject, and remaining/total from the live `tasks.md` checkbox counts. Bind it to the commit
       sha; fail-safe (a publication error is recorded, never fatal; sender delivery errors are
