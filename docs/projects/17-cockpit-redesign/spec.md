@@ -183,17 +183,38 @@ Home view (cross-product pulse) → select product → Per-product deep view
 ### Chat and sessions
 
 25. WHEN Michael chats in the web view THEN it is a per-product dev/planning chat tied
-    to the active product, the only chat in the web view.
+    to the active product — one chat window/session per product, the only chat in the
+    web view. Switching products switches to that product's own chat session.
 26. WHEN a webview product chat session is created THEN it is scoped by
     `{product, transport, user}`; existing Telegram and global chat/session behavior
     remains available for non-product conversations and commands.
 27. WHEN Michael runs `/fresh`, `/fresh-full`, `/clear`, or any existing chat command
     THEN it behaves exactly as it does today.
-28. WHEN chat search runs THEN it reaches the product repo + vault, not vault alone.
+28. WHEN chat search runs in a product chat THEN its search/context is scoped to THAT
+    product's repo plus the vault, not vault alone and not another product's repo.
+
+### Concurrency
+
+> The autonomous-run concurrency model is owned by
+> [08-intent-layer](../08-intent-layer/spec.md#concurrency-model) (`src/intent/scheduler.ts`,
+> `WORK_RUN_GLOBAL_CAP`). This surface assumes the global cap is raised so more products can
+> each be running a project at once; the cap value and the scheduler change itself live in
+> project 08, not here. These requirements pin what THIS surface assumes and exposes.
+
+29. WHEN multiple products each have a project ready to run THEN the scheduler runs up to the
+    configured global cap of them in parallel — one project per product — rather than
+    serializing products behind a global cap of 2. The default global cap is raised above
+    today's 2 so cross-product parallelism is the normal case, and the cap stays
+    configurable (`WORK_RUN_GLOBAL_CAP`), never a new hardcoded magic number.
+30. WHEN the global cap is reached THEN additional ready projects queue in order and start as
+    slots free — queued projects are never dropped (the existing scheduler guarantee, retained).
+31. WHEN the Home pulse renders THEN it truthfully reflects the raised concurrency: multiple
+    products can each show a live active-run indicator at once, and a product whose project is
+    waiting on a slot reads as queued/idle, not as failed.
 
 ### Cutover and preserved operations
 
-29. WHEN the Phase 6 cutover replaces the current layout THEN every operational
+32. WHEN the Phase 6 cutover replaces the current layout THEN every operational
     affordance of today's webview keeps a working home in the new IA: the
     pending-approvals inbox (including parked-run release — the project 13
     Approve → `requestWorkRunRelease` path), the production restart-server button,
@@ -202,7 +223,7 @@ Home view (cross-product pulse) → select product → Per-product deep view
     global status) live on the Home view's operational rail; per-product
     affordances (run cancel, planning, backlog) live in the deep view. Exact
     placement is the design team's to detail; existence is not negotiable.
-30. WHEN a panel of the current sidebar is deliberately dropped rather than
+33. WHEN a panel of the current sidebar is deliberately dropped rather than
     migrated (e.g. the Claude Activity trace or the session/queue/review status
     panels) THEN the drop is recorded in this spec / the project decisions log,
     never silent.
@@ -311,6 +332,25 @@ Home view (cross-product pulse) → select product → Per-product deep view
   the active product/view selection both UI phases render against, with back and
   deep-link behavior. Prerequisite for the Home and deep-view UIs.
 
+### Concurrency cap
+
+> **Ownership:** the scheduler and its caps belong to
+> [08-intent-layer](../08-intent-layer/spec.md#concurrency-model) (`src/intent/scheduler.ts`).
+> This project does not re-implement the scheduler; it consumes a raised cap and renders the
+> resulting multi-product parallelism truthfully.
+
+- **`raise-global-concurrency-cap`.** Raise the default `WORK_RUN_GLOBAL_CAP`
+  (`src/config.ts`, currently `2`) so cross-product parallelism is the normal case rather than
+  the exception. The value stays env-configurable through the existing `parseNumericEnv`
+  (`min: 1, integer: true`) path — no new hardcoded constant. The `schedule()` pass in
+  `src/intent/scheduler.ts` already takes `globalCap` as a parameter and walks the queue FIFO,
+  so raising the cap needs no scheduler-logic change; the per-product cap of one is preserved
+  (decided — see Open Questions). The change is tracked and delivered under project 17: it
+  touches the shared `WORK_RUN_GLOBAL_CAP` default in `src/config.ts` and assumes `scheduler.ts`
+  (project 08's module) unchanged. The Home pulse and per-product deep
+  view already read live run state per product, so they reflect N concurrent product runs with
+  no projection change beyond rendering more than one active product at once.
+
 ---
 
 ## UI/UX Design
@@ -390,6 +430,8 @@ reused so a no-op or dirty run never reads as success.
 - [ ] `session-scope-core` with product scopes plus legacy/global compatibility
 - [ ] `product-chat-routing-and-commands` thread product scope through chat commands
 - [ ] `repo-plus-vault-chat-search` repo + vault search seam
+- [ ] `raise-global-concurrency-cap` raise the default `WORK_RUN_GLOBAL_CAP` (configurable;
+      scheduler/cap owned by project 08, cross-referenced)
 
 ### Phase 5: Home View UI
 
@@ -497,6 +539,20 @@ from the web view.
 
 ## Open Questions
 
+- [x] **Per-product cap: keep at one (decided 2026-06-19).** Raising `WORK_RUN_GLOBAL_CAP` lets more
+  *products* run in parallel, but the scheduler also enforces a per-product cap of **one**
+  (`src/intent/scheduler.ts` `busyProducts` set) — one product never runs two of its own
+  projects at once. Relaxing that cap (letting a single product run several of its projects
+  concurrently) is the key design decision. **Tradeoff:** the per-product-one rule exists
+  specifically so two runs never touch the same repo at once — with autonomous merges (no
+  human gate), it is what guarantees concurrent auto-merges on a single repo cannot collide
+  (08-intent-layer spec, "Concurrency model" / "Isolation model"). Relaxing it reintroduces
+  same-repo concurrency, which would require per-project worktree isolation *plus* a
+  merge-serialization or conflict-resolution story that does not exist today.
+  **Decision:** keep the per-product cap at one and only raise the global cap (the definite
+  ask) — that delivers the cross-product parallelism we want with zero new merge-collision
+  risk. Per-product parallelism is a separate, later change, gated on a same-repo
+  merge-serialization design that does not exist today.
 - [ ] Surfacing logged Claude App conversations back into the cockpit (beyond bug/idea
   routing): a position worth taking later; v1 deep-links out only.
 - [ ] Exact visual layout/hierarchy within the per-product deep view is the design
