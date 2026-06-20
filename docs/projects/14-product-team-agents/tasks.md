@@ -1349,7 +1349,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `summary.json` outcome and the supervised/mutation status are consistent (a `branch-complete`
       work product is never paired with a `failed` lifecycle status, and a terminal work product is
       never paired with a `running` lifecycle status).
-- [ ] Periodic-reconciler test: a supervised entry still `running` whose
+- [x] Periodic-reconciler test: a supervised entry still `running` whose
       `work-runs/<id>/summary.json` already shows a terminal outcome is flipped to that outcome by a
       timer-driven reconciler (NOT startup-only), with no restart and no live handle required. An
       entry with no terminal summary is left untouched (still genuinely in flight).

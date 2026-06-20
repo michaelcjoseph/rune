@@ -28,6 +28,11 @@ import { createMcpOAuth } from './server/mcp-oauth.js';
 import { readOAuthStore, writeOAuthStore } from './server/mcp-oauth-store.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
+import {
+  defaultTerminalWorkRunReconcilerDeps,
+  startTerminalWorkRunReconciler,
+  stopTerminalWorkRunReconciler,
+} from './jobs/work-run-reconciler.js';
 import { startPlanningExpiry, stopPlanningExpiry } from './jobs/planning-expiry-runner.js';
 import { startWatcher, stopWatcher } from './vault/watcher.js';
 import { getSkillRegistry } from './bot/skill-registry.js';
@@ -254,6 +259,11 @@ const server = startHttpServer(
 );
 startScheduler({ bus });
 startStallCheck(bus);
+try {
+  startTerminalWorkRunReconciler(await defaultTerminalWorkRunReconcilerDeps());
+} catch (err) {
+  log.warn('Terminal work-run reconciler failed to start', { error: (err as Error).message });
+}
 startPlanningExpiry();
 startWatcher(bus);
 
@@ -274,6 +284,7 @@ async function shutdown() {
   log.info('Shutting down...');
   stopScheduler();
   stopStallCheck();
+  stopTerminalWorkRunReconciler();
   stopPlanningExpiry();
   stopWatcher();
   destroy();
