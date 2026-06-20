@@ -154,6 +154,21 @@ vi.mock('./jobs/stall-check-runner.js', () => ({
   stopStallCheck: vi.fn(),
 }));
 
+vi.mock('./jobs/work-run-reconciler.js', () => ({
+  defaultTerminalWorkRunReconcilerDeps: vi.fn(async () => {
+    calls.push('default-terminal-work-run-reconciler-deps');
+    return {
+      supervisedRunsFile: '/tmp/jarvis/supervised-runs.json',
+      workRunsDir: '/tmp/jarvis/work-runs',
+      terminalizeMutation: vi.fn(),
+      findRunningMutation: vi.fn(),
+      now: () => '2026-06-19T12:00:00.000Z',
+    };
+  }),
+  startTerminalWorkRunReconciler: vi.fn(() => calls.push('start-terminal-work-run-reconciler')),
+  stopTerminalWorkRunReconciler: vi.fn(),
+}));
+
 vi.mock('./jobs/planning-expiry-runner.js', () => ({
   startPlanningExpiry: vi.fn(() => calls.push('start-planning-expiry')),
   stopPlanningExpiry: vi.fn(),
@@ -218,5 +233,21 @@ describe('index startup orchestrated-work recovery', () => {
 
     expect(calls.indexOf('register-applier:orchestrated-work')).toBeLessThan(calls.indexOf('recover-orchestrated-work'));
     expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('cleanup-worktrees'));
+  });
+
+  it('starts the terminal work-run reconciler on boot so stranded terminal artifacts self-heal without another restart', async () => {
+    await import('./index.js');
+
+    expect(calls).toContain('default-terminal-work-run-reconciler-deps');
+    expect(calls).toContain('start-terminal-work-run-reconciler');
+    expect(calls.indexOf('start-stall-check')).toBeLessThan(
+      calls.indexOf('default-terminal-work-run-reconciler-deps'),
+    );
+    expect(calls.indexOf('default-terminal-work-run-reconciler-deps')).toBeLessThan(
+      calls.indexOf('start-terminal-work-run-reconciler'),
+    );
+    expect(calls.indexOf('start-terminal-work-run-reconciler')).toBeLessThan(
+      calls.indexOf('start-planning-expiry'),
+    );
   });
 });

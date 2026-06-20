@@ -315,6 +315,52 @@ describe('reconcileTerminalWorkRunsOnce', () => {
 });
 
 describe('terminal work-run reconciler timer', () => {
+  it('flips a terminal-summary-backed running row on the timer tick, using only the persisted stores', () => {
+    vi.useFakeTimers();
+    try {
+      withTempDir((dir) => {
+        const supervisedRunsFile = join(dir, 'supervised-runs.json');
+        const workRunsDir = join(dir, 'work-runs');
+        const runId = 'timer-run';
+        writeAllRuns([makeRun(runId, { status: 'running' })], supervisedRunsFile);
+        writeTestSummary(workRunsDir, runId, summary(runId, 'branch-complete'));
+        const terminalizedMutations: MutationDescriptor[] = [];
+
+        startTerminalWorkRunReconciler({
+          supervisedRunsFile,
+          workRunsDir,
+          terminalizeMutation: (descriptor) => terminalizedMutations.push(descriptor),
+          findRunningMutation: (id) => makeDescriptor(id),
+          now: () => '2026-06-18T03:15:00.000Z',
+        });
+
+        vi.advanceTimersByTime(TERMINAL_WORK_RUN_RECONCILE_INTERVAL_MS - 1);
+        expect(readAllRuns(supervisedRunsFile)[0]).toMatchObject({
+          id: runId,
+          status: 'running',
+        });
+        expect(terminalizedMutations).toEqual([]);
+
+        vi.advanceTimersByTime(1);
+
+        expect(readAllRuns(supervisedRunsFile)[0]).toMatchObject({
+          id: runId,
+          status: 'completed',
+          lastHeartbeatAt: '2026-06-18T03:15:00.000Z',
+        });
+        expect(terminalizedMutations).toHaveLength(1);
+        expect(terminalizedMutations[0]).toMatchObject({
+          id: runId,
+          status: 'completed',
+          outcome: 'branch-complete',
+        });
+      });
+    } finally {
+      stopTerminalWorkRunReconciler();
+      vi.useRealTimers();
+    }
+  });
+
   it('runs from a periodic timer over the persisted stores, not from startup recovery or live handles only', () => {
     vi.useFakeTimers();
     try {

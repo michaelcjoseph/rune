@@ -1366,7 +1366,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       status are persisted together (single owner, atomic): the applier writes the terminal mutation
       line + supervised status alongside `persistTerminalArtifacts`; the yielded event becomes
       notification-only (bus/Telegram/cockpit-stream), no longer the sole carrier of the status write.
-- [ ] Add a periodic, store-driven reconciler (timer, not startup-only) that flips any supervised
+- [x] Add a periodic, store-driven reconciler (timer, not startup-only) that flips any supervised
       `running` whose run-artifact `summary.json` shows a terminal outcome to that outcome, and
       terminalizes the matching mutation-log line.
 - [ ] Point stall-check at the persisted supervised store (in addition to live handles) so abandoned
