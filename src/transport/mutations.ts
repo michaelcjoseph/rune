@@ -9,6 +9,17 @@ import { NotificationBus } from './notification-bus.js';
 
 const log = createLogger('mutations');
 
+function appendMutationSnapshot(descriptor: MutationDescriptor): void {
+  appendMutationLine({
+    ...descriptor,
+    target: { ...descriptor.target },
+    preview: { ...descriptor.preview },
+    payload: { ...(descriptor.payload as Record<string, unknown>) },
+    ...(descriptor.outcome !== undefined ? { outcome: descriptor.outcome } : {}),
+    ...(descriptor.workProduct !== undefined ? { workProduct: descriptor.workProduct } : {}),
+  });
+}
+
 /**
  * Build a SupervisedRun for a mutation descriptor. The supervision visibility
  * surface keys runs by id (using the mutation id keeps the two stores aligned).
@@ -271,7 +282,7 @@ export function writeRecoveredTerminalMutation(
   if (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') {
     applyOutcomeToDescriptor(descriptor, event);
   }
-  appendMutationLine(descriptor);
+  appendMutationSnapshot(descriptor);
 
   const parked =
     (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') &&
@@ -328,7 +339,7 @@ export async function createMutation(
     status: 'pending',
   };
 
-  appendMutationLine(descriptor);
+  appendMutationSnapshot(descriptor);
 
   // Seed the supervision visibility surface with the new run. An autoApprove
   // mutation starts running immediately, so seed as 'running'; a non-
@@ -385,7 +396,7 @@ async function startApply(
   const supervise = applier.supervised !== false;
 
   descriptor.status = 'running';
-  appendMutationLine(descriptor);
+  appendMutationSnapshot(descriptor);
   // Flip supervision to 'running' — for an autoApprove mutation this confirms
   // the seed; for a manual-approval mutation it transitions out of the
   // 'blocked-on-human' seed once the human approved and dispatch started.
@@ -505,7 +516,7 @@ async function startApply(
         if (descriptor.kind === 'work-run' || descriptor.kind === 'orchestrated-work') {
           applyOutcomeToDescriptor(descriptor, event);
         }
-        appendMutationLine(descriptor);
+        appendMutationSnapshot(descriptor);
         // Project 13 (Background §7): a PARKED work-run terminates the MUTATION
         // normally (the child exited to report a human-block), but the SUPERVISED
         // run must stay `blocked-on-human` until a human releases it. The parked
@@ -541,7 +552,7 @@ async function startApply(
     }
     // Applier exhausted without terminal event — treat as completed
     descriptor.status = 'completed';
-    appendMutationLine(descriptor);
+    appendMutationSnapshot(descriptor);
     if (supervise) {
       safeUpsertRun(
         buildSupervisedRun(descriptor, 'completed', new Date().toISOString(), currentChildAliveAt, currentOutputAt),
@@ -551,7 +562,7 @@ async function startApply(
     log.error('Mutation applier threw', { id: descriptor.id, error: (err as Error).message });
     descriptor.status = 'failed';
     descriptor.error = (err as Error).message;
-    appendMutationLine(descriptor);
+    appendMutationSnapshot(descriptor);
     // Persist directly as 'failed' — the terminal-event branch above exits
     // via `return`, so this catch is only reachable when the run is still
     // 'running' and a markCrashed() wrap would be a no-op composition.

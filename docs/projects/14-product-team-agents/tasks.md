@@ -1362,7 +1362,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 **Implementation**
 
-- [ ] Move the lifecycle-terminal write into the applier's terminal path so work product and run
+- [x] Move the lifecycle-terminal write into the applier's terminal path so work product and run
       status are persisted together (single owner, atomic): the applier writes the terminal mutation
       line + supervised status alongside `persistTerminalArtifacts`; the yielded event becomes
       notification-only (bus/Telegram/cockpit-stream), no longer the sole carrier of the status write.

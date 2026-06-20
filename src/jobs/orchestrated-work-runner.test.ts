@@ -646,6 +646,98 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it('treats the yielded terminal event as notification-only after the applier writes lifecycle state', async () => {
+      const projectSlug = '14-product-team-agents';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-notification-only-terminal-'));
+      const ordering: string[] = [];
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+      const previousAppendMutationLineImpl = mockAppendMutationLine.getMockImplementation();
+      const previousUpsertRunImpl = mockUpsertRun.getMockImplementation();
+
+      mockAppendMutationLine.mockImplementation((entry: MutationDescriptor) => {
+        ordering.push(`mutation:${entry.status}`);
+      });
+      mockUpsertRun.mockImplementation((run: SupervisedRun) => {
+        ordering.push(`supervision:${run.status}`);
+      });
+
+      const bus = {
+        publish: vi.fn((event: { subKind?: string }) => {
+          if (event.subKind === 'completed' || event.subKind === 'failed') {
+            ordering.push(`bus:${event.subKind}`);
+          }
+        }),
+      };
+      setMutationBus(bus as never);
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree(projectSlug, '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-notification-only-terminal' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (): Promise<OrchestrationResult> => ({
+          kind: 'finalized',
+          outcome: 'branch-complete',
+        }),
+      });
+
+      try {
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'jarvis' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        const runId = createdMutation.descriptor.id;
+
+        await waitForCondition(() => !activeRuns.has(runId));
+
+        const terminalMutationWrites = mockAppendMutationLine.mock.calls
+          .map(([entry]) => entry as MutationDescriptor)
+          .filter((entry) => entry.id === runId && entry.status === 'completed');
+        expect(
+          terminalMutationWrites,
+          'the applier is the single lifecycle-terminal writer; startApply must not append a second terminal line after notification publish',
+        ).toHaveLength(1);
+
+        const terminalSupervisionWrites = mockUpsertRun.mock.calls
+          .map(([run]) => run as SupervisedRun)
+          .filter((run) => run.id === runId && run.status === 'completed');
+        expect(
+          terminalSupervisionWrites,
+          'the applier is the single terminal supervision writer; consuming the yielded event must not duplicate it',
+        ).toHaveLength(1);
+
+        const terminalMutationIndex = ordering.indexOf('mutation:completed');
+        const terminalSupervisionIndex = ordering.indexOf('supervision:completed');
+        const terminalBusIndex = ordering.indexOf('bus:completed');
+        expect(terminalMutationIndex).toBeGreaterThanOrEqual(0);
+        expect(terminalSupervisionIndex).toBeGreaterThanOrEqual(0);
+        expect(terminalBusIndex).toBeGreaterThanOrEqual(0);
+        expect(terminalMutationIndex).toBeLessThan(terminalBusIndex);
+        expect(terminalSupervisionIndex).toBeLessThan(terminalBusIndex);
+      } finally {
+        setMutationBus(null);
+        mockAppendMutationLine.mockImplementation(previousAppendMutationLineImpl ?? (() => undefined));
+        mockUpsertRun.mockImplementation(previousUpsertRunImpl ?? (() => undefined));
+        mockAppendMutationLine.mockClear();
+        mockUpsertRun.mockClear();
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
     it.each([
       {
         outcome: 'branch-complete',

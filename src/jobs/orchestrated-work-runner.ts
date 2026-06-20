@@ -1461,7 +1461,14 @@ function persistTerminalMutationState(
     descriptor.error = String((terminal.data as Record<string, unknown>)['reason'] ?? '');
   }
   applyOutcomeToDescriptor(descriptor, terminal);
-  appendMutationLine(descriptor);
+  appendMutationLine({
+    ...descriptor,
+    target: { ...descriptor.target },
+    preview: { ...descriptor.preview },
+    payload: { ...descriptor.payload },
+    ...(descriptor.outcome !== undefined ? { outcome: descriptor.outcome } : {}),
+    ...(descriptor.workProduct !== undefined ? { workProduct: descriptor.workProduct } : {}),
+  });
 
   try {
     upsertRun(
