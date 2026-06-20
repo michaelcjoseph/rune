@@ -57,6 +57,23 @@ function run(id: string, overrides: Partial<SupervisedRun> = {}): SupervisedRun 
   };
 }
 
+function activeHandle(id: string, overrides: Record<string, unknown> = {}): unknown {
+  return {
+    descriptor: {
+      id,
+      kind: 'orchestrated-work',
+      source: 'webview',
+      target: { type: 'orchestrated-work', ref: 'live-only' },
+      preview: { summary: 'orchestrated work on live-only' },
+      payload: { product: 'live-source', projectSlug: 'live-only' },
+      createdAt: new Date(NOW - 10 * 60_000).toISOString(),
+      status: 'running',
+      ...overrides,
+    },
+    cancel: vi.fn(),
+  };
+}
+
 function installIntervalCapture(): { fireTick: () => void } {
   let tick: (() => void) | undefined;
   vi.spyOn(globalThis, 'setInterval').mockImplementation(((handler: Parameters<typeof setInterval>[0]) => {
@@ -121,19 +138,41 @@ describe('startStallCheck — supervised-store source of truth', () => {
     ]);
   });
 
-  it('does not nudge a stale in-memory-only run when the persisted supervised store is empty', () => {
+  it('still nudges a stale live handle when the persisted supervised store is empty', () => {
     const { fireTick } = installIntervalCapture();
     const bus = collectBusEvents();
     store.readAllRuns.mockReturnValue([]);
-    mutations.activeRuns.set('memory-only-stalled-0001', {
-      descriptor: { id: 'memory-only-stalled-0001' },
-      run: run('memory-only-stalled-0001', { project: 'memory-only' }),
-    });
+    mutations.activeRuns.set('live-stalled-0001', activeHandle('live-stalled-0001'));
 
     startStallCheck(bus as unknown as NotificationBus);
     fireTick();
 
     expect(store.readAllRuns).toHaveBeenCalledWith('/test/logs/supervised-runs.json');
-    expect(bus.events.filter((event) => event.kind === 'message')).toEqual([]);
+    expect(bus.events).toEqual([
+      expect.objectContaining({
+        kind: 'message',
+        userId: 4242,
+        text: expect.stringContaining('live-source/live-only'),
+      }),
+    ]);
+  });
+
+  it('cancels a quiet persisted run with no live handle when it passes the quiet-cancel threshold', () => {
+    const { fireTick } = installIntervalCapture();
+    const bus = collectBusEvents();
+    store.readAllRuns.mockReturnValue([
+      run('persisted-quiet-cancel-0001', {
+        lastHeartbeatAt: new Date(NOW).toISOString(),
+        lastChildAliveAt: new Date(NOW).toISOString(),
+        lastOutputAt: new Date(NOW - 2 * 60 * 60_000).toISOString(),
+        quietNudgedAt: new Date(NOW - 2 * 60 * 60_000).toISOString(),
+      }),
+    ]);
+
+    startStallCheck(bus as unknown as NotificationBus);
+    fireTick();
+
+    expect(mutations.activeRuns.size).toBe(0);
+    expect(mutations.cancelMutation).toHaveBeenCalledWith('persisted-quiet-cancel-0001', 'system');
   });
 });

@@ -11,8 +11,14 @@
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { NotificationBus } from '../transport/notification-bus.js';
-import { planQuietNudges, planQuietCancel, planMaxRuntimeKills, planParkedNudges } from '../intent/supervision.js';
-import { cancelMutation } from '../transport/mutations.js';
+import { activeRuns, cancelMutation } from '../transport/mutations.js';
+import {
+  planQuietNudges,
+  planQuietCancel,
+  planMaxRuntimeKills,
+  planParkedNudges,
+  type SupervisedRun,
+} from '../intent/supervision.js';
 import { readAllRuns, upsertRun } from './supervision-store.js';
 import {
   checkStalledRuns,
@@ -28,6 +34,35 @@ const log = createLogger('stall-check-runner');
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let nudged: Set<string> = new Set();
+
+function snapshotSupervisedRuns(): SupervisedRun[] {
+  const persisted = readAllRuns(config.SUPERVISED_RUNS_FILE);
+  const byId = new Map(persisted.map((run) => [run.id, run]));
+
+  for (const handle of activeRuns.values()) {
+    const descriptor = handle.descriptor;
+    if (byId.has(descriptor.id)) continue;
+
+    const payload = descriptor.payload as Record<string, unknown>;
+    const product = typeof payload['product'] === 'string' ? payload['product'] : 'jarvis';
+    const project =
+      typeof payload['projectSlug'] === 'string' ? payload['projectSlug']
+      : typeof payload['ref'] === 'string' ? payload['ref']
+      : descriptor.target.ref || descriptor.id;
+
+    byId.set(descriptor.id, {
+      id: descriptor.id,
+      kind: descriptor.kind,
+      product,
+      project,
+      status: 'running',
+      startedAt: descriptor.createdAt,
+      lastHeartbeatAt: descriptor.createdAt,
+    });
+  }
+
+  return [...byId.values()];
+}
 
 /**
  * Start the periodic stall check. Idempotent — calling twice clears the
@@ -47,7 +82,7 @@ export function startStallCheck(bus: NotificationBus): void {
     // and crash the server. Better to log and skip a tick.
     try {
       const now = Date.now();
-      const runs = readAllRuns(config.SUPERVISED_RUNS_FILE);
+      const runs = snapshotSupervisedRuns();
 
       nudged = checkStalledRuns({
         readRuns: () => runs,

@@ -1369,7 +1369,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Add a periodic, store-driven reconciler (timer, not startup-only) that flips any supervised
       `running` whose run-artifact `summary.json` shows a terminal outcome to that outcome, and
       terminalizes the matching mutation-log line.
-- [ ] Point stall-check at the persisted supervised store (in addition to live handles) so abandoned
+- [x] Point stall-check at the persisted supervised store (in addition to live handles) so abandoned
       runs past threshold are caught.
 - [ ] Stop exempting `orchestrated-work` in `reconcileOrphans` (`mutations-log.ts:99-100`), or fold
       its responsibility into the periodic reconciler above.
