@@ -1373,7 +1373,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       runs past threshold are caught.
 - [x] Stop exempting `orchestrated-work` in `reconcileOrphans` (`mutations-log.ts:99-100`), or fold
       its responsibility into the periodic reconciler above.
-- [ ] One-time cleanup: terminalize the currently-stranded `0620f39e` (its work product is `noop`)
+- [x] One-time cleanup: terminalize the currently-stranded `0620f39e` (its work product is `noop`)
       so the cockpit clears the phantom active run.
 
 > **Provenance:** same defect class as Phase 11 ("persist run state, exactly one terminal" / the
