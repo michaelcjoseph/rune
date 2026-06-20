@@ -1277,6 +1277,7 @@ async function persistTerminalArtifacts(args: {
     projectDir,
     baselineTasks,
   });
+  normalizeLateErrorTerminalFromWorkProduct(terminal, workProduct, result);
   const summary = buildOrchestratedSummary({
     id: descriptor.id,
     project: projectSlug,
@@ -1313,6 +1314,36 @@ async function persistTerminalArtifacts(args: {
       error: (err as Error).message,
     });
   }
+}
+
+function normalizeLateErrorTerminalFromWorkProduct(
+  terminal: MutationEvent,
+  workProduct: WorkProductFacts | null,
+  result: OrchestrationResult | null,
+): void {
+  if (result !== null || terminal.kind !== 'failed' || workProduct === null) return;
+  const data = (terminal.data ?? {}) as Record<string, unknown>;
+  if (data['outcome'] !== undefined) return;
+
+  const classification = classifyOutcome({
+    exit: {
+      exitCode: 0,
+      signal: null,
+      cancelled: false,
+      durationMs: 0,
+      exitFact: 'clean-exit',
+    },
+    product: workProduct,
+  });
+  if (classification.outcome !== 'branch-complete') return;
+
+  terminal.kind = 'completed';
+  terminal.data = {
+    ...data,
+    outcome: classification.outcome,
+    reason: typeof data['reason'] === 'string' ? data['reason'] : classification.reason,
+    workProduct,
+  };
 }
 
 const EMPTY_WORK_PRODUCT: WorkProductFacts = {

@@ -646,6 +646,130 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
+    it.each([
+      {
+        outcome: 'branch-complete',
+        runId: 'mut-orch-agree-branch-complete',
+        expectedStatus: 'completed' as const,
+        git: {
+          commitShas: ['bc1111'],
+          diffstat: ' src/complete.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+        },
+        tasks: '- [x] task one\n',
+        runOrchestration: async (): Promise<OrchestrationResult> => {
+          throw new Error('late loop failure after a branch-complete work product');
+        },
+      },
+      {
+        outcome: 'partial',
+        runId: 'mut-orch-agree-partial',
+        expectedStatus: 'completed' as const,
+        git: {
+          commitShas: ['pa1111'],
+          diffstat: ' src/partial.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+        },
+        tasks: '- [ ] task one\n',
+        runOrchestration: async (): Promise<OrchestrationResult> => ({ kind: 'finalized', outcome: 'partial' }),
+      },
+      {
+        outcome: 'noop',
+        runId: 'mut-orch-agree-noop',
+        expectedStatus: 'completed' as const,
+        git: {
+          commitShas: [],
+          diffstat: '',
+        },
+        tasks: '- [ ] task one\n',
+        runOrchestration: async (): Promise<OrchestrationResult> => ({ kind: 'finalized', outcome: 'noop' }),
+      },
+      {
+        outcome: 'dirty-uncommitted',
+        runId: 'mut-orch-agree-dirty',
+        expectedStatus: 'completed' as const,
+        git: {
+          commitShas: [],
+          diffstat: '',
+          status: ' M src/dirty.ts\n',
+        },
+        tasks: '- [ ] task one\n',
+        runOrchestration: async (): Promise<OrchestrationResult> => ({ kind: 'finalized', outcome: 'dirty-uncommitted' }),
+      },
+      {
+        outcome: 'failed',
+        runId: 'mut-orch-agree-failed',
+        expectedStatus: 'failed' as const,
+        git: {
+          commitShas: [],
+          diffstat: '',
+        },
+        tasks: '- [ ] task one\n',
+        runOrchestration: async (): Promise<OrchestrationResult> => {
+          throw new Error('orchestration loop failed with no terminal work product');
+        },
+      },
+    ])(
+      'keeps durable work-product and lifecycle layers in agreement for $outcome',
+      async ({ outcome, runId, expectedStatus, git, tasks, runOrchestration }) => {
+        const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-lifecycle-agreement-'));
+        const { runGit } = makeWorkProductGitStub(git);
+        __setOrchestratedRuntimeForTest({
+          createWorktree: async () => {
+            created = true;
+            const { sandbox, dir } = makeWorktree('demo', '- [ ] task one\n');
+            wtDir = dir;
+            writeFileSync(join(dir, 'docs', 'projects', 'demo', 'tasks.md'), tasks, 'utf8');
+            return { ...sandbox, baseSha: 'base-lifecycle-agreement' };
+          },
+          destroyWorktree: async () => {
+            destroyed = true;
+          },
+          runGit,
+          workRunsDir: artifactsDir,
+          workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+          runOrchestration,
+        });
+
+        try {
+          const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+          const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+          expect(terminal, 'the applier must yield exactly one terminal event').toBeDefined();
+
+          const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as {
+            outcome: string;
+          };
+          expect(summary.outcome).toBe(outcome);
+
+          const terminalMutationWrites = mockAppendMutationLine.mock.calls
+            .map(([entry]) => entry as MutationDescriptor)
+            .filter((entry) => entry.id === runId);
+          const mutation = terminalMutationWrites.at(-1);
+          expect(mutation).toMatchObject({
+            id: runId,
+            kind: 'orchestrated-work',
+            status: expectedStatus,
+            outcome,
+          });
+
+          const terminalSupervisionWrites = mockUpsertRun.mock.calls
+            .map(([run]) => run as SupervisedRun)
+            .filter((run) => run.id === runId);
+          expect(terminalSupervisionWrites.at(-1)).toMatchObject({
+            id: runId,
+            kind: 'orchestrated-work',
+            status: expectedStatus,
+          });
+
+          if (summary.outcome === 'branch-complete') {
+            expect(mutation?.status, 'a branch-complete work product must not be lifecycle-failed').toBe('completed');
+          }
+          expect(mutation?.status, 'a terminal work-product summary must not be paired with a running mutation').not.toBe('running');
+          expect(terminalSupervisionWrites.at(-1)?.status, 'a terminal work-product summary must not be paired with running supervision').not.toBe('running');
+        } finally {
+          rmSync(artifactsDir, { recursive: true, force: true });
+        }
+      },
+    );
+
     it('pumps reported role activity between the starting log and terminal event', async () => {
       __setOrchestratedRuntimeForTest({
         createWorktree: async () => {

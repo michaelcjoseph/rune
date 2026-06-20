@@ -1345,7 +1345,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Lost-yield-no-strand test: simulate the consumer abandoning the `for await` immediately after
       the work-product write (no terminal event consumed); the run must NOT be left at `running` —
       the supervised store reflects the classified outcome (`noop`/`branch-complete`/`failed`).
-- [ ] Work-product-vs-lifecycle-agreement test: for every terminal outcome, the work-runs
+- [x] Work-product-vs-lifecycle-agreement test: for every terminal outcome, the work-runs
       `summary.json` outcome and the supervised/mutation status are consistent (a `branch-complete`
       work product is never paired with a `failed` lifecycle status, and a terminal work product is
       never paired with a `running` lifecycle status).
