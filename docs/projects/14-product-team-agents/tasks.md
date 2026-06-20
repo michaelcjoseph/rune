@@ -1353,7 +1353,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `work-runs/<id>/summary.json` already shows a terminal outcome is flipped to that outcome by a
       timer-driven reconciler (NOT startup-only), with no restart and no live handle required. An
       entry with no terminal summary is left untouched (still genuinely in flight).
-- [ ] Stall-check-store-source test: stall detection reads the persisted supervised store (not only
+- [x] Stall-check-store-source test: stall detection reads the persisted supervised store (not only
       live `activeRuns` handles), so an abandoned `running` record past the stall threshold with no
       live handle is surfaced rather than silently ignored.
 - [ ] Reconcile-orchestrated-mutations test: `reconcileOrphans` (or its replacement) no longer
