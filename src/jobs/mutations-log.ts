@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import config from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import type { MutationDescriptor } from '../transport/mutations.js';
+import type { WorkOutcome, WorkProductFacts } from './work-run-classify.js';
 
 const log = createLogger('mutations-log');
 
@@ -66,6 +67,52 @@ export function readRunningOrchestratedMutations(): MutationDescriptor[] {
   );
 }
 
+interface TerminalSummary {
+  id: string;
+  outcome: WorkOutcome;
+  reason?: string;
+  workProduct?: WorkProductFacts;
+}
+
+function terminalStatusForOutcome(outcome: WorkOutcome): 'completed' | 'failed' {
+  return outcome === 'failed' ? 'failed' : 'completed';
+}
+
+function readTerminalSummary(id: string): TerminalSummary | null {
+  if (typeof config.WORK_RUNS_DIR !== 'string' || config.WORK_RUNS_DIR.trim() === '') {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(config.WORK_RUNS_DIR, id, 'summary.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+
+  const summary = parsed as Partial<TerminalSummary>;
+  if (summary.id !== id || typeof summary.outcome !== 'string') {
+    log.warn('mutations.jsonl: skipped terminal summary with unexpected shape', { id });
+    return null;
+  }
+  return summary as TerminalSummary;
+}
+
+function terminalizeFromSummary(
+  entry: MutationDescriptor,
+  summary: TerminalSummary,
+): MutationDescriptor {
+  const status = terminalStatusForOutcome(summary.outcome);
+  const { error: _error, ...base } = entry;
+  return {
+    ...base,
+    status,
+    ...(status === 'failed' ? { error: summary.reason ?? '' } : {}),
+    outcome: summary.outcome,
+    ...(summary.workProduct ? { workProduct: summary.workProduct } : {}),
+  };
+}
+
 /** On startup, flip non-resumable descriptors still in 'running' status to 'failed' with reason 'orphaned'.
  *  These represent mutations that were interrupted by a server restart mid-run. */
 export function reconcileOrphans(): void {
@@ -97,6 +144,11 @@ export function reconcileOrphans(): void {
       const isLatestState = latestLineById.get(entry.id) === index;
       if (isLatestState && entry.status === 'running') {
         if (entry.kind === 'orchestrated-work') {
+          const summary = readTerminalSummary(entry.id);
+          if (summary) {
+            changed = true;
+            return JSON.stringify(terminalizeFromSummary(entry, summary) satisfies MutationDescriptor);
+          }
           return line;
         }
         changed = true;

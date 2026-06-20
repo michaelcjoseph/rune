@@ -20,6 +20,7 @@ vi.mock('node:fs', () => ({
 vi.mock('../config.js', () => ({
   default: {
     LOGS_DIR: '/test/logs',
+    WORK_RUNS_DIR: '/test/work-runs',
   },
 }));
 
@@ -187,25 +188,63 @@ describe('mutations-log', () => {
       expect(untouchedCompleted.status).toBe('completed');
     });
 
-    it('does not terminalize running orchestrated-work entries; dedicated recovery decides resume vs orphan', () => {
-      const resumableOrchestrated = makeDescriptor({
-        id: 'orch-resume-1',
+    it('terminalizes a running orchestrated-work entry when its work product summary is already terminal', () => {
+      const terminalOrchestrated = makeDescriptor({
+        id: 'orch-terminal-1',
         kind: 'orchestrated-work',
         status: 'running',
         payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
       });
+      const resumableOrchestrated = makeDescriptor({
+        id: 'orch-resume-1',
+        kind: 'orchestrated-work',
+        status: 'running',
+        payload: { projectSlug: 'resume-me', product: 'jarvis' },
+      });
       const legacyRunning = makeDescriptor({ id: 'legacy-run-1', status: 'running' });
 
-      const raw = [resumableOrchestrated, legacyRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
-      (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(raw);
+      const raw = [terminalOrchestrated, resumableOrchestrated, legacyRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
+      (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
+        if (path.includes('mutations.jsonl')) return raw;
+        if (path.includes('/test/work-runs/orch-terminal-1/summary.json')) {
+          return JSON.stringify({
+            id: 'orch-terminal-1',
+            outcome: 'noop',
+            reason: 'terminal work product already persisted',
+            workProduct: {
+              commitCount: 0,
+              commitShas: [],
+              filesChanged: [],
+              diffstat: '',
+              dirty: false,
+              untracked: false,
+              transitions: {
+                tasksNewlyChecked: 0,
+                tasksRemaining: 0,
+                tasksAdded: 0,
+                tasksRemoved: 0,
+              },
+            },
+          });
+        }
+        throw new Error('ENOENT');
+      });
 
       reconcileOrphans();
 
       expect(writeFileSync).toHaveBeenCalledOnce();
       const [, writtenContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0]!;
       const lines = writtenContent.split('\n').filter(Boolean);
-      const untouchedOrchestrated = JSON.parse(lines[0]!);
-      const terminalizedLegacy = JSON.parse(lines[1]!);
+      const terminalizedOrchestrated = JSON.parse(lines[0]!);
+      const untouchedOrchestrated = JSON.parse(lines[1]!);
+      const terminalizedLegacy = JSON.parse(lines[2]!);
+
+      expect(terminalizedOrchestrated.id).toBe('orch-terminal-1');
+      expect(terminalizedOrchestrated.kind).toBe('orchestrated-work');
+      expect(terminalizedOrchestrated.status).toBe('completed');
+      expect(terminalizedOrchestrated.outcome).toBe('noop');
+      expect(terminalizedOrchestrated.workProduct).toMatchObject({ commitCount: 0 });
+      expect(terminalizedOrchestrated.error).toBeUndefined();
 
       expect(untouchedOrchestrated.id).toBe('orch-resume-1');
       expect(untouchedOrchestrated.kind).toBe('orchestrated-work');

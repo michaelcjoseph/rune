@@ -1356,7 +1356,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Stall-check-store-source test: stall detection reads the persisted supervised store (not only
       live `activeRuns` handles), so an abandoned `running` record past the stall threshold with no
       live handle is surfaced rather than silently ignored.
-- [ ] Reconcile-orchestrated-mutations test: `reconcileOrphans` (or its replacement) no longer
+- [x] Reconcile-orchestrated-mutations test: `reconcileOrphans` (or its replacement) no longer
       exempts `orchestrated-work` — a stale `running` orchestrated mutation with a terminal work
       product is terminalized, not left `running` forever in `mutations.jsonl`.
 
