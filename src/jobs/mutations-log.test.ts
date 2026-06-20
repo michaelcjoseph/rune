@@ -188,22 +188,22 @@ describe('mutations-log', () => {
       expect(untouchedCompleted.status).toBe('completed');
     });
 
-    it('terminalizes a running orchestrated-work entry when its work product summary is already terminal', () => {
+    it('reconciles running orchestrated-work entries instead of exempting them', () => {
       const terminalOrchestrated = makeDescriptor({
         id: 'orch-terminal-1',
         kind: 'orchestrated-work',
         status: 'running',
         payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
       });
-      const resumableOrchestrated = makeDescriptor({
-        id: 'orch-resume-1',
+      const staleOrchestrated = makeDescriptor({
+        id: 'orch-stale-1',
         kind: 'orchestrated-work',
         status: 'running',
-        payload: { projectSlug: 'resume-me', product: 'jarvis' },
+        payload: { projectSlug: 'stale-run', product: 'jarvis' },
       });
       const legacyRunning = makeDescriptor({ id: 'legacy-run-1', status: 'running' });
 
-      const raw = [terminalOrchestrated, resumableOrchestrated, legacyRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
+      const raw = [terminalOrchestrated, staleOrchestrated, legacyRunning].map(d => JSON.stringify(d)).join('\n') + '\n';
       (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string) => {
         if (path.includes('mutations.jsonl')) return raw;
         if (path.includes('/test/work-runs/orch-terminal-1/summary.json')) {
@@ -236,7 +236,7 @@ describe('mutations-log', () => {
       const [, writtenContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0]!;
       const lines = writtenContent.split('\n').filter(Boolean);
       const terminalizedOrchestrated = JSON.parse(lines[0]!);
-      const untouchedOrchestrated = JSON.parse(lines[1]!);
+      const orphanedOrchestrated = JSON.parse(lines[1]!);
       const terminalizedLegacy = JSON.parse(lines[2]!);
 
       expect(terminalizedOrchestrated.id).toBe('orch-terminal-1');
@@ -246,10 +246,10 @@ describe('mutations-log', () => {
       expect(terminalizedOrchestrated.workProduct).toMatchObject({ commitCount: 0 });
       expect(terminalizedOrchestrated.error).toBeUndefined();
 
-      expect(untouchedOrchestrated.id).toBe('orch-resume-1');
-      expect(untouchedOrchestrated.kind).toBe('orchestrated-work');
-      expect(untouchedOrchestrated.status).toBe('running');
-      expect(untouchedOrchestrated.error).toBeUndefined();
+      expect(orphanedOrchestrated.id).toBe('orch-stale-1');
+      expect(orphanedOrchestrated.kind).toBe('orchestrated-work');
+      expect(orphanedOrchestrated.status).toBe('failed');
+      expect(orphanedOrchestrated.error).toBe('orphaned');
 
       expect(terminalizedLegacy.id).toBe('legacy-run-1');
       expect(terminalizedLegacy.status).toBe('failed');

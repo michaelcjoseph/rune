@@ -114,11 +114,6 @@ try {
   });
 }
 
-// Flip any stale non-resumable 'running' mutations from a prior interrupted run
-// to 'failed'. Orchestrated-work entries are skipped here and handled by the
-// dedicated cursor-based recovery below.
-reconcileOrphans();
-
 // Recover stale `running` supervised runs (project 15, P0.4). FIRST, drive each
 // to a real terminal state through the hold-mode finalizer — classified on its
 // work product while its worktree STILL EXISTS (this is awaited before the
@@ -177,6 +172,7 @@ registerApplier(workRunReleaseApplier);
 const { tg, webview, destroy } = createSenders(bot, bus);
 wireHandlers(bot, tg);
 let ready = false;
+const redispatchedOrchestratedMutationIds = new Set<string>();
 
 try {
   const recovery = await recoverOrchestratedWorkRuns({
@@ -205,6 +201,9 @@ try {
       writeRecoveredTerminalMutation(mutation as MutationDescriptor, event);
     },
   });
+  for (const id of recovery.resumed) {
+    redispatchedOrchestratedMutationIds.add(id);
+  }
   if (recovery.resumed.length > 0 || recovery.orphaned.length > 0 || recovery.skipped.length > 0) {
     log.info('Orchestrated-work startup recovery completed', {
       resumed: recovery.resumed,
@@ -215,6 +214,12 @@ try {
 } catch (err) {
   log.error('Orchestrated-work startup recovery threw', { error: (err as Error).message });
 }
+
+// Flip stale latest-state `running` mutations from a prior interrupted run to
+// `failed`. Orchestrated-work cursor recovery must run first so resumable runs
+// can be re-dispatched; those live ids are skipped here and all other running
+// descriptors, including non-resumable orchestrated-work entries, are reconciled.
+reconcileOrphans({ skipIds: redispatchedOrchestratedMutationIds });
 
 // Sweep orphan project worktrees from a prior interrupted run. Best-effort —
 // a missing products.json (fresh clone, no Regime B products registered yet)

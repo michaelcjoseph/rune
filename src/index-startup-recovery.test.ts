@@ -233,6 +233,8 @@ describe('index startup orchestrated-work recovery', () => {
 
     expect(calls.indexOf('register-applier:orchestrated-work')).toBeLessThan(calls.indexOf('recover-orchestrated-work'));
     expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('cleanup-worktrees'));
+    expect(calls.indexOf('recover-orchestrated-work')).toBeLessThan(calls.indexOf('reconcile-orphans'));
+    expect(calls.indexOf('reconcile-orphans')).toBeLessThan(calls.indexOf('cleanup-worktrees'));
   });
 
   it('starts the terminal work-run reconciler on boot so stranded terminal artifacts self-heal without another restart', async () => {

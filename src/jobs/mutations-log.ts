@@ -43,8 +43,7 @@ export function readRecentMutations(n: number): MutationDescriptor[] {
 
 /** Read latest-state orchestrated-work descriptors whose newest persisted line
  *  is still `running`. Startup recovery owns deciding whether each is resumable
- *  or should be terminalized; the generic orphan reconciler intentionally skips
- *  this kind. */
+ *  or should be terminalized before generic orphan reconciliation runs. */
 export function readRunningOrchestratedMutations(): MutationDescriptor[] {
   const latest = new Map<string, MutationDescriptor>();
   try {
@@ -115,7 +114,8 @@ function terminalizeFromSummary(
 
 /** On startup, flip non-resumable descriptors still in 'running' status to 'failed' with reason 'orphaned'.
  *  These represent mutations that were interrupted by a server restart mid-run. */
-export function reconcileOrphans(): void {
+export function reconcileOrphans(options: { skipIds?: Iterable<string> } = {}): void {
+  const skipIds = new Set(options.skipIds ?? []);
   let raw: string;
   try {
     raw = readFileSync(logPath(), 'utf8');
@@ -143,13 +143,13 @@ export function reconcileOrphans(): void {
       const entry = JSON.parse(line) as MutationDescriptor;
       const isLatestState = latestLineById.get(entry.id) === index;
       if (isLatestState && entry.status === 'running') {
+        if (skipIds.has(entry.id)) return line;
         if (entry.kind === 'orchestrated-work') {
           const summary = readTerminalSummary(entry.id);
           if (summary) {
             changed = true;
             return JSON.stringify(terminalizeFromSummary(entry, summary) satisfies MutationDescriptor);
           }
-          return line;
         }
         changed = true;
         return JSON.stringify({ ...entry, status: 'failed', error: 'orphaned' } satisfies MutationDescriptor);

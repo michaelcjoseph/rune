@@ -50,7 +50,7 @@ afterAll(() => {
 });
 
 describe('mutations-log orchestrated recovery interaction', () => {
-  it('keeps running orchestrated-work discoverable after generic orphan reconciliation', () => {
+  it('does not leave stale orchestrated-work entries discoverable after generic orphan reconciliation', () => {
     const orchestrated = descriptor({
       id: 'mut-orchestrated-running',
       kind: 'orchestrated-work',
@@ -66,11 +66,10 @@ describe('mutations-log orchestrated recovery interaction', () => {
 
     const raw = readFileSync(join(logsDir, 'mutations.jsonl'), 'utf8');
     const persisted = raw.split('\n').filter(Boolean).map((line) => JSON.parse(line) as MutationDescriptor);
-    expect(persisted.find((entry) => entry.id === orchestrated.id)?.status).toBe('running');
+    expect(persisted.find((entry) => entry.id === orchestrated.id)?.status).toBe('failed');
+    expect(persisted.find((entry) => entry.id === orchestrated.id)?.error).toBe('orphaned');
     expect(persisted.find((entry) => entry.id === legacy.id)?.status).toBe('failed');
 
-    expect(readRunningOrchestratedMutations().map((entry) => entry.id)).toEqual([
-      'mut-orchestrated-running',
-    ]);
+    expect(readRunningOrchestratedMutations().map((entry) => entry.id)).toEqual([]);
   });
 });

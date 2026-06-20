@@ -1371,7 +1371,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       terminalizes the matching mutation-log line.
 - [x] Point stall-check at the persisted supervised store (in addition to live handles) so abandoned
       runs past threshold are caught.
-- [ ] Stop exempting `orchestrated-work` in `reconcileOrphans` (`mutations-log.ts:99-100`), or fold
+- [x] Stop exempting `orchestrated-work` in `reconcileOrphans` (`mutations-log.ts:99-100`), or fold
       its responsibility into the periodic reconciler above.
 - [ ] One-time cleanup: terminalize the currently-stranded `0620f39e` (its work product is `noop`)
       so the cockpit clears the phantom active run.
