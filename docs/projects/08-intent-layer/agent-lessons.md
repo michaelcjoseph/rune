@@ -486,3 +486,87 @@ lesson-propagation loop the same way.
   Jarvis-spawned sub-agents, /work spawns, every product repo).
 
 Same patch series, separate commits.
+
+---
+
+## 2026-06-20 — Project 17's first run dead-looped: implementation landed before the gate meant to guard it
+
+Project `17-cockpit-redesign` was the first feature run executed under the
+team-task orchestrator's stabilized reviewer (it reached `branch-complete`
+only on 2026-06-18/19). It failed twice on the same underlying state and
+never recovered on its own. The forensics live in
+[`docs/projects/bugs.md`](../bugs.md) ("The 'Confirm red before
+implementation' TDD gate is honor-system with no recovery path"). Two
+lessons generalize beyond that one bug.
+
+The root in one sentence: **Phase 2's tests and implementation were bundled
+into a single commit (`00849c7`), so the implementation existed on the
+branch before the gates that were supposed to guard it ran.** Two different
+gates then tripped on that one state — the "Confirm red" honor-system gate
+on run `c1e18632`, and the diff-vs-tree completeness gate on run
+`a6958309` — and the round-cap retry loop burned out against both because
+no turn could un-commit the work.
+
+### Lesson 12 — Completeness/red gates must judge tree (and suite) state, not the task's diff
+
+A gate that decides "is this task done?" by inspecting only the **current
+task's diff** misfires the moment work lands out of sequence. Project 17's
+`run-event-bus-contract` task was judged incomplete because its
+deliverables (`BusRunEvent` typing, `WebviewSender` forwarding, the client
+frame parser) had already landed in an earlier bundled commit — so they
+never appeared in *this* task's diff, even though they were plainly present
+on the branch. The gate read "not in the diff" as "not done" and vetoed a
+task whose work was finished.
+
+The same shape sinks the "Confirm red" gate: it asks the suite to be red,
+but the suite is evaluated against tree state (impl already present →
+green), so a diff-blind "did the coder demonstrate red?" check can never
+pass once the implementation is committed.
+
+The fix is to evaluate the gate's predicate against **reality** — the tree
+for "does this deliverable exist?", the suite for "are these tests red?" —
+not against the slice of reality that happens to be in the latest diff.
+A deliverable already on the branch should count as satisfied; a test
+already green because its implementation is present should be detected as
+"impl landed early," not silently treated as a passing gate or an
+unresolvable veto.
+
+**Applied at:** recorded as fix option E on the bugs.md entry above
+(owned by project 14 — it owns the role gates and the diff-vs-task
+adjudication). Not yet shipped; tracked there. The box-check recovery used
+on 2026-06-22 is the interim unblock, not the gate fix.
+
+### Lesson 13 — A veto-only gate plus a memoryless retry loop guarantees a dead-loop, not a recovery
+
+Two mechanisms combined to turn a recoverable stop into a hard failure that
+re-failed on every resume:
+
+1. **The gate can only say "no."** It returns `fail` with feedback and
+   threads it back to the coder, but it has **no corrective action**. When
+   the rejected state is one no coder turn can fix (implementation already
+   committed, red undemonstrable), the feedback is permanently unresolvable.
+
+2. **The coder has no cross-round memory.** Each retry within the round cap
+   starts fresh — it doesn't carry forward what prior rounds tried or why
+   they were rejected. So it can re-attempt the same dead-end, and against
+   an unfixable state it just thrashes until the round cap trips and the
+   whole run classifies `failed`.
+
+Either alone is survivable; together they are a guaranteed dead-loop. A gate
+that can only veto, pointed at a state no turn can repair, counted down by a
+retry loop that can't learn, will exhaust the budget every time — including
+on a plain `/work --auto` resume, because the bad state is committed on the
+branch and re-evaluates identically.
+
+The general rule: **any gate that can reject must either offer a recovery
+action or escalate to a human — never just loop a memoryless worker against
+an unfixable state.** And retry loops should accumulate context across
+rounds (prior attempts + feedback), so the rounds the cap is budgeting are
+actually spent converging rather than resetting.
+
+**Applied at:** recorded as fix options B (orchestrator recovery action)
+and F (cross-round coder memory) on the bugs.md entry above, owned by
+project 14. Not yet shipped; tracked there. Reinforces Lesson 11's broader
+point that a stop with no checkpoint to resume from is worse than a loud
+failure — here the "checkpoint" the loop lacks is both a recovery move and
+the memory of what it already tried.
