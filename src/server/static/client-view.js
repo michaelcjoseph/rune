@@ -1,4 +1,5 @@
 import { createHomeView } from './home-view.js';
+import { createProductDeepView } from './product-deep-view.js';
 import { createClientViewRouter } from './view-router.js';
 
 function fetchJson(url) {
@@ -32,9 +33,24 @@ function createHomeRoot() {
   return root;
 }
 
+function createProductRoot() {
+  const main = document.getElementById('main');
+  if (!main) return null;
+  let root = document.getElementById('product-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'product-root';
+    main.prepend(root);
+  }
+  return root;
+}
+
 const homeRoot = createHomeRoot();
+const productRoot = createProductRoot();
 let homeLoaded = false;
 let home = null;
+let productView = null;
+let loadedProductRoute = '';
 
 const router = createClientViewRouter({
   window,
@@ -47,6 +63,33 @@ const router = createClientViewRouter({
           available: false,
           products: [],
           unavailableReason: error?.message || 'could not load home pulse',
+        });
+      });
+    }
+    if (route.view === 'home') {
+      productView?.close?.();
+      productView = null;
+      loadedProductRoute = '';
+    }
+    if (route.view === 'product' && productRoot) {
+      const routeKey = `${route.product || ''}:${route.focusRunId || ''}`;
+      if (loadedProductRoute === routeKey) return;
+      loadedProductRoute = routeKey;
+      productView?.close?.();
+      productView = createProductDeepView({
+        root: productRoot,
+        product: route.product,
+        focusRunId: route.focusRunId,
+        fetchJson,
+      });
+      productView.load().catch(error => {
+        productView.render({
+          name: route.product,
+          repoBacked: false,
+          limitedReason: error?.message || 'could not load product',
+          projects: [],
+          backlog: { bugs: [], ideas: [], warnings: [] },
+          runs: [],
         });
       });
     }
@@ -67,6 +110,9 @@ if (router.getState().view === 'home' && home) {
       unavailableReason: error?.message || 'could not load home pulse',
     });
   });
+}
+if (router.getState().view === 'product' && productRoot) {
+  router.replace(router.getState());
 }
 
 window.jarvisClientRouter = router;

@@ -4,7 +4,11 @@ type Listener = (event?: any) => unknown;
 
 function makeRoot() {
   let html = '';
-  const listeners = new Map<string, Listener>();
+  const listeners = new Map<string, Set<Listener>>();
+  const emit = async (type: string, event: unknown) => {
+    const handlers = Array.from(listeners.get(type) ?? []);
+    await Promise.all(handlers.map(listener => listener(event)));
+  };
   return {
     get innerHTML() {
       return html;
@@ -13,10 +17,15 @@ function makeRoot() {
       html = next;
     },
     addEventListener: vi.fn((type: string, listener: Listener) => {
-      listeners.set(type, listener);
+      const handlers = listeners.get(type) ?? new Set<Listener>();
+      handlers.add(listener);
+      listeners.set(type, handlers);
+    }),
+    removeEventListener: vi.fn((type: string, listener: Listener) => {
+      listeners.get(type)?.delete(listener);
     }),
     clickClosest(selector: string, dataset: Record<string, string> = {}) {
-      return listeners.get('click')?.({
+      return emit('click', {
         preventDefault: vi.fn(),
         target: {
           closest(query: string) {
@@ -26,7 +35,7 @@ function makeRoot() {
       });
     },
     submitClosest(selector: string, fields: Record<string, string> = {}) {
-      return listeners.get('submit')?.({
+      return emit('submit', {
         preventDefault: vi.fn(),
         target: {
           closest(query: string) {
@@ -193,6 +202,33 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toContain('run-recent-1');
   });
 
+  it('renders a per-product limited view for known products that are not repo-backed', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      expect(url).toBe('/api/products/relay');
+      return productView({
+        name: 'relay',
+        repoBacked: false,
+        limitedReason: 'Product is tracked but has no writable repo configured.',
+        projects: [],
+        backlog: { bugs: [], ideas: [], warnings: [] },
+        runs: [],
+        activeRun: undefined,
+      });
+    });
+
+    const view = createProductDeepView({ root, product: 'relay', fetchJson });
+    await view.load();
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/products/relay');
+    expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
+    expect(root.innerHTML).toContain('relay');
+    expect(root.innerHTML).toMatch(/limited|not repo-backed|no writable repo/i);
+    expect(root.innerHTML).toContain('Product is tracked but has no writable repo configured.');
+    expect(root.innerHTML).not.toMatch(/data-fix-item-id|data-plan-item-id|data-run-id=["']run-/i);
+  });
+
   it('keeps chat as a scoped secondary panel instead of the dominant surface', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
@@ -302,6 +338,28 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(postJson).toHaveBeenCalledTimes(1);
     expect(root.innerHTML).toMatch(/fix-attempt-1|gating|scoping/i);
     expect(root.innerHTML).toMatch(/BUG-available[\s\S]{0,320}(disabled|aria-busy=["']true["']|gating|scoping)/i);
+  });
+
+  it('tears down delegated root listeners on close so product re-navigation does not duplicate actions', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async () => productView());
+    const postJson = vi.fn(async () => ({ attemptId: 'fix-attempt-1' }));
+    const sendChat = vi.fn(async () => ({ ok: true }));
+
+    const first = createProductDeepView({ root, product: 'aura', fetchJson, postJson, sendChat });
+    await first.load();
+    first.close();
+    const second = createProductDeepView({ root, product: 'aura', fetchJson, postJson, sendChat });
+    await second.load();
+
+    await root.clickClosest('[data-fix-item-id]', { fixItemId: 'BUG-available' });
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: '/fresh' });
+
+    expect(root.removeEventListener).toHaveBeenCalledWith('click', expect.any(Function));
+    expect(root.removeEventListener).toHaveBeenCalledWith('submit', expect.any(Function));
+    expect(postJson).toHaveBeenCalledTimes(1);
+    expect(sendChat).toHaveBeenCalledTimes(1);
   });
 
   it('keeps migrated operational controls reachable in the new deep-view IA', async () => {

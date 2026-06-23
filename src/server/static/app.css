@@ -77,7 +77,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text); font-famil
   overflow: hidden;
 }
 
-#home-root { display: none; }
+#home-root,
+#product-root { display: none; }
 body[data-view="home"] #main {
   overflow-y: auto;
 }
@@ -87,8 +88,18 @@ body[data-view="home"] #home-root {
   padding: 1.25rem;
 }
 body[data-view="home"] #chat,
-body[data-view="home"] #input-form {
+body[data-view="home"] #input-form,
+body[data-view="product"] #chat,
+body[data-view="product"] #input-form {
   display: none;
+}
+body[data-view="product"] #main {
+  overflow-y: auto;
+}
+body[data-view="product"] #product-root {
+  display: block;
+  min-height: 100vh;
+  padding: 1rem;
 }
 
 .home-view {
@@ -237,6 +248,274 @@ body[data-view="home"] #input-form {
 .home-unavailable p {
   margin-top: .35rem;
   color: var(--text2);
+}
+
+.product-deep-view {
+  display: flex;
+  flex-direction: column;
+  gap: .9rem;
+}
+.deep-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .7rem;
+}
+.deep-header h2 {
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+.deep-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+}
+.deep-header button,
+.product-deep-view a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.deep-header button {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg3);
+  padding: .18rem .45rem;
+  font: inherit;
+  font-size: .78rem;
+  cursor: pointer;
+}
+.deep-header button:hover,
+.product-deep-view a:hover {
+  text-decoration: underline;
+}
+.deep-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, .95fr) minmax(340px, 1.45fr) minmax(300px, 1.1fr);
+  grid-template-areas:
+    "projects backlog runs"
+    "chat backlog operations";
+  gap: .8rem;
+  align-items: start;
+}
+.deep-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  padding: .85rem;
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  min-width: 0;
+}
+.deep-panel--projects { grid-area: projects; }
+.deep-panel--backlog { grid-area: backlog; }
+.deep-panel--runs { grid-area: runs; }
+.deep-panel--chat { grid-area: chat; }
+.deep-panel--operations { grid-area: operations; }
+.deep-panel-head,
+.deep-row-head,
+.deep-run-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .6rem;
+}
+.deep-panel-head h3 {
+  font-size: .9rem;
+  font-weight: 650;
+}
+.deep-panel-head span,
+.deep-row-head span,
+.deep-run-meta,
+.deep-action-meta {
+  color: var(--text2);
+  font-size: .75rem;
+}
+.deep-project,
+.deep-backlog-item,
+.deep-run-row,
+.deep-live-run,
+.deep-op-row {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: .65rem;
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  min-width: 0;
+}
+.deep-progress,
+.deep-actions {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  flex-wrap: wrap;
+}
+.deep-backlog-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+}
+.deep-backlog-column {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  min-width: 0;
+}
+.deep-backlog-column > h4,
+.deep-live-grid h4,
+.deep-panel--operations h4 {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text2);
+}
+.deep-backlog-item h4 {
+  font-size: .88rem;
+  line-height: 1.25;
+}
+.deep-backlog-item p,
+.deep-panel--chat p,
+.product-deep-view--limited p {
+  color: var(--text2);
+  font-size: .82rem;
+}
+.deep-action,
+.deep-panel button {
+  font: inherit;
+  font-size: .72rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  padding: .22rem .55rem;
+  cursor: pointer;
+}
+.deep-action--fix {
+  border-color: #2f7d62;
+  color: #75d4a8;
+}
+.deep-action:disabled,
+.deep-panel button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.deep-live-run {
+  border-color: #2f7d62;
+  background: #101b16;
+}
+.deep-worktree,
+.deep-run-logs {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .72rem;
+}
+.deep-worktree {
+  display: block;
+  color: var(--text2);
+  background: var(--bg3);
+  border-radius: 4px;
+  padding: .35rem;
+  overflow-wrap: anywhere;
+}
+.deep-live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  gap: .55rem;
+}
+.deep-agents,
+.deep-run-logs,
+.deep-warnings ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.deep-agents li {
+  display: flex;
+  justify-content: space-between;
+  gap: .5rem;
+  color: var(--text2);
+}
+.deep-agents li.active {
+  color: #75d4a8;
+}
+.deep-run-logs {
+  color: var(--text2);
+  max-height: 9rem;
+  overflow: auto;
+}
+.deep-warnings {
+  border-top: 1px solid var(--border);
+  padding-top: .5rem;
+  color: #d6a248;
+  font-size: .78rem;
+}
+.deep-panel--chat textarea {
+  width: 100%;
+  min-height: 5.5rem;
+  resize: vertical;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: .5rem;
+  font: inherit;
+}
+.deep-panel--chat form {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+}
+.deep-panel--chat button {
+  align-self: flex-end;
+}
+.deep-op-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+}
+.deep-op-row span {
+  overflow-wrap: anywhere;
+}
+.product-deep-view--limited {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  padding: 1rem;
+}
+
+@media (max-width: 1100px) {
+  .deep-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "projects runs"
+      "backlog backlog"
+      "chat operations";
+  }
+}
+
+@media (max-width: 760px) {
+  #app {
+    grid-template-columns: 1fr;
+  }
+  #sidebar {
+    display: none;
+  }
+  .deep-header,
+  .deep-row-head,
+  .deep-run-meta {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .deep-grid,
+  .deep-backlog-columns,
+  .deep-live-grid {
+    display: flex;
+    flex-direction: column;
+  }
 }
 
 /* Chat scroll area */

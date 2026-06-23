@@ -302,6 +302,14 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- s, and product-scoped chat with slash commands preserved.
+- ep-view layout and hides the legacy dominant chat on product routes.
 
-Verification: `npx vitest run src/server/static/product-deep-view-client.test.ts --configLoader runner` fails red as expected: 8/8 failures are due to missing `src/server/static/product-deep-view.js`, which is the next implementation target.
+Verification:
+`npx vitest run src/server/static/product-deep-view-client.test.ts src/server/static/home-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner`
+
+Result: 3 files passed, 25 tests passed.
+- design/src/server/static/product-deep-view-client.test.ts): added regression coverage proving re-navigation does not duplicate Fix POSTs or chat sends.
+
+Verification:
+- `npx vitest run src/server/static/product-deep-view-client.test.ts --configLoader runner`
+- Result: 1 file passed, 10 tests passed.
