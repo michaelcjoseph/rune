@@ -14,6 +14,7 @@
  */
 
 import type { BacklogItem } from '../intent/backlog-parser.js';
+import type { FixAttempt } from '../jobs/fix-attempt-store.js';
 
 export type BacklogDisabledReason =
   | 'already-promoted'
@@ -21,6 +22,26 @@ export type BacklogDisabledReason =
   | 'planning-active'
   | 'bug-done'
   | 'parse-warning';
+
+export type FixDisabledReason = BacklogDisabledReason | 'not-a-bug';
+
+export type FixActionState =
+  | 'available'
+  | 'gating'
+  | 'declined'
+  | 'handoff-failed'
+  | 'proceeding'
+  | 'disabled';
+
+export interface FixAction {
+  kind: 'fix';
+  state: FixActionState;
+  reason?: string;
+  detail?: string;
+  runId?: string;
+}
+
+export type FixActionAttempt = Pick<FixAttempt, 'attemptId' | 'state' | 'reason' | 'detail' | 'runId'>;
 
 export interface BacklogItemAction {
   kind: 'plan';
@@ -47,6 +68,54 @@ export function computePlanAction(item: BacklogItem, planningActive: boolean): B
   if (item.section === 'loop-filed') return disabled('loop-filed');
   if (item.warnings.length > 0) return disabled('parse-warning');
   return { kind: 'plan', enabled: true };
+}
+
+/** Compute the v2 `fix` action for a backlog item and its latest persisted FixAttempt. Pure. */
+export function computeFixAction(item: BacklogItem, attempt?: FixActionAttempt): FixAction {
+  const disabled = (reason: FixDisabledReason): FixAction => ({
+    kind: 'fix',
+    state: 'disabled',
+    reason,
+  });
+
+  if (item.kind !== 'bugs') return disabled('not-a-bug');
+  if (item.promotedTo) return disabled('already-promoted');
+  if (item.status === 'done') return disabled('bug-done');
+  if (item.section === 'loop-filed') return disabled('loop-filed');
+  if (item.warnings.length > 0) return disabled('parse-warning');
+
+  if (!attempt) return { kind: 'fix', state: 'available' };
+
+  switch (attempt.state) {
+    case 'gating':
+      return { kind: 'fix', state: 'gating' };
+    case 'declined':
+      return {
+        kind: 'fix',
+        state: 'declined',
+        ...(attempt.reason !== undefined ? { reason: attempt.reason } : {}),
+        ...(attempt.detail !== undefined ? { detail: attempt.detail } : {}),
+      };
+    case 'handoff-failed':
+      return {
+        kind: 'fix',
+        state: 'handoff-failed',
+        ...(attempt.reason !== undefined ? { reason: attempt.reason } : {}),
+        ...(attempt.detail !== undefined ? { detail: attempt.detail } : {}),
+      };
+    case 'proceeding':
+      return {
+        kind: 'fix',
+        state: 'proceeding',
+        ...(attempt.runId !== undefined ? { runId: attempt.runId } : {}),
+      };
+    case 'interrupted':
+      return {
+        kind: 'fix',
+        state: 'available',
+        ...(attempt.detail !== undefined ? { detail: attempt.detail } : {}),
+      };
+  }
 }
 
 /** Augment an item with its computed actions. */

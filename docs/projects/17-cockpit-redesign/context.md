@@ -302,7 +302,12 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- pt-store.ts` passed.
-- `npm run build` still fails on broader existing branch type errors, including future Phase 3 missing pieces like `computeFixAction` and unrelated test typing issues.
+- ript check with repo module settings.
+- `git diff --check` passed.
+- `npm test -- src/server/fix-action-states.test.ts` hung before producing results; a timed Vitest wrapper also hung. The original session remained unreachable because stdin was closed and the sandbox blocked process inspection/kill.
+- g the store contract and QA literals.
 
-Note: `src/jobs/fix-attempt-store.test.ts` was already staged/modified before my changes; I left it untouched.
+Verification:
+`npx vitest run --configLoader runner src/server/fix-action-states.test.ts` passed: 13 tests.
+
+`npx tsc --noEmit --pretty false` still fails on existing broader branch type errors, but the reported `FixActionAttempt` excess-property issue is gone.

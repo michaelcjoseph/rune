@@ -27,12 +27,31 @@ describe('computeFixAction - cockpit redesign Phase 3', () => {
   });
 
   it.each([
-    [item({ status: 'done' }), 'bug-done'],
-    [item({ promotedTo: '17-cockpit-redesign' }), 'already-promoted'],
-    [item({ warnings: ['bad-promotion-marker'] }), 'parse-warning'],
-  ])('disables ineligible bugs with the v1 disabled reason pattern', async (backlogItem, reason) => {
+    ['bug-done', item({ status: 'done' })],
+    ['already-promoted', item({ promotedTo: '17-cockpit-redesign' })],
+    ['parse-warning', item({ warnings: ['bad-promotion-marker'] })],
+  ])('disables an ineligible bug with %s using the v1 disabled reason pattern', async (reason, backlogItem) => {
     const { computeFixAction } = await loadActions();
-    expect(computeFixAction(backlogItem, { state: 'gating', attemptId: 'ignored' })).toEqual({
+    expect(
+      computeFixAction(backlogItem, {
+        attemptId: 'persisted-state-must-not-win',
+        state: 'proceeding',
+        runId: 'run-should-not-surface',
+      }),
+    ).toEqual({
+      kind: 'fix',
+      state: 'disabled',
+      reason,
+    });
+  });
+
+  it.each([
+    ['already-promoted', item({ promotedTo: '17-cockpit-redesign', status: 'done' })],
+    ['already-promoted', item({ promotedTo: '17-cockpit-redesign', warnings: ['bad-promotion-marker'] })],
+    ['bug-done', item({ status: 'done', warnings: ['bad-promotion-marker'] })],
+  ])('uses Plan precedence and returns %s when multiple bug-disabled reasons apply', async (reason, backlogItem) => {
+    const { computeFixAction } = await loadActions();
+    expect(computeFixAction(backlogItem, undefined)).toEqual({
       kind: 'fix',
       state: 'disabled',
       reason,
@@ -41,11 +60,12 @@ describe('computeFixAction - cockpit redesign Phase 3', () => {
 
   it('is bug-only: ideas never expose an available Fix action', async () => {
     const { computeFixAction } = await loadActions();
-    expect(computeFixAction(item({ id: 'idea-1', kind: 'ideas' }), undefined)).toEqual({
-      kind: 'fix',
-      state: 'disabled',
-      reason: 'not-a-bug',
-    });
+    expect(
+      computeFixAction(
+        item({ id: 'idea-1', kind: 'ideas' }),
+        { attemptId: 'attempt-on-wrong-kind', state: 'gating' },
+      ),
+    ).toEqual({ kind: 'fix', state: 'disabled', reason: 'not-a-bug' });
   });
 
   it.each([
