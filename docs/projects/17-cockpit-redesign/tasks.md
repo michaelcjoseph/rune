@@ -16,7 +16,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **HomePulse + ProductDeepView projections and endpoints** — test-plan.md §1.
+- [x] Write the test suite for **HomePulse + ProductDeepView projections and endpoints** — test-plan.md §1.
 - [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Implementation

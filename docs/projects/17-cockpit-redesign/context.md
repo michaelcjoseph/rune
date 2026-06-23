@@ -302,4 +302,18 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-Start with: Add a pure HomePulse projection (buildHomePulse) that aggregates, per product: active-run status, open project/bug/idea counts, backlog warnings, most-recent-run classified outcome, and attention signals (parked/failed/no-op run, parse warnings). Forks the pattern from src/intent/cockpit.ts:buildCockpitView; reads registry + supervision-store + work-run-store + backlog-reader. No state owned; return an explicit unavailable shape if the registry cannot be read.
+- x item.completed
+codex item.completed
+codex item.started
+codex item.completed
+codex item.started
+codex item.completed
+codex item.started
+codex item.completed
+codex item.completed
+codex item.started
+codex item.completed
+codex item.started
+codex item.completed
+codex item.completed
+codex turn.completed
