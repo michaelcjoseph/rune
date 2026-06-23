@@ -302,7 +302,10 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
--  WORKSPACE_DIR=/tmp PRODUCTS_CONFIG_FILE=$PWD/policies/products.json npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts` passed: 54 tests.
-- `git diff --check` passed.
+- with `tasks: { done: 0, total: 0 }` and empty `lastLogLines`.
 
-`npm run build` still fails on existing branch-wide type errors outside the production files touched here.
+Verified:
+`npm test -- --configLoader runner src/server/work-run-live-api.test.ts` passed: 4 tests.
+`git diff --check` passed.
+
+Note: `src/server/work-run-live-api.test.ts` was already modified/staged before my edit; I left it untouched.

@@ -253,19 +253,26 @@ describe('GET /api/work-runs/:id/live (cockpit redesign Phase 2)', () => {
     expect(res.body.lastLogLines.join('\n')).toMatch(/Bash:/);
   });
 
-  it('returns a typed 404 when a live run has no transcript to rehydrate from', async () => {
+  it('rehydrates a supervised live run even before its transcript exists', async () => {
     rmSync(join(tmpDir, RUN_ID, 'transcript.jsonl'), { force: true });
 
     const res = await makeRequest(`/api/work-runs/${RUN_ID}/live`, AUTH);
 
-    expect(res.status).toBe(404);
-    expect(res.body).toEqual({
-      error: {
-        code: 'live-snapshot-not-found',
-        message: expect.any(String),
-        retryable: false,
-      },
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      runId: RUN_ID,
+      product: 'aura',
+      target: { kind: 'project', slug: '01-mvp' },
+      state: 'running',
+      tasks: { done: 0, total: 0 },
+      elapsedMs: 65_000,
+      worktreePath: '/test/worktrees/aura-01-mvp',
+      agents: [
+        { role: 'qa', active: true, model: 'claude' },
+        { role: 'coder', active: true, model: 'codex' },
+      ],
     });
+    expect(res.body.lastLogLines).toEqual([]);
   });
 
   it('returns a typed 404 for an unknown run id', async () => {

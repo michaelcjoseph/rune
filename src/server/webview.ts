@@ -942,13 +942,13 @@ function transcriptLineToLiveDisplay(line: string): { display: string[]; tasks?:
   return { display: text ? text.split('\n') : [] };
 }
 
-function readLiveTranscriptSnapshot(runId: string): { tasks: { done: number; total: number }; lastLogLines: string[] } | null {
+function readLiveTranscriptSnapshot(runId: string): { tasks: { done: number; total: number }; lastLogLines: string[] } {
   const filePath = join(config.WORK_RUNS_DIR, runId, 'transcript.jsonl');
   let raw: string;
   try {
     raw = readFileSync(filePath, 'utf8');
   } catch {
-    return null;
+    return { tasks: { done: 0, total: 0 }, lastLogLines: [] };
   }
   let tasks = { done: 0, total: 0 };
   const display: string[] = [];
@@ -985,10 +985,6 @@ function handleApiWorkRunLive(res: ServerResponse, id: string): void {
     return;
   }
   const transcript = readLiveTranscriptSnapshot(id);
-  if (!transcript) {
-    sendErrorEnvelope(res, 404, 'live-snapshot-not-found', `live snapshot for '${id}' was not found`, false);
-    return;
-  }
   const target = supervisedRunTarget(run);
   const agents = agentsFromTaskRecords(readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, id));
   res.writeHead(200, { 'Content-Type': 'application/json' });
