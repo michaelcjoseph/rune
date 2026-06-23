@@ -302,8 +302,13 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- n src/config.test.ts --configLoader runner`
-- `npx vitest run src/intent/scheduler.test.ts --configLoader runner`
-- `npx vitest run src/intent/home-pulse-deep-view.test.ts --configLoader runner`
+- e product view
+- unavailable HomePulse rendering
 
-Note: `src/config.test.ts` was already staged/modified before my change; I only changed `src/config.ts`.
+Verified red with:
+
+```sh
+npx vitest run src/server/static/home-view-client.test.ts --configLoader runner
+```
+
+Result: 8 failing tests, all because `view-router.js` and `home-view.js` are not implemented yet, which is the expected test-first failure.
