@@ -302,7 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- -techlead-bug-scoping.ts src/intent/planning-roles-wiring.ts` passed
-- `npm run build` still fails on existing broader branch errors, including missing later Phase 3 modules like `fix-attempt-store` and unrelated test typing issues; no errors were reported in the files changed here.
+- pt-store.ts` passed.
+- `npm run build` still fails on broader existing branch type errors, including future Phase 3 missing pieces like `computeFixAction` and unrelated test typing issues.
 
-No commit made.
+Note: `src/jobs/fix-attempt-store.test.ts` was already staged/modified before my changes; I left it untouched.

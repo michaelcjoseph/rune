@@ -77,6 +77,69 @@ describe('fix-attempt-store - cockpit redesign Phase 3', () => {
     });
   });
 
+  it('keys attempts by product+bugId, so the same bug id in another product is independent', async () => {
+    const { appendFixAttempt, readLatestFixAttempts, getLatestFixAttempt } = await loadStore();
+
+    appendFixAttempt(file, attempt({
+      attemptId: 'aura-gate',
+      product: 'aura',
+      bugId: 'shared-bug-id',
+      state: 'gating',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    }));
+    appendFixAttempt(file, attempt({
+      attemptId: 'jarvis-proceeding',
+      product: 'jarvis',
+      bugId: 'shared-bug-id',
+      state: 'proceeding',
+      runId: 'run-jarvis-fix',
+      updatedAt: '2026-06-23T12:01:00.000Z',
+    }));
+
+    const latest = readLatestFixAttempts(file);
+
+    expect(getLatestFixAttempt(latest, 'aura', 'shared-bug-id')).toMatchObject({
+      attemptId: 'aura-gate',
+      product: 'aura',
+      bugId: 'shared-bug-id',
+      state: 'gating',
+    });
+    expect(getLatestFixAttempt(latest, 'jarvis', 'shared-bug-id')).toMatchObject({
+      attemptId: 'jarvis-proceeding',
+      product: 'jarvis',
+      bugId: 'shared-bug-id',
+      state: 'proceeding',
+      runId: 'run-jarvis-fix',
+    });
+  });
+
+  it('replays last physical write as the latest same-bug state for restart-safe idempotency guards', async () => {
+    const { appendFixAttempt, readLatestFixAttempts, getLatestFixAttempt } = await loadStore();
+
+    appendFixAttempt(file, attempt({
+      attemptId: 'first-click',
+      state: 'gating',
+      updatedAt: '2026-06-23T12:02:00.000Z',
+    }));
+    appendFixAttempt(file, attempt({
+      attemptId: 'first-click',
+      state: 'declined',
+      reason: 'incomplete-fields',
+      detail: 'Missing expected behavior.',
+      updatedAt: '2026-06-23T12:01:00.000Z',
+    }));
+
+    const latest = readLatestFixAttempts(file);
+
+    expect(getLatestFixAttempt(latest, 'aura', 'bug-1')).toMatchObject({
+      attemptId: 'first-click',
+      state: 'declined',
+      reason: 'incomplete-fields',
+      detail: 'Missing expected behavior.',
+    });
+    expect(readFileSync(file, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+
   it('is torn-line tolerant and ignores malformed rows without dropping valid attempts', async () => {
     const { readLatestFixAttempts, getLatestFixAttempt } = await loadStore();
     writeFileSync(

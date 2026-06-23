@@ -7,6 +7,7 @@ import { markSessionCreated, killActiveProcesses, waitForActiveProcesses, setBus
 import { setMutationBus, registerApplier } from './transport/mutations.js';
 import { setInFlightBus, stopInFlightTicker } from './transport/in-flight.js';
 import { reconcileOrphans } from './jobs/mutations-log.js';
+import { reconcileInterruptedFixAttempts } from './jobs/fix-attempt-store.js';
 import { cleanupOrphanWorktrees } from './jobs/sandbox-runtime.js';
 import { runWorkRunGc } from './jobs/work-run-gc-runner.js';
 import { rebuildRegistry } from './jobs/registry-rebuild.js';
@@ -83,6 +84,17 @@ async function markRecoveredOrchestratedMutationFailed(
 
 // Ensure logs directory exists
 mkdirSync(config.LOGS_DIR, { recursive: true });
+
+try {
+  const interrupted = reconcileInterruptedFixAttempts(config.FIX_ATTEMPTS_FILE);
+  if (interrupted.length > 0) {
+    log.info('FixAttempt startup reconcile interrupted stale gating attempts', {
+      count: interrupted.length,
+    });
+  }
+} catch (err) {
+  log.error('FixAttempt startup reconcile threw', { error: (err as Error).message });
+}
 
 // Fail fast if .claude/settings.json (declaring the jarvis-kb MCP server) is
 // missing — every Claude CLI spawn passes --mcp-config to it. Without this
