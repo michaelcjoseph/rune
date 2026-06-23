@@ -302,7 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- tion:
-- `npm test -- --configLoader runner src/jobs/bug-fix-gate.test.ts` passed: 8/8 tests.
-- `git diff --check -- src/jobs/bug-fix-gate.ts` passed.
-- `npm run build` still fails on existing broader branch errors in unrelated tests/missing later Phase 3 modules; no `bug-fix-gate.ts` error appeared.
+- -techlead-bug-scoping.ts src/intent/planning-roles-wiring.ts` passed
+- `npm run build` still fails on existing broader branch errors, including missing later Phase 3 modules like `fix-attempt-store` and unrelated test typing issues; no errors were reported in the files changed here.
+
+No commit made.

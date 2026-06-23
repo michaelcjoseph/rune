@@ -121,4 +121,122 @@ describe('pm-techlead-bug-scoping - cockpit redesign Phase 3', () => {
     });
     expect(modelCall).toHaveBeenCalledTimes(2);
   });
+
+  it('preserves the PM not-well-scoped reason as the gate detail', async () => {
+    const { runPmTechLeadBugScoping } = await loadScoping();
+    const modelCall = vi.fn(async (input: RoleCallInput) => {
+      if (input.role === 'pm') {
+        return [
+          '```pm-bug-scope',
+          JSON.stringify({
+            wellScoped: false,
+            reason: 'The report names a broken screen but has no reproduction path or observed error.',
+          }),
+          '```',
+        ].join('\n');
+      }
+      if (input.role === 'tech-lead') {
+        return [
+          '```tech-lead-bug-scope',
+          JSON.stringify({ objection: null }),
+          '```',
+        ].join('\n');
+      }
+      return '';
+    });
+
+    const facts = await runPmTechLeadBugScoping({ product: 'aura', bug: bug(), modelCall });
+
+    expect(facts).toMatchObject({
+      itemEligible: true,
+      fieldsComplete: true,
+      pmAssessed: true,
+      pmWellScoped: false,
+      pmReason: 'The report names a broken screen but has no reproduction path or observed error.',
+    });
+  });
+
+  it('preserves a Tech-Lead feasibility or scope objection as a gate-blocking fact', async () => {
+    const { runPmTechLeadBugScoping } = await loadScoping();
+    const modelCall = vi.fn(async (input: RoleCallInput) => {
+      if (input.role === 'pm') {
+        return [
+          '```pm-bug-scope',
+          JSON.stringify({ wellScoped: true, reason: 'Bug has repro, expected behavior, and actual behavior.' }),
+          '```',
+        ].join('\n');
+      }
+      if (input.role === 'tech-lead') {
+        return [
+          '```tech-lead-bug-scope',
+          JSON.stringify({ objection: 'The fix likely spans auth and billing; split scope before one-click Fix.' }),
+          '```',
+        ].join('\n');
+      }
+      return '';
+    });
+
+    const facts = await runPmTechLeadBugScoping({ product: 'aura', bug: bug(), modelCall });
+
+    expect(facts).toMatchObject({
+      itemEligible: true,
+      fieldsComplete: true,
+      pmAssessed: true,
+      pmWellScoped: true,
+      techLeadReviewed: true,
+      techLeadObjection: 'The fix likely spans auth and billing; split scope before one-click Fix.',
+    });
+  });
+
+  it('marks non-open, promoted, or warning-bearing backlog items ineligible before a Fix gate can proceed', async () => {
+    const { runPmTechLeadBugScoping } = await loadScoping();
+    const modelCall = vi.fn(async () => {
+      throw new Error('ineligible bugs should not need PM or Tech-Lead assessment');
+    });
+
+    await expect(
+      runPmTechLeadBugScoping({
+        product: 'aura',
+        bug: bug({ status: 'done' }),
+        modelCall,
+      }),
+    ).resolves.toMatchObject({ itemEligible: false });
+    await expect(
+      runPmTechLeadBugScoping({
+        product: 'aura',
+        bug: bug({ promotedTo: '17-cockpit-redesign' }),
+        modelCall,
+      }),
+    ).resolves.toMatchObject({ itemEligible: false });
+    await expect(
+      runPmTechLeadBugScoping({
+        product: 'aura',
+        bug: bug({ warnings: ['bad-promotion-marker'] }),
+        modelCall,
+      }),
+    ).resolves.toMatchObject({ itemEligible: false });
+    expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it('marks a bug with no title or body detail incomplete without inventing role facts', async () => {
+    const { runPmTechLeadBugScoping } = await loadScoping();
+    const modelCall = vi.fn(async () => {
+      throw new Error('incomplete bugs should not need PM or Tech-Lead assessment');
+    });
+
+    await expect(
+      runPmTechLeadBugScoping({
+        product: 'aura',
+        bug: bug({ text: '', body: [] }),
+        modelCall,
+      }),
+    ).resolves.toMatchObject({
+      itemEligible: true,
+      fieldsComplete: false,
+      pmAssessed: false,
+      pmWellScoped: false,
+      techLeadReviewed: false,
+    });
+    expect(modelCall).not.toHaveBeenCalled();
+  });
 });

@@ -19,9 +19,6 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
-import { runCodex, probeCodexProvider } from '../ai/codex.js';
-import { getBaseEnv } from '../jobs/credential-injector.js';
 import { ROLE_NAMES, composeRoleContext, type RoleContext, type RoleName } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import type {
@@ -70,6 +67,7 @@ export interface RoleModelCall {
  */
 const defaultRoleModelCall: RoleModelCall = async ({ role, systemPrompt, message }) => {
   const sessionId = randomUUID();
+  const { askClaudeWithContext, cleanupSession } = await import('../ai/claude.js');
   try {
     const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
       opLabel: `planner:${role}`,
@@ -466,6 +464,7 @@ export interface CritiquePlanSeams {
  *  yields null and the orchestrator keeps the prior plan. */
 const defaultCritiqueClaudeCall = async (system: string, message: string): Promise<string> => {
   const sessionId = randomUUID();
+  const { askClaudeWithContext, cleanupSession } = await import('../ai/claude.js');
   try {
     const result = await askClaudeWithContext(message, sessionId, system, {
       opLabel: 'planner:critique-claude',
@@ -495,6 +494,10 @@ const defaultCritiqueCodexCall = async (message: string): Promise<string | null>
   // read-only sandbox: the critique only returns text, it never edits the repo.
   // Slim env (defense-in-depth): a text-only internal critique has no need for
   // Jarvis's Telegram/HTTP secrets — pass only what the Codex CLI itself needs.
+  const [{ runCodex }, { getBaseEnv }] = await Promise.all([
+    import('../ai/codex.js'),
+    import('../jobs/credential-injector.js'),
+  ]);
   let result;
   try {
     result = await runCodex(message, {
@@ -528,7 +531,11 @@ export function buildProductionCritiquePlan(
   const claudeCall = seams.claudeCall ?? defaultCritiqueClaudeCall;
   const codexCall = seams.codexCall ?? defaultCritiqueCodexCall;
   const isCodexAvailable =
-    seams.isCodexAvailable ?? (async () => (await probeCodexProvider()).available);
+    seams.isCodexAvailable ??
+    (async () => {
+      const { probeCodexProvider } = await import('../ai/codex.js');
+      return (await probeCodexProvider()).available;
+    });
 
   return (plan) =>
     runPlanningCritique(plan, {
