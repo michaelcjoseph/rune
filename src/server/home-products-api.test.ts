@@ -246,6 +246,12 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
     expect(res.body.error).toBe('unauthorized');
   });
 
+  it('keeps GET /api/home behind the existing host guard', async () => {
+    const res = await makeRequest('/api/home', { ...AUTH, host: 'evil.example.com' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+  });
+
   it('returns the cross-product HomePulse at GET /api/home', async () => {
     const res = await makeRequest('/api/home', AUTH);
 
@@ -287,6 +293,12 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
   it('requires auth on GET /api/products/:product', async () => {
     const res = await makeRequest('/api/products/aura');
     expect(res.status).toBe(401);
+  });
+
+  it('keeps GET /api/products/:product behind the existing host guard', async () => {
+    const res = await makeRequest('/api/products/aura', { ...AUTH, host: 'evil.example.com' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('forbidden');
   });
 
   it('returns the repo-backed ProductDeepView at GET /api/products/:product', async () => {
@@ -353,7 +365,7 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatchObject({
-      code: 'invalid-product',
+      code: 'invalid-slug',
       message: expect.any(String),
       retryable: false,
     });

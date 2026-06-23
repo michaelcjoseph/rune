@@ -302,7 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- st.ts --configLoader runner` → 14 passed
-- `tsc --noEmit ... src/intent/product-deep-view.ts src/intent/home-pulse.ts src/intent/home-pulse-deep-view.test.ts` → passed
+- t run --configLoader runner src/intent/home-pulse-deep-view.test.ts src/server/home-products-api.test.ts` → 24 passed
+- `git diff --check` → passed
 
-Note: `src/intent/home-pulse-deep-view.test.ts` was already modified on the branch; I only added `src/intent/product-deep-view.ts`.
+I also tried full `npm run build -- --pretty false`; it still fails on unrelated pre-existing TypeScript errors across the repo, not this route wiring.

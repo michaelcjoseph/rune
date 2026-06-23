@@ -13,6 +13,8 @@ import { getStateSnapshot } from './state-snapshot.js';
 import { readRegistry, type Registry } from '../intent/registry.js';
 import { readFileSync } from 'node:fs';
 import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '../intent/cockpit.js';
+import { buildHomePulse } from '../intent/home-pulse.js';
+import { buildProductDeepView, type ProductDeepViewWorkRun } from '../intent/product-deep-view.js';
 import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
 import { parseBugs, parseIdeas } from '../intent/backlog-parser.js';
 import { appendBug, appendIdea } from '../intent/backlog-append.js';
@@ -38,9 +40,9 @@ import { restartServer } from './restart.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
-import { readWorkRunSummary } from '../jobs/work-run-store.js';
+import { readRecentIndex, readWorkRunSummary } from '../jobs/work-run-store.js';
 import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
-import { VALID_SLUG } from '../intent/sandbox.js';
+import { VALID_SLUG, worktreePathFor } from '../intent/sandbox.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
   createPlanningSession,
@@ -60,6 +62,7 @@ import { readAllRuns } from '../jobs/supervision-store.js';
 import { getVisibility } from '../intent/supervision.js';
 import { readPlaybookQueue } from '../jobs/playbook-extract.js';
 import { dispatchApprovalStatus } from '../transport/approval-actions.js';
+import { readOrchestratedTaskRunRecords } from '../jobs/orchestrated-work-runner.js';
 
 const log = createLogger('webview');
 
@@ -314,6 +317,88 @@ function handleApiCockpit(res: ServerResponse): void {
   }
 
   const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts, dispatchModes);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(view));
+}
+
+// ---------------------------------------------------------------------------
+// Home + product deep-view routes (cockpit redesign, Phase 1)
+// ---------------------------------------------------------------------------
+
+const NEW_COCKPIT_RECENT_RUNS = 20;
+
+function readNewCockpitBacklogs(registry: Registry) {
+  const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+  return readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+}
+
+function readNewCockpitRecentWorkRuns(): ProductDeepViewWorkRun[] {
+  const rows = readRecentIndex(config.WORK_RUNS_INDEX_FILE, NEW_COCKPIT_RECENT_RUNS);
+  const runs: ProductDeepViewWorkRun[] = [];
+  for (const row of rows) {
+    if (!VALID_SLUG.test(row.id)) continue;
+    const summary = readWorkRunSummary(config.WORK_RUNS_DIR, row.id);
+    const product = summary?.product;
+    const project = summary?.project ?? row.project;
+    if (!product || !project) continue;
+    runs.push({
+      runId: row.id,
+      product,
+      project,
+      target: { kind: 'project', slug: project },
+      outcome: summary?.outcome ?? row.outcome,
+      endedAt: summary?.endedAt ?? row.endedAt,
+      transcriptExists: Boolean(summary?.transcriptPath),
+    });
+  }
+  return runs;
+}
+
+function handleApiHome(res: ServerResponse): void {
+  const view = buildHomePulse({
+    readRegistry,
+    readSupervisedRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
+    readRecentWorkRuns: readNewCockpitRecentWorkRuns,
+    readBacklogs: () => {
+      const registry = readRegistry();
+      return readNewCockpitBacklogs(registry);
+    },
+  });
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(view));
+}
+
+function handleApiProductDeepView(res: ServerResponse, product: string): void {
+  if (!VALID_SLUG.test(product)) {
+    sendErrorEnvelope(res, 400, 'invalid-slug', `invalid product slug '${product}'`);
+    return;
+  }
+
+  let registry: Registry;
+  try {
+    registry = readRegistry();
+  } catch (err) {
+    log.warn('handleApiProductDeepView: registry read failed', { product, error: (err as Error).message });
+    sendErrorEnvelope(res, 500, 'registry-unavailable', 'could not read the product registry', false);
+    return;
+  }
+
+  if (!registry.products.some((candidate) => candidate.name === product)) {
+    sendErrorEnvelope(res, 404, 'unknown-product', `unknown product '${product}'`, false);
+    return;
+  }
+
+  const planningActive = isPlanningActiveForProduct(product);
+  const view = buildProductDeepView({
+    product,
+    readRegistry: () => registry,
+    readSupervisedRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
+    readRecentWorkRuns: readNewCockpitRecentWorkRuns,
+    readBacklogs: () => readNewCockpitBacklogs(registry),
+    readTaskRunRecords: (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
+    worktreePathFor: (productName, projectSlug) => worktreePathFor(productName, projectSlug, config.WORKTREE_ROOT),
+    planningActive,
+  });
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }
@@ -1482,6 +1567,17 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/cockpit') {
         handleApiCockpit(res);
+        return true;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/home') {
+        handleApiHome(res);
+        return true;
+      }
+
+      const productDeepViewMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
+      if (req.method === 'GET' && productDeepViewMatch) {
+        handleApiProductDeepView(res, decodeURIComponent(productDeepViewMatch[1]!));
         return true;
       }
 
