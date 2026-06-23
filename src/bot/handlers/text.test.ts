@@ -113,7 +113,7 @@ const { getActivePlanningSession } = await import('../../reviews/planning.js');
 const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
 const { handleStudy } = await import('../commands/study.js');
-const { getSession, createSession } = await import('../../vault/sessions.js');
+const { getSession, createSession, appendMessageToSession, updateSession, setSessionModel } = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { hasActiveSRSession, handleSRMessage } = await import('../../study/sr-session.js');
@@ -1145,6 +1145,138 @@ describe('dispatchText — webview transport derivation', () => {
     expect(uid).toBe(100);
     expect(transport).toBe('webview');
     expect(firstMsg).toBe('hi from webview');
+  });
+});
+
+describe('dispatchText — product-scoped webview sessions', () => {
+  const productScope = { kind: 'product' as const, product: 'jarvis' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveReview).mockReturnValue(false);
+    vi.mocked(hasActiveSRSession).mockReturnValue(false);
+    vi.mocked(getActivePlanningSession).mockReturnValue(null);
+  });
+
+  function webviewSender(): MessageSender {
+    return {
+      name: 'webview' as const,
+      send: vi.fn().mockResolvedValue(undefined),
+      startTyping: vi.fn(),
+      stopTyping: vi.fn(),
+    };
+  }
+
+  it('creates and updates the active product session instead of the global webview session', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const appendMock = appendMessageToSession as unknown as ReturnType<typeof vi.fn>;
+    const updateMock = updateSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'jarvis-product-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'ship it',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'ship it', productScope);
+
+    expect(getSessionMock).toHaveBeenCalledWith(100, 'webview', productScope);
+    expect(createSessionMock.mock.calls[0]?.slice(0, 3)).toEqual([100, 'webview', 'ship it']);
+    expect(createSessionMock.mock.calls[0]?.[4]).toBe(productScope);
+    expect(appendMock).toHaveBeenCalledWith(100, 'webview', 'user', 'ship it', productScope);
+    expect(updateMock).toHaveBeenCalledWith(100, 'webview', productScope);
+  });
+
+  it('routes existing product-scoped chat continuations without consulting a global webview session', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockImplementation((_userId: number, _transport: string, scope?: unknown) => {
+      if (scope === productScope) {
+        return {
+          sessionId: 'existing-product-session',
+          lastActivity: new Date().toISOString(),
+          messageCount: 2,
+          firstMessage: 'first',
+          model: 'haiku',
+        };
+      }
+      return null;
+    });
+    askMock.mockResolvedValue({ text: 'continued', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'continue this', productScope);
+
+    expect(getSessionMock).toHaveBeenCalledWith(100, 'webview', productScope);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(mockClassify).not.toHaveBeenCalled();
+  });
+
+  it('passes product scope through existing chat commands', async () => {
+    const sender = webviewSender();
+
+    await (dispatchText as any)(sender, 100, '/fresh', productScope);
+    await (dispatchText as any)(sender, 100, '/fresh-full', productScope);
+    await (dispatchText as any)(sender, 100, '/clear', productScope);
+    await (dispatchText as any)(sender, 100, '/journal scoped note', productScope);
+
+    expect(handleFresh).toHaveBeenCalledWith(expect.anything(), 100, 'webview', productScope);
+    expect(handleFreshFull).toHaveBeenCalledWith(expect.anything(), 100, 'webview', productScope);
+    expect(handleClear).toHaveBeenCalledWith(expect.anything(), 100, 'webview', productScope);
+    expect(handleJournal).toHaveBeenCalledWith(expect.anything(), 100, 'webview', 'scoped note', productScope);
+  });
+
+  it('applies model switching to the product-scoped session', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const setSessionModelMock = setSessionModel as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue({
+      sessionId: 'existing-product-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'first',
+      model: 'haiku',
+    });
+
+    await (dispatchText as any)(webviewSender(), 100, '/opus', productScope);
+
+    expect(getSessionMock).toHaveBeenCalledWith(100, 'webview', productScope);
+    expect(setSessionModelMock).toHaveBeenCalledWith(100, 'webview', 'opus', productScope);
+  });
+
+  it('tells product-scoped chat to search both the active repo and the vault', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'search-scope-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'where is the fix?',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'where is the fix?', productScope);
+
+    const systemPrompt = askMock.mock.calls[0]![2] as string;
+    const options = askMock.mock.calls[0]![3] as { allowedTools: string[] };
+    expect(systemPrompt).toMatch(/active product:\s*jarvis/i);
+    expect(systemPrompt).toMatch(/product repo/i);
+    expect(systemPrompt).toMatch(/vault/i);
+    expect(options.allowedTools).toEqual(expect.arrayContaining([
+      'Read',
+      'Glob',
+      'Grep',
+      'mcp__jarvis-kb__kb_query',
+      'mcp__jarvis-kb__kb_search',
+    ]));
   });
 });
 

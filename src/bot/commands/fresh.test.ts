@@ -198,6 +198,21 @@ describe('bot/commands/fresh', () => {
 
       await expect(closeConversation(123, 'telegram')).resolves.toMatchObject({ ok: false });
     });
+
+    it('summarizes and deletes the product-scoped webview session when a scope is supplied', async () => {
+      const scope = { kind: 'product', product: 'jarvis' };
+      getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
+      summarizeMock.mockResolvedValue({
+        text: 'Scoped product discussion\nKB-worthy: no',
+        error: null,
+      });
+
+      const result = await (closeConversation as any)(123, 'webview', scope);
+
+      expect(result).toMatchObject({ ok: true });
+      expect(getSessionMock).toHaveBeenCalledWith(123, 'webview', scope);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'webview', scope);
+    });
   });
 
   describe('closeConversation — webview transport label', () => {
@@ -260,6 +275,23 @@ describe('bot/commands/fresh', () => {
       expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(sender.send).toHaveBeenCalledWith(123, expect.stringContaining('Could not summarize'));
       expect(appendMock).not.toHaveBeenCalled();
+    });
+
+    it('uses the product-scoped webview session for /fresh when a scope is supplied', async () => {
+      const scope = { kind: 'product', product: 'jarvis' };
+      getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
+      summarizeMock.mockResolvedValue({
+        text: 'Scoped summary\nKB-worthy: no',
+        error: null,
+      });
+      const sender = makeSender();
+
+      await (handleFresh as any)(sender, 123, 'webview', scope);
+
+      expect(getSessionMock).toHaveBeenCalledWith(123, 'webview', scope);
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'webview', scope);
+      const msg = vi.mocked(sender.send).mock.calls[0]![1] as string;
+      expect(msg).toContain('Conversation logged');
     });
 
     it('saves conversation source and shows label when KB-worthy is yes', async () => {

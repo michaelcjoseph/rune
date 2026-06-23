@@ -11,7 +11,12 @@ vi.mock('../config.js', () => ({ default: mockConfig }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockGetSession = vi.fn<() => any>(() => null);
-vi.mock('../vault/sessions.js', () => ({ getSession: mockGetSession }));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mockGetAllSessions = vi.fn<() => any[]>(() => []);
+vi.mock('../vault/sessions.js', () => ({
+  getSession: mockGetSession,
+  getAllSessions: mockGetAllSessions,
+}));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockGetActiveReviewSession = vi.fn<() => any>(() => null);
@@ -104,6 +109,7 @@ describe('state-snapshot / getStateSnapshot', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetSession.mockReturnValue(null);
+    mockGetAllSessions.mockReturnValue([]);
     mockGetActiveReviewSession.mockReturnValue(null);
     mockGetQueue.mockReturnValue([]);
     mockGetPendingPlaybookDrafts.mockReturnValue([]);
@@ -154,6 +160,32 @@ describe('state-snapshot / getStateSnapshot', () => {
       model: tgSession.model,
       messageCount: tgSession.messageCount,
     });
+  });
+
+  it('surfaces product-scoped sessions without replacing the legacy global session slots', () => {
+    const globalWebview = makeSession({ sessionId: 'global-webview', model: 'haiku', messageCount: 2 });
+    const productWebview = makeSession({ sessionId: 'jarvis-webview', model: 'opus', messageCount: 4 });
+    mockGetSession
+      .mockReturnValueOnce(globalWebview)
+      .mockReturnValueOnce(null);
+    mockGetAllSessions.mockReturnValue([
+      {
+        userId: mockConfig.TELEGRAM_USER_ID,
+        transport: 'webview',
+        scope: { kind: 'product', product: 'jarvis' },
+        session: productWebview,
+      },
+    ]);
+
+    const snap = getStateSnapshot();
+
+    expect(snap.sessions).toEqual({
+      webview: { sessionId: 'global-webview', model: 'haiku', messageCount: 2 },
+      telegram: null,
+    });
+    expect((snap as any).productSessions).toEqual([
+      { product: 'jarvis', transport: 'webview', sessionId: 'jarvis-webview', model: 'opus', messageCount: 4 },
+    ]);
   });
 
   it('returns null activeReview when no review session exists', () => {

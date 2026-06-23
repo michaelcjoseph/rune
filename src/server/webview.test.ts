@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
+import { WebSocket } from 'ws';
 
 // --- Mocks must be declared before any imports that pull in the mocked modules ---
 
@@ -178,6 +179,34 @@ function makeRequest(
     r.on('error', reject);
     if (opts.body) r.write(opts.body);
     r.end();
+  });
+}
+
+function openWebSocket(port: number): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, {
+      headers: { authorization: 'Bearer test-secret' },
+    });
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+}
+
+function waitForMockCall(mock: ReturnType<typeof vi.fn>, timeoutMs = 1000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (mock.mock.calls.length > 0) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        reject(new Error('timed out waiting for mock call'));
+        return;
+      }
+      setTimeout(tick, 10);
+    };
+    tick();
   });
 }
 
@@ -636,6 +665,26 @@ describe('server/webview', () => {
       );
     });
 
+    it('carries product scope through POST /api/chat dispatch and response session lookup', async () => {
+      await makeRequest(port, '/api/chat', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ message: '  look in this repo  ', product: 'aura' }),
+      });
+
+      const expectedScope = { kind: 'product', product: 'aura' };
+      expect(handleWebviewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'webview' }),
+        mockConfig.TELEGRAM_USER_ID,
+        'look in this repo',
+        expectedScope,
+      );
+      expect(getSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'webview', expectedScope);
+    });
+
     it('returns 500 when handleWebviewMessage throws', async () => {
       (handleWebviewMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('dispatch failed'));
       const res = await makeRequest(port, '/api/chat', {
@@ -648,6 +697,26 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(500);
       expect(res.body.error).toBe('internal error');
+    });
+  });
+
+  describe('WebSocket /api/ws chat frames', () => {
+    it('carries product scope from message frames through webview dispatch', async () => {
+      const ws = await openWebSocket(port);
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  inspect this repo  ', product: 'aura' }));
+
+        await waitForMockCall(handleWebviewMessage as ReturnType<typeof vi.fn>);
+
+        expect(handleWebviewMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'inspect this repo',
+          { kind: 'product', product: 'aura' },
+        );
+      } finally {
+        ws.terminate();
+      }
     });
   });
 

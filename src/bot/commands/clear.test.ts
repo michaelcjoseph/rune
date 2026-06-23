@@ -98,6 +98,18 @@ describe('handleClear', () => {
     expect(sender.send).toHaveBeenCalledWith(chatId, 'Session cleared.');
   });
 
+  it('clears the product-scoped webview session when a scope is supplied', async () => {
+    const scope = { kind: 'product', product: 'jarvis' };
+    getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
+    const sender = makeSender();
+
+    await (handleClear as any)(sender, 456, 'webview', scope);
+
+    expect(getSessionMock).toHaveBeenCalledWith(456, 'webview', scope);
+    expect(deleteSessionMock).toHaveBeenCalledWith(456, 'webview', scope);
+    expect(sender.send).toHaveBeenCalledWith(456, 'Session cleared.');
+  });
+
   it('abandons planning and surfaces the active-review note when both are live', async () => {
     // Planning + review both active — abandon planning but warn that the review
     // still needs /fresh, so the user is not left guessing about review state.

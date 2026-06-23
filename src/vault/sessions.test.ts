@@ -19,6 +19,7 @@ const {
   createSession,
   updateSession,
   deleteSession,
+  setSessionModel,
   getAllSessions,
   restoreSessions,
   appendMessageToSession,
@@ -27,8 +28,8 @@ const {
 
 describe('vault/sessions', () => {
   beforeEach(() => {
-    for (const { userId, transport } of getAllSessions()) {
-      deleteSession(userId, transport);
+    for (const { userId, transport, scope } of getAllSessions() as any[]) {
+      deleteSession(userId, transport, scope);
     }
   });
 
@@ -117,6 +118,99 @@ describe('vault/sessions', () => {
       appendMessageToSession(42, 'telegram', 'user', 'tg-only');
       expect(getSessionMessages(42, 'telegram')).toHaveLength(1);
       expect(getSessionMessages(42, 'webview')).toHaveLength(0);
+    });
+  });
+
+  describe('product-scoped sessions', () => {
+    const jarvisScope = { kind: 'product' as const, product: 'jarvis' };
+    const pkmsScope = { kind: 'product' as const, product: 'pkms' };
+
+    it('keeps global, telegram, and per-product webview sessions on independent keys', () => {
+      const globalWeb = (createSession as any)(42, 'webview', 'global webview');
+      const jarvisWeb = (createSession as any)(42, 'webview', 'jarvis webview', undefined, jarvisScope);
+      const pkmsWeb = (createSession as any)(42, 'webview', 'pkms webview', undefined, pkmsScope);
+      const telegram = createSession(42, 'telegram', 'telegram global');
+
+      expect(jarvisWeb.sessionId).not.toBe(globalWeb.sessionId);
+      expect(pkmsWeb.sessionId).not.toBe(jarvisWeb.sessionId);
+      expect(telegram.sessionId).not.toBe(jarvisWeb.sessionId);
+      expect((getSession as any)(42, 'webview')!.firstMessage).toBe('global webview');
+      expect((getSession as any)(42, 'webview', jarvisScope)!.firstMessage).toBe('jarvis webview');
+      expect((getSession as any)(42, 'webview', pkmsScope)!.firstMessage).toBe('pkms webview');
+      expect(getSession(42, 'telegram')!.firstMessage).toBe('telegram global');
+    });
+
+    it('surfaces scope metadata from getAllSessions for capture and state snapshot consumers', () => {
+      (createSession as any)(7, 'webview', 'jarvis scoped', undefined, jarvisScope);
+      createSession(7, 'telegram', 'telegram global');
+
+      const keys = (getAllSessions() as any[])
+        .map(e => `${e.scope?.kind ?? 'global'}:${e.scope?.product ?? ''}:${e.transport}:${e.userId}`)
+        .sort();
+
+      expect(keys).toEqual([
+        'global::telegram:7',
+        'product:jarvis:webview:7',
+      ]);
+    });
+
+    it('restores product-scoped keys without stranding legacy global sessions', () => {
+      const data = [
+        ['jarvis:webview:12', {
+          sessionId: 'product-session',
+          lastActivity: '2026-04-07T12:00:00Z',
+          messageCount: 2,
+          firstMessage: 'product restored',
+        }],
+        ['webview:12', {
+          sessionId: 'global-session',
+          lastActivity: '2026-04-07T12:00:00Z',
+          messageCount: 3,
+          firstMessage: 'global restored',
+        }],
+        [13, {
+          sessionId: 'legacy-telegram-session',
+          lastActivity: '2026-04-07T12:00:00Z',
+          messageCount: 4,
+          firstMessage: 'legacy restored',
+        }],
+      ];
+      writeFileSync(sessionsFile, JSON.stringify(data));
+
+      restoreSessions();
+
+      expect((getSession as any)(12, 'webview', jarvisScope)!.sessionId).toBe('product-session');
+      expect(getSession(12, 'webview')!.sessionId).toBe('global-session');
+      expect(getSession(13, 'telegram')!.sessionId).toBe('legacy-telegram-session');
+      const persisted = JSON.parse(readFileSync(sessionsFile, 'utf8')) as [string, unknown][];
+      expect(persisted.map(([k]) => k).sort()).toEqual([
+        'jarvis:webview:12',
+        'telegram:13',
+        'webview:12',
+      ]);
+    });
+
+    it('updates, appends, model-switches, and deletes only the addressed product scope', () => {
+      (createSession as any)(42, 'webview', 'global webview', 'haiku');
+      (createSession as any)(42, 'webview', 'jarvis webview', 'haiku', jarvisScope);
+
+      (appendMessageToSession as any)(42, 'webview', 'user', 'jarvis-only', jarvisScope);
+      (updateSession as any)(42, 'webview', jarvisScope);
+      (setSessionModel as any)(42, 'webview', 'opus', jarvisScope);
+
+      expect((getSession as any)(42, 'webview')!.messageCount).toBe(1);
+      expect((getSession as any)(42, 'webview')!.model).toBe('haiku');
+      expect((getSessionMessages as any)(42, 'webview')).toEqual([]);
+      expect((getSession as any)(42, 'webview', jarvisScope)!.messageCount).toBe(2);
+      expect((getSession as any)(42, 'webview', jarvisScope)!.model).toBe('opus');
+      expect((getSessionMessages as any)(42, 'webview', jarvisScope).map((m: any) => m.text)).toEqual([
+        'jarvis-only',
+      ]);
+
+      (deleteSession as any)(42, 'webview', jarvisScope);
+
+      expect((getSession as any)(42, 'webview', jarvisScope)).toBeNull();
+      expect((getSession as any)(42, 'webview')!.firstMessage).toBe('global webview');
     });
   });
 

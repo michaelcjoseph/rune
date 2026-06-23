@@ -127,4 +127,22 @@ describe('jobs/capture', () => {
     expect(entries.some(e => e.includes('telegram chat'))).toBe(true);
     expect(entries.some(e => e.includes('webview chat'))).toBe(true);
   });
+
+  it('deletes captured product-scoped sessions with their scope so nightly capture does not leave them stranded', async () => {
+    const scope = { kind: 'product', product: 'jarvis' };
+    getAllMock.mockReturnValue([
+      {
+        userId: 202,
+        transport: 'webview',
+        scope,
+        session: { sessionId: 'sess-product', lastActivity: '', messageCount: 3, firstMessage: 'repo question' },
+      },
+    ]);
+    summaryMock.mockResolvedValue({ text: 'Scoped summary', error: null });
+
+    const result = await captureSessions();
+
+    expect(result).toEqual({ captured: 1 });
+    expect(deleteMock).toHaveBeenCalledWith(202, 'webview', scope);
+  });
 });

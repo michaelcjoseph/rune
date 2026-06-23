@@ -11,7 +11,10 @@ vi.mock('../../vault/sessions.js', () => ({
   transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
 vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
-vi.mock('../../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
+vi.mock('../../vault/journal.js', () => ({
+  appendToJournal: vi.fn(),
+  saveConversationSource: vi.fn(() => 'knowledge/raw/conversations/test-conversation.md'),
+}));
 vi.mock('../../utils/time.js', () => ({
   getTimestamp: vi.fn(() => '14:30'),
   getTodayDate: vi.fn(() => '2026-04-30'),
@@ -107,6 +110,23 @@ describe('handleJournal', () => {
 
     expect(summarizeMock).toHaveBeenCalledWith('sess-active');
     expect(deleteSessionMock).toHaveBeenCalledWith(100, 'telegram');
+    const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    expect(reply).toContain('session reset');
+  });
+
+  it('closes the active product-scoped webview session after journaling', async () => {
+    const scope = { kind: 'product', product: 'jarvis' };
+    getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
+    summarizeMock.mockResolvedValue({
+      text: 'Scoped product summary\nKB-worthy: no',
+      error: null,
+    });
+    const sender = makeSender();
+
+    await (handleJournal as any)(sender, 100, 'webview', 'log scoped thread', scope);
+
+    expect(getSessionMock).toHaveBeenCalledWith(100, 'webview', scope);
+    expect(deleteSessionMock).toHaveBeenCalledWith(100, 'webview', scope);
     const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
     expect(reply).toContain('session reset');
   });

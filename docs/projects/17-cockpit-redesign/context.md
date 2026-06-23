@@ -302,6 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- boring Phase 3/projection suites passed: 58 tests.
+- ion:
 - `git diff --check` passed.
-- `npx tsc --noEmit --pretty false` still fails on existing broader branch/test type errors; no errors were reported for the new production files after filtering. The pre-existing staged QA test change remains untouched.
+- `npx vitest run --configLoader runner ...` ran and produced expected red failures for missing Phase 4 implementation contracts. `src/server/webview.test.ts` could not bind `127.0.0.1` in this sandbox (`listen EPERM`), so its route-level tests did not execute here.
