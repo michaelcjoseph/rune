@@ -66,7 +66,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 - [x] Write the test suite for **per-product session scoping and repo + vault chat search** — test-plan.md §4.
 - [x] Add a scheduler test asserting the raised global cap runs N products in parallel while the per-product cap of one holds, and that an env override of `WORK_RUN_GLOBAL_CAP` is honored — mirrors `src/intent/scheduler.test.ts`. Confirm red before implementation.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
