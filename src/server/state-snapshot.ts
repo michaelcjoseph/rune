@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import config from '../config.js';
-import { getSession } from '../vault/sessions.js';
+import { getAllSessions, getSession, type Transport } from '../vault/sessions.js';
 import { getActiveReviewSession } from '../reviews/session.js';
 import { getActivePlanningSession } from '../reviews/planning.js';
 import { getQueue } from '../kb/queue.js';
@@ -40,6 +40,13 @@ export interface StateSnapshot {
    *  clear" — you couldn't tell which thread you were looking at. See the
    *  2026-06-04 transport-scope fix. */
   sessions: { webview: SessionSummary | null; telegram: SessionSummary | null };
+  productSessions: {
+    product: string;
+    transport: Transport;
+    sessionId: string;
+    model: string;
+    messageCount: number;
+  }[];
   activeReview: { type: string; phase: string; targetDate: string } | null;
   /** An in-flight planning conversation (scoping or spec-proposed). Free-form
    *  webview messages route to a planning session ahead of the chat path in
@@ -99,6 +106,17 @@ export function getStateSnapshot(): StateSnapshot {
     s ? { sessionId: s.sessionId, model: s.model, messageCount: s.messageCount } : null;
   const webviewSession = toSummary(getSession(userId, 'webview'));
   const telegramSession = toSummary(getSession(userId, 'telegram'));
+  const productSessions: StateSnapshot['productSessions'] = [];
+  for (const entry of getAllSessions()) {
+    if (entry.userId !== userId || entry.scope?.kind !== 'product') continue;
+    productSessions.push({
+      product: entry.scope.product,
+      transport: entry.transport,
+      sessionId: entry.session.sessionId,
+      model: entry.session.model,
+      messageCount: entry.session.messageCount,
+    });
+  }
   const review = getActiveReviewSession(userId);
   const planning = getActivePlanningSession(userId);
   const schedulerState = readSchedulerState();
@@ -135,6 +153,7 @@ export function getStateSnapshot(): StateSnapshot {
     version: 1,
     ready: true,
     sessions: { webview: webviewSession, telegram: telegramSession },
+    productSessions,
     activeReview: review
       ? { type: review.type, phase: review.phase, targetDate: review.targetDate }
       : null,

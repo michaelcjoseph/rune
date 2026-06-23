@@ -1,4 +1,4 @@
-import { deleteSession, getSession, type Transport } from '../../vault/sessions.js';
+import { deleteSession, getSession, type Transport, type SessionScope } from '../../vault/sessions.js';
 import { hasActiveReview } from '../../reviews/orchestrator.js';
 import { abandonActivePlanningSession, getActivePlanningSession } from '../../reviews/planning.js';
 import { createLogger } from '../../utils/logger.js';
@@ -10,6 +10,7 @@ export async function handleClear(
   sender: MessageSender,
   userId: number,
   transport: Transport,
+  scope?: SessionScope,
 ): Promise<void> {
   // Active planning session is an escape hatch the spec promises (`/clear` or
   // `/fresh` abandons it). Handle it before the chat-session check so a chat
@@ -26,7 +27,7 @@ export async function handleClear(
     return;
   }
 
-  const session = getSession(userId, transport);
+  const session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (!session) {
     await sender.send(userId, 'No active session to clear.');
     return;
@@ -35,7 +36,8 @@ export async function handleClear(
     await sender.send(userId, 'Active review in progress — use /fresh to close it first.');
     return;
   }
-  deleteSession(userId, transport);
+  if (scope) deleteSession(userId, transport, scope);
+  else deleteSession(userId, transport);
   log.info('Session cleared', { userId, transport });
   await sender.send(userId, 'Session cleared.');
 }

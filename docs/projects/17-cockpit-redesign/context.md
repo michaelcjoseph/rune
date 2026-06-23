@@ -302,17 +302,8 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- nt/scheduler.test.ts:92). I confirmed red first: default cap was `2`, failing `expect(cap).toBeGreaterThan(2)`. After the config change, `npx vitest run --configLoader runner src/intent/scheduler.test.ts` passes: 11/11 tests.
+- sed.
 
-Also ran `git diff --check` and `git diff --cached --check`; both passed.
-- r runner src/intent/scheduler.test.ts` passed: 11 tests.
-`git diff --cached --check` passed.
-
-I did not re-confirm red in this retry because the scheduler/config behavior already exists in the current branch; the fix here was to remove the out-of-scope production default change from the staged diff.
-- he duplicate product remains queued.
-
-Verified:
-`npx vitest run --configLoader runner src/intent/scheduler.test.ts` passed: 11 tests.
-`git diff --check` passed.
-
-Note: `git status` shows `MM src/intent/scheduler.test.ts`; there were already staged changes in that file, and my fix is unstaged on top.
+Not fully green:
+- `src/server/webview.test.ts` could not run in this sandbox because binding `127.0.0.1` fails with `listen EPERM`.
+- `npm run build` still fails on pre-existing branch type errors outside this task; none of the remaining reported errors are in the files changed for this task.

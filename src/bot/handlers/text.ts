@@ -1,7 +1,15 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import type { MessageSender } from '../../transport/sender.js';
 import config from '../../config.js';
-import { getSession, createSession, updateSession, setSessionModel, appendMessageToSession, type Transport } from '../../vault/sessions.js';
+import {
+  getSession,
+  createSession,
+  updateSession,
+  setSessionModel,
+  appendMessageToSession,
+  type Transport,
+  type SessionScope,
+} from '../../vault/sessions.js';
 import { askClaudeWithContext, runAgent } from '../../ai/claude.js';
 import { createLogger } from '../../utils/logger.js';
 import { handleFresh } from '../commands/fresh.js';
@@ -140,19 +148,35 @@ async function withCommandLog<T>(name: string, fn: () => Promise<T>): Promise<T>
  *  happens upstream; callers must pass the verified userId. Transport is taken
  *  from `sender.name` (its discriminant union matches `Transport`) so session
  *  and journal writes are keyed independently per channel. */
-export async function dispatchText(sender: MessageSender, userId: number, text: string): Promise<void> {
+export async function dispatchText(
+  sender: MessageSender,
+  userId: number,
+  text: string,
+  scope?: SessionScope,
+): Promise<void> {
   if (!text) return;
   const transport: Transport = sender.name;
 
   // Each slash branch wraps its handler in `withCommandLog` so every
   // command invocation produces one `kind:'command'` observation record
   // (Phase 6 B1.3). The `cmd=<name>` detail is structured — never the args.
-  if (text.startsWith('/fresh-full')) return withCommandLog('fresh-full', () => handleFreshFull(sender, userId, transport));
-  if (text.startsWith('/fresh')) return withCommandLog('fresh', () => handleFresh(sender, userId, transport));
-  if (text === '/clear' || text.startsWith('/clear ')) return withCommandLog('clear', () => handleClear(sender, userId, transport));
+  if (text.startsWith('/fresh-full')) return withCommandLog('fresh-full', () => (
+    scope ? handleFreshFull(sender, userId, transport, scope) : handleFreshFull(sender, userId, transport)
+  ));
+  if (text.startsWith('/fresh')) return withCommandLog('fresh', () => (
+    scope ? handleFresh(sender, userId, transport, scope) : handleFresh(sender, userId, transport)
+  ));
+  if (text === '/clear' || text.startsWith('/clear ')) return withCommandLog('clear', () => (
+    scope ? handleClear(sender, userId, transport, scope) : handleClear(sender, userId, transport)
+  ));
   if (text === '/cancel-review') return withCommandLog('cancel-review', () => handleCancelReview(sender, userId));
   if (text === '/cancel' || text.startsWith('/cancel ')) return withCommandLog('cancel', () => handleCancel(sender, userId, text.slice('/cancel'.length).trim()));
-  if (text.startsWith('/journal ')) return withCommandLog('journal', () => handleJournal(sender, userId, transport, text.slice('/journal '.length).trim()));
+  if (text.startsWith('/journal ')) return withCommandLog('journal', () => {
+    const journalText = text.slice('/journal '.length).trim();
+    return scope
+      ? handleJournal(sender, userId, transport, journalText, scope)
+      : handleJournal(sender, userId, transport, journalText);
+  });
   if (text.startsWith('/ask ')) return withCommandLog('ask', () => handleAsk(sender, userId, text.slice('/ask '.length).trim()));
   if (text.startsWith('/kb ')) return withCommandLog('kb', () => handleKB(sender, userId, text.slice('/kb '.length).trim()));
   if (text.startsWith('/ingest')) return withCommandLog('ingest', () => handleIngest(sender, userId, text.slice('/ingest'.length).trim()));
@@ -181,9 +205,9 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   if (text.startsWith('/prep')) return withCommandLog('prep', () => handlePrep(sender, userId));
   if (text.startsWith('/seed')) return withCommandLog('seed', () => handleSeed(sender, userId, text.slice('/seed'.length).trim()));
   if (text.startsWith('/lint')) return withCommandLog('lint', () => handleLint(sender, userId));
-  if (text.startsWith('/opus')) return withCommandLog('opus', () => handleModelSwitch(sender, userId, transport, 'opus'));
-  if (text.startsWith('/sonnet')) return withCommandLog('sonnet', () => handleModelSwitch(sender, userId, transport, 'sonnet'));
-  if (text.startsWith('/haiku')) return withCommandLog('haiku', () => handleModelSwitch(sender, userId, transport, 'haiku'));
+  if (text.startsWith('/opus')) return withCommandLog('opus', () => handleModelSwitch(sender, userId, transport, 'opus', scope));
+  if (text.startsWith('/sonnet')) return withCommandLog('sonnet', () => handleModelSwitch(sender, userId, transport, 'sonnet', scope));
+  if (text.startsWith('/haiku')) return withCommandLog('haiku', () => handleModelSwitch(sender, userId, transport, 'haiku', scope));
   if (text.startsWith('/status')) return withCommandLog('status', () => handleStatus(sender, userId, transport));
   if (text.startsWith('/whoop')) return withCommandLog('whoop', () => handleWhoop(sender, userId));
   if (text.startsWith('/start')) return withCommandLog('start', () => handleStart(sender, userId));
@@ -208,7 +232,9 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // confidence, which closes the active session (handleJournal calls
   // closeConversation when a session exists). Slash escape hatches
   // (/fresh, /journal, /clear) already short-circuited above.
-  if (getSession(userId, transport)) return handleConversation(sender, userId, transport, text);
+  if (scope ? getSession(userId, transport, scope) : getSession(userId, transport)) {
+    return handleConversation(sender, userId, transport, text, scope);
+  }
 
   // URL detection — messages containing URLs go to content triage. Checked
   // AFTER the review/SR/chat-session checks above: a URL shared mid-thread
@@ -223,13 +249,13 @@ export async function dispatchText(sender: MessageSender, userId: number, text: 
   // call. Slash commands already short-circuited above; active-session above.
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   if (wordCount >= config.RESOLVER_MIN_WORDS) {
-    const routed = await tryResolveAndDispatch(sender, userId, transport, text);
+    const routed = await tryResolveAndDispatch(sender, userId, transport, text, scope);
     if (routed) return;
     // Fall through — the resolver already logged the intent-log entry.
   }
 
   // Default: multi-turn conversation
-  return handleConversation(sender, userId, transport, text);
+  return handleConversation(sender, userId, transport, text, scope);
 }
 
 /** Run the resolver and, if confidence ≥ threshold and the top-2 aren't
@@ -244,6 +270,7 @@ async function tryResolveAndDispatch(
   userId: number,
   transport: Transport,
   text: string,
+  scope?: SessionScope,
 ): Promise<boolean> {
   try {
     const registry = getSkillRegistry();
@@ -275,7 +302,7 @@ async function tryResolveAndDispatch(
     }
 
     try {
-      await invokeSkill(sender, userId, transport, text, entry, result.args);
+      await invokeSkill(sender, userId, transport, text, entry, result.args, scope);
       logIntent(text, result, 'routed', entry.name);
       return true;
     } catch (err) {
@@ -317,6 +344,7 @@ async function invokeSkill(
   message: string,
   skill: SkillEntry,
   args: string,
+  scope?: SessionScope,
 ): Promise<void> {
   if (skill.kind === 'agent') {
     // No explicit label here — runAgent's op-event:start arrives within ms
@@ -338,7 +366,9 @@ async function invokeSkill(
   // listed — model-switch (/opus, /sonnet, /haiku), auth (/whoop, /start),
   // and admin (/status, /lint, /seed) commands are intentionally omitted.
   switch (skill.name) {
-    case 'journal': return handleJournal(sender, userId, transport, args);
+    case 'journal': return scope
+      ? handleJournal(sender, userId, transport, args, scope)
+      : handleJournal(sender, userId, transport, args);
     case 'ingest': return handleIngest(sender, userId, args);
     case 'priorities': return handlePriorities(sender, userId, args);
     case 'workout': return handleWorkout(sender, userId, args);
@@ -358,8 +388,12 @@ async function invokeSkill(
     case 'library-sync': return handleLibrarySync(sender, userId);
     case 'learn': return handleLearn(sender, userId, args || message);
     case 'learn-list': return handleLearnList(sender, userId);
-    case 'fresh': return handleFresh(sender, userId, transport);
-    case 'fresh-full': return handleFreshFull(sender, userId, transport);
+    case 'fresh': return scope
+      ? handleFresh(sender, userId, transport, scope)
+      : handleFresh(sender, userId, transport);
+    case 'fresh-full': return scope
+      ? handleFreshFull(sender, userId, transport, scope)
+      : handleFreshFull(sender, userId, transport);
     case 'plan': return handlePlan(sender, userId, args);
     // No 'approve' case — /approve is an explicit gate, not resolver-inferred.
     default:
@@ -429,9 +463,14 @@ HOW TO ANSWER:
 - Never write files. If the question implies a write, say so and point to the right slash command.
 - The user can end the thread with /fresh, or by asking you to log the conversation to the journal.`;
 
-function getVaultSystemPrompt(): string {
-  if (!config.WORKSPACE_DIR) return VAULT_SYSTEM_PROMPT_BASE;
-  return `${VAULT_SYSTEM_PROMPT_BASE}\n\nWORKSPACE: You also have read access to ${config.WORKSPACE_DIR}. When the user references workspace files or project code, read them directly from that path.`;
+function getVaultSystemPrompt(scope?: SessionScope): string {
+  const workspacePrompt = config.WORKSPACE_DIR
+    ? `\n\nWORKSPACE: You also have read access to ${config.WORKSPACE_DIR}. When the user references workspace files or project code, read them directly from that path.`
+    : '';
+  const productPrompt = scope?.kind === 'product'
+    ? `\n\nPRODUCT CHAT: Active product: ${scope.product}. Search both the active product repo and the vault before answering product-specific development questions.`
+    : '';
+  return `${VAULT_SYSTEM_PROMPT_BASE}${workspacePrompt}${productPrompt}`;
 }
 
 // Read-only by design: chat must never modify the vault. The "never write
@@ -454,20 +493,24 @@ async function handleConversation(
   userId: number,
   transport: Transport,
   text: string,
+  scope?: SessionScope,
 ): Promise<void> {
-  let session = getSession(userId, transport);
+  let session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (!session) {
-    session = createSession(userId, transport, text, config.CONVERSATION_MODEL);
+    session = scope
+      ? createSession(userId, transport, text, config.CONVERSATION_MODEL, scope)
+      : createSession(userId, transport, text, config.CONVERSATION_MODEL);
   }
 
-  appendMessageToSession(userId, transport, 'user', text);
+  if (scope) appendMessageToSession(userId, transport, 'user', text, scope);
+  else appendMessageToSession(userId, transport, 'user', text);
 
   sender.startTyping(userId, 'Asking Claude');
   try {
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
-      getVaultSystemPrompt(),
+      getVaultSystemPrompt(scope),
       { model: session.model, allowedTools: CONVERSATION_TOOLS, opLabel: 'chat', voice: true },
     );
 
@@ -478,8 +521,13 @@ async function handleConversation(
     }
 
     const rawReply = result.text!;
-    appendMessageToSession(userId, transport, 'assistant', rawReply);
-    updateSession(userId, transport);
+    if (scope) {
+      appendMessageToSession(userId, transport, 'assistant', rawReply, scope);
+      updateSession(userId, transport, scope);
+    } else {
+      appendMessageToSession(userId, transport, 'assistant', rawReply);
+      updateSession(userId, transport);
+    }
     // Mode visibility: every conversation reply is suffixed so the user can
     // tell at a glance they are in a multi-turn thread (vs. a routed task
     // action, which has no such marker).
@@ -558,15 +606,22 @@ async function handleModelSwitch(
   userId: number,
   transport: Transport,
   model: string,
+  scope?: SessionScope,
 ): Promise<void> {
-  const session = getSession(userId, transport);
+  const session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (!session) {
-    createSession(userId, transport, `/${model}`);
-    setSessionModel(userId, transport, model);
+    if (scope) {
+      createSession(userId, transport, `/${model}`, undefined, scope);
+      setSessionModel(userId, transport, model, scope);
+    } else {
+      createSession(userId, transport, `/${model}`);
+      setSessionModel(userId, transport, model);
+    }
     await sender.send(userId, `Switched to ${model}. New session started.`);
     return;
   }
-  setSessionModel(userId, transport, model);
+  if (scope) setSessionModel(userId, transport, model, scope);
+  else setSessionModel(userId, transport, model);
   await sender.send(userId, `Switched to ${model}.`);
 }
 

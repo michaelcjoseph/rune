@@ -11,6 +11,9 @@ const log = createLogger('sessions');
 const MAX_SESSION_MESSAGES = 200;
 
 export type Transport = 'telegram' | 'webview';
+export type SessionScope =
+  | { kind: 'global'; product?: undefined }
+  | { kind: 'product'; product: string };
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -27,9 +30,11 @@ interface Session {
   messages: ConversationMessage[];
 }
 
-/** Composite key shape: `${transport}:${userId}` — lets TG and webview hold
- *  independent threads under the same numeric userId. */
-function sessionKey(userId: number, transport: Transport): string {
+/** Composite key shape: global `${transport}:${userId}`, product
+ *  `${product}:${transport}:${userId}`. The two-part global key is retained so
+ *  existing on-disk sessions and Telegram/webview global threads keep working. */
+function sessionKey(userId: number, transport: Transport, scope: SessionScope = { kind: 'global' }): string {
+  if (scope.kind === 'product') return `${scope.product}:${transport}:${userId}`;
   return `${transport}:${userId}`;
 }
 
@@ -42,8 +47,12 @@ export function transportLabel(transport: Transport): string {
 
 const sessions = new Map<string, Session>();
 
-export function getSession(userId: number, transport: Transport): Session | null {
-  return sessions.get(sessionKey(userId, transport)) || null;
+export function getSession(
+  userId: number,
+  transport: Transport,
+  scope: SessionScope = { kind: 'global' },
+): Session | null {
+  return sessions.get(sessionKey(userId, transport, scope)) || null;
 }
 
 export function createSession(
@@ -51,6 +60,7 @@ export function createSession(
   transport: Transport,
   firstMessage: string,
   model?: string,
+  scope: SessionScope = { kind: 'global' },
 ): Session {
   const session: Session = {
     sessionId: randomUUID(),
@@ -60,28 +70,41 @@ export function createSession(
     model: model || config.DEFAULT_CHAT_MODEL,
     messages: [],
   };
-  sessions.set(sessionKey(userId, transport), session);
+  sessions.set(sessionKey(userId, transport, scope), session);
   persistSessions();
   return session;
 }
 
-export function updateSession(userId: number, transport: Transport): void {
-  const session = sessions.get(sessionKey(userId, transport));
+export function updateSession(
+  userId: number,
+  transport: Transport,
+  scope: SessionScope = { kind: 'global' },
+): void {
+  const session = sessions.get(sessionKey(userId, transport, scope));
   if (!session) return;
   session.lastActivity = new Date().toISOString();
   session.messageCount++;
   persistSessions();
 }
 
-export function setSessionModel(userId: number, transport: Transport, model: string): void {
-  const session = sessions.get(sessionKey(userId, transport));
+export function setSessionModel(
+  userId: number,
+  transport: Transport,
+  model: string,
+  scope: SessionScope = { kind: 'global' },
+): void {
+  const session = sessions.get(sessionKey(userId, transport, scope));
   if (!session) return;
   session.model = model;
   persistSessions();
 }
 
-export function deleteSession(userId: number, transport: Transport): void {
-  const key = sessionKey(userId, transport);
+export function deleteSession(
+  userId: number,
+  transport: Transport,
+  scope: SessionScope = { kind: 'global' },
+): void {
+  const key = sessionKey(userId, transport, scope);
   const session = sessions.get(key);
   if (session) cleanupSession(session.sessionId);
   sessions.delete(key);
@@ -93,21 +116,27 @@ export function appendMessageToSession(
   transport: Transport,
   role: 'user' | 'assistant',
   text: string,
+  scope: SessionScope = { kind: 'global' },
 ): void {
-  const session = sessions.get(sessionKey(userId, transport));
+  const session = sessions.get(sessionKey(userId, transport, scope));
   if (!session) return;
   if (session.messages.length >= MAX_SESSION_MESSAGES) session.messages.shift();
   session.messages.push({ role, text, ts: `${getTodayDate()} ${getTimestamp()}` });
   // Persistence is deferred to updateSession to avoid 3 synchronous disk writes per turn.
 }
 
-export function getSessionMessages(userId: number, transport: Transport): ConversationMessage[] {
-  return sessions.get(sessionKey(userId, transport))?.messages ?? [];
+export function getSessionMessages(
+  userId: number,
+  transport: Transport,
+  scope: SessionScope = { kind: 'global' },
+): ConversationMessage[] {
+  return sessions.get(sessionKey(userId, transport, scope))?.messages ?? [];
 }
 
 export interface SessionEntry {
   userId: number;
   transport: Transport;
+  scope?: SessionScope;
   session: Session;
 }
 
@@ -126,14 +155,22 @@ export function getAllSessions(): SessionEntry[] {
 
 /** Parse a composite key. Returns null for malformed keys so callers can skip
  *  rather than throw — useful during the legacy-format migration. */
-function parseSessionKey(key: string): { userId: number; transport: Transport } | null {
-  const colon = key.indexOf(':');
-  if (colon <= 0) return null;
-  const transport = key.slice(0, colon);
+function parseSessionKey(key: string): { userId: number; transport: Transport; scope: SessionScope } | null {
+  const parts = key.split(':');
+  if (parts.length === 2) {
+    const [transport, rawUserId] = parts;
+    if (transport !== 'telegram' && transport !== 'webview') return null;
+    const userId = Number(rawUserId);
+    if (!Number.isFinite(userId)) return null;
+    return { userId, transport, scope: { kind: 'global' } };
+  }
+  if (parts.length !== 3) return null;
+  const [product, transport, rawUserId] = parts;
+  if (!product) return null;
   if (transport !== 'telegram' && transport !== 'webview') return null;
-  const userId = Number(key.slice(colon + 1));
+  const userId = Number(rawUserId);
   if (!Number.isFinite(userId)) return null;
-  return { userId, transport };
+  return { userId, transport, scope: { kind: 'product', product } };
 }
 
 export function restoreSessions(): void {

@@ -1,4 +1,4 @@
-import { getAllSessions, deleteSession, transportLabel, type Transport } from '../vault/sessions.js';
+import { getAllSessions, deleteSession, transportLabel, type Transport, type SessionScope } from '../vault/sessions.js';
 import { summarizeSession } from '../ai/claude.js';
 import { appendToJournal } from '../vault/journal.js';
 import { getTimestamp } from '../utils/time.js';
@@ -15,9 +15,9 @@ const log = createLogger('capture');
 export async function captureSessions(source = 'nightly'): Promise<{ captured: number }> {
   const entries = getAllSessions();
   let captured = 0;
-  const capturedKeys: { userId: number; transport: Transport }[] = [];
+  const capturedKeys: { userId: number; transport: Transport; scope?: SessionScope }[] = [];
 
-  for (const { userId, transport, session } of entries) {
+  for (const { userId, transport, scope, session } of entries) {
     try {
       const result = await summarizeSession(session.sessionId);
       if (result.text) {
@@ -26,7 +26,7 @@ export async function captureSessions(source = 'nightly'): Promise<{ captured: n
         const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n${summaryLines}`;
         appendToJournal(entry);
         captured++;
-        capturedKeys.push({ userId, transport });
+        capturedKeys.push({ userId, transport, scope });
       }
     } catch (err) {
       log.error(`Failed to capture session ${transport}:${userId}`, { error: (err as Error).message });
@@ -34,8 +34,12 @@ export async function captureSessions(source = 'nightly'): Promise<{ captured: n
   }
 
   // Only delete sessions that were successfully captured
-  for (const { userId, transport } of capturedKeys) {
-    deleteSession(userId, transport);
+  for (const { userId, transport, scope } of capturedKeys) {
+    if (scope) {
+      deleteSession(userId, transport, scope);
+    } else {
+      deleteSession(userId, transport);
+    }
   }
 
   if (captured > 0) {

@@ -1,4 +1,11 @@
-import { getSession, getSessionMessages, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
+import {
+  getSession,
+  getSessionMessages,
+  deleteSession,
+  transportLabel,
+  type Transport,
+  type SessionScope,
+} from '../../vault/sessions.js';
 import { describeActiveNonChatContext } from './active-context.js';
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
@@ -21,8 +28,9 @@ export async function handleFreshFull(
   sender: MessageSender,
   userId: number,
   transport: Transport,
+  scope?: SessionScope,
 ): Promise<void> {
-  const session = getSession(userId, transport);
+  const session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (!session) {
     // No chat session — but the user may be in a planning/review/SR context
     // that routes ahead of the chat path and never creates a chat Session.
@@ -33,10 +41,11 @@ export async function handleFreshFull(
     return;
   }
 
-  const messages = getSessionMessages(userId, transport);
+  const messages = scope ? getSessionMessages(userId, transport, scope) : getSessionMessages(userId, transport);
   if (messages.length === 0) {
     await sender.send(userId, 'No messages captured in this session — use /fresh for a summary instead.');
-    deleteSession(userId, transport);
+    if (scope) deleteSession(userId, transport, scope);
+    else deleteSession(userId, transport);
     return;
   }
 
@@ -49,11 +58,13 @@ export async function handleFreshFull(
     log.info('Full transcript logged', { userId, transport, messageCount: messages.length });
 
     await gitCommitAndPush('Conversation logged (full)');
-    deleteSession(userId, transport);
+    if (scope) deleteSession(userId, transport, scope);
+    else deleteSession(userId, transport);
     await sender.send(userId, `Full conversation logged (${messages.length} messages). Session reset.`);
   } catch (err) {
     log.error('fresh-full exception', { error: (err as Error).message });
-    deleteSession(userId, transport);
+    if (scope) deleteSession(userId, transport, scope);
+    else deleteSession(userId, transport);
     await sender.send(userId, `Internal error logging conversation — session reset. Error: ${(err as Error).message}`);
   } finally {
     sender.stopTyping(userId);

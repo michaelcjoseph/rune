@@ -1,7 +1,7 @@
 import { appendToJournal } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
-import { getSession, transportLabel, type Transport } from '../../vault/sessions.js';
+import { getSession, transportLabel, type Transport, type SessionScope } from '../../vault/sessions.js';
 import { closeConversation } from './fresh.js';
 import { createLogger } from '../../utils/logger.js';
 import type { MessageSender } from '../../transport/sender.js';
@@ -13,6 +13,7 @@ export async function handleJournal(
   userId: number,
   transport: Transport,
   text: string,
+  scope?: SessionScope,
 ): Promise<void> {
   const ts = getTimestamp();
   const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n\t- ${text}`;
@@ -23,14 +24,14 @@ export async function handleJournal(
   // KB-worthy, commit, delete the session. The user's literal entry above
   // remains uncommitted here so closeConversation's single commit captures
   // both the literal entry and the summary together.
-  if (!getSession(userId, transport)) {
+  if (!(scope ? getSession(userId, transport, scope) : getSession(userId, transport))) {
     await gitCommitAndPush('TG journal entry');
     await sender.send(userId, 'Logged to journal.');
     return;
   }
 
   sender.startTyping(userId);
-  const result = await closeConversation(userId, transport);
+  const result = await closeConversation(userId, transport, scope);
   sender.stopTyping(userId);
 
   if (!result.ok) {

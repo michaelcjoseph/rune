@@ -1,4 +1,4 @@
-import { getSession, deleteSession, transportLabel, type Transport } from '../../vault/sessions.js';
+import { getSession, deleteSession, transportLabel, type Transport, type SessionScope } from '../../vault/sessions.js';
 import { summarizeSession } from '../../ai/claude.js';
 import { appendToJournal, saveConversationSource } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
@@ -37,8 +37,9 @@ export type CloseConversationResult =
 export async function closeConversation(
   chatId: number,
   transport: Transport,
+  scope?: SessionScope,
 ): Promise<CloseConversationResult> {
-  const session = getSession(chatId, transport);
+  const session = scope ? getSession(chatId, transport, scope) : getSession(chatId, transport);
   if (!session) return { ok: false, error: 'no-session' };
 
   try {
@@ -46,7 +47,8 @@ export async function closeConversation(
 
     if (result.error) {
       log.error('Summarize error', { error: result.error, sessionId: session.sessionId });
-      deleteSession(chatId, transport);
+      if (scope) deleteSession(chatId, transport, scope);
+      else deleteSession(chatId, transport);
       return { ok: false, error: result.error };
     }
 
@@ -64,11 +66,13 @@ export async function closeConversation(
     }
 
     await gitCommitAndPush('Conversation logged');
-    deleteSession(chatId, transport);
+    if (scope) deleteSession(chatId, transport, scope);
+    else deleteSession(chatId, transport);
     return { ok: true, journalSummary, isKBWorthy };
   } catch (err) {
     log.error('closeConversation exception', { error: (err as Error).message });
-    deleteSession(chatId, transport);
+    if (scope) deleteSession(chatId, transport, scope);
+    else deleteSession(chatId, transport);
     return { ok: false, error: (err as Error).message };
   }
 }
@@ -77,6 +81,7 @@ export async function handleFresh(
   sender: MessageSender,
   userId: number,
   transport: Transport,
+  scope?: SessionScope,
 ): Promise<void> {
   // Active planning session is an escape hatch the spec promises (`/clear` or
   // `/fresh` abandons it). If there's a planning session and no chat session
@@ -84,7 +89,7 @@ export async function handleFresh(
   // conversation. If both exist, the planning session is abandoned first and
   // the normal chat-summary flow continues.
   const planning = getActivePlanningSession(userId);
-  const session = getSession(userId, transport);
+  const session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
   if (planning && !session) {
     abandonActivePlanningSession(userId);
     log.info('Planning session abandoned via /fresh', { userId, transport });
@@ -101,7 +106,7 @@ export async function handleFresh(
   }
 
   sender.startTyping(userId);
-  const result = await closeConversation(userId, transport);
+  const result = await closeConversation(userId, transport, scope);
   sender.stopTyping(userId);
 
   if (!result.ok) {

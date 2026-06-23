@@ -27,7 +27,7 @@ import {
 } from '../intent/backlog-write-lock.js';
 import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
 import { computeFixAction, withActions } from './backlog-actions.js';
-import { getSession } from '../vault/sessions.js';
+import { getSession, type SessionScope } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
@@ -1337,13 +1337,19 @@ async function handleApiWorkRunRelease(req: IncomingMessage, res: ServerResponse
   }
 }
 
+function productScopeFrom(value: unknown): SessionScope | undefined {
+  const product = typeof value === 'string' ? value.trim() : '';
+  if (!product || !VALID_SLUG.test(product)) return undefined;
+  return { kind: 'product', product };
+}
+
 async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady: () => boolean): Promise<void> {
   if (!isReady()) {
     res.writeHead(503, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ready: false, reason: 'bot starting' }));
     return;
   }
-  let body: { message?: string } = {};
+  let body: { message?: string; product?: unknown } = {};
   try {
     body = JSON.parse(await readBody(req));
   } catch {
@@ -1358,6 +1364,7 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
     return;
   }
   const userId = config.TELEGRAM_USER_ID;
+  const scope = productScopeFrom(body.product);
   const chunks: string[] = [];
   // capturingSender collects the direct reply. Secondary bus-published messages
   // (e.g., background notifications that fire concurrently) reach open WS
@@ -1369,14 +1376,15 @@ async function handleApiChat(req: IncomingMessage, res: ServerResponse, isReady:
     stopTyping: () => {},
   };
   try {
-    await handleWebviewMessage(capturingSender, userId, text);
+    if (scope) await handleWebviewMessage(capturingSender, userId, text, scope);
+    else await handleWebviewMessage(capturingSender, userId, text);
   } catch (err) {
     log.error('POST /api/chat dispatch error', { error: (err as Error).message });
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'internal error' }));
     return;
   }
-  const session = getSession(userId, 'webview');
+  const session = scope ? getSession(userId, 'webview', scope) : getSession(userId, 'webview');
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     text: chunks.join('\n\n'),
@@ -1859,14 +1867,19 @@ export function mountWebviewRoutes(
 
       ws.on('message', (data) => {
         try {
-          const frame = JSON.parse(data.toString()) as { kind?: string; text?: string };
+          const frame = JSON.parse(data.toString()) as { kind?: string; text?: string; product?: unknown };
           if (frame.kind === 'message' && typeof frame.text === 'string') {
             const text = frame.text.trim();
             if (!text) return;
+            const scope = productScopeFrom(frame.product);
             // Chain dispatch promises to serialise inbound frames for the same user
             const prev = dispatchQueues.get(userId) ?? Promise.resolve();
             const next = prev
-              .then(() => handleWebviewMessage(deps.webview, userId, text))
+              .then(() => (
+                scope
+                  ? handleWebviewMessage(deps.webview, userId, text, scope)
+                  : handleWebviewMessage(deps.webview, userId, text)
+              ))
               .catch((err: unknown) => {
                 log.error('WS message dispatch error', { error: (err as Error).message });
               });
