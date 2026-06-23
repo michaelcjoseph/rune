@@ -302,8 +302,9 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- .test.ts src/server/state-snapshot.test.ts` passed: 71 tests.
+- n prompt builder instead of a local prompt copy.
 
-Not fully runnable here:
-- `src/server/webview.test.ts` still fails before executing tests with `listen EPERM: operation not permitted 127.0.0.1`.
-- `npm run build` still fails on existing branch type errors outside these source changes.
+Verified:
+- `npx vitest run src/vault/sessions.test.ts src/bot/handlers/text.test.ts --configLoader runner` passed: 144 tests.
+- Changed-file TypeScript check passed.
+- `npm run build` still fails on existing branch-wide errors outside these changes.

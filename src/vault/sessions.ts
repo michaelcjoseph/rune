@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import config from '../config.js';
 import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
 import { getTodayDate, getTimestamp } from '../utils/time.js';
+import { readProductsConfig } from '../jobs/sandbox-runtime.js';
 
 const log = createLogger('sessions');
 
 const MAX_SESSION_MESSAGES = 200;
+const PROMPT_CONTEXT_CHAR_LIMIT = 12_000;
+const PROMPT_FILE_CHAR_LIMIT = 4_000;
+const MAX_PROJECT_CONTEXTS = 5;
 
 export type Transport = 'telegram' | 'webview';
 export type SessionScope =
@@ -21,6 +25,37 @@ export interface ConversationMessage {
   ts: string;
 }
 
+export interface ProductPromptDoc {
+  path: string;
+  content: string;
+}
+
+export interface ProductPromptProject {
+  slug: string;
+  spec: string;
+  tasks: string;
+}
+
+export interface ProductPromptWorldview {
+  path: string;
+  anchor?: string;
+  content: string;
+}
+
+export interface ProductPromptContext {
+  product: string;
+  repoPath: string;
+  repoDocs: ProductPromptDoc[];
+  projects: ProductPromptProject[];
+  worldview: ProductPromptWorldview[];
+}
+
+export interface BuildSessionSystemPromptInput {
+  scope?: SessionScope;
+  productContext?: ProductPromptContext;
+  workspaceDir?: string;
+}
+
 interface Session {
   sessionId: string;
   lastActivity: string;
@@ -28,6 +63,196 @@ interface Session {
   firstMessage: string;
   model: string;
   messages: ConversationMessage[];
+}
+
+export const VAULT_SYSTEM_PROMPT_BASE = `You are Jarvis, the user's second-brain conversational layer. Your working directory is their Obsidian vault — you have full read access.
+
+DEFAULT POSTURE — thinking partner. Lean Socratic. For strategic, reflective, or open-ended questions, your first move is to ask before you answer. Don't solve the problem for them; help them clarify their own thinking. Open with one or two sharp probing questions grounded in something specific you found in their vault. After they respond, offer your view.
+
+For tactical or factual asks ("find Rory in my CRM", "what's my workout today", "who is X") — answer directly. Skip the thinking ritual. Be brief.
+
+VAULT MAP (read the relevant file(s), don't dump everything):
+- CLAUDE.md — identity, "About Me", vault folder structure, tag taxonomy, review cadence, command list. READ THIS FIRST when you don't already know the answer — it's the manifest.
+- world-view/world-view.md — the user's explicit belief synthesis across 8 domains (ai, crypto, energy, raw-materials, geopolitics, demographics, governance, education-healthcare). Each domain has a dedicated file in world-view/ with thesis + investment implications + changelog.
+- knowledge/index.md — 100+ curated wiki entities/concepts/topics compiled from their reading. For lookups against this file PREFER kb_query (the MCP synthesizer); only Read/Grep directly if you need a verbatim quote from the index or you're looking for a specific named entity by filename.
+- knowledge/schema.md — how the KB is organized (raw sources → compiled wiki pages).
+- pages/index.md, investments/index.md, health/index.md, career/index.md, study/index.md, writing/index.md — per-domain indices.
+- pages/{books,crm,places}.json, health/workouts.json, career/applications.json, investments/investments.json — structured JSON stores. For lookups against these, Read/Grep them directly; no synthesis needed.
+- journals/YYYY_MM_DD.md — daily notes (interstitial journaling).
+
+KNOWLEDGE BASE (jarvis-kb MCP) — your FIRST move for any factual or domain question about the user's world (people, companies, projects, concepts, topics, frameworks they've written about). The KB is the synthesis layer over journals, articles, world-view, projects, and playbook. Don't grep the vault for these — ask the synthesizer.
+- kb_query <question>: a synthesized natural-language answer with [[wikilink]] citations. Use for "what is X", "tell me about X", "current state of X", "summarize X strategy". The answer is synthesis-quality — use it directly or adapt minimally for the current conversational context; don't re-query the vault for what the KB already covers.
+- kb_search <terms>: targeted full-text search across wiki pages, filtered by type (entity/concept/topic/comparison) or tag. Use when you need specific source pages to read after a kb_query, not a synthesized answer.
+- kb_stats: counts + recent ingestion log. Diagnostic only.
+
+WEB SEARCH (WebSearch, WebFetch): External-knowledge tools. Use them ACTIVELY when the question reaches outside the user's vault — current events, news, definitions, third-party docs/APIs, library behavior, market data, anything time-sensitive or factual that isn't already in their notes. Don't treat web as a last resort: if the question is genuinely about the world (not the user), web search is often the right first move alongside KB lookups. Cite sources inline (URL or article title) the way you cite [[wikilinks]] for vault content.
+
+HOW TO ANSWER:
+- Pick the mode by question shape, not by length. Strategy/reflection/exploration → ask first. Lookup/tactical/factual → answer directly.
+- Route by subject: questions about the user's domain (work projects, companies, investments, frameworks, concepts) → kb_query FIRST. Then optionally Read specific files the KB answer cites for verbatim detail. Questions about the world (current events, third-party tools, external facts) → web first, vault second if relevant. Mixed questions → both, in parallel where possible.
+- When to skip the KB: a specific named file the user is editing right now ("what does my projects/foo.md say verbatim"), a structured JSON store (workouts.json, books.json, crm.json — Read these directly), a specific journal date, slash-command dispatch.
+- For substantive questions about worldview, investments, projects, or thinking frameworks: READ the relevant index/page first, then either probe (strategy) or answer with specifics (lookup). Cite with [[wikilinks]] where appropriate.
+- Probing questions should be specific, not generic. "What's the current state? what flows in?" is exactly what to avoid — it re-elicits context already in the vault. Anchor every question to something concrete you found.
+- Surface assumptions the user might be making. Name them explicitly.
+- Responses go to Telegram on mobile — be concise. Structure matters more than length.
+- Never write files. If the question implies a write, say so and point to the right slash command.
+- The user can end the thread with /fresh, or by asking you to log the conversation to the journal.`;
+
+function buildGenericSystemPrompt(workspaceDir: string | undefined): string {
+  const workspacePrompt = workspaceDir
+    ? `\n\nWORKSPACE: You also have read access to ${workspaceDir}. When the user references workspace files or project code, read them directly from that path.`
+    : '';
+  return `${VAULT_SYSTEM_PROMPT_BASE}${workspacePrompt}`;
+}
+
+function limitText(text: string, limit = PROMPT_FILE_CHAR_LIMIT): string {
+  const trimmed = text.trim();
+  return trimmed.length > limit ? `${trimmed.slice(0, limit)}\n...[truncated]` : trimmed;
+}
+
+function formatDocs(docs: ProductPromptDoc[]): string {
+  if (docs.length === 0) return '(no repo docs loaded)';
+  return docs.map(doc => `### ${doc.path}\n${limitText(doc.content)}`).join('\n\n');
+}
+
+function formatProjects(projects: ProductPromptProject[]): string {
+  if (projects.length === 0) return '(no project specs/tasks loaded)';
+  return projects.map(project => [
+    `### ${project.slug}`,
+    `spec.md:\n${limitText(project.spec)}`,
+    `tasks.md:\n${limitText(project.tasks)}`,
+  ].join('\n')).join('\n\n');
+}
+
+function formatWorldview(entries: ProductPromptWorldview[]): string {
+  if (entries.length === 0) return '(no relevant worldview loaded)';
+  return entries.map(entry => {
+    const label = entry.anchor ? `${entry.path}#${entry.anchor}` : entry.path;
+    return `### ${label}\n${limitText(entry.content)}`;
+  }).join('\n\n');
+}
+
+function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product' }>, context: ProductPromptContext): string {
+  if (context.product !== scope.product) {
+    throw new Error(
+      `Product context mismatch: session scope is '${scope.product}' but loaded product context is '${context.product}'`,
+    );
+  }
+  return [
+    `PRODUCT CHAT: Active product: ${scope.product}.`,
+    `Product repo: ${context.repoPath}`,
+    'Ground this conversation in the loaded product context below. Search the active product repo and the vault before answering product-specific development questions.',
+    '',
+    '## Loaded Repo Docs',
+    formatDocs(context.repoDocs),
+    '',
+    '## Loaded Project Specs and Tasks',
+    formatProjects(context.projects),
+    '',
+    '## Relevant Worldview',
+    formatWorldview(context.worldview),
+  ].join('\n');
+}
+
+export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = {}): string {
+  const scope = input.scope ?? { kind: 'global' };
+  const base = buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
+  if (scope.kind !== 'product') return base;
+
+  const context = input.productContext ?? loadProductPromptContext(scope.product);
+  if (!context) {
+    return `${base}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search both the product repo and the vault before answering product-specific development questions.`;
+  }
+
+  const productPrompt = buildProductContextPrompt(scope, context);
+  const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - base.length - 2);
+  const boundedProductPrompt = productPrompt.length > available
+    ? `${productPrompt.slice(0, available)}\n...[truncated product context]`
+    : productPrompt;
+  return `${base}\n\n${boundedProductPrompt}`;
+}
+
+function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {
+  try {
+    if (!existsSync(absPath) || !statSync(absPath).isFile()) return null;
+    return { path: relPath, content: readFileSync(absPath, 'utf8') };
+  } catch {
+    return null;
+  }
+}
+
+function loadRepoDocs(repoPath: string): ProductPromptDoc[] {
+  const candidates = [
+    'CLAUDE.md',
+    'AGENTS.md',
+    'README.md',
+    join('docs', 'README.md'),
+    join('docs', 'operations.md'),
+  ];
+  return candidates
+    .map(rel => readIfExists(join(repoPath, rel), rel))
+    .filter((doc): doc is ProductPromptDoc => Boolean(doc));
+}
+
+function loadProjectContexts(repoPath: string): ProductPromptProject[] {
+  const projectsDir = join(repoPath, 'docs', 'projects');
+  try {
+    if (!existsSync(projectsDir) || !statSync(projectsDir).isDirectory()) return [];
+    return readdirSync(projectsDir)
+      .filter(slug => {
+        try {
+          return statSync(join(projectsDir, slug)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort()
+      .slice(0, MAX_PROJECT_CONTEXTS)
+      .map(slug => ({
+        slug,
+        spec: readIfExists(join(projectsDir, slug, 'spec.md'), join('docs', 'projects', slug, 'spec.md'))?.content ?? '',
+        tasks: readIfExists(join(projectsDir, slug, 'tasks.md'), join('docs', 'projects', slug, 'tasks.md'))?.content ?? '',
+      }))
+      .filter(project => project.spec || project.tasks);
+  } catch {
+    return [];
+  }
+}
+
+function loadWorldviewContext(): ProductPromptWorldview[] {
+  const worldviewDir = join(config.VAULT_DIR, 'world-view');
+  try {
+    if (!existsSync(worldviewDir) || !statSync(worldviewDir).isDirectory()) return [];
+    return readdirSync(worldviewDir)
+      .filter(name => name.endsWith('.md'))
+      .sort()
+      .slice(0, 4)
+      .map(name => {
+        const rel = join('world-view', name);
+        const doc = readIfExists(join(worldviewDir, name), rel);
+        return doc ? { path: doc.path, content: doc.content } : null;
+      })
+      .filter((entry): entry is ProductPromptWorldview => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
+
+function loadProductPromptContext(product: string): ProductPromptContext | null {
+  try {
+    const productConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product];
+    if (!productConfig) return null;
+    return {
+      product,
+      repoPath: productConfig.repoPath,
+      repoDocs: loadRepoDocs(productConfig.repoPath),
+      projects: loadProjectContexts(productConfig.repoPath),
+      worldview: loadWorldviewContext(),
+    };
+  } catch (err) {
+    log.warn('Failed to load product prompt context', { product, error: (err as Error).message });
+    return null;
+  }
 }
 
 /** Composite key shape: global `${transport}:${userId}`, product

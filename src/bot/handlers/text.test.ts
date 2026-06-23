@@ -18,6 +18,16 @@ vi.mock('../../vault/sessions.js', () => ({
   updateSession: vi.fn(),
   setSessionModel: vi.fn(),
   appendMessageToSession: vi.fn(),
+  buildSessionSystemPrompt: vi.fn(({ scope }: { scope?: { kind: string; product?: string } } = {}) => [
+    'You are Jarvis, the user\'s second-brain conversational layer.',
+    'KNOWLEDGE BASE: kb_query is your FIRST move for domain questions.',
+    'kb_search supports type (entity/concept/topic/comparison) and tag filters.',
+    'When to skip the KB: named files and structured JSON stores.',
+    'The answer is synthesis-quality; adapt minimally.',
+    scope?.kind === 'product'
+      ? `PRODUCT CHAT: Active product: ${scope.product}. Search the product repo and vault.`
+      : '',
+  ].join('\n')),
 }));
 vi.mock('../../ai/claude.js', () => ({
   askClaude: vi.fn(),
@@ -113,7 +123,14 @@ const { getActivePlanningSession } = await import('../../reviews/planning.js');
 const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
 const { handleStudy } = await import('../commands/study.js');
-const { getSession, createSession, appendMessageToSession, updateSession, setSessionModel } = await import('../../vault/sessions.js');
+const {
+  getSession,
+  createSession,
+  appendMessageToSession,
+  updateSession,
+  setSessionModel,
+  buildSessionSystemPrompt,
+} = await import('../../vault/sessions.js');
 const { askClaudeWithContext } = await import('../../ai/claude.js');
 const { hasActiveReview, handleReviewMessage } = await import('../../reviews/orchestrator.js');
 const { hasActiveSRSession, handleSRMessage } = await import('../../study/sr-session.js');
@@ -1336,6 +1353,38 @@ describe('dispatchText — product-scoped webview sessions', () => {
       'mcp__jarvis-kb__kb_query',
       'mcp__jarvis-kb__kb_search',
     ]));
+  });
+
+  it('passes the product-tailored system prompt built for the active product scope to Claude', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
+    const productPrompt = [
+      'PRODUCT PROMPT FOR jarvis',
+      'repo docs: one Node process owns Telegram and HTTP',
+      'spec: cockpit deep view',
+      'tasks: product-tailored-system-prompt',
+      'worldview: operator cockpits preserve judgment',
+    ].join('\n');
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'product-context-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'what should I do next?',
+      model: 'haiku',
+    });
+    buildPromptMock.mockReturnValueOnce(productPrompt);
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'what should I do next?', productScope);
+
+    expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: productScope,
+    }));
+    expect(askMock.mock.calls[0]![2]).toBe(productPrompt);
   });
 });
 

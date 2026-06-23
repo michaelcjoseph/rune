@@ -29,6 +29,39 @@ const {
   getSessionMessages,
 } = sessionsModule;
 
+interface ProductPromptFixture {
+  product: string;
+  repoPath: string;
+  repoDocs: Array<{ path: string; content: string }>;
+  projects: Array<{ slug: string; spec: string; tasks: string }>;
+  worldview: Array<{ path: string; anchor?: string; content: string }>;
+}
+
+type BuildSessionSystemPrompt = (input: {
+  scope?: SessionScope;
+  productContext?: ProductPromptFixture;
+  workspaceDir?: string;
+}) => string;
+
+function requireBuildSessionSystemPrompt(): BuildSessionSystemPrompt {
+  const fn = (sessionsModule as unknown as {
+    buildSessionSystemPrompt?: BuildSessionSystemPrompt;
+  }).buildSessionSystemPrompt;
+  expect(
+    fn,
+    'src/vault/sessions.ts must export buildSessionSystemPrompt for conversation prompt assembly',
+  ).toEqual(expect.any(Function));
+  return fn!;
+}
+
+function buildSessionSystemPrompt(input: {
+  scope?: SessionScope;
+  productContext?: ProductPromptFixture;
+  workspaceDir?: string;
+}): string {
+  return requireBuildSessionSystemPrompt()(input);
+}
+
 describe('vault/sessions', () => {
   beforeEach(() => {
     for (const { userId, transport, scope } of getAllSessions() as any[]) {
@@ -272,6 +305,84 @@ describe('vault/sessions', () => {
 
       expect(getSession(42, 'webview', jarvisScope)).toBeNull();
       expect(getSession(42, 'webview')!.firstMessage).toBe('global webview');
+    });
+  });
+
+  describe('buildSessionSystemPrompt — product-tailored context', () => {
+    const jarvisScope: SessionScope = { kind: 'product', product: 'jarvis' };
+    const jarvisContext: ProductPromptFixture = {
+      product: 'jarvis',
+      repoPath: '/workspace/jarvis',
+      repoDocs: [
+        {
+          path: 'CLAUDE.md',
+          content: 'Jarvis architecture: one Node process owns Telegram polling and the localhost cockpit.',
+        },
+        {
+          path: 'docs/operations.md',
+          content: 'Restart is production-only and goes through launchctl kickstart.',
+        },
+      ],
+      projects: [
+        {
+          slug: '17-cockpit-redesign',
+          spec: 'The cockpit deep view makes Product, Project, Bug, Idea, Run, and Chat first-class.',
+          tasks: '- [ ] product-tailored-system-prompt\n- [ ] repo-plus-vault-chat-search',
+        },
+      ],
+      worldview: [
+        {
+          path: 'world-view/ai.md',
+          anchor: 'operator-cockpit',
+          content: 'Operator cockpits should preserve human judgment while delegating scoped execution.',
+        },
+      ],
+    };
+
+    it('assembles product-scoped prompts from that product repo docs, project specs/tasks, and worldview', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: jarvisScope,
+        productContext: jarvisContext,
+        workspaceDir: '/workspace',
+      });
+
+      expect(prompt).toMatch(/active product:\s*jarvis/i);
+      expect(prompt).toContain('CLAUDE.md');
+      expect(prompt).toContain('one Node process owns Telegram polling');
+      expect(prompt).toContain('17-cockpit-redesign');
+      expect(prompt).toContain('Product, Project, Bug, Idea, Run, and Chat');
+      expect(prompt).toContain('product-tailored-system-prompt');
+      expect(prompt).toContain('world-view/ai.md');
+      expect(prompt).toContain('Operator cockpits should preserve human judgment');
+    });
+
+    it('keeps global sessions on the generic prompt and does not leak product context', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: { kind: 'global' },
+        productContext: jarvisContext,
+        workspaceDir: '/workspace',
+      });
+
+      expect(prompt).toContain('second-brain conversational layer');
+      expect(prompt).not.toContain('one Node process owns Telegram polling');
+      expect(prompt).not.toContain('product-tailored-system-prompt');
+      expect(prompt).not.toContain('Operator cockpits should preserve human judgment');
+    });
+
+    it('fails closed instead of grounding one product chat with another product context', () => {
+      const buildPrompt = requireBuildSessionSystemPrompt();
+      const auraContext: ProductPromptFixture = {
+        ...jarvisContext,
+        product: 'aura',
+        repoPath: '/workspace/aura',
+        repoDocs: [{ path: 'README.md', content: 'Aura-only billing dashboard context.' }],
+      };
+
+      expect(() => buildPrompt({
+        scope: jarvisScope,
+        productContext: auraContext,
+        workspaceDir: '/workspace',
+      })).toThrow(/jarvis|aura|product context|scope/i);
     });
   });
 
