@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import type { BugScopingFacts, FixGateResult } from './bug-fix-gate.js';
 
-async function loadGate(): Promise<any> {
+type LoadedGateModule = {
+  evaluateBugFixGate: (facts: BugScopingFacts) => FixGateResult;
+};
+
+async function loadGate(): Promise<LoadedGateModule> {
   try {
     const mod = await import('./bug-fix-gate.js');
     expect(mod.evaluateBugFixGate, 'expected bug-fix-gate.ts to export evaluateBugFixGate').toBeTypeOf('function');
-    return mod;
+    return mod as LoadedGateModule;
   } catch (err) {
     throw new Error(
       `bug-fix-gate module missing or invalid: expected src/jobs/bug-fix-gate.ts exporting evaluateBugFixGate (${(err as Error).message})`,
@@ -20,10 +25,17 @@ function goodFacts(overrides: Record<string, unknown> = {}) {
     pmWellScoped: true,
     techLeadReviewed: true,
     ...overrides,
-  };
+  } as BugScopingFacts;
 }
 
 describe('evaluateBugFixGate - cockpit redesign Phase 3 Fix gate', () => {
+  it('exports the Fix gate type contract names used by callers', async () => {
+    const { evaluateBugFixGate } = await loadGate();
+
+    expectTypeOf(evaluateBugFixGate).parameters.toEqualTypeOf<[BugScopingFacts]>();
+    expectTypeOf(evaluateBugFixGate).returns.toEqualTypeOf<FixGateResult>();
+  });
+
   it('proceeds only when the item is eligible, complete, PM-scoped, and TL-reviewed without objection', async () => {
     const { evaluateBugFixGate } = await loadGate();
     expect(evaluateBugFixGate(goodFacts())).toEqual({ decision: 'proceeding' });
@@ -36,6 +48,10 @@ describe('evaluateBugFixGate - cockpit redesign Phase 3 Fix gate', () => {
       decision: 'declined',
       reason: 'ineligible',
     });
+    expect(evaluateBugFixGate(goodFacts({ itemEligible: undefined }))).toEqual({
+      decision: 'declined',
+      reason: 'ineligible',
+    });
     expect(evaluateBugFixGate(goodFacts({ fieldsComplete: undefined }))).toEqual({
       decision: 'declined',
       reason: 'incomplete-fields',
@@ -45,7 +61,22 @@ describe('evaluateBugFixGate - cockpit redesign Phase 3 Fix gate', () => {
       reason: 'pm-not-well-scoped',
       detail: expect.any(String),
     });
+    expect(evaluateBugFixGate(goodFacts({ pmAssessed: false }))).toEqual({
+      decision: 'declined',
+      reason: 'pm-not-well-scoped',
+      detail: expect.any(String),
+    });
+    expect(evaluateBugFixGate(goodFacts({ pmWellScoped: undefined }))).toEqual({
+      decision: 'declined',
+      reason: 'pm-not-well-scoped',
+      detail: expect.any(String),
+    });
     expect(evaluateBugFixGate(goodFacts({ techLeadReviewed: undefined }))).toEqual({
+      decision: 'declined',
+      reason: 'tech-lead-objection',
+      detail: expect.any(String),
+    });
+    expect(evaluateBugFixGate(goodFacts({ techLeadReviewed: false }))).toEqual({
       decision: 'declined',
       reason: 'tech-lead-objection',
       detail: expect.any(String),
@@ -98,6 +129,25 @@ describe('evaluateBugFixGate - cockpit redesign Phase 3 Fix gate', () => {
       decision: 'declined',
       reason: 'pm-not-well-scoped',
       detail: 'The bug names a symptom but gives no reproduction path.',
+    });
+  });
+
+  it('orders a PM not-well-scoped decision before any Tech-Lead objection', async () => {
+    const { evaluateBugFixGate } = await loadGate();
+
+    expect(
+      evaluateBugFixGate(
+        goodFacts({
+          pmWellScoped: false,
+          pmReason: 'No concrete observed behavior.',
+          techLeadReviewed: true,
+          techLeadObjection: 'Needs a migration plan.',
+        }),
+      ),
+    ).toEqual({
+      decision: 'declined',
+      reason: 'pm-not-well-scoped',
+      detail: 'No concrete observed behavior.',
     });
   });
 

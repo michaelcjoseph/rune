@@ -302,9 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- vis/17-cockpit-redesign/src/intent/home-pulse-deep-view.test.ts)
-
-Verification:
-`npm test -- --configLoader runner ...` is red as expected for tests-first: 46 collected, 14 passed, 32 failed on missing Phase 3 modules/exports and the unimplemented fix route returning 404.
-
-`git diff --check` passed.
+- tion:
+- `npm test -- --configLoader runner src/jobs/bug-fix-gate.test.ts` passed: 8/8 tests.
+- `git diff --check -- src/jobs/bug-fix-gate.ts` passed.
+- `npm run build` still fails on existing broader branch errors in unrelated tests/missing later Phase 3 modules; no `bug-fix-gate.ts` error appeared.
