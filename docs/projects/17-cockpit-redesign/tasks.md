@@ -96,7 +96,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **deep-view layout, realtime run panel, Fix affordance, and per-product chat panel** — test-plan.md §6.
+- [x] Write the test suite for **deep-view layout, realtime run panel, Fix affordance, and per-product chat panel** — test-plan.md §6.
 - [ ] Confirm red before implementation.
 
 ### Implementation

@@ -302,8 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- 
-- `npx vitest run src/server/static/home-view-client.test.ts --configLoader runner` passes: 11 tests.
-- `git diff --check -- src/server/static/home-view.js src/server/static/app.css` passes.
+- s, and product-scoped chat with slash commands preserved.
 
-Note: `src/server/static/home-view-client.test.ts` was already staged before my edits; I left it untouched.
+Verification: `npx vitest run src/server/static/product-deep-view-client.test.ts --configLoader runner` fails red as expected: 8/8 failures are due to missing `src/server/static/product-deep-view.js`, which is the next implementation target.
