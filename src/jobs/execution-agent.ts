@@ -205,6 +205,7 @@ async function defaultSpawnAgent(args: {
       ? `${args.systemPrompt}\n\n${args.prompt}`
       : args.prompt;
     let streamedOutput = '';
+    let sawCodexEvent = false;
     const result = await runCodex(codexPrompt, {
       cwd: args.cwd,
       model: args.model.alias,
@@ -214,47 +215,46 @@ async function defaultSpawnAgent(args: {
       // RunCodexOpts.env: sandboxed callers MUST pass a built env).
       env: args.env,
       onEvent: (event) => {
+        sawCodexEvent = true;
         const line = codexEventToDisplay(event);
-        if (!line) return;
+        if (line === null) {
+          args.emit?.({ kind: 'activity' });
+          return;
+        }
         streamedOutput += `${line}\n`;
         args.emit?.({ kind: 'output', data: { line } });
       },
     });
-    return { output: streamedOutput.trim() || (result.text ?? ''), error: result.error };
+    const output = streamedOutput.trim() || (sawCodexEvent ? '' : sanitize(result.text ?? ''));
+    return { output, error: result.error };
   }
   return spawnClaudeAgent(args);
 }
 
-function codexEventToDisplay(event: Record<string, unknown>): string {
-  const display =
-    firstString(event, ['message', 'text', 'delta', 'content', 'output', 'result', 'summary']) ??
-    nestedString(event, ['item', 'message', 'content', 'delta']) ??
-    nestedString(event, ['data', 'message', 'content', 'delta']);
-  if (display && display.trim() !== '') {
-    return redactSecrets(scrubPathsInText(display.trim()));
+function codexEventToDisplay(event: Record<string, unknown>): string | null {
+  if (event['type'] === 'raw' && typeof event['line'] === 'string') {
+    return cleanCodexText(event['line']);
   }
-  const type = typeof event['type'] === 'string' ? event['type'] : 'event';
-  return redactSecrets(scrubPathsInText(`codex ${type}`));
+
+  if (event['type'] !== 'item.completed' || !isRecord(event['item'])) {
+    return null;
+  }
+
+  const item = event['item'];
+  if (item['type'] !== 'agent_message' || typeof item['text'] !== 'string') {
+    return null;
+  }
+
+  return cleanCodexText(item['text']);
 }
 
-function firstString(obj: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = obj[key];
-    if (typeof value === 'string') return value;
-  }
-  return null;
+function cleanCodexText(text: string): string | null {
+  const trimmed = text.trim();
+  return trimmed === '' ? null : redactSecrets(scrubPathsInText(trimmed));
 }
 
-function nestedString(obj: Record<string, unknown>, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = obj[key];
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const nested = firstString(value as Record<string, unknown>, keys);
-      if (nested !== null) return nested;
-    }
-  }
-  return null;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /** Claude CLI spawn against the worktree — mirrors gen-eval-loop-runner's
