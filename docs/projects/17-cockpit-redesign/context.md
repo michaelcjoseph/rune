@@ -302,12 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- ript check with repo module settings.
+- boring Phase 3/projection suites passed: 58 tests.
 - `git diff --check` passed.
-- `npm test -- src/server/fix-action-states.test.ts` hung before producing results; a timed Vitest wrapper also hung. The original session remained unreachable because stdin was closed and the sandbox blocked process inspection/kill.
-- g the store contract and QA literals.
-
-Verification:
-`npx vitest run --configLoader runner src/server/fix-action-states.test.ts` passed: 13 tests.
-
-`npx tsc --noEmit --pretty false` still fails on existing broader branch type errors, but the reported `FixActionAttempt` excess-property issue is gone.
+- `npx tsc --noEmit --pretty false` still fails on existing broader branch/test type errors; no errors were reported for the new production files after filtering. The pre-existing staged QA test change remains untouched.

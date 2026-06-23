@@ -1,6 +1,9 @@
-import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, afterEach, afterAll, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('../transport/mutations.js', () => ({ createMutation: vi.fn(), cancelMutation: vi.fn(), activeRuns: new Map() }));
 vi.mock('../transport/in-flight.js', () => ({ cancelOp: vi.fn(), listOps: vi.fn(() => []) }));
@@ -56,7 +59,7 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 
-const { mockBacklogs, mockLatestAttempts } = vi.hoisted(() => {
+const { mockBacklogs } = vi.hoisted(() => {
   const bug = (overrides: Record<string, unknown>) => ({
     id: 'bug-open',
     kind: 'bugs',
@@ -68,13 +71,13 @@ const { mockBacklogs, mockLatestAttempts } = vi.hoisted(() => {
     ...overrides,
   });
   return {
-    mockLatestAttempts: new Map<string, any>(),
     mockBacklogs: [
       {
         product: 'aura',
         notRepoBacked: false,
         bugs: [
           bug({ id: 'bug-open' }),
+          bug({ id: 'bug-handoff' }),
           bug({ id: 'bug-done', status: 'done' }),
           bug({ id: 'bug-warned', warnings: ['bad-marker'] }),
         ],
@@ -88,15 +91,6 @@ const { mockBacklogs, mockLatestAttempts } = vi.hoisted(() => {
   };
 });
 
-const mockAppendFixAttempt = vi.fn();
-const mockReadLatestFixAttempts = vi.fn(() => mockLatestAttempts);
-const mockGetLatestFixAttempt = vi.fn((attempts: Map<string, any>, product: string, bugId: string) => attempts.get(`${product}:${bugId}`));
-vi.mock('../jobs/fix-attempt-store.js', () => ({
-  appendFixAttempt: mockAppendFixAttempt,
-  readLatestFixAttempts: mockReadLatestFixAttempts,
-  getLatestFixAttempt: mockGetLatestFixAttempt,
-}));
-
 const mockRunPmTechLeadBugScoping = vi.fn(async () => ({
   itemEligible: true,
   fieldsComplete: true,
@@ -106,11 +100,6 @@ const mockRunPmTechLeadBugScoping = vi.fn(async () => ({
 }));
 vi.mock('../jobs/pm-techlead-bug-scoping.js', () => ({
   runPmTechLeadBugScoping: mockRunPmTechLeadBugScoping,
-}));
-
-const mockEvaluateBugFixGate = vi.fn(() => ({ decision: 'proceeding' }));
-vi.mock('../jobs/bug-fix-gate.js', () => ({
-  evaluateBugFixGate: mockEvaluateBugFixGate,
 }));
 
 const mockStartFixRun = vi.fn(async () => ({ accepted: true, runId: 'run-fix-accepted' }));
@@ -190,10 +179,20 @@ const mockSender = { name: 'webview' as const, register: vi.fn(), unregister: vi
 
 let server: Server & EventEmitter;
 let handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+let tempDir: string;
 
 async function flushAsyncGate(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   await Promise.resolve();
+}
+
+function readAttemptLines(): any[] {
+  if (!existsSync(mockConfig.FIX_ATTEMPTS_FILE)) return [];
+  return readFileSync(mockConfig.FIX_ATTEMPTS_FILE, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', () => {
@@ -208,7 +207,8 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLatestAttempts.clear();
+    tempDir = mkdtempSync(join(tmpdir(), 'fix-endpoint-api-'));
+    mockConfig.FIX_ATTEMPTS_FILE = join(tempDir, 'fix-attempts.jsonl');
     mockRunPmTechLeadBugScoping.mockResolvedValue({
       itemEligible: true,
       fieldsComplete: true,
@@ -216,23 +216,33 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
       pmWellScoped: true,
       techLeadReviewed: true,
     });
-    mockEvaluateBugFixGate.mockReturnValue({ decision: 'proceeding' });
     mockStartFixRun.mockResolvedValue({ accepted: true, runId: 'run-fix-accepted' });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('requires auth before accepting an LLM-spending Fix attempt', async () => {
     const res = await request('POST', '/api/backlog/aura/items/bug-open/fix');
     expect(res.status).toBe(401);
-    expect(mockAppendFixAttempt).not.toHaveBeenCalled();
+    expect(readAttemptLines()).toEqual([]);
   });
 
-  it('validates an open bug, persists gating, returns 202 immediately, then records proceeding only after startFixRun accepts a run id', async () => {
+  it('validates an open bug, persists gating, returns 202 before PM/TL scoping resolves, then records proceeding only after startFixRun accepts a run id', async () => {
+    let resolveScoping!: (facts: any) => void;
+    mockRunPmTechLeadBugScoping.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveScoping = resolve;
+      }),
+    );
+
     const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ attemptId: expect.any(String) });
-    expect(mockAppendFixAttempt).toHaveBeenCalledWith(
-      mockConfig.FIX_ATTEMPTS_FILE,
+    expect(mockStartFixRun).not.toHaveBeenCalled();
+    expect(readAttemptLines()).toEqual([
       expect.objectContaining({
         attemptId: res.body.attemptId,
         product: 'aura',
@@ -240,7 +250,15 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
         state: 'gating',
         updatedAt: expect.any(String),
       }),
-    );
+    ]);
+
+    resolveScoping({
+      itemEligible: true,
+      fieldsComplete: true,
+      pmAssessed: true,
+      pmWellScoped: true,
+      techLeadReviewed: true,
+    });
 
     await flushAsyncGate();
 
@@ -248,18 +266,14 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
       product: 'aura',
       bug: expect.objectContaining({ id: 'bug-open', text: 'Save button crashes' }),
     }));
-    expect(mockEvaluateBugFixGate).toHaveBeenCalledWith(expect.objectContaining({
-      itemEligible: true,
-      pmWellScoped: true,
-      techLeadReviewed: true,
-    }));
     expect(mockStartFixRun).toHaveBeenCalledWith(expect.objectContaining({
       product: 'aura',
       bugId: 'bug-open',
       scope: expect.any(Object),
     }));
-    expect(mockAppendFixAttempt).toHaveBeenCalledWith(
-      mockConfig.FIX_ATTEMPTS_FILE,
+
+    expect(readAttemptLines()).toEqual([
+      expect.objectContaining({ state: 'gating' }),
       expect.objectContaining({
         attemptId: res.body.attemptId,
         product: 'aura',
@@ -267,14 +281,17 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
         state: 'proceeding',
         runId: 'run-fix-accepted',
       }),
-    );
+    ]);
   });
 
   it('records a declined attempt with the gate reason and never calls startFixRun', async () => {
-    mockEvaluateBugFixGate.mockReturnValue({
-      decision: 'declined',
-      reason: 'pm-not-well-scoped',
-      detail: 'Missing reproduction steps.',
+    mockRunPmTechLeadBugScoping.mockResolvedValue({
+      itemEligible: true,
+      fieldsComplete: true,
+      pmAssessed: true,
+      pmWellScoped: false,
+      pmReason: 'Missing reproduction steps.',
+      techLeadReviewed: false,
     });
 
     const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
@@ -282,8 +299,8 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     await flushAsyncGate();
 
     expect(mockStartFixRun).not.toHaveBeenCalled();
-    expect(mockAppendFixAttempt).toHaveBeenCalledWith(
-      mockConfig.FIX_ATTEMPTS_FILE,
+    expect(readAttemptLines()).toEqual([
+      expect.objectContaining({ state: 'gating' }),
       expect.objectContaining({
         attemptId: res.body.attemptId,
         product: 'aura',
@@ -292,7 +309,7 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
         reason: 'pm-not-well-scoped',
         detail: 'Missing reproduction steps.',
       }),
-    );
+    ]);
   });
 
   it('records handoff-failed when a passing gate cannot get an accepted run id', async () => {
@@ -302,8 +319,8 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
     expect(res.status).toBe(202);
     await flushAsyncGate();
 
-    expect(mockAppendFixAttempt).toHaveBeenCalledWith(
-      mockConfig.FIX_ATTEMPTS_FILE,
+    expect(readAttemptLines()).toEqual([
+      expect.objectContaining({ state: 'gating' }),
       expect.objectContaining({
         attemptId: res.body.attemptId,
         product: 'aura',
@@ -312,11 +329,52 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
         reason: expect.any(String),
         detail: expect.stringContaining('autorun handoff unavailable'),
       }),
-    );
-    expect(mockAppendFixAttempt).not.toHaveBeenCalledWith(
-      mockConfig.FIX_ATTEMPTS_FILE,
+    ]);
+    expect(readAttemptLines()).not.toContainEqual(
       expect.objectContaining({ state: 'proceeding', runId: expect.any(String) }),
     );
+  });
+
+  it('surfaces declined and handoff-failed Fix attempts in the product deep view', async () => {
+    const { appendFixAttempt } = await import('../jobs/fix-attempt-store.js');
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: 'attempt-declined',
+      product: 'aura',
+      bugId: 'bug-open',
+      state: 'declined',
+      reason: 'pm-not-well-scoped',
+      detail: 'Missing reproduction steps.',
+      updatedAt: '2026-06-23T12:00:00.000Z',
+    });
+    appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, {
+      attemptId: 'attempt-handoff-failed',
+      product: 'aura',
+      bugId: 'bug-handoff',
+      state: 'handoff-failed',
+      reason: 'handoff-unavailable',
+      detail: 'startFixRun unavailable.',
+      updatedAt: '2026-06-23T12:01:00.000Z',
+    });
+
+    const res = await request('GET', '/api/products/aura', AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.backlog.bugs.find((bug: any) => bug.id === 'bug-open')).toMatchObject({
+      fix: {
+        kind: 'fix',
+        state: 'declined',
+        reason: 'pm-not-well-scoped',
+        detail: 'Missing reproduction steps.',
+      },
+    });
+    expect(res.body.backlog.bugs.find((bug: any) => bug.id === 'bug-handoff')).toMatchObject({
+      fix: {
+        kind: 'fix',
+        state: 'handoff-failed',
+        reason: 'handoff-unavailable',
+        detail: 'startFixRun unavailable.',
+      },
+    });
   });
 
   it.each([
@@ -329,18 +387,21 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
 
     expect(res.status).toBe(status);
     expect(res.body.error).toMatchObject({ code });
-    expect(mockAppendFixAttempt).not.toHaveBeenCalled();
+    expect(readAttemptLines()).toEqual([]);
     expect(mockRunPmTechLeadBugScoping).not.toHaveBeenCalled();
     expect(mockStartFixRun).not.toHaveBeenCalled();
   });
 
   it('guards concurrent clicks for the same bug while a gating attempt is already active', async () => {
-    mockLatestAttempts.set('aura:bug-open', {
+    const existing = {
       attemptId: 'existing-gate',
       product: 'aura',
       bugId: 'bug-open',
       state: 'gating',
       updatedAt: '2026-06-23T12:00:00.000Z',
+    };
+    await import('../jobs/fix-attempt-store.js').then(({ appendFixAttempt }) => {
+      appendFixAttempt(mockConfig.FIX_ATTEMPTS_FILE, existing as any);
     });
 
     const res = await request('POST', '/api/backlog/aura/items/bug-open/fix', AUTH);
@@ -350,6 +411,8 @@ describe('POST /api/backlog/:product/items/:id/fix - cockpit redesign Phase 3', 
       code: 'fix-already-gating',
       attemptId: 'existing-gate',
     });
-    expect(mockAppendFixAttempt).not.toHaveBeenCalled();
+    expect(readAttemptLines()).toEqual([existing]);
+    expect(mockRunPmTechLeadBugScoping).not.toHaveBeenCalled();
+    expect(mockStartFixRun).not.toHaveBeenCalled();
   });
 });

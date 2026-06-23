@@ -16,7 +16,7 @@ import { buildCockpitView, type WorkRunProjection, type BacklogCounts } from '..
 import { buildHomePulse } from '../intent/home-pulse.js';
 import { buildProductDeepView, type ProductDeepViewWorkRun } from '../intent/product-deep-view.js';
 import { readBacklogs, computeBacklogCounts } from '../intent/backlog-reader.js';
-import { parseBugs, parseIdeas } from '../intent/backlog-parser.js';
+import { parseBugs, parseIdeas, type BacklogItem } from '../intent/backlog-parser.js';
 import { appendBug, appendIdea } from '../intent/backlog-append.js';
 import {
   withFileLock,
@@ -26,7 +26,7 @@ import {
   BacklogWriteError,
 } from '../intent/backlog-write-lock.js';
 import { readProductsConfig, defaultRunGit } from '../jobs/sandbox-runtime.js';
-import { withActions } from './backlog-actions.js';
+import { computeFixAction, withActions } from './backlog-actions.js';
 import { getSession } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
@@ -65,6 +65,15 @@ import { dispatchApprovalStatus } from '../transport/approval-actions.js';
 import { readOrchestratedTaskRunRecords } from '../jobs/orchestrated-work-runner.js';
 import { parseStreamJsonLine, streamJsonToDisplay } from '../jobs/work-run-transcript.js';
 import { redactSecrets } from '../utils/redact-secrets.js';
+import { evaluateBugFixGate } from '../jobs/bug-fix-gate.js';
+import { runPmTechLeadBugScoping } from '../jobs/pm-techlead-bug-scoping.js';
+import {
+  appendFixAttempt,
+  getLatestFixAttempt,
+  readLatestFixAttempts,
+  type FixAttempt,
+} from '../jobs/fix-attempt-store.js';
+import { startFixRun } from '../jobs/fix-run-handoff.js';
 
 const log = createLogger('webview');
 
@@ -397,6 +406,7 @@ function handleApiProductDeepView(res: ServerResponse, product: string): void {
     readSupervisedRuns: () => readAllRuns(config.SUPERVISED_RUNS_FILE),
     readRecentWorkRuns: readNewCockpitRecentWorkRuns,
     readBacklogs: () => readNewCockpitBacklogs(registry),
+    readFixAttempts: () => readLatestFixAttempts(config.FIX_ATTEMPTS_FILE),
     readTaskRunRecords: (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
     worktreePathFor: (productName, projectSlug) => worktreePathFor(productName, projectSlug, config.WORKTREE_ROOT),
     planningActive,
@@ -797,6 +807,253 @@ async function handleApiPlanItem(res: ServerResponse, product: string, id: strin
 
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ planningSessionId, promotionId: promotion.id }));
+}
+
+const fixAttemptQueues = new Map<string, Promise<unknown>>();
+
+interface FixApiError {
+  status: number;
+  code: string;
+  message: string;
+  retryable?: boolean;
+  attemptId?: string;
+}
+
+type FixStartResult =
+  | { bug: BacklogItem; attemptId: string }
+  | { error: FixApiError };
+
+async function withFixAttemptQueue<T>(product: string, bugId: string, fn: () => Promise<T>): Promise<T> {
+  const key = `${product}:${bugId}`;
+  const previous = fixAttemptQueues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(fn);
+  fixAttemptQueues.set(key, next);
+  try {
+    return await next;
+  } finally {
+    if (fixAttemptQueues.get(key) === next) fixAttemptQueues.delete(key);
+  }
+}
+
+function appendAttemptUpdate(attempt: Omit<FixAttempt, 'updatedAt'> & { updatedAt?: string }): void {
+  appendFixAttempt(config.FIX_ATTEMPTS_FILE, {
+    ...attempt,
+    updatedAt: attempt.updatedAt ?? new Date().toISOString(),
+  });
+}
+
+function errorDetail(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function runFixGateAttempt(product: string, bug: BacklogItem, attemptId: string): Promise<void> {
+  try {
+    let facts;
+    try {
+      facts = await runPmTechLeadBugScoping({ product, bug });
+    } catch (err) {
+      appendAttemptUpdate({
+        attemptId,
+        product,
+        bugId: bug.id,
+        state: 'declined',
+        reason: 'pm-not-well-scoped',
+        detail: `PM/TL bug scoping failed: ${errorDetail(err)}`,
+      });
+      return;
+    }
+
+    const gate = evaluateBugFixGate(facts);
+    if (gate.decision === 'declined') {
+      appendAttemptUpdate({
+        attemptId,
+        product,
+        bugId: bug.id,
+        state: 'declined',
+        reason: gate.reason,
+        ...(gate.detail !== undefined ? { detail: gate.detail } : {}),
+      });
+      return;
+    }
+
+    try {
+      const handoff = await startFixRun({
+        product,
+        bugId: bug.id,
+        scope: { bug, facts },
+      });
+      if (handoff.accepted === true) {
+        appendAttemptUpdate({
+          attemptId,
+          product,
+          bugId: bug.id,
+          state: 'proceeding',
+          runId: handoff.runId,
+        });
+        return;
+      }
+      appendAttemptUpdate({
+        attemptId,
+        product,
+        bugId: bug.id,
+        state: 'handoff-failed',
+        reason: handoff.reason || 'handoff-unavailable',
+        ...(handoff.detail !== undefined ? { detail: handoff.detail } : {}),
+      });
+    } catch (err) {
+      appendAttemptUpdate({
+        attemptId,
+        product,
+        bugId: bug.id,
+        state: 'handoff-failed',
+        reason: 'handoff-unavailable',
+        detail: errorDetail(err),
+      });
+    }
+  } catch (err) {
+    log.error('runFixGateAttempt failed unexpectedly', {
+      product,
+      bugId: bug.id,
+      attemptId,
+      error: errorDetail(err),
+    });
+    try {
+      appendAttemptUpdate({
+        attemptId,
+        product,
+        bugId: bug.id,
+        state: 'interrupted',
+        detail: `Fix attempt failed unexpectedly: ${errorDetail(err)}`,
+      });
+    } catch (writeErr) {
+      log.error('runFixGateAttempt could not record unexpected failure', {
+        product,
+        bugId: bug.id,
+        attemptId,
+        error: errorDetail(writeErr),
+      });
+    }
+  }
+}
+
+function findFixableBug(
+  registry: Registry,
+  product: string,
+  id: string,
+): { bug: BacklogItem } | { error: FixApiError } {
+  const regProduct = registry.products.find((p) => p.name === product);
+  if (!regProduct) {
+    return { error: { status: 404, code: 'unknown-product', message: `unknown product '${product}'` } };
+  }
+  if (!regProduct.repoBacked) {
+    return { error: { status: 409, code: 'not-repo-backed', message: `product '${product}' is not repo-backed` } };
+  }
+
+  let backlogs;
+  try {
+    const productsConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE);
+    backlogs = readBacklogs(registry, productsConfig, { workspaceRoot: config.WORKSPACE_DIR });
+  } catch (err) {
+    log.warn('findFixableBug: backlog read failed', { product, error: (err as Error).message });
+    return {
+      error: {
+        status: 500,
+        code: 'backlog-read-failed',
+        message: 'could not read the backlog',
+        retryable: false,
+      },
+    };
+  }
+
+  const pb = backlogs.find((b) => b.product === product);
+  const item = [...(pb?.bugs ?? []), ...(pb?.ideas ?? [])].find((candidate) => candidate.id === id);
+  if (!item) {
+    return {
+      error: {
+        status: 409,
+        code: 'stale-item',
+        message: `backlog item '${id}' not found in '${product}'`,
+        retryable: true,
+      },
+    };
+  }
+
+  const fix = computeFixAction(item);
+  if (fix.state === 'disabled' || item.kind !== 'bugs') {
+    return {
+      error: {
+        status: 422,
+        code: 'item-not-eligible',
+        message: `item '${id}' is not eligible for Fix${fix.reason ? ` (${fix.reason})` : ''}`,
+      },
+    };
+  }
+  return { bug: item };
+}
+
+async function handleApiFixItem(res: ServerResponse, product: string, id: string): Promise<void> {
+  if (!VALID_SLUG.test(product)) {
+    reject400(res, 'invalid product');
+    return;
+  }
+  if (!VALID_SLUG.test(id)) {
+    reject400(res, 'invalid item id');
+    return;
+  }
+
+  let registry: Registry | null;
+  try {
+    registry = readRegistry();
+  } catch {
+    registry = null;
+  }
+  if (!registry) {
+    sendErrorEnvelope(res, 500, 'registry-unavailable', 'could not read the product registry', false);
+    return;
+  }
+
+  const result = await withFixAttemptQueue<FixStartResult>(product, id, async () => {
+    const validation = findFixableBug(registry, product, id);
+    if ('error' in validation) return validation;
+
+    const latest = readLatestFixAttempts(config.FIX_ATTEMPTS_FILE);
+    const existing = getLatestFixAttempt(latest, product, id);
+    if (existing?.state === 'gating') {
+      return {
+        error: {
+          status: 409,
+          code: 'fix-already-gating',
+          message: `fix attempt '${existing.attemptId}' is already gating '${id}'`,
+          attemptId: existing.attemptId,
+        },
+      };
+    }
+
+    const attemptId = randomUUID();
+    appendAttemptUpdate({
+      attemptId,
+      product,
+      bugId: validation.bug.id,
+      state: 'gating',
+    });
+    return { bug: validation.bug, attemptId };
+  });
+
+  if ('error' in result) {
+    sendErrorEnvelope(
+      res,
+      result.error.status,
+      result.error.code,
+      result.error.message,
+      result.error.retryable ?? false,
+      'attemptId' in result.error ? { attemptId: result.error.attemptId } : undefined,
+    );
+    return;
+  }
+
+  res.writeHead(202, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ attemptId: result.attemptId }));
+  void runFixGateAttempt(product, result.bug, result.attemptId);
 }
 
 /** GET /api/promotions/:id — the promotion's current state for the cockpit. 404 `unknown-promotion`. */
@@ -1714,6 +1971,15 @@ export function mountWebviewRoutes(
       }
       // Plan button (09-expand-cockpit): more segments than the append route, so its `$`-anchored
       // regex can't collide with the 2-segment append match — checked first for clarity.
+      const fixItemMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/items\/([^/]+)\/fix$/);
+      if (req.method === 'POST' && fixItemMatch) {
+        await handleApiFixItem(
+          res,
+          decodeURIComponent(fixItemMatch[1]!),
+          decodeURIComponent(fixItemMatch[2]!),
+        );
+        return true;
+      }
       const planItemMatch = pathname.match(/^\/api\/backlog\/([^/]+)\/items\/([^/]+)\/plan$/);
       if (req.method === 'POST' && planItemMatch) {
         await handleApiPlanItem(

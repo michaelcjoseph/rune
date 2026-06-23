@@ -1,7 +1,13 @@
 import type { BacklogItem, FileWarning } from './backlog-parser.js';
 import type { Registry, RegistryProduct } from './registry.js';
 import type { SupervisedRun } from './supervision.js';
-import { computePlanAction, type BacklogItemAction } from '../server/backlog-actions.js';
+import {
+  computeFixAction,
+  computePlanAction,
+  type BacklogItemAction,
+  type FixAction,
+  type FixActionAttempt,
+} from '../server/backlog-actions.js';
 
 export type ProductDeepViewOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
 
@@ -43,6 +49,7 @@ export interface ActiveRunDetail {
 
 export interface BacklogItemWithActions extends BacklogItem {
   plan: BacklogItemAction;
+  fix?: FixAction;
 }
 
 export interface ProductDeepView {
@@ -91,12 +98,18 @@ export interface ProductDeepViewTaskRunRecord {
   modelChoices?: Record<string, string>;
 }
 
+export type ProductDeepViewFixAttempt = FixActionAttempt & {
+  product?: string;
+  bugId?: string;
+};
+
 export interface ProductDeepViewDeps {
   product: string;
   readRegistry: () => Registry;
   readSupervisedRuns: () => SupervisedRun[];
   readRecentWorkRuns: () => ProductDeepViewWorkRun[];
   readBacklogs: () => ProductDeepViewBacklog[];
+  readFixAttempts?: () => Map<string, ProductDeepViewFixAttempt>;
   readTaskRunRecords?: (runId: string) => ProductDeepViewTaskRunRecord[];
   worktreePathFor?: (product: string, slug: string) => string;
   planningActive?: boolean;
@@ -160,8 +173,33 @@ function projectLifecycle(status: RegistryProduct['projects'][number]['status'])
   return status === 'done' ? 'done' : 'active';
 }
 
-function withPlan(item: BacklogItem, planningActive: boolean): BacklogItemWithActions {
-  return { ...item, plan: computePlanAction(item, planningActive) };
+function attemptKey(product: string, bugId: string): string {
+  return `${product}:${bugId}`;
+}
+
+function readFixAttempts(deps: ProductDeepViewDeps): Map<string, ProductDeepViewFixAttempt> {
+  if (!deps.readFixAttempts) return new Map();
+  try {
+    return deps.readFixAttempts();
+  } catch {
+    return new Map();
+  }
+}
+
+function withBacklogActions(
+  product: string,
+  item: BacklogItem,
+  planningActive: boolean,
+  attempts: Map<string, ProductDeepViewFixAttempt>,
+): BacklogItemWithActions {
+  const projected: BacklogItemWithActions = {
+    ...item,
+    plan: computePlanAction(item, planningActive),
+  };
+  if (item.kind === 'bugs') {
+    projected.fix = computeFixAction(item, attempts.get(attemptKey(product, item.id)));
+  }
+  return projected;
 }
 
 function transcriptUrlForRun(run: ProductDeepViewWorkRun, id: string): string | undefined {
@@ -252,6 +290,7 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
 
   const now = deps.now?.() ?? Date.now();
   const backlogs = readOrEmpty(deps.readBacklogs);
+  const fixAttempts = readFixAttempts(deps);
   const backlog = backlogs.find((entry) => entry.product === product.name);
   const recentRuns = readOrEmpty(deps.readRecentWorkRuns)
     .filter((run) => run.product === product.name && runId(run) && run.endedAt)
@@ -273,8 +312,12 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       taskProgress: project.progress ?? { done: 0, total: 0 },
     })),
     backlog: {
-      bugs: (backlog?.bugs ?? []).map((item) => withPlan(item, deps.planningActive ?? false)),
-      ideas: (backlog?.ideas ?? []).map((item) => withPlan(item, deps.planningActive ?? false)),
+      bugs: (backlog?.bugs ?? []).map((item) =>
+        withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+      ),
+      ideas: (backlog?.ideas ?? []).map((item) =>
+        withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+      ),
       warnings: backlog?.fileWarnings ?? [],
     },
     runs: recentRuns.map((run) => {
