@@ -416,4 +416,94 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       ],
     });
   });
+
+  it('filters run history to the selected product, sorts most-recent first, maps outcomes, and preserves bug targets', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [
+          {
+            runId: 'run-older-partial',
+            product: 'aura',
+            target: { kind: 'project', slug: '00-archive' },
+            outcome: 'dirty-uncommitted',
+            endedAt: '2026-06-23T09:30:00.000Z',
+            transcriptExists: true,
+          },
+          {
+            runId: 'run-other-product',
+            product: 'relay',
+            target: { kind: 'project', slug: '01-relay-core' },
+            outcome: 'failed',
+            endedAt: '2026-06-23T12:00:00.000Z',
+            transcriptExists: true,
+          },
+          {
+            runId: 'run-newer-bug',
+            product: 'aura',
+            target: { kind: 'bug', slug: 'b-open' },
+            outcome: 'branch-complete',
+            endedAt: '2026-06-23T11:45:00.000Z',
+            transcriptExists: false,
+          },
+        ]),
+      }),
+    });
+
+    expect(view.runs).toEqual([
+      {
+        runId: 'run-newer-bug',
+        target: { kind: 'bug', slug: 'b-open' },
+        outcome: 'completed',
+        endedAt: '2026-06-23T11:45:00.000Z',
+      },
+      {
+        runId: 'run-older-partial',
+        target: { kind: 'project', slug: '00-archive' },
+        outcome: 'partial',
+        endedAt: '2026-06-23T09:30:00.000Z',
+        transcriptUrl: '/api/work-runs/run-older-partial/transcript',
+      },
+    ]);
+    expect(view.runs.some((row: any) => row.runId === 'run-other-product')).toBe(false);
+  });
+
+  it('projects a running bug active-run detail with computed worktree path and role records', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readSupervisedRuns: vi.fn(() => [
+          {
+            ...run({
+              id: 'run-bug-fix',
+              product: 'aura',
+              project: 'b-open',
+              status: 'running',
+              startedAt: '2026-06-23T12:00:10.000Z',
+            }),
+            target: { kind: 'bug', slug: 'b-open' },
+          },
+        ]),
+        readTaskRunRecords: vi.fn(() => [{ rolesInvoked: ['pm', 'tech-lead', 'coder'] }]),
+      }),
+    });
+
+    expect(view.activeRun).toEqual({
+      runId: 'run-bug-fix',
+      target: { kind: 'bug', slug: 'b-open' },
+      state: 'running',
+      startedAt: '2026-06-23T12:00:10.000Z',
+      elapsedMs: 20_000,
+      worktreePath: '/tmp/jarvis-aura-b-open',
+      transcriptUrl: '/api/work-runs/run-bug-fix/transcript',
+      agents: [
+        { role: 'pm', active: true },
+        { role: 'tech-lead', active: true },
+        { role: 'coder', active: true },
+      ],
+    });
+  });
 });

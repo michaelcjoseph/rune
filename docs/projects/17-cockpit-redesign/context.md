@@ -302,5 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- de_modules/.bin/tsc --noEmit ... src/intent/home-pulse.ts`.
-- Full QA file still fails on missing `./product-deep-view.js`, which is the separate unchecked `product-deepview-projection` task. `npm run build` is also blocked by existing unrelated repo test type errors plus that missing future module.
+- st.ts --configLoader runner` → 14 passed
+- `tsc --noEmit ... src/intent/product-deep-view.ts src/intent/home-pulse.ts src/intent/home-pulse-deep-view.test.ts` → passed
+
+Note: `src/intent/home-pulse-deep-view.test.ts` was already modified on the branch; I only added `src/intent/product-deep-view.ts`.
