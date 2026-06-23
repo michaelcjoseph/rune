@@ -302,14 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- ep-view layout and hides the legacy dominant chat on product routes.
+-  vitest run src/server/static/product-deep-view-client.test.ts src/server/static/home-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner`
 
-Verification:
-`npx vitest run src/server/static/product-deep-view-client.test.ts src/server/static/home-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner`
-
-Result: 3 files passed, 25 tests passed.
-- design/src/server/static/product-deep-view-client.test.ts): added regression coverage proving re-navigation does not duplicate Fix POSTs or chat sends.
-
-Verification:
-- `npx vitest run src/server/static/product-deep-view-client.test.ts --configLoader runner`
-- Result: 1 file passed, 10 tests passed.
+Result: 3 files passed, 28 tests passed. I did not commit; the QA test file was already staged/modified and I left it untouched.

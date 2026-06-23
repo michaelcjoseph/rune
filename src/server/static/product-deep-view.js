@@ -127,7 +127,10 @@ function renderBacklog(backlog) {
 
 function renderAgents(agents) {
   const rows = list(agents).map(agent =>
-    `<li class="${agent.active ? 'active' : ''}"><span>${escHtml(agent.role)}</span><span>${agent.active ? 'active' : 'idle'}</span></li>`
+    `<li class="${agent.active ? 'active' : ''}">` +
+      `<span>${escHtml(agent.role)}</span>` +
+      `<span>${agent.model ? `${escHtml(agent.model)} - ` : ''}${agent.active ? 'active' : 'idle'}</span>` +
+    `</li>`
   ).join('');
   return rows ? `<ul class="deep-agents">${rows}</ul>` : '<p class="muted">No agents reported</p>';
 }
@@ -144,6 +147,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
   const agents = live.agents || activeRun.agents;
   const elapsedMs = live.elapsedMs ?? activeRun.elapsedMs;
   const state = live.state || activeRun.state;
+  const outcome = live.outcome || activeRun.outcome;
   const worktreePath = live.worktreePath || activeRun.worktreePath;
   const transcriptUrl = live.transcriptUrl || activeRun.transcriptUrl;
   const target = live.target || activeRun.target;
@@ -156,10 +160,11 @@ function renderActiveRun(activeRun, liveRuns = {}) {
       `<span>${escHtml(fmtTarget(target))}</span>` +
       `<span>${escHtml(fmtProgress(tasks))} tasks</span>` +
       `<span>${escHtml(fmtElapsed(elapsedMs))}</span>` +
+      (outcome ? `<span>outcome ${escHtml(outcome)}</span>` : '') +
     `</div>` +
     `<code class="deep-worktree">${escHtml(worktreePath)}</code>` +
     `<div class="deep-live-grid">` +
-      `<div><h4>Agents</h4>${renderAgents(agents)}</div>` +
+      `<div><h4>Agent activity</h4>${renderAgents(agents)}</div>` +
       `<div><h4>Logs</h4>${renderLogs(live.lastLogLines)}</div>` +
     `</div>` +
     (transcriptUrl ? `<a class="workrun-transcript" href="${attr(transcriptUrl)}">Transcript</a>` : '') +

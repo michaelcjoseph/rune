@@ -261,6 +261,69 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/no-op/i);
   });
 
+  it('labels the run roster as Agent activity, shows each agent model, and renders the classified terminal outcome from live state', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView(), {
+      liveRuns: {
+        'run-live-1': {
+          ...liveSnapshot,
+          state: 'completed',
+          outcome: 'partial',
+          elapsedMs: 185_000,
+          agents: [
+            { role: 'pm', active: false, model: 'claude' },
+            { role: 'tech-lead', active: false, model: 'codex' },
+            { role: 'coder', active: false, model: 'codex' },
+            { role: 'reviewer', active: false, model: 'claude' },
+          ],
+          lastLogLines: ['classified outcome: partial'],
+        },
+      },
+    });
+
+    expect(html).toMatch(/Agent activity/i);
+    expect(html).not.toMatch(/Claude activity/i);
+    for (const [role, model] of [
+      ['pm', 'claude'],
+      ['tech-lead', 'codex'],
+      ['coder', 'codex'],
+      ['reviewer', 'claude'],
+    ]) {
+      expect(html).toMatch(new RegExp(`${role}[\\s\\S]{0,180}${model}|${model}[\\s\\S]{0,180}${role}`, 'i'));
+    }
+    expect(html).toMatch(/completed[\s\S]{0,180}partial|partial[\s\S]{0,180}completed/i);
+  });
+
+  it('keeps the most-recent run transcript readable from the Runs panel even when no run is active', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView({
+      activeRun: undefined,
+      runs: [
+        {
+          runId: 'run-most-recent',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          outcome: 'failed',
+          endedAt: '2026-06-23T14:00:00.000Z',
+          transcriptUrl: '/api/work-runs/run-most-recent/transcript',
+        },
+        {
+          runId: 'run-older',
+          target: { kind: 'bug', slug: 'BUG-available' },
+          outcome: 'completed',
+          endedAt: '2026-06-23T13:00:00.000Z',
+          transcriptUrl: '/api/work-runs/run-older/transcript',
+        },
+      ],
+    }));
+
+    expect(html).toMatch(/run-most-recent[\s\S]{0,260}failed/i);
+    expect(html).toMatch(
+      /run-most-recent[\s\S]{0,320}href=["']\/api\/work-runs\/run-most-recent\/transcript["'][\s\S]{0,120}>Transcript</i,
+    );
+  });
+
   it('rehydrates a focused run from /live and merges streamed run-feed updates into the rendered panel', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
