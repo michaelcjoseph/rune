@@ -19,11 +19,12 @@
  * See: docs/projects/14-product-team-agents/test-plan.md §5
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   runProjectOrchestration,
   type CloseoutCommit,
+  type OrchestrationActivityEvent,
   type OrchestrationDeps,
   type OrchestrationResult,
 } from './project-orchestrator.js';
@@ -53,7 +54,7 @@ interface Harness {
     commits: string[];
     contextHandoffs: string[]; // the context each task saw at workflow time
     finalizeCalled: boolean;
-    events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>;
+    events: OrchestrationActivityEvent[];
   };
 }
 
@@ -84,7 +85,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     commits: [] as string[],
     contextHandoffs: [] as string[],
     finalizeCalled: false,
-    events: [] as Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
+    events: [] as OrchestrationActivityEvent[],
   };
 
   const finalize: FinalizerAdapter = async () => {
@@ -133,27 +134,32 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
 }
 
 function eventsByName(
-  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
+  events: OrchestrationActivityEvent[],
   name: string,
-): Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }> {
-  return events.filter((event) => event.data?.['event'] === name);
+): OrchestrationActivityEvent[] {
+  return events.filter((event) => eventData(event)?.['event'] === name);
 }
 
 function eventNames(
-  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
+  events: OrchestrationActivityEvent[],
 ): string[] {
   return events
-    .map((event) => event.data?.['event'])
+    .map((event) => eventData(event)?.['event'])
     .filter((name): name is string => typeof name === 'string');
 }
 
 function closeoutProgressEvents(
-  events: Array<{ kind: 'activity' | 'output' | 'progress'; data?: Record<string, unknown> }>,
-): Array<{ kind: 'progress'; data?: Record<string, unknown> }> {
+  events: OrchestrationActivityEvent[],
+): OrchestrationActivityEvent[] {
   return events.filter(
-    (event): event is { kind: 'progress'; data?: Record<string, unknown> } =>
-      event.kind === 'progress' && event.data?.['event'] === 'closeout-commit',
+    (event) => event.kind === 'progress' && eventData(event)?.['event'] === 'closeout-commit',
   );
+}
+
+function eventData(event: OrchestrationActivityEvent): Record<string, unknown> | undefined {
+  return event.data && typeof event.data === 'object'
+    ? (event.data as Record<string, unknown>)
+    : undefined;
 }
 
 function expectOperationalHold(
@@ -255,6 +261,68 @@ describe('project-orchestrator — closeout', () => {
     // and it never finalizes.
     expect(h.state.tasksMd).toContain('- [ ] Render the streak card');
     expect(h.state.finalizeCalled).toBe(false);
+  });
+
+  it('auto-closes the repeated "Confirm red before implementation." gate without role review dead-looping', async () => {
+    const tasksMd = [
+      '# Tasks',
+      '',
+      '## Phase 2',
+      '- [ ] Confirm red before implementation.',
+      '- [ ] Build the run feed',
+    ].join('\n');
+    const workflow = vi.fn(async (task: SelectedTask): Promise<TaskEvidence> => readyEvidence(task));
+    const readSpec = vi.fn(async () => 'spec body');
+    const h = makeHarness({ runTaskWorkflow: workflow, readSpec }, tasksMd);
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('finalized');
+    expect(h.state.tasksMd).toContain('- [x] Confirm red before implementation.');
+    expect(h.state.tasksMd).toContain('- [x] Build the run feed');
+    expect(readSpec).toHaveBeenCalledTimes(1);
+    expect(workflow).toHaveBeenCalledTimes(1);
+    expect(workflow.mock.calls[0]?.[0].text).toBe('Build the run feed');
+    expect(h.state.commits).toEqual([
+      'sha-confirm-red-before-implementation',
+      'sha-build-the-run-feed',
+    ]);
+    expect(h.state.contextMd).not.toMatch(/Confirm red|TDD|bookkeeping|dead-loop/i);
+  });
+
+  it('does not let a role-gate failure on a later task re-select an already auto-closed confirm-red gate', async () => {
+    const tasksMd = [
+      '# Tasks',
+      '',
+      '## Phase 2',
+      '- [ ] Confirm red before implementation.',
+      '- [ ] Build the run feed',
+    ].join('\n');
+    // Model the ACTUAL round-cap dead-loop terminal the bug is about: the
+    // team-task workflow's `block()` returns outcome 'blocked' /
+    // loopExitReason 'hard-budget' with this exact blockedReason (see
+    // team-task-workflow.ts round-cap exit), not a 'failed'/'operational'
+    // shape. The orchestrator takes the plain-blocked path on this reason text.
+    const h = makeHarness({
+      runTaskWorkflow: async (task) => ({
+        taskId: task.id,
+        outcome: 'blocked',
+        rolesInvoked: ['coder', 'reviewer'],
+        findingsLedger: [],
+        loopExitReason: 'hard-budget',
+        objectionOpen: false,
+        handoffNotes: [],
+        blockedReason: 'round cap reached with unresolved task feedback',
+      }),
+    }, tasksMd);
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res.kind).toBe('blocked');
+    expect(String((res as Extract<OrchestrationResult, { kind: 'blocked' }>).reason)).toMatch(/round cap/i);
+    expect(h.state.tasksMd).toContain('- [x] Confirm red before implementation.');
+    expect(h.state.tasksMd).toContain('- [ ] Build the run feed');
+    expect(h.state.commits).toEqual(['sha-confirm-red-before-implementation']);
   });
 });
 

@@ -1179,6 +1179,7 @@ describe('orchestratedWorkApplier', () => {
 
     it('emits one closeout progress event for each successful commitCloseout with live remaining counts', async () => {
       const commitShas = ['1111111aaaaaaa', '2222222bbbbbbb'];
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-progress-'));
       let revParseCalls = 0;
       const runGit = vi.fn(async (gitArgs: string[]) => {
         if (gitArgs[0] === 'rev-parse') {
@@ -1229,6 +1230,7 @@ describe('orchestratedWorkApplier', () => {
         destroyWorktree: async () => {
           destroyed = true;
         },
+        workRunsDir: artifactsDir,
         runGit,
         createTaskWorkflowRunner: () => async (task) => ({
           taskId: task.id,
@@ -1242,51 +1244,58 @@ describe('orchestratedWorkApplier', () => {
         }),
       });
 
-      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(), ctx));
-      const terminalIndex = events.findIndex((event) => event.kind === 'completed' || event.kind === 'failed');
-      const progress = events.slice(0, terminalIndex).filter((event) => {
-        const data = (event.data ?? {}) as Record<string, unknown>;
-        return event.kind === 'progress' && data['event'] === 'closeout-commit';
-      });
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, 'mut-closeout-progress-events'),
+          ctx,
+        ));
+        const terminalIndex = events.findIndex((event) => event.kind === 'completed' || event.kind === 'failed');
+        const progress = events.slice(0, terminalIndex).filter((event) => {
+          const data = (event.data ?? {}) as Record<string, unknown>;
+          return event.kind === 'progress' && data['event'] === 'closeout-commit';
+        });
 
-      expect(progress).toHaveLength(2);
-      expect(progress[0]).toMatchObject({
-        mutationId: 'mut-1',
-        kind: 'progress',
-        data: {
-          event: 'closeout-commit',
-          projectSlug: 'demo',
-          product: 'jarvis',
-          taskId: 'build-the-streak-core',
-          taskText: 'Build the streak core',
-          commitSha: '1111111aaaaaaa',
-          shortSha: '1111111',
-          commitSubject: 'jarvis(jarvis): closeout — Build the streak core',
-          tasksDone: 1,
-          tasksTotal: 2,
-          tasksRemaining: 1,
-          line: expect.stringMatching(/Build the streak core.*1\/2 done.*1 remaining/i),
-        },
-      });
-      expect(progress[1]).toMatchObject({
-        mutationId: 'mut-1',
-        kind: 'progress',
-        data: {
-          event: 'closeout-commit',
-          projectSlug: 'demo',
-          product: 'jarvis',
-          taskId: 'render-the-streak-card',
-          taskText: 'Render the streak card',
-          commitSha: '2222222bbbbbbb',
-          shortSha: '2222222',
-          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
-          tasksDone: 2,
-          tasksTotal: 2,
-          tasksRemaining: 0,
-          line: expect.stringMatching(/Render the streak card.*2\/2 done.*0 remaining/i),
-        },
-      });
-      expect(destroyed).toBe(true);
+        expect(progress).toHaveLength(2);
+        expect(progress[0]).toMatchObject({
+          mutationId: 'mut-closeout-progress-events',
+          kind: 'progress',
+          data: {
+            event: 'closeout-commit',
+            projectSlug: 'demo',
+            product: 'jarvis',
+            taskId: 'build-the-streak-core',
+            taskText: 'Build the streak core',
+            commitSha: '1111111aaaaaaa',
+            shortSha: '1111111',
+            commitSubject: 'jarvis(jarvis): closeout — Build the streak core',
+            tasksDone: 1,
+            tasksTotal: 2,
+            tasksRemaining: 1,
+            line: expect.stringMatching(/Build the streak core.*1\/2 done.*1 remaining/i),
+          },
+        });
+        expect(progress[1]).toMatchObject({
+          mutationId: 'mut-closeout-progress-events',
+          kind: 'progress',
+          data: {
+            event: 'closeout-commit',
+            projectSlug: 'demo',
+            product: 'jarvis',
+            taskId: 'render-the-streak-card',
+            taskText: 'Render the streak card',
+            commitSha: '2222222bbbbbbb',
+            shortSha: '2222222',
+            commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+            tasksDone: 2,
+            tasksTotal: 2,
+            tasksRemaining: 0,
+            line: expect.stringMatching(/Render the streak card.*2\/2 done.*0 remaining/i),
+          },
+        });
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it('dedupes closeout progress alerts across replay by commit sha while still alerting for a new closeout commit', async () => {

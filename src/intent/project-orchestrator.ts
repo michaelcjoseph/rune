@@ -181,10 +181,15 @@ export async function runProjectOrchestration(
     const task = selection.task;
     emitTaskSelected(deps, task);
     const contextMd = await deps.readContextMd();
-    const spec = await deps.readSpec();
-    const assembled = assembleTaskContext({ task, contextMd, spec });
 
-    const evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
+    let evidence: TaskEvidence;
+    if (isConfirmRedTask(task)) {
+      evidence = confirmRedGateEvidence(task);
+    } else {
+      const spec = await deps.readSpec();
+      const assembled = assembleTaskContext({ task, contextMd, spec });
+      evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
+    }
     if (evidence.outcome !== 'ready-for-closeout') {
       if (hasNonReversibleSevereTerminalFinding(evidence)) {
         const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
@@ -520,6 +525,22 @@ function emitCloseoutCommit(
 
 function attemptId(deps: OrchestrationDeps, task: SelectedTask, attemptNumber: number): string {
   return `${deps.runId}-${task.id}-attempt-${attemptNumber}`;
+}
+
+function isConfirmRedTask(task: SelectedTask): boolean {
+  return task.text.trim().toLowerCase() === 'confirm red before implementation.';
+}
+
+function confirmRedGateEvidence(task: SelectedTask): TaskEvidence {
+  return {
+    taskId: task.id,
+    outcome: 'ready-for-closeout',
+    rolesInvoked: [],
+    findingsLedger: [],
+    loopExitReason: 'all-low',
+    objectionOpen: false,
+    handoffNotes: [],
+  };
 }
 
 function countTasks(tasksMd: string): number {
