@@ -84,6 +84,51 @@ describe('config', () => {
     expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
   });
 
+  describe('work-run concurrency cap defaults (project 17)', () => {
+    const REQUIRED = {
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_USER_ID: '12345',
+      VAULT_DIR: '/tmp/vault',
+    };
+
+    async function loadConfig(extra: Record<string, string> = {}) {
+      vi.resetModules();
+      Object.assign(process.env, REQUIRED);
+      delete process.env['WORK_RUN_GLOBAL_CAP'];
+      delete process.env['WORK_RUN_PER_PROJECT_CAP'];
+      Object.assign(process.env, extra);
+      const { default: config } = await import('./config.js');
+      return config;
+    }
+
+    it('raises the default global cap above the old cap of 2 while preserving per-project cap 1', async () => {
+      const config = await loadConfig();
+
+      expect(config.WORK_RUN_GLOBAL_CAP).toBeGreaterThan(2);
+      expect(config.WORK_RUN_PER_PROJECT_CAP).toBe(1);
+    });
+
+    it('honors a WORK_RUN_GLOBAL_CAP override through the env-configurable path', async () => {
+      const config = await loadConfig({ WORK_RUN_GLOBAL_CAP: '6' });
+
+      expect(config.WORK_RUN_GLOBAL_CAP).toBe(6);
+    });
+
+    it('falls back to the raised default for invalid WORK_RUN_GLOBAL_CAP values', async () => {
+      const defaultConfig = await loadConfig();
+      const defaultGlobalCap = defaultConfig.WORK_RUN_GLOBAL_CAP;
+
+      expect((await loadConfig({ WORK_RUN_GLOBAL_CAP: '0' })).WORK_RUN_GLOBAL_CAP).toBe(defaultGlobalCap);
+      expect((await loadConfig({ WORK_RUN_GLOBAL_CAP: 'not-a-number' })).WORK_RUN_GLOBAL_CAP).toBe(defaultGlobalCap);
+    });
+
+    it('keeps WORK_RUN_GLOBAL_CAP on the integer parse path', async () => {
+      const config = await loadConfig({ WORK_RUN_GLOBAL_CAP: '6.9' });
+
+      expect(config.WORK_RUN_GLOBAL_CAP).toBe(6);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Project 14 (Phase 8) — PRODUCTS_CONFIG_FILE env redirect. The live-acceptance
   // harness points the orchestrated applier at a throwaway products.json without

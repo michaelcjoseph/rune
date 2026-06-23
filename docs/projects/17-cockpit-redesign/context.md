@@ -302,6 +302,8 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- erified:
-- `npx vitest run src/bot/handlers/text.test.ts src/kb/search.test.ts src/mcp/server.test.ts src/vault/sessions.test.ts --configLoader runner` passed: 162 tests.
-- `npm run build` still fails on existing branch-wide TypeScript errors outside the touched implementation files. No commit made.
+- n src/config.test.ts --configLoader runner`
+- `npx vitest run src/intent/scheduler.test.ts --configLoader runner`
+- `npx vitest run src/intent/home-pulse-deep-view.test.ts --configLoader runner`
+
+Note: `src/config.test.ts` was already staged/modified before my change; I only changed `src/config.ts`.

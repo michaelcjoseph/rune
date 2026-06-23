@@ -291,7 +291,7 @@ const config = {
   TIMEZONE: 'America/Chicago',
 
   WORK_RUN_PER_PROJECT_CAP: parseNumericEnv('WORK_RUN_PER_PROJECT_CAP', 1, { min: 1, integer: true }),
-  WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 2, { min: 1, integer: true }),
+  WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 4, { min: 1, integer: true }),
 
   /** Global default for the orchestrated-work dispatch toggle (project 14,
    *  Phase 5). When true, the cockpit Start action dispatches the Jarvis-owned
