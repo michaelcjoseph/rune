@@ -302,7 +302,5 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- me-pulse.js` and `product-deep-view.js`.
-- [home-products-api.test.ts](jarvis/.worktrees/jarvis/17-cockpit-redesign/src/server/home-products-api.test.ts): new `/api/home` and `/api/products/:product` routes are not implemented yet, so route assertions fail.
-
-No files changed; worktree remains clean.
+- de_modules/.bin/tsc --noEmit ... src/intent/home-pulse.ts`.
+- Full QA file still fails on missing `./product-deep-view.js`, which is the separate unchecked `product-deepview-projection` task. `npm run build` is also blocked by existing unrelated repo test type errors plus that missing future module.

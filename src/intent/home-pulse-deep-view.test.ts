@@ -7,7 +7,7 @@ type WorkRunFixture = {
   runId: string;
   product: string;
   target: { kind: 'project' | 'bug'; slug: string };
-  outcome: 'branch-complete' | 'dirty-uncommitted' | 'noop' | 'failed';
+  outcome: 'branch-complete' | 'partial' | 'dirty-uncommitted' | 'noop' | 'failed';
   endedAt: string;
   startedAt?: string;
   transcriptExists?: boolean;
@@ -192,6 +192,27 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
       'noop-run',
       'backlog-warning',
     ]);
+    expect(aura.attention).toEqual([
+      {
+        kind: 'parked-run',
+        runId: 'run-parked',
+        target: { kind: 'project', slug: '01-mvp' },
+      },
+      {
+        kind: 'failed-run',
+        runId: 'run-failed',
+        target: { kind: 'project', slug: '01-mvp' },
+      },
+      {
+        kind: 'noop-run',
+        runId: 'run-noop',
+        target: { kind: 'project', slug: '00-archive' },
+      },
+      {
+        kind: 'backlog-warning',
+        count: 1,
+      },
+    ]);
   });
 
   it('degrades backlog-derived fields when the backlog store read fails instead of failing the pulse', async () => {
@@ -229,6 +250,7 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
 
   it.each([
     ['branch-complete', 'completed'],
+    ['partial', 'partial'],
     ['dirty-uncommitted', 'partial'],
     ['noop', 'no-op'],
     ['failed', 'failed'],
@@ -253,6 +275,77 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
       runId: `run-${storedOutcome}`,
       outcome: expected,
     });
+  });
+
+  it('surfaces a parked run only as active state and attention, never as a terminal outcome', async () => {
+    const { buildHomePulse } = await import('./home-pulse.js');
+    const pulse = buildHomePulse(
+      deps({
+        readSupervisedRuns: vi.fn(() => [
+          run({
+            id: 'run-awaiting-release',
+            product: 'aura',
+            project: '01-mvp',
+            status: 'blocked-on-human',
+            startedAt: '2026-06-23T12:00:00.000Z',
+          }),
+        ]),
+        readRecentWorkRuns: vi.fn(() => []),
+        readBacklogs: vi.fn(() => []),
+      }),
+    );
+
+    const aura = pulse.products.find((p: any) => p.name === 'aura');
+    expect(aura).toMatchObject({
+      activeRun: {
+        runId: 'run-awaiting-release',
+        target: { kind: 'project', slug: '01-mvp' },
+        state: 'parked',
+        elapsedMs: 30_000,
+      },
+      attention: [
+        {
+          kind: 'parked-run',
+          runId: 'run-awaiting-release',
+          target: { kind: 'project', slug: '01-mvp' },
+        },
+      ],
+    });
+    expect(aura?.mostRecentRun).toBeUndefined();
+    expect(aura?.attention.some((signal: any) => signal.kind === 'parked')).toBe(false);
+  });
+
+  it('keeps bug targets intact for recent-run outcomes and attention signals', async () => {
+    const { buildHomePulse } = await import('./home-pulse.js');
+    const pulse = buildHomePulse(
+      deps({
+        readSupervisedRuns: vi.fn(() => []),
+        readBacklogs: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn(() => [
+          {
+            runId: 'run-bug-noop',
+            product: 'aura',
+            target: { kind: 'bug', slug: 'b-open' },
+            outcome: 'noop',
+            endedAt: '2026-06-23T11:30:00.000Z',
+          },
+        ]),
+      }),
+    );
+
+    const aura = pulse.products.find((p: any) => p.name === 'aura');
+    expect(aura?.mostRecentRun).toEqual({
+      runId: 'run-bug-noop',
+      outcome: 'no-op',
+      endedAt: '2026-06-23T11:30:00.000Z',
+    });
+    expect(aura?.attention).toEqual([
+      {
+        kind: 'noop-run',
+        runId: 'run-bug-noop',
+        target: { kind: 'bug', slug: 'b-open' },
+      },
+    ]);
   });
 });
 
