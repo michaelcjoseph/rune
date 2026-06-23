@@ -155,7 +155,7 @@ export function getAllSessions(): SessionEntry[] {
 
 /** Parse a composite key. Returns null for malformed keys so callers can skip
  *  rather than throw — useful during the legacy-format migration. */
-function parseSessionKey(key: string): { userId: number; transport: Transport; scope: SessionScope } | null {
+export function parseSessionKey(key: string): { userId: number; transport: Transport; scope: SessionScope } | null {
   const parts = key.split(':');
   if (parts.length === 2) {
     const [transport, rawUserId] = parts;

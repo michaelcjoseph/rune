@@ -302,8 +302,8 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- sed.
+- .test.ts src/server/state-snapshot.test.ts` passed: 71 tests.
 
-Not fully green:
-- `src/server/webview.test.ts` could not run in this sandbox because binding `127.0.0.1` fails with `listen EPERM`.
-- `npm run build` still fails on pre-existing branch type errors outside this task; none of the remaining reported errors are in the files changed for this task.
+Not fully runnable here:
+- `src/server/webview.test.ts` still fails before executing tests with `listen EPERM: operation not permitted 127.0.0.1`.
+- `npm run build` still fails on existing branch type errors outside these source changes.

@@ -15,6 +15,7 @@ vi.mock('../config.js', () => ({
   PROJECT_ROOT: '/tmp/test-project',
 }));
 
+const sessionsModule = await import('./sessions.js');
 const {
   getSession,
   createSession,
@@ -23,9 +24,10 @@ const {
   setSessionModel,
   getAllSessions,
   restoreSessions,
+  persistSessions,
   appendMessageToSession,
   getSessionMessages,
-} = await import('./sessions.js');
+} = sessionsModule;
 
 describe('vault/sessions', () => {
   beforeEach(() => {
@@ -93,6 +95,26 @@ describe('vault/sessions', () => {
       const entries = getAllSessions();
       const sorted = [...entries].sort((a, b) => a.transport.localeCompare(b.transport));
       expect(sorted.map(e => `${e.transport}:${e.userId}`)).toEqual(['telegram:1', 'webview:1']);
+    });
+  });
+
+  describe('parseSessionKey', () => {
+    it('decodes product-scoped keys and still accepts legacy global keys', () => {
+      const parseSessionKey = (sessionsModule as {
+        parseSessionKey?: (key: string) => unknown;
+      }).parseSessionKey;
+      expect(parseSessionKey).toEqual(expect.any(Function));
+
+      expect(parseSessionKey!('jarvis:webview:42')).toEqual({
+        userId: 42,
+        transport: 'webview',
+        scope: { kind: 'product', product: 'jarvis' },
+      });
+      expect(parseSessionKey!('telegram:7')).toEqual({
+        userId: 7,
+        transport: 'telegram',
+        scope: { kind: 'global' },
+      });
     });
   });
 
@@ -189,6 +211,44 @@ describe('vault/sessions', () => {
         'telegram:13',
         'webview:12',
       ]);
+    });
+
+    it('preserves a product-scoped session through getAllSessions, persist, and restore', () => {
+      const session = createSession(88, 'webview', 'repo scoped first turn', 'haiku', jarvisScope);
+      appendMessageToSession(88, 'webview', 'user', 'look in this product repo', jarvisScope);
+      updateSession(88, 'webview', jarvisScope);
+
+      const before = getAllSessions().find(e =>
+        e.userId === 88
+        && e.transport === 'webview'
+        && e.scope?.kind === 'product'
+        && e.scope.product === 'jarvis',
+      );
+      expect(before?.session.sessionId).toBe(session.sessionId);
+
+      persistSessions();
+      const persisted = readFileSync(sessionsFile, 'utf8');
+      deleteSession(88, 'webview', jarvisScope);
+      expect(getSession(88, 'webview', jarvisScope)).toBeNull();
+
+      writeFileSync(sessionsFile, persisted);
+      restoreSessions();
+
+      const restored = getSession(88, 'webview', jarvisScope);
+      expect(restored?.sessionId).toBe(session.sessionId);
+      expect(restored?.model).toBe('haiku');
+      expect(restored?.messageCount).toBe(2);
+      expect(getSessionMessages(88, 'webview', jarvisScope).map(m => m.text)).toEqual([
+        'look in this product repo',
+      ]);
+      expect(getAllSessions()).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          userId: 88,
+          transport: 'webview',
+          scope: { kind: 'product', product: 'jarvis' },
+          session: expect.objectContaining({ sessionId: session.sessionId }),
+        }),
+      ]));
     });
 
     it('updates, appends, model-switches, and deletes only the addressed product scope', () => {

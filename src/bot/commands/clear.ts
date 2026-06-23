@@ -6,6 +6,15 @@ import type { MessageSender } from '../../transport/sender.js';
 
 const log = createLogger('clear');
 
+function planningMatchesScope(
+  planning: ReturnType<typeof getActivePlanningSession>,
+  scope?: SessionScope,
+): boolean {
+  if (!planning) return false;
+  if (!scope || scope.kind === 'global') return true;
+  return planning.planning.product === scope.product;
+}
+
 export async function handleClear(
   sender: MessageSender,
   userId: number,
@@ -17,7 +26,7 @@ export async function handleClear(
   // with only a planning session — no conversation thread — still has a way
   // to bail out. If a review is also active, surface that explicitly so the
   // user knows the review still needs `/fresh` to close.
-  if (getActivePlanningSession(userId)) {
+  if (planningMatchesScope(getActivePlanningSession(userId), scope)) {
     abandonActivePlanningSession(userId);
     log.info('Planning session abandoned via /clear', { userId, transport });
     const reviewNote = hasActiveReview(userId)

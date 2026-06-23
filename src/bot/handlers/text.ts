@@ -45,7 +45,7 @@ import { handleLearnList } from '../commands/learn-list.js';
 import { handleCancel } from '../commands/cancel.js';
 import { handleCancelReview } from '../commands/cancel-review.js';
 import { hasActiveReview, handleReviewMessage } from '../../reviews/orchestrator.js';
-import { getActivePlanningSession } from '../../reviews/planning.js';
+import { getActivePlanningSession, type StoredPlanningSession } from '../../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../../reviews/planning-handler.js';
 import { hasActiveSRSession, handleSRMessage } from '../../study/sr-session.js';
 import { containsURL, handleURLMessage } from './url.js';
@@ -208,7 +208,9 @@ export async function dispatchText(
   if (text.startsWith('/opus')) return withCommandLog('opus', () => handleModelSwitch(sender, userId, transport, 'opus', scope));
   if (text.startsWith('/sonnet')) return withCommandLog('sonnet', () => handleModelSwitch(sender, userId, transport, 'sonnet', scope));
   if (text.startsWith('/haiku')) return withCommandLog('haiku', () => handleModelSwitch(sender, userId, transport, 'haiku', scope));
-  if (text.startsWith('/status')) return withCommandLog('status', () => handleStatus(sender, userId, transport));
+  if (text.startsWith('/status')) return withCommandLog('status', () => (
+    scope ? handleStatus(sender, userId, transport, scope) : handleStatus(sender, userId, transport)
+  ));
   if (text.startsWith('/whoop')) return withCommandLog('whoop', () => handleWhoop(sender, userId));
   if (text.startsWith('/start')) return withCommandLog('start', () => handleStart(sender, userId));
 
@@ -218,7 +220,8 @@ export async function dispatchText(
   // their handlers; only free-form text falls through here. The planning
   // handler's reply is surfaced raw — the LLM's question is self-contained
   // and the spec-proposed transition will be wrapped by A4.4/C6.
-  if (getActivePlanningSession(userId)) return routeToPlanning(sender, userId, text);
+  const activePlanning = getActivePlanningSession(userId);
+  if (planningMatchesScope(activePlanning, scope)) return routeToPlanning(sender, userId, text);
 
   // Active review session takes priority over default conversation
   if (hasActiveReview(userId)) return handleReviewMessage(userId, text, sender);
@@ -399,6 +402,15 @@ async function invokeSkill(
     default:
       throw new Error(`No dispatcher for slash skill: ${skill.name}`);
   }
+}
+
+function planningMatchesScope(
+  planning: StoredPlanningSession | null,
+  scope?: SessionScope,
+): planning is StoredPlanningSession {
+  if (!planning) return false;
+  if (!scope || scope.kind === 'global') return true;
+  return planning.planning.product === scope.product;
 }
 
 /** Drive one turn of an active planning conversation. Surfaces the LLM's

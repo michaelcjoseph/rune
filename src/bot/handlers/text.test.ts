@@ -1217,6 +1217,53 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(mockClassify).not.toHaveBeenCalled();
   });
 
+  it('routes product-scoped freeform text into an active planning session before normal chat', async () => {
+    const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
+    const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+
+    getActivePlanningSessionMock.mockReturnValue({
+      id: 'plan-product-001',
+      chatId: 100,
+      claudeSessionId: 'claude-product-001',
+      planning: {
+        status: 'scoping',
+        product: 'jarvis',
+        idea: '',
+        surface: 'cockpit',
+        history: [],
+        createdAt: new Date().toISOString(),
+      },
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+    });
+    getSessionMock.mockReturnValue({
+      sessionId: 'existing-product-chat',
+      lastActivity: new Date().toISOString(),
+      messageCount: 2,
+      firstMessage: 'first',
+      model: 'haiku',
+    });
+    handlePlanningTurnMock.mockResolvedValue({
+      reply: 'What acceptance signal proves this is done?',
+      status: 'scoping',
+    });
+
+    const sender = webviewSender();
+    await (dispatchText as any)(sender, 100, 'scope the next step', productScope);
+
+    expect(getActivePlanningSessionMock).toHaveBeenCalledWith(100);
+    expect(handlePlanningTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ scopingTurn: expect.any(Function) }),
+      100,
+      'scope the next step',
+    );
+    expect(askMock).not.toHaveBeenCalled();
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(sender.send).toHaveBeenCalledWith(100, 'What acceptance signal proves this is done?');
+  });
+
   it('passes product scope through existing chat commands', async () => {
     const sender = webviewSender();
 
@@ -1246,6 +1293,18 @@ describe('dispatchText — product-scoped webview sessions', () => {
 
     expect(getSessionMock).toHaveBeenCalledWith(100, 'webview', productScope);
     expect(setSessionModelMock).toHaveBeenCalledWith(100, 'webview', 'opus', productScope);
+  });
+
+  it('creates a new product-scoped session when model switching starts product chat', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const setSessionModelMock = setSessionModel as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+
+    await (dispatchText as any)(webviewSender(), 100, '/sonnet', productScope);
+
+    expect(createSessionMock).toHaveBeenCalledWith(100, 'webview', '/sonnet', undefined, productScope);
+    expect(setSessionModelMock).toHaveBeenCalledWith(100, 'webview', 'sonnet', productScope);
   });
 
   it('tells product-scoped chat to search both the active repo and the vault', async () => {

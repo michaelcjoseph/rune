@@ -685,6 +685,29 @@ describe('server/webview', () => {
       expect(getSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'webview', expectedScope);
     });
 
+    it('keeps POST /api/chat global when product is invalid', async () => {
+      await makeRequest(port, '/api/chat', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ message: 'stay global', product: '../jarvis' }),
+      });
+
+      expect(handleWebviewMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'webview' }),
+        mockConfig.TELEGRAM_USER_ID,
+        'stay global',
+      );
+      expect(getSession).toHaveBeenCalledWith(mockConfig.TELEGRAM_USER_ID, 'webview');
+      expect(getSession).not.toHaveBeenCalledWith(
+        mockConfig.TELEGRAM_USER_ID,
+        'webview',
+        expect.anything(),
+      );
+    });
+
     it('returns 500 when handleWebviewMessage throws', async () => {
       (handleWebviewMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('dispatch failed'));
       const res = await makeRequest(port, '/api/chat', {
@@ -713,6 +736,23 @@ describe('server/webview', () => {
           mockConfig.TELEGRAM_USER_ID,
           'inspect this repo',
           { kind: 'product', product: 'aura' },
+        );
+      } finally {
+        ws.terminate();
+      }
+    });
+
+    it('keeps WS message frames global when product is invalid', async () => {
+      const ws = await openWebSocket(port);
+      try {
+        ws.send(JSON.stringify({ kind: 'message', text: '  global fallback  ', product: 'bad/product' }));
+
+        await waitForMockCall(handleWebviewMessage as ReturnType<typeof vi.fn>);
+
+        expect(handleWebviewMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'webview' }),
+          mockConfig.TELEGRAM_USER_ID,
+          'global fallback',
         );
       } finally {
         ws.terminate();

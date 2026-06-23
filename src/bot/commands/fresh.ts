@@ -29,6 +29,15 @@ export type CloseConversationResult =
   | { ok: true; journalSummary: string; isKBWorthy: boolean }
   | { ok: false; error: string };
 
+function planningMatchesScope(
+  planning: ReturnType<typeof getActivePlanningSession>,
+  scope?: SessionScope,
+): boolean {
+  if (!planning) return false;
+  if (!scope || scope.kind === 'global') return true;
+  return planning.planning.product === scope.product;
+}
+
 /** Summarize the active conversation, append the summary to today's journal,
  *  optionally enqueue it to the KB, commit, and delete the session. Used by
  *  /fresh and by /journal (which closes the thread after a journal write).
@@ -89,14 +98,15 @@ export async function handleFresh(
   // conversation. If both exist, the planning session is abandoned first and
   // the normal chat-summary flow continues.
   const planning = getActivePlanningSession(userId);
+  const scopedPlanning = planningMatchesScope(planning, scope);
   const session = scope ? getSession(userId, transport, scope) : getSession(userId, transport);
-  if (planning && !session) {
+  if (scopedPlanning && !session) {
     abandonActivePlanningSession(userId);
     log.info('Planning session abandoned via /fresh', { userId, transport });
     await sender.send(userId, 'Planning session abandoned.');
     return;
   }
-  if (planning) {
+  if (scopedPlanning) {
     abandonActivePlanningSession(userId);
     log.info('Planning session abandoned via /fresh (chat session also closing)', { userId, transport });
   }
