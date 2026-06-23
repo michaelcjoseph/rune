@@ -302,13 +302,9 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- e product view
-- unavailable HomePulse rendering
+- Home layout styles.
 
-Verified red with:
+Verified:
+`npx vitest run src/server/static/home-view-client.test.ts --configLoader runner` passes: 9 tests.
 
-```sh
-npx vitest run src/server/static/home-view-client.test.ts --configLoader runner
-```
-
-Result: 8 failing tests, all because `view-router.js` and `home-view.js` are not implemented yet, which is the expected test-first failure.
+Also ran `git diff --check` for the touched static files. Note: `src/server/static/home-view-client.test.ts` was already staged in the branch state; I left it untouched.

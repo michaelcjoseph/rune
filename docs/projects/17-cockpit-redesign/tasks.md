@@ -87,7 +87,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **client-view-router** — Introduce a minimal client-side view-state/router module in the vanilla-JS app (home ↔ per-product), since the SPA has no routing layer today. Owns the active product/view selection that both UI phases render against, with back/deep-link behavior. Prerequisite for the home and deep-view UIs. Interim: until Phase 6 lands, selecting a product from Home routes to the legacy cockpit layout — Home never dead-ends.
+- [x] **client-view-router** — Introduce a minimal client-side view-state/router module in the vanilla-JS app (home ↔ per-product), since the SPA has no routing layer today. Owns the active product/view selection that both UI phases render against, with back/deep-link behavior. Prerequisite for the home and deep-view UIs. Interim: until Phase 6 lands, selecting a product from Home routes to the legacy cockpit layout — Home never dead-ends.
 - [ ] **home-view-ui** — Build the cross-product Home view (read-mostly pulse): per-product cards with repo-backed status, live active-run indicator (state, elapsed, running pulse), open counts, most-recent-run classified outcome, and prominently-surfaced attention signals (parked/failed/no-op run, backlog warnings). No chat box, no logs, no Fix here — pulse + router into the deep view. Reads `GET /api/home`, handles the unavailable shape, and does not rely on `/api/cockpit`. _(designer review)_
 
 ## Phase 6 — Per-Product Deep View UI

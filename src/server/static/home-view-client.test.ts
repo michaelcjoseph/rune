@@ -108,6 +108,9 @@ describe('client view-router (cockpit redesign Phase 5)', () => {
       product: 'aura',
       focusRunId: 'run-parked-1',
     });
+    expect(parseClientRoute('#/products/aura?run=')).toEqual({ view: 'product', product: 'aura' });
+    expect(parseClientRoute('#/products/')).toEqual({ view: 'home' });
+    expect(parseClientRoute('#/definitely-not-a-route')).toEqual({ view: 'home' });
   });
 
   it('owns active view/product selection and pushes browser history when navigating', async () => {
@@ -133,6 +136,32 @@ describe('client view-router (cockpit redesign Phase 5)', () => {
 
     expect(router.getState()).toEqual({ view: 'home' });
     expect(win.history.pushState).toHaveBeenLastCalledWith({ view: 'home' }, '', '#/');
+  });
+
+  it('encodes active-run focus when routing from Home to a product view', async () => {
+    const { createClientViewRouter } = await import('./view-router.js');
+    const win = makeWindow('#/');
+    const onChange = vi.fn();
+
+    const router = createClientViewRouter({ window: win, onChange });
+
+    router.goProduct('aura', { focusRunId: 'run-parked-1' });
+
+    expect(router.getState()).toEqual({
+      view: 'product',
+      product: 'aura',
+      focusRunId: 'run-parked-1',
+    });
+    expect(win.history.pushState).toHaveBeenLastCalledWith(
+      { view: 'product', product: 'aura', focusRunId: 'run-parked-1' },
+      '',
+      '#/products/aura?run=run-parked-1',
+    );
+    expect(onChange).toHaveBeenLastCalledWith({
+      view: 'product',
+      product: 'aura',
+      focusRunId: 'run-parked-1',
+    });
   });
 
   it('restores the route state from the URL on back navigation and page reload', async () => {
