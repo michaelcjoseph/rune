@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /*
  * Test suite for test-plan.md §15 — concurrency scheduler (08-intent-layer, Phase 4).
@@ -86,5 +86,67 @@ describe('concurrency scheduler — queued-vs-running view (test-plan §15)', ()
     // The cockpit reads `running` and `queued` to show queued-vs-running accurately.
     expect(result.running).toEqual([proj('aura', '01'), proj('relay', '01')]);
     expect(result.queued).toEqual([]);
+  });
+});
+
+describe('concurrency scheduler — configured WORK_RUN_GLOBAL_CAP (project 17)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+  const REQUIRED_ENV = {
+    TELEGRAM_BOT_TOKEN: 'test-token',
+    TELEGRAM_USER_ID: '12345',
+    VAULT_DIR: '/tmp/vault',
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...REQUIRED_ENV };
+  });
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  async function loadWorkRunGlobalCap(): Promise<number> {
+    const { default: config } = await import('../config.js');
+    return config.WORK_RUN_GLOBAL_CAP;
+  }
+
+  function queueWithDuplicateFirstProduct(distinctProductCount: number): ScheduledProject[] {
+    const products = Array.from({ length: distinctProductCount }, (_, i) => `product-${i + 1}`);
+    return [
+      proj(products[0], '01'),
+      proj(products[0], '02'),
+      ...products.slice(1).map((product) => proj(product, '01')),
+    ];
+  }
+
+  it('runs N products in parallel under a raised cap while holding one per product', () => {
+    const cap = 3;
+
+    const sameProductSecondProject = proj('product-1', '02');
+    const result = schedule([], queueWithDuplicateFirstProduct(cap), cap);
+
+    expect(result.started).toHaveLength(cap);
+    expect(new Set(result.started.map((p) => p.product)).size).toBe(cap);
+    expect(result.started).not.toContainEqual(sameProductSecondProject);
+    expect(result.queued).toEqual([sameProductSecondProject]);
+  });
+
+  it('honors a WORK_RUN_GLOBAL_CAP env override when deciding how many products start', async () => {
+    process.env['WORK_RUN_GLOBAL_CAP'] = '5';
+    const cap = await loadWorkRunGlobalCap();
+    expect(cap).toBe(5);
+
+    const sameProductSecondProject = proj('product-1', '02');
+    const result = schedule([], queueWithDuplicateFirstProduct(cap), cap);
+
+    expect(result.started).toEqual([
+      proj('product-1', '01'),
+      proj('product-2', '01'),
+      proj('product-3', '01'),
+      proj('product-4', '01'),
+      proj('product-5', '01'),
+    ]);
+    expect(result.queued).toEqual([sameProductSecondProject]);
   });
 });
