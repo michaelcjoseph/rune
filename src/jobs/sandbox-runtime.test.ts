@@ -484,14 +484,15 @@ describe('createWorktree', () => {
     expect(spec.resumed).toBe(false);
   });
 
-  it('RESUMES an existing branch: checks it out (no -b), tip becomes baseSha, resumed=true', async () => {
+  it('RESUMES an existing branch with base already contained: checks it out, skips rebase, tip becomes baseSha', async () => {
     const configPath = writeProductsJson(tmpDir);
     const tip = 'resumetip0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
     const branch = 'jarvis-work/01-growth';
-    // show-ref reports the branch exists, printing "<sha> <ref>". rev-parse is
-    // never consulted on the resume path — the branch tip IS the base.
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${baseTip}\n`, stderr: '' };
       return { stdout: '', stderr: '' };
     });
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
@@ -505,8 +506,9 @@ describe('createWorktree', () => {
       runGit,
     });
 
-    // No HEAD resolve on a resume — the existing tip is the diff base.
-    expect(runGit.mock.calls.some(c => c[0][0] === 'rev-parse')).toBe(false);
+    // No product-repo HEAD resolve on a resume — only the configured base
+    // branch is inspected for resume-time reconciliation.
+    expect(runGit.mock.calls.some(c => c[0][0] === 'rev-parse' && c[0][1] === 'HEAD')).toBe(false);
     // worktree-add checks out the EXISTING branch, with NO -b flag, so the
     // project's prior commits are present in the worktree.
     const addCall = runGit.mock.calls.find(c => c[0].includes('add'))!;
@@ -514,8 +516,124 @@ describe('createWorktree', () => {
     expect(addCall[0]).toContain(expectedPath);
     // The branch (a commit-ish) is the last arg — not a fresh sha.
     expect(addCall[0][addCall[0].length - 1]).toBe(branch);
+    expect(runGit.mock.calls.some(c => c[0][0] === 'rebase')).toBe(false);
     expect(spec.baseSha).toBe(tip);
+    expect(spec.baseReconciled).toBeUndefined();
     expect(spec.resumed).toBe(true);
+  });
+
+  it('RESUMES an existing branch behind base: rebases and returns post-rebase HEAD as baseSha', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const previousTip = 'previous0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const mergeBase = 'mergebase987654321fedcba987654321fedcba';
+    const newTip = 'newtip0987654321fedcba0987654321fedcba000';
+    const branch = 'jarvis-work/01-growth';
+    const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${mergeBase}\n`, stderr: '' };
+      if (args[0] === 'rev-list') return { stdout: '2\n', stderr: '' };
+      if (args[0] === 'rebase' && args[1] === 'main') return { stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${newTip}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    const addCallIndex = runGit.mock.calls.findIndex(c => c[0][0] === 'worktree' && c[0][1] === 'add');
+    const rebaseCallIndex = runGit.mock.calls.findIndex(c => c[0][0] === 'rebase' && c[0][1] === 'main');
+    expect(addCallIndex).toBeGreaterThanOrEqual(0);
+    expect(rebaseCallIndex).toBeGreaterThan(addCallIndex);
+    expect(runGit.mock.calls[rebaseCallIndex]![1]?.cwd).toBe(expectedPath);
+    expect(spec.resumed).toBe(true);
+    expect(spec.baseSha).toBe(newTip);
+    expect(spec.baseReconciled).toEqual({
+      strategy: 'rebase',
+      baseBranch: 'main',
+      previousTip,
+      newTip,
+      baseAheadCount: 2,
+    });
+  });
+
+  it('RESUMES an existing branch with rebase failure: aborts, removes worktree, and throws a reconciliation error', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const previousTip = 'previous0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const mergeBase = 'mergebase987654321fedcba987654321fedcba';
+    const branch = 'jarvis-work/01-growth';
+    const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${mergeBase}\n`, stderr: '' };
+      if (args[0] === 'rev-list') return { stdout: '3\n', stderr: '' };
+      if (args[0] === 'rebase' && args[1] === 'main') {
+        throw Object.assign(new Error('conflict while rebasing'), { stderr: 'CONFLICT (content)' });
+      }
+      if (args[0] === 'rebase' && args[1] === '--abort') return { stdout: '', stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'remove') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        branch,
+        worktreeRoot: WORKTREE_ROOT,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(/base reconciliation failed.*jarvis-work\/01-growth.*main.*previous0987654321fedcba0987654321fedcba.*base ahead 3/i);
+
+    const abortCall = runGit.mock.calls.find(c => c[0][0] === 'rebase' && c[0][1] === '--abort');
+    expect(abortCall?.[1]?.cwd).toBe(expectedPath);
+    const removeCall = runGit.mock.calls.find(c => c[0][0] === 'worktree' && c[0][1] === 'remove');
+    expect(removeCall?.[0]).toEqual(['worktree', 'remove', '--force', expectedPath]);
+    expect(removeCall?.[1]?.cwd).toBe(FIXTURE_PRODUCTS.aura.repoPath);
+    expect(runGit.mock.calls.some(c => c[0][0] === 'rev-parse' && c[0][1] === 'HEAD')).toBe(false);
+  });
+
+  it('RESUMES an existing branch with base inspection failure: removes the just-created worktree', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const previousTip = 'previous0987654321fedcba0987654321fedcba';
+    const branch = 'jarvis-work/01-growth';
+    const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
+      if (args[0] === 'worktree' && args[1] === 'add') return { stdout: '', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') {
+        throw Object.assign(new Error('unknown revision main'), { stderr: 'fatal: ambiguous argument' });
+      }
+      if (args[0] === 'worktree' && args[1] === 'remove') return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        branch,
+        worktreeRoot: WORKTREE_ROOT,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(/rev-parse main failed/i);
+
+    const removeCall = runGit.mock.calls.find(c => c[0][0] === 'worktree' && c[0][1] === 'remove');
+    expect(removeCall?.[0]).toEqual(['worktree', 'remove', '--force', expectedPath]);
+    expect(removeCall?.[1]?.cwd).toBe(FIXTURE_PRODUCTS.aura.repoPath);
+    expect(runGit.mock.calls.some(c => c[0][0] === 'rebase')).toBe(false);
   });
 
   it('cuts a FRESH branch (resumed=false) when the requested branch does not exist', async () => {

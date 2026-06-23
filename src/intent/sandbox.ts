@@ -36,9 +36,20 @@ export interface SandboxSpec {
    *  (`baseSha..branch`) for work-product computation. Set by `createWorktree`
    *  when a branch is created (captured atomically with the branch point so a
    *  moving `HEAD` can't change it); absent for base-branch-tracking worktrees.
-   *  On a resume (the requested branch already existed), this is the branch's
-   *  pre-run tip, so the work product is only the commits THIS run adds. */
+   *  On a resume (the requested branch already existed), this is the branch tip
+   *  after any resume-time base reconciliation, so the work product is only the
+   *  commits THIS run adds. */
   baseSha?: string;
+  /** Metadata for a resumed branch that was reconciled with the product's
+   *  configured base branch before the agent saw the worktree. Optional because
+   *  fresh runs and already-current resumes do not need it. */
+  baseReconciled?: {
+    strategy: 'rebase';
+    baseBranch: string;
+    previousTip: string;
+    newTip: string;
+    baseAheadCount: number;
+  };
   /** True when `createWorktree` checked out an existing branch (a resumed,
    *  in-progress project) rather than cutting a fresh one. The runner uses this
    *  to tell the agent prior commits are already present so it continues from

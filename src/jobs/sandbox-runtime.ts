@@ -227,9 +227,10 @@ export interface CreateWorktreeOpts {
  * - When `branch` is given and ALREADY exists (and no `startPoint` forces a
  *   fresh base), the worktree resumes it via `git worktree add <path> <branch>`
  *   — the project's prior commits are present, `SandboxSpec.resumed` is true,
- *   and `baseSha` is the branch's pre-run tip (so the work product is only the
- *   commits this run adds). This is what lets `/work --auto` continue an
- *   interrupted project instead of re-forking off `main` (docs/projects/bugs.md).
+ *   and `baseSha` is the branch tip after any resume-time base reconciliation
+ *   (so the work product is only the commits this run adds). This is what lets
+ *   `/work --auto` continue an interrupted project instead of re-forking off
+ *   `main` (docs/projects/bugs.md).
  * - When `branch` is omitted, the worktree tracks the product's `baseBranch`
  *   via `git worktree add <path> <baseBranch>`.
  *
@@ -285,8 +286,9 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   //    check the branch out in the new worktree (no -b) so the project's prior
   //    commits are present. Without this every run re-forked off `main` and
   //    restarted the project from scratch, stranding committed work
-  //    (docs/projects/bugs.md). The pre-run tip becomes the diff base, so the
-  //    work product is only the commits THIS run adds.
+  //    (docs/projects/bugs.md). After any resume-time base reconciliation, the
+  //    checked-out branch tip becomes the diff base, so the work product is
+  //    only the commits THIS run adds.
   //  - branch requested, does not exist → FRESH: cut it from `startPoint` or the
   //    repo's HEAD, captured BEFORE the add so a moving HEAD can't shift the
   //    diff base.
@@ -294,6 +296,7 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
   let baseSha: string | undefined;
   let resumed = false;
   let args: string[];
+  let baseReconciled: SandboxSpec['baseReconciled'];
   if (opts.branch) {
     // An explicit `startPoint` means the caller wants a fresh branch from a
     // specific commit — honor it and skip the resume probe.
@@ -350,6 +353,29 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     );
   }
 
+  if (resumed && opts.branch && baseSha) {
+    try {
+      const reconciled = await reconcileResumedBranchBase({
+        runGit,
+        worktree,
+        branch: opts.branch,
+        baseBranch: product.baseBranch,
+        previousTip: baseSha,
+      });
+      baseSha = reconciled.baseSha;
+      baseReconciled = reconciled.baseReconciled;
+    } catch (err) {
+      await removeWorktreeAfterReconciliationFailure(
+        runGit,
+        product.repoPath,
+        worktree,
+        opts.branch,
+        product.baseBranch,
+      );
+      throw err;
+    }
+  }
+
   // A fresh worktree has no node_modules (git worktrees don't carry the
   // gitignored dir), so `npx`/`vitest`/`tsx` can't resolve and a /work run
   // can't run the project's tests — half of the 2026-06-01 noop (bugs.md).
@@ -361,8 +387,152 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     worktree,
     egressAllowlist: product.egressAllowlist,
     baseSha,
+    baseReconciled,
     resumed,
   };
+}
+
+interface ReconcileResumeOpts {
+  runGit: GitRunner;
+  worktree: string;
+  branch: string;
+  baseBranch: string;
+  previousTip: string;
+}
+
+async function reconcileResumedBranchBase(
+  opts: ReconcileResumeOpts,
+): Promise<{ baseSha: string; baseReconciled?: SandboxSpec['baseReconciled'] }> {
+  const { runGit, worktree, branch, baseBranch, previousTip } = opts;
+  // Reconcile against the LOCAL base ref — no `git fetch`. Jarvis lands its
+  // out-of-band fixes as commits on the daemon's local base branch (the exact
+  // scenario this guards, docs/projects/bugs.md), so the local ref is
+  // authoritative; consulting origin would risk rebasing onto unreviewed state.
+  const baseTip = await revParse(runGit, worktree, baseBranch, 'base branch');
+  const mergeBase = await mergeBaseHead(runGit, worktree, baseBranch);
+
+  if (mergeBase === baseTip) {
+    return { baseSha: previousTip };
+  }
+
+  const baseAheadCount = await countBaseAhead(runGit, worktree, baseBranch);
+  try {
+    await runGit(['rebase', baseBranch], { cwd: worktree });
+  } catch (err) {
+    try {
+      await runGit(['rebase', '--abort'], { cwd: worktree });
+    } catch (abortErr) {
+      log.warn(
+        'Failed to abort rebase during resume base reconciliation',
+        { branch, baseBranch, worktree, err: (abortErr as Error).message },
+      );
+    }
+
+    const stderr = (err as { stderr?: string })?.stderr ?? '';
+    throw new Error(
+      `createWorktree: base reconciliation failed for branch ${branch} ` +
+        `against ${baseBranch} (previous tip ${previousTip}, base ahead ` +
+        `${baseAheadCount}): ${(err as Error).message}` +
+        `${stderr ? ` — ${stderr.trim()}` : ''}`,
+    );
+  }
+
+  const newTip = await revParse(runGit, worktree, 'HEAD', 'post-rebase HEAD');
+  // Surface the rebase so a resumed run that silently moved its base forward is
+  // never implicit (docs/projects/bugs.md — "what base does this run build on is
+  // never implicit"). The captured baseReconciled rides the SandboxSpec for any
+  // downstream operator surface; this log is the minimum observability.
+  log.info('Reconciled resumed branch base via rebase', {
+    branch,
+    baseBranch,
+    previousTip,
+    newTip,
+    baseAheadCount,
+  });
+  return {
+    baseSha: newTip,
+    baseReconciled: {
+      strategy: 'rebase',
+      baseBranch,
+      previousTip,
+      newTip,
+      baseAheadCount,
+    },
+  };
+}
+
+async function removeWorktreeAfterReconciliationFailure(
+  runGit: GitRunner,
+  repoPath: string,
+  worktree: string,
+  branch: string,
+  baseBranch: string,
+): Promise<void> {
+  try {
+    await runGit(['worktree', 'remove', '--force', worktree], { cwd: repoPath });
+  } catch (removeErr) {
+    log.warn(
+      'Failed to remove worktree after resume base reconciliation failure',
+      { branch, baseBranch, worktree, err: (removeErr as Error).message },
+    );
+  }
+}
+
+async function revParse(
+  runGit: GitRunner,
+  cwd: string,
+  ref: string,
+  label: string,
+): Promise<string> {
+  try {
+    const { stdout } = await runGit(['rev-parse', ref], { cwd });
+    const sha = stdout.trim();
+    if (!sha) throw new Error(`empty ${label}`);
+    return sha;
+  } catch (err) {
+    const stderr = (err as { stderr?: string })?.stderr ?? '';
+    throw new Error(
+      `createWorktree: git rev-parse ${ref} failed in ${cwd}: ` +
+        `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+    );
+  }
+}
+
+async function mergeBaseHead(
+  runGit: GitRunner,
+  cwd: string,
+  baseBranch: string,
+): Promise<string> {
+  try {
+    const { stdout } = await runGit(['merge-base', 'HEAD', baseBranch], { cwd });
+    const sha = stdout.trim();
+    if (!sha) throw new Error('empty merge-base');
+    return sha;
+  } catch (err) {
+    const stderr = (err as { stderr?: string })?.stderr ?? '';
+    throw new Error(
+      `createWorktree: git merge-base HEAD ${baseBranch} failed in ${cwd}: ` +
+        `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+    );
+  }
+}
+
+async function countBaseAhead(
+  runGit: GitRunner,
+  cwd: string,
+  baseBranch: string,
+): Promise<number> {
+  try {
+    const { stdout } = await runGit(['rev-list', '--count', `HEAD..${baseBranch}`], { cwd });
+    const n = Number.parseInt(stdout.trim(), 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch (err) {
+    const stderr = (err as { stderr?: string })?.stderr ?? '';
+    throw new Error(
+      `createWorktree: git rev-list --count HEAD..${baseBranch} failed in ${cwd}: ` +
+        `${(err as Error).message}${stderr ? ` — ${stderr.trim()}` : ''}`,
+    );
+  }
 }
 
 /**
