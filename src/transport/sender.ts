@@ -1,6 +1,13 @@
 import type TelegramBot from 'node-telegram-bot-api';
 import { createLogger } from '../utils/logger.js';
-import type { NotificationBus, BusMessageEvent, BusAgentEvent, BusMutationEvent, BusOpEvent } from './notification-bus.js';
+import type {
+  NotificationBus,
+  BusMessageEvent,
+  BusAgentEvent,
+  BusMutationEvent,
+  BusOpEvent,
+  BusRunEvent,
+} from './notification-bus.js';
 import { TelegramSender } from './telegram-sender.js';
 import { WebviewSender } from './webview-sender.js';
 
@@ -68,11 +75,23 @@ export function createSenders(
   };
   bus.on('op-event', opEventHandler);
 
+  const runEventHandler = (event: BusRunEvent) => {
+    try {
+      webview.onRunEvent(event);
+    } catch (err) {
+      log.error('WebviewSender.onRunEvent failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  bus.on('run-event', runEventHandler);
+
   const destroy = () => {
     bus.off('message', handler);
     bus.off('agent-event', agentEventHandler);
     bus.off('mutation-event', mutationEventHandler);
     bus.off('op-event', opEventHandler);
+    bus.off('run-event', runEventHandler);
     tg.shutdown();
     webview.shutdown();
   };

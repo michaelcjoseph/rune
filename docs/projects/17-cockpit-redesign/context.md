@@ -302,8 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
--  failed on the missing Phase 2 implementation surfaces.
+- er runner src/transport/sender.test.ts src/transport/webview-sender.test.ts src/server/static/run-feed-client.test.ts` passed: 58 tests.
 - `git diff --check` passed.
-- `git diff --cached --check` passed.
-
-The failing points are the expected ones: no `run-feed-client.js`, no `WebviewSender.onRunEvent` / `run-event` bus subscription yet, and no `/api/work-runs/:id/live` route yet.
+- `npm run build` still has pre-existing branch-wide type errors, but no errors reference the touched files after the declaration fix.

@@ -34,6 +34,9 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { formatToolUse, scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
+
+export { redactSecrets };
 
 /** A parsed `--output-format stream-json` envelope. The CLI emits one JSON
  *  object per line; common `type`s are `system`, `assistant`, `user`, and
@@ -87,72 +90,6 @@ export interface CreateTranscriptSinkOptions {
    *  trusted path (a config/constant), never derived from user input —
    *  `runId` is slug-validated, but `baseDir` is joined verbatim. */
   baseDir: string;
-}
-
-/**
- * Best-effort redaction of known secret/token patterns from a string before it
- * is persisted to the transcript. Covers at least credential-bearing URLs,
- * bearer tokens, and common API-key prefixes. Best-effort, not a guarantee —
- * the primary protection is gitignore + the authenticated route.
- */
-/**
- * A short, deterministic, non-secret tag derived from the matched secret. It
- * makes every redacted value DISTINGUISHABLE from a bare placeholder literal.
- *
- * Why this exists (docs/projects/bugs.md 2026-06-15): `redactSecrets` also runs
- * on the inter-agent diff path — `execution-agent.ts` stages the work product
- * and redacts it before handing it to a cross-provider reviewer. A task whose
- * tests are ABOUT secret redaction carries a real `sk-…` fixture. With a fixed
- * placeholder, that fixture redacts to the SAME literal the test asserts as its
- * expected-redacted output, collapsing `rawSecret` and the expected string into
- * one value and making the test self-contradictory (`expect(out).toContain(P)`
- * AND `expect(out).not.toContain(rawSecret)` with `rawSecret === P`). The
- * reviewer then correctly objects, the objection hard-gates, and the run dies.
- * A per-secret tag breaks the collision: a redacted fixture becomes
- * `sk-<redacted-a1b2c3>`, never the bare `sk-<redacted>` literal a test names.
- * Deterministic, so re-redacting the same text stays stable.
- */
-function redactionTag(secret: string): string {
-  // FNV-1a (32-bit) — no imports, stable, non-cryptographic (this is a
-  // disambiguator, not a security primitive).
-  let h = 0x811c9dc5;
-  for (let i = 0; i < secret.length; i++) {
-    h = Math.imul(h ^ secret.charCodeAt(i), 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0').slice(0, 6);
-}
-
-// Each replacement is a function so token-style redactions can carry a
-// per-secret tag (see redactionTag). The leading non-`[A-Za-z0-9_-]` char in
-// every token placeholder (`<`) keeps redaction idempotent — a placeholder
-// never re-matches its own pattern.
-const REDACTIONS: ReadonlyArray<
-  readonly [RegExp, (match: string, ...groups: string[]) => string]
-> = [
-  // Credential-bearing URLs: https://user:pass@host -> https://<redacted>@host
-  // (userinfo only — no standalone token literal a test asserts on, so no tag.)
-  [/(https?:\/\/)[^\s/@]+@/gi, (_m, scheme: string) => `${scheme}<redacted>@`],
-  // Authorization: Bearer <token> (hyphen first in the class to avoid an
-  // ambiguous range)
-  [/\bBearer\s+[-A-Za-z0-9._~+/=]+/gi, (m) => `Bearer <redacted-${redactionTag(m)}>`],
-  // Common API-key prefixes (sk-, sk-proj-, …)
-  [/\bsk-[A-Za-z0-9_-]{6,}/g, (m) => `sk-<redacted-${redactionTag(m)}>`],
-  // Telegram bot token (numeric_id:35-char secret) — Jarvis's highest-value
-  // secret; the backstop if a sandbox ever echoes its environment.
-  [/\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g, (m) => `<tg-token-redacted-${redactionTag(m)}>`],
-  // GitHub tokens (PAT/OAuth/app) — most likely to appear via a git remote URL.
-  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b/g, (m) => `<gh-token-redacted-${redactionTag(m)}>`],
-  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, (m) => `<gh-token-redacted-${redactionTag(m)}>`],
-  // AWS access key id.
-  [/\bAKIA[A-Z0-9]{16}\b/g, (m) => `<aws-key-redacted-${redactionTag(m)}>`],
-  // JWT (incl. bare ones not prefixed with Bearer, e.g. LENNY_MCP_TOKEN).
-  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, (m) => `<jwt-redacted-${redactionTag(m)}>`],
-];
-
-export function redactSecrets(text: string): string {
-  let out = text;
-  for (const [re, repl] of REDACTIONS) out = out.replace(re, repl);
-  return out;
 }
 
 /**

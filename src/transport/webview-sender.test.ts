@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { WebSocket as WsWebSocket } from 'ws';
+import type { BusRunEvent } from './notification-bus.js';
 
 // Mock the 'ws' module so we can create fake WebSocket stubs
 const OPEN = 1;
@@ -444,14 +445,14 @@ describe('WebviewSender', () => {
       tasks: { done: 2, total: 5 },
       ts: '2026-06-23T12:00:05.000Z',
       userId: 42,
-    };
+    } satisfies BusRunEvent;
 
     it('forwards run-event frames to registered open connections and strips userId', () => {
       const sender = new WebviewSender();
       const ws = makeWs();
       sender.register(42, ws);
 
-      (sender as any).onRunEvent(baseEvent);
+      sender.onRunEvent(baseEvent);
 
       expect(ws.send).toHaveBeenCalledOnce();
       const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
@@ -472,7 +473,7 @@ describe('WebviewSender', () => {
       const ws = makeWs();
       sender.register(99, ws);
 
-      (sender as any).onRunEvent(baseEvent);
+      sender.onRunEvent(baseEvent);
 
       expect(ws.send).not.toHaveBeenCalled();
     });
@@ -483,7 +484,7 @@ describe('WebviewSender', () => {
       sender.register(42, ws);
       const rawToken = 'sk-liveRunSecret0123456789';
 
-      (sender as any).onRunEvent({
+      const event = {
         kind: 'run-event',
         subKind: 'log',
         runId: 'run-live-001',
@@ -492,7 +493,9 @@ describe('WebviewSender', () => {
         lines: [`provider failed with token ${rawToken}`],
         ts: '2026-06-23T12:00:10.000Z',
         userId: 42,
-      });
+      } satisfies BusRunEvent;
+
+      sender.onRunEvent(event);
 
       expect(ws.send).toHaveBeenCalledOnce();
       const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);

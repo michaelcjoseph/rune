@@ -85,7 +85,57 @@ export interface BusOpEventEnd extends BusOpEventBase {
 
 export type BusOpEvent = BusOpEventStart | BusOpEventProgress | BusOpEventEnd;
 
-export type BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent | BusOpEvent;
+export interface BusRunTarget {
+  kind: 'project' | 'bug';
+  slug: string;
+}
+
+export interface BusRunAgent {
+  role: string;
+  active: boolean;
+}
+
+export type BusRunState = 'running' | 'parked' | 'completed' | 'no-op' | 'partial' | 'failed';
+export type BusRunOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
+
+interface BusRunEventBase {
+  kind: 'run-event';
+  runId: string;
+  product: string;
+  target: BusRunTarget;
+  ts: string;
+  userId: number;
+}
+
+export interface BusRunProgressEvent extends BusRunEventBase {
+  subKind: 'progress';
+  tasks: { done: number; total: number };
+}
+
+export interface BusRunAgentsEvent extends BusRunEventBase {
+  subKind: 'agents';
+  agents: BusRunAgent[];
+}
+
+export interface BusRunLogEvent extends BusRunEventBase {
+  subKind: 'log';
+  lines: string[];
+}
+
+export interface BusRunStateEvent extends BusRunEventBase {
+  subKind: 'state';
+  state: BusRunState;
+  elapsedMs: number;
+  outcome?: BusRunOutcome;
+}
+
+export type BusRunEvent =
+  | BusRunProgressEvent
+  | BusRunAgentsEvent
+  | BusRunLogEvent
+  | BusRunStateEvent;
+
+export type BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent | BusOpEvent | BusRunEvent;
 
 type BusEventKind = BusEvent['kind'];
 type HandlerFor<K extends BusEventKind> = (event: Extract<BusEvent, { kind: K }>) => void;

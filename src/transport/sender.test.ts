@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { BusRunEvent } from './notification-bus.js';
 
 // Mock logger to suppress output
 vi.mock('../utils/logger.js', () => ({
@@ -240,7 +241,7 @@ describe('createSenders', () => {
       const ws = mockWs();
       webview.register(123, ws);
 
-      bus.publish({
+      const event = {
         kind: 'run-event',
         subKind: 'agents',
         runId: 'run-live-001',
@@ -252,7 +253,8 @@ describe('createSenders', () => {
         ],
         ts: '2026-06-23T12:00:00.000Z',
         userId: 123,
-      } as any);
+      } satisfies BusRunEvent;
+      bus.publish(event);
 
       await flushMicrotasks();
 
@@ -274,23 +276,25 @@ describe('createSenders', () => {
 
     it('a run-event webview delivery failure does not throw out of publish', () => {
       const { webview } = createSenders(bot, bus);
-      const runEventSpy = vi.spyOn(webview as any, 'onRunEvent').mockImplementation(() => {
+      const runEventSpy = vi.spyOn(webview, 'onRunEvent').mockImplementation(() => {
         throw new Error('ws delivery failed');
       });
 
+      const event = {
+        kind: 'run-event',
+        subKind: 'state',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        state: 'failed',
+        elapsedMs: 65_000,
+        outcome: 'failed',
+        ts: '2026-06-23T12:01:05.000Z',
+        userId: 123,
+      } satisfies BusRunEvent;
+
       expect(() =>
-        bus.publish({
-          kind: 'run-event',
-          subKind: 'state',
-          runId: 'run-live-001',
-          product: 'aura',
-          target: { kind: 'project', slug: '01-mvp' },
-          state: 'failed',
-          elapsedMs: 65_000,
-          outcome: 'failed',
-          ts: '2026-06-23T12:01:05.000Z',
-          userId: 123,
-        } as any),
+        bus.publish(event),
       ).not.toThrow();
       expect(runEventSpy).toHaveBeenCalledOnce();
     });
@@ -301,7 +305,7 @@ describe('createSenders', () => {
       webview.register(123, ws);
 
       destroy();
-      bus.publish({
+      const event = {
         kind: 'run-event',
         subKind: 'progress',
         runId: 'run-live-001',
@@ -310,7 +314,8 @@ describe('createSenders', () => {
         tasks: { done: 3, total: 7 },
         ts: '2026-06-23T12:00:05.000Z',
         userId: 123,
-      } as any);
+      } satisfies BusRunEvent;
+      bus.publish(event);
 
       await flushMicrotasks();
 

@@ -1,7 +1,8 @@
 import { WebSocket } from 'ws';
 import type { MessageSender, SendOpts } from './sender.js';
-import type { BusAgentEvent, BusMutationEvent, BusOpEvent } from './notification-bus.js';
+import type { BusAgentEvent, BusMutationEvent, BusOpEvent, BusRunEvent } from './notification-bus.js';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('webview-sender');
 
@@ -67,6 +68,16 @@ export class WebviewSender implements MessageSender {
     if (event.opKind === 'classifier') return;
     const { userId, ...rest } = event;
     this.broadcast(userId, JSON.stringify(rest));
+  }
+
+  /** Forward a run-event bus message to all connected WS clients for the given userId.
+   *  Strips userId before forwarding and redacts live log lines at the WS boundary. */
+  onRunEvent(event: BusRunEvent): void {
+    const { userId, ...rest } = event;
+    const frame = rest.subKind === 'log'
+      ? { ...rest, lines: rest.lines.map((line) => redactSecrets(line)) }
+      : rest;
+    this.broadcast(userId, JSON.stringify(frame));
   }
 
   private broadcast(userId: number, frame: string, logErrors = false): void {
