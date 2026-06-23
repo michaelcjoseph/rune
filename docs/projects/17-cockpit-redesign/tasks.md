@@ -83,7 +83,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ### Tests (write first)
 
 - [x] Write the test suite for **client view-router and the Home view UI** — test-plan.md §5.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
