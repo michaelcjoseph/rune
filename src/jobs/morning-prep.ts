@@ -13,8 +13,6 @@ export interface MorningData {
   weeklyGoals: string;
   weeklyGoalsSource: string | null;
   priorities: string;
-  study: string;
-  writing: string;
   yesterdayFile: string;
   dayOfWeek: string;
 }
@@ -36,21 +34,6 @@ function gatherWeeklyGoals(fridayFile: string): { goals: string; sourceFile: str
   return { goals: parsed.trim(), sourceFile: fridayFile };
 }
 
-function gatherStudy(): string {
-  const syllabus = readVaultFile('study/syllabus.md')?.trim();
-  const progress = readVaultFile('study/progress.json')?.trim();
-  if (!syllabus && !progress) return 'No active study assignments.';
-  const parts: string[] = [];
-  if (syllabus) parts.push(syllabus);
-  if (progress) parts.push(progress);
-  return parts.join('\n\n');
-}
-
-function gatherWriting(): string {
-  const content = readVaultFile('writing/topics.md');
-  return content?.trim() || 'No writing topic set.';
-}
-
 // Claude synthesis sees full content; only the fallback path truncates.
 function truncateForFallback(content: string, sourceHint: string, maxLines: number): string {
   const trimmed = content.trim();
@@ -70,9 +53,7 @@ export function formatMorningPrepFallback(data: MorningData): string {
   const weeklyGoals = truncateForFallback(data.weeklyGoals, goalsSourceHint, 10);
   const goalsHeader = `### Weekly Goals${buildGoalsSourceLabel(data.weeklyGoalsSource)}`;
   const priorities = truncateForFallback(data.priorities, 'journals/<yesterday>.md #priorities', 15);
-  const study = truncateForFallback(data.study, 'study/syllabus.md, study/progress.json', 10);
-  const writing = truncateForFallback(data.writing, 'writing/topics.md', 10);
-  return `${goalsHeader}\n${weeklyGoals}\n\n### Priorities Recap\n${priorities}\n\n### Study\n${study}\n\n### Writing Focus\n${writing}`;
+  return `${goalsHeader}\n${weeklyGoals}\n\n### Priorities Recap\n${priorities}\n\n## Notes`;
 }
 
 function formatSourceDate(filename: string): string {
@@ -84,6 +65,27 @@ export interface SynthesisResult {
   text: string;
   synthFailed: boolean;
   synthError: string | null;
+}
+
+function normalizeMorningPrepSections(text: string): string {
+  const lines = text.trim().split('\n');
+  const kept: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^###\s+(?:Study|Writing Focus)\s*$/i.test(line.trim())) {
+      while (i + 1 < lines.length && !/^#{2,3}\s+/.test(lines[i + 1]!.trim())) i++;
+      continue;
+    }
+    if (/^##\s+Notes\s*$/i.test(line.trim())) {
+      while (i + 1 < lines.length && !/^#{2,3}\s+/.test(lines[i + 1]!.trim())) i++;
+      continue;
+    }
+    kept.push(line);
+  }
+
+  const body = kept.join('\n').trim();
+  return body ? `${body}\n\n## Notes` : '## Notes';
 }
 
 // Uses askClaudeOneShot instead of the morning-prep agent because the data is
@@ -102,12 +104,6 @@ ${data.weeklyGoals}
 **Yesterday's Priorities:**
 ${data.priorities}
 
-**Study Assignments:**
-${data.study}
-
-**Writing Focus:**
-${data.writing}
-
 Synthesize this into a concise morning prep section using exactly this format (no markdown fences, no extra commentary):
 
 ${goalsHeaderTemplate}
@@ -116,11 +112,7 @@ ${goalsHeaderTemplate}
 ### Priorities Recap
 <bullet list of yesterday's priorities with brief status if inferable>
 
-### Study
-<current assignments, progress, overdue items>
-
-### Writing Focus
-<current topic and any relevant context>
+## Notes
 
 Be concise — this is a morning glance, not a report. Use bullet points (or numbered for goals), not paragraphs. Never invent data — only report what was provided. The "(from YYYY-MM-DD)" parenthetical appears only on the "### Weekly Goals" header — do not add it to any other section. Keep total output under 500 words.`;
 
@@ -139,7 +131,7 @@ Be concise — this is a morning glance, not a report. Use bullet points (or num
     return { text: formatMorningPrepFallback(data), synthFailed: true, synthError: errMsg };
   }
 
-  return { text: result.text, synthFailed: false, synthError: null };
+  return { text: normalizeMorningPrepSections(result.text), synthFailed: false, synthError: null };
 }
 
 export type MorningPrepResult =
@@ -206,8 +198,6 @@ export function gatherMorningData(): MorningData {
     weeklyGoals: goals,
     weeklyGoalsSource: sourceFile,
     priorities: gatherPriorities(yesterdayFile),
-    study: gatherStudy(),
-    writing: gatherWriting(),
     yesterdayFile,
     dayOfWeek,
   };

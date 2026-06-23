@@ -56,16 +56,13 @@ const { gatherMorningData, formatMorningPrepFallback, synthesizeMorningPrep, exe
 describe('jobs/morning-prep — gatherMorningData', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns real content for all fields when every source is present', () => {
+  it('returns real content for morning-prep fields when sources are present and ignores study/writing files', () => {
     const journalContent = '# Journal\n#priorities\n- Ship feature X\n- Review PRs\n';
     const fridayContent = '## Week in Review\n\n**Next Week\'s Goals:**\n1. Ship Aura\n2. Sleep 8h';
     mockReadVaultFile.mockImplementation((path: string) => {
       if (path === 'journals/2026_04_08.md') return journalContent;
       if (path === 'journals/2026_04_03.md') return fridayContent;
       if (path === 'health/plan.md') return 'Run 5k + stretching';
-      if (path === 'study/syllabus.md') return 'Chapter 7: Transformers';
-      if (path === 'study/progress.json') return '{"chapter":6,"complete":true}';
-      if (path === 'writing/topics.md') return 'Draft: LLM orchestration patterns';
       return null;
     });
     mockParseTag.mockReturnValue('- Ship feature X\n- Review PRs');
@@ -76,10 +73,11 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(data.weeklyGoals).toBe('1. Ship Aura\n2. Sleep 8h');
     expect(data.weeklyGoalsSource).toBe('2026_04_03.md');
     expect(data.priorities).toBe('- Ship feature X\n- Review PRs');
-    expect(data.study).toBe('Chapter 7: Transformers\n\n{"chapter":6,"complete":true}');
-    expect(data.writing).toBe('Draft: LLM orchestration patterns');
     expect(data.yesterdayFile).toBe('2026_04_08.md');
     expect(data.dayOfWeek).toBe('Wednesday');
+    expect(mockReadVaultFile).not.toHaveBeenCalledWith('study/syllabus.md');
+    expect(mockReadVaultFile).not.toHaveBeenCalledWith('study/progress.json');
+    expect(mockReadVaultFile).not.toHaveBeenCalledWith('writing/topics.md');
   });
 
   it('returns fallback strings when all sources are missing', () => {
@@ -92,8 +90,6 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(data.weeklyGoals).toBe('No weekly goals set.');
     expect(data.weeklyGoalsSource).toBeNull();
     expect(data.priorities).toBe('No priorities logged yesterday.');
-    expect(data.study).toBe('No active study assignments.');
-    expect(data.writing).toBe('No writing topic set.');
   });
 
   it('returns fallback for weekly goals when Friday journal has no goals section', () => {
@@ -142,32 +138,6 @@ describe('jobs/morning-prep — gatherMorningData', () => {
     expect(mockParseTag).toHaveBeenCalledWith('# Journal\nJust some notes.', 'priorities');
   });
 
-  it('returns just syllabus when progress.json is missing', () => {
-    mockReadVaultFile.mockImplementation((path: string) => {
-      if (path === 'study/syllabus.md') return 'Week 3: Attention mechanisms';
-      return null;
-    });
-    mockParseTag.mockReturnValue(null);
-    mockParseWeeklyGoals.mockReturnValue(null);
-
-    const data = gatherMorningData();
-
-    expect(data.study).toBe('Week 3: Attention mechanisms');
-  });
-
-  it('returns just progress.json when syllabus is missing', () => {
-    mockReadVaultFile.mockImplementation((path: string) => {
-      if (path === 'study/progress.json') return '{"lesson":4}';
-      return null;
-    });
-    mockParseTag.mockReturnValue(null);
-    mockParseWeeklyGoals.mockReturnValue(null);
-
-    const data = gatherMorningData();
-
-    expect(data.study).toBe('{"lesson":4}');
-  });
-
   it('always populates yesterdayFile and dayOfWeek from time utils', () => {
     mockReadVaultFile.mockReturnValue(null);
     mockParseTag.mockReturnValue(null);
@@ -195,8 +165,6 @@ const sampleData = {
   weeklyGoals: '1. Ship Aura\n2. Sleep 8h\n3. Build shelves',
   weeklyGoalsSource: '2026_04_03.md',
   priorities: '- Ship feature X\n- Review PRs',
-  study: 'Chapter 7: Transformers',
-  writing: 'Draft: LLM orchestration patterns',
   yesterdayFile: '2026_04_08.md',
   dayOfWeek: 'Wednesday',
 };
@@ -208,14 +176,13 @@ const sampleDataNoGoals = {
 };
 
 describe('jobs/morning-prep — formatMorningPrepFallback', () => {
-  it('produces correct 4-section markdown with weekly goals header showing source date', () => {
+  it('produces morning-prep markdown with weekly goals and final Notes header', () => {
     const result = formatMorningPrepFallback(sampleData);
 
     expect(result).toBe(
       '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h\n3. Build shelves\n\n' +
       '### Priorities Recap\n- Ship feature X\n- Review PRs\n\n' +
-      '### Study\nChapter 7: Transformers\n\n' +
-      '### Writing Focus\nDraft: LLM orchestration patterns'
+      '## Notes'
     );
   });
 
@@ -235,18 +202,6 @@ describe('jobs/morning-prep — formatMorningPrepFallback', () => {
     expect(prioritiesIdx).toBeGreaterThan(goalsIdx);
   });
 
-  it('truncates study content containing a raw JSON blob', () => {
-    const jsonBlob = JSON.stringify(Array.from({ length: 30 }, (_, i) => ({ id: i, title: `item ${i}` })), null, 2);
-    const data = { ...sampleData, study: `## Syllabus\n- Chapter 7: Transformers\n\n${jsonBlob}` };
-
-    const result = formatMorningPrepFallback(data);
-
-    // Raw item 29 must not end up in the journal
-    expect(result).not.toContain('item 29');
-    expect(result).toContain('truncated');
-    expect(result).toContain('study/syllabus.md');
-  });
-
   it('truncates priorities content exceeding the 15-line cap and adds a journal source hint', () => {
     const longPriorities = Array.from({ length: 30 }, (_, i) => `- priority ${i}`).join('\n');
     const data = { ...sampleData, priorities: longPriorities };
@@ -261,18 +216,9 @@ describe('jobs/morning-prep — formatMorningPrepFallback', () => {
     expect(result).toContain('#priorities');
   });
 
-  it('truncates writing content exceeding the 10-line cap and adds a topics source hint', () => {
-    const longWriting = Array.from({ length: 25 }, (_, i) => `- topic ${i}`).join('\n');
-    const data = { ...sampleData, writing: longWriting };
-
-    const result = formatMorningPrepFallback(data);
-
-    expect(result).toContain('topic 0');
-    expect(result).toContain('topic 9'); // 10-line cap: indices 0..9 retained
-    expect(result).not.toContain('topic 15');
-    expect(result).not.toContain('topic 24');
-    expect(result).toContain('truncated');
-    expect(result).toContain('writing/topics.md');
+  it('always leaves Notes as the final section', () => {
+    const result = formatMorningPrepFallback(sampleData);
+    expect(result.endsWith('\n\n## Notes')).toBe(true);
   });
 });
 
@@ -280,7 +226,7 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('on Claude success, returns result.text with synthFailed=false', async () => {
-    const synthesized = '### Priorities Recap\n- Ship feature X (in progress)\n\n### Study\n- Chapter 7: Transformers\n\n### Writing Focus\n- LLM orchestration patterns draft';
+    const synthesized = '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n\n### Priorities Recap\n- Ship feature X (in progress)\n\n## Notes';
     mockAskClaudeOneShot.mockResolvedValue({ text: synthesized, error: null });
 
     const result = await synthesizeMorningPrep(sampleData);
@@ -288,6 +234,37 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
     expect(result.text).toBe(synthesized);
     expect(result.synthFailed).toBe(false);
     expect(result.synthError).toBeNull();
+  });
+
+  it('normalizes Claude success output by removing Study/Writing and appending final Notes', async () => {
+    mockAskClaudeOneShot.mockResolvedValue({
+      text: [
+        '### Weekly Goals',
+        '1. Ship Aura',
+        '',
+        '### Priorities Recap',
+        '- Ship feature X',
+        '',
+        '### Study',
+        '- Stale assignment',
+        '',
+        '### Writing Focus',
+        '- Draft post',
+      ].join('\n'),
+      error: null,
+    });
+
+    const result = await synthesizeMorningPrep(sampleData);
+
+    expect(result.text).toBe(
+      '### Weekly Goals\n1. Ship Aura\n\n' +
+      '### Priorities Recap\n- Ship feature X\n\n' +
+      '## Notes',
+    );
+    expect(result.text).not.toContain('### Study');
+    expect(result.text).not.toContain('Stale assignment');
+    expect(result.text).not.toContain('### Writing Focus');
+    expect(result.text).not.toContain('Draft post');
   });
 
   it('on Claude error, returns fallback-formatted content and synthFailed=true', async () => {
@@ -342,6 +319,12 @@ describe('jobs/morning-prep — synthesizeMorningPrep', () => {
     expect(prompt).toContain('### Weekly Goals (from 2026-04-03)');
     // Weekly Goals header must appear before Priorities Recap in the template
     expect(prompt.indexOf('### Weekly Goals')).toBeLessThan(prompt.indexOf('### Priorities Recap'));
+    expect(prompt).not.toContain('Study Assignments');
+    expect(prompt).not.toContain('### Study');
+    expect(prompt).not.toContain('Writing Focus');
+    expect(prompt).not.toContain('writing');
+    expect(prompt).toContain('## Notes');
+    expect(prompt.trim().endsWith('Keep total output under 500 words.')).toBe(true);
   });
 
   it('prompt uses bare "Weekly Goals" header with fallback body when source is null', async () => {

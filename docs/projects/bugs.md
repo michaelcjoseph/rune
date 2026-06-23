@@ -24,7 +24,6 @@
     - C. Add a stuck-session watchdog: mirror `src/jobs/planning-expiry.ts` for review sessions, auto-closing any session left in a non-terminal phase past some age so the cockpit self-heals.
     - D. Detect model-side completion: if the target journal grew or a `"<Type> review: <date>"` commit landed while a session is non-terminal, transition it to `done`.
 - [ ] Review run after its scheduled date appends the summary to the wrong journal. When a review is completed late, the write-up should land in the journal entry for the day it was due, not the day it actually ran.
-- [ ] Remove study from the morning prep and add the "## Notes" section at the end
 - [ ] Nightly wrap-up summarizes and deletes ongoing sessions — the `Session capture` step auto-summarizes EVERY active session, appends the summary to the journal, then deletes the live session, clearing in-progress conversations at the nightly run.
   - **Issue**
     - The nightly `Session capture` step (`stepCaptureSession`, `src/jobs/nightly.ts:62-67`; run first at `nightly.ts:739`) calls `captureSessions()` (`src/jobs/capture.ts:15`).
@@ -60,6 +59,7 @@
 
 ## Done
 
+- [x] Remove study from the morning prep and add the "## Notes" section at the end. _(Fixed 2026-06-23 — morning prep no longer reads or prompts with study/writing files, fallback output omits `### Study` and `### Writing Focus`, normalized Claude output strips either stale section, and the required output format ends with `## Notes`.)_
 - [x] `/work --auto` resume reuses a stale project branch — when `main` advances out-of-band after the branch was cut, the resumed run never rebases onto it, so a fix landed directly on `main` is invisible to the in-flight project. The uncovered flip side of the 2026-06-04 stable-per-project-branch resume fix below. _(Fixed 2026-06-23 — chose A+B: resume-time base reconciliation via auto-rebase, with conflict cleanup.)_
   - **Issue**
     - The 2026-06-04 resume fix made each project run check out a stable per-project branch (`jarvis-work/<slug>`) when it already exists, instead of re-forking off `main` (`work-runner.ts` `workBranchName`; resume path `src/jobs/sandbox-runtime.ts:297-309`). That correctly killed the restart-from-Phase-1 bug — but it only ever checks the branch OUT (`git worktree add <path> <branch>`, no `-b`); it never rebases or merges the branch's now-older base forward.

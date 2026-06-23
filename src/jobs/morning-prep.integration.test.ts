@@ -124,7 +124,7 @@ beforeEach(() => {
 
   // Default: Claude returns synthesized content
   mockAskClaudeOneShot.mockResolvedValue({
-    text: '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h consistently\n3. Build shelves for Sam\n\n### Priorities Recap\n- Ship feature X (in progress)\n- Review PRs (pending)\n\n### Study\n- Week 5: Transformer architectures\n- 1 assignment remaining\n\n### Writing Focus\n- Personal knowledge management with LLMs',
+    text: '### Weekly Goals (from 2026-04-03)\n1. Ship Aura\n2. Sleep 8h consistently\n3. Build shelves for Sam\n\n### Priorities Recap\n- Ship feature X (in progress)\n- Review PRs (pending)\n\n## Notes',
     error: null,
   });
 
@@ -168,6 +168,11 @@ describe('morning-prep integration', () => {
     expect(content).toContain('## Morning Prep');
     expect(content).toContain('### Priorities Recap');
     expect(content).toContain('Ship feature X');
+    expect(content).toContain('## Notes');
+    expect(content.trim().endsWith('## Notes')).toBe(true);
+    expect(content).not.toContain('### Study');
+    expect(content).not.toContain('### Writing Focus');
+    expect(content).not.toContain('Personal knowledge management with LLMs');
 
     // Claude was called with gathered data
     expect(mockAskClaudeOneShot).toHaveBeenCalledOnce();
@@ -178,6 +183,11 @@ describe('morning-prep integration', () => {
     expect(prompt).toContain('Ship Aura');
     expect(prompt).toContain('### Weekly Goals (from 2026-04-03)');
     expect(prompt.indexOf('### Weekly Goals')).toBeLessThan(prompt.indexOf('### Priorities Recap'));
+    expect(prompt).not.toContain('Study Assignments');
+    expect(prompt).not.toContain('### Study');
+    expect(prompt).not.toContain('Writing Focus');
+    expect(prompt).not.toContain('Personal knowledge management with LLMs');
+    expect(prompt).toContain('## Notes');
 
     // Synthesized journal contains the new section above Priorities Recap
     expect(content).toContain('### Weekly Goals (from 2026-04-03)');
@@ -202,8 +212,8 @@ describe('morning-prep integration', () => {
     const prompt = mockAskClaudeOneShot.mock.calls[0]![0] as string;
     expect(prompt).toContain('No weekly goals set');
     expect(prompt).toContain('No priorities logged yesterday');
-    expect(prompt).toContain('No active study assignments');
-    expect(prompt).toContain('No writing topic set');
+    expect(prompt).not.toContain('No active study assignments');
+    expect(prompt).not.toContain('No writing topic set');
 
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
   });
@@ -251,16 +261,18 @@ describe('morning-prep integration', () => {
     // Fallback format headings present, including the new Weekly Goals section
     expect(content).toContain('### Weekly Goals (from 2026-04-03)');
     expect(content).toContain('### Priorities Recap');
-    expect(content).toContain('### Study');
-    expect(content).toContain('### Writing Focus');
+    expect(content).toContain('## Notes');
     expect(content).not.toContain('### Workout');
+    expect(content).not.toContain('### Study');
+    expect(content).not.toContain('### Writing Focus');
     expect(content.indexOf('### Weekly Goals')).toBeLessThan(content.indexOf('### Priorities Recap'));
+    expect(content.trim().endsWith('## Notes')).toBe(true);
 
     // Raw data present (not synthesized)
     expect(content).toContain('Ship Aura');
     expect(content).toContain('Ship feature X');
-    expect(content).toContain('Transformer architectures');
-    expect(content).toContain('Personal knowledge management with LLMs');
+    expect(content).not.toContain('Transformer architectures');
+    expect(content).not.toContain('Personal knowledge management with LLMs');
 
     // Fallback must be terse — these fixtures are short, so no truncation should trigger
     expect(content.length).toBeLessThan(5000);
@@ -268,8 +280,7 @@ describe('morning-prep integration', () => {
     expect(mockGitCommitAndPush).toHaveBeenCalledWith('Morning prep');
   });
 
-  it('Claude failure with large source files produces a terse (truncated) fallback, not a raw dump', async () => {
-    // Simulate the real-world incident: a 1000-line study/progress.json
+  it('Claude failure with large study/writing sources does not include either source in fallback', async () => {
     const largeProgress = JSON.stringify(
       Array.from({ length: 1000 }, (_, i) => ({ id: i, lesson: `Lesson ${i}`, done: false })),
       null,
@@ -278,7 +289,7 @@ describe('morning-prep integration', () => {
     writeVaultFixture('journals/2026_04_08.md', '#priorities\n- X');
     writeVaultFixture('study/syllabus.md', '## Syllabus\n- Intro');
     writeVaultFixture('study/progress.json', largeProgress);
-    writeVaultFixture('writing/topics.md', '- Topic A');
+    writeVaultFixture('writing/topics.md', Array.from({ length: 1000 }, (_, i) => `- Topic ${i}`).join('\n'));
 
     mockAskClaudeOneShot.mockResolvedValue({ text: null, error: 'timeout' });
 
@@ -289,14 +300,16 @@ describe('morning-prep integration', () => {
 
     // Terse: far smaller than the 50KB incident that triggered this fix
     expect(content.length).toBeLessThan(3000);
-    // The raw dump must not leak
+    // Study data must not be part of morning prep anymore.
+    expect(content).not.toContain('## Syllabus');
     expect(content).not.toContain('"lesson": "Lesson 999"');
-    // Source hints must be present so the user knows where to look
-    expect(content).toContain('study/syllabus.md');
-    expect(content).toContain('truncated');
+    // Writing data must not be part of morning prep anymore.
+    expect(content).not.toContain('### Writing Focus');
+    expect(content).not.toContain('Topic 999');
+    expect(content).not.toContain('writing/topics.md');
   });
 
-  it('gatherMorningData reads all vault sources correctly', () => {
+  it('gatherMorningData reads morning-prep vault sources correctly and ignores study/writing', () => {
     seedAllVaultFiles();
 
     const data = gatherMorningData();
@@ -308,9 +321,7 @@ describe('morning-prep integration', () => {
     expect(data.weeklyGoals).toContain('Sleep 8h consistently');
     expect(data.priorities).toContain('Ship feature X');
     expect(data.priorities).toContain('Review PRs');
-    expect(data.study).toContain('Transformer architectures');
-    expect(data.study).toContain('"week":5');
-    expect(data.writing).toContain('Personal knowledge management with LLMs');
+    expect(data).not.toHaveProperty('writing');
   });
 
   it('gatherMorningData returns "No weekly goals set." when Friday journal lacks the section', () => {
@@ -329,8 +340,6 @@ describe('morning-prep integration', () => {
       weeklyGoals: '1. Ship Aura\n2. Sleep more',
       weeklyGoalsSource: '2026_04_03.md',
       priorities: '- Task A\n- Task B',
-      study: '- Read chapter 4',
-      writing: '- Blog post draft',
       yesterdayFile: '2026_04_08.md',
       dayOfWeek: 'Wednesday',
     };
@@ -342,10 +351,11 @@ describe('morning-prep integration', () => {
     expect(output).toContain('### Priorities Recap');
     expect(output).toContain('- Task A');
     expect(output).not.toContain('### Workout');
-    expect(output).toContain('### Study');
-    expect(output).toContain('- Read chapter 4');
-    expect(output).toContain('### Writing Focus');
-    expect(output).toContain('- Blog post draft');
+    expect(output).not.toContain('### Study');
+    expect(output).not.toContain('### Writing Focus');
+    expect(output).not.toContain('- Blog post draft');
+    expect(output).toContain('## Notes');
     expect(output.indexOf('### Weekly Goals')).toBeLessThan(output.indexOf('### Priorities Recap'));
+    expect(output.trim().endsWith('## Notes')).toBe(true);
   });
 });
