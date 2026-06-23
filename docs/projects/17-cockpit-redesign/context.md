@@ -302,9 +302,8 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- Home layout styles.
+- 
+- `npx vitest run src/server/static/home-view-client.test.ts --configLoader runner` passes: 11 tests.
+- `git diff --check -- src/server/static/home-view.js src/server/static/app.css` passes.
 
-Verified:
-`npx vitest run src/server/static/home-view-client.test.ts --configLoader runner` passes: 9 tests.
-
-Also ran `git diff --check` for the touched static files. Note: `src/server/static/home-view-client.test.ts` was already staged in the branch state; I left it untouched.
+Note: `src/server/static/home-view-client.test.ts` was already staged before my edits; I left it untouched.

@@ -19,22 +19,30 @@ function fmtElapsed(ms) {
   return `${seconds}s`;
 }
 
+function fmtTarget(target) {
+  if (!target?.slug) return '';
+  return `${target.kind || 'target'} ${target.slug}`;
+}
+
 function renderAttention(signal) {
   if (!signal || !signal.kind) return '';
+  const target = fmtTarget(signal.target);
+  const targetLabel = target ? ` - ${target}` : '';
   if (signal.kind === 'parked-run') {
-    const slug = signal.target?.slug ? ` - ${signal.target.slug}` : '';
-    return `<li>parked run${escHtml(slug)}</li>`;
+    return `<li class="home-attention-signal home-attention-signal--parked-run home-attention-signal--urgent" ` +
+      `data-attention-kind="parked-run">parked run${escHtml(targetLabel)}</li>`;
   }
   if (signal.kind === 'failed-run') {
-    const slug = signal.target?.slug ? ` - ${signal.target.slug}` : '';
-    return `<li>failed run${escHtml(slug)}</li>`;
+    return `<li class="home-attention-signal home-attention-signal--failed-run home-attention-signal--urgent" ` +
+      `data-attention-kind="failed-run">failed run${escHtml(targetLabel)}</li>`;
   }
   if (signal.kind === 'noop-run') {
-    const slug = signal.target?.slug ? ` - ${signal.target.slug}` : '';
-    return `<li>no-op run${escHtml(slug)}</li>`;
+    return `<li class="home-attention-signal home-attention-signal--noop-run" ` +
+      `data-attention-kind="noop-run">no-op run${escHtml(targetLabel)}</li>`;
   }
   if (signal.kind === 'backlog-warning') {
-    return `<li>${fmtCount(signal.count, 'backlog warning', 'backlog warnings')}</li>`;
+    return `<li class="home-attention-signal home-attention-signal--backlog-warning" ` +
+      `data-attention-kind="backlog-warning">${escHtml(fmtCount(signal.count, 'backlog warning', 'backlog warnings'))}</li>`;
   }
   return '';
 }
@@ -42,13 +50,19 @@ function renderAttention(signal) {
 function renderActiveRun(product) {
   const run = product.activeRun;
   if (!run) return '<div class="home-run muted">No active run</div>';
-  const target = run.target?.slug ? ` - ${escHtml(run.target.slug)}` : '';
-  return `<button class="home-active-run" type="button" data-home-active-run ` +
+  const target = fmtTarget(run.target);
+  const targetLabel = target ? ` - ${target}` : '';
+  const state = escHtml(run.state);
+  const runId = escHtml(run.runId);
+  const elapsed = escHtml(fmtElapsed(run.elapsedMs));
+  const ariaLabel = `${run.state} ${run.runId}${targetLabel ? ` ${targetLabel}` : ''} ${fmtElapsed(run.elapsedMs)}`;
+  return `<button class="home-active-run home-active-run--${state}" type="button" data-home-active-run ` +
+    `data-run-state="${state}" aria-label="${escHtml(ariaLabel)}" ` +
     `data-product="${escHtml(product.name)}" data-run-id="${escHtml(run.runId)}">` +
-      `<span class="home-run-state">${escHtml(run.state)}</span>` +
-      `<span>${escHtml(run.runId)}</span>` +
-      `<span>${escHtml(fmtElapsed(run.elapsedMs))}</span>` +
-      `<span>${target}</span>` +
+      `<span class="home-run-state">${state}</span>` +
+      `<span>${runId}</span>` +
+      `<span>${elapsed}</span>` +
+      `<span>${escHtml(targetLabel)}</span>` +
     `</button>`;
 }
 
@@ -71,11 +85,11 @@ function renderProductCard(product) {
       `<span>${escHtml(fmtCount(counts.activeProjects, 'active project', 'active projects'))}</span>` +
       `<span>${escHtml(fmtCount(counts.openBugs, 'open bug', 'open bugs'))}</span>` +
       `<span>${escHtml(fmtCount(counts.openIdeas, 'open idea', 'open ideas'))}</span>` +
-      `<span>${escHtml(fmtCount(warnings, 'backlog warning', 'backlog warnings'))}</span>` +
+      `<span>${escHtml(fmtCount(warnings, 'warning', 'warnings'))}</span>` +
     `</div>` +
     outcome +
     (attention
-      ? `<div class="home-attention"><strong>Needs attention</strong><ul>${attention}</ul></div>`
+      ? `<div class="home-attention home-attention--urgent" aria-label="attention signals"><strong>Needs attention</strong><ul>${attention}</ul></div>`
       : '<div class="home-attention muted">No attention signals</div>') +
   `</article>`;
 }

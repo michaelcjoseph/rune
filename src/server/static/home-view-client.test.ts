@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 type Listener = (event?: unknown) => unknown;
@@ -222,6 +223,68 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/1\s*(backlog )?warning/i);
     expect(html).toMatch(/no-op/i);
     expect(html).toMatch(/needs|attention|parked/i);
+  });
+
+  it('renders a running active-run indicator with a state-specific pulse affordance', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView({
+      available: true,
+      products: [
+        {
+          name: 'jarvis',
+          repoBacked: true,
+          activeRun: {
+            runId: 'run-live-1',
+            target: { kind: 'bug', slug: 'bug-42' },
+            state: 'running',
+            elapsedMs: 61_000,
+          },
+          counts: { activeProjects: 1, openBugs: 1, openIdeas: 0, backlogWarnings: 0 },
+          attention: [],
+        },
+      ],
+    });
+    const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+
+    expect(html).toContain('run-live-1');
+    expect(html).toMatch(/data-run-state=["']running["']|home-active-run--running/i);
+    expect(html).toMatch(/aria-label=["'][^"']*running[^"']*run-live-1[^"']*["']/i);
+    expect(css).toMatch(/@keyframes\s+home-run-pulse|home-active-run--running[\s\S]*animation/i);
+  });
+
+  it('surfaces every attention kind as a prominent, typed signal instead of plain list text', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView({
+      available: true,
+      products: [
+        {
+          name: 'aura',
+          repoBacked: true,
+          counts: { activeProjects: 2, openBugs: 4, openIdeas: 1, backlogWarnings: 2 },
+          mostRecentRun: {
+            runId: 'run-failed-1',
+            outcome: 'failed',
+            endedAt: '2026-06-23T13:00:00.000Z',
+          },
+          attention: [
+            { kind: 'parked-run', runId: 'run-parked-1', target: { kind: 'project', slug: '17-redesign' } },
+            { kind: 'failed-run', runId: 'run-failed-1', target: { kind: 'bug', slug: 'bug-9' } },
+            { kind: 'noop-run', runId: 'run-noop-1', target: { kind: 'project', slug: '16-connector' } },
+            { kind: 'backlog-warning', count: 2 },
+          ],
+        },
+      ],
+    });
+
+    for (const kind of ['parked-run', 'failed-run', 'noop-run', 'backlog-warning']) {
+      expect(html).toMatch(new RegExp(`data-attention-kind=["']${kind}["']|home-attention-signal--${kind}`, 'i'));
+    }
+    expect(html).toMatch(/home-attention--urgent|home-attention-signal--urgent|aria-label=["'][^"']*attention/i);
+    expect(html.indexOf('parked run')).toBeLessThan(html.indexOf('failed run'));
+    expect(html.indexOf('failed run')).toBeLessThan(html.indexOf('no-op run'));
+    expect(html.indexOf('no-op run')).toBeLessThan(html.indexOf('backlog warning'));
   });
 
   it('does not render chat, logs, or Fix controls on the Home pulse', async () => {

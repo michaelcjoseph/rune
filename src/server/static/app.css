@@ -165,6 +165,18 @@ body[data-view="home"] #input-form {
 .home-active-run:hover {
   border-color: #d6a248;
 }
+.home-active-run--running {
+  border-color: #2f7d62;
+  background: #102018;
+  animation: home-run-pulse 1.8s ease-in-out infinite;
+}
+.home-active-run--running .home-run-state {
+  color: #55d49f;
+}
+@keyframes home-run-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(85, 212, 159, .22); }
+  50% { box-shadow: 0 0 0 4px rgba(85, 212, 159, .06); }
+}
 .home-run-state {
   color: #d6a248;
   font-weight: 600;
@@ -188,9 +200,33 @@ body[data-view="home"] #input-form {
   font-size: .82rem;
 }
 .home-attention ul {
-  margin-top: .2rem;
-  padding-left: 1.1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  list-style: none;
+  margin-top: .35rem;
   color: var(--text2);
+}
+.home-attention-signal {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .14rem .48rem;
+  background: var(--bg3);
+  color: var(--text);
+  line-height: 1.35;
+}
+.home-attention-signal--urgent,
+.home-attention-signal--parked-run,
+.home-attention-signal--failed-run {
+  border-color: #7a4636;
+  background: #241713;
+  color: #f0ad8d;
+}
+.home-attention-signal--noop-run,
+.home-attention-signal--backlog-warning {
+  border-color: #5b4930;
+  background: #1f1a13;
+  color: #d6a248;
 }
 .home-unavailable {
   padding: 1rem;
