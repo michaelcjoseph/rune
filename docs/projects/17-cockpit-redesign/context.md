@@ -302,18 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- x item.completed
-codex item.completed
-codex item.started
-codex item.completed
-codex item.started
-codex item.completed
-codex item.started
-codex item.completed
-codex item.completed
-codex item.started
-codex item.completed
-codex item.started
-codex item.completed
-codex item.completed
-codex turn.completed
+- me-pulse.js` and `product-deep-view.js`.
+- [home-products-api.test.ts](jarvis/.worktrees/jarvis/17-cockpit-redesign/src/server/home-products-api.test.ts): new `/api/home` and `/api/products/:product` routes are not implemented yet, so route assertions fail.
+
+No files changed; worktree remains clean.
