@@ -134,6 +134,7 @@ function deps(overrides: Record<string, unknown> = {}) {
       },
     ]),
     readBacklogs: vi.fn(() => [auraBacklog, relayBacklog]),
+    readFixAttempts: vi.fn(() => new Map()),
     readTaskRunRecords: vi.fn(() => [{ rolesInvoked: ['qa', 'coder', 'reviewer'] }]),
     worktreePathFor: vi.fn((product: string, slug: string) => `/tmp/jarvis-${product}-${slug}`),
     now: vi.fn(() => NOW_MS),
@@ -378,12 +379,14 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
     expect(view.backlog.bugs.find((b: any) => b.id === 'b-open')).toMatchObject({
       id: 'b-open',
       plan: { kind: 'plan', enabled: true },
+      fix: { kind: 'fix', state: 'available' },
     });
     expect(view.backlog.ideas.find((i: any) => i.id === 'i-open')).toMatchObject({
       id: 'i-open',
       body: ['show active run'],
       plan: { kind: 'plan', enabled: true },
     });
+    expect(view.backlog.ideas.find((i: any) => i.id === 'i-open')?.fix).toBeUndefined();
     expect(view.backlog.warnings).toHaveLength(1);
 
     expect(view.runs).toEqual([
@@ -508,5 +511,60 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
         { role: 'coder', active: true, model: 'codex' },
       ],
     });
+  });
+
+  it('projects persisted FixAttempt state into each bug fix action and ignores stale attempts for deleted bugs', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const attempts = new Map([
+      [
+        'aura:b-open',
+        {
+          attemptId: 'attempt-gating',
+          product: 'aura',
+          bugId: 'b-open',
+          state: 'gating',
+          updatedAt: '2026-06-23T12:00:00.000Z',
+        },
+      ],
+      [
+        'aura:b-done',
+        {
+          attemptId: 'attempt-ignored',
+          product: 'aura',
+          bugId: 'b-done',
+          state: 'proceeding',
+          runId: 'run-ignored',
+          updatedAt: '2026-06-23T12:01:00.000Z',
+        },
+      ],
+      [
+        'aura:b-deleted',
+        {
+          attemptId: 'attempt-stale',
+          product: 'aura',
+          bugId: 'b-deleted',
+          state: 'declined',
+          reason: 'pm-not-well-scoped',
+          updatedAt: '2026-06-23T12:02:00.000Z',
+        },
+      ],
+    ]);
+
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readFixAttempts: vi.fn(() => attempts),
+      }),
+    });
+
+    expect(view.backlog.bugs.find((b: any) => b.id === 'b-open')).toMatchObject({
+      id: 'b-open',
+      fix: { kind: 'fix', state: 'gating' },
+    });
+    expect(view.backlog.bugs.find((b: any) => b.id === 'b-done')).toMatchObject({
+      id: 'b-done',
+      fix: { kind: 'fix', state: 'disabled', reason: 'bug-done' },
+    });
+    expect(view.backlog.bugs.some((b: any) => b.id === 'b-deleted')).toBe(false);
   });
 });

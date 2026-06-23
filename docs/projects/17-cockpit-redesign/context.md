@@ -302,17 +302,9 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- t.d.ts): updated the public client contract.
+- vis/17-cockpit-redesign/src/intent/home-pulse-deep-view.test.ts)
 
-Verified:
-- `npm test -- --configLoader runner src/server/static/run-feed-client.test.ts` passed: 5 tests.
-- `git diff --check` passed.
+Verification:
+`npm test -- --configLoader runner ...` is red as expected for tests-first: 46 collected, 14 passed, 32 failed on missing Phase 3 modules/exports and the unimplemented fix route returning 404.
 
-Note: `src/server/static/run-feed-client.test.ts` was already staged/modified before my changes; I left it untouched.
--  existing subscription guard already drops `event.runId !== runId`.
-
-Verified:
-`npm test -- --configLoader runner src/server/static/run-feed-client.test.ts` passed, 5 tests.
 `git diff --check` passed.
-
-Note: prior staged run-feed changes remain staged; this retry adds an unstaged test change on top.
