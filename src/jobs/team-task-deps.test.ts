@@ -366,6 +366,53 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(lower).toContain('partial view');
     expect(lower).toContain('exported nowhere');
     expect(lower).toContain('never as an objection-class finding');
+    // Diff-vs-tree dead-loop fix: the reviewer (the historical primary trigger)
+    // must treat the now-provided branch tree-state evidence as positive proof a
+    // deliverable already landed out-of-sequence, not only suppress absence
+    // objections. Mirrors the tech-lead diff gate.
+    expect(lower).toContain('whole branch');
+    expect(lower).toContain('earlier commit on this branch');
+    expect(lower).toContain('tree-state evidence');
+  });
+
+  it('instructs the tech-lead diff gate to judge provided tree state, not only absence from a partial diff', async () => {
+    // Regression: a task deliverable already present on the branch was absent
+    // from the current task diff, so the tech-lead diff gate kept treating the
+    // task as incomplete and the workflow exhausted the round cap.
+    let techLeadSystemPrompt = '';
+    let techLeadMessage = '';
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({
+      judgmentCall: async ({ role, systemPrompt, message }) => {
+        if (role !== 'tech-lead') return GREEN_JUDGMENT_REPLY;
+        techLeadSystemPrompt = systemPrompt;
+        techLeadMessage = message;
+        return [
+          '```tl-diff-review',
+          JSON.stringify({ outcome: 'pass', findings: [] }),
+          '```',
+        ].join('\n');
+      },
+    }));
+
+    await deps.techLeadReviewDiff({
+      task: sizedTask,
+      diff: 'diff --git a/src/other.ts b/src/other.ts\n+++ b/src/other.ts\n+export const touched = true;\n',
+      spec: 'The task requires BusRunEvent typing.',
+      context: 'Tree-state evidence: BusRunEvent typing already exists in src/transport/notification-bus.ts.',
+    });
+
+    const lowerPrompt = techLeadSystemPrompt.toLowerCase();
+    expect(lowerPrompt).toContain('no tools');
+    expect(lowerPrompt).toContain('no repository access');
+    expect(lowerPrompt).toContain('partial view');
+    expect(lowerPrompt).toContain('missing-from-this-diff');
+    expect(lowerPrompt).toContain('tree-state/context evidence');
+    expect(lowerPrompt).toContain('diff regresses it');
+
+    expect(techLeadMessage).toContain('## Spec');
+    expect(techLeadMessage).toContain('BusRunEvent typing');
+    expect(techLeadMessage).toContain('## Project context / tree-state evidence');
+    expect(techLeadMessage).toContain('already exists in src/transport/notification-bus.ts');
   });
 
   it('renders the coder findings ledger severity-sorted with a highest-severity-first fix instruction', async () => {

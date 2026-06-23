@@ -1177,6 +1177,137 @@ describe('orchestratedWorkApplier', () => {
       expect(destroyed).toBe(true);
     });
 
+    it('passes branch-wide tree-state evidence into each task workflow context', async () => {
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-tree-state-context-'));
+      let capturedContext = '';
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--name-only') {
+          return { stdout: 'src/transport/notification-bus.ts\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--stat') {
+          return { stdout: ' src/transport/notification-bus.ts | 3 +++\n', stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--unified=3') {
+          return {
+            stdout: [
+              'diff --git a/src/transport/notification-bus.ts b/src/transport/notification-bus.ts',
+              '+export interface BusRunEvent {',
+              '+  runId: string;',
+              '+}',
+              '',
+            ].join('\n'),
+            stderr: '',
+          };
+        }
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-tree-state-sha\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Run event bus contract\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-tree-state' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createTaskWorkflowRunner: () => async (task, taskCtx) => {
+          capturedContext = taskCtx.contextMd;
+          return {
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+            findingsLedger: [],
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes: [`completed ${task.text}`],
+            reviewerVerdict: { pass: true, objections: [] },
+          };
+        },
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(
+        makeDescriptor(undefined, 'mut-tree-state-context'),
+        ctx,
+      ));
+
+      expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+      expect(capturedContext).toContain('## Branch Tree-State Evidence');
+      expect(capturedContext).toContain('Base ref: main...HEAD');
+      expect(capturedContext).toContain('src/transport/notification-bus.ts');
+      expect(capturedContext).toContain('export interface BusRunEvent');
+    });
+
+    it('keeps best-effort tree-state evidence when one git probe fails and caps oversized sections', async () => {
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-tree-state-capped-'));
+      const longChangedFiles = Array.from(
+        { length: 700 },
+        (_, i) => `src/generated/${String(i).padStart(3, '0')}.ts`,
+      ).join('\n');
+      let capturedContext = '';
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--name-only') {
+          return { stdout: `${longChangedFiles}\n`, stderr: '' };
+        }
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--stat') {
+          throw new Error('stat unavailable');
+        }
+        if (gitArgs[0] === 'diff' && gitArgs[1] === '--unified=3') {
+          return {
+            stdout: 'diff --git a/src/x.ts b/src/x.ts\n+export const BusRunEvent = true;\n',
+            stderr: '',
+          };
+        }
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-capped-sha\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Run event bus contract\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-tree-state-capped' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        createTaskWorkflowRunner: () => async (task, taskCtx) => {
+          capturedContext = taskCtx.contextMd;
+          return {
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+            findingsLedger: [],
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes: [`completed ${task.text}`],
+            reviewerVerdict: { pass: true, objections: [] },
+          };
+        },
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(
+        makeDescriptor(undefined, 'mut-tree-state-capped'),
+        ctx,
+      ));
+
+      expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+      expect(capturedContext).toContain('## Branch Tree-State Evidence');
+      expect(capturedContext).toContain('src/generated/000.ts');
+      expect(capturedContext).toContain('[truncated branch tree-state evidence]');
+      expect(capturedContext).toContain('Diffstat already present on this branch:\n(none reported)');
+      expect(capturedContext).toContain('export const BusRunEvent = true');
+    });
+
     it('emits one closeout progress event for each successful commitCloseout with live remaining counts', async () => {
       const commitShas = ['1111111aaaaaaa', '2222222bbbbbbb'];
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-progress-'));

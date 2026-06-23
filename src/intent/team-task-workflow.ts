@@ -205,6 +205,8 @@ export interface TeamTaskDeps {
   techLeadReviewDiff: (input: {
     task: SizedTask;
     diff: string;
+    spec?: string;
+    context?: string;
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
@@ -518,6 +520,8 @@ async function runGated(
     lastTechLeadDiff = normalizeGateVerdict(await deps.techLeadReviewDiff({
       task,
       diff: coder.diff,
+      spec: input.spec,
+      context: input.contextMd,
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),

@@ -279,6 +279,13 @@ function buildOrchestrationDeps(args: {
   const tasksPath = join(projectDir, 'tasks.md');
   const contextPath = join(projectDir, 'context.md');
   const cwd = sandbox.worktree;
+  const taskWorkflowRunner = args.createTaskWorkflowRunner({
+    sandbox,
+    productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+    modelPolicyPath: config.MODEL_POLICY_FILE,
+    cap: ORCHESTRATED_ROUND_CAP,
+    ...(args.emit !== undefined ? { emit: args.emit } : {}),
+  });
 
   return {
     runId: descriptor.id,
@@ -313,12 +320,14 @@ function buildOrchestrationDeps(args: {
     // the production TeamTaskDeps (execution-agent artifact sessions, charter
     // judgment calls, policy-resolved models, fail-closed reviewer
     // independence). Resolution failures surface as durable blocked evidence.
-    runTaskWorkflow: args.createTaskWorkflowRunner({
-      sandbox,
-      productsConfigPath: config.PRODUCTS_CONFIG_FILE,
-      modelPolicyPath: config.MODEL_POLICY_FILE,
-      cap: ORCHESTRATED_ROUND_CAP,
-      ...(args.emit !== undefined ? { emit: args.emit } : {}),
+    runTaskWorkflow: async (task, ctx) => taskWorkflowRunner(task, {
+      ...ctx,
+      contextMd: await appendBranchTreeStateEvidence(ctx.contextMd, {
+        runGit,
+        cwd,
+        baseBranch,
+        baseSha: sandbox.baseSha,
+      }),
     }),
 
     // Derive a neutral context update from the task evidence. Real role-authored
@@ -363,6 +372,94 @@ function readFileSafe(path: string): string {
   } catch {
     return '';
   }
+}
+
+const TREE_STATE_FILES_MAX_CHARS = 8_000;
+const TREE_STATE_STAT_MAX_CHARS = 8_000;
+const TREE_STATE_DIFF_MAX_CHARS = 20_000;
+
+async function appendBranchTreeStateEvidence(
+  contextMd: string,
+  args: {
+    runGit: GitRunner;
+    cwd: string;
+    baseBranch: string;
+    baseSha?: string;
+  },
+): Promise<string> {
+  const evidence = await readBranchTreeStateEvidence(args);
+  if (evidence === '') return contextMd;
+  return [
+    contextMd.trimEnd(),
+    '',
+    '## Branch Tree-State Evidence',
+    '',
+    evidence,
+  ].join('\n');
+}
+
+async function readBranchTreeStateEvidence(args: {
+  runGit: GitRunner;
+  cwd: string;
+  baseBranch: string;
+  baseSha?: string;
+}): Promise<string> {
+  if (args.runGit === defaultRunGit && !existsSync(join(args.cwd, '.git'))) return '';
+
+  const baseRefs = [
+    `${args.baseBranch}...HEAD`,
+    ...(args.baseSha !== undefined && args.baseSha.trim() !== '' ? [`${args.baseSha}..HEAD`] : []),
+  ];
+
+  for (const baseRef of baseRefs) {
+    const evidence = await tryReadBranchTreeStateEvidence({ ...args, baseRef });
+    if (evidence !== '') return evidence;
+  }
+  return '';
+}
+
+async function tryReadBranchTreeStateEvidence(args: {
+  runGit: GitRunner;
+  cwd: string;
+  baseRef: string;
+}): Promise<string> {
+  const [nameOnly, stat, diff] = await Promise.all([
+    readTreeStateGit(args, ['diff', '--name-only', args.baseRef]),
+    readTreeStateGit(args, ['diff', '--stat', args.baseRef]),
+    readTreeStateGit(args, ['diff', '--unified=3', args.baseRef]),
+  ]);
+  const changedFiles = truncateTreeStateSection(nameOnly.trim(), TREE_STATE_FILES_MAX_CHARS);
+  const diffStat = truncateTreeStateSection(stat.trim(), TREE_STATE_STAT_MAX_CHARS);
+  const branchDiff = truncateTreeStateSection(diff.trim(), TREE_STATE_DIFF_MAX_CHARS);
+  if (changedFiles === '' && diffStat === '' && branchDiff === '') return '';
+  return [
+    `Base ref: ${args.baseRef}`,
+    '',
+    'Changed files already present on this branch:',
+    changedFiles || '(none reported)',
+    '',
+    'Diffstat already present on this branch:',
+    diffStat || '(none reported)',
+    '',
+    'Branch diff excerpt already present before this task diff:',
+    branchDiff || '(no diff excerpt reported)',
+  ].join('\n');
+}
+
+async function readTreeStateGit(
+  args: { runGit: GitRunner; cwd: string },
+  gitArgs: string[],
+): Promise<string> {
+  try {
+    return (await args.runGit(gitArgs, { cwd: args.cwd })).stdout;
+  } catch {
+    return '';
+  }
+}
+
+function truncateTreeStateSection(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n[truncated branch tree-state evidence]`;
 }
 
 // ---------------------------------------------------------------------------

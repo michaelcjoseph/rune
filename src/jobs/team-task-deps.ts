@@ -240,15 +240,20 @@ const REVIEWER_INSTRUCTION = [
   'to have grepped, searched, read files, or "verified on disk / on the tree" —',
   'you cannot, and any such claim is a fabrication that invalidates your verdict.',
   '',
-  'The diff is a PARTIAL view: changed hunks only, not the whole repository. A',
-  'symbol, export, import, type, field, or call site that is not visible in the',
-  'diff may still exist elsewhere in the repo. Do NOT raise an objection that',
+  'The diff is a PARTIAL view: changed hunks only, not the whole repository or',
+  'the whole branch. A symbol, export, import, type, field, or call site that is',
+  'not visible in the diff may still exist elsewhere in the repo, or may already',
+  'have landed in an earlier commit on this branch. When present, the `## Project',
+  'context / tree-state evidence` block below shows what is already on the branch',
+  'before this task diff; treat a deliverable as satisfied when the diff, spec, or',
+  'that tree-state evidence shows it exists. Do NOT raise an objection that',
   'asserts something is absent or unsatisfied — "exported nowhere", "defined',
   'nowhere", "never invoked", "field missing", "unwired", "won\'t compile" — when',
-  'that conclusion rests only on its absence from the diff. If a suspected defect',
-  'cannot be confirmed from the artifacts you were actually given, withhold the',
-  'objection: report it as a non-objection note on a fail or pass-with-warnings',
-  'outcome, never as an objection-class finding.',
+  'that conclusion rests only on its absence from this task diff while the',
+  'provided context/spec/tree-state evidence shows it already exists. If a',
+  'suspected defect cannot be confirmed from the artifacts you were actually',
+  'given, withhold the objection: report it as a non-objection note on a fail or',
+  'pass-with-warnings outcome, never as an objection-class finding.',
   '',
   'If an open findings ledger is present, review in this order:',
   '1. Regression pass: verify every prior finding by id before looking for new',
@@ -285,6 +290,19 @@ const TL_TEST_REVIEW_INSTRUCTION = [
 const TL_DIFF_REVIEW_INSTRUCTION = [
   'You are the tech lead. Review the diff below for technical coherence with the',
   'task: interfaces, contracts, sequencing, and fit with the existing system.',
+  '',
+  'You have NO tools and NO repository access: no file system, no grep, no ability',
+  'to open or search files. You see ONLY the artifacts in this prompt. Never claim',
+  'to have grepped, searched, read files, or verified on disk.',
+  '',
+  'The diff is a PARTIAL view: changed hunks only, not the whole repository or',
+  'the whole branch. A task deliverable may already exist on the branch even if',
+  'it is absent from this task diff. Judge completeness against the provided',
+  'task, spec, project context / tree-state evidence, and diff together. Do NOT',
+  'fail or raise a finding solely because a deliverable is missing-from-this-diff',
+  'when the provided context/spec indicates it already exists on the tree. Only',
+  'treat a deliverable as missing when it is absent from both the current diff and',
+  'the provided tree-state/context evidence, or when the diff regresses it.',
   '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
@@ -871,12 +889,14 @@ export function buildProductionTeamTaskDeps(
       return parseReviewerVerdict(reply);
     },
 
-    techLeadReviewDiff: async ({ task, diff, findingsLedger }) => {
+    techLeadReviewDiff: async ({ task, diff, spec, context, findingsLedger }) => {
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
       const body = [
         `## Task\n\n${task.text}`,
         '',
         `## Diff\n\n${diff}`,
+        ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
+        ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body);
