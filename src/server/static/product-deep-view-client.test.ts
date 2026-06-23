@@ -497,4 +497,45 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/claude app|app:\/\/|data-app-deeplink/i);
     expect(html).not.toMatch(/embedded-app-thread|kb-research-thread|idea-exploration-thread/i);
   });
+
+  it('renders product-chat command affordances for the preserved lifecycle and model commands', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ ok: true }));
+
+    const requiredCommands = ['/fresh', '/fresh-full', '/clear', '/opus', '/sonnet', '/haiku'];
+    const html = renderProductDeepView(productView());
+
+    for (const command of requiredCommands) {
+      expect(html).toMatch(new RegExp(`data-chat-command=["']${command}["']|>${command}<`, 'i'));
+    }
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      sendChat,
+    });
+    await view.load();
+    await root.clickClosest('[data-chat-command]', { chatCommand: '/fresh-full' });
+
+    expect(sendChat).toHaveBeenCalledWith(expect.objectContaining({
+      product: 'aura',
+      text: '/fresh-full',
+    }));
+  });
+
+  it('renders an explicit product search affordance scoped to the product repo plus the vault', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView());
+    const searchForm = html.match(/<form[^>]*data-product-search-form[\s\S]*?<\/form>/i)?.[0] ?? '';
+
+    expect(searchForm).toMatch(/data-product-search-form/i);
+    expect(searchForm).toMatch(/data-product=["']aura["']/i);
+    expect(searchForm).toMatch(/data-search-scope=["']repo\+vault["']/i);
+    expect(searchForm).toMatch(/name=["']query["']|data-search-query/i);
+    expect(searchForm).toMatch(/repo[\s\S]{0,80}vault|vault[\s\S]{0,80}repo/i);
+    expect(searchForm).not.toMatch(/data-search-scope=["']vault["'](?!\+)|kb-only-search/i);
+  });
 });

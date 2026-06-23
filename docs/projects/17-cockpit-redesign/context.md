@@ -302,7 +302,10 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- s, shows persisted Fix state reason/detail/run/attempt text, and preserves the async `/fix` POST flow that moves the row into gating.
+- o+vault search form. Styled the added controls in [app.css](jarvis/.worktrees/jarvis/17-cockpit-redesign/src/server/static/app.css).
 
 Verified:
-`npm test -- --run src/server/static/product-deep-view-client.test.ts --configLoader runner` passed, 13 tests. `git diff --check` passed. I did not commit.
+`npm test -- --run src/server/static/product-deep-view-client.test.ts --configLoader runner` passed, 15 tests.
+`git diff --check` passed.
+
+I did not commit.

@@ -491,12 +491,31 @@ body[data-view="product"] #product-root {
   padding: .5rem;
   font: inherit;
 }
-.deep-panel--chat form {
+.deep-panel--chat form,
+.deep-chat-commands {
   display: flex;
-  flex-direction: column;
   gap: .45rem;
 }
-.deep-panel--chat button {
+.deep-panel--chat form {
+  flex-direction: column;
+}
+.deep-chat-commands {
+  flex-wrap: wrap;
+}
+.deep-panel--chat [data-product-search-form] {
+  flex-direction: row;
+}
+.deep-panel--chat input[type="search"] {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: .42rem .5rem;
+  font: inherit;
+}
+.deep-panel--chat [data-product-chat-form] button {
   align-self: flex-end;
 }
 .deep-op-row {

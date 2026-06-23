@@ -238,12 +238,31 @@ function renderOperations(operations) {
   `</section>`;
 }
 
+const PRODUCT_CHAT_COMMANDS = ['/fresh', '/fresh-full', '/clear', '/opus', '/sonnet', '/haiku'];
+
+function renderChatCommands() {
+  return `<div class="deep-chat-commands" aria-label="Chat commands">` +
+    PRODUCT_CHAT_COMMANDS.map(command =>
+      `<button type="button" data-chat-command="${attr(command)}">${escHtml(command)}</button>`
+    ).join('') +
+  `</div>`;
+}
+
+function renderProductSearch(view) {
+  return `<form data-product-search-form data-product="${attr(view.name)}" data-search-scope="repo+vault">` +
+    `<input name="query" type="search" placeholder="Search repo + vault" aria-label="Search repo and vault">` +
+    `<button type="submit">Search</button>` +
+  `</form>`;
+}
+
 function renderChat(view) {
   return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
     `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
     `<div class="deep-panel-head"><h3>Chat</h3><span>${escHtml(view.name)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
     `<a href="app://claude" data-app-deeplink>Open Claude App</a>` +
+    `${renderChatCommands()}` +
+    `${renderProductSearch(view)}` +
     `<form data-product-chat-form data-product="${attr(view.name)}">` +
       `<textarea name="message" rows="3" placeholder="Message ${attr(view.name)}..."></textarea>` +
       `<button type="submit">Send</button>` +
@@ -365,17 +384,37 @@ export function createProductDeepView({
         }
       }
       render();
+      return;
+    }
+
+    const command = event.target?.closest?.('[data-chat-command]');
+    if (command) {
+      event.preventDefault?.();
+      const text = command.dataset?.chatCommand;
+      if (!text) return;
+      await send({ product, text });
     }
   };
 
   const onSubmit = async event => {
-    const form = event.target?.closest?.('[data-product-chat-form]');
-    if (!form) return;
+    const chatForm = event.target?.closest?.('[data-product-chat-form]');
+    if (chatForm) {
+      event.preventDefault?.();
+      const text = chatForm.elements?.message?.value || '';
+      if (!String(text).trim()) return;
+      await send({ product: chatForm.dataset?.product || product, text });
+      chatForm.reset?.();
+      return;
+    }
+
+    const searchForm = event.target?.closest?.('[data-product-search-form]');
+    if (!searchForm) return;
     event.preventDefault?.();
-    const text = form.elements?.message?.value || '';
-    if (!String(text).trim()) return;
-    await send({ product: form.dataset?.product || product, text });
-    form.reset?.();
+    const query = searchForm.elements?.query?.value || '';
+    if (!String(query).trim()) return;
+    const text = `Search repo and vault for: ${query}`;
+    await send({ product: searchForm.dataset?.product || product, text });
+    searchForm.reset?.();
   };
 
   root.addEventListener?.('click', onClick);
