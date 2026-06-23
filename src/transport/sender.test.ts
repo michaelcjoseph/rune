@@ -234,6 +234,90 @@ describe('createSenders', () => {
     });
   });
 
+  describe('bus "run-event" fan-out', () => {
+    it('publishing a run-event reaches WebviewSender as a first-class realtime frame', async () => {
+      const { webview } = createSenders(bot, bus);
+      const ws = mockWs();
+      webview.register(123, ws);
+
+      bus.publish({
+        kind: 'run-event',
+        subKind: 'agents',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        agents: [
+          { role: 'qa', active: true },
+          { role: 'coder', active: true },
+        ],
+        ts: '2026-06-23T12:00:00.000Z',
+        userId: 123,
+      } as any);
+
+      await flushMicrotasks();
+
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse(ws.send.mock.calls[0]![0]);
+      expect(frame).toMatchObject({
+        kind: 'run-event',
+        subKind: 'agents',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        agents: [
+          { role: 'qa', active: true },
+          { role: 'coder', active: true },
+        ],
+      });
+      expect('userId' in frame).toBe(false);
+    });
+
+    it('a run-event webview delivery failure does not throw out of publish', () => {
+      const { webview } = createSenders(bot, bus);
+      const runEventSpy = vi.spyOn(webview as any, 'onRunEvent').mockImplementation(() => {
+        throw new Error('ws delivery failed');
+      });
+
+      expect(() =>
+        bus.publish({
+          kind: 'run-event',
+          subKind: 'state',
+          runId: 'run-live-001',
+          product: 'aura',
+          target: { kind: 'project', slug: '01-mvp' },
+          state: 'failed',
+          elapsedMs: 65_000,
+          outcome: 'failed',
+          ts: '2026-06-23T12:01:05.000Z',
+          userId: 123,
+        } as any),
+      ).not.toThrow();
+      expect(runEventSpy).toHaveBeenCalledOnce();
+    });
+
+    it('after destroy(), run-events are no longer delivered', async () => {
+      const { webview, destroy } = createSenders(bot, bus);
+      const ws = mockWs();
+      webview.register(123, ws);
+
+      destroy();
+      bus.publish({
+        kind: 'run-event',
+        subKind: 'progress',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        tasks: { done: 3, total: 7 },
+        ts: '2026-06-23T12:00:05.000Z',
+        userId: 123,
+      } as any);
+
+      await flushMicrotasks();
+
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+  });
+
   describe('bus "op-event" fan-out', () => {
     const TS = '2026-05-14T12:00:00.000Z';
 

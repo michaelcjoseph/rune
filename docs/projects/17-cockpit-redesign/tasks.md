@@ -31,7 +31,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **run event publish, live snapshot, and subscription client** — test-plan.md §2.
+- [x] Write the test suite for **run event publish, live snapshot, and subscription client** — test-plan.md §2.
 - [ ] Confirm red before implementation.
 
 ### Implementation

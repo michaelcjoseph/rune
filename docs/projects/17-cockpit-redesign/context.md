@@ -302,7 +302,8 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- t run --configLoader runner src/intent/home-pulse-deep-view.test.ts src/server/home-products-api.test.ts` → 24 passed
-- `git diff --check` → passed
+-  failed on the missing Phase 2 implementation surfaces.
+- `git diff --check` passed.
+- `git diff --cached --check` passed.
 
-I also tried full `npm run build -- --pretty false`; it still fails on unrelated pre-existing TypeScript errors across the repo, not this route wiring.
+The failing points are the expected ones: no `run-feed-client.js`, no `WebviewSender.onRunEvent` / `run-event` bus subscription yet, and no `/api/work-runs/:id/live` route yet.

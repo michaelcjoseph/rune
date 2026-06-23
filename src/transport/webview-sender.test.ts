@@ -433,4 +433,71 @@ describe('WebviewSender', () => {
       expect('userId' in frame).toBe(false);
     });
   });
+
+  describe('onRunEvent()', () => {
+    const baseEvent = {
+      kind: 'run-event' as const,
+      subKind: 'progress' as const,
+      runId: 'run-live-001',
+      product: 'aura',
+      target: { kind: 'project' as const, slug: '01-mvp' },
+      tasks: { done: 2, total: 5 },
+      ts: '2026-06-23T12:00:05.000Z',
+      userId: 42,
+    };
+
+    it('forwards run-event frames to registered open connections and strips userId', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+
+      (sender as any).onRunEvent(baseEvent);
+
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(frame).toEqual({
+        kind: 'run-event',
+        subKind: 'progress',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        tasks: { done: 2, total: 5 },
+        ts: '2026-06-23T12:00:05.000Z',
+      });
+      expect('userId' in frame).toBe(false);
+    });
+
+    it('does not forward run-event frames to a different user connection', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(99, ws);
+
+      (sender as any).onRunEvent(baseEvent);
+
+      expect(ws.send).not.toHaveBeenCalled();
+    });
+
+    it('redacts live log-tail lines before they cross the WebSocket boundary', () => {
+      const sender = new WebviewSender();
+      const ws = makeWs();
+      sender.register(42, ws);
+      const rawToken = 'sk-liveRunSecret0123456789';
+
+      (sender as any).onRunEvent({
+        kind: 'run-event',
+        subKind: 'log',
+        runId: 'run-live-001',
+        product: 'aura',
+        target: { kind: 'project', slug: '01-mvp' },
+        lines: [`provider failed with token ${rawToken}`],
+        ts: '2026-06-23T12:00:10.000Z',
+        userId: 42,
+      });
+
+      expect(ws.send).toHaveBeenCalledOnce();
+      const frame = JSON.parse((ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0]);
+      expect(JSON.stringify(frame)).not.toContain(rawToken);
+      expect(frame.lines.join('\n')).toMatch(/sk-<redacted-[0-9a-f]{6}>/);
+    });
+  });
 });
