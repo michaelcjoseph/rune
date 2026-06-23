@@ -302,6 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
--  vitest run src/server/static/product-deep-view-client.test.ts src/server/static/home-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner`
+- s, shows persisted Fix state reason/detail/run/attempt text, and preserves the async `/fix` POST flow that moves the row into gating.
 
-Result: 3 files passed, 28 tests passed. I did not commit; the QA test file was already staged/modified and I left it untouched.
+Verified:
+`npm test -- --run src/server/static/product-deep-view-client.test.ts --configLoader runner` passed, 13 tests. `git diff --check` passed. I did not commit.

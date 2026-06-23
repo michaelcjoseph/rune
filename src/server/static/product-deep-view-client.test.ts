@@ -85,14 +85,24 @@ function productView(overrides: Record<string, unknown> = {}) {
           title: 'Ambiguous import error',
           status: 'open',
           plan: { kind: 'plan', state: 'available' },
-          fix: { kind: 'fix', state: 'declined', reason: 'pm-not-well-scoped' },
+          fix: {
+            kind: 'fix',
+            state: 'declined',
+            reason: 'pm-not-well-scoped',
+            detail: 'Needs concrete reproduction steps before autorun can start.',
+          },
         },
         {
           id: 'BUG-handoff',
           title: 'Valid gate, missing executor',
           status: 'open',
           plan: { kind: 'plan', state: 'available' },
-          fix: { kind: 'fix', state: 'handoff-failed', reason: 'startFixRun unavailable' },
+          fix: {
+            kind: 'fix',
+            state: 'handoff-failed',
+            reason: 'handoff-unavailable',
+            detail: 'startFixRun unavailable',
+          },
         },
         {
           id: 'BUG-proceeding',
@@ -378,11 +388,33 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/BUG-available[\s\S]{0,260}(available|Fix)/i);
     expect(html).toMatch(/BUG-gating[\s\S]{0,260}(gating|scoping|disabled)/i);
     expect(html).toMatch(/BUG-declined[\s\S]{0,320}pm-not-well-scoped/i);
+    expect(html).toMatch(/BUG-declined[\s\S]{0,420}Needs concrete reproduction steps before autorun can start/i);
+    expect(html).toMatch(/BUG-handoff[\s\S]{0,320}handoff-unavailable/i);
     expect(html).toMatch(/BUG-handoff[\s\S]{0,320}startFixRun unavailable/i);
     expect(html).toMatch(/BUG-proceeding[\s\S]{0,320}run-fix-accepted/i);
     expect(html).toMatch(/BUG-disabled[\s\S]{0,320}done/i);
     expect(html).toMatch(/IDEA-1[\s\S]{0,240}\bPlan\b/i);
     expect(html).not.toMatch(/IDEA-1[\s\S]{0,240}\bFix\b/i);
+  });
+
+  it('makes Fix the headline bug action while Plan remains available as the secondary action', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView());
+    const bugRow = html.match(/<article class="deep-backlog-item deep-backlog-item--bugs" data-backlog-item-id="BUG-available">[\s\S]*?<\/article>/)?.[0];
+    expect(bugRow, 'expected BUG-available row to render').toBeTypeOf('string');
+
+    const fixIndex = bugRow!.indexOf('data-fix-item-id="BUG-available"');
+    const planIndex = bugRow!.indexOf('data-plan-item-id="BUG-available"');
+    expect(fixIndex, 'expected bug row to expose a Fix action').toBeGreaterThanOrEqual(0);
+    expect(planIndex, 'expected bug row to retain a Plan action').toBeGreaterThanOrEqual(0);
+    expect(fixIndex, 'Fix must appear before Plan for bugs because it is the headline action').toBeLessThan(planIndex);
+    expect(bugRow).toMatch(/deep-action--headline|data-primary-action=["']fix["']|aria-label=["'][^"']*Fix[^"']*headline/i);
+
+    const ideaRow = html.match(/<article class="deep-backlog-item deep-backlog-item--ideas" data-backlog-item-id="IDEA-1">[\s\S]*?<\/article>/)?.[0];
+    expect(ideaRow, 'expected IDEA-1 row to render').toBeTypeOf('string');
+    expect(ideaRow).toContain('data-plan-item-id="IDEA-1"');
+    expect(ideaRow).not.toContain('data-fix-item-id="IDEA-1"');
   });
 
   it('posts an available bug Fix asynchronously, disables the affordance, and shows the durable gating attempt id', async () => {

@@ -398,6 +398,33 @@ body[data-view="product"] #product-root {
   border-color: #2f7d62;
   color: #75d4a8;
 }
+.deep-action--headline {
+  font-weight: 650;
+  background: #102018;
+}
+.deep-action--gating {
+  border-color: #5b4930;
+  color: #d6a248;
+}
+.deep-action--declined,
+.deep-action--handoff-failed {
+  border-color: #7a4636;
+  color: #f0ad8d;
+}
+.deep-fix-notice {
+  border-left: 2px solid #2f7d62;
+  padding-left: .45rem;
+  overflow-wrap: anywhere;
+}
+.deep-fix-notice--gating {
+  border-color: #5b4930;
+  color: #d6a248;
+}
+.deep-fix-notice--declined,
+.deep-fix-notice--handoff-failed,
+.deep-fix-notice--disabled {
+  border-color: #7a4636;
+}
 .deep-action:disabled,
 .deep-panel button:disabled {
   opacity: .55;

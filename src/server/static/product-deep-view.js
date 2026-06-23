@@ -52,8 +52,10 @@ function renderActionButton(action, itemId, kind, extra = '') {
   const label = actionLabel(action, kind === 'fix' ? 'Fix' : 'Plan');
   const dataName = kind === 'fix' ? 'data-fix-item-id' : 'data-plan-item-id';
   const busy = state === 'gating' ? ' aria-busy="true"' : '';
-  return `<button type="button" class="deep-action deep-action--${attr(kind)} deep-action--${attr(state)}" ` +
-    `${dataName}="${attr(itemId)}" data-action-state="${attr(state)}"${disabled ? ' disabled' : ''}${busy}>` +
+  const headline = kind === 'fix' ? ' deep-action--headline' : '';
+  const primary = kind === 'fix' ? ' data-primary-action="fix" aria-label="Fix headline bug action"' : '';
+  return `<button type="button" class="deep-action deep-action--${attr(kind)} deep-action--${attr(state)}${headline}" ` +
+    `${dataName}="${attr(itemId)}" data-action-state="${attr(state)}"${primary}${disabled ? ' disabled' : ''}${busy}>` +
       `${escHtml(label)}${extra}` +
     `</button>`;
 }
@@ -63,10 +65,23 @@ function renderActionMeta(action) {
   const bits = [];
   if (action.state && action.state !== 'available') bits.push(action.state);
   if (action.reason) bits.push(action.reason);
+  if (action.detail) bits.push(action.detail);
   if (action.runId) bits.push(action.runId);
   if (action.attemptId) bits.push(action.attemptId);
   if (bits.length === 0) return '';
   return `<span class="deep-action-meta">${escHtml(bits.join(' - '))}</span>`;
+}
+
+function renderFixNotice(action) {
+  if (!action || action.state === 'available') return '';
+  const bits = [];
+  if (action.state) bits.push(action.state);
+  if (action.reason) bits.push(action.reason);
+  if (action.detail) bits.push(action.detail);
+  if (action.runId) bits.push(action.runId);
+  if (action.attemptId) bits.push(action.attemptId);
+  if (bits.length === 0) return '';
+  return `<p class="deep-fix-notice deep-fix-notice--${attr(action.state)}">${escHtml(bits.join(' - '))}</p>`;
 }
 
 function renderProjects(projects) {
@@ -95,6 +110,7 @@ function renderProjects(projects) {
 function renderBacklogItem(item, kind) {
   const fix = kind === 'bugs' ? renderActionButton(item.fix, item.id, 'fix') : '';
   const fixMeta = kind === 'bugs' ? renderActionMeta(item.fix) : '';
+  const fixNotice = kind === 'bugs' ? renderFixNotice(item.fix) : '';
   return `<article class="deep-backlog-item deep-backlog-item--${attr(kind)}" data-backlog-item-id="${attr(item.id)}">` +
     `<div class="deep-row-head">` +
       `<strong>${escHtml(item.id)}</strong>` +
@@ -102,9 +118,10 @@ function renderBacklogItem(item, kind) {
     `</div>` +
     `<h4>${escHtml(item.title || item.raw || item.id)}</h4>` +
     (item.body ? `<p>${escHtml(item.body)}</p>` : '') +
+    `${fixNotice}` +
     `<div class="deep-actions">` +
-      `${renderActionButton(item.plan, item.id, 'plan')}` +
       `${fix}` +
+      `${renderActionButton(item.plan, item.id, 'plan')}` +
       `${renderActionMeta(item.plan)}` +
       `${fixMeta}` +
     `</div>` +
