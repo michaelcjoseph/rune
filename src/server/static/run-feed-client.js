@@ -19,8 +19,16 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function createRunFeedState() {
+export function createRunFeedState(options = {}) {
   const runs = new Map();
+  const maxLogLines = Number.isFinite(options.maxLogLines) && options.maxLogLines > 0
+    ? Math.floor(options.maxLogLines)
+    : 200;
+
+  function trimLogLines(lines) {
+    if (!Array.isArray(lines)) return [];
+    return lines.slice(-maxLogLines);
+  }
 
   function ensureRun(runId, base) {
     let run = runs.get(runId);
@@ -64,7 +72,7 @@ export function createRunFeedState() {
       run.elapsedMs = snapshot.elapsedMs;
       run.worktreePath = snapshot.worktreePath;
       run.agents = clone(snapshot.agents || []);
-      run.lastLogLines = clone(snapshot.lastLogLines || []);
+      run.lastLogLines = clone(trimLogLines(snapshot.lastLogLines || []));
       if (snapshot.outcome !== undefined) run.outcome = snapshot.outcome;
       run.ts = snapshot.ts;
       run._ts = {
@@ -88,7 +96,7 @@ export function createRunFeedState() {
         run.agents = clone(event.agents || []);
       } else if (event.subKind === 'log') {
         if (!shouldApply(run, 'log', event.ts)) return publicRun(run);
-        run.lastLogLines = [...(run.lastLogLines || []), ...(event.lines || [])];
+        run.lastLogLines = trimLogLines([...(run.lastLogLines || []), ...(event.lines || [])]);
       } else if (event.subKind === 'state') {
         if (!shouldApply(run, 'state', event.ts)) return publicRun(run);
         run.state = event.state;
@@ -105,27 +113,49 @@ export function createRunFeedState() {
   };
 }
 
-export function createRunFeedSubscription({ runId, fetchLive, openStream, onState }) {
-  const feed = createRunFeedState();
+export function createRunFeedSubscription({
+  runId,
+  fetchLive,
+  openStream,
+  socket,
+  fetchJson,
+  onState,
+  maxLogLines,
+}) {
+  const loadLive = fetchLive || ((id) => fetchJson(`/api/work-runs/${encodeURIComponent(id)}/live`));
+  const feed = createRunFeedState({ maxLogLines });
   let stream = null;
 
   async function connect() {
-    const snapshot = await fetchLive(runId);
+    const snapshot = await loadLive(runId);
     const state = feed.applySnapshot(snapshot);
     if (onState) onState(state);
-    stream = openStream({
-      runId,
-      onFrame(raw) {
-        const event = parseRunFeedFrame(raw);
-        if (event) applyEvent(event);
-      },
-    });
+    stream = openRunStream();
   }
 
   function applyEvent(event) {
     if (!event || event.runId !== runId) return;
     const state = feed.applyEvent(event);
     if (onState) onState(state);
+  }
+
+  function handleFrame(raw) {
+    const event = parseRunFeedFrame(raw);
+    if (event) applyEvent(event);
+  }
+
+  function openRunStream() {
+    if (openStream) {
+      return openStream({ runId, onFrame: handleFrame });
+    }
+    if (!socket) return null;
+    const onMessage = (event) => handleFrame(event?.data);
+    socket.addEventListener('message', onMessage);
+    return {
+      close() {
+        socket.removeEventListener('message', onMessage);
+      },
+    };
   }
 
   return {

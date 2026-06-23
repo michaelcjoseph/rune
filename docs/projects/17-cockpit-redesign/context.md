@@ -302,10 +302,17 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- with `tasks: { done: 0, total: 0 }` and empty `lastLogLines`.
+- t.d.ts): updated the public client contract.
 
 Verified:
-`npm test -- --configLoader runner src/server/work-run-live-api.test.ts` passed: 4 tests.
+- `npm test -- --configLoader runner src/server/static/run-feed-client.test.ts` passed: 5 tests.
+- `git diff --check` passed.
+
+Note: `src/server/static/run-feed-client.test.ts` was already staged/modified before my changes; I left it untouched.
+-  existing subscription guard already drops `event.runId !== runId`.
+
+Verified:
+`npm test -- --configLoader runner src/server/static/run-feed-client.test.ts` passed, 5 tests.
 `git diff --check` passed.
 
-Note: `src/server/work-run-live-api.test.ts` was already modified/staged before my edit; I left it untouched.
+Note: prior staged run-feed changes remain staged; this retry adds an unstaged test change on top.

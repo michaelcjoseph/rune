@@ -66,7 +66,7 @@ export interface RunFeedRunState extends Partial<LiveRunSnapshot> {
 
 export function parseRunFeedFrame(raw: string): RunFeedEvent | null;
 
-export function createRunFeedState(): {
+export function createRunFeedState(opts?: { maxLogLines?: number }): {
   applySnapshot(snapshot: LiveRunSnapshot): RunFeedRunState;
   applyEvent(event: RunFeedEvent): RunFeedRunState | null;
   getRun(runId: string): RunFeedRunState | null;
@@ -74,9 +74,15 @@ export function createRunFeedState(): {
 
 export function createRunFeedSubscription(opts: {
   runId: string;
-  fetchLive: (runId: string) => Promise<LiveRunSnapshot>;
-  openStream: (opts: { runId: string; onFrame: (raw: string) => void }) => { close?: () => void };
+  fetchLive?: (runId: string) => Promise<LiveRunSnapshot>;
+  openStream?: (opts: { runId: string; onFrame: (raw: string) => void }) => { close?: () => void };
+  socket?: {
+    addEventListener(type: 'message', listener: (event: { data: string }) => void): void;
+    removeEventListener(type: 'message', listener: (event: { data: string }) => void): void;
+  };
+  fetchJson?: (url: string) => Promise<LiveRunSnapshot>;
   onState?: (state: RunFeedRunState | null) => void;
+  maxLogLines?: number;
 }): {
   connect(): Promise<void>;
   reconnect(): Promise<void>;
