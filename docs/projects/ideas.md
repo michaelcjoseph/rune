@@ -7,36 +7,17 @@ below it.
 ## User-authored
 
 
-- Cockpit redesign — web view focused entirely on products/projects/bugs/ideas, with one-click **Fix** on cockpit bugs as a core surface. Rethink the web view once chat moves to the Claude App (see the conversation-surface idea above).
-  - **Premise:** Today the web view is ~90% chat, ~10% cockpit. Once the conversation surface moves to the Claude App, 100% of the visual real estate frees up. A chance to rethink the whole interaction model, not just resize panels.
-  - **Scope:** Redesign how products, projects, bugs, and ideas are presented and how I interact with them — the dev-side cockpit of my world without a chat box eating half the screen. A one-click **Fix** button on cockpit bugs generalizes `/work --auto` across product repos (aura, assay, relay); it's the highest-value action the redesigned surface exposes. Needs its own scoping session.
-  - **Some ideas**
-    - See project tasks update in realtime during a work run even when the edits are only happening in a separate worktree
-    - Chat box is contained per product and better scoped to searching the products repo + vault (and not just the vault)
-    - Logs from most recent run (project, planning or bug fixes) are easily readable
-    - Be able to see which agents are working on an active project work run
-    - Open to other ideas. The goal is to make it easier for me to work with Jarvis to make progress on all products
-  - **Open questions for planning:** What are the primary objects and their states? How do bugs and ideas flow into projects? What actions do I take most often, and what should be one-click vs. delegated to Jarvis? How does the cockpit relate to the Claude App threads (deep-link out to a thread? surface logged conversations back in?).
 - Install tools to improve agent performance
   - https://colbymchenry.github.io/codegraph/ (for each product repo)
   - https://github.com/cursor/plugins/blob/683cdbda983ea8be4b766ac3fe94b7b88e7f75ad/cursor-team-kit/agents/thermo-nuclear-code-quality-review.md (code review skill)
   - https://smartcommit.labrun.app/ (better commits)
   - code mode https://blog.cloudflare.com/code-mode-mcp/
   - https://www.rtk-ai.app/#install
-- Symlink mirror agents between .claude and .agents
+  - https://browser-use.com
+- Symlink mirror agents between .claude and .agents (dotagents.sentry.dev)
 - As part of nightly processing, Jarvis should read vault notes and add items to ideas and bugs
 - Engagement-driven writing lessons (extends project 12)
-  - Set up email, X, blog, and website for Jarvis
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
-- Agentic control surfaces — compile/cascade beyond prose
-  - Premise: project 10 lifts category 1 (prose instructions: CLAUDE.md/AGENTS.md) to a canonical source and cascades it down. That's one of five agentic-control surfaces. The same "model-agnostic intent, model-specific encoding" pattern applies to the rest, which today are hand-set per-layer with no canonical home and real drift risk.
-  - The five categories: (1) what the agent KNOWS — prose/context [project 10, separate]; (2) what it CAN DO — tools, MCP servers, permissions, --add-dir; (3) what it MUST/MUST NOT do — hooks/enforced behavior; (4) what it can INVOKE — skills, commands, sub-agent definitions; (5) what it RUNS IN — env, cwd, model, timeouts.
-  - Scope for project 11: categories 2, 3, and 4. Category 1 is project 10; category 5 mostly already lives centralized in code (src/ai/claude.ts spawn) and is lowest priority — out of v1.
-  - Category 2 (capabilities/permissions): today split awkwardly across .claude/settings.json (committed mcpServers), .claude/settings.local.json (permissions.allow), and code (claude.ts pins MCP config + --add-dir at spawn). Goal: one canonical capability/permission source per repo, cascaded to the model-specific settings files, drift-checked like project 10 does for prose.
-  - Category 3 (enforced behavior / hooks): the non-response Stop hook (scripts/hooks/block-nonresponse.cjs, registered in global ~/.claude/settings.json, committed 3302938) is the FIRST concrete deliverable of this category and the seed of project 11. Built standalone now; project 11 gives it a canonical home so hook definitions cascade rather than being hand-registered per layer. Open question flagged: confirm whether Codex supports hooks at all, and whether --dangerously-skip-permissions (used by the daemon spawn) honors Stop hooks — both checkable, both gate the cascade design.
-  - Category 4 (skills/commands/sub-agent defs): the biggest duplication surface — 30+ agent defs split between jarvis/.claude/agents (generic) and pkms/.claude/agents (personal-specifics), plus .claude/skills. Project 10 EXPLICITLY deferred this (its non-goal: "compiling .claude/agents/*.md"). Highest-effort, highest-payoff, likely the last phase.
-  - Relationship to project 10: sibling, not child. Project 10 = "compile category 1." Project 11 = "compile/cascade categories 2-4." Keep 10 clean and shipping; do not expand it. Project 11 should reuse 10's compiler architecture (canonical source → model-specific renderers → CI drift check) where the surface is file-based config; categories that live in spawn code (parts of 2 and 5) need a different mechanism than a markdown compiler — design question for the spec.
-  - Dependency: best started after project 10 ships, so the compiler/IR/renderer pattern exists to extend rather than reinvent.
 - Per product loop where if Jarvis isn't working on something, it picks up the next scoped bug or project
   - **The actual gap — automated dispatch is jarvis-only and partly unwired.** Three layers, only the top one done:
       - *Layer A — manual trigger:* works (above).
@@ -45,11 +26,49 @@ below it.
     - The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
     - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
 - Easily add new products to Jarvis
-- quarterly and annual SEC reports ingestion of companies I'm following
-- Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
-- Monitor and ingest X posts for relevant topics and report them to me daily
-- Integrate Granola MCP for Jarvis to better manage meeting transcription notes
+- quarterly and annual SEC reports ingestion of companies I'm following (Claude Cowork?)
+- Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc) (Claude Cowork?)
+- Monitor and ingest X posts for relevant topics and report them to me daily (Claude Cowork?)
+- Integrate Granola MCP for Jarvis to better manage meeting transcription notes (Claude Cowork?)
 - set up child developmental agent support to help with monitoring progress and planning weekly
+- Treat the writer as its own product space within Jarvis
+  - **Premise:** Today the writer agent runs only via the `/blog` skill (Telegram, interview-style) and `src/writer/`. It should be a first-class product space inside Jarvis, not just a skill — its own surface with its own interactions, the way products/projects are.
+  - **Desired interactions:**
+      - Kick off the writer on a topic and watch it run live, like a work run.
+      - A dedicated chat window scoped to the writer to discuss things with it directly.
+      - Maintain the writer's own backlog/list of topics and ideas to write up.
+      - Discuss past posts and their performance/engagement.
+      - Share other people's writing as input to sharpen the writer's own craft.
+  - **Connects to:** project 17 (cockpit product spaces + per-product chat scoping) and project 12 (writer memory / engagement-driven writing lessons).
+  - **Note:** needs its own planning session; this is a scoping seed, not a spec.
+- Rename Jarvis → Axel (full rename)
+  - **Motivation:** trademark concern with the name "Jarvis," and this is an open-source repo, so the name must change everywhere consistently — not a cosmetic chat-only relabel.
+  - **Blast-radius inventory** (so a later planning session starts informed; verify each by searching the repo/vault):
+      - The persona/display name in chat.
+      - The `[[jarvis]]` wikilink appended into vault journals on session capture (`src/jobs/capture.ts` writes `- <ts> [[jarvis]] ...`) — a vault-wide historical-journal rewrite, the trickiest migration.
+      - The MCP server name `jarvis-kb` (default name in `src/mcp/server.ts`).
+      - Code identifiers, module names, and directory names.
+      - Agent definitions under `.claude/agents/` and `agents/`.
+      - The repo name itself.
+      - `CLAUDE.md` / `README.md` and other docs.
+      - Any user-facing strings and config keys.
+  - **Scope:** full rename across code + repo + identifiers + vault wikilinks. Needs its own planning session given the blast radius; flag the historical `[[jarvis]]` journal rewrite as the migration risk to design carefully.
+- Default to an ELI5 / first-principles posture when I talk to Jarvis
+  - **Premise:** When I talk to Jarvis it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
+  - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)
+  - **To discuss before editing the prompt:**
+      - How it reconciles with the existing "thinking partner / lean-Socratic" posture and the "be concise on mobile" guidance — first-principles explanation can run long, so the two need reconciling.
+      - Always-on vs default-with-an-escape-hatch — a way to ask for the dense/expert version when wanted, since the user is often an expert who sometimes wants depth, not ELI5.
+      - Whether it applies across all modes (tactical lookups vs strategic/reflective) or only when explaining/reasoning.
+  - **Note:** seed for a working session on the system prompt itself; not a spec.
+- Move reviews (weekly, monthly, quarterly, yearly, health, etc) into MCP to be used in Claude / Cowork
+  - Just migrate away from Telegram entirely
+- Move reviews (weekly, monthly, quarterly, yearly, health, etc) into MCP to be used in Claude / Cowork
+  - Just migrate away from Telegram entirely
+- Improve scalability and performance of MCP server
+  - Want multiple Claude Cowork chats / systems to be able to use it in parallel
+  - Want KB queries to happen significantly faster
+  - Monitor MCP usage and performance in cockpit
 
 ## Loop-filed
 

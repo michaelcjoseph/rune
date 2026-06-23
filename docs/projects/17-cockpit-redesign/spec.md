@@ -320,6 +320,12 @@ Home view (cross-product pulse) → select product → Per-product deep view
   path (the `getAllSessions` / `parseSessionKey` / persist / restore round-trip must
   survive the key-shape change). Preserve every existing command verbatim and migrate
   existing on-disk session keys without stranding them.
+- **`product-tailored-system-prompt`.** A product-scoped chat session builds its system
+  prompt from that product's loaded context — its repo docs, project specs/tasks, and
+  relevant worldview — so the chat is grounded in the product rather than generic. It
+  keys off the `SessionScope` from `per-product-session-scoping`: a product scope
+  assembles the prompt from the product's context, while global/Telegram sessions keep
+  the existing generic prompt.
 - **`repo-plus-vault-chat-search`.** Add a repo-search seam alongside
   `src/kb/search.ts`, extend `CONVERSATION_TOOLS`, and update the conversation system
   prompt to route code/project questions to the repo and concept/people questions to
