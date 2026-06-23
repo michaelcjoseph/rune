@@ -302,6 +302,7 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- er runner src/transport/sender.test.ts src/transport/webview-sender.test.ts src/server/static/run-feed-client.test.ts` passed: 58 tests.
+-  WORKSPACE_DIR=/tmp PRODUCTS_CONFIG_FILE=$PWD/policies/products.json npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts` passed: 54 tests.
 - `git diff --check` passed.
-- `npm run build` still has pre-existing branch-wide type errors, but no errors reference the touched files after the declaration fix.
+
+`npm run build` still fails on existing branch-wide type errors outside the production files touched here.

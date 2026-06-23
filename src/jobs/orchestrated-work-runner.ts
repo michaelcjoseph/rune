@@ -91,6 +91,7 @@ import {
   type WorkProductFacts,
 } from './work-run-classify.js';
 import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
+import { buildRunAgentsEventFromTaskRecords } from '../transport/notification-bus.js';
 import {
   markProjectDoneOnBranch,
   runFinalizer,
@@ -272,6 +273,7 @@ function buildOrchestrationDeps(args: {
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
+  publishAgents?: (records: TaskRunRecord[]) => void;
   finalize: FinalizerAdapter;
 }): OrchestrationDeps {
   const { descriptor, sandbox, projectDir, product, projectSlug, branch, baseBranch, runGit } = args;
@@ -295,7 +297,11 @@ function buildOrchestrationDeps(args: {
     worktreePath: sandbox.worktree,
     baseBranch,
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
-    appendTaskRunRecord: async (record) => appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record),
+    appendTaskRunRecord: async (record) => {
+      appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record);
+      const records = readOrchestratedTaskRunRecords(args.workRunsDir, descriptor.id);
+      args.publishAgents?.(records.length > 0 ? records : [record]);
+    },
     writeRunCursor: async (cursor) => writeOrchestratedRunCursor(args.workRunsDir, descriptor.id, cursor),
     appendTerminalBugEntries: async (entries) => {
       // File to the CANONICAL product repo's bugs.md, NEVER the throwaway
@@ -946,6 +952,16 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
+        publishAgents: (records) => {
+          ctx.bus.publish(buildRunAgentsEventFromTaskRecords({
+            runId: descriptor.id,
+            product,
+            target: { kind: 'project', slug: projectSlug },
+            ts: new Date().toISOString(),
+            userId: config.TELEGRAM_USER_ID,
+            records,
+          }));
+        },
         emit: (event) => {
           const mutationEvent = toMutationEvent(descriptor.id, event);
           if (!shouldPublishCloseoutProgress(deps.workRunsDir, descriptor.id, mutationEvent)) return;

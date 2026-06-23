@@ -27,6 +27,7 @@ export interface RunSummaryRow {
 export interface AgentOnRun {
   role: string;
   active: boolean;
+  model?: string;
 }
 
 export interface ActiveRunDetail {
@@ -87,6 +88,7 @@ export interface ProductDeepViewWorkRun {
 
 export interface ProductDeepViewTaskRunRecord {
   rolesInvoked: string[];
+  modelChoices?: Record<string, string>;
 }
 
 export interface ProductDeepViewDeps {
@@ -175,7 +177,12 @@ function agentsFromRecords(records: ProductDeepViewTaskRunRecord[]): AgentOnRun[
     for (const role of record.rolesInvoked) {
       if (seen.has(role)) continue;
       seen.add(role);
-      agents.push({ role, active: true });
+      const model = record.modelChoices?.[role];
+      agents.push({
+        role,
+        active: true,
+        ...(model !== undefined ? { model } : {}),
+      });
     }
   }
   return agents;

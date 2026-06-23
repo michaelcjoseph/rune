@@ -5,7 +5,14 @@ import { applyOutcomeToDescriptor, type WorkOutcome, type WorkProductFacts } fro
 import { type SupervisedRun } from '../intent/supervision.js';
 import { createLogger } from '../utils/logger.js';
 import config from '../config.js';
-import { NotificationBus } from './notification-bus.js';
+import {
+  NotificationBus,
+  buildRunLogEventFromTranscriptTail,
+  buildRunProgressEventFromCommitPoll,
+  buildRunStateEventFromSupervision,
+  type BusRunOutcome,
+  type BusRunTarget,
+} from './notification-bus.js';
 
 const log = createLogger('mutations');
 
@@ -97,6 +104,112 @@ function safeUpsertRun(run: SupervisedRun): void {
       id: run.id,
       error: (err as Error).message,
     });
+  }
+}
+
+function runTargetFromDescriptor(descriptor: MutationDescriptor): BusRunTarget {
+  const payload = descriptor.payload as Record<string, unknown>;
+  const target = payload['target'];
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    const obj = target as Record<string, unknown>;
+    if ((obj['kind'] === 'project' || obj['kind'] === 'bug') && typeof obj['slug'] === 'string') {
+      return { kind: obj['kind'], slug: obj['slug'] };
+    }
+  }
+  if (typeof payload['bugId'] === 'string') return { kind: 'bug', slug: payload['bugId'] };
+  const slug =
+    typeof payload['projectSlug'] === 'string' ? payload['projectSlug']
+    : typeof payload['ref'] === 'string' ? payload['ref']
+    : descriptor.target.ref || descriptor.id;
+  return { kind: 'project', slug };
+}
+
+function runEventBase(descriptor: MutationDescriptor, ts: string) {
+  const payload = descriptor.payload as Record<string, unknown>;
+  return {
+    runId: descriptor.id,
+    product: typeof payload['product'] === 'string' ? payload['product'] : 'jarvis',
+    target: runTargetFromDescriptor(descriptor),
+    ts,
+    userId: config.TELEGRAM_USER_ID,
+  };
+}
+
+function tasksFromMutationData(data: unknown): { done: number; total: number } | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const obj = data as Record<string, unknown>;
+  const direct = obj['tasks'];
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    const done = (direct as Record<string, unknown>)['done'];
+    const total = (direct as Record<string, unknown>)['total'];
+    if (Number.isFinite(done) && Number.isFinite(total)) {
+      return { done: done as number, total: total as number };
+    }
+  }
+  const done = obj['tasksDone'];
+  const total = obj['tasksTotal'];
+  if (Number.isFinite(done) && Number.isFinite(total)) {
+    return { done: done as number, total: total as number };
+  }
+  const line = typeof obj['line'] === 'string' ? obj['line'] : '';
+  const match = line.match(/(?:^|[^\d])(\d+)\/(\d+)\s+(?:tasks|done)\b/);
+  if (!match) return null;
+  return { done: Number(match[1]), total: Number(match[2]) };
+}
+
+function lineFromMutationData(data: unknown): string | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const line = (data as Record<string, unknown>)['line'];
+  return typeof line === 'string' && line.trim() !== '' ? line : null;
+}
+
+function outcomeFromMutationEvent(event: MutationEvent): BusRunOutcome | undefined {
+  const data = event.data as Record<string, unknown> | undefined;
+  const value = data?.['outcome'];
+  switch (value) {
+    case 'branch-complete':
+      return 'completed';
+    case 'noop':
+      return 'no-op';
+    case 'dirty-uncommitted':
+    case 'partial':
+      return 'partial';
+    case 'failed':
+      return 'failed';
+    default:
+      return event.kind === 'failed' ? 'failed' : event.kind === 'completed' ? 'completed' : undefined;
+  }
+}
+
+function publishDerivedRunEvent(descriptor: MutationDescriptor, event: MutationEvent): void {
+  if (descriptor.kind !== 'work-run' && descriptor.kind !== 'orchestrated-work') return;
+  const bus = _bus ?? noopBus;
+  const base = runEventBase(descriptor, event.ts);
+
+  if (event.kind === 'progress') {
+    const tasks = tasksFromMutationData(event.data);
+    if (tasks) bus.publish(buildRunProgressEventFromCommitPoll({ ...base, tasks }));
+    return;
+  }
+
+  if (event.kind === 'output' || event.kind === 'log') {
+    const line = lineFromMutationData(event.data);
+    if (line) bus.publish(buildRunLogEventFromTranscriptTail({ ...base, lines: [line] }));
+    return;
+  }
+
+  if (event.kind === 'start' || event.kind === 'keep-alive' || event.kind === 'completed' || event.kind === 'failed') {
+    const outcome = outcomeFromMutationEvent(event);
+    const status: SupervisedRun['status'] =
+      event.kind === 'failed' ? 'failed'
+      : event.kind === 'completed' ? 'completed'
+      : 'running';
+    bus.publish(buildRunStateEventFromSupervision({
+      ...base,
+      run: buildSupervisedRun(descriptor, status, event.ts),
+      now: Date.parse(event.ts),
+      ...(outcome !== undefined ? { outcome } : {}),
+    }));
   }
 }
 
@@ -310,6 +423,7 @@ export function writeRecoveredTerminalMutation(
     data: event.data,
     userId: config.TELEGRAM_USER_ID,
   });
+  publishDerivedRunEvent(descriptor, event);
 }
 
 /** Create, validate, persist, and (if autoApprove) start a mutation. */
@@ -450,6 +564,7 @@ async function startApply(
         data: event.data,
         userId: config.TELEGRAM_USER_ID,
       });
+      if (event.kind !== 'activity') publishDerivedRunEvent(descriptor, event);
 
       if (isTerminalEvent && isTerminalMutationStatus(descriptor.status)) {
         return;

@@ -63,6 +63,8 @@ import { getVisibility } from '../intent/supervision.js';
 import { readPlaybookQueue } from '../jobs/playbook-extract.js';
 import { dispatchApprovalStatus } from '../transport/approval-actions.js';
 import { readOrchestratedTaskRunRecords } from '../jobs/orchestrated-work-runner.js';
+import { parseStreamJsonLine, streamJsonToDisplay } from '../jobs/work-run-transcript.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('webview');
 
@@ -863,6 +865,103 @@ async function handleApiPromotionRetry(res: ServerResponse, id: string): Promise
  *  bounded, but a single long run has no write-side cap, so refuse to stream an
  *  oversized one rather than tie up the response / pressure the client. */
 const MAX_TRANSCRIPT_SERVE_BYTES = 50 * 1024 * 1024;
+const LIVE_LOG_LINE_LIMIT = 20;
+
+function supervisedRunTarget(run: ReturnType<typeof readAllRuns>[number]): { kind: 'project' | 'bug'; slug: string } {
+  const target = (run as typeof run & { target?: { kind?: unknown; slug?: unknown } }).target;
+  if (
+    target &&
+    (target.kind === 'project' || target.kind === 'bug') &&
+    typeof target.slug === 'string'
+  ) {
+    return { kind: target.kind, slug: target.slug };
+  }
+  return { kind: 'project', slug: run.project };
+}
+
+function supervisedRunState(run: ReturnType<typeof readAllRuns>[number]): 'running' | 'parked' | 'completed' | 'failed' {
+  if (run.status === 'blocked-on-human') return 'parked';
+  if (run.status === 'completed') return 'completed';
+  if (run.status === 'failed' || run.status === 'unknown') return 'failed';
+  return 'running';
+}
+
+function elapsedSince(startedAt: string, now = Date.now()): number {
+  const parsed = Date.parse(startedAt);
+  return Number.isNaN(parsed) ? 0 : Math.max(0, now - parsed);
+}
+
+function agentsFromTaskRecords(records: Array<{ rolesInvoked: string[]; modelChoices?: Record<string, string> }>) {
+  const seen = new Set<string>();
+  const agents: Array<{ role: string; active: boolean; model?: string }> = [];
+  for (const record of records) {
+    for (const role of record.rolesInvoked) {
+      if (seen.has(role)) continue;
+      seen.add(role);
+      const model = record.modelChoices?.[role];
+      agents.push({
+        role,
+        active: true,
+        ...(model !== undefined ? { model } : {}),
+      });
+    }
+  }
+  return agents;
+}
+
+function transcriptLineToLiveDisplay(line: string): { display: string[]; tasks?: { done: number; total: number } } {
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(line);
+  } catch {
+    parsedJson = null;
+  }
+
+  if (parsedJson && typeof parsedJson === 'object' && !Array.isArray(parsedJson)) {
+    const obj = parsedJson as Record<string, unknown>;
+    if (obj['kind'] === 'run-event' && obj['subKind'] === 'progress') {
+      const tasks = obj['tasks'];
+      if (tasks && typeof tasks === 'object' && !Array.isArray(tasks)) {
+        const done = (tasks as Record<string, unknown>)['done'];
+        const total = (tasks as Record<string, unknown>)['total'];
+        if (typeof done === 'number' && typeof total === 'number') return { display: [], tasks: { done, total } };
+      }
+      return { display: [] };
+    }
+    if ((obj['kind'] === 'output' || obj['kind'] === 'activity') && obj['data']) {
+      const data = obj['data'];
+      if (typeof data === 'object' && !Array.isArray(data)) {
+        const text = (data as Record<string, unknown>)['line'];
+        return typeof text === 'string' ? { display: text.split('\n') } : { display: [] };
+      }
+    }
+  }
+
+  const envelope = parseStreamJsonLine(line);
+  const text = envelope ? streamJsonToDisplay(envelope) : null;
+  return { display: text ? text.split('\n') : [] };
+}
+
+function readLiveTranscriptSnapshot(runId: string): { tasks: { done: number; total: number }; lastLogLines: string[] } | null {
+  const filePath = join(config.WORK_RUNS_DIR, runId, 'transcript.jsonl');
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+  let tasks = { done: 0, total: 0 };
+  const display: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    const next = transcriptLineToLiveDisplay(line);
+    if (next.tasks) tasks = next.tasks;
+    for (const displayLine of next.display) {
+      if (displayLine) display.push(redactSecrets(displayLine));
+    }
+  }
+  return { tasks, lastLogLines: display.slice(-LIVE_LOG_LINE_LIMIT) };
+}
 
 function handleApiWorkRunRecord(res: ServerResponse, id: string): void {
   if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
@@ -876,6 +975,35 @@ function handleApiWorkRunRecord(res: ServerResponse, id: string): void {
   }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(summary));
+}
+
+function handleApiWorkRunLive(res: ServerResponse, id: string): void {
+  if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
+  const run = readAllRuns(config.SUPERVISED_RUNS_FILE).find((candidate) => candidate.id === id);
+  if (!run) {
+    sendErrorEnvelope(res, 404, 'unknown-run', `work run '${id}' was not found`, false);
+    return;
+  }
+  const transcript = readLiveTranscriptSnapshot(id);
+  if (!transcript) {
+    sendErrorEnvelope(res, 404, 'live-snapshot-not-found', `live snapshot for '${id}' was not found`, false);
+    return;
+  }
+  const target = supervisedRunTarget(run);
+  const agents = agentsFromTaskRecords(readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, id));
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    runId: id,
+    product: run.product,
+    target,
+    state: supervisedRunState(run),
+    tasks: transcript.tasks,
+    elapsedMs: elapsedSince(run.startedAt),
+    worktreePath: run.operatorWorktreePath ?? worktreePathFor(run.product, target.slug, config.WORKTREE_ROOT),
+    agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
+    lastLogLines: transcript.lastLogLines,
+    ts: new Date().toISOString(),
+  }));
 }
 
 async function handleApiWorkRunTranscript(res: ServerResponse, id: string): Promise<void> {
@@ -1622,12 +1750,17 @@ export function mountWebviewRoutes(
         return true;
       }
 
-      // Work-run transcript (more specific) then record. Both regexes are
+      // Work-run live snapshot/transcript (more specific) then record. These regexes are
       // `$`-anchored, so the record pattern can't match a sub-path like
       // `/:id/transcript` — order is for clarity, not correctness. A future
       // sub-path (e.g. `/forensics`) must be added before the record check.
       // decodeURIComponent matches the other id-bearing routes; the handlers
       // VALID_SLUG-guard the decoded id before any fs access.
+      const workRunLiveMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/live$/);
+      if (req.method === 'GET' && workRunLiveMatch) {
+        handleApiWorkRunLive(res, decodeURIComponent(workRunLiveMatch[1]!));
+        return true;
+      }
       const workRunTranscriptMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/transcript$/);
       if (req.method === 'GET' && workRunTranscriptMatch) {
         await handleApiWorkRunTranscript(res, decodeURIComponent(workRunTranscriptMatch[1]!));

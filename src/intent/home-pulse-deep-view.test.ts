@@ -487,7 +487,10 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
             target: { kind: 'bug', slug: 'b-open' },
           },
         ]),
-        readTaskRunRecords: vi.fn(() => [{ rolesInvoked: ['pm', 'tech-lead', 'coder'] }]),
+        readTaskRunRecords: vi.fn(() => [{
+          rolesInvoked: ['pm', 'tech-lead', 'coder'],
+          modelChoices: { pm: 'claude', 'tech-lead': 'claude', coder: 'codex' },
+        }]),
       }),
     });
 
@@ -500,9 +503,9 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       worktreePath: '/tmp/jarvis-aura-b-open',
       transcriptUrl: '/api/work-runs/run-bug-fix/transcript',
       agents: [
-        { role: 'pm', active: true },
-        { role: 'tech-lead', active: true },
-        { role: 'coder', active: true },
+        { role: 'pm', active: true, model: 'claude' },
+        { role: 'tech-lead', active: true, model: 'claude' },
+        { role: 'coder', active: true, model: 'codex' },
       ],
     });
   });

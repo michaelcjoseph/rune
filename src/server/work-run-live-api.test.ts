@@ -56,7 +56,10 @@ vi.mock('../reviews/planning.js', () => ({
 
 const { mockRuns, mockReadOrchestratedTaskRunRecords, mockConfig } = vi.hoisted(() => ({
   mockRuns: [] as SupervisedRun[],
-  mockReadOrchestratedTaskRunRecords: vi.fn(() => [] as Array<{ rolesInvoked: string[] }>),
+  mockReadOrchestratedTaskRunRecords: vi.fn(() => [] as Array<{
+    rolesInvoked: string[];
+    modelChoices?: Record<string, string>;
+  }>),
   mockConfig: {
     HTTP_PORT: 0,
     HTTP_HOST: '127.0.0.1',
@@ -212,7 +215,10 @@ describe('GET /api/work-runs/:id/live (cockpit redesign Phase 2)', () => {
       lastChildAliveAt: '2026-06-23T12:01:00.000Z',
       operatorWorktreePath: '/test/worktrees/aura-01-mvp',
     });
-    mockReadOrchestratedTaskRunRecords.mockReturnValue([{ rolesInvoked: ['qa', 'coder'] }]);
+    mockReadOrchestratedTaskRunRecords.mockReturnValue([{
+      rolesInvoked: ['qa', 'coder'],
+      modelChoices: { qa: 'claude', coder: 'codex' },
+    }]);
     rmSync(join(tmpDir, RUN_ID), { recursive: true, force: true });
     seedLiveTranscript();
   });
@@ -236,8 +242,8 @@ describe('GET /api/work-runs/:id/live (cockpit redesign Phase 2)', () => {
       elapsedMs: 65_000,
       worktreePath: '/test/worktrees/aura-01-mvp',
       agents: [
-        { role: 'qa', active: true },
-        { role: 'coder', active: true },
+        { role: 'qa', active: true, model: 'claude' },
+        { role: 'coder', active: true, model: 'codex' },
       ],
     });
     expect(res.body.lastLogLines).toHaveLength(2);

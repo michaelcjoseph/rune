@@ -11,7 +11,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
     tasks: { done: 3, total: 7 },
     elapsedMs: 65_000,
     worktreePath: '/test/worktrees/aura-01-mvp',
-    agents: [{ role: 'qa', active: true }],
+    agents: [{ role: 'qa', active: true, model: 'claude' }],
     lastLogLines: ['qa started'],
     ts: '2026-06-23T12:01:05.000Z',
     ...overrides,
@@ -57,11 +57,11 @@ describe('run-feed client subscription module (cockpit redesign Phase 2)', () =>
       product: 'aura',
       target: { kind: 'project', slug: '01-mvp' },
       agents: [
-        { role: 'qa', active: false },
-        { role: 'coder', active: true },
+        { role: 'qa', active: false, model: 'claude' },
+        { role: 'coder', active: true, model: 'codex' },
       ],
       ts: '2026-06-23T12:01:12.000Z',
-    });
+    } as any);
     feed.applyEvent({
       kind: 'run-event',
       subKind: 'log',
@@ -87,8 +87,8 @@ describe('run-feed client subscription module (cockpit redesign Phase 2)', () =>
       runId: RUN_ID,
       tasks: { done: 4, total: 7 },
       agents: [
-        { role: 'qa', active: false },
-        { role: 'coder', active: true },
+        { role: 'qa', active: false, model: 'claude' },
+        { role: 'coder', active: true, model: 'codex' },
       ],
       lastLogLines: ['qa started', 'coder edited src/server/webview.ts'],
       state: 'completed',

@@ -1,6 +1,6 @@
 export type RunFeedTarget = { kind: string; slug: string };
 export type RunFeedTasks = { done: number; total: number };
-export type RunFeedAgent = { role: string; active: boolean };
+export type RunFeedAgent = { role: string; active: boolean; model?: string };
 export type RunFeedOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
 export type RunFeedStateName = 'running' | 'parked' | RunFeedOutcome;
 

@@ -1,4 +1,6 @@
 import { createLogger } from '../utils/logger.js';
+import type { SupervisedRun } from '../intent/supervision.js';
+import { redactSecrets } from '../utils/redact-secrets.js';
 
 const log = createLogger('notification-bus');
 
@@ -93,6 +95,7 @@ export interface BusRunTarget {
 export interface BusRunAgent {
   role: string;
   active: boolean;
+  model?: string;
 }
 
 export type BusRunState = 'running' | 'parked' | 'completed' | 'no-op' | 'partial' | 'failed';
@@ -134,6 +137,107 @@ export type BusRunEvent =
   | BusRunAgentsEvent
   | BusRunLogEvent
   | BusRunStateEvent;
+
+type BusRunEventBaseInput = Omit<BusRunEventBase, 'kind'>;
+
+export interface RunEventTaskRecord {
+  rolesInvoked: string[];
+  modelChoices?: Record<string, string>;
+}
+
+export function buildRunProgressEventFromCommitPoll(
+  input: BusRunEventBaseInput & { tasks: { done: number; total: number } },
+): BusRunProgressEvent {
+  return {
+    kind: 'run-event',
+    subKind: 'progress',
+    runId: input.runId,
+    product: input.product,
+    target: input.target,
+    ts: input.ts,
+    userId: input.userId,
+    tasks: { done: input.tasks.done, total: input.tasks.total },
+  };
+}
+
+export function buildRunAgentsEventFromTaskRecords(
+  input: BusRunEventBaseInput & { records: RunEventTaskRecord[] },
+): BusRunAgentsEvent {
+  const seen = new Set<string>();
+  const agents: BusRunAgent[] = [];
+  for (const record of input.records) {
+    for (const role of record.rolesInvoked) {
+      if (seen.has(role)) continue;
+      seen.add(role);
+      const model = record.modelChoices?.[role];
+      agents.push({
+        role,
+        active: true,
+        ...(model !== undefined ? { model } : {}),
+      });
+    }
+  }
+  return {
+    kind: 'run-event',
+    subKind: 'agents',
+    runId: input.runId,
+    product: input.product,
+    target: input.target,
+    ts: input.ts,
+    userId: input.userId,
+    agents,
+  };
+}
+
+export function buildRunLogEventFromTranscriptTail(
+  input: BusRunEventBaseInput & { lines: string[] },
+): BusRunLogEvent {
+  return {
+    kind: 'run-event',
+    subKind: 'log',
+    runId: input.runId,
+    product: input.product,
+    target: input.target,
+    ts: input.ts,
+    userId: input.userId,
+    lines: input.lines.map((line) => redactSecrets(line)),
+  };
+}
+
+export function buildRunStateEventFromSupervision(
+  input: BusRunEventBaseInput & { run: SupervisedRun; now: number; outcome?: BusRunOutcome },
+): BusRunStateEvent {
+  const started = Date.parse(input.run.startedAt);
+  const elapsedMs = Number.isNaN(started) ? 0 : Math.max(0, input.now - started);
+  const state = stateFromSupervision(input.run.status, input.outcome);
+  return {
+    kind: 'run-event',
+    subKind: 'state',
+    runId: input.runId,
+    product: input.product,
+    target: input.target,
+    ts: input.ts,
+    userId: input.userId,
+    state,
+    elapsedMs,
+    ...(input.outcome !== undefined ? { outcome: input.outcome } : {}),
+  };
+}
+
+function stateFromSupervision(status: SupervisedRun['status'], outcome?: BusRunOutcome): BusRunState {
+  if (outcome !== undefined) return outcome;
+  switch (status) {
+    case 'blocked-on-human':
+      return 'parked';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    case 'unknown':
+      return 'failed';
+    case 'running':
+      return 'running';
+  }
+}
 
 export type BusEvent = BusMessageEvent | BusAgentEvent | BusMutationEvent | BusOpEvent | BusRunEvent;
 
