@@ -59,6 +59,7 @@
 
 ## Done
 
+- [x] Codex agent output is reduced to event-type marker strings — every gpt-5.5 role in every work run displays as `codex item.completed` spam instead of its real prose, and the no-code test-intent gate hard-fails because the QA rationale never survives transport. _(Fixed 2026-06-23 — `src/jobs/execution-agent.ts` now whitelists Codex `item.completed` / `agent_message` prose, suppresses lifecycle/reasoning JSON as activity-only, preserves malformed raw stdout through `{type:"raw"}`, and prevents raw JSONL from falling back into `ExecutionAgentResult.output`; covered by `execution-agent.test.ts` Codex JSON event regressions and the `team-task-deps.test.ts` no-code rationale consumer.)_
 - [x] Remove study from the morning prep and add the "## Notes" section at the end. _(Fixed 2026-06-23 — morning prep no longer reads or prompts with study/writing files, fallback output omits `### Study` and `### Writing Focus`, normalized Claude output strips either stale section, and the required output format ends with `## Notes`.)_
 - [x] `/work --auto` resume reuses a stale project branch — when `main` advances out-of-band after the branch was cut, the resumed run never rebases onto it, so a fix landed directly on `main` is invisible to the in-flight project. The uncovered flip side of the 2026-06-04 stable-per-project-branch resume fix below. _(Fixed 2026-06-23 — chose A+B: resume-time base reconciliation via auto-rebase, with conflict cleanup.)_
   - **Issue**

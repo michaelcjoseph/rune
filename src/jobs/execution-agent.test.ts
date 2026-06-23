@@ -33,10 +33,12 @@ import type { SandboxSpec } from '../intent/sandbox.js';
 
 const {
   mockSpawn,
+  mockRunCodex,
   mockRegisterActiveProcess,
   mockUnregisterActiveProcess,
 } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
+  mockRunCodex: vi.fn(),
   mockRegisterActiveProcess: vi.fn(),
   mockUnregisterActiveProcess: vi.fn(),
 }));
@@ -60,6 +62,10 @@ vi.mock('../ai/claude.js', () => ({
   unregisterActiveProcess: mockUnregisterActiveProcess,
 }));
 
+vi.mock('../ai/codex.js', () => ({
+  runCodex: mockRunCodex,
+}));
+
 vi.mock('../config.js', () => ({
   PROJECT_ROOT: '/tmp/test-jarvis',
   default: {
@@ -80,6 +86,7 @@ function git(args: string[], cwd: string): string {
 
 beforeEach(() => {
   mockSpawn.mockReset();
+  mockRunCodex.mockReset();
   mockRegisterActiveProcess.mockReset();
   mockUnregisterActiveProcess.mockReset();
   repoDir = mkdtempSync(join(tmpdir(), 'exec-agent-'));
@@ -168,6 +175,162 @@ function makeControlledChild() {
   child.pid = 12345;
   return child;
 }
+
+// ---------------------------------------------------------------------------
+// Codex JSON event forwarding
+// ---------------------------------------------------------------------------
+
+describe('runExecutionAgent — Codex JSON event forwarding', () => {
+  it('surfaces item.completed agent_message text as output and keeps lifecycle events as activity', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'thread.started' });
+      opts.onEvent({ type: 'turn.started' });
+      opts.onEvent({
+        type: 'item.completed',
+        item: { type: 'reasoning', text: 'hidden chain of thought' },
+      });
+      opts.onEvent({
+        type: 'item.completed',
+        item: {
+          type: 'agent_message',
+          text: 'No code changes were needed; tests already cover it.',
+        },
+      });
+      opts.onEvent({ type: 'turn.completed', delta: 'hidden lifecycle marker' });
+      return { text: 'raw json stdout fallback', error: null, exitCode: 0 };
+    });
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const result = await runExecutionAgent({
+      ...makeOpts(),
+      emit: (event) => events.push(event),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.diff).toBe('');
+    expect(result.output).toBe('No code changes were needed; tests already cover it.');
+
+    const outputLines = events
+      .filter((event) => event.kind === 'output')
+      .map((event) => event.data?.line ?? '');
+    const transcript = outputLines.join('\n');
+    expect(outputLines).toEqual(['No code changes were needed; tests already cover it.']);
+    expect(transcript).not.toContain('codex thread.started');
+    expect(transcript).not.toContain('codex turn.started');
+    expect(transcript).not.toContain('codex item.completed');
+    expect(transcript).not.toContain('hidden chain of thought');
+    expect(transcript).not.toContain('hidden lifecycle marker');
+    expect(events.filter((event) => event.kind === 'activity')).toHaveLength(4);
+  });
+
+  it('keeps malformed Codex raw stdout reviewable as output', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'raw', line: 'not-json private/file.md' });
+      return { text: 'not-json private/file.md', error: null, exitCode: 0 };
+    });
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const result = await runExecutionAgent({
+      ...makeOpts(),
+      emit: (event) => events.push(event),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('not-json private/file.md');
+    expect(events).toEqual([
+      { kind: 'output', data: { line: 'not-json private/file.md' } },
+    ]);
+  });
+
+  it('treats unknown Codex envelopes without display text as activity only', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'experimental.metric', count: 1 });
+      return { text: '{"type":"experimental.metric","count":1}', error: null, exitCode: 0 };
+    });
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const result = await runExecutionAgent({
+      ...makeOpts(),
+      emit: (event) => events.push(event),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('');
+    expect(events).toEqual([{ kind: 'activity' }]);
+    expect(events.some((event) => event.data?.line?.includes('codex experimental.metric'))).toBe(false);
+  });
+
+  it('does not fall back to raw JSON stdout when structured events have no displayable prose', async () => {
+    mockRunCodex.mockImplementation(async (
+      _prompt: string,
+      opts: { onEvent: (event: Record<string, unknown>) => void },
+    ) => {
+      opts.onEvent({ type: 'thread.started' });
+      opts.onEvent({
+        type: 'item.completed',
+        item: { type: 'reasoning', text: 'hidden chain of thought /tmp/secret' },
+      });
+      return {
+        text: [
+          '{"type":"thread.started"}',
+          '{"type":"item.completed","item":{"type":"reasoning","text":"hidden chain of thought /tmp/secret"}}',
+        ].join('\n'),
+        error: null,
+        exitCode: 0,
+      };
+    });
+
+    const events: Array<{ kind: 'activity' | 'output'; data?: { line?: string } }> = [];
+    const result = await runExecutionAgent({
+      ...makeOpts(),
+      emit: (event) => events.push(event),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('');
+    expect(events).toEqual([
+      { kind: 'activity' },
+      { kind: 'activity' },
+    ]);
+  });
+
+  it('sanitizes the no-event Codex text fallback', async () => {
+    mockRunCodex.mockResolvedValue({
+      text: 'legacy stdout from /tmp/test-jarvis/private/file.md',
+      error: null,
+      exitCode: 0,
+    });
+
+    const result = await runExecutionAgent(makeOpts(), {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.output).toBe('legacy stdout from private/file.md');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Diff capture
