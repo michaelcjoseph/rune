@@ -302,9 +302,6 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- n prompt builder instead of a local prompt copy.
-
-Verified:
-- `npx vitest run src/vault/sessions.test.ts src/bot/handlers/text.test.ts --configLoader runner` passed: 144 tests.
-- Changed-file TypeScript check passed.
-- `npm run build` still fails on existing branch-wide errors outside these changes.
+- erified:
+- `npx vitest run src/bot/handlers/text.test.ts src/kb/search.test.ts src/mcp/server.test.ts src/vault/sessions.test.ts --configLoader runner` passed: 162 tests.
+- `npm run build` still fails on existing branch-wide TypeScript errors outside the touched implementation files. No commit made.

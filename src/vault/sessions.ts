@@ -142,6 +142,7 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
     `PRODUCT CHAT: Active product: ${scope.product}.`,
     `Product repo: ${context.repoPath}`,
     'Ground this conversation in the loaded product context below. Search the active product repo and the vault before answering product-specific development questions.',
+    `REPO + KB ROUTING: code/project questions route to the active product repo (${context.repoPath}) with repo_search/Read/Grep. Concept/people questions route to the KB with kb_query first, then kb_search for source pages. Mixed questions should use both.`,
     '',
     '## Loaded Repo Docs',
     formatDocs(context.repoDocs),
@@ -161,7 +162,7 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
 
   const context = input.productContext ?? loadProductPromptContext(scope.product);
   if (!context) {
-    return `${base}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search both the product repo and the vault before answering product-specific development questions.`;
+    return `${base}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search both the product repo and the vault before answering product-specific development questions. REPO + KB ROUTING: code/project questions route to the active product repo when the repo path is known; concept/people questions route to the KB with kb_query first.`;
   }
 
   const productPrompt = buildProductContextPrompt(scope, context);

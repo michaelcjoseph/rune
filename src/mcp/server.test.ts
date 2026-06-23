@@ -7,8 +7,8 @@
  *
  *   RED  — contract points 1-3 (createJarvisMcpServer, APP_SURFACE_TOOLS,
  *           ADMIN_TOOLS constants): the export does not exist yet.
- *   GREEN — contract point 4 (admin no-behavior-change pins): these exercise
- *           the existing createKBServer() and must PASS today as regression guards.
+ *   RED/GREEN — contract point 4 (admin search surface pins): these exercise
+ *               createKBServer() as the chat MCP surface evolves.
  *
  * Mechanics:
  *   - vi.mock stubs '../kb/engine.js' and '../kb/search.js' so no vault I/O
@@ -43,6 +43,7 @@ vi.mock('../kb/engine.js', () => ({
 
 vi.mock('../kb/search.js', () => ({
   searchWithFilter: vi.fn().mockReturnValue([]),
+  searchRepo: vi.fn().mockReturnValue([]),
 }));
 
 // ─── Lazy module import (after mocks are hoisted) ────────────────────────────
@@ -87,20 +88,20 @@ function getFactory(): JarvisMcpFactory | undefined {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4 — Admin no-behavior-change pins (🔴 MUST PASS TODAY)
+// §4 — Admin search surface pins
 //
-// These run against the existing createKBServer() export and serve as
-// regression guards for the upcoming factory refactor.
+// These run against createKBServer() and pin the local chat/search tool surface:
+// existing KB tools stay present, and product chat gains repo_search.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('createKBServer — no-behavior-change pins', () => {
-  it('exposes exactly the five kb_* tools', async () => {
+describe('createKBServer — repo plus KB search pins', () => {
+  it('exposes the existing kb_* tools plus repo_search for product chat', async () => {
     const server = serverModule.createKBServer();
     const client = await connectClient(server);
 
     const names = await listedToolNames(client);
     expect(names).toEqual(
-      ['kb_ingest', 'kb_lint', 'kb_query', 'kb_search', 'kb_stats'],
+      ['kb_ingest', 'kb_lint', 'kb_query', 'kb_search', 'kb_stats', 'repo_search'],
     );
 
     await client.close();
@@ -177,7 +178,7 @@ describe('createJarvisMcpServer — factory contract', () => {
     await client.close();
   });
 
-  it('admin opts register exactly the five kb_* tools', async () => {
+  it('admin opts register exactly the kb_* tools plus repo_search', async () => {
     const createJarvisMcpServer = getFactory();
     if (typeof createJarvisMcpServer !== 'function') {
       expect.fail('createJarvisMcpServer is not exported — implementation pending');
@@ -221,15 +222,16 @@ describe('exported constants', () => {
     expect(names).toContain('log_conversation');
   });
 
-  it('ADMIN_TOOLS is exported and contains exactly the five kb_* tools', () => {
+  it('ADMIN_TOOLS is exported and contains the kb_* tools plus repo_search', () => {
     const ADMIN_TOOLS = (serverModule as Record<string, unknown>)['ADMIN_TOOLS'];
     expect(ADMIN_TOOLS, 'ADMIN_TOOLS must be exported').toBeDefined();
     expect(Array.isArray(ADMIN_TOOLS)).toBe(true);
 
     const names = ADMIN_TOOLS as string[];
-    expect(names).toHaveLength(5);
+    expect(names).toHaveLength(6);
     expect(names).toContain('kb_query');
     expect(names).toContain('kb_search');
+    expect(names).toContain('repo_search');
     expect(names).toContain('kb_ingest');
     expect(names).toContain('kb_stats');
     expect(names).toContain('kb_lint');

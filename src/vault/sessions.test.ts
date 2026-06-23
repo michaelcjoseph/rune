@@ -356,6 +356,17 @@ describe('vault/sessions', () => {
       expect(prompt).toContain('Operator cockpits should preserve human judgment');
     });
 
+    it('routes product chat search by subject: code and project work to the active repo, people and concepts to the KB', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: jarvisScope,
+        productContext: jarvisContext,
+        workspaceDir: '/workspace',
+      });
+
+      expect(prompt).toMatch(/code\/project questions route to (?:the )?(?:active )?product repo/i);
+      expect(prompt).toMatch(/concept\/people questions route to (?:the )?(?:KB|knowledge base|kb_query)/i);
+    });
+
     it('keeps global sessions on the generic prompt and does not leak product context', () => {
       const prompt = buildSessionSystemPrompt({
         scope: { kind: 'global' },

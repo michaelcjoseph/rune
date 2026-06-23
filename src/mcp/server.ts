@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ingestSource, queryKB, lintKB, getKBStats } from '../kb/engine.js';
-import { searchWithFilter } from '../kb/search.js';
+import { searchRepo, searchWithFilter } from '../kb/search.js';
 
 /**
  * Shared MCP server factory (project 16-claude-app-connector).
@@ -37,6 +37,7 @@ export const APP_SURFACE_TOOLS = [
 export const ADMIN_TOOLS = [
   'kb_query',
   'kb_search',
+  'repo_search',
   'kb_ingest',
   'kb_stats',
   'kb_lint',
@@ -83,6 +84,25 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
           type || tags ? { type, tags } : undefined,
           { maxResults },
         );
+        const text = results.length === 0
+          ? 'No results found.'
+          : results.map((r) => `${r.file}:${r.line} — ${r.content}`).join('\n');
+        return { content: [{ type: 'text' as const, text }] };
+      },
+    );
+  },
+
+  repo_search: (server) => {
+    server.tool(
+      'repo_search',
+      'Search the active product repository. Use for product code, docs, project specs, tasks, bugs, and implementation questions.',
+      {
+        query: z.string().describe('Search query text'),
+        repoPath: z.string().describe('Absolute path to the active product repository'),
+        maxResults: z.number().optional().describe('Max results to return (default 20)'),
+      },
+      async ({ query, repoPath, maxResults }) => {
+        const results = searchRepo(query, { repoPath, maxResults });
         const text = results.length === 0
           ? 'No results found.'
           : results.map((r) => `${r.file}:${r.line} — ${r.content}`).join('\n');

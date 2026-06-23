@@ -1350,6 +1350,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
       'Read',
       'Glob',
       'Grep',
+      'mcp__jarvis-kb__repo_search',
       'mcp__jarvis-kb__kb_query',
       'mcp__jarvis-kb__kb_search',
     ]));

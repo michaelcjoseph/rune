@@ -453,6 +453,7 @@ const CONVERSATION_TOOLS = [
   'Grep',
   'WebSearch',
   'WebFetch',
+  'mcp__jarvis-kb__repo_search',
   'mcp__jarvis-kb__kb_query',
   'mcp__jarvis-kb__kb_search',
   'mcp__jarvis-kb__kb_stats',

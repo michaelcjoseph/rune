@@ -9,7 +9,15 @@ vi.mock('node:child_process', () => ({
 }));
 
 const { execFileSync } = await import('node:child_process');
-const { searchVault } = await import('./search.js');
+const searchModule = await import('./search.js');
+const { searchVault } = searchModule;
+const searchRepo = (searchModule as unknown as {
+  searchRepo?: (query: string, options: { repoPath: string; maxResults?: number }) => Array<{
+    file: string;
+    line: number;
+    content: string;
+  }>;
+}).searchRepo;
 
 const execMock = execFileSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -77,5 +85,55 @@ describe('kb/search', () => {
 
     execMock.mockReturnValue(Buffer.from(rgOutput));
     expect(searchVault('q')).toHaveLength(1);
+  });
+
+  it('searchRepo searches the active product repo and returns repo-relative snippets', () => {
+    expect(
+      searchRepo,
+      'src/kb/search.ts must export searchRepo for product-scoped repo chat search',
+    ).toEqual(expect.any(Function));
+
+    const rgOutput = [
+      JSON.stringify({
+        type: 'match',
+        data: {
+          path: { text: '/workspace/jarvis/src/server/webview.ts' },
+          line_number: 42,
+          lines: { text: 'handleApiProducts reads the product deep view' },
+        },
+      }),
+      JSON.stringify({
+        type: 'match',
+        data: {
+          path: { text: '/workspace/jarvis/docs/projects/17-cockpit-redesign/spec.md' },
+          line_number: 330,
+          lines: { text: 'per-product chat search is repo plus vault' },
+        },
+      }),
+    ].join('\n');
+
+    execMock.mockReturnValue(Buffer.from(rgOutput));
+
+    expect(searchRepo!('product deep view', {
+      repoPath: '/workspace/jarvis',
+      maxResults: 5,
+    })).toEqual([
+      { file: 'src/server/webview.ts', line: 42, content: 'handleApiProducts reads the product deep view' },
+      {
+        file: 'docs/projects/17-cockpit-redesign/spec.md',
+        line: 330,
+        content: 'per-product chat search is repo plus vault',
+      },
+    ]);
+    expect(execMock).toHaveBeenCalledWith(
+      'rg',
+      expect.arrayContaining(['/workspace/jarvis']),
+      expect.any(Object),
+    );
+    expect(execMock).not.toHaveBeenCalledWith(
+      'rg',
+      expect.arrayContaining(['/test/vault']),
+      expect.any(Object),
+    );
   });
 });

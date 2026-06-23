@@ -90,6 +90,64 @@ export function searchVault(
 }
 
 /**
+ * Full-text search across one product repository using ripgrep.
+ * Returns repo-relative matching file paths with line content.
+ */
+export function searchRepo(
+  query: string,
+  options: { repoPath: string; maxResults?: number },
+): SearchResult[] {
+  const resolvedRoot = resolve(options.repoPath);
+  const maxResults = options.maxResults ?? 20;
+
+  try {
+    const output = execFileSync(
+      'rg',
+      ['--json', '-i', '--max-count', '3', query, resolvedRoot],
+      { timeout: 10_000, maxBuffer: 1024 * 1024 },
+    ).toString();
+
+    const results: SearchResult[] = [];
+
+    for (const line of output.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as {
+          type: string;
+          data?: {
+            path?: { text?: string };
+            line_number?: number;
+            lines?: { text?: string };
+          };
+        };
+        if (parsed.type !== 'match' || !parsed.data) continue;
+
+        const filePath = parsed.data.path?.text || '';
+        const resolvedFile = resolve(filePath);
+        if (resolvedFile !== resolvedRoot && !resolvedFile.startsWith(resolvedRoot + sep)) {
+          continue;
+        }
+
+        const relative = resolvedFile === resolvedRoot
+          ? filePath
+          : resolvedFile.slice(resolvedRoot.length + 1);
+        results.push({
+          file: relative,
+          line: parsed.data.line_number || 0,
+          content: (parsed.data.lines?.text || '').trim(),
+        });
+      } catch {
+        // Skip unparseable lines
+      }
+    }
+
+    return results.slice(0, maxResults);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Parse YAML frontmatter from a markdown file.
  * Returns undefined if no frontmatter found.
  */
