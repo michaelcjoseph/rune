@@ -31,7 +31,7 @@ import { getSession, type SessionScope } from '../vault/sessions.js';
 import { createLogger } from '../utils/logger.js';
 import type { WebviewSender } from '../transport/webview-sender.js';
 import { handleWebviewMessage } from './webview-bootstrap.js';
-import { createMutation, cancelMutation } from '../transport/mutations.js';
+import { createMutation, cancelMutation, activeRuns } from '../transport/mutations.js';
 import type { MutationKind } from '../transport/mutations.js';
 import { resolveWorkDispatch, readDispatchModeInput } from '../jobs/work-dispatch.js';
 import type { DispatchModeView } from '../intent/cockpit.js';
@@ -400,6 +400,26 @@ function handleApiProductDeepView(res: ServerResponse, product: string): void {
   }
 
   const planningActive = isPlanningActiveForProduct(product);
+  let dispatchModes: Record<string, DispatchModeView> = {};
+  try {
+    const resolution = resolveWorkDispatch(
+      readDispatchModeInput({
+        product,
+        productsConfigPath: config.PRODUCTS_CONFIG_FILE,
+        globalEnabled: config.ORCHESTRATED_WORK_ENABLED,
+      }),
+    );
+    const entry: DispatchModeView = {
+      mode: resolution.mode,
+      ...(resolution.fallbackReason !== undefined ? { fallbackReason: resolution.fallbackReason } : {}),
+    };
+    const productEntry = registry.products.find((candidate) => candidate.name === product);
+    if (productEntry) {
+      dispatchModes = Object.fromEntries(productEntry.projects.map((project) => [project.slug, entry]));
+    }
+  } catch (err) {
+    log.warn('handleApiProductDeepView: dispatch-mode resolution failed', { product, error: (err as Error).message });
+  }
   const view = buildProductDeepView({
     product,
     readRegistry: () => registry,
@@ -408,6 +428,8 @@ function handleApiProductDeepView(res: ServerResponse, product: string): void {
     readBacklogs: () => readNewCockpitBacklogs(registry),
     readFixAttempts: () => readLatestFixAttempts(config.FIX_ATTEMPTS_FILE),
     readTaskRunRecords: (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
+    readActiveMutations: () => [...activeRuns.values()].map((handle) => handle.descriptor),
+    dispatchModes,
     worktreePathFor: (productName, projectSlug) => worktreePathFor(productName, projectSlug, config.WORKTREE_ROOT),
     planningActive,
   });

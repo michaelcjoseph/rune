@@ -20,6 +20,15 @@ export interface DeepProject {
   slug: string;
   lifecycle: 'active' | 'done';
   taskProgress: { done: number; total: number };
+  runControl: DeepProjectRunControl;
+}
+
+export interface DeepProjectRunControl {
+  state: 'start' | 'cancel';
+  mutationId?: string;
+  dispatchMode?: string;
+  fallbackReason?: string;
+  error?: string;
 }
 
 export interface RunSummaryRow {
@@ -98,6 +107,18 @@ export interface ProductDeepViewTaskRunRecord {
   modelChoices?: Record<string, string>;
 }
 
+export interface ProductDeepViewActiveMutation {
+  id: string;
+  kind: string;
+  status?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface ProductDeepViewDispatchMode {
+  mode: string;
+  fallbackReason?: string;
+}
+
 export type ProductDeepViewFixAttempt = FixActionAttempt & {
   product?: string;
   bugId?: string;
@@ -111,6 +132,8 @@ export interface ProductDeepViewDeps {
   readBacklogs: () => ProductDeepViewBacklog[];
   readFixAttempts?: () => Map<string, ProductDeepViewFixAttempt>;
   readTaskRunRecords?: (runId: string) => ProductDeepViewTaskRunRecord[];
+  readActiveMutations?: () => ProductDeepViewActiveMutation[];
+  dispatchModes?: Record<string, ProductDeepViewDispatchMode>;
   worktreePathFor?: (product: string, slug: string) => string;
   planningActive?: boolean;
   now?: () => number;
@@ -171,6 +194,47 @@ function compareEndedDesc(a: ProductDeepViewWorkRun, b: ProductDeepViewWorkRun):
 
 function projectLifecycle(status: RegistryProduct['projects'][number]['status']): 'active' | 'done' {
   return status === 'done' ? 'done' : 'active';
+}
+
+function isCancellableProjectMutation(mutation: ProductDeepViewActiveMutation, product: string, projectSlug: string): boolean {
+  if (mutation.kind !== 'work-run' && mutation.kind !== 'orchestrated-work') return false;
+  if (mutation.status === 'completed' || mutation.status === 'failed' || mutation.status === 'rejected') return false;
+  const payload = mutation.payload ?? {};
+  return payload['product'] === product && payload['projectSlug'] === projectSlug;
+}
+
+function runControlForProject(
+  product: string,
+  projectSlug: string,
+  activeMutations: ProductDeepViewActiveMutation[],
+  dispatchModes: Record<string, ProductDeepViewDispatchMode> = {},
+): DeepProjectRunControl {
+  const activeMutation = activeMutations.find((mutation) =>
+    isCancellableProjectMutation(mutation, product, projectSlug),
+  );
+  const dispatch = dispatchModes[projectSlug];
+  if (activeMutation) {
+    const payload = activeMutation.payload ?? {};
+    const control: DeepProjectRunControl = {
+      state: 'cancel',
+      mutationId: activeMutation.id,
+    };
+    const dispatchMode = typeof payload['dispatchMode'] === 'string'
+      ? payload['dispatchMode']
+      : undefined;
+    const fallbackReason = typeof payload['fallbackReason'] === 'string'
+      ? payload['fallbackReason']
+      : undefined;
+    if (dispatchMode !== undefined) control.dispatchMode = dispatchMode;
+    if (fallbackReason !== undefined) control.fallbackReason = fallbackReason;
+    return control;
+  }
+
+  return {
+    state: 'start',
+    ...(dispatch?.mode !== undefined ? { dispatchMode: dispatch.mode } : {}),
+    ...(dispatch?.fallbackReason !== undefined ? { fallbackReason: dispatch.fallbackReason } : {}),
+  };
 }
 
 function attemptKey(product: string, bugId: string): string {
@@ -302,6 +366,7 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       if (a.status !== 'blocked-on-human' && b.status === 'blocked-on-human') return 1;
       return compareStartedDesc(a, b);
     });
+  const activeMutations = deps.readActiveMutations ? readOrEmpty(deps.readActiveMutations) : [];
 
   const view: ProductDeepView = {
     name: product.name,
@@ -312,6 +377,7 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
         slug: project.slug,
         lifecycle: projectLifecycle(project.status),
         taskProgress: project.progress ?? { done: 0, total: 0 },
+        runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
       })),
     backlog: {
       bugs: (backlog?.bugs ?? []).map((item) =>

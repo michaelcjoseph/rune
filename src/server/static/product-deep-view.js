@@ -95,6 +95,28 @@ function renderFixNotice(action) {
   return `<p class="deep-fix-notice deep-fix-notice--${attr(action.state)}">${escHtml(bits.join(' - '))}</p>`;
 }
 
+function renderProjectRunControl(project) {
+  const control = project.runControl || { state: 'start' };
+  const mode = control.dispatchMode
+    ? `<span class="deep-action-meta">${escHtml(control.fallbackReason ? `${control.dispatchMode} - ${control.fallbackReason}` : control.dispatchMode)}</span>`
+    : '';
+  const error = control.error
+    ? `<span class="deep-action-meta deep-action-meta--error">${escHtml(control.error)}</span>`
+    : '';
+  if (control.state === 'cancel' && control.mutationId) {
+    return `<div class="deep-actions deep-project-actions">` +
+      `<button type="button" class="deep-action deep-action--cancel" data-project-run-action="cancel" ` +
+        `data-project-slug="${attr(project.slug)}" data-mutation-id="${attr(control.mutationId)}">Cancel</button>` +
+      `${mode}${error}` +
+    `</div>`;
+  }
+  return `<div class="deep-actions deep-project-actions">` +
+    `<button type="button" class="deep-action deep-action--start" data-project-run-action="start" ` +
+      `data-project-slug="${attr(project.slug)}">Start</button>` +
+    `${mode}${error}` +
+  `</div>`;
+}
+
 function renderProjects(projects) {
   const rows = list(projects).map(project => {
     const progress = fmtProgress(project.taskProgress);
@@ -110,6 +132,7 @@ function renderProjects(projects) {
         `<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${percent}%"></div></div>` +
         `<span class="progress-text">${escHtml(progress)}</span>` +
       `</div>` +
+      `${renderProjectRunControl(project)}` +
     `</article>`;
   }).join('');
   return `<section class="deep-panel deep-panel--projects" data-surface="projects">` +
@@ -438,8 +461,18 @@ function defaultPostJson(url, body) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-  }).then(response => {
-    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  }).then(async response => {
+    if (!response.ok) {
+      // Surface the server's typed reason (e.g. "global work-run cap reached",
+      // "parked (blocked-on-human) run exists") instead of a bare status — the
+      // inline card error relies on this to tell the user what to do.
+      let detail = `Request failed: ${response.status}`;
+      try {
+        const parsed = await response.json();
+        if (parsed && typeof parsed.error === 'string' && parsed.error) detail = parsed.error;
+      } catch (_) { /* non-JSON body — keep the status string */ }
+      throw new Error(detail);
+    }
     return response.json();
   });
 }
@@ -456,11 +489,66 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+const WORK_RUN_MUTATION_KINDS = new Set(['work-run', 'orchestrated-work']);
+
 function mutationProduct(mutation) {
   const payload = mutation?.payload || {};
   return typeof mutation?.product === 'string' ? mutation.product
     : typeof payload.product === 'string' ? payload.product
     : 'jarvis';
+}
+
+function mutationProjectSlug(mutation) {
+  const payload = mutation?.payload || {};
+  return typeof payload.projectSlug === 'string' ? payload.projectSlug : '';
+}
+
+function isTerminalMutation(mutation) {
+  return mutation?.status === 'completed' || mutation?.status === 'failed' || mutation?.status === 'rejected';
+}
+
+function activeProjectMutation(mutations, product, projectSlug) {
+  return list(mutations).find(mutation =>
+    WORK_RUN_MUTATION_KINDS.has(mutation?.kind) &&
+    !isTerminalMutation(mutation) &&
+    mutationProduct(mutation) === product &&
+    mutationProjectSlug(mutation) === projectSlug
+  );
+}
+
+function overlayRunControlsFromState(view, state, product) {
+  if (!view?.projects) return view;
+  // A failed /api/state fetch arrives here as null — keep the server-provided
+  // runControl rather than resetting every project to 'start' (which would hide
+  // a live run's Cancel button on a transient blip).
+  if (!state) return view;
+  const activeMutations = list(state?.mutations?.active);
+  const next = clone(view);
+  next.projects = list(next.projects).map(project => {
+    const mutation = activeProjectMutation(activeMutations, product, project.slug);
+    const existing = project.runControl || { state: 'start' };
+    if (mutation?.id) {
+      const payload = mutation.payload || {};
+      return {
+        ...project,
+        runControl: {
+          state: 'cancel',
+          mutationId: mutation.id,
+          ...(typeof payload.dispatchMode === 'string' ? { dispatchMode: payload.dispatchMode } : {}),
+          ...(typeof payload.fallbackReason === 'string' ? { fallbackReason: payload.fallbackReason } : {}),
+        },
+      };
+    }
+    return {
+      ...project,
+      runControl: {
+        state: 'start',
+        ...(existing.dispatchMode ? { dispatchMode: existing.dispatchMode } : {}),
+        ...(existing.fallbackReason ? { fallbackReason: existing.fallbackReason } : {}),
+      },
+    };
+  });
+  return next;
 }
 
 function operationsFromState(state, product) {
@@ -534,6 +622,52 @@ export function createProductDeepView({
       chatMessages,
       planning,
     });
+  }
+
+  async function reloadProductAndOperations() {
+    const [nextView, state] = await Promise.all([
+      loadJson(`/api/products/${encodeURIComponent(product)}`),
+      loadJson('/api/state').catch(() => null),
+    ]);
+    current = overlayRunControlsFromState(nextView, state, product);
+    const nextOperations = operationsFromState(state, product);
+    if (nextOperations) currentOperations = nextOperations;
+    render();
+    return current;
+  }
+
+  // Start launches an autonomous run that edits + commits without further
+  // confirmation, so gate it behind a confirm() that names the project and the
+  // resolved dispatch mode — mirroring the cockpit Start modal. Proceeds when
+  // window.confirm is unavailable (node/test) so headless callers aren't blocked.
+  function confirmStartRun(projectSlug) {
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') return true;
+    const project = list(current?.projects).find(p => p.slug === projectSlug);
+    const control = project?.runControl || {};
+    let mode = '';
+    if (control.dispatchMode === 'orchestrated') {
+      mode = '\n\nMode: orchestrated (product-team loop)';
+    } else if (control.dispatchMode === 'legacy') {
+      mode = `\n\nMode: legacy /work --auto · fallback: ${control.fallbackReason || 'unspecified'}`;
+    } else if (control.dispatchMode) {
+      mode = `\n\nMode: ${control.dispatchMode}`;
+    }
+    return window.confirm(
+      `Start a work run on "${projectSlug}"?${mode}\n\n` +
+        'It runs autonomously and edits + commits without further confirmation.',
+    );
+  }
+
+  function setProjectRunControlError(projectSlug, message) {
+    current = clone(current);
+    for (const project of list(current?.projects)) {
+      if (project.slug !== projectSlug) continue;
+      project.runControl = {
+        ...(project.runControl || { state: 'start' }),
+        error: message,
+      };
+    }
+    render();
   }
 
   function appendChatMessage(role, text) {
@@ -795,6 +929,34 @@ export function createProductDeepView({
       return;
     }
 
+    const projectRun = event.target?.closest?.('[data-project-run-action]');
+    if (projectRun) {
+      event.preventDefault?.();
+      const action = projectRun.dataset?.projectRunAction;
+      const projectSlug = projectRun.dataset?.projectSlug;
+      if (!projectSlug || projectRun.disabled) return;
+      // Gate Start (not Cancel) behind a confirmation; a decline leaves the
+      // button usable (return before disabling).
+      if (action === 'start' && !confirmStartRun(projectSlug)) return;
+      projectRun.disabled = true;
+      try {
+        if (action === 'start') {
+          await post('/api/mutations', { kind: 'work-run', payload: { product, projectSlug } });
+        } else if (action === 'cancel') {
+          const mutationId = projectRun.dataset?.mutationId;
+          if (!mutationId) throw new Error('missing mutation id');
+          await post(`/api/mutations/${encodeURIComponent(mutationId)}/cancel`);
+        } else {
+          return;
+        }
+        await reloadProductAndOperations();
+      } catch (err) {
+        projectRun.disabled = false;
+        setProjectRunControlError(projectSlug, `${action === 'cancel' ? 'Cancel' : 'Start'} failed: ${err?.message || err}`);
+      }
+      return;
+    }
+
     const cancelOp = event.target?.closest?.('[data-cancel-op-id]');
     if (cancelOp) {
       event.preventDefault?.();
@@ -872,6 +1034,7 @@ export function createProductDeepView({
       if (loadOperations && !operations) {
         const state = await loadJson('/api/state').catch(() => null);
         currentOperations = operationsFromState(state, product);
+        current = overlayRunControlsFromState(current, state, product);
       }
       // Adopt an already-active planning session (e.g. started from Telegram or a
       // prior visit) so the chat panel surfaces it. In-session planning state

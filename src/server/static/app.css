@@ -559,6 +559,9 @@ body[data-view="product"] #product-root {
   color: var(--text2);
   font-size: .75rem;
 }
+.deep-action-meta--error {
+  color: var(--error);
+}
 .deep-project,
 .deep-backlog-item,
 .deep-run-row,

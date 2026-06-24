@@ -569,6 +569,393 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).not.toMatch(/data-restart-server|restart server|global status/i);
   });
 
+  it('renders project-card Start by default and Cancel for a matching active work mutation from operations state', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+
+    expect(renderProductDeepView(productView({
+      projects: [
+        {
+          slug: '17-cockpit-redesign',
+          lifecycle: 'active',
+          taskProgress: { done: 4, total: 9 },
+          runControl: { state: 'start', dispatchMode: 'legacy', fallbackReason: 'operator override' },
+        },
+      ],
+    }))).toMatch(/data-project-run-action=["']start["'][\s\S]{0,160}>Start</i);
+
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [
+            {
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'start', dispatchMode: 'legacy' },
+            },
+          ],
+        });
+      }
+      if (url === '/api/state') {
+        return {
+          mutations: {
+            active: [
+              {
+                id: 'mut-project-live',
+                kind: 'orchestrated-work',
+                status: 'running',
+                payload: { product: 'aura', projectSlug: '17-cockpit-redesign', dispatchMode: 'orchestrated' },
+              },
+              {
+                id: 'mut-other-project',
+                kind: 'work-run',
+                status: 'running',
+                payload: { product: 'aura', projectSlug: 'other-project' },
+              },
+              {
+                id: 'mut-other-product',
+                kind: 'work-run',
+                status: 'running',
+                payload: { product: 'relay', projectSlug: '17-cockpit-redesign' },
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const view = createProductDeepView({ root, product: 'aura', fetchJson, loadOperations: true });
+    await view.load();
+
+    expect(root.innerHTML).toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}data-mutation-id=["']mut-project-live["']/i);
+    expect(root.innerHTML).not.toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}data-mutation-id=["']mut-other-project["']/i);
+    expect(root.innerHTML).not.toContain('mut-other-product');
+  });
+
+  it('posts project-card Start and reloads product plus operations state so the control flips', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    let state = { mutations: { active: [] as any[] } };
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [
+            {
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'start', dispatchMode: 'legacy' },
+            },
+          ],
+        });
+      }
+      if (url === '/api/state') return state;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async (url: string, body?: unknown) => {
+      expect(url).toBe('/api/mutations');
+      expect(body).toEqual({
+        kind: 'work-run',
+        payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+      });
+      state = {
+        mutations: {
+          active: [{
+            id: 'mut-started',
+            kind: 'work-run',
+            status: 'running',
+            payload: { product: 'aura', projectSlug: '17-cockpit-redesign', dispatchMode: 'legacy' },
+          }],
+        },
+      };
+      return { id: 'mut-started' };
+    });
+
+    const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson, loadOperations: true });
+    await view.load();
+    await root.clickClosest('[data-project-run-action]', {
+      projectRunAction: 'start',
+      projectSlug: '17-cockpit-redesign',
+    });
+
+    expect(postJson).toHaveBeenCalledWith('/api/mutations', {
+      kind: 'work-run',
+      payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+    });
+    expect(fetchJson).toHaveBeenCalledWith('/api/products/aura');
+    expect(fetchJson).toHaveBeenCalledWith('/api/state');
+    expect(root.innerHTML).toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}mut-started/i);
+  });
+
+  it('posts project-card Cancel and reloads product plus operations state so the control flips back to Start', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    let state = {
+      mutations: {
+        active: [{
+          id: 'mut-live-project',
+          kind: 'work-run',
+          status: 'running',
+          payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+        }],
+      },
+    };
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [
+            {
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'cancel', mutationId: 'mut-live-project' },
+            },
+          ],
+        });
+      }
+      if (url === '/api/state') return state;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async (url: string) => {
+      expect(url).toBe('/api/mutations/mut-live-project/cancel');
+      state = { mutations: { active: [] } };
+      return { ok: true };
+    });
+
+    const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson, loadOperations: true });
+    await view.load();
+    await root.clickClosest('[data-project-run-action]', {
+      projectRunAction: 'cancel',
+      projectSlug: '17-cockpit-redesign',
+      mutationId: 'mut-live-project',
+    });
+
+    expect(postJson).toHaveBeenCalledWith('/api/mutations/mut-live-project/cancel');
+    expect(root.innerHTML).toMatch(/data-project-run-action=["']start["'][\s\S]{0,120}>Start</i);
+  });
+
+  it('keeps project-card run controls usable and renders inline errors after Start or Cancel failures', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const startRoot = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [{
+            slug: '17-cockpit-redesign',
+            lifecycle: 'active',
+            taskProgress: { done: 4, total: 9 },
+            runControl: { state: 'start' },
+          }],
+        });
+      }
+      if (url === '/api/state') return { mutations: { active: [] } };
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const startView = createProductDeepView({
+      root: startRoot,
+      product: 'aura',
+      fetchJson,
+      postJson: vi.fn(async () => { throw new Error('boom'); }),
+      loadOperations: true,
+    });
+    await startView.load();
+    await startRoot.clickClosest('[data-project-run-action]', {
+      projectRunAction: 'start',
+      projectSlug: '17-cockpit-redesign',
+    });
+    expect(startRoot.innerHTML).toMatch(/Start failed: boom/i);
+    expect(startRoot.innerHTML).toMatch(/data-project-run-action=["']start["'][^>]*>Start/i);
+
+    const cancelRoot = makeRoot();
+    const cancelView = createProductDeepView({
+      root: cancelRoot,
+      product: 'aura',
+      fetchJson: vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') {
+          return productView({
+            projects: [{
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'cancel', mutationId: 'mut-live-project' },
+            }],
+          });
+        }
+        if (url === '/api/state') {
+          return {
+            mutations: {
+              active: [{
+                id: 'mut-live-project',
+                kind: 'work-run',
+                status: 'running',
+                payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+              }],
+            },
+          };
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }),
+      postJson: vi.fn(async () => { throw new Error('nope'); }),
+      loadOperations: true,
+    });
+    await cancelView.load();
+    await cancelRoot.clickClosest('[data-project-run-action]', {
+      projectRunAction: 'cancel',
+      projectSlug: '17-cockpit-redesign',
+      mutationId: 'mut-live-project',
+    });
+    expect(cancelRoot.innerHTML).toMatch(/Cancel failed: nope/i);
+    expect(cancelRoot.innerHTML).toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}mut-live-project/i);
+  });
+
+  it('aborts project-card Start (no POST) when the confirmation is declined', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const previousWindow = (globalThis as any).window;
+    const confirmFn = vi.fn(() => false);
+    (globalThis as any).window = {
+      confirm: confirmFn,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const root = makeRoot();
+      const postJson = vi.fn(async () => ({ id: 'should-not-happen' }));
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') {
+          return productView({
+            projects: [{
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'start', dispatchMode: 'legacy', fallbackReason: 'toggle off' },
+            }],
+          });
+        }
+        if (url === '/api/state') return { mutations: { active: [] } };
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson, loadOperations: true });
+      await view.load();
+      await root.clickClosest('[data-project-run-action]', {
+        projectRunAction: 'start',
+        projectSlug: '17-cockpit-redesign',
+      });
+      expect(confirmFn).toHaveBeenCalledTimes(1);
+      expect(postJson).not.toHaveBeenCalled();
+      expect(root.innerHTML).toMatch(/data-project-run-action=["']start["'][^>]*>Start/i);
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('proceeds with project-card Start when the confirmation is accepted', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      confirm: vi.fn(() => true),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const root = makeRoot();
+      const postJson = vi.fn(async () => ({ id: 'mut-started' }));
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') {
+          return productView({
+            projects: [{
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'start' },
+            }],
+          });
+        }
+        if (url === '/api/state') return { mutations: { active: [] } };
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson, loadOperations: true });
+      await view.load();
+      await root.clickClosest('[data-project-run-action]', {
+        projectRunAction: 'start',
+        projectSlug: '17-cockpit-redesign',
+      });
+      expect(postJson).toHaveBeenCalledWith('/api/mutations', {
+        kind: 'work-run',
+        payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+      });
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('surfaces the server error reason inline when a default-path Start is rejected', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [{
+            slug: '17-cockpit-redesign',
+            lifecycle: 'active',
+            taskProgress: { done: 4, total: 9 },
+            runControl: { state: 'start' },
+          }],
+        });
+      }
+      if (url === '/api/state') return { mutations: { active: [] } };
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const previousFetch = (globalThis as any).fetch;
+    // No postJson injected → exercises the real defaultPostJson over global fetch,
+    // which must surface the server's {error} body rather than a bare status.
+    (globalThis as any).fetch = vi.fn(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'global work-run cap reached' }),
+    }));
+    try {
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, loadOperations: true });
+      await view.load();
+      await root.clickClosest('[data-project-run-action]', {
+        projectRunAction: 'start',
+        projectSlug: '17-cockpit-redesign',
+      });
+      expect(root.innerHTML).toMatch(/Start failed: global work-run cap reached/i);
+      expect(root.innerHTML).toMatch(/data-project-run-action=["']start["'][^>]*>Start/i);
+    } finally {
+      if (previousFetch === undefined) delete (globalThis as any).fetch;
+      else (globalThis as any).fetch = previousFetch;
+    }
+  });
+
+  it('preserves an active Cancel control when the /api/state fetch fails on load', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [{
+            slug: '17-cockpit-redesign',
+            lifecycle: 'active',
+            taskProgress: { done: 4, total: 9 },
+            runControl: { state: 'cancel', mutationId: 'mut-server' },
+          }],
+        });
+      }
+      if (url === '/api/state') throw new Error('state unavailable');
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const view = createProductDeepView({ root, product: 'aura', fetchJson, loadOperations: true });
+    await view.load();
+    // /api/state rejected → overlay must keep the server's cancel control, not reset to start.
+    expect(root.innerHTML).toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}mut-server/i);
+  });
+
   it('posts per-product op and mutation cancels from the deep view through the existing cancel endpoints', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();

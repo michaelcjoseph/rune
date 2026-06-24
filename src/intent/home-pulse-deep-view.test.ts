@@ -373,7 +373,12 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
     expect(view.name).toBe('aura');
     expect(view.repoBacked).toBe(true);
     expect(view.projects).toEqual([
-      { slug: '01-mvp', lifecycle: 'active', taskProgress: { done: 2, total: 5 } },
+      {
+        slug: '01-mvp',
+        lifecycle: 'active',
+        taskProgress: { done: 2, total: 5 },
+        runControl: { state: 'start' },
+      },
     ]);
     expect(view.projects.some((project: any) => project.lifecycle === 'done')).toBe(false);
     expect(view.backlog.bugs.find((b: any) => b.id === 'b-open')).toMatchObject({
@@ -471,6 +476,55 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       },
     ]);
     expect(view.runs.some((row: any) => row.runId === 'run-other-product')).toBe(false);
+  });
+
+  it('projects per-project Start or Cancel controls from active work mutations only', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const view = buildProductDeepView({
+      product: 'aura',
+      ...deps({
+        readActiveMutations: vi.fn(() => [
+          {
+            id: 'mut-cancel-this',
+            kind: 'orchestrated-work',
+            status: 'running',
+            payload: {
+              product: 'aura',
+              projectSlug: '01-mvp',
+              dispatchMode: 'orchestrated',
+            },
+          },
+          {
+            id: 'mut-other-project',
+            kind: 'work-run',
+            status: 'running',
+            payload: { product: 'aura', projectSlug: 'other-project' },
+          },
+          {
+            id: 'mut-other-product',
+            kind: 'work-run',
+            status: 'running',
+            payload: { product: 'relay', projectSlug: '01-mvp' },
+          },
+        ]),
+        dispatchModes: {
+          '01-mvp': { mode: 'legacy', fallbackReason: 'operator override' },
+        },
+      }),
+    });
+
+    expect(view.projects).toEqual([
+      {
+        slug: '01-mvp',
+        lifecycle: 'active',
+        taskProgress: { done: 2, total: 5 },
+        runControl: {
+          state: 'cancel',
+          mutationId: 'mut-cancel-this',
+          dispatchMode: 'orchestrated',
+        },
+      },
+    ]);
   });
 
   it('projects a running bug active-run detail with computed worktree path and role records', async () => {
