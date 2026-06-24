@@ -41,9 +41,14 @@ function makeRoot() {
           closest(query: string) {
             return query === selector
               ? {
-                dataset: { product: fields.product ?? 'aura' },
+                dataset: {
+                  product: fields.product ?? 'aura',
+                  kind: fields.kind,
+                },
                 elements: {
                   message: { value: fields.message ?? '' },
+                  text: { value: fields.text ?? '' },
+                  query: { value: fields.query ?? '' },
                 },
                 reset: vi.fn(),
               }
@@ -186,6 +191,12 @@ const operations = {
   inFlightOps: [{ opId: 'op-live-1', label: 'agent', startedAt: '2026-06-23T12:01:00.000Z' }],
   mutations: [{ id: 'mut-live-1', kind: 'work-run', status: 'running' }],
   restartAvailable: true,
+  planning: { product: 'aura', status: 'scoping' },
+};
+
+const productOperations = {
+  inFlightOps: [{ opId: 'op-live-1', label: 'agent', product: 'aura' }],
+  mutations: [{ id: 'mut-live-1', kind: 'work-run', status: 'running', product: 'aura' }],
   planning: { product: 'aura', status: 'scoping' },
 };
 
@@ -457,19 +468,100 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(sendChat).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps migrated operational controls reachable in the new deep-view IA', async () => {
+  it('keeps per-product operational controls reachable in the deep view without cross-product rail controls', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
-    const html = renderProductDeepView(productView(), { operations });
+    const html = renderProductDeepView(productView(), { operations: productOperations });
 
-    expect(html).toMatch(/pending approvals|approvals/i);
-    expect(html).toContain('Release parked run');
-    expect(html).toMatch(/data-approval-action=["']approve["'][\s\S]{0,180}blocked-on-human:run-parked-1|blocked-on-human:run-parked-1[\s\S]{0,180}data-approval-action=["']approve["']/i);
-    expect(html).toMatch(/intent proposal/i);
-    expect(html).toMatch(/restart server/i);
     expect(html).toMatch(/op-live-1[\s\S]{0,180}cancel|cancel[\s\S]{0,180}op-live-1/i);
     expect(html).toMatch(/mut-live-1[\s\S]{0,180}cancel|cancel[\s\S]{0,180}mut-live-1/i);
     expect(html).toMatch(/planning[\s\S]{0,160}aura|aura[\s\S]{0,160}planning/i);
+    expect(html).not.toMatch(/data-approval-action|pending approvals|blocked-on-human:run-parked-1/i);
+    expect(html).not.toMatch(/data-restart-server|restart server|global status/i);
+  });
+
+  it('posts per-product op and mutation cancels from the deep view through the existing cancel endpoints', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const postJson = vi.fn(async () => ({ ok: true }));
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      postJson,
+      operations: productOperations,
+    });
+    await view.load();
+    await root.clickClosest('[data-cancel-op-id]', { cancelOpId: 'op-live-1' });
+    await root.clickClosest('[data-cancel-mutation-id]', { cancelMutationId: 'mut-live-1' });
+
+    expect(postJson).toHaveBeenCalledWith('/api/ops/op-live-1/cancel');
+    expect(postJson).toHaveBeenCalledWith('/api/mutations/mut-live-1/cancel');
+  });
+
+  it('keeps backlog add in the deep-view backlog surface and appends through the existing backlog endpoint', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const appendedBug = {
+      id: 'BUG-new',
+      title: 'Newly captured bug',
+      status: 'open',
+      plan: { kind: 'plan', state: 'available' },
+      fix: { kind: 'fix', state: 'available' },
+    };
+    const postJson = vi.fn(async (url: string, body?: unknown) => {
+      expect(url).toBe('/api/backlog/aura/bugs');
+      expect(body).toEqual({ text: 'Newly captured bug' });
+      return { item: appendedBug };
+    });
+
+    expect(renderProductDeepView(productView())).toMatch(/data-backlog-add-form[\s\S]{0,240}bugs|bugs[\s\S]{0,240}data-backlog-add-form/i);
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      postJson,
+    });
+    await view.load();
+    await root.submitClosest('[data-backlog-add-form]', {
+      product: 'aura',
+      kind: 'bugs',
+      text: 'Newly captured bug',
+    });
+
+    expect(postJson).toHaveBeenCalledTimes(1);
+    expect(root.innerHTML).toContain('BUG-new');
+    expect(root.innerHTML).toContain('Newly captured bug');
+  });
+
+  it('keeps backlog Plan in the deep view and hands successful plans to the planning panel without starting a replacement session', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const postJson = vi.fn(async (url: string) => {
+      expect(url).toBe('/api/backlog/aura/items/IDEA-1/plan');
+      return { planningSessionId: 'planning-1', promotionId: 'promotion-1' };
+    });
+    const openPlanningPanel = vi.fn();
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      postJson,
+      openPlanningPanel,
+    });
+    await view.load();
+    await root.clickClosest('[data-plan-item-id]', { planItemId: 'IDEA-1' });
+
+    expect(postJson).toHaveBeenCalledWith('/api/backlog/aura/items/IDEA-1/plan');
+    expect(openPlanningPanel).toHaveBeenCalledWith(expect.objectContaining({
+      product: 'aura',
+      planningSessionId: 'planning-1',
+      promotionId: 'promotion-1',
+      linkedSession: true,
+    }));
   });
 
   it('submits chat turns with product scope, preserves slash commands verbatim, and links KB research out instead of embedding it', async () => {

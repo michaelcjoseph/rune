@@ -94,7 +94,58 @@ function renderProductCard(product) {
   `</article>`;
 }
 
-export function renderHomeView(pulse) {
+function renderStatus(status) {
+  if (!status) return '<p class="muted">Global status unavailable</p>';
+  const pending = status.pendingApprovals || {};
+  const pendingCount = Number(pending.intent || 0) + Number(pending.playbook || 0) + Number(pending.proposal || 0);
+  const activeOps = Number.isFinite(status.activeOps) ? status.activeOps : list(status.inFlight).length;
+  const activeMutations = Number.isFinite(status.activeMutations)
+    ? status.activeMutations
+    : list(status.mutations?.active).length;
+  return `<div class="home-operation-status">` +
+    `<div><strong>Global status</strong><span>${status.ready ? 'ready' : 'not ready'}</span></div>` +
+    `<div><strong>Active ops</strong><span>${escHtml(activeOps)}</span></div>` +
+    `<div><strong>Active mutations</strong><span>${escHtml(activeMutations)}</span></div>` +
+    `<div><strong>Pending approvals</strong><span>${escHtml(pendingCount)}</span></div>` +
+  `</div>`;
+}
+
+function renderApprovalRow(row) {
+  const id = row?.id || '';
+  if (!id) return '';
+  const type = row.type || row.source || '';
+  const summary = row.summary || row.label || id;
+  const product = row.productProject || '';
+  const age = Number.isFinite(row.age) ? fmtElapsed(row.age * 1000) : '';
+  return `<article class="home-approval-row" data-approval-id="${attr(id)}">` +
+    `<div class="home-approval-copy">` +
+      `<strong>${escHtml(summary)}</strong>` +
+      `<span>${escHtml([product, type, age].filter(Boolean).join(' - '))}</span>` +
+    `</div>` +
+    `<div class="home-approval-actions">` +
+      `<button type="button" data-approval-id="${attr(id)}" data-approval-action="approve">Approve</button>` +
+      `<button type="button" data-approval-id="${attr(id)}" data-approval-action="reject">Reject</button>` +
+    `</div>` +
+  `</article>`;
+}
+
+function renderOperationalRail(operations) {
+  if (!operations) return '';
+  const approvals = list(operations.approvals).map(renderApprovalRow).filter(Boolean).join('');
+  const restart = operations.restartAvailable
+    ? `<button type="button" class="home-restart-btn" data-restart-server>Restart server</button>`
+    : '';
+  return `<aside class="home-operational-rail" data-home-operational-rail>` +
+    `<section class="home-operation-panel">${renderStatus(operations.status)}</section>` +
+    `<section class="home-operation-panel">` +
+      `<div class="home-operation-head"><h3>Pending approvals</h3><span>${escHtml(list(operations.approvals).length)}</span></div>` +
+      `${approvals || '<p class="muted">No pending approvals</p>'}` +
+    `</section>` +
+    (restart ? `<section class="home-operation-panel">${restart}</section>` : '') +
+  `</aside>`;
+}
+
+function renderHomeViewWithOptions(pulse, options = {}) {
   if (!pulse || pulse.available !== true) {
     const reason = pulse?.unavailableReason || 'Home pulse unavailable';
     return `<section class="home-unavailable">` +
@@ -105,18 +156,56 @@ export function renderHomeView(pulse) {
 
   const products = Array.isArray(pulse.products) ? pulse.products : [];
   if (products.length === 0) {
-    return `<section class="home-view"><h2>Home</h2><p class="muted">No products registered</p></section>`;
+    return `<section class="home-view"><h2>Home</h2><p class="muted">No products registered</p>${renderOperationalRail(options.operations)}</section>`;
   }
 
   return `<section class="home-view">` +
     `<div class="home-header"><h2>Home</h2><span>${escHtml(fmtCount(products.length, 'product', 'products'))}</span></div>` +
-    `<div class="home-products">${products.map(renderProductCard).join('')}</div>` +
+    `<div class="home-layout">` +
+      `<div class="home-products">${products.map(renderProductCard).join('')}</div>` +
+      `${renderOperationalRail(options.operations)}` +
+    `</div>` +
   `</section>`;
 }
 
-export function createHomeView({ root, fetchJson, router }) {
+export function renderHomeView(pulse, options = {}) {
+  return renderHomeViewWithOptions(pulse, options);
+}
+
+function list(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function attr(value) {
+  return escHtml(value);
+}
+
+function defaultPostJson(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(response => {
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+    return response.json().catch(() => ({}));
+  });
+}
+
+function isProductionSurface() {
+  if (typeof document === 'undefined') return false;
+  return document.querySelector?.('meta[name="is-production"]')?.content === 'true';
+}
+
+export function createHomeView({ root, fetchJson, postJson, router }) {
   if (!root) throw new Error('createHomeView requires a root');
   const loadJson = fetchJson || (url => fetch(url).then(r => r.json()));
+  const post = postJson || defaultPostJson;
+  let currentPulse = null;
+  let operations = null;
+
+  function render() {
+    root.innerHTML = renderHomeView(currentPulse, { operations });
+  }
 
   root.addEventListener?.('click', event => {
     const activeRun = event.target?.closest?.('[data-home-active-run]');
@@ -130,16 +219,47 @@ export function createHomeView({ root, fetchJson, router }) {
     const productCard = event.target?.closest?.('[data-home-product]');
     const product = productCard?.dataset?.homeProduct;
     if (product) router?.goProduct?.(product);
+
+    const approval = event.target?.closest?.('[data-approval-action]');
+    if (approval) {
+      event.preventDefault?.();
+      const id = approval.dataset?.approvalId;
+      const action = approval.dataset?.approvalAction;
+      if (!id || !action || approval.disabled) return;
+      approval.disabled = true;
+      post(`/api/approvals/${encodeURIComponent(id)}/${encodeURIComponent(action)}`)
+        .catch(() => { approval.disabled = false; });
+      return;
+    }
+
+    const restart = event.target?.closest?.('[data-restart-server]');
+    if (restart) {
+      event.preventDefault?.();
+      if (restart.disabled) return;
+      restart.disabled = true;
+      post('/api/server/restart').catch(() => { restart.disabled = false; });
+    }
   });
 
   return {
     async load() {
-      const pulse = await loadJson('/api/home');
-      root.innerHTML = renderHomeView(pulse);
-      return pulse;
+      currentPulse = await loadJson('/api/home');
+      const [status, approvals] = await Promise.all([
+        loadJson('/api/state').catch(() => null),
+        loadJson('/api/approvals').catch(() => []),
+      ]);
+      operations = {
+        status,
+        approvals: list(approvals),
+        restartAvailable: Boolean(status?.restartAvailable || isProductionSurface()),
+      };
+      render();
+      return currentPulse;
     },
-    render(pulse) {
-      root.innerHTML = renderHomeView(pulse);
+    render(pulse, opts = {}) {
+      currentPulse = pulse;
+      operations = opts.operations || operations;
+      render();
     },
   };
 }

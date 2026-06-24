@@ -50,7 +50,7 @@ function makeRoot() {
       listeners.set(type, listener);
     }),
     clickClosest(selector: string, dataset: Record<string, string>) {
-      listeners.get('click')?.({
+      return listeners.get('click')?.({
         target: {
           closest(query: string) {
             return query === selector ? { dataset } : null;
@@ -95,6 +95,34 @@ const homePulse = {
       attention: [],
     },
   ],
+};
+
+const homeOperations = {
+  status: {
+    ready: true,
+    activeOps: 1,
+    activeMutations: 1,
+    pendingApprovals: { intent: 1, playbook: 0, proposal: 0 },
+  },
+  approvals: [
+    {
+      id: 'blocked-on-human:run-parked-1',
+      type: 'blocked-on-human',
+      source: 'blocked-on-human',
+      productProject: 'aura/17-cockpit-redesign',
+      summary: 'run run-park blocked-on-human',
+      age: 90,
+    },
+    {
+      id: 'intent-proposal:0',
+      type: 'intent-proposal',
+      source: 'intent-proposal',
+      productProject: 'jarvis',
+      summary: 'capture product idea',
+      age: 30,
+    },
+  ],
+  restartAvailable: true,
 };
 
 describe('client view-router (cockpit redesign Phase 5)', () => {
@@ -191,17 +219,62 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     const { createHomeView } = await import('./home-view.js');
     const root = makeRoot();
     const fetchJson = vi.fn(async (url: string) => {
-      expect(url).toBe('/api/home');
-      return homePulse;
+      expect(url).not.toBe('/api/cockpit');
+      if (url === '/api/home') return homePulse;
+      if (url === '/api/state') return homeOperations.status;
+      if (url === '/api/approvals') return homeOperations.approvals;
+      throw new Error(`unexpected fetch ${url}`);
     });
 
     const home = createHomeView({ root, fetchJson, router: { goProduct: vi.fn() } });
     await home.load();
 
-    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(fetchJson).toHaveBeenCalledWith('/api/home');
     expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
     expect(root.innerHTML).toContain('aura');
     expect(root.innerHTML).toContain('relay');
+  });
+
+  it('renders the Home operational rail with global status, pending approvals, parked-run release, and production restart', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView(homePulse, { operations: homeOperations });
+
+    expect(html).toMatch(/data-home-operational-rail|home-operational-rail/i);
+    expect(html).toMatch(/global status|ready|active ops|active mutations/i);
+    expect(html).toContain('run run-park blocked-on-human');
+    expect(html).toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}data-approval-action=["']approve["']|data-approval-action=["']approve["'][\s\S]{0,220}blocked-on-human:run-parked-1/i);
+    expect(html).toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}data-approval-action=["']reject["']|data-approval-action=["']reject["'][\s\S]{0,220}blocked-on-human:run-parked-1/i);
+    expect(html).not.toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}disabled|disabled[\s\S]{0,220}blocked-on-human:run-parked-1/i);
+    expect(html).toContain('capture product idea');
+    expect(html).toMatch(/data-restart-server|restart server/i);
+  });
+
+  it('loads Home rail data from the existing operations endpoints and actions approvals/restart through the cutover routes', async () => {
+    const { createHomeView } = await import('./home-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/home') return homePulse;
+      if (url === '/api/state') return homeOperations.status;
+      if (url === '/api/approvals') return homeOperations.approvals;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async () => ({ ok: true }));
+
+    const home = createHomeView({ root, fetchJson, postJson, router: { goProduct: vi.fn() } });
+    await home.load();
+    root.clickClosest('[data-approval-action]', {
+      approvalId: 'blocked-on-human:run-parked-1',
+      approvalAction: 'approve',
+    });
+    root.clickClosest('[data-restart-server]', {});
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/home');
+    expect(fetchJson).toHaveBeenCalledWith('/api/state');
+    expect(fetchJson).toHaveBeenCalledWith('/api/approvals');
+    expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
+    expect(postJson).toHaveBeenCalledWith('/api/approvals/blocked-on-human%3Arun-parked-1/approve');
+    expect(postJson).toHaveBeenCalledWith('/api/server/restart');
   });
 
   it('renders product cards with repo status, live run, counts, outcome, and attention', async () => {

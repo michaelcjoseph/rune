@@ -134,6 +134,10 @@ function renderBacklog(backlog) {
   ).join('');
   return `<section class="deep-panel deep-panel--backlog" data-surface="backlog">` +
     `<div class="deep-panel-head"><h3>Backlog</h3><span>Bugs / Ideas</span></div>` +
+    `<div class="deep-backlog-add">` +
+      `<form data-backlog-add-form data-kind="bugs"><input name="text" type="text" placeholder="New bug"><button type="submit">Add bug</button></form>` +
+      `<form data-backlog-add-form data-kind="ideas"><input name="text" type="text" placeholder="New idea"><button type="submit">Add idea</button></form>` +
+    `</div>` +
     `<div class="deep-backlog-columns">` +
       `<div class="deep-backlog-column" data-backlog-kind="bugs"><h4>Bugs</h4>${list(backlog?.bugs).map(item => renderBacklogItem(item, 'bugs')).join('') || '<p class="muted">No bugs</p>'}</div>` +
       `<div class="deep-backlog-column" data-backlog-kind="ideas"><h4>Ideas</h4>${list(backlog?.ideas).map(item => renderBacklogItem(item, 'ideas')).join('') || '<p class="muted">No ideas</p>'}</div>` +
@@ -211,14 +215,6 @@ function renderRuns(view, liveRuns = {}) {
 
 function renderOperations(operations) {
   if (!operations) return '';
-  const approvals = list(operations.pendingApprovals).map(approval =>
-    `<article class="deep-op-row">` +
-      `<span>${escHtml(approval.label || approval.kind || approval.id)}</span>` +
-      `<span>${escHtml(approval.kind || '')}</span>` +
-      `<button type="button" data-approval-id="${attr(approval.id)}" data-approval-action="approve">Approve</button>` +
-      `<button type="button" data-approval-id="${attr(approval.id)}" data-approval-action="reject">Reject</button>` +
-    `</article>`
-  ).join('');
   const ops = list(operations.inFlightOps).map(op =>
     `<article class="deep-op-row"><span>${escHtml(op.opId)}</span><span>${escHtml(op.label || 'op')}</span><button type="button" data-cancel-op-id="${attr(op.opId)}">Cancel</button></article>`
   ).join('');
@@ -230,11 +226,9 @@ function renderOperations(operations) {
     : '<p class="muted">No active planning</p>';
   return `<section class="deep-panel deep-panel--operations" data-surface="operations">` +
     `<div class="deep-panel-head"><h3>Operations</h3><span>controls</span></div>` +
-    `<h4>Pending approvals</h4>${approvals || '<p class="muted">No pending approvals</p>'}` +
     `<h4>Active ops</h4>${ops || '<p class="muted">No active ops</p>'}` +
     `<h4>Work runs</h4>${mutations || '<p class="muted">No active mutations</p>'}` +
     `<h4>Planning</h4>${planning}` +
-    (operations.restartAvailable ? '<button type="button" data-restart-server>Restart server</button>' : '') +
   `</section>`;
 }
 
@@ -321,6 +315,25 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+function mutationProduct(mutation) {
+  const payload = mutation?.payload || {};
+  return typeof mutation?.product === 'string' ? mutation.product
+    : typeof payload.product === 'string' ? payload.product
+    : 'jarvis';
+}
+
+function operationsFromState(state, product) {
+  if (!state) return null;
+  const activeMutations = list(state.mutations?.active)
+    .filter(mutation => mutationProduct(mutation) === product);
+  const planning = state.activePlanning?.product === product ? state.activePlanning : null;
+  return {
+    inFlightOps: list(state.inFlight).filter(op => op.kind !== 'classifier'),
+    mutations: activeMutations,
+    planning,
+  };
+}
+
 export function createProductDeepView({
   root,
   product,
@@ -330,17 +343,20 @@ export function createProductDeepView({
   sendChat,
   createRunFeedSubscription = defaultCreateRunFeedSubscription,
   operations,
+  openPlanningPanel,
+  loadOperations = false,
 } = {}) {
   if (!root) throw new Error('createProductDeepView requires a root');
   const loadJson = fetchJson || (url => fetch(url).then(r => r.json()));
   const post = postJson || ((url, body) => defaultPostJson(url, body));
   const send = sendChat || defaultSendChat;
   let current = null;
+  let currentOperations = operations || null;
   let liveRuns = {};
   let subscription = null;
 
   function render() {
-    root.innerHTML = renderProductDeepView(current, { liveRuns, operations });
+    root.innerHTML = renderProductDeepView(current, { liveRuns, operations: currentOperations });
   }
 
   async function focusRun(runId) {
@@ -387,6 +403,42 @@ export function createProductDeepView({
       return;
     }
 
+    const plan = event.target?.closest?.('[data-plan-item-id]');
+    if (plan) {
+      event.preventDefault?.();
+      const itemId = plan.dataset?.planItemId;
+      if (!itemId || plan.disabled) return;
+      plan.disabled = true;
+      const result = await post(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`);
+      openPlanningPanel?.({
+        product,
+        planningSessionId: result?.planningSessionId,
+        promotionId: result?.promotionId,
+        linkedSession: true,
+      });
+      return;
+    }
+
+    const cancelOp = event.target?.closest?.('[data-cancel-op-id]');
+    if (cancelOp) {
+      event.preventDefault?.();
+      const id = cancelOp.dataset?.cancelOpId;
+      if (!id || cancelOp.disabled) return;
+      cancelOp.disabled = true;
+      await post(`/api/ops/${encodeURIComponent(id)}/cancel`).catch(() => { cancelOp.disabled = false; });
+      return;
+    }
+
+    const cancelMutation = event.target?.closest?.('[data-cancel-mutation-id]');
+    if (cancelMutation) {
+      event.preventDefault?.();
+      const id = cancelMutation.dataset?.cancelMutationId;
+      if (!id || cancelMutation.disabled) return;
+      cancelMutation.disabled = true;
+      await post(`/api/mutations/${encodeURIComponent(id)}/cancel`).catch(() => { cancelMutation.disabled = false; });
+      return;
+    }
+
     const command = event.target?.closest?.('[data-chat-command]');
     if (command) {
       event.preventDefault?.();
@@ -397,6 +449,21 @@ export function createProductDeepView({
   };
 
   const onSubmit = async event => {
+    const backlogAdd = event.target?.closest?.('[data-backlog-add-form]');
+    if (backlogAdd) {
+      event.preventDefault?.();
+      const kind = backlogAdd.dataset?.kind;
+      const text = backlogAdd.elements?.text?.value || '';
+      if (!kind || !String(text).trim()) return;
+      const result = await post(`/api/backlog/${encodeURIComponent(product)}/${encodeURIComponent(kind)}`, { text });
+      current = clone(current);
+      const items = current?.backlog?.[kind];
+      if (Array.isArray(items) && result?.item) items.push(result.item);
+      render();
+      backlogAdd.reset?.();
+      return;
+    }
+
     const chatForm = event.target?.closest?.('[data-product-chat-form]');
     if (chatForm) {
       event.preventDefault?.();
@@ -423,6 +490,10 @@ export function createProductDeepView({
   return {
     async load() {
       current = await loadJson(`/api/products/${encodeURIComponent(product)}`);
+      if (loadOperations && !operations) {
+        const state = await loadJson('/api/state').catch(() => null);
+        currentOperations = operationsFromState(state, product);
+      }
       render();
       if (focusRunId) {
         await focusRun(focusRunId);
@@ -433,7 +504,8 @@ export function createProductDeepView({
     render(view = current, opts = {}) {
       current = view;
       if (opts.liveRuns) liveRuns = opts.liveRuns;
-      root.innerHTML = renderProductDeepView(current, { liveRuns, operations: opts.operations || operations });
+      currentOperations = opts.operations || currentOperations;
+      root.innerHTML = renderProductDeepView(current, { liveRuns, operations: currentOperations });
     },
     close() {
       subscription?.close?.();

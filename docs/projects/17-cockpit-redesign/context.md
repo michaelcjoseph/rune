@@ -302,10 +302,10 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- o+vault search form. Styled the added controls in [app.css](jarvis/.worktrees/jarvis/17-cockpit-redesign/src/server/static/app.css).
+- cockpit-redesign/src/server/static/app.css:85).
 
 Verified:
-`npm test -- --run src/server/static/product-deep-view-client.test.ts --configLoader runner` passed, 15 tests.
+`npm test -- --run src/server/static/home-view-client.test.ts src/server/static/product-deep-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner` passed, 36 tests.
 `git diff --check` passed.
 
 I did not commit.
