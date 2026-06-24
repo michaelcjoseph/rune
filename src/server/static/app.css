@@ -429,6 +429,7 @@ body[data-view="product"] #product-root {
   display: flex;
   flex-direction: column;
   gap: .9rem;
+  min-height: calc(100vh - 2rem);
 }
 .deep-header {
   display: flex;
@@ -478,7 +479,9 @@ body[data-view="product"] #product-root {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: .9rem;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 .deep-work-column,
 .deep-side-stack {
@@ -486,6 +489,9 @@ body[data-view="product"] #product-root {
   display: flex;
   flex-direction: column;
   gap: .8rem;
+}
+.deep-side-stack {
+  min-height: calc(100vh - 6rem);
 }
 .deep-work-tabs {
   display: flex;
@@ -541,7 +547,8 @@ body[data-view="product"] #product-root {
 .deep-panel--chat { grid-area: chat; }
 .deep-panel--operations { grid-area: operations; }
 .deep-panel--chat {
-  min-height: min(72vh, 46rem);
+  min-height: calc(100vh - 6rem);
+  flex: 0 0 auto;
 }
 .deep-panel-head,
 .deep-row-head,
@@ -747,8 +754,9 @@ body[data-view="product"] #product-root {
   overflow-wrap: anywhere;
 }
 .deep-chat-transcript {
-  min-height: 20rem;
-  max-height: min(56vh, 34rem);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow: auto;
   display: flex;
   flex-direction: column;

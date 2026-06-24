@@ -277,7 +277,11 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html.indexOf('data-surface="operations"')).toBeLessThan(html.indexOf('data-surface="runs"'));
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i);
-    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*min-height:\s*20rem/i);
+    expect(css).toMatch(/\.product-deep-view[\s\S]*min-height:\s*calc\(100vh - 2rem\)/i);
+    expect(css).toMatch(/\.deep-two-column[\s\S]*align-items:\s*stretch/i);
+    expect(css).toMatch(/\.deep-panel--chat[\s\S]*min-height:\s*calc\(100vh - 6rem\)/i);
+    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*flex:\s*1 1 auto/i);
+    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*max-height:\s*none/i);
     expect(css).toMatch(/\.deep-panel--chat textarea[\s\S]*min-height:\s*7\.5rem/i);
     expect(css).toMatch(/\.deep-tab-panel:not\(\.is-active\)[\s\S]*display:\s*none/i);
 
