@@ -1,0 +1,66 @@
+/*
+  Dracula theme for highlight.js — code-block syntax colors for the webview.
+  Palette matches the app's Dracula UI variables in app.css.
+  Based on the canonical Dracula highlight.js theme (https://github.com/dracula/highlight).
+*/
+.hljs {
+  background: #282a36;
+  color: #f8f8f2;
+}
+.hljs-built_in,
+.hljs-selector-tag,
+.hljs-section,
+.hljs-link {
+  color: #8be9fd; /* cyan */
+}
+.hljs-keyword {
+  color: #ff79c6; /* pink */
+}
+.hljs,
+.hljs-subst {
+  color: #f8f8f2; /* foreground */
+}
+.hljs-title,
+.hljs-attr,
+.hljs-meta-keyword {
+  font-style: italic;
+  color: #50fa7b; /* green */
+}
+.hljs-string,
+.hljs-meta,
+.hljs-name,
+.hljs-type,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition,
+.hljs-variable,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #f1fa8c; /* yellow */
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+  color: #6272a4; /* comment */
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-title,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  font-weight: bold;
+}
+.hljs-literal,
+.hljs-number {
+  color: #bd93f9; /* purple */
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
