@@ -1404,7 +1404,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('submits chat turns with product scope, preserves slash commands verbatim, and links KB research out instead of embedding it', async () => {
     const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
-    const sendChat = vi.fn(async () => ({ text: 'Fresh summary complete.' }));
+    const sendChat = vi.fn(async () => ({ text: 'Model switched.' }));
 
     const view = createProductDeepView({
       root,
@@ -1413,14 +1413,14 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       sendChat,
     });
     await view.load();
-    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: '/fresh' });
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: '/opus' });
 
     expect(sendChat).toHaveBeenCalledWith(expect.objectContaining({
       product: 'aura',
-      text: '/fresh',
+      text: '/opus',
     }));
-    expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,80}\/fresh/i);
-    expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,120}Fresh summary complete/i);
+    expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,80}\/opus/i);
+    expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,120}Model switched/i);
     expect(root.innerHTML).toMatch(/data-chat-message-depth[\s\S]{0,80}2 messages deep/i);
 
     const html = renderProductDeepView(productView());
@@ -1428,6 +1428,36 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/repo\s*\+\s*vault|product repo[\s\S]{0,120}vault|data-search-scope=["']repo\+vault["']/i);
     expect(html).toMatch(/claude app|app:\/\/|data-app-deeplink/i);
     expect(html).not.toMatch(/embedded-app-thread|kb-research-thread|idea-exploration-thread/i);
+  });
+
+  it('resets product-local message depth when the active chat session is cleared', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async ({ text }: { text: string }) => (
+      text === '/clear' ? { text: 'Cleared.' } : { text: 'Reply.' }
+    ));
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      sendChat,
+    });
+    await view.load();
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Before clear' });
+
+    expect(root.innerHTML).toMatch(/data-chat-message-depth[\s\S]{0,80}2 messages deep/i);
+    expect(root.innerHTML).toContain('Before clear');
+
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: '/clear' });
+
+    expect(sendChat).toHaveBeenCalledWith(expect.objectContaining({
+      product: 'aura',
+      text: '/clear',
+    }));
+    expect(root.innerHTML).toMatch(/data-chat-message-depth[\s\S]{0,80}0 messages deep/i);
+    expect(root.innerHTML).not.toContain('Before clear');
+    expect(root.innerHTML).not.toContain('Cleared.');
   });
 
   it('sends product chat on Enter while preserving Shift+Enter for newlines', async () => {

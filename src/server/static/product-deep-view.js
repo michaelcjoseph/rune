@@ -854,6 +854,17 @@ export function createProductDeepView({
     render();
   }
 
+  function resetChatSession({ restorePlanActions = true } = {}) {
+    chatMessages = [];
+    streamingMessageIndex = -1;
+    if (planning.active) {
+      planning = { active: false, status: 'scoping', artifact: null };
+      if (restorePlanActions) restoreTemporarilyDisabledPlanActions();
+    }
+    persistSession();
+    render();
+  }
+
   function markPlanningActiveOnBacklog() {
     current = clone(current);
     for (const kind of ['bugs', 'ideas']) {
@@ -923,15 +934,17 @@ export function createProductDeepView({
     if (!trimmed) return null;
     appendChatMessage('user', trimmed);
     const isCommand = trimmed.startsWith('/');
+    const clearsSession = trimmed === '/clear' || trimmed.startsWith('/fresh');
     // While planning, free-form text drives the planning conversation through the
     // structured endpoint; slash commands fall through to the normal path so
     // /clear, /fresh, and model switches keep working (and abandon the session).
     if (planning.active && !isCommand) return planningTurn(trimmed);
     const result = await send({ product: messageProduct, text: trimmed });
-    if (result?.text) appendChatMessage('assistant', result.text);
-    if (planning.active && (trimmed === '/clear' || trimmed.startsWith('/fresh'))) {
-      resetPlanning();
+    if (clearsSession) {
+      resetChatSession();
+      return result;
     }
+    if (result?.text) appendChatMessage('assistant', result.text);
     return result;
   }
 
