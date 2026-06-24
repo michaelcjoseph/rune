@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Listener = (event?: any) => unknown;
 
@@ -207,6 +207,13 @@ const productOperations = {
 };
 
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
+  // Per-product chat/planning state is retained at module scope (so it survives
+  // navigate-away-and-back). Clear it between tests so they stay isolated.
+  beforeEach(async () => {
+    const mod = await import('./product-deep-view.js');
+    mod.__resetProductSessions?.();
+  });
+
   it('loads the per-product projection and renders Projects, Bugs, Ideas, Runs, and Chat without depending on /api/cockpit', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
@@ -600,33 +607,102 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toContain('Newly captured bug');
   });
 
-  it('keeps backlog Plan in the deep view and focuses the right-column Chat transcript after creating the planning session', async () => {
+  it('starts planning in the right-column chat panel after creating the planning session (no separate overlay)', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const postJson = vi.fn(async (url: string) => {
       expect(url).toBe('/api/backlog/aura/items/IDEA-1/plan');
       return { planningSessionId: 'planning-1', promotionId: 'promotion-1' };
     });
-    const openPlanningPanel = vi.fn();
 
     const view = createProductDeepView({
       root,
       product: 'aura',
       fetchJson: vi.fn(async () => productView()),
       postJson,
-      openPlanningPanel,
     });
     await view.load();
     await root.clickClosest('[data-plan-item-id]', { planItemId: 'IDEA-1' });
 
     expect(postJson).toHaveBeenCalledWith('/api/backlog/aura/items/IDEA-1/plan');
+    // Breadcrumb lands in the visible product-chat transcript and the chat panel
+    // enters planning mode (status pill) — no dependency on a separate overlay.
     expect(root.innerHTML).toMatch(/data-product-chat-transcript[\s\S]*Planning started for Add a release dashboard/i);
-    expect(openPlanningPanel).toHaveBeenCalledWith(expect.objectContaining({
+    expect(root.innerHTML).toMatch(/data-planning-active|data-planning-status/i);
+  });
+
+  it('routes chat turns through the planning endpoint while planning, renders the proposed spec inline, and approves it', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const specReply = [
+      'Here is the proposed spec.',
+      '```spec-artifact',
+      JSON.stringify({
+        title: 'Release dashboard',
+        spec: 'Build a dashboard for releases.',
+        tasks: '- [ ] scaffold\n- [ ] wire data',
+        testPlan: 'unit + e2e',
+      }),
+      '```',
+    ].join('\n');
+    const postJson = vi.fn(async (url: string) => {
+      if (url === '/api/backlog/aura/items/IDEA-1/plan') return { planningSessionId: 'planning-1' };
+      if (url === '/api/planning/turn') return { reply: specReply, status: 'spec-proposed' };
+      if (url === '/api/planning/approve') return { ok: true, slug: 'aura-release-dashboard' };
+      throw new Error(`unexpected post ${url}`);
+    });
+
+    const view = createProductDeepView({
+      root,
       product: 'aura',
-      planningSessionId: 'planning-1',
-      promotionId: 'promotion-1',
-      linkedSession: true,
-    }));
+      fetchJson: vi.fn(async () => productView()),
+      postJson,
+    });
+    await view.load();
+    await root.clickClosest('[data-plan-item-id]', { planItemId: 'IDEA-1' });
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'A board listing recent releases' });
+
+    // The free-form turn went to the structured planning endpoint, not the WS/chat send.
+    expect(postJson).toHaveBeenCalledWith('/api/planning/turn', { text: 'A board listing recent releases' });
+    // Structured spec rendered inline with the artifact fields + action buttons.
+    expect(root.innerHTML).toMatch(/data-planning-status[^>]*>spec-proposed</i);
+    expect(root.innerHTML).toContain('Release dashboard');
+    expect(root.innerHTML).toContain('Build a dashboard for releases.');
+    expect(root.innerHTML).toMatch(/data-planning-action=["']approve["']/i);
+
+    await root.clickClosest('[data-planning-action]', { planningAction: 'approve' });
+    expect(postJson).toHaveBeenCalledWith('/api/planning/approve');
+    expect(root.innerHTML).toMatch(/Spec approved/i);
+    // Planning surface clears after approval.
+    expect(root.innerHTML).not.toMatch(/data-planning-action=["']approve["']/i);
+  });
+
+  it('retains the product chat transcript across navigate-away-and-back (in-session)', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ text: 'Working on it.' }));
+
+    const first = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      sendChat,
+    });
+    await first.load();
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Remember this' });
+    expect(root.innerHTML).toContain('Remember this');
+    first.close();
+
+    // Re-navigate: a fresh view for the same product restores the transcript.
+    const second = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      sendChat,
+    });
+    await second.load();
+    expect(root.innerHTML).toContain('Remember this');
+    expect(root.innerHTML).toContain('Working on it.');
   });
 
   it('submits chat turns with product scope, preserves slash commands verbatim, and links KB research out instead of embedding it', async () => {

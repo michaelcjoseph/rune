@@ -193,24 +193,6 @@ function renderWorkTabs(view, activeTab = 'projects') {
   `</section>`;
 }
 
-function renderBacklog(backlog) {
-  const warnings = list(backlog?.warnings).map(warning =>
-    renderWarning(warning)
-  ).join('');
-  return `<section class="deep-panel deep-panel--backlog" data-surface="backlog">` +
-    `<div class="deep-panel-head"><h3>Backlog</h3><span>Bugs / Ideas</span></div>` +
-    `<div class="deep-backlog-add">` +
-      `<form data-backlog-add-form data-kind="bugs"><input name="text" type="text" placeholder="New bug"><button type="submit">Add bug</button></form>` +
-      `<form data-backlog-add-form data-kind="ideas"><input name="text" type="text" placeholder="New idea"><button type="submit">Add idea</button></form>` +
-    `</div>` +
-    `<div class="deep-backlog-columns">` +
-      `<div class="deep-backlog-column" data-backlog-kind="bugs"><h4>Bugs</h4>${list(backlog?.bugs).map(item => renderBacklogItem(item, 'bugs')).join('') || '<p class="muted">No bugs</p>'}</div>` +
-      `<div class="deep-backlog-column" data-backlog-kind="ideas"><h4>Ideas</h4>${list(backlog?.ideas).map(item => renderBacklogItem(item, 'ideas')).join('') || '<p class="muted">No ideas</p>'}</div>` +
-    `</div>` +
-    (warnings ? `<div class="deep-warnings"><strong>Warnings</strong><ul>${warnings}</ul></div>` : '') +
-  `</section>`;
-}
-
 function renderAgents(agents) {
   const rows = list(agents).map(agent =>
     `<li class="${agent.active ? 'active' : ''}">` +
@@ -326,25 +308,88 @@ function renderChatMessages(messages) {
   `</div>`;
 }
 
-function renderChat(view, messages = []) {
+function specField(label, value) {
+  return `<div class="deep-spec-field">` +
+    `<span class="deep-spec-label">${escHtml(label)}</span>` +
+    `<pre class="deep-spec-body">${escHtml(value || '')}</pre>` +
+  `</div>`;
+}
+
+// Inline planning surface rendered inside the product chat panel. The chat
+// panel IS the planning surface in the home/product layout (the standalone
+// #planning-panel overlay is unreachable now that the sidebar is hidden). When
+// a spec is proposed the structured artifact (title/spec/tasks/test-plan) and
+// the Approve/Refine/Abandon actions render here instead of in a separate panel.
+function renderPlanning(planning) {
+  if (!planning?.active) return '';
+  const status = planning.status || 'scoping';
+  const statusPill = `<span class="planning-status-pill status-${attr(status)}" data-planning-status>${escHtml(status)}</span>`;
+  if (status !== 'spec-proposed' || !planning.artifact) {
+    return `<div class="deep-planning" data-planning-active>` +
+      `<div class="deep-planning-head"><strong>Planning</strong>${statusPill}</div>` +
+      `<p class="muted">Reply below to shape the spec. Approve scaffolds it; /clear abandons.</p>` +
+    `</div>`;
+  }
+  const a = planning.artifact;
+  return `<div class="deep-planning deep-planning--spec" data-planning-active>` +
+    `<div class="deep-planning-head"><strong>Proposed spec</strong>${statusPill}</div>` +
+    `<div class="deep-planning-spec-body">` +
+      specField('title', a.title) +
+      specField('spec', a.spec) +
+      specField('tasks', a.tasks) +
+      specField('test-plan', a.testPlan) +
+    `</div>` +
+    `<div class="deep-planning-actions">` +
+      `<button type="button" class="deep-planning-approve" data-planning-action="approve">Approve</button>` +
+      `<button type="button" class="deep-planning-refine" data-planning-action="refine">Refine</button>` +
+      `<button type="button" class="deep-planning-abandon" data-planning-action="abandon">Abandon</button>` +
+    `</div>` +
+  `</div>`;
+}
+
+function renderChat(view, messages = [], planning = null) {
+  const planningActive = !!planning?.active;
+  const placeholder = planningActive ? `Reply to planning...` : `Message ${attr(view.name)}...`;
   return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
     `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
     `<div class="deep-panel-head"><h3>Chat</h3><span>${escHtml(view.name)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
+    `${renderPlanning(planning)}` +
     `${renderChatMessages(messages)}` +
     `<a href="app://claude" data-app-deeplink>Open Claude App</a>` +
     `${renderChatCommands()}` +
     `${renderProductSearch(view)}` +
     `<form data-product-chat-form data-product="${attr(view.name)}">` +
-      `<textarea name="message" rows="3" placeholder="Message ${attr(view.name)}..."></textarea>` +
+      `<textarea name="message" rows="3" placeholder="${attr(placeholder)}"></textarea>` +
       `<button type="submit">Send</button>` +
     `</form>` +
   `</section>`;
 }
 
+// Best-effort parse of the fenced ```spec-artifact JSON block the planning
+// scoping turn emits, so the chat panel can render the structured spec without a
+// separate fetch. Mirrors tryParseSpecArtifactFromReply in app.js. Returns null
+// when no well-formed block is present.
+function tryParseSpecArtifact(reply) {
+  const match = /```spec-artifact\s*\n([\s\S]*?)\n```/.exec(String(reply || ''));
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    if (parsed && typeof parsed === 'object' &&
+        typeof parsed.title === 'string' &&
+        typeof parsed.spec === 'string' &&
+        typeof parsed.tasks === 'string' &&
+        typeof parsed.testPlan === 'string') {
+      return parsed;
+    }
+  } catch (_) { /* malformed — fall through */ }
+  return null;
+}
+
 export function renderProductDeepView(view, options = {}) {
   const activeTab = options.activeTab || 'projects';
   const chatMessages = options.chatMessages || [];
+  const planning = options.planning || null;
   if (!view) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
@@ -370,7 +415,7 @@ export function renderProductDeepView(view, options = {}) {
     `<div class="deep-two-column">` +
       `${renderWorkTabs(view, activeTab)}` +
       `<aside class="deep-side-stack">` +
-        `${renderChat(view, chatMessages)}` +
+        `${renderChat(view, chatMessages, planning)}` +
         `${renderOperations(options.operations)}` +
         `${renderRuns(view, options.liveRuns || {})}` +
       `</aside>` +
@@ -420,6 +465,26 @@ function operationsFromState(state, product) {
   };
 }
 
+// Per-product chat + planning state kept at module scope so it survives
+// navigating away from a product and back (client-view.js close()s the view and
+// constructs a fresh one on each route change). In-session only — not persisted
+// across a full page reload. Keyed by product slug.
+const productSessions = new Map();
+
+function getProductSession(product) {
+  let session = productSessions.get(product);
+  if (!session) {
+    session = { chatMessages: [], planning: { active: false, status: 'scoping', artifact: null } };
+    productSessions.set(product, session);
+  }
+  return session;
+}
+
+/** Test seam: clear all retained per-product chat/planning state. */
+export function __resetProductSessions() {
+  productSessions.clear();
+}
+
 export function createProductDeepView({
   root,
   product,
@@ -429,7 +494,6 @@ export function createProductDeepView({
   sendChat,
   createRunFeedSubscription = defaultCreateRunFeedSubscription,
   operations,
-  openPlanningPanel,
   router,
   loadOperations = false,
 } = {}) {
@@ -442,8 +506,15 @@ export function createProductDeepView({
   let liveRuns = {};
   let subscription = null;
   let activeTab = 'projects';
-  let chatMessages = [];
+  const session = getProductSession(product);
+  let chatMessages = session.chatMessages;
+  let planning = session.planning;
   let streamingMessageIndex = -1;
+
+  function persistSession() {
+    session.chatMessages = chatMessages;
+    session.planning = planning;
+  }
 
   function render() {
     root.innerHTML = renderProductDeepView(current, {
@@ -451,12 +522,14 @@ export function createProductDeepView({
       operations: currentOperations,
       activeTab,
       chatMessages,
+      planning,
     });
   }
 
   function appendChatMessage(role, text) {
     chatMessages = [...chatMessages, { role, text }];
     streamingMessageIndex = -1;
+    persistSession();
     render();
   }
 
@@ -471,15 +544,81 @@ export function createProductDeepView({
           : message
       );
     }
+    persistSession();
     render();
+  }
+
+  function resetPlanning() {
+    planning = { active: false, status: 'scoping', artifact: null };
+    persistSession();
+    render();
+  }
+
+  function focusChatInput() {
+    root.querySelector?.('[data-product-chat-form] [name="message"]')?.focus?.();
+  }
+
+  // Drive one planning turn through the structured planning endpoint so the chat
+  // panel can render the proposed spec + Approve/Refine/Abandon. The user line is
+  // appended by the caller; this appends the assistant reply and updates the
+  // spec-proposed state.
+  async function planningTurn(text) {
+    let body;
+    try {
+      body = await post('/api/planning/turn', { text });
+    } catch (err) {
+      appendChatMessage('assistant', `Planning error: ${err?.message || err}`);
+      return null;
+    }
+    const status = body?.status || 'scoping';
+    const artifact = status === 'spec-proposed' ? tryParseSpecArtifact(body?.reply || '') : null;
+    planning = {
+      ...planning,
+      active: true,
+      status,
+      artifact: status === 'spec-proposed' ? (artifact || planning.artifact) : null,
+    };
+    persistSession();
+    appendChatMessage('assistant', body?.reply || '');
+    return body;
+  }
+
+  async function approvePlanning() {
+    let body;
+    try {
+      body = await post('/api/planning/approve');
+    } catch (err) {
+      appendChatMessage('assistant', `Approve failed: ${err?.message || err}`);
+      return;
+    }
+    appendChatMessage('system', body?.slug
+      ? `Spec approved — scaffolding ${body.slug}.`
+      : 'Spec approved — scaffolding project files.');
+    resetPlanning();
+  }
+
+  async function abandonPlanning() {
+    try {
+      await post('/api/planning/abandon');
+    } catch (_) { /* idempotent server-side */ }
+    appendChatMessage('system', 'Planning session abandoned.');
+    resetPlanning();
   }
 
   async function sendProductMessage(text, messageProduct = product) {
     const trimmed = String(text || '').trim();
     if (!trimmed) return null;
     appendChatMessage('user', trimmed);
+    const isCommand = trimmed.startsWith('/');
+    // While planning, free-form text drives the planning conversation through the
+    // structured endpoint; slash commands fall through to the normal path so
+    // /clear, /fresh, and model switches keep working (and abandon the session).
+    if (planning.active && !isCommand) return planningTurn(trimmed);
     const result = await send({ product: messageProduct, text: trimmed });
     if (result?.text) appendChatMessage('assistant', result.text);
+    if (planning.active && (trimmed === '/clear' || trimmed.startsWith('/fresh'))) {
+      resetPlanning();
+    }
     return result;
   }
 
@@ -568,6 +707,21 @@ export function createProductDeepView({
       return;
     }
 
+    const planningAction = event.target?.closest?.('[data-planning-action]');
+    if (planningAction) {
+      event.preventDefault?.();
+      const action = planningAction.dataset?.planningAction;
+      if (action === 'approve') { await approvePlanning(); return; }
+      if (action === 'abandon') { await abandonPlanning(); return; }
+      if (action === 'refine') {
+        planning = { ...planning, status: 'scoping' };
+        persistSession();
+        render();
+        focusChatInput();
+      }
+      return;
+    }
+
     const plan = event.target?.closest?.('[data-plan-item-id]');
     if (plan) {
       event.preventDefault?.();
@@ -576,17 +730,25 @@ export function createProductDeepView({
       plan.disabled = true;
       const result = await post(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`);
       const item = findBacklogItem(itemId);
+      // Enter planning mode in the right-column chat: the chat panel IS the
+      // planning surface. The next free-form chat turn drives the planning
+      // conversation (the backend routes product-scoped text to the active
+      // planning session); a proposed spec then renders inline with
+      // Approve/Refine/Abandon.
+      planning = {
+        active: true,
+        status: 'scoping',
+        artifact: null,
+        sessionId: result?.planningSessionId,
+        promotionId: result?.promotionId,
+      };
       appendChatMessage(
         'system',
-        `Planning started for ${itemTitle(item) || itemId}. Continue the planning conversation here.`,
+        `Planning started for ${itemTitle(item) || itemId}. Reply in this chat to shape the spec; Approve scaffolds it.`,
       );
+      persistSession();
       focusChat();
-      openPlanningPanel?.({
-        product,
-        planningSessionId: result?.planningSessionId,
-        promotionId: result?.promotionId,
-        linkedSession: true,
-      });
+      focusChatInput();
       return;
     }
 
@@ -667,6 +829,17 @@ export function createProductDeepView({
       if (loadOperations && !operations) {
         const state = await loadJson('/api/state').catch(() => null);
         currentOperations = operationsFromState(state, product);
+      }
+      // Adopt an already-active planning session (e.g. started from Telegram or a
+      // prior visit) so the chat panel surfaces it. In-session planning state
+      // restored from the store wins; otherwise seed from /api/state.
+      if (!planning.active && currentOperations?.planning?.product === product) {
+        planning = {
+          ...planning,
+          active: true,
+          status: currentOperations.planning.status || 'scoping',
+        };
+        persistSession();
       }
       render();
       if (focusRunId) {

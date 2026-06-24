@@ -716,6 +716,68 @@ body[data-view="product"] #product-root {
   background: #1f1a13;
   border-color: #5b4930;
 }
+/* Inline planning surface inside the product chat panel. */
+.deep-planning {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  border: 1px solid #5a4828;
+  border-radius: 6px;
+  background: #211b12;
+  padding: .55rem;
+}
+.deep-planning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  font-size: .9rem;
+}
+.deep-planning-spec-body {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.deep-spec-field {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+.deep-spec-label {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text2);
+}
+.deep-spec-body {
+  margin: 0;
+  max-height: 9rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: .78rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: .4rem .5rem;
+}
+.deep-planning-actions {
+  display: flex;
+  gap: .45rem;
+  flex-wrap: wrap;
+}
+.deep-planning-actions button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .4rem .75rem;
+  font: inherit;
+  background: var(--bg3);
+  color: var(--text);
+}
+.deep-planning-approve { background: #1a3a1a; color: #79d979; border-color: #2d6a2d; }
+.deep-planning-abandon { background: #2a1a1a; color: #d97979; border-color: #6a2d2d; }
+.deep-planning-actions button:hover { filter: brightness(1.15); }
 .deep-panel--chat textarea {
   width: 100%;
   min-height: 5.5rem;

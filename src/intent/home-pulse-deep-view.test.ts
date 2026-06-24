@@ -165,7 +165,7 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
     const pulse = buildHomePulse(deps());
 
     expect(pulse.available).toBe(true);
-    const aura = pulse.products.find((p: any) => p.name === 'aura');
+    const aura = pulse.products.find((p: any) => p.name === 'aura')!;
     expect(aura).toMatchObject({
       name: 'aura',
       repoBacked: true,
@@ -227,7 +227,7 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
     );
 
     expect(pulse.available).toBe(true);
-    const aura = pulse.products.find((p: any) => p.name === 'aura');
+    const aura = pulse.products.find((p: any) => p.name === 'aura')!;
     expect(aura).toMatchObject({
       name: 'aura',
       repoBacked: true,
