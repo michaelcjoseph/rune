@@ -306,11 +306,13 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
   const view: ProductDeepView = {
     name: product.name,
     repoBacked: true,
-    projects: product.projects.map((project) => ({
-      slug: project.slug,
-      lifecycle: projectLifecycle(project.status),
-      taskProgress: project.progress ?? { done: 0, total: 0 },
-    })),
+    projects: product.projects
+      .filter((project) => project.status !== 'done')
+      .map((project) => ({
+        slug: project.slug,
+        lifecycle: projectLifecycle(project.status),
+        taskProgress: project.progress ?? { done: 0, total: 0 },
+      })),
     backlog: {
       bugs: (backlog?.bugs ?? []).map((item) =>
         withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),

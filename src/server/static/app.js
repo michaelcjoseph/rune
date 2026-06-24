@@ -109,6 +109,7 @@
     ws.onmessage = (event) => {
       let frame;
       try { frame = JSON.parse(event.data); } catch { return; }
+      window.dispatchEvent(new CustomEvent('jarvis-webview-frame', { detail: frame }));
 
       if (frame.kind === 'message') {
         // Reply arrived. If an op is still attached we leave the pill alone —
@@ -199,6 +200,15 @@
     ringPos = -1;
     ws.send(JSON.stringify({ kind: 'message', text }));
   }
+
+  window.jarvisSendWebviewMessage = function ({ product, text } = {}) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    const frame = { kind: 'message', text: trimmed };
+    if (product) frame.product = String(product);
+    ws.send(JSON.stringify(frame));
+    return true;
+  };
 
   function updateStatus(status) {
     const el = document.getElementById('ws-status');

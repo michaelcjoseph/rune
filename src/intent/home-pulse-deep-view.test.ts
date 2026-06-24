@@ -374,8 +374,8 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
     expect(view.repoBacked).toBe(true);
     expect(view.projects).toEqual([
       { slug: '01-mvp', lifecycle: 'active', taskProgress: { done: 2, total: 5 } },
-      { slug: '00-archive', lifecycle: 'done', taskProgress: { done: 4, total: 4 } },
     ]);
+    expect(view.projects.some((project: any) => project.lifecycle === 'done')).toBe(false);
     expect(view.backlog.bugs.find((b: any) => b.id === 'b-open')).toMatchObject({
       id: 'b-open',
       plan: { kind: 'plan', enabled: true },

@@ -296,6 +296,7 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/1\s*(backlog )?warning/i);
     expect(html).toMatch(/no-op/i);
     expect(html).toMatch(/needs|attention|parked/i);
+    expect(html).toMatch(/data-home-open-product[\s\S]{0,120}Open project|Open project[\s\S]{0,120}data-home-open-product/i);
   });
 
   it('renders a running active-run indicator with a state-specific pulse affordance', async () => {
@@ -388,6 +389,23 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     });
 
     expect(router.goProduct).toHaveBeenCalledWith('aura', { focusRunId: 'run-parked-1' });
+  });
+
+  it('opens a product from the explicit Home card button', async () => {
+    const { createHomeView } = await import('./home-view.js');
+    const root = makeRoot();
+    const router = { goProduct: vi.fn() };
+
+    const home = createHomeView({
+      root,
+      fetchJson: vi.fn(async () => homePulse),
+      router,
+    });
+    await home.load();
+
+    root.clickClosest('[data-home-open-product]', { product: 'aura' });
+
+    expect(router.goProduct).toHaveBeenCalledWith('aura');
   });
 
   it('renders the unavailable HomePulse state clearly without product-card chrome', async () => {

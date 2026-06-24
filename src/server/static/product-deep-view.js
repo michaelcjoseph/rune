@@ -35,6 +35,15 @@ function fmtProgress(progress) {
   return `${done}/${total}`;
 }
 
+function itemTitle(item) {
+  return item?.title || item?.text || item?.raw || item?.id || '';
+}
+
+function renderBody(body) {
+  if (Array.isArray(body)) return body.filter(Boolean).map(line => `<p>${escHtml(line)}</p>`).join('');
+  return body ? `<p>${escHtml(body)}</p>` : '';
+}
+
 function actionLabel(action, fallback) {
   if (!action) return fallback;
   if (action.state === 'gating') return `${fallback} scoping`;
@@ -113,11 +122,11 @@ function renderBacklogItem(item, kind) {
   const fixNotice = kind === 'bugs' ? renderFixNotice(item.fix) : '';
   return `<article class="deep-backlog-item deep-backlog-item--${attr(kind)}" data-backlog-item-id="${attr(item.id)}">` +
     `<div class="deep-row-head">` +
-      `<strong>${escHtml(item.id)}</strong>` +
+      `<strong>${escHtml(itemTitle(item))}</strong>` +
       `<span>${escHtml(item.status || 'open')}</span>` +
     `</div>` +
-    `<h4>${escHtml(item.title || item.raw || item.id)}</h4>` +
-    (item.body ? `<p>${escHtml(item.body)}</p>` : '') +
+    `<div class="deep-item-id">${escHtml(item.id)}</div>` +
+    `${renderBody(item.body)}` +
     `${fixNotice}` +
     `<div class="deep-actions">` +
       `${fix}` +
@@ -128,9 +137,65 @@ function renderBacklogItem(item, kind) {
   `</article>`;
 }
 
+function renderWarning(warning) {
+  const file = warning.file || 'backlog';
+  const line = Number.isFinite(warning.lineNumber) && warning.lineNumber > 0
+    ? `:${warning.lineNumber}`
+    : '';
+  const code = warning.code ? ` [${warning.code}]` : '';
+  return `<li><span>${escHtml(`${file}${line}${code}`)}</span> - ${escHtml(warning.message || 'warning')}</li>`;
+}
+
+function renderBacklogAdd(kind) {
+  const singular = kind === 'bugs' ? 'bug' : 'idea';
+  return `<form data-backlog-add-form data-kind="${attr(kind)}">` +
+    `<input name="text" type="text" placeholder="New ${singular}">` +
+    `<button type="submit">Add ${singular}</button>` +
+  `</form>`;
+}
+
+function renderBacklogKind(backlog, kind) {
+  const items = list(backlog?.[kind]);
+  const title = kind === 'bugs' ? 'Bugs' : 'Ideas';
+  return `<section class="deep-panel deep-panel--backlog deep-panel--${attr(kind)}" data-surface="${attr(kind)}">` +
+    `<div class="deep-panel-head"><h3>${title}</h3><span>${items.length}</span></div>` +
+    `<div class="deep-backlog-add deep-backlog-add--single">${renderBacklogAdd(kind)}</div>` +
+    `<div class="deep-backlog-list" data-backlog-kind="${attr(kind)}">` +
+      `${items.map(item => renderBacklogItem(item, kind)).join('') || `<p class="muted">No ${title.toLowerCase()}</p>`}` +
+    `</div>` +
+  `</section>`;
+}
+
+function renderWorkTabs(view, activeTab = 'projects') {
+  const tabs = [
+    { id: 'projects', label: 'Projects', count: list(view.projects).length },
+    { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length },
+    { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length },
+  ];
+  const warnings = list(view.backlog?.warnings).map(renderWarning).join('');
+  const panel = (id, html) =>
+    `<div class="deep-tab-panel ${activeTab === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
+      `${activeTab === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
+
+  return `<section class="deep-work-column" data-surface="work" data-active-work-tab="${attr(activeTab)}">` +
+    `<div class="deep-work-tabs" role="tablist" aria-label="Product work">` +
+      tabs.map(tab =>
+        `<button type="button" class="${activeTab === tab.id ? 'is-active' : ''}" ` +
+          `data-work-tab="${attr(tab.id)}" role="tab" aria-selected="${activeTab === tab.id ? 'true' : 'false'}">` +
+          `${escHtml(tab.label)} <span>${escHtml(tab.count)}</span>` +
+        `</button>`
+      ).join('') +
+    `</div>` +
+    (warnings ? `<div class="deep-warnings"><strong>Warnings</strong><ul>${warnings}</ul></div>` : '') +
+    panel('projects', renderProjects(view.projects)) +
+    panel('bugs', renderBacklogKind(view.backlog, 'bugs')) +
+    panel('ideas', renderBacklogKind(view.backlog, 'ideas')) +
+  `</section>`;
+}
+
 function renderBacklog(backlog) {
   const warnings = list(backlog?.warnings).map(warning =>
-    `<li>line ${escHtml(warning.line)} - ${escHtml(warning.message)}</li>`
+    renderWarning(warning)
   ).join('');
   return `<section class="deep-panel deep-panel--backlog" data-surface="backlog">` +
     `<div class="deep-panel-head"><h3>Backlog</h3><span>Bugs / Ideas</span></div>` +
@@ -249,11 +314,24 @@ function renderProductSearch(view) {
   `</form>`;
 }
 
-function renderChat(view) {
+function renderChatMessages(messages) {
+  const rows = list(messages).map(message =>
+    `<article class="deep-chat-message deep-chat-message--${attr(message.role || 'assistant')}" ` +
+      `data-chat-message-role="${attr(message.role || 'assistant')}">` +
+      `${escHtml(message.text || '')}` +
+    `</article>`
+  ).join('');
+  return `<div class="deep-chat-transcript" data-product-chat-transcript aria-live="polite">` +
+    (rows || '<p class="muted">No messages yet</p>') +
+  `</div>`;
+}
+
+function renderChat(view, messages = []) {
   return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
     `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
     `<div class="deep-panel-head"><h3>Chat</h3><span>${escHtml(view.name)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
+    `${renderChatMessages(messages)}` +
     `<a href="app://claude" data-app-deeplink>Open Claude App</a>` +
     `${renderChatCommands()}` +
     `${renderProductSearch(view)}` +
@@ -265,33 +343,37 @@ function renderChat(view) {
 }
 
 export function renderProductDeepView(view, options = {}) {
+  const activeTab = options.activeTab || 'projects';
+  const chatMessages = options.chatMessages || [];
   if (!view) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
 
   if (view.repoBacked === false) {
     return `<section class="product-deep-view product-deep-view--limited" data-product="${attr(view.name)}">` +
-      `<header class="deep-header"><h2>${escHtml(view.name)}</h2><span>limited - not repo-backed</span></header>` +
+      `<header class="deep-header"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2><span>limited - not repo-backed</span></header>` +
       `<p>${escHtml(view.limitedReason || 'Known product is not repo-backed.')}</p>` +
     `</section>`;
   }
 
   return `<section class="product-deep-view" data-product="${attr(view.name)}">` +
     `<header class="deep-header">` +
-      `<h2>${escHtml(view.name)}</h2>` +
+      `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2></div>` +
       `<nav aria-label="Product surfaces">` +
         `<button type="button" data-surface-jump="projects">Projects</button>` +
-        `<button type="button" data-surface-jump="backlog">Backlog</button>` +
+        `<button type="button" data-surface-jump="bugs">Bugs</button>` +
+        `<button type="button" data-surface-jump="ideas">Ideas</button>` +
         `<button type="button" data-surface-jump="runs">Runs</button>` +
         `<button type="button" data-surface-jump="chat">Chat</button>` +
       `</nav>` +
     `</header>` +
-    `<div class="deep-grid">` +
-      `${renderProjects(view.projects)}` +
-      `${renderBacklog(view.backlog)}` +
-      `${renderRuns(view, options.liveRuns || {})}` +
-      `${renderChat(view)}` +
-      `${renderOperations(options.operations)}` +
+    `<div class="deep-two-column">` +
+      `${renderWorkTabs(view, activeTab)}` +
+      `<aside class="deep-side-stack">` +
+        `${renderChat(view, chatMessages)}` +
+        `${renderOperations(options.operations)}` +
+        `${renderRuns(view, options.liveRuns || {})}` +
+      `</aside>` +
     `</div>` +
   `</section>`;
 }
@@ -308,6 +390,10 @@ function defaultPostJson(url, body) {
 }
 
 function defaultSendChat({ product, text }) {
+  if (typeof window !== 'undefined' && typeof window.jarvisSendWebviewMessage === 'function') {
+    const sent = window.jarvisSendWebviewMessage({ product, text });
+    if (sent) return Promise.resolve({ live: true });
+  }
   return defaultPostJson('/api/chat', { product, message: text });
 }
 
@@ -344,6 +430,7 @@ export function createProductDeepView({
   createRunFeedSubscription = defaultCreateRunFeedSubscription,
   operations,
   openPlanningPanel,
+  router,
   loadOperations = false,
 } = {}) {
   if (!root) throw new Error('createProductDeepView requires a root');
@@ -354,10 +441,69 @@ export function createProductDeepView({
   let currentOperations = operations || null;
   let liveRuns = {};
   let subscription = null;
+  let activeTab = 'projects';
+  let chatMessages = [];
+  let streamingMessageIndex = -1;
 
   function render() {
-    root.innerHTML = renderProductDeepView(current, { liveRuns, operations: currentOperations });
+    root.innerHTML = renderProductDeepView(current, {
+      liveRuns,
+      operations: currentOperations,
+      activeTab,
+      chatMessages,
+    });
   }
+
+  function appendChatMessage(role, text) {
+    chatMessages = [...chatMessages, { role, text }];
+    streamingMessageIndex = -1;
+    render();
+  }
+
+  function appendOrUpdateStreaming(text) {
+    if (streamingMessageIndex < 0 || !chatMessages[streamingMessageIndex]) {
+      chatMessages = [...chatMessages, { role: 'assistant streaming', text }];
+      streamingMessageIndex = chatMessages.length - 1;
+    } else {
+      chatMessages = chatMessages.map((message, index) =>
+        index === streamingMessageIndex
+          ? { ...message, text: `${message.text || ''}${text}` }
+          : message
+      );
+    }
+    render();
+  }
+
+  async function sendProductMessage(text, messageProduct = product) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return null;
+    appendChatMessage('user', trimmed);
+    const result = await send({ product: messageProduct, text: trimmed });
+    if (result?.text) appendChatMessage('assistant', result.text);
+    return result;
+  }
+
+  function findBacklogItem(itemId) {
+    return [...list(current?.backlog?.bugs), ...list(current?.backlog?.ideas)]
+      .find(item => item.id === itemId);
+  }
+
+  function focusChat() {
+    root.querySelector?.('[data-surface="chat"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  }
+
+  const onWebviewFrame = event => {
+    const frame = event?.detail;
+    if (!frame || !current) return;
+    if (frame.kind === 'chunk') {
+      appendOrUpdateStreaming(frame.text || '');
+      return;
+    }
+    if (frame.kind === 'message') {
+      streamingMessageIndex = -1;
+      appendChatMessage('assistant', frame.text || '');
+    }
+  };
 
   async function focusRun(runId) {
     if (!runId) return;
@@ -379,10 +525,29 @@ export function createProductDeepView({
   }
 
   const onClick = async event => {
+    const home = event.target?.closest?.('[data-go-home]');
+    if (home) {
+      event.preventDefault?.();
+      router?.goHome?.();
+      return;
+    }
+
+    const workTab = event.target?.closest?.('[data-work-tab]');
+    if (workTab) {
+      event.preventDefault?.();
+      activeTab = workTab.dataset?.workTab || activeTab;
+      render();
+      return;
+    }
+
     const surfaceJump = event.target?.closest?.('[data-surface-jump]');
     if (surfaceJump) {
       event.preventDefault?.();
       const surface = surfaceJump.dataset?.surfaceJump;
+      if (surface === 'projects' || surface === 'bugs' || surface === 'ideas') {
+        activeTab = surface;
+        render();
+      }
       root.querySelector?.(`[data-surface="${surface}"]`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
       return;
     }
@@ -410,6 +575,12 @@ export function createProductDeepView({
       if (!itemId || plan.disabled) return;
       plan.disabled = true;
       const result = await post(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`);
+      const item = findBacklogItem(itemId);
+      appendChatMessage(
+        'system',
+        `Planning started for ${itemTitle(item) || itemId}. Continue the planning conversation here.`,
+      );
+      focusChat();
       openPlanningPanel?.({
         product,
         planningSessionId: result?.planningSessionId,
@@ -444,7 +615,7 @@ export function createProductDeepView({
       event.preventDefault?.();
       const text = command.dataset?.chatCommand;
       if (!text) return;
-      await send({ product, text });
+      await sendProductMessage(text);
     }
   };
 
@@ -469,7 +640,7 @@ export function createProductDeepView({
       event.preventDefault?.();
       const text = chatForm.elements?.message?.value || '';
       if (!String(text).trim()) return;
-      await send({ product: chatForm.dataset?.product || product, text });
+      await sendProductMessage(text, chatForm.dataset?.product || product);
       chatForm.reset?.();
       return;
     }
@@ -480,12 +651,15 @@ export function createProductDeepView({
     const query = searchForm.elements?.query?.value || '';
     if (!String(query).trim()) return;
     const text = `Search repo and vault for: ${query}`;
-    await send({ product: searchForm.dataset?.product || product, text });
+    await sendProductMessage(text, searchForm.dataset?.product || product);
     searchForm.reset?.();
   };
 
   root.addEventListener?.('click', onClick);
   root.addEventListener?.('submit', onSubmit);
+  if (typeof window !== 'undefined') {
+    window.addEventListener?.('jarvis-webview-frame', onWebviewFrame);
+  }
 
   return {
     async load() {
@@ -504,14 +678,19 @@ export function createProductDeepView({
     render(view = current, opts = {}) {
       current = view;
       if (opts.liveRuns) liveRuns = opts.liveRuns;
+      if (opts.activeTab) activeTab = opts.activeTab;
+      if (opts.chatMessages) chatMessages = opts.chatMessages;
       currentOperations = opts.operations || currentOperations;
-      root.innerHTML = renderProductDeepView(current, { liveRuns, operations: currentOperations });
+      render();
     },
     close() {
       subscription?.close?.();
       subscription = null;
       root.removeEventListener?.('click', onClick);
       root.removeEventListener?.('submit', onSubmit);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener?.('jarvis-webview-frame', onWebviewFrame);
+      }
     },
   };
 }

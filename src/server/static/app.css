@@ -135,23 +135,23 @@ body[data-view="product"] #product-root {
 }
 .home-products {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: .85rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
 }
 .home-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-  gap: .85rem;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+  gap: 1rem;
   align-items: start;
 }
 .home-product-card {
   display: flex;
   flex-direction: column;
-  gap: .7rem;
+  gap: .85rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg2);
-  padding: .9rem;
+  padding: 1.05rem;
 }
 .home-product-head {
   display: flex;
@@ -327,7 +327,8 @@ body[data-view="product"] #product-root {
   gap: .35rem;
 }
 .home-approval-actions button,
-.home-restart-btn {
+.home-restart-btn,
+.home-open-product {
   font: inherit;
   font-size: .72rem;
   border-radius: 4px;
@@ -338,14 +339,30 @@ body[data-view="product"] #product-root {
   cursor: pointer;
 }
 .home-approval-actions button:hover:not(:disabled),
-.home-restart-btn:hover:not(:disabled) {
+.home-restart-btn:hover:not(:disabled),
+.home-open-product:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
 .home-approval-actions button:disabled,
-.home-restart-btn:disabled {
+.home-restart-btn:disabled,
+.home-open-product:disabled {
   opacity: .55;
   cursor: not-allowed;
+}
+.home-open-product {
+  width: 100%;
+  padding: .5rem .7rem;
+  font-size: .82rem;
+  font-weight: 650;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.home-open-product:hover:not(:disabled) {
+  color: #fff;
+  opacity: .9;
+  text-decoration: none;
 }
 
 .product-deep-view {
@@ -364,6 +381,12 @@ body[data-view="product"] #product-root {
 .deep-header h2 {
   font-size: 1.15rem;
   line-height: 1.2;
+}
+.deep-title-row {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-width: 0;
 }
 .deep-header nav {
   display: flex;
@@ -384,9 +407,54 @@ body[data-view="product"] #product-root {
   font-size: .78rem;
   cursor: pointer;
 }
+.deep-home-btn {
+  color: var(--text);
+}
 .deep-header button:hover,
 .product-deep-view a:hover {
   text-decoration: underline;
+}
+.deep-two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+  gap: .9rem;
+  align-items: start;
+}
+.deep-work-column,
+.deep-side-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .8rem;
+}
+.deep-work-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .55rem;
+}
+.deep-work-tabs button {
+  font: inherit;
+  font-size: .82rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  padding: .32rem .65rem;
+  cursor: pointer;
+}
+.deep-work-tabs button.is-active {
+  border-color: var(--accent);
+  color: #fff;
+  background: #15304a;
+}
+.deep-work-tabs span {
+  color: var(--text2);
+  margin-left: .2rem;
+}
+.deep-tab-panel:not(.is-active) {
+  display: none;
 }
 .deep-grid {
   display: grid;
@@ -462,6 +530,9 @@ body[data-view="product"] #product-root {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .45rem;
 }
+.deep-backlog-add--single {
+  display: block;
+}
 .deep-backlog-add form {
   display: flex;
   gap: .35rem;
@@ -494,6 +565,12 @@ body[data-view="product"] #product-root {
 .deep-backlog-item h4 {
   font-size: .88rem;
   line-height: 1.25;
+}
+.deep-item-id {
+  color: var(--text2);
+  font-size: .72rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
 }
 .deep-backlog-item p,
 .deep-panel--chat p,
@@ -593,10 +670,51 @@ body[data-view="product"] #product-root {
   overflow: auto;
 }
 .deep-warnings {
-  border-top: 1px solid var(--border);
-  padding-top: .5rem;
+  border: 1px solid #5b4930;
+  border-radius: 6px;
+  background: #1f1a13;
+  padding: .55rem;
   color: #d6a248;
   font-size: .78rem;
+}
+.deep-warnings li {
+  overflow-wrap: anywhere;
+}
+.deep-chat-transcript {
+  min-height: 8rem;
+  max-height: 18rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: .55rem;
+}
+.deep-chat-message {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .45rem .55rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: .84rem;
+}
+.deep-chat-message--user {
+  align-self: flex-end;
+  background: var(--user-bg);
+  border-color: #264060;
+}
+.deep-chat-message--assistant,
+.deep-chat-message--assistant.streaming {
+  align-self: flex-start;
+  background: var(--assistant-bg);
+}
+.deep-chat-message--system {
+  align-self: stretch;
+  color: #d6a248;
+  background: #1f1a13;
+  border-color: #5b4930;
 }
 .deep-panel--chat textarea {
   width: 100%;
@@ -655,6 +773,9 @@ body[data-view="product"] #product-root {
   .home-layout {
     grid-template-columns: 1fr;
   }
+  .deep-two-column {
+    grid-template-columns: 1fr;
+  }
   .deep-grid {
     grid-template-columns: 1fr 1fr;
     grid-template-areas:
@@ -678,6 +799,7 @@ body[data-view="product"] #product-root {
     flex-direction: column;
   }
   .deep-grid,
+  .deep-two-column,
   .deep-backlog-columns,
   .deep-backlog-add,
   .deep-live-grid {

@@ -81,6 +81,7 @@ const router = createClientViewRouter({
         product: route.product,
         focusRunId: route.focusRunId,
         fetchJson,
+        router,
         loadOperations: true,
       });
       productView.load().catch(error => {

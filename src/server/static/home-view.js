@@ -91,6 +91,8 @@ function renderProductCard(product) {
     (attention
       ? `<div class="home-attention home-attention--urgent" aria-label="attention signals"><strong>Needs attention</strong><ul>${attention}</ul></div>`
       : '<div class="home-attention muted">No attention signals</div>') +
+    `<button class="home-open-product" type="button" data-home-open-product ` +
+      `data-product="${escHtml(product.name)}">Open project</button>` +
   `</article>`;
 }
 
@@ -208,6 +210,14 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
   }
 
   root.addEventListener?.('click', event => {
+    const openProduct = event.target?.closest?.('[data-home-open-product]');
+    if (openProduct) {
+      event.preventDefault?.();
+      const product = openProduct.dataset?.product;
+      if (product) router?.goProduct?.(product);
+      return;
+    }
+
     const activeRun = event.target?.closest?.('[data-home-active-run]');
     if (activeRun) {
       const product = activeRun.dataset?.product;

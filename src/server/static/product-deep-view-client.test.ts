@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 type Listener = (event?: any) => unknown;
@@ -132,7 +133,12 @@ function productView(overrides: Record<string, unknown> = {}) {
           plan: { kind: 'plan', state: 'available' },
         },
       ],
-      warnings: [{ line: 42, message: 'Unparseable backlog bullet' }],
+      warnings: [{
+        file: 'docs/projects/bugs.md',
+        lineNumber: 42,
+        code: 'non-checkbox-bullet',
+        message: 'Unparseable backlog bullet',
+      }],
     },
     runs: [
       {
@@ -201,7 +207,7 @@ const productOperations = {
 };
 
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
-  it('loads the per-product projection and renders Projects, Backlog, Runs, and Chat without depending on /api/cockpit', async () => {
+  it('loads the per-product projection and renders Projects, Bugs, Ideas, Runs, and Chat without depending on /api/cockpit', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const fetchJson = vi.fn(async (url: string) => {
@@ -215,12 +221,54 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(fetchJson).toHaveBeenCalledTimes(1);
     expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
     expect(root.innerHTML).toMatch(/data-product=["']aura["']|aura/i);
-    for (const surface of ['Projects', 'Backlog', 'Runs', 'Chat']) {
+    for (const surface of ['Projects', 'Bugs', 'Ideas', 'Runs', 'Chat']) {
       expect(root.innerHTML).toMatch(new RegExp(`data-surface=["']${surface.toLowerCase()}["']|${surface}`, 'i'));
     }
     expect(root.innerHTML).toContain('17-cockpit-redesign');
     expect(root.innerHTML).toContain('Crash when saving');
     expect(root.innerHTML).toContain('run-recent-1');
+  });
+
+  it('renders a Home button and routes it through the client router', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const router = { goHome: vi.fn() };
+
+    expect(renderProductDeepView(productView())).toMatch(/data-go-home[\s\S]{0,80}Home|Home[\s\S]{0,80}data-go-home/i);
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      router,
+    });
+    await view.load();
+    await root.clickClosest('[data-go-home]', {});
+
+    expect(router.goHome).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a two-column product layout with tabbed Projects, Bugs, and Ideas on the left and Chat, Operations, Runs on the right', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
+
+    const html = renderProductDeepView(productView(), { operations: productOperations });
+
+    expect(html).toMatch(/deep-two-column|deep-work-column|deep-side-stack/i);
+    for (const tab of ['projects', 'bugs', 'ideas']) {
+      expect(html).toMatch(new RegExp(`data-work-tab=["']${tab}["']|data-work-tab-panel=["']${tab}["']`, 'i'));
+    }
+    expect(html.indexOf('data-surface="chat"')).toBeLessThan(html.indexOf('data-surface="operations"'));
+    expect(html.indexOf('data-surface="operations"')).toBeLessThan(html.indexOf('data-surface="runs"'));
+    expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns/i);
+    expect(css).toMatch(/\.deep-tab-panel:not\(\.is-active\)[\s\S]*display:\s*none/i);
+
+    const view = createProductDeepView({ root, product: 'aura', fetchJson: vi.fn(async () => productView()) });
+    await view.load();
+    await root.clickClosest('[data-work-tab]', { workTab: 'bugs' });
+
+    expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
   });
 
   it('renders a per-product limited view for known products that are not repo-backed', async () => {
@@ -408,6 +456,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).not.toMatch(/IDEA-1[\s\S]{0,240}\bFix\b/i);
   });
 
+  it('renders backlog titles as the primary label, IDs as metadata, and file warnings with file, line, and code', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView());
+    const bugRow = html.match(/<article class="deep-backlog-item deep-backlog-item--bugs" data-backlog-item-id="BUG-available">[\s\S]*?<\/article>/)?.[0] ?? '';
+    const ideaRow = html.match(/<article class="deep-backlog-item deep-backlog-item--ideas" data-backlog-item-id="IDEA-1">[\s\S]*?<\/article>/)?.[0] ?? '';
+
+    expect(bugRow.indexOf('Crash when saving')).toBeGreaterThanOrEqual(0);
+    expect(bugRow.indexOf('Crash when saving')).toBeLessThan(bugRow.indexOf('deep-item-id'));
+    expect(bugRow).toMatch(/deep-item-id[\s\S]{0,80}BUG-available/i);
+    expect(ideaRow.indexOf('Add a release dashboard')).toBeGreaterThanOrEqual(0);
+    expect(ideaRow.indexOf('Add a release dashboard')).toBeLessThan(ideaRow.indexOf('deep-item-id'));
+    expect(html).toContain('docs/projects/bugs.md:42 [non-checkbox-bullet]');
+    expect(html).toContain('Unparseable backlog bullet');
+  });
+
   it('makes Fix the headline bug action while Plan remains available as the secondary action', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
@@ -536,7 +600,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toContain('Newly captured bug');
   });
 
-  it('keeps backlog Plan in the deep view and hands successful plans to the planning panel without starting a replacement session', async () => {
+  it('keeps backlog Plan in the deep view and focuses the right-column Chat transcript after creating the planning session', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const postJson = vi.fn(async (url: string) => {
@@ -556,6 +620,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     await root.clickClosest('[data-plan-item-id]', { planItemId: 'IDEA-1' });
 
     expect(postJson).toHaveBeenCalledWith('/api/backlog/aura/items/IDEA-1/plan');
+    expect(root.innerHTML).toMatch(/data-product-chat-transcript[\s\S]*Planning started for Add a release dashboard/i);
     expect(openPlanningPanel).toHaveBeenCalledWith(expect.objectContaining({
       product: 'aura',
       planningSessionId: 'planning-1',
@@ -567,7 +632,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('submits chat turns with product scope, preserves slash commands verbatim, and links KB research out instead of embedding it', async () => {
     const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
-    const sendChat = vi.fn(async () => ({ ok: true }));
+    const sendChat = vi.fn(async () => ({ text: 'Fresh summary complete.' }));
 
     const view = createProductDeepView({
       root,
@@ -582,12 +647,52 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       product: 'aura',
       text: '/fresh',
     }));
+    expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,80}\/fresh/i);
+    expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,120}Fresh summary complete/i);
 
     const html = renderProductDeepView(productView());
     expect(html).toMatch(/data-product-chat-form|data-chat-scope=["']product["']/i);
     expect(html).toMatch(/repo\s*\+\s*vault|product repo[\s\S]{0,120}vault|data-search-scope=["']repo\+vault["']/i);
     expect(html).toMatch(/claude app|app:\/\/|data-app-deeplink/i);
     expect(html).not.toMatch(/embedded-app-thread|kb-research-thread|idea-exploration-thread/i);
+  });
+
+  it('can send product chat over the shared WebSocket helper and append streamed replies into the visible transcript', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      jarvisSendWebviewMessage: vi.fn(() => true),
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+      await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'What is next?' });
+
+      expect((globalThis as any).window.jarvisSendWebviewMessage).toHaveBeenCalledWith({
+        product: 'aura',
+        text: 'What is next?',
+      });
+      expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,120}What is next\?/i);
+
+      listeners.get('jarvis-webview-frame')?.({ detail: { kind: 'message', text: 'Next: pick the highest-risk task.' } });
+
+      expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,160}highest-risk task/i);
+      view.close();
+      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('jarvis-webview-frame', expect.any(Function));
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
   });
 
   it('renders product-chat command affordances for the preserved lifecycle and model commands', async () => {
