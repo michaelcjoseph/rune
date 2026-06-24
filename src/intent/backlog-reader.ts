@@ -75,6 +75,13 @@ function fileWarning(file: string, code: string, message: string): FileWarning {
   return { file, lineNumber: 0, code, message };
 }
 
+function shouldSurfaceFileWarning(warning: FileWarning): boolean {
+  // `bugs.md` often carries indented detail under a top-level checkbox. The parser ignores that
+  // detail for item extraction, but surfacing every detail bullet as a cockpit warning drowns out
+  // genuinely actionable file issues.
+  return !(warning.file === BUGS_REL && warning.code === 'over-indented');
+}
+
 /**
  * Read and parse one backlog file under an already-canonicalized repo root. Returns the parsed
  * items and appends any file/parse warnings to `fileWarnings`. Missing file → silent empty;
@@ -129,7 +136,7 @@ function readOne(
       return [];
     }
     const parsed = parse(readFileSync(fd, 'utf8'), relFile);
-    fileWarnings.push(...parsed.fileWarnings);
+    fileWarnings.push(...parsed.fileWarnings.filter(shouldSurfaceFileWarning));
     return parsed.items;
   } catch {
     fileWarnings.push(fileWarning(relFile, 'unreadable-file', `could not read ${relFile}`));
