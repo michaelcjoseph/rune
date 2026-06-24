@@ -124,6 +124,13 @@ function productView(overrides: Record<string, unknown> = {}) {
           plan: { kind: 'plan', state: 'disabled', reason: 'done' },
           fix: { kind: 'fix', state: 'disabled', reason: 'done' },
         },
+        {
+          id: 'BUG-plan-disabled',
+          title: 'Already promoted',
+          status: 'open',
+          plan: { kind: 'plan', enabled: false, disabledReason: 'already-promoted' },
+          fix: { kind: 'fix', state: 'disabled', reason: 'already-promoted' },
+        },
       ],
       ideas: [
         {
@@ -463,6 +470,17 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).not.toMatch(/IDEA-1[\s\S]{0,240}\bFix\b/i);
   });
 
+  it('honors the real Plan action enabled/disabledReason contract from the API', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView());
+    const disabledRow = html.match(/<article class="deep-backlog-item deep-backlog-item--bugs" data-backlog-item-id="BUG-plan-disabled">[\s\S]*?<\/article>/)?.[0] ?? '';
+
+    expect(disabledRow).toContain('Already promoted');
+    expect(disabledRow).toMatch(/data-plan-item-id=["']BUG-plan-disabled["'][^>]*disabled/i);
+    expect(disabledRow).toContain('already-promoted');
+  });
+
   it('renders backlog titles as the primary label, IDs as metadata, and file warnings with file, line, and code', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
@@ -629,25 +647,22 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     // enters planning mode (status pill) — no dependency on a separate overlay.
     expect(root.innerHTML).toMatch(/data-product-chat-transcript[\s\S]*Planning started for Add a release dashboard/i);
     expect(root.innerHTML).toMatch(/data-planning-active|data-planning-status/i);
+    expect(root.innerHTML).toMatch(/data-plan-item-id=["']IDEA-1["'][^>]*disabled/i);
+    expect(root.innerHTML).toContain('planning-active');
   });
 
   it('routes chat turns through the planning endpoint while planning, renders the proposed spec inline, and approves it', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
-    const specReply = [
-      'Here is the proposed spec.',
-      '```spec-artifact',
-      JSON.stringify({
-        title: 'Release dashboard',
-        spec: 'Build a dashboard for releases.',
-        tasks: '- [ ] scaffold\n- [ ] wire data',
-        testPlan: 'unit + e2e',
-      }),
-      '```',
-    ].join('\n');
+    const artifact = {
+      title: 'Release dashboard',
+      spec: 'Build a dashboard for releases.',
+      tasks: '- [ ] scaffold\n- [ ] wire data',
+      testPlan: 'unit + e2e',
+    };
     const postJson = vi.fn(async (url: string) => {
       if (url === '/api/backlog/aura/items/IDEA-1/plan') return { planningSessionId: 'planning-1' };
-      if (url === '/api/planning/turn') return { reply: specReply, status: 'spec-proposed' };
+      if (url === '/api/planning/turn') return { reply: 'Here is the proposed spec.', status: 'spec-proposed', artifact };
       if (url === '/api/planning/approve') return { ok: true, slug: 'aura-release-dashboard' };
       throw new Error(`unexpected post ${url}`);
     });

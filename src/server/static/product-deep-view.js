@@ -46,6 +46,7 @@ function renderBody(body) {
 
 function actionLabel(action, fallback) {
   if (!action) return fallback;
+  if (action.enabled === false) return fallback;
   if (action.state === 'gating') return `${fallback} scoping`;
   if (action.state === 'declined') return `${fallback} declined`;
   if (action.state === 'handoff-failed') return `${fallback} handoff failed`;
@@ -56,8 +57,8 @@ function actionLabel(action, fallback) {
 
 function renderActionButton(action, itemId, kind, extra = '') {
   if (!action) return '';
-  const state = action.state || 'available';
-  const disabled = state !== 'available';
+  const state = action.enabled === false ? 'disabled' : (action.state || 'available');
+  const disabled = action.enabled === false || state !== 'available';
   const label = actionLabel(action, kind === 'fix' ? 'Fix' : 'Plan');
   const dataName = kind === 'fix' ? 'data-fix-item-id' : 'data-plan-item-id';
   const busy = state === 'gating' ? ' aria-busy="true"' : '';
@@ -73,6 +74,7 @@ function renderActionMeta(action) {
   if (!action) return '';
   const bits = [];
   if (action.state && action.state !== 'available') bits.push(action.state);
+  if (action.disabledReason) bits.push(action.disabledReason);
   if (action.reason) bits.push(action.reason);
   if (action.detail) bits.push(action.detail);
   if (action.runId) bits.push(action.runId);
@@ -386,6 +388,14 @@ function tryParseSpecArtifact(reply) {
   return null;
 }
 
+function isSpecArtifact(value) {
+  return value && typeof value === 'object' &&
+    typeof value.title === 'string' &&
+    typeof value.spec === 'string' &&
+    typeof value.tasks === 'string' &&
+    typeof value.testPlan === 'string';
+}
+
 export function renderProductDeepView(view, options = {}) {
   const activeTab = options.activeTab || 'projects';
   const chatMessages = options.chatMessages || [];
@@ -548,10 +558,33 @@ export function createProductDeepView({
     render();
   }
 
-  function resetPlanning() {
+  function restoreTemporarilyDisabledPlanActions() {
+    current = clone(current);
+    for (const kind of ['bugs', 'ideas']) {
+      for (const item of list(current?.backlog?.[kind])) {
+        if (item.plan?.disabledReason === 'planning-active') {
+          item.plan = { kind: 'plan', enabled: true };
+        }
+      }
+    }
+  }
+
+  function resetPlanning({ restorePlanActions = true } = {}) {
     planning = { active: false, status: 'scoping', artifact: null };
+    if (restorePlanActions) restoreTemporarilyDisabledPlanActions();
     persistSession();
     render();
+  }
+
+  function markPlanningActiveOnBacklog() {
+    current = clone(current);
+    for (const kind of ['bugs', 'ideas']) {
+      for (const item of list(current?.backlog?.[kind])) {
+        if (item.plan && item.plan.enabled !== false) {
+          item.plan = { kind: 'plan', enabled: false, disabledReason: 'planning-active' };
+        }
+      }
+    }
   }
 
   function focusChatInput() {
@@ -571,7 +604,9 @@ export function createProductDeepView({
       return null;
     }
     const status = body?.status || 'scoping';
-    const artifact = status === 'spec-proposed' ? tryParseSpecArtifact(body?.reply || '') : null;
+    const artifact = status === 'spec-proposed'
+      ? (isSpecArtifact(body?.artifact) ? body.artifact : tryParseSpecArtifact(body?.reply || ''))
+      : null;
     planning = {
       ...planning,
       active: true,
@@ -594,7 +629,7 @@ export function createProductDeepView({
     appendChatMessage('system', body?.slug
       ? `Spec approved — scaffolding ${body.slug}.`
       : 'Spec approved — scaffolding project files.');
-    resetPlanning();
+    resetPlanning({ restorePlanActions: false });
   }
 
   async function abandonPlanning() {
@@ -728,7 +763,14 @@ export function createProductDeepView({
       const itemId = plan.dataset?.planItemId;
       if (!itemId || plan.disabled) return;
       plan.disabled = true;
-      const result = await post(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`);
+      let result;
+      try {
+        result = await post(`/api/backlog/${encodeURIComponent(product)}/items/${encodeURIComponent(itemId)}/plan`);
+      } catch (err) {
+        plan.disabled = false;
+        appendChatMessage('assistant', `Plan failed: ${err?.message || err}`);
+        return;
+      }
       const item = findBacklogItem(itemId);
       // Enter planning mode in the right-column chat: the chat panel IS the
       // planning surface. The next free-form chat turn drives the planning
@@ -742,6 +784,7 @@ export function createProductDeepView({
         sessionId: result?.planningSessionId,
         promotionId: result?.promotionId,
       };
+      markPlanningActiveOnBacklog();
       appendChatMessage(
         'system',
         `Planning started for ${itemTitle(item) || itemId}. Reply in this chat to shape the spec; Approve scaffolds it.`,
