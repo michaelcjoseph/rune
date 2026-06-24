@@ -235,11 +235,11 @@ describe('backlog-reader — missing and unreadable files', () => {
 });
 
 describe('backlog-reader — warning surfacing', () => {
-  it('suppresses indented detail bullets in bugs.md while keeping actionable warnings', () => {
+  it('suppresses indented detail bullets while keeping actionable warnings', () => {
     const root = makeRoot('backlog-warning-noise-');
     scaffoldRepo(root, 'jarvis', {
       bugs: '- [ ] top bug\n  - detail bullet\n* wrong top-level bullet\n',
-      ideas: '## User-authored\n- idea\n   - too deep\n',
+      ideas: '## User-authored\n- idea\n   - too deep\n> wrong top-level quote\n',
     });
 
     const result = readBacklogs(
@@ -252,7 +252,7 @@ describe('backlog-reader — warning surfacing', () => {
     expect(jarvis.bugs.map((b) => b.text)).toEqual(['top bug']);
     expect(jarvis.fileWarnings.map((w) => `${w.file}:${w.code}`)).toEqual([
       'docs/projects/bugs.md:star-bullet',
-      'docs/projects/ideas.md:over-indented',
+      'docs/projects/ideas.md:blockquote',
     ]);
   });
 });

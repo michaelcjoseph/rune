@@ -76,10 +76,13 @@ function fileWarning(file: string, code: string, message: string): FileWarning {
 }
 
 function shouldSurfaceFileWarning(warning: FileWarning): boolean {
-  // `bugs.md` often carries indented detail under a top-level checkbox. The parser ignores that
-  // detail for item extraction, but surfacing every detail bullet as a cockpit warning drowns out
-  // genuinely actionable file issues.
-  return !(warning.file === BUGS_REL && warning.code === 'over-indented');
+  // Backlog files often carry nested markdown detail under a top-level item. The parser ignores
+  // unsupported detail for item extraction, but surfacing every detail bullet as a cockpit warning
+  // drowns out genuinely actionable file issues.
+  return !(
+    (warning.file === BUGS_REL || warning.file === IDEAS_REL) &&
+    warning.code === 'over-indented'
+  );
 }
 
 /**
