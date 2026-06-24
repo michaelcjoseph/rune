@@ -238,16 +238,55 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
   it('renders the Home operational rail with global status, pending approvals, parked-run release, and production restart', async () => {
     const { renderHomeView } = await import('./home-view.js');
 
-    const html = renderHomeView(homePulse, { operations: homeOperations });
+    const html = renderHomeView(homePulse, {
+      operations: { ...homeOperations, connectionStatus: 'connected' },
+    });
 
     expect(html).toMatch(/data-home-operational-rail|home-operational-rail/i);
     expect(html).toMatch(/global status|ready|active ops|active mutations/i);
+    expect(html).toMatch(/data-home-connection-status=["']connected["'][\s\S]{0,120}Connected/i);
     expect(html).toContain('run run-park blocked-on-human');
     expect(html).toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}data-approval-action=["']approve["']|data-approval-action=["']approve["'][\s\S]{0,220}blocked-on-human:run-parked-1/i);
     expect(html).toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}data-approval-action=["']reject["']|data-approval-action=["']reject["'][\s\S]{0,220}blocked-on-human:run-parked-1/i);
     expect(html).not.toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}disabled|disabled[\s\S]{0,220}blocked-on-human:run-parked-1/i);
     expect(html).toContain('capture product idea');
     expect(html).toMatch(/data-restart-server|restart server/i);
+  });
+
+  it('updates the Home server connection indicator from WebSocket status events', async () => {
+    const { createHomeView } = await import('./home-view.js');
+    const root = makeRoot();
+    const previousWindow = (globalThis as any).window;
+    const listeners = new Map<string, Listener>();
+    (globalThis as any).window = {
+      jarvisConnectionStatus: 'disconnected',
+      addEventListener: vi.fn((type: string, listener: Listener) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/home') return homePulse;
+        if (url === '/api/state') return homeOperations.status;
+        if (url === '/api/approvals') return homeOperations.approvals;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const home = createHomeView({ root, fetchJson, router: { goProduct: vi.fn() } });
+      await home.load();
+
+      expect(root.innerHTML).toMatch(/data-home-connection-status=["']disconnected["'][\s\S]{0,140}Disconnected/i);
+
+      (globalThis as any).window.jarvisConnectionStatus = 'connected';
+      listeners.get('jarvis-connection-status')?.({ detail: { status: 'connected' } });
+
+      expect(root.innerHTML).toMatch(/data-home-connection-status=["']connected["'][\s\S]{0,120}Connected/i);
+      home.close?.();
+      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('jarvis-connection-status', expect.any(Function));
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
   });
 
   it('loads Home rail data from the existing operations endpoints and actions approvals/restart through the cutover routes', async () => {

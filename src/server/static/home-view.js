@@ -131,9 +131,25 @@ function renderApprovalRow(row) {
   `</article>`;
 }
 
+function connectionLabel(status) {
+  if (status === 'connected') return 'Connected';
+  if (status === 'connecting') return 'Connecting';
+  return 'Disconnected';
+}
+
+function renderConnectionIndicator(status) {
+  const normalized = status === 'connected' || status === 'connecting' ? status : 'disconnected';
+  return `<span class="home-connection home-connection--${attr(normalized)}" ` +
+    `data-home-connection-status="${attr(normalized)}" aria-label="Webview ${attr(connectionLabel(normalized))}">` +
+    `<span class="home-connection-dot" aria-hidden="true"></span>` +
+    `<span>${escHtml(connectionLabel(normalized))}</span>` +
+  `</span>`;
+}
+
 function renderOperationalRail(operations) {
   if (!operations) return '';
   const approvals = list(operations.approvals).map(renderApprovalRow).filter(Boolean).join('');
+  const connection = renderConnectionIndicator(operations.connectionStatus || 'disconnected');
   const restart = operations.restartAvailable
     ? `<button type="button" class="home-restart-btn" data-restart-server>Restart server</button>`
     : '';
@@ -143,7 +159,9 @@ function renderOperationalRail(operations) {
       `<div class="home-operation-head"><h3>Pending approvals</h3><span>${escHtml(list(operations.approvals).length)}</span></div>` +
       `${approvals || '<p class="muted">No pending approvals</p>'}` +
     `</section>` +
-    (restart ? `<section class="home-operation-panel">${restart}</section>` : '') +
+    `<section class="home-operation-panel home-server-panel">` +
+      `<div class="home-server-actions">${connection}${restart}</div>` +
+    `</section>` +
   `</aside>`;
 }
 
@@ -198,6 +216,11 @@ function isProductionSurface() {
   return document.querySelector?.('meta[name="is-production"]')?.content === 'true';
 }
 
+function currentConnectionStatus() {
+  if (typeof window === 'undefined') return 'disconnected';
+  return window.jarvisConnectionStatus || 'disconnected';
+}
+
 export function createHomeView({ root, fetchJson, postJson, router }) {
   if (!root) throw new Error('createHomeView requires a root');
   const loadJson = fetchJson || (url => fetch(url).then(r => r.json()));
@@ -207,6 +230,18 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
 
   function render() {
     root.innerHTML = renderHomeView(currentPulse, { operations });
+  }
+
+  const onConnectionStatus = event => {
+    operations = {
+      ...(operations || {}),
+      connectionStatus: event?.detail?.status || currentConnectionStatus(),
+    };
+    if (currentPulse) render();
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener?.('jarvis-connection-status', onConnectionStatus);
   }
 
   root.addEventListener?.('click', event => {
@@ -262,14 +297,23 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
         status,
         approvals: list(approvals),
         restartAvailable: Boolean(status?.restartAvailable || isProductionSurface()),
+        connectionStatus: currentConnectionStatus(),
       };
       render();
       return currentPulse;
     },
     render(pulse, opts = {}) {
       currentPulse = pulse;
-      operations = opts.operations || operations;
+      operations = {
+        ...(opts.operations || operations || {}),
+        connectionStatus: opts.operations?.connectionStatus || operations?.connectionStatus || currentConnectionStatus(),
+      };
       render();
+    },
+    close() {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener?.('jarvis-connection-status', onConnectionStatus);
+      }
     },
   };
 }

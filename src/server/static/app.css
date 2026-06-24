@@ -326,6 +326,49 @@ body[data-view="product"] #product-root {
   display: flex;
   gap: .35rem;
 }
+.home-server-panel {
+  padding: .65rem .8rem;
+}
+.home-server-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+  flex-wrap: wrap;
+}
+.home-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: .38rem;
+  color: var(--text2);
+  font-size: .76rem;
+  line-height: 1.2;
+}
+.home-connection-dot {
+  width: .48rem;
+  height: .48rem;
+  border-radius: 999px;
+  background: #777;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.04);
+}
+.home-connection--connected {
+  color: #75d4a8;
+}
+.home-connection--connected .home-connection-dot {
+  background: #55d49f;
+}
+.home-connection--connecting {
+  color: #d6a248;
+}
+.home-connection--connecting .home-connection-dot {
+  background: #d6a248;
+}
+.home-connection--disconnected {
+  color: #f0ad8d;
+}
+.home-connection--disconnected .home-connection-dot {
+  background: #d36f55;
+}
 .home-approval-actions button,
 .home-restart-btn,
 .home-open-product {

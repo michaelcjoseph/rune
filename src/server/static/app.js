@@ -96,6 +96,7 @@
   let reconnectDelay = 2000;
   let streamingDiv = null;
   let streamingText = '';
+  window.jarvisConnectionStatus = 'disconnected';
 
   function connect() {
     const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -220,6 +221,8 @@
   };
 
   function updateStatus(status) {
+    window.jarvisConnectionStatus = status;
+    window.dispatchEvent(new CustomEvent('jarvis-connection-status', { detail: { status } }));
     const el = document.getElementById('ws-status');
     if (el) { el.textContent = status; el.className = `ws-status ${status}`; }
   }
