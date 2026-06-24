@@ -58,6 +58,29 @@ function makeRoot() {
         },
       });
     },
+    async keyDownClosest(selector: string, fields: Record<string, unknown> = {}) {
+      const event = {
+        key: fields.key ?? 'Enter',
+        shiftKey: !!fields.shiftKey,
+        preventDefault: vi.fn(),
+        target: {
+          name: fields.name ?? 'message',
+          closest(query: string) {
+            return query === selector
+              ? {
+                dataset: { product: fields.product ?? 'aura' },
+                elements: {
+                  message: { value: fields.message ?? '' },
+                },
+                reset: vi.fn(),
+              }
+              : null;
+          },
+        },
+      };
+      await emit('keydown', event);
+      return event;
+    },
   };
 }
 
@@ -1398,12 +1421,46 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }));
     expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,80}\/fresh/i);
     expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,120}Fresh summary complete/i);
+    expect(root.innerHTML).toMatch(/data-chat-message-depth[\s\S]{0,80}2 messages deep/i);
 
     const html = renderProductDeepView(productView());
     expect(html).toMatch(/data-product-chat-form|data-chat-scope=["']product["']/i);
     expect(html).toMatch(/repo\s*\+\s*vault|product repo[\s\S]{0,120}vault|data-search-scope=["']repo\+vault["']/i);
     expect(html).toMatch(/claude app|app:\/\/|data-app-deeplink/i);
     expect(html).not.toMatch(/embedded-app-thread|kb-research-thread|idea-exploration-thread/i);
+  });
+
+  it('sends product chat on Enter while preserving Shift+Enter for newlines', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ text: 'Sent from enter.' }));
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      sendChat,
+    });
+    await view.load();
+
+    const shiftEnter = await root.keyDownClosest('[data-product-chat-form]', {
+      product: 'aura',
+      message: 'line one',
+      shiftKey: true,
+    });
+    expect(shiftEnter.preventDefault).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+
+    const enter = await root.keyDownClosest('[data-product-chat-form]', {
+      product: 'aura',
+      message: 'Send this',
+    });
+    expect(enter.preventDefault).toHaveBeenCalledTimes(1);
+    expect(sendChat).toHaveBeenCalledWith(expect.objectContaining({
+      product: 'aura',
+      text: 'Send this',
+    }));
+    expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,120}Sent from enter/i);
   });
 
   it('can send product chat over the shared WebSocket helper and append streamed replies into the visible transcript', async () => {
@@ -1471,17 +1528,14 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }));
   });
 
-  it('renders an explicit product search affordance scoped to the product repo plus the vault', async () => {
+  it('does not render a separate product search form because normal product chat already has repo plus vault scope', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
     const html = renderProductDeepView(productView());
-    const searchForm = html.match(/<form[^>]*data-product-search-form[\s\S]*?<\/form>/i)?.[0] ?? '';
 
-    expect(searchForm).toMatch(/data-product-search-form/i);
-    expect(searchForm).toMatch(/data-product=["']aura["']/i);
-    expect(searchForm).toMatch(/data-search-scope=["']repo\+vault["']/i);
-    expect(searchForm).toMatch(/name=["']query["']|data-search-query/i);
-    expect(searchForm).toMatch(/repo[\s\S]{0,80}vault|vault[\s\S]{0,80}repo/i);
-    expect(searchForm).not.toMatch(/data-search-scope=["']vault["'](?!\+)|kb-only-search/i);
+    expect(html).toMatch(/data-product-chat-form/i);
+    expect(html).toMatch(/data-chat-scope=["']product["']/i);
+    expect(html).toMatch(/data-search-scope=["']repo\+vault["']/i);
+    expect(html).not.toMatch(/data-product-search-form|Search repo \+ vault|name=["']query["']/i);
   });
 });

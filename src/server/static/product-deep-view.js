@@ -339,13 +339,6 @@ function renderChatCommands() {
   `</div>`;
 }
 
-function renderProductSearch(view) {
-  return `<form data-product-search-form data-product="${attr(view.name)}" data-search-scope="repo+vault">` +
-    `<input name="query" type="search" placeholder="Search repo + vault" aria-label="Search repo and vault">` +
-    `<button type="submit">Search</button>` +
-  `</form>`;
-}
-
 function renderChatMessages(messages) {
   const rows = list(messages).map(message =>
     `<article class="deep-chat-message deep-chat-message--${attr(message.role || 'assistant')}" ` +
@@ -415,16 +408,17 @@ function renderPlanning(planning) {
 function renderChat(view, messages = [], planning = null, activeOp = null) {
   const planningActive = !!planning?.active;
   const placeholder = planningActive ? `Reply to planning...` : `Message ${attr(view.name)}...`;
+  const messageCount = list(messages).length;
+  const depthLabel = `${messageCount} ${messageCount === 1 ? 'message' : 'messages'} deep`;
   return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
     `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
-    `<div class="deep-panel-head"><h3>Chat</h3><span>${escHtml(view.name)}</span></div>` +
+    `<div class="deep-panel-head"><h3>Chat</h3><span data-chat-message-depth>${escHtml(depthLabel)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
     `${renderChatOpStatus(activeOp)}` +
     `${renderPlanning(planning)}` +
     `${renderChatMessages(messages)}` +
     `<a href="app://claude" data-app-deeplink>Open Claude App</a>` +
     `${renderChatCommands()}` +
-    `${renderProductSearch(view)}` +
     `<form data-product-chat-form data-product="${attr(view.name)}">` +
       `<textarea name="message" rows="3" placeholder="${attr(placeholder)}"></textarea>` +
       `<button type="submit">Send</button>` +
@@ -1140,6 +1134,13 @@ export function createProductDeepView({
     }
   };
 
+  async function submitChatForm(chatForm) {
+    const text = chatForm.elements?.message?.value || '';
+    if (!String(text).trim()) return;
+    await sendProductMessage(text, chatForm.dataset?.product || product);
+    chatForm.reset?.();
+  }
+
   const onSubmit = async event => {
     const backlogAdd = event.target?.closest?.('[data-backlog-add-form]');
     if (backlogAdd) {
@@ -1159,25 +1160,22 @@ export function createProductDeepView({
     const chatForm = event.target?.closest?.('[data-product-chat-form]');
     if (chatForm) {
       event.preventDefault?.();
-      const text = chatForm.elements?.message?.value || '';
-      if (!String(text).trim()) return;
-      await sendProductMessage(text, chatForm.dataset?.product || product);
-      chatForm.reset?.();
+      await submitChatForm(chatForm);
       return;
     }
+  };
 
-    const searchForm = event.target?.closest?.('[data-product-search-form]');
-    if (!searchForm) return;
+  const onKeyDown = async event => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    const form = event.target?.closest?.('[data-product-chat-form]');
+    if (!form || event.target?.name !== 'message') return;
     event.preventDefault?.();
-    const query = searchForm.elements?.query?.value || '';
-    if (!String(query).trim()) return;
-    const text = `Search repo and vault for: ${query}`;
-    await sendProductMessage(text, searchForm.dataset?.product || product);
-    searchForm.reset?.();
+    await submitChatForm(form);
   };
 
   root.addEventListener?.('click', onClick);
   root.addEventListener?.('submit', onSubmit);
+  root.addEventListener?.('keydown', onKeyDown);
   if (typeof window !== 'undefined') {
     window.addEventListener?.('jarvis-webview-frame', onWebviewFrame);
   }
@@ -1226,6 +1224,7 @@ export function createProductDeepView({
       }
       root.removeEventListener?.('click', onClick);
       root.removeEventListener?.('submit', onSubmit);
+      root.removeEventListener?.('keydown', onKeyDown);
       if (typeof window !== 'undefined') {
         window.removeEventListener?.('jarvis-webview-frame', onWebviewFrame);
       }
