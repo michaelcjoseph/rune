@@ -380,9 +380,11 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
         runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
       })),
     backlog: {
-      bugs: (backlog?.bugs ?? []).map((item) =>
-        withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
-      ),
+      bugs: (backlog?.bugs ?? [])
+        .filter((item) => item.status !== 'done')
+        .map((item) =>
+          withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+        ),
       ideas: (backlog?.ideas ?? []).map((item) =>
         withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
       ),

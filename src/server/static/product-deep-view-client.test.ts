@@ -131,7 +131,7 @@ function productView(overrides: Record<string, unknown> = {}) {
           plan: { kind: 'plan', enabled: false, disabledReason: 'already-promoted' },
           fix: { kind: 'fix', state: 'disabled', reason: 'already-promoted' },
         },
-      ],
+      ].filter((bug) => bug.status !== 'done'),
       ideas: [
         {
           id: 'IDEA-1',
@@ -453,7 +453,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
 
     const html = renderProductDeepView(productView());
 
-    for (const id of ['BUG-available', 'BUG-gating', 'BUG-declined', 'BUG-handoff', 'BUG-proceeding', 'BUG-disabled']) {
+    for (const id of ['BUG-available', 'BUG-gating', 'BUG-declined', 'BUG-handoff', 'BUG-proceeding']) {
       expect(html).toContain(id);
       expect(html).toMatch(new RegExp(`data-plan-item-id=["']${id}["']|${id}[\\s\\S]{0,240}\\bPlan\\b`, 'i'));
       expect(html).toMatch(new RegExp(`data-fix-item-id=["']${id}["']|${id}[\\s\\S]{0,240}\\bFix\\b`, 'i'));
@@ -465,7 +465,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/BUG-handoff[\s\S]{0,320}handoff-unavailable/i);
     expect(html).toMatch(/BUG-handoff[\s\S]{0,320}startFixRun unavailable/i);
     expect(html).toMatch(/BUG-proceeding[\s\S]{0,320}run-fix-accepted/i);
-    expect(html).toMatch(/BUG-disabled[\s\S]{0,320}done/i);
+    expect(html).not.toContain('BUG-disabled');
     expect(html).toMatch(/IDEA-1[\s\S]{0,240}\bPlan\b/i);
     expect(html).not.toMatch(/IDEA-1[\s\S]{0,240}\bFix\b/i);
   });

@@ -615,10 +615,7 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       id: 'b-open',
       fix: { kind: 'fix', state: 'gating' },
     });
-    expect(view.backlog.bugs.find((b: any) => b.id === 'b-done')).toMatchObject({
-      id: 'b-done',
-      fix: { kind: 'fix', state: 'disabled', reason: 'bug-done' },
-    });
+    expect(view.backlog.bugs.some((b: any) => b.id === 'b-done')).toBe(false);
     expect(view.backlog.bugs.some((b: any) => b.id === 'b-deleted')).toBe(false);
   });
 });
