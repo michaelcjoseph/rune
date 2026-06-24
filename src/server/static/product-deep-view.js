@@ -44,6 +44,20 @@ function renderBody(body) {
   return body ? `<p>${escHtml(body)}</p>` : '';
 }
 
+function renderProductMarkdown(text) {
+  const raw = String(text || '');
+  const factory = typeof window !== 'undefined' ? window.markdownit : null;
+  // Fallback escapes HTML and preserves line breaks — `.deep-chat-message` is
+  // `white-space: normal`, so bare escaped text would collapse newlines.
+  const fallback = () => escHtml(raw).replace(/\n/g, '<br>');
+  if (typeof factory !== 'function') return fallback();
+  try {
+    const md = factory({ html: false, linkify: true, typographer: true });
+    if (md && typeof md.render === 'function') return md.render(raw);
+  } catch (_) { /* fall back to escaped plain text */ }
+  return fallback();
+}
+
 function actionLabel(action, fallback) {
   if (!action) return fallback;
   if (action.enabled === false) return fallback;
@@ -285,20 +299,31 @@ function renderRuns(view, liveRuns = {}) {
   `</section>`;
 }
 
+function renderOperationActivity(activity) {
+  const rows = list(activity).map(row => {
+    const label = row.status ? `${row.status}: ${row.detail || row.label || row.opId || 'op'}` : (row.detail || row.label || row.opId || 'op');
+    return `<article class="deep-op-row deep-op-row--activity" data-op-activity-id="${attr(row.opId || '')}">` +
+      `<span>${escHtml(row.at || '')}</span><span>${escHtml(label)}</span>` +
+    `</article>`;
+  }).join('');
+  return rows || '<p class="muted">No live activity yet</p>';
+}
+
 function renderOperations(operations) {
-  if (!operations) return '';
-  const ops = list(operations.inFlightOps).map(op =>
-    `<article class="deep-op-row"><span>${escHtml(op.opId)}</span><span>${escHtml(op.label || 'op')}</span><button type="button" data-cancel-op-id="${attr(op.opId)}">Cancel</button></article>`
+  const model = operations || {};
+  const ops = list(model.inFlightOps).map(op =>
+    `<article class="deep-op-row"><span>${escHtml(op.opId)}</span><span>${escHtml(op.detail || op.label || 'op')}</span><button type="button" data-cancel-op-id="${attr(op.opId)}">Cancel</button></article>`
   ).join('');
-  const mutations = list(operations.mutations).map(mutation =>
+  const mutations = list(model.mutations).map(mutation =>
     `<article class="deep-op-row"><span>${escHtml(mutation.id)}</span><span>${escHtml(mutation.kind || mutation.status || 'mutation')}</span><button type="button" data-cancel-mutation-id="${attr(mutation.id)}">Cancel</button></article>`
   ).join('');
-  const planning = operations.planning
-    ? `<p>Planning ${escHtml(operations.planning.product || '')} ${escHtml(operations.planning.status || '')}</p>`
+  const planning = model.planning
+    ? `<p>Planning ${escHtml(model.planning.product || '')} ${escHtml(model.planning.status || '')}</p>`
     : '<p class="muted">No active planning</p>';
   return `<section class="deep-panel deep-panel--operations" data-surface="operations">` +
     `<div class="deep-panel-head"><h3>Operations</h3><span>controls</span></div>` +
     `<h4>Active ops</h4>${ops || '<p class="muted">No active ops</p>'}` +
+    `<h4>Activity</h4><div class="deep-op-activity" data-product-op-activity>${renderOperationActivity(model.activity)}</div>` +
     `<h4>Work runs</h4>${mutations || '<p class="muted">No active mutations</p>'}` +
     `<h4>Planning</h4>${planning}` +
   `</section>`;
@@ -325,11 +350,26 @@ function renderChatMessages(messages) {
   const rows = list(messages).map(message =>
     `<article class="deep-chat-message deep-chat-message--${attr(message.role || 'assistant')}" ` +
       `data-chat-message-role="${attr(message.role || 'assistant')}">` +
-      `${escHtml(message.text || '')}` +
+      `${renderProductMarkdown(message.text || '')}` +
     `</article>`
   ).join('');
   return `<div class="deep-chat-transcript" data-product-chat-transcript aria-live="polite">` +
     (rows || '<p class="muted">No messages yet</p>') +
+  `</div>`;
+}
+
+function renderChatOpStatus(activeOp) {
+  if (!activeOp?.opId) return '';
+  // Recompute from startedAt on every render (matches the global UI) so a full
+  // re-render mid-op shows true elapsed rather than the stale elapsedMs:0 stamp.
+  const elapsed = activeOp.startedAt
+    ? Date.now() - new Date(activeOp.startedAt).getTime()
+    : (Number.isFinite(activeOp.elapsedMs) ? activeOp.elapsedMs : 0);
+  return `<div class="deep-chat-op-status chat-status" data-product-chat-op-status data-op-id="${attr(activeOp.opId)}" aria-live="polite">` +
+    `<span class="cs-spinner"></span>` +
+    `<span class="cs-label">${escHtml(activeOp.label || 'Asking Claude')}</span>` +
+    `<span class="cs-elapsed">· ${escHtml(fmtElapsed(elapsed))}</span>` +
+    `<button type="button" class="cs-cancel" data-cancel-op-id="${attr(activeOp.opId)}" title="Cancel" aria-label="Cancel operation">&times;</button>` +
   `</div>`;
 }
 
@@ -372,13 +412,14 @@ function renderPlanning(planning) {
   `</div>`;
 }
 
-function renderChat(view, messages = [], planning = null) {
+function renderChat(view, messages = [], planning = null, activeOp = null) {
   const planningActive = !!planning?.active;
   const placeholder = planningActive ? `Reply to planning...` : `Message ${attr(view.name)}...`;
   return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
     `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
     `<div class="deep-panel-head"><h3>Chat</h3><span>${escHtml(view.name)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
+    `${renderChatOpStatus(activeOp)}` +
     `${renderPlanning(planning)}` +
     `${renderChatMessages(messages)}` +
     `<a href="app://claude" data-app-deeplink>Open Claude App</a>` +
@@ -423,6 +464,7 @@ export function renderProductDeepView(view, options = {}) {
   const activeTab = options.activeTab || 'projects';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
+  const activeOp = options.activeOp || null;
   if (!view) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
@@ -448,7 +490,7 @@ export function renderProductDeepView(view, options = {}) {
     `<div class="deep-two-column">` +
       `${renderWorkTabs(view, activeTab)}` +
       `<aside class="deep-side-stack">` +
-        `${renderChat(view, chatMessages, planning)}` +
+        `${renderChat(view, chatMessages, planning, activeOp)}` +
         `${renderOperations(options.operations)}` +
         `${renderRuns(view, options.liveRuns || {})}` +
       `</aside>` +
@@ -563,6 +605,30 @@ function operationsFromState(state, product) {
   };
 }
 
+// Op-events carry no product field, so they are user-global. Scope the product
+// chat pill to `chat` ops only — product chat + planning turns are chat-kind
+// (claude.ts opLabel:'chat'). Project runs emit no op-events (mutation/run
+// events, already surfaced in the Runs + Operations panels); background `agent`
+// ops (nightly, prep, reviews) are unrelated noise, so they are excluded.
+const PRODUCT_VISIBLE_OP_KINDS = new Set(['chat']);
+
+function shouldShowProductOp(frame) {
+  return frame?.kind === 'op-event' &&
+    frame.opKind !== 'classifier' &&
+    PRODUCT_VISIBLE_OP_KINDS.has(frame.opKind);
+}
+
+function opDisplayLabel(frame) {
+  if (frame?.opKind === 'chat') return 'Asking Claude';
+  return frame?.label || 'Asking Claude';
+}
+
+function fmtClock(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
 // Per-product chat + planning state kept at module scope so it survives
 // navigating away from a product and back (client-view.js close()s the view and
 // constructs a fresh one on each route change). In-session only — not persisted
@@ -572,7 +638,12 @@ const productSessions = new Map();
 function getProductSession(product) {
   let session = productSessions.get(product);
   if (!session) {
-    session = { chatMessages: [], planning: { active: false, status: 'scoping', artifact: null } };
+    session = {
+      chatMessages: [],
+      planning: { active: false, status: 'scoping', artifact: null },
+      activeOp: null,
+      opActivity: [],
+    };
     productSessions.set(product, session);
   }
   return session;
@@ -607,21 +678,100 @@ export function createProductDeepView({
   const session = getProductSession(product);
   let chatMessages = session.chatMessages;
   let planning = session.planning;
+  let activeOp = session.activeOp || null;
+  let opActivity = list(session.opActivity);
   let streamingMessageIndex = -1;
+  let opTicker = null;
 
   function persistSession() {
     session.chatMessages = chatMessages;
     session.planning = planning;
+    session.activeOp = activeOp;
+    session.opActivity = opActivity;
   }
 
   function render() {
     root.innerHTML = renderProductDeepView(current, {
       liveRuns,
-      operations: currentOperations,
+      operations: { ...(currentOperations || {}), activity: opActivity.length ? opActivity : list(currentOperations?.activity) },
       activeTab,
       chatMessages,
       planning,
+      activeOp,
     });
+  }
+
+  function syncOpTicker() {
+    if (activeOp?.opId && !opTicker) {
+      opTicker = setInterval(() => {
+        if (!activeOp?.opId) {
+          syncOpTicker();
+          return;
+        }
+        // Update only the elapsed text node — a full render() here would
+        // replace root.innerHTML every second, wiping the chat textarea (typed
+        // text + focus) and the transcript scroll position. Elapsed is
+        // recomputed from startedAt on the next real render, so we don't mutate
+        // activeOp here.
+        const el = root.querySelector?.('[data-product-chat-op-status] .cs-elapsed');
+        if (el) {
+          const ms = Date.now() - new Date(activeOp.startedAt || Date.now()).getTime();
+          el.textContent = `· ${fmtElapsed(ms)}`;
+        }
+      }, 1000);
+      return;
+    }
+    if (!activeOp?.opId && opTicker) {
+      clearInterval(opTicker);
+      opTicker = null;
+    }
+  }
+
+  function appendOperationActivity(row) {
+    opActivity = [...opActivity, row].slice(-50);
+    persistSession();
+  }
+
+  function handleOpFrame(frame) {
+    if (!shouldShowProductOp(frame)) return;
+    const base = {
+      opId: frame.opId,
+      label: opDisplayLabel(frame),
+      startedAt: frame.startedAt,
+      elapsedMs: Number.isFinite(frame.elapsedMs) ? frame.elapsedMs : 0,
+    };
+    if (frame.subKind === 'start') {
+      activeOp = base;
+      appendOperationActivity({ ...base, at: fmtClock(frame.startedAt), status: 'started' });
+      syncOpTicker();
+      render();
+      return;
+    }
+    if (frame.subKind === 'progress') {
+      if (activeOp?.opId === frame.opId) activeOp = { ...activeOp, ...base };
+      if (frame.detail) {
+        appendOperationActivity({
+          ...base,
+          at: fmtClock(new Date().toISOString()),
+          detail: frame.detail,
+        });
+      } else {
+        persistSession();
+      }
+      render();
+      return;
+    }
+    if (frame.subKind === 'end') {
+      if (activeOp?.opId === frame.opId) activeOp = null;
+      appendOperationActivity({
+        ...base,
+        at: fmtClock(new Date().toISOString()),
+        detail: frame.error || frame.detail || frame.status || 'done',
+        status: frame.status || 'ended',
+      });
+      syncOpTicker();
+      render();
+    }
   }
 
   async function reloadProductAndOperations() {
@@ -810,6 +960,10 @@ export function createProductDeepView({
     if (frame.kind === 'message') {
       streamingMessageIndex = -1;
       appendChatMessage('assistant', frame.text || '');
+      return;
+    }
+    if (frame.kind === 'op-event') {
+      handleOpFrame(frame);
     }
   };
 
@@ -1059,12 +1213,17 @@ export function createProductDeepView({
       if (opts.liveRuns) liveRuns = opts.liveRuns;
       if (opts.activeTab) activeTab = opts.activeTab;
       if (opts.chatMessages) chatMessages = opts.chatMessages;
+      if ('activeOp' in opts) activeOp = opts.activeOp;
       currentOperations = opts.operations || currentOperations;
       render();
     },
     close() {
       subscription?.close?.();
       subscription = null;
+      if (opTicker) {
+        clearInterval(opTicker);
+        opTicker = null;
+      }
       root.removeEventListener?.('click', onClick);
       root.removeEventListener?.('submit', onSubmit);
       if (typeof window !== 'undefined') {

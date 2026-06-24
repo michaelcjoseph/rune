@@ -276,6 +276,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html.indexOf('data-surface="chat"')).toBeLessThan(html.indexOf('data-surface="operations"'));
     expect(html.indexOf('data-surface="operations"')).toBeLessThan(html.indexOf('data-surface="runs"'));
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns/i);
+    expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i);
+    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*min-height:\s*20rem/i);
+    expect(css).toMatch(/\.deep-panel--chat textarea[\s\S]*min-height:\s*7\.5rem/i);
     expect(css).toMatch(/\.deep-tab-panel:not\(\.is-active\)[\s\S]*display:\s*none/i);
 
     const view = createProductDeepView({ root, product: 'aura', fetchJson: vi.fn(async () => productView()) });
@@ -974,6 +977,270 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
 
     expect(postJson).toHaveBeenCalledWith('/api/ops/op-live-1/cancel');
     expect(postJson).toHaveBeenCalledWith('/api/mutations/mut-live-1/cancel');
+  });
+
+  it('renders product-local op status from WebSocket op-event frames and logs activity in Operations', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).toMatch(/Asking Claude/i);
+      expect(root.innerHTML).toMatch(/data-cancel-op-id=["']op-chat-1["']/i);
+
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'progress',
+          opKind: 'chat',
+          opId: 'op-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 1000,
+          detail: 'Read: package.json',
+        },
+      });
+
+      expect(root.innerHTML).toMatch(/data-product-op-activity/i);
+      expect(root.innerHTML).toContain('Read: package.json');
+
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'end',
+          opKind: 'chat',
+          opId: 'op-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 2000,
+          status: 'success',
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).toMatch(/success/i);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores classifier op-event frames in the product-local status surface', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'classifier',
+          opId: 'op-classifier-1',
+          label: 'classifier',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-classifier-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('ignores unrelated background agent op-event frames (op-events carry no product scope)', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+      });
+      await view.load();
+
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'agent',
+          opId: 'op-agent-1',
+          label: 'nightly',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      expect(root.innerHTML).not.toMatch(/data-product-chat-op-status/i);
+      expect(root.innerHTML).not.toContain('op-agent-1');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('cancels the active product-local chat op through the existing ops endpoint', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const postJson = vi.fn(async () => ({ ok: true }));
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView()),
+        postJson,
+      });
+      await view.load();
+      listeners.get('jarvis-webview-frame')?.({
+        detail: {
+          kind: 'op-event',
+          subKind: 'start',
+          opKind: 'chat',
+          opId: 'op-chat-1',
+          label: 'webview chat',
+          startedAt: '2026-06-24T12:00:00.000Z',
+          elapsedMs: 0,
+        },
+      });
+
+      await root.clickClosest('[data-cancel-op-id]', { cancelOpId: 'op-chat-1' });
+
+      expect(postJson).toHaveBeenCalledWith('/api/ops/op-chat-1/cancel');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('renders product chat messages through markdown-it with unsafe HTML disabled', async () => {
+    const previousWindow = (globalThis as any).window;
+    const markdownOptions: unknown[] = [];
+    (globalThis as any).window = {
+      markdownit: vi.fn((opts: unknown) => {
+        markdownOptions.push(opts);
+        return {
+          render(raw: string) {
+            const escaped = String(raw)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;');
+            const lines = escaped.split('\n');
+            return lines.map(line => {
+              if (line.startsWith('- ')) return `<ul><li>${line.slice(2)}</li></ul>`;
+              return `<p>${line.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>')}</p>`;
+            }).join('');
+          },
+        };
+      }),
+    };
+    try {
+      const { renderProductDeepView } = await import('./product-deep-view.js');
+
+      const html = renderProductDeepView(productView(), {
+        chatMessages: [{
+          role: 'assistant',
+          text: '**Bold**\n- item\nUse `code`\n<script>alert("x")</script>',
+        }],
+      });
+
+      expect(markdownOptions).toContainEqual(expect.objectContaining({ html: false, linkify: true }));
+      expect(html).toContain('<strong>Bold</strong>');
+      expect(html).toContain('<li>item</li>');
+      expect(html).toContain('<code>code</code>');
+      expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
+      expect(html).not.toContain('<script>');
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('falls back to escaped text with preserved line breaks when markdown-it is unavailable', async () => {
+    const previousWindow = (globalThis as any).window;
+    // No markdownit on window — exercise the degraded-mode fallback path.
+    (globalThis as any).window = {};
+    try {
+      const { renderProductDeepView } = await import('./product-deep-view.js');
+
+      const html = renderProductDeepView(productView(), {
+        chatMessages: [{
+          role: 'assistant',
+          text: 'line one\nline two\n<script>alert("x")</script>',
+        }],
+      });
+
+      // Newlines survive as <br> (the message container is white-space: normal).
+      expect(html).toContain('line one<br>line two');
+      // HTML is still escaped — no raw tag injection.
+      expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;');
+      expect(html).not.toContain('<script>');
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
   });
 
   it('keeps backlog add in the deep-view backlog surface and appends through the existing backlog endpoint', async () => {

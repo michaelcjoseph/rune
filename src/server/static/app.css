@@ -476,7 +476,7 @@ body[data-view="product"] #product-root {
 }
 .deep-two-column {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: .9rem;
   align-items: start;
 }
@@ -540,6 +540,9 @@ body[data-view="product"] #product-root {
 .deep-panel--runs { grid-area: runs; }
 .deep-panel--chat { grid-area: chat; }
 .deep-panel--operations { grid-area: operations; }
+.deep-panel--chat {
+  min-height: min(72vh, 46rem);
+}
 .deep-panel-head,
 .deep-row-head,
 .deep-run-meta {
@@ -744,8 +747,8 @@ body[data-view="product"] #product-root {
   overflow-wrap: anywhere;
 }
 .deep-chat-transcript {
-  min-height: 8rem;
-  max-height: 18rem;
+  min-height: 20rem;
+  max-height: min(56vh, 34rem);
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -758,10 +761,11 @@ body[data-view="product"] #product-root {
 .deep-chat-message {
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: .45rem .55rem;
+  padding: .55rem .65rem;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  font-size: .84rem;
+  white-space: normal;
+  font-size: .94rem;
+  line-height: 1.55;
 }
 .deep-chat-message--user {
   align-self: flex-end;
@@ -778,6 +782,52 @@ body[data-view="product"] #product-root {
   color: var(--warning);
   background: var(--warning-bg);
   border-color: var(--warning-border);
+}
+.deep-chat-message p { margin-bottom: .55rem; }
+.deep-chat-message p,
+.deep-chat-message li {
+  color: var(--text);
+  font-size: .94rem;
+}
+.deep-chat-message p:last-child { margin-bottom: 0; }
+.deep-chat-message ul,
+.deep-chat-message ol {
+  padding-left: 1.35rem;
+  margin-bottom: .55rem;
+}
+.deep-chat-message code {
+  background: var(--bg3);
+  padding: .1em .35em;
+  border-radius: 3px;
+  font-size: .9em;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+.deep-chat-message pre {
+  margin: .55rem 0;
+  border-radius: 6px;
+  overflow: auto;
+  background: var(--bg3);
+}
+.deep-chat-message pre code {
+  background: transparent;
+  padding: .75rem 1rem;
+  display: block;
+  font-size: .84em;
+}
+.deep-chat-message blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: .75rem;
+  color: var(--text2);
+  margin: .55rem 0;
+}
+.deep-chat-message a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.deep-chat-message a:hover { text-decoration: underline; }
+.deep-chat-op-status.chat-status {
+  margin: 0;
+  align-self: flex-start;
 }
 /* Inline planning surface inside the product chat panel. */
 .deep-planning {
@@ -843,7 +893,7 @@ body[data-view="product"] #product-root {
 .deep-planning-actions button:hover { filter: brightness(1.15); }
 .deep-panel--chat textarea {
   width: 100%;
-  min-height: 5.5rem;
+  min-height: 7.5rem;
   resize: vertical;
   background: var(--bg3);
   border: 1px solid var(--border);
@@ -851,6 +901,8 @@ body[data-view="product"] #product-root {
   color: var(--text);
   padding: .5rem;
   font: inherit;
+  font-size: .95rem;
+  line-height: 1.5;
 }
 .deep-panel--chat form,
 .deep-chat-commands {
@@ -883,6 +935,9 @@ body[data-view="product"] #product-root {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
+}
+.deep-op-row--activity {
+  grid-template-columns: auto minmax(0, 1fr);
 }
 .deep-op-row span {
   overflow-wrap: anywhere;
