@@ -2,8 +2,8 @@
  * Project 13 Phase 1c — the EXISTING `blocked-on-human` cockpit inbox row made
  * actionable (test-plan §3). Before Project 13 the row returned `not-found`
  * (non-actionable) for approve/reject; now Approve/Release routes to the shared
- * release runtime (`requestWorkRunRelease`), while Reject/dismiss leaves the
- * parked run untouched.
+ * release runtime (`requestWorkRunRelease`), while Reject/dismiss acknowledges
+ * the action and leaves the parked run untouched.
  *
  * Written TEST-FIRST: `dispatchApprovalStatus` does not yet route
  * `blocked-on-human` approvals to release, so the approve-routes-to-release
@@ -63,9 +63,9 @@ describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () 
   it('Reject leaves the parked run untouched — never calls the release runtime', async () => {
     const result = await dispatchApprovalStatus('blocked-on-human:run-1', 'rejected');
     expect(mockRequestWorkRunRelease).not.toHaveBeenCalled();
-    // A dismissed parked row is a no-op (not a queue transition) — surfaced as
-    // `not-found` so the row stays put until the underlying run terminates.
-    expect(result).toBe('not-found');
+    // A dismissed parked row is a working no-op (not a queue transition): the
+    // endpoint can acknowledge the click while the parked run remains parked.
+    expect(result).toBe('ok');
   });
 
   it('Approve on a not-parked / already-released run is a clean not-found (no destructive action)', async () => {

@@ -302,10 +302,4 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- cockpit-redesign/src/server/static/app.css:85).
-
-Verified:
-`npm test -- --run src/server/static/home-view-client.test.ts src/server/static/product-deep-view-client.test.ts src/server/static/run-feed-client.test.ts --configLoader runner` passed, 36 tests.
-`git diff --check` passed.
-
-I did not commit.
+- ceptance, because it requires the real Jarvis daemon, `JARVIS_HTTP_SECRET`, and `JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1`. `npm run build` still fails on broad pre-existing branch TypeScript errors outside this task; `src/server/webview.test.ts` also cannot bind `127.0.0.1` in this sandbox (`EPERM`).

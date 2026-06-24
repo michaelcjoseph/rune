@@ -35,7 +35,7 @@ const log = createLogger('approval-actions');
 type ApprovalStatus = 'approved' | 'rejected';
 /** `ok` — successful pending→approved/rejected transition.
  *  `not-found` — id parse failed, queue index out of range, entry already
- *    actioned, or source is `blocked-on-human` (terminal, not queue-flippable).
+ *    actioned, or a `blocked-on-human` approve cannot create a release.
  *  `error` — a disk-write failure (or other unexpected throw) from the
  *    queue mutator. The HTTP path maps this to a 500 so the caller can
  *    distinguish "entry not found" from "server failed to persist." */
@@ -133,9 +133,9 @@ function setAskTwiceStatus(idx: number, status: ApprovalStatus): ApprovalDispatc
  * Dispatch an approval action to the correct queue based on the composite id.
  * Returns `'ok'` on a successful pending→approved/rejected transition,
  * `'not-found'` when the id is malformed, the queue index is out of range,
- * the entry is already non-pending, or the source is `blocked-on-human`
- * (those rows are not queue entries the cockpit can flip — the user must
- * take the underlying action).
+ * the entry is already non-pending, or a `blocked-on-human` approve cannot
+ * create a release. `blocked-on-human` reject is a working no-op: it
+ * acknowledges the cockpit action while leaving the parked run untouched.
  */
 export async function dispatchApprovalStatus(id: string, status: ApprovalStatus): Promise<ApprovalDispatchResult> {
   const parsed = parseApprovalId(id);
@@ -157,13 +157,12 @@ export async function dispatchApprovalStatus(id: string, status: ApprovalStatus)
     case 'blocked-on-human':
       // Project 13 Phase 1c: a `blocked-on-human` row is a PARKED work-run, made
       // actionable here. Approve/Release routes to the shared release runtime (a
-      // clean parked run → creates the cold-finalize mutation → 'ok'); Reject
-      // (or a not-parked / dirty / failed release) leaves the parked run
-      // untouched and returns 'not-found' so the row stays put. A dirty worktree
-      // is NOT confirm-discarded from the inbox — that requires the explicit
-      // release endpoint/callback carrying confirmDirty=true (the inbox Approve
-      // is a clean-release quick-action only).
-      if (status !== 'approved') return 'not-found';
+      // clean parked run → creates the cold-finalize mutation → 'ok'); Reject is
+      // a no-op acknowledgement that leaves the parked run untouched. A dirty
+      // worktree is NOT confirm-discarded from the inbox — that requires the
+      // explicit release endpoint/callback carrying confirmDirty=true (the inbox
+      // Approve is a clean-release quick-action only).
+      if (status !== 'approved') return 'ok';
       // Guard the id at the trust boundary (consistent with the HTTP route),
       // even though readParkedRun does a pure store lookup with no path join.
       if (!VALID_SLUG.test(parsed.payload)) return 'not-found';
