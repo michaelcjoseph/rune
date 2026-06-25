@@ -121,17 +121,7 @@ _None yet._
 
 ## Next Task Handoff
 
-- pected against the pre-rename implementation:
+- ver/auth.test.ts --reporter=verbose --pool=threads --maxWorkers=1
+```
 
-- `src/config.test.ts`: 3 failed, 22 passed
-- `src/server/auth.test.ts`: 10 failed, 9 passed
-- `src/mcp/server.test.ts`: 3 failed, 11 passed
-- `src/bot/handlers/text.test.ts`: 2 failed, 108 passed
-
-No implementation files changed and no commit was made.
-- est.ts src/config.test.ts src/mcp/server.test.ts src/server/auth.test.ts`
-
-Result: red, 18 failing tests. The remaining failures are the intended runtime-rename implementation gaps: current code still returns `jarvis-kb`, old auth/config names, and Jarvis help text/tool descriptions. No commit made.
-- o hits.
-- `git diff --check -- ...` passed.
-- `npm test -- src/bot/handlers/text.test.ts src/config.test.ts src/mcp/server.test.ts src/server/auth.test.ts` runs, and remains red as intended for the test-first runtime rename: 18 failures where production still emits/reads the old runtime identifiers.
+Result: exit code `1`, `18 failed | 150 passed` across 4 files. Failures match the intended Phase 3 runtime-rename gaps: `jarvis-kb`, old auth/config names, Jarvis help text, and old MCP tool names/descriptions. No files changed.
