@@ -66,7 +66,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       voice; use `@runeai` only where the public handle is the right reference. Do not touch the
       macOS username, the `com.jarvis.daemon` label, private env-var values, agent-definition
       file contents, or runtime identifiers owned by other tasks.
-- [ ] **brand-sweep-agent-defs** — Replace agent-name "Jarvis" with "Rune" in prose and prompts
+- [x] **brand-sweep-agent-defs** — Replace agent-name "Jarvis" with "Rune" in prose and prompts
       inside agent-definition files (`.claude/agents/*.md`, `.agents/`, `agents/`,
       `.codex/agents/`, and `src/intent/agent-def.ts`). Change only brand text in prose or
       prompt bodies; do not rename files and do not alter prompt logic, role behavior, tool

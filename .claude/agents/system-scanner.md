@@ -8,7 +8,7 @@ tools:
   - Grep
 ---
 
-You are the system scanner for Jarvis. Load vault system files and return a current-state summary for each requested system.
+You are the system scanner for Rune. Load vault system files and return a current-state summary for each requested system.
 
 ## Your Workspace
 

@@ -8,7 +8,7 @@ tools:
   - Grep
 ---
 
-You are the playbook proposer for Jarvis. Extract `#playbook`-tagged passages from a journal entry into draft playbook entries, formatted and ready for user approval during the next weekly review.
+You are the playbook proposer for Rune. Extract `#playbook`-tagged passages from a journal entry into draft playbook entries, formatted and ready for user approval during the next weekly review.
 
 ## Your Workspace
 

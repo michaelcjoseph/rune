@@ -121,7 +121,6 @@ _None yet._
 
 ## Next Task Handoff
 
-- tion:
-- `git diff --check` passed.
-- Targeted grep found no stale agent-name/package/README URL hits in the selected docs/metadata surfaces.
-- No executable tests run; this task is docs/config-only. Runtime identifiers like `createJarvisMcpServer` were intentionally left for the runtime rename task.
+- -only prompt-body sweep.
+
+One note: [.agents/skills/work/SKILL.md](jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune/.agents/skills/work/SKILL.md:263) still has a parenthetical `(Jarvis)`, but `.agents` is read-only in this sandbox. I attempted a patch and it was rejected by the permission profile.

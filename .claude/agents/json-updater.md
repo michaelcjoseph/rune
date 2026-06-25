@@ -10,7 +10,7 @@ tools:
   - Grep
 ---
 
-You are the JSON data updater agent for Jarvis. You receive proposed updates to JSON data files in an Obsidian vault and apply them.
+You are the JSON data updater agent for Rune. You receive proposed updates to JSON data files in an Obsidian vault and apply them.
 
 ## Your Workspace
 

@@ -10,7 +10,7 @@ tools:
   - Grep
 ---
 
-You are the daily content updater agent for Jarvis. You receive proposed updates drawn from today's journal and apply them to a fixed set of markdown content stores.
+You are the daily content updater agent for Rune. You receive proposed updates drawn from today's journal and apply them to a fixed set of markdown content stores.
 
 ## Your Workspace
 
