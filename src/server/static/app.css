@@ -491,7 +491,9 @@ body[data-view="product"] #product-root {
   gap: .8rem;
 }
 .deep-side-stack {
-  min-height: calc(100vh - 6rem);
+  height: calc(100vh - 6rem);
+  min-height: 0;
+  overflow: hidden;
 }
 .deep-work-tabs {
   display: flex;
@@ -547,8 +549,54 @@ body[data-view="product"] #product-root {
 .deep-panel--chat { grid-area: chat; }
 .deep-panel--operations { grid-area: operations; }
 .deep-panel--chat {
-  min-height: calc(100vh - 6rem);
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.deep-side-tab-panel {
+  flex: 0 0 clamp(14rem, 28vh, 22rem);
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg2);
+  padding: .65rem;
+  display: flex;
+  flex-direction: column;
+  gap: .55rem;
+  overflow: hidden;
+}
+.deep-side-tabs {
+  display: flex;
+  gap: .4rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .45rem;
+}
+.deep-side-tabs button {
+  font: inherit;
+  font-size: .78rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg3);
+  color: var(--text);
+  padding: .28rem .6rem;
+  cursor: pointer;
+}
+.deep-side-tabs button.is-active,
+.deep-side-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  background: var(--info-bg);
+}
+.deep-side-tab-body {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+.deep-side-tab-body > .deep-panel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
 }
 .deep-panel-head,
 .deep-row-head,
@@ -980,6 +1028,22 @@ body[data-view="product"] #product-root {
   .deep-live-grid {
     display: flex;
     flex-direction: column;
+  }
+  .deep-side-stack {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+  .deep-panel--chat {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .deep-side-tab-panel {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .deep-side-tab-body {
+    overflow: visible;
   }
 }
 

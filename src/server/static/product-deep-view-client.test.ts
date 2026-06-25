@@ -263,6 +263,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }
     expect(root.innerHTML).toContain('17-cockpit-redesign');
     expect(root.innerHTML).toContain('Crash when saving');
+    await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'runs' });
     expect(root.innerHTML).toContain('run-recent-1');
   });
 
@@ -285,7 +286,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(router.goHome).toHaveBeenCalledTimes(1);
   });
 
-  it('uses a two-column product layout with tabbed Projects, Bugs, and Ideas on the left and Chat, Operations, Runs on the right', async () => {
+  it('uses a fixed right-column workspace with Chat above a tabbed Operations/Runs panel', async () => {
     const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
@@ -296,23 +297,84 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     for (const tab of ['projects', 'bugs', 'ideas']) {
       expect(html).toMatch(new RegExp(`data-work-tab=["']${tab}["']|data-work-tab-panel=["']${tab}["']`, 'i'));
     }
-    expect(html.indexOf('data-surface="chat"')).toBeLessThan(html.indexOf('data-surface="operations"'));
-    expect(html.indexOf('data-surface="operations"')).toBeLessThan(html.indexOf('data-surface="runs"'));
+    expect(html.indexOf('data-surface="chat"')).toBeLessThan(html.indexOf('data-surface="side-panel"'));
+    expect(html).toMatch(/data-side-panel-tab=["']operations["'][\s\S]{0,120}aria-selected=["']true["']/i);
+    expect(html).toMatch(/data-side-panel-tab=["']runs["']/i);
+    expect(html).toMatch(/data-surface=["']operations["']/i);
+    expect(html).not.toMatch(/data-surface=["']runs["']/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i);
     expect(css).toMatch(/\.product-deep-view[\s\S]*min-height:\s*calc\(100vh - 2rem\)/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*align-items:\s*stretch/i);
-    expect(css).toMatch(/\.deep-panel--chat[\s\S]*min-height:\s*calc\(100vh - 6rem\)/i);
+    expect(css).toMatch(/\.deep-side-stack[\s\S]*height:\s*calc\(100vh - 6rem\)/i);
+    expect(css).toMatch(/\.deep-side-stack[\s\S]*overflow:\s*hidden/i);
+    expect(css).toMatch(/\.deep-panel--chat[\s\S]*flex:\s*1 1 auto/i);
+    expect(css).toMatch(/\.deep-panel--chat[\s\S]*overflow:\s*hidden/i);
     expect(css).toMatch(/\.deep-chat-transcript[\s\S]*flex:\s*1 1 auto/i);
-    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*max-height:\s*none/i);
+    expect(css).toMatch(/\.deep-chat-transcript[\s\S]*min-height:\s*0/i);
+    expect(css).toMatch(/\.deep-side-tab-panel[\s\S]*flex:\s*0 0 clamp\(14rem,\s*28vh,\s*22rem\)/i);
+    expect(css).toMatch(/\.deep-side-tab-body[\s\S]*overflow:\s*auto/i);
     expect(css).toMatch(/\.deep-panel--chat textarea[\s\S]*min-height:\s*7\.5rem/i);
     expect(css).toMatch(/\.deep-tab-panel:not\(\.is-active\)[\s\S]*display:\s*none/i);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.deep-side-stack[\s\S]*height:\s*auto/i);
 
     const view = createProductDeepView({ root, product: 'aura', fetchJson: vi.fn(async () => productView()) });
     await view.load();
     await root.clickClosest('[data-work-tab]', { workTab: 'bugs' });
 
     expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
+  });
+
+  it('switches the lower right panel between Operations and Runs without resetting chat state', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ text: 'Still here.' }));
+    // No active run, so the lower panel defaults to Operations (an active run
+    // would default to Runs — covered by its own test below).
+    const fetchJson = vi.fn(async () => productView({ activeRun: undefined }));
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson,
+      sendChat,
+      operations: productOperations,
+    });
+    await view.load();
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Keep this message' });
+
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']operations["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']operations["']/i);
+    expect(root.innerHTML).not.toMatch(/data-surface=["']runs["']/i);
+    expect(root.innerHTML).toContain('Keep this message');
+
+    await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'runs' });
+
+    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']runs["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']runs["']/i);
+    expect(root.innerHTML).not.toMatch(/data-surface=["']operations["']/i);
+    expect(root.innerHTML).toContain('run-recent-1');
+    expect(root.innerHTML).toContain('Keep this message');
+  });
+
+  it('defaults the lower right panel to Runs when a run is active on entry', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    // productView() carries an active run (run-live-1), so the lower panel
+    // should open on Runs so live progress is visible without a click.
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      operations: productOperations,
+    });
+    await view.load();
+
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']runs["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']runs["']/i);
+    expect(root.innerHTML).not.toMatch(/data-surface=["']operations["']/i);
+    expect(root.innerHTML).toContain('run-live-1');
   });
 
   it('renders a per-product limited view for known products that are not repo-backed', async () => {
@@ -357,7 +419,10 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('renders the live run panel from activeRun plus the live snapshot: task progress, agents, elapsed, logs, worktree path, and transcript link', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
-    const html = renderProductDeepView(productView(), { liveRuns: { 'run-live-1': liveSnapshot } });
+    const html = renderProductDeepView(productView(), {
+      activeSidePanel: 'runs',
+      liveRuns: { 'run-live-1': liveSnapshot },
+    });
 
     expect(html).toContain('run-live-1');
     expect(html).toContain('17-cockpit-redesign');
@@ -378,6 +443,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
     const html = renderProductDeepView(productView(), {
+      activeSidePanel: 'runs',
       liveRuns: {
         'run-live-1': {
           ...liveSnapshot,
@@ -411,25 +477,28 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   it('keeps the most-recent run transcript readable from the Runs panel even when no run is active', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
-    const html = renderProductDeepView(productView({
-      activeRun: undefined,
-      runs: [
-        {
-          runId: 'run-most-recent',
-          target: { kind: 'project', slug: '17-cockpit-redesign' },
-          outcome: 'failed',
-          endedAt: '2026-06-23T14:00:00.000Z',
-          transcriptUrl: '/api/work-runs/run-most-recent/transcript',
-        },
-        {
-          runId: 'run-older',
-          target: { kind: 'bug', slug: 'BUG-available' },
-          outcome: 'completed',
-          endedAt: '2026-06-23T13:00:00.000Z',
-          transcriptUrl: '/api/work-runs/run-older/transcript',
-        },
-      ],
-    }));
+    const html = renderProductDeepView(
+      productView({
+        activeRun: undefined,
+        runs: [
+          {
+            runId: 'run-most-recent',
+            target: { kind: 'project', slug: '17-cockpit-redesign' },
+            outcome: 'failed',
+            endedAt: '2026-06-23T14:00:00.000Z',
+            transcriptUrl: '/api/work-runs/run-most-recent/transcript',
+          },
+          {
+            runId: 'run-older',
+            target: { kind: 'bug', slug: 'BUG-available' },
+            outcome: 'completed',
+            endedAt: '2026-06-23T13:00:00.000Z',
+            transcriptUrl: '/api/work-runs/run-older/transcript',
+          },
+        ],
+      }),
+      { activeSidePanel: 'runs' },
+    );
 
     expect(html).toMatch(/run-most-recent[\s\S]{0,260}failed/i);
     expect(html).toMatch(
@@ -994,11 +1063,18 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const view = createProductDeepView({
       root,
       product: 'aura',
-      fetchJson: vi.fn(async () => productView()),
+      // No active run, so the lower panel defaults to Operations where the
+      // cancel controls live (the cancel buttons come from productOperations,
+      // independent of any active run).
+      fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
       postJson,
       operations: productOperations,
     });
     await view.load();
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']operations["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']operations["'][\s\S]*data-cancel-op-id=["']op-live-1["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']operations["'][\s\S]*data-cancel-mutation-id=["']mut-live-1["']/i);
+
     await root.clickClosest('[data-cancel-op-id]', { cancelOpId: 'op-live-1' });
     await root.clickClosest('[data-cancel-mutation-id]', { cancelMutationId: 'mut-live-1' });
 
@@ -1021,7 +1097,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       const view = createProductDeepView({
         root,
         product: 'aura',
-        fetchJson: vi.fn(async () => productView()),
+        // No active run, so the lower panel defaults to Operations where the
+        // logged op activity ([data-product-op-activity]) is rendered.
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
       });
       await view.load();
 

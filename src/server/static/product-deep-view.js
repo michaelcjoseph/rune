@@ -329,6 +329,26 @@ function renderOperations(operations) {
   `</section>`;
 }
 
+function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'operations') {
+  const active = activeSidePanel === 'runs' ? 'runs' : 'operations';
+  const tabs = [
+    { id: 'operations', label: 'Operations' },
+    { id: 'runs', label: 'Runs' },
+  ];
+  return `<section class="deep-side-tab-panel" data-surface="side-panel" data-active-side-panel="${attr(active)}">` +
+    `<div class="deep-side-tabs" role="tablist" aria-label="Product operations panels">` +
+      tabs.map(tab =>
+        `<button type="button" role="tab" data-side-panel-tab="${attr(tab.id)}" ` +
+          `aria-selected="${tab.id === active ? 'true' : 'false'}" ` +
+          `class="${tab.id === active ? 'is-active' : ''}">${escHtml(tab.label)}</button>`
+      ).join('') +
+    `</div>` +
+    `<div class="deep-side-tab-body">` +
+      (active === 'runs' ? renderRuns(view, liveRuns) : renderOperations(operations)) +
+    `</div>` +
+  `</section>`;
+}
+
 const PRODUCT_CHAT_COMMANDS = ['/fresh', '/fresh-full', '/clear', '/opus', '/sonnet', '/haiku'];
 
 function renderChatCommands() {
@@ -456,6 +476,7 @@ function isSpecArtifact(value) {
 
 export function renderProductDeepView(view, options = {}) {
   const activeTab = options.activeTab || 'projects';
+  const activeSidePanel = options.activeSidePanel === 'runs' ? 'runs' : 'operations';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
@@ -485,8 +506,7 @@ export function renderProductDeepView(view, options = {}) {
       `${renderWorkTabs(view, activeTab)}` +
       `<aside class="deep-side-stack">` +
         `${renderChat(view, chatMessages, planning, activeOp)}` +
-        `${renderOperations(options.operations)}` +
-        `${renderRuns(view, options.liveRuns || {})}` +
+        `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel)}` +
       `</aside>` +
     `</div>` +
   `</section>`;
@@ -669,6 +689,7 @@ export function createProductDeepView({
   let liveRuns = {};
   let subscription = null;
   let activeTab = 'projects';
+  let activeSidePanel = 'operations';
   const session = getProductSession(product);
   let chatMessages = session.chatMessages;
   let planning = session.planning;
@@ -689,6 +710,7 @@ export function createProductDeepView({
       liveRuns,
       operations: { ...(currentOperations || {}), activity: opActivity.length ? opActivity : list(currentOperations?.activity) },
       activeTab,
+      activeSidePanel,
       chatMessages,
       planning,
       activeOp,
@@ -1009,12 +1031,26 @@ export function createProductDeepView({
       return;
     }
 
+    const sidePanelTab = event.target?.closest?.('[data-side-panel-tab]');
+    if (sidePanelTab) {
+      event.preventDefault?.();
+      const next = sidePanelTab.dataset?.sidePanelTab;
+      if (next === 'operations' || next === 'runs') {
+        activeSidePanel = next;
+        render();
+      }
+      return;
+    }
+
     const surfaceJump = event.target?.closest?.('[data-surface-jump]');
     if (surfaceJump) {
       event.preventDefault?.();
       const surface = surfaceJump.dataset?.surfaceJump;
       if (surface === 'projects' || surface === 'bugs' || surface === 'ideas') {
         activeTab = surface;
+        render();
+      } else if (surface === 'runs') {
+        activeSidePanel = 'runs';
         render();
       }
       root.querySelector?.(`[data-surface="${surface}"]`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
@@ -1212,8 +1248,15 @@ export function createProductDeepView({
         };
         persistSession();
       }
+      // Surface a live run on entry: when a run is active and the user hasn't
+      // deep-linked to a specific run, open the lower panel on Runs so progress
+      // is visible without a click. Operations stays the default otherwise.
+      // Scoped to load() only — a later polling refresh or a run starting
+      // mid-session must not yank the user off whatever tab they're reading.
+      if (current?.activeRun?.runId) activeSidePanel = 'runs';
       render();
       if (focusRunId) {
+        activeSidePanel = 'runs';
         await focusRun(focusRunId);
         render();
       }
@@ -1223,6 +1266,7 @@ export function createProductDeepView({
       current = view;
       if (opts.liveRuns) liveRuns = opts.liveRuns;
       if (opts.activeTab) activeTab = opts.activeTab;
+      if (opts.activeSidePanel === 'operations' || opts.activeSidePanel === 'runs') activeSidePanel = opts.activeSidePanel;
       if (opts.chatMessages) chatMessages = opts.chatMessages;
       if ('activeOp' in opts) activeOp = opts.activeOp;
       currentOperations = opts.operations || currentOperations;
