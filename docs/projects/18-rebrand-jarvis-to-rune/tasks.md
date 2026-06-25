@@ -59,7 +59,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **brand-sweep-docs-metadata** — Per the Phase 0 inventory, replace agent-name "Jarvis"
+- [x] **brand-sweep-docs-metadata** — Per the Phase 0 inventory, replace agent-name "Jarvis"
       with "Rune" across docs, README, every CLAUDE.md file, public package metadata,
       lockfile/package-manager metadata where applicable, CI/workflow files, committed
       `github.com/.../jarvis` URLs, badges, and repository descriptions. Preserve casing and

@@ -1,4 +1,4 @@
-# Jarvis MVP — Tasks
+# Rune MVP — Tasks
 
 In progress. See [spec.md](spec.md) for details.
 

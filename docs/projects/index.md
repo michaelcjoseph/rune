@@ -1,6 +1,6 @@
 # Projects
 
-Build log for Jarvis — one numbered project per directory. The table below is the
+Build log for Rune — one numbered project per directory. The table below is the
 at-a-glance index; the sections that follow give the full write-up, each linking to
 its `spec.md`.
 
@@ -13,17 +13,17 @@ its `spec.md`.
 | [05-library-into-kb](05-library-into-kb/spec.md) | Done | External reading library folded into the KB. |
 | [06-webview](06-webview/spec.md) | Done | A localhost web chat surface mirroring Telegram. |
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
-| [08-intent-layer](08-intent-layer/spec.md) | In Progress | Jarvis becomes an intent-layer orchestrator over multi-model sub-agents. |
+| [08-intent-layer](08-intent-layer/spec.md) | In Progress | Rune becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Done | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
-| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Jarvis orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
+| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Rune orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
-| [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (observability + auto-merge)** and **Phase 11 (orchestration resilience):** Phase 10 makes codex AND claude role activity observable on the cockpit (and reuses the stream as the finalizer transcript so clean runs auto-merge); Phase 11 fixes two failure modes the overnight project-17 run exposed — gate rejections that discard their feedback (QA retried blindly, then blocked), and a server restart that orphans a run instead of resuming it. Phase 12 makes the team learn: reference exemplars of good output per role, and gate failures that write neutral-validated lessons into the counterpart's memory. |
+| [14-product-team-agents](14-product-team-agents/spec.md) | Done | Rune coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (observability + auto-merge)** and **Phase 11 (orchestration resilience):** Phase 10 makes codex AND claude role activity observable on the cockpit (and reuses the stream as the finalizer transcript so clean runs auto-merge); Phase 11 fixes two failure modes the overnight project-17 run exposed — gate rejections that discard their feedback (QA retried blindly, then blocked), and a server restart that orphans a run instead of resuming it. Phase 12 makes the team learn: reference exemplars of good output per role, and gate failures that write neutral-validated lessons into the counterpart's memory. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
-| [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
-| [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
-| [18-rebrand-jarvis-to-rune](18-rebrand-jarvis-to-rune/spec.md) | Not Started | Cut the agent's public brand over from Jarvis to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
+| [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. |
+| [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
+| [18-rebrand-jarvis-to-rune](18-rebrand-jarvis-to-rune/spec.md) | Not Started | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 ---
 
 ## 01-mvp — Done
@@ -111,13 +111,13 @@ over non-stale wiki concepts.
 
 [Spec](08-intent-layer/spec.md)
 
-Jarvis becomes an intent-layer orchestrator over multi-model sub-agents.
+Rune becomes an intent-layer orchestrator over multi-model sub-agents.
 
-Evolves Jarvis from a reactive command-router into an orchestrator with a persistent intent
+Evolves Rune from a reactive command-router into an orchestrator with a persistent intent
 layer: it reasons about Michael's goals, discusses them into approved specs, then dispatches
 and supervises sub-agents across multiple foundation models (Claude, Codex) and domains
 (coding first). Extends the cockpit [06-webview](06-webview/spec.md) shipped, and widens
-self-improvement to cover Jarvis's own operation.
+self-improvement to cover Rune's own operation.
 
 - **Two regimes:** the reliability-first substrate (raw notes, KB, second-brain memory) stays heavy and propose-and-approve; project execution is a new, light, Amp-style regime that bets on model progress.
 - **Federated memory:** vault holds raw thoughts, each product repo holds structured durable memory, a cockpit aggregates status across all of them and owns nothing.
@@ -138,7 +138,7 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Reader + parser:** strict line-regex parser with documented format (`docs/projects/BACKLOG-FORMAT.md`); rejected forms produce typed warnings surfaced in the cockpit; deterministic id per `(file, line, normalized-raw)`.
 - **Drawer UI:** right-side drawer reusing the existing `mutation-drawer` pattern; tabs for Bugs/Ideas; one action button per open item (`Plan` in v1).
 - **Add:** `+` chip with per-file mutex + temp-then-rename writes; security-canonicalized paths under `$WORKSPACE_ROOT`; audit log of every mutation.
-- **Plan + promotion job:** durable JSONL job log (`state/promotions.jsonl`) drives the `planning-started → scaffolded → marked-source` chain across Jarvis restarts. Scaffold contract adds a structured `scaffold-result` JSON block from the agent, cross-checked against the existing repo-diff verification from `approve.ts`.
+- **Plan + promotion job:** durable JSONL job log (`state/promotions.jsonl`) drives the `planning-started → scaffolded → marked-source` chain across Rune restarts. Scaffold contract adds a structured `scaffold-result` JSON block from the agent, cross-checked against the existing repo-diff verification from `approve.ts`.
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
 
@@ -146,11 +146,11 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 
 [Spec](10-jarvis-identity-refactor/spec.md)
 
-Two surgical edits: make `AGENTS.md` a symlink to `CLAUDE.md` per repo so the two can never drift, and move Jarvis's orchestrator identity out of `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`. **Rescoped 2026-06-02** from a five-repo canonical-source compiler — see the spec's Scope change section.
+Two surgical edits: make `AGENTS.md` a symlink to `CLAUDE.md` per repo so the two can never drift, and move Rune's orchestrator identity out of `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`. **Rescoped 2026-06-02** from a five-repo canonical-source compiler — see the spec's Scope change section.
 
 - **Why rescoped:** no instruction will ever differ between CLAUDE.md and AGENTS.md (same instructions, different per-model prompts), so a compiler whose renderers must produce identical output is a copy with extra steps. A symlink delivers zero drift for zero machinery.
 - **Drift fix:** `ln -s CLAUDE.md AGENTS.md`. Core repos jarvis + pkms (both currently drifted); best-effort assay + aura; relay has no instruction files.
-- **Identity fix:** move the `## Jarvis` and `### How Reviews Work` sections from pkms to jarvis, leave a one-line pointer. The git diff is the proof of preservation.
+- **Identity fix:** move the `## Rune` and `### How Reviews Work` sections from pkms to jarvis, leave a one-line pointer. The git diff is the proof of preservation.
 - **Dropped:** the compiler, IR, renderers, manifest, `$JARVIS_HOME` wrapper, inventory verifier, CI drift checks, and `per-repo-migration.md`. The persistent-role-agent / SOUL.md / per-agent-memory architecture is a separate project (ideas.md → "Better agentic systems").
 - **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md).
 
@@ -195,7 +195,7 @@ Make an automated `/work --auto` run reachable and testable by a human when it n
 Today the runner executes in a worktree at a deterministic path that is not consistently surfaced as
 an operator-actionable value. Project 15 now owns normal terminalization and gated merge, so this
 project covers the remaining gap: when a run hits a step `--auto` can't do — the interactive Codex
-check that stalled project 10 — Jarvis needs a durable parked state, a live worktree, and a clean
+check that stalled project 10 — Rune needs a durable parked state, a live worktree, and a clean
 hand-back to the finalizer after the human acts.
 
 - **Findability:** surface the (already-deterministic) worktree path + run id in notifications, on
@@ -203,7 +203,7 @@ hand-back to the finalizer after the human acts.
   to).
 - **Parked state:** a run that needs a human emits a durable `blocked-on-human` state, keeps its
   worktree alive, blocks finalizer teardown/merge, and holds the per-project slot — surviving a
-  Jarvis restart.
+  Rune restart.
 - **Release:** one explicit action (Telegram + cockpit) resumes the Project 15 finalizer for a
   clean parked worktree, or explicitly discards a dirty worktree after confirmation. Net-new, since
   today's `blocked-on-human` approval rows are intentionally non-actionable.
@@ -219,30 +219,30 @@ hand-back to the finalizer after the human acts.
 
 [Spec](14-product-team-agents/spec.md)
 
-Jarvis coordinates a persistent product team across an entire project.
+Rune coordinates a persistent product team across an entire project.
 
 Generalizes the Project 12 role-agent pattern (`SOUL.md` charter + compounding `memory.md`)
 from one writer to six roles — PM, tech lead, QA, coder, reviewer, designer — and folds in
-the Jarvis-owned project orchestration idea formerly captured as project 16. The useful
-product is not standalone role agents; it is Jarvis running the team task-by-task with
+the Rune-owned project orchestration idea formerly captured as project 16. The useful
+product is not standalone role agents; it is Rune running the team task-by-task with
 explicit context handoff.
 
 - **The team:** fixed roles with fixed review edges. PM writes the spec and assumptions; tech
   lead breaks it into task-sized slices, role sizing, test strategy, and designer-needed
   flags; QA writes tests first; coder implements; reviewer (cross-model) and tech lead
   review; designer checks only tech-lead-flagged front-end/designer-needed work.
-- **Jarvis owns the project loop:** select first unchecked task, assemble bounded context,
+- **Rune owns the project loop:** select first unchecked task, assemble bounded context,
   invoke the role workflow in a fresh execution context, record task evidence, update
   `docs/projects/<project>/context.md`, then advance/retry/block.
-- **Context handoff:** `context.md` is Jarvis-owned orchestration state, not role memory and
+- **Context handoff:** `context.md` is Rune-owned orchestration state, not role memory and
   not a seventh role. It carries current state, key decisions, interfaces/contracts, known
   risks, and next-task handoff.
 - **Objection classes are hard gates:** security, data integrity, concurrency, irreversibility,
   and cost/perf findings block task completion and PM cannot wave them through.
-- **Finalizer handoff:** when no unchecked tasks remain, Jarvis hands branch/run facts to
+- **Finalizer handoff:** when no unchecked tasks remain, Rune hands branch/run facts to
   [15-work-run-finalizer](15-work-run-finalizer/spec.md); this project does not implement an
   independent merge path.
-- **The learning loop:** explicit machine-readable feedback records drive a Jarvis-owned
+- **The learning loop:** explicit machine-readable feedback records drive a Rune-owned
   post-mortem that attributes the miss to a stage and writes one atomic lesson into that
   role's `memory.md`. Feedback-gated; "no lesson warranted" is allowed.
 - **Gate:** loop closure, not quality — a deterministic fixture project goes from planning to
@@ -279,7 +279,7 @@ explicit context handoff.
   nightly + explicit-feedback-only, `feedback-record.ts:5`). Phase 12 gives each role reference
   exemplars (a permanent `agents/<role>/examples/` baseline plus per-project exemplars the
   tech-lead emits at planning) and makes gate rejections teach: the rejecting role drafts a
-  candidate lesson, a neutral Jarvis pass (`runPostMortem` model) validates/attributes it, and it
+  candidate lesson, a neutral Rune pass (`runPostMortem` model) validates/attributes it, and it
   lands in the counterpart's `memory.md` via `writeRoleLesson` at gate-time — making the learning
   loop gate-triggered, not just nightly, while keeping roles out of each other's memory directly.
 - **Phase 13 — outcome gating (reopened 2026-06-16):** the 2026-06-15 Codex-stream run exposed
@@ -292,7 +292,7 @@ explicit context handoff.
   an accept-with-rationale override. The `sk-` redaction collision that triggered it is already
   fixed on main (`fb2e2a0`); Phase 13 is the structural follow-up.
 - **Provenance:** 2026-06-05 product-team design extending projects 08 and 12, merged with
-  the 2026-06-07 Jarvis-orchestrated-work idea. The merged scope makes Jarvis the workflow
+  the 2026-06-07 Rune-orchestrated-work idea. The merged scope makes Rune the workflow
   owner rather than a launcher for one long `/work --auto` process.
 - **Task breakdown & test plan:** see [tasks.md](14-product-team-agents/tasks.md) and [test-plan.md](14-product-team-agents/test-plan.md). Test-first per phase.
 
@@ -308,7 +308,7 @@ On 2026-06-06, run `d0679453` (project 12) emitted `result: success` at 04:38 an
 until a human killed the process tree at 13:12 — ~8.5h. Hung background `vitest` tasks kept
 `claude -p` alive; the keep-alive ticker made it look "quiet, not stalled"; the quiet nudge re-fired
 every 30s; and the SIGTERM that finally killed it mis-classified the run `failed` despite a complete
-branch. The work only reached `main` because a Jarvis assistant session merged it by hand. Same
+branch. The work only reached `main` because a Rune assistant session merged it by hand. Same
 symptom class as the 2026-06-04 wedge fix, different trigger (that fix assumed the process eventually
 exits).
 
@@ -338,10 +338,10 @@ exits).
 
 [Spec](16-claude-app-connector/spec.md)
 
-Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. **Shipped 2026-06-10/11: live in the Claude App over a Tailscale Funnel; general/dev chat no longer requires Telegram.**
+Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. **Shipped 2026-06-10/11: live in the Claude App over a Tailscale Funnel; general/dev chat no longer requires Telegram.**
 
-- **The bet:** the conversation surface was never the moat. Claude is the brain; the funnel (vault → pipeline → KB) is the asset. Port the surface into the Claude App, keep the funnel unchanged and Jarvis-owned. Dual-surface end state, not a Telegram retirement.
-- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Built behind a shared `createJarvisMcpServer` factory that splits the App-surface tools from the `kb_*` admin set (the admin tools are never remotely reachable). Ambient/health commands and Jarvis-pushed updates stay Telegram-only.
+- **The bet:** the conversation surface was never the moat. Claude is the brain; the funnel (vault → pipeline → KB) is the asset. Port the surface into the Claude App, keep the funnel unchanged and Rune-owned. Dual-surface end state, not a Telegram retirement.
+- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Built behind a shared `createJarvisMcpServer` factory that splits the App-surface tools from the `kb_*` admin set (the admin tools are never remotely reachable). Ambient/health commands and Rune-pushed updates stay Telegram-only.
 - **Write-back, no new stage:** `log_conversation` writes a finished thread into today's journal (summary or full reconstruction) and, when kb-worthy, into the KB raw-source queue; the nightly pipeline ingests it unchanged. The `summarizeSession` prompt + kb-worthy heuristic were ported verbatim into the App project instructions (the server is stateless to the App — no session lifecycle).
 - **Routing:** `resolveProductTarget()` attributes captured ideas/bugs to the right product with an explicit inbox fallback — never dropped, never mis-attributed; loop-filed and App-filed ideas share one `product` attribution schema.
 - **Transport + auth:** `StreamableHTTPServerTransport` at `/mcp` on the daemon HTTP server (host-allowlist → fail-closed bearer → SDK transport), and hand-rolled single-user OAuth 2.1 — DCR, a consent-form gate on `JARVIS_HTTP_SECRET` (secret only ever in the POST body), PKCE S256-only, single-use codes, tokens bound to the one user id. Tokens are **persisted + never-expire** (`logs/mcp-oauth-store.json`, 0600) so the App authenticates once and survives daemon restarts; revoke by deleting the store + restarting.
@@ -353,7 +353,7 @@ Make the Jarvis chat surface portable into the Claude App via a lean six-tool MC
 
 [Spec](17-cockpit-redesign/spec.md)
 
-A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action.
+A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action.
 
 Reframes the web view from ~90% chat into a development cockpit, now that KB research and idea exploration move to the Claude App ([16-claude-app-connector](16-claude-app-connector/spec.md)). Builds on the v1 product card, backlog drawer, and Plan promotion from [09-expand-cockpit](09-expand-cockpit/spec.md), and reads off the existing work-run observability/finalizer instrumentation (projects 11/13/14/15).
 
@@ -368,13 +368,13 @@ Reframes the web view from ~90% chat into a development cockpit, now that KB res
 
 [Spec](18-rebrand-jarvis-to-rune/spec.md)
 
-Cut the agent's public brand over from Jarvis to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged.
+Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged.
 
-"Jarvis" is not trademark-clean or distinctively ownable; **Rune** is the chosen name, with `@runeai` as the public handle and part of the brand-ownability premise. The cutover is complete only when the public repo is renamed, the local checkout runs from `~/workspace/rune/`, the handle is owned, old public brand references are gone, private paths no longer leak into committed code, and the launchd daemon is healthy after the move.
+The retired brand is not trademark-clean or distinctively ownable; **Rune** is the chosen name, with `@runeai` as the public handle and part of the brand-ownability premise. The cutover is complete only when the public repo is renamed, the local checkout runs from `~/workspace/rune/`, the handle is owned, old public brand references are gone, private paths no longer leak into committed code, and the launchd daemon is healthy after the move.
 
 - **Inventory first:** a case-insensitive `jarvis` sweep classifies every hit (brand-rewrite / public-identifier / private-functional / excluded-filename) and outputs the explicit acceptance allowlist.
 - **Path de-leak:** extract hardcoded `/Users/jarvis/workspace/jarvis/...` references behind `RUNE_*` env vars with computed defaults, rename `JARVIS_LOGS_DIR` to `RUNE_LOGS_DIR`, and convert the known holdouts; lands and is verified before any disk move.
-- **Brand + runtime sweep:** rewrite agent-name "Jarvis" to "Rune" across docs, metadata, CI, URLs, and agent-prompt prose, and rename public runtime identifiers (e.g. the `jarvis-kb` MCP server) with focused tests.
+- **Brand + runtime sweep:** rewrite agent-name references across docs, metadata, CI, URLs, and agent-prompt prose, and rename public runtime identifiers (e.g. the `jarvis-kb` MCP server) with focused tests.
 - **Repo, handle, cutover:** rename the GitHub repo to `rune` and claim `@runeai` (independent of the disk move), then move the checkout to `~/workspace/rune/` and reload the daemon (label stays `com.jarvis.daemon`).
 - **Non-goals:** no macOS account/home rename, no launchd label rename, no agent-filename renames, no history rewrite, no visual identity, no compatibility alias.
 - **Task breakdown & test plan:** see [tasks.md](18-rebrand-jarvis-to-rune/tasks.md) and [test-plan.md](18-rebrand-jarvis-to-rune/test-plan.md). Test-first per phase.

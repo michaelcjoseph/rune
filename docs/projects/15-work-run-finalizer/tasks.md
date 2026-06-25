@@ -13,7 +13,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 > **Agent-runnable constraint:** required verification must use temp repos/worktrees, injected
 > work-run streams, fake sender/HTTP surfaces, test-scoped supervision/mutation stores, and injected
 > clocks. Do not make any required task depend on a real Telegram chat, a production cockpit click, a
-> live Jarvis restart, or a human killing a real process tree. A live smoke check may be added after
+> live Rune restart, or a human killing a real process tree. A live smoke check may be added after
 > the automated suites pass, but it is not a blocking task.
 >
 > **Self-reference sequencing guard:** Phase 4's regression suite reproduces the
@@ -219,7 +219,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       the latent `finalizer → gate-runtime → finalizer` import cycle. 3 tests red via clean
       `notImplemented`; tsc unchanged.)
 - [x] Write product-config tests proving `validationCommands` is read from `policies/products.json`;
-      Jarvis has `["npm run build", "npm test"]`, products without commands fail closed, and each
+      Rune has `["npm run build", "npm test"]`, products without commands fail closed, and each
       command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`. (Added a `readProductsConfig —
       validationCommands (P1.5)` describe to `sandbox-runtime.test.ts`: 5 fixture tests — parses the
       array, fail-closed `[]` when absent, non-array→`[]`, `String()`-coerces entries (mirrors
@@ -312,7 +312,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       running validationCommands in an integration worktree, the conflict probe, the lock check,
       timeout enforcement — is the gate RUNTIME (`runGate`, next tasks), which feeds `evaluateGate`.)
 - [x] Add `validationCommands` support to `policies/products.json` / product config parsing; set
-      Jarvis to `["npm run build", "npm test"]`. (`readProductsConfig` now parses `validationCommands`
+      Rune to `["npm run build", "npm test"]`. (`readProductsConfig` now parses `validationCommands`
       into the ProductConfig literal mirroring `egressAllowlist` — `Array.isArray ? .map(String) : []`,
       always an array, fail-closed `[]`. Added `"validationCommands": ["npm run build","npm test"]` to
       the jarvis entry in `policies/products.json`; other products omit it → `[]` → gate fails closed

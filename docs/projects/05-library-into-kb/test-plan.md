@@ -123,7 +123,7 @@ Error-handling and behavior checklist for the new raw-source routes, the `lenny-
 - [ ] 🔴 `applyEntityLinks()` runs against new wiki pages without throwing — JSON alias map (CRM, books, places, family) still resolves
 - [ ] 🟡 `/kb "what does Lenny say about pricing?"` returns wikilinked synthesis with Lenny raw-source citations after backfill
 - [ ] 🟡 `/kb "what does Paul Graham say about taste?"` returns synthesis with PG raw-source citations after backfill
-- [ ] 🟡 `kb_query` MCP tool (the one Jarvis exposes outward) returns the same enriched results to other Claude Code sessions — no schema mismatch
+- [ ] 🟡 `kb_query` MCP tool (the one Rune exposes outward) returns the same enriched results to other Claude Code sessions — no schema mismatch
 - [ ] 🟢 Morning prep is unaffected (does not invoke library sync, KB query, or these commands)
 
 ## 7. Resilience

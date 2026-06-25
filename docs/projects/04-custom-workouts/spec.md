@@ -153,7 +153,7 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 
 24. WHEN a workout is generated THEN `logs/last-workout.json` is written with `{generated_at, location, focus, markdown, structured}` where `structured` is the agent's best-effort JSON decomposition (may be empty object in v1 if agent opts out).
 25. WHEN `logs/last-workout.json` already exists THEN it is overwritten, not appended.
-26. WHEN Jarvis restarts between `/workout` and `/done-workout` THEN the file persists and `/done-workout` still works.
+26. WHEN Rune restarts between `/workout` and `/done-workout` THEN the file persists and `/done-workout` still works.
 
 ### `/done-workout` behavior
 

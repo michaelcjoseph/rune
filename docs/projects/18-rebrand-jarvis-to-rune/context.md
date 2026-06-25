@@ -121,7 +121,7 @@ _None yet._
 
 ## Next Task Handoff
 
-- ocs/projects/18-rebrand-jarvis-to-rune/tasks.md)
-- [test-plan.md](jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune/docs/projects/18-rebrand-jarvis-to-rune/test-plan.md)
-
-Verification: `git diff --check` passed. No executable tests run because this selected task is docs/config-only. No commit made.
+- tion:
+- `git diff --check` passed.
+- Targeted grep found no stale agent-name/package/README URL hits in the selected docs/metadata surfaces.
+- No executable tests run; this task is docs/config-only. Runtime identifiers like `createJarvisMcpServer` were intentionally left for the runtime rename task.

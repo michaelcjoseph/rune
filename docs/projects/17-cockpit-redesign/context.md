@@ -1,24 +1,24 @@
-# Project Context: Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Jarvis across all products
+# Project Context: Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Rune across all products
 
-> Orchestration state for the `jarvis` project "Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Jarvis across all products".
-> Owned by Jarvis's context curator — roles read a bounded slice and emit handoff
+> Orchestration state for the `jarvis` project "Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Rune across all products".
+> Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 
 ## Current State
 
-Today the Jarvis web view is ~90% chat, ~10% cockpit. A separate workstream
+Today the Rune web view is ~90% chat, ~10% cockpit. A separate workstream
 (`16-claude-app-connector`) moves KB research and idea exploration into the Claude
 App, and more MCP functions will continue pushing product/project *planning* there
 over time. That migration is the unlock: with research-chat gone, the web view no
 longer needs a chat box eating half the screen. The web view becomes a
-**development-focused cockpit** for working *with Jarvis* across all products —
+**development-focused cockpit** for working *with Rune* across all products —
 projects, bugs, ideas, runs, and the dev/planning chat that surrounds them.
 
 ## Key Decisions
 
 - Primary objects fixed as Product, Project, Bug, Idea, Run, and Chat session — with states grounded in the existing system (run states reuse the work-run observability/finalizer vocabulary: running, parked, completed, no-op, partial, failed; bug open/done; idea open/promoted; project active/done).
 - Bugs and ideas flow into projects through exactly two promotion paths: Plan (existing — opens a planning session, scaffolds a project on approval) and Fix (bugs only — triggers the PM/Tech-Lead scoping gate). No new promotion path is invented.
-- One-click vs delegated split: one-click actions are Fix, open run logs, open the backlog drawer, switch product/view, and add a backlog item; everything requiring judgment (Plan, triage, scoping) is delegated to Jarvis via a planning/dev chat session.
+- One-click vs delegated split: one-click actions are Fix, open run logs, open the backlog drawer, switch product/view, and add a backlog item; everything requiring judgment (Plan, triage, scoping) is delegated to Rune via a planning/dev chat session.
 - Home/per-product division: the home view is a read-mostly cross-product pulse (per-product cards: active-run status, open counts, most-recent-run outcome, attention signals like parked/failed/no-op runs); all working surfaces — projects, backlog, runs, logs, agents, chat — live on the per-product deep view.
 - Claude App relationship (v1 position): the cockpit deep-links OUT to start KB-research/idea threads in the Claude App but does not render App threads inside the cockpit; items captured in the App flow back as bugs/ideas via the existing connector routing and simply appear in the cockpit backlog.
 - Fix scope per this brief is the surface affordance + single-bug trigger + PM/Tech-Lead gating decision only; on an approved gate, Fix hands off to the cross-repo autorun fix-run path that is the separately-deferred idea (not built here).
@@ -279,7 +279,7 @@ place a stub is acceptable.
   (`operational-panels-cutover`): the pending-approvals inbox (incl. parked-run
   release), restart-server button, op/mutation cancel, and planning panel keep
   working homes; deliberate drops are recorded, never silent.
-- **Phase 7 (Acceptance)** proves the five DoD scenarios stub-free on Jarvis as the
+- **Phase 7 (Acceptance)** proves the five DoD scenarios stub-free on Rune as the
   first real product, with the autorun hand-off as the only permitted seam.
 
 ## 6. Test strategy notes
@@ -302,4 +302,4 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- ceptance, because it requires the real Jarvis daemon, `JARVIS_HTTP_SECRET`, and `JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1`. `npm run build` still fails on broad pre-existing branch TypeScript errors outside this task; `src/server/webview.test.ts` also cannot bind `127.0.0.1` in this sandbox (`EPERM`).
+- ceptance, because it requires the real Rune daemon, `JARVIS_HTTP_SECRET`, and `JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1`. `npm run build` still fails on broad pre-existing branch TypeScript errors outside this task; `src/server/webview.test.ts` also cannot bind `127.0.0.1` in this sandbox (`EPERM`).

@@ -1,4 +1,4 @@
-# Jarvis Identity Refactor Specification
+# Rune Identity Refactor Specification
 
 ## Scope change (2026-06-02)
 
@@ -54,11 +54,11 @@ ever appears, let it pull a compiler into existence then.
 
 ## Overview
 
-Jarvis's identity is documented in parallel `CLAUDE.md` / `AGENTS.md` files that have
+Rune's identity is documented in parallel `CLAUDE.md` / `AGENTS.md` files that have
 drifted, and orchestrator-specific instructions live in `pkms/CLAUDE.md` even though
-Jarvis (not the vault) owns them. This project removes the drift mechanism and relocates
+Rune (not the vault) owns them. This project removes the drift mechanism and relocates
 the misplaced content. Output: one canonical instruction file per repo (the model-specific
-filename is a symlink to it), and Jarvis's orchestrator identity living in the jarvis repo.
+filename is a symlink to it), and Rune's orchestrator identity living in the jarvis repo.
 
 ### Core value
 
@@ -97,10 +97,10 @@ filename is a symlink to it), and Jarvis's orchestrator identity living in the j
    Root cause: a human edits one file and forgets the other. A symlink removes the second
    file entirely.
 
-2. **Misplaced identity.** `pkms/CLAUDE.md` carries `## Jarvis` (agent split, KB
+2. **Misplaced identity.** `pkms/CLAUDE.md` carries `## Rune` (agent split, KB
    raw-source routing, `loadAgentDef` order) and `### How Reviews Work` (the
    prep → interview → outline → write-up + post-agent pipeline). These describe how the
-   Jarvis *orchestrator* behaves, not how the *vault* is structured. They belong in jarvis.
+   Rune *orchestrator* behaves, not how the *vault* is structured. They belong in jarvis.
 
 ---
 
@@ -142,7 +142,7 @@ read it.
 
 **Moving out of `pkms/CLAUDE.md` → into `jarvis/CLAUDE.md`:**
 
-- The entire `## Jarvis` section — automation ownership (morning prep, nightly job),
+- The entire `## Rune` section — automation ownership (morning prep, nightly job),
   the agent split (generic tooling agents in jarvis vs personal-specifics agents in
   pkms `.claude/agents/`), KB raw-source routing, and `loadAgentDef` lookup order.
 - The `### How Reviews Work` mechanics — the prep → interview → outline →
@@ -159,7 +159,7 @@ note) are acceptable and need not be hunted down.
 
 **Pointer left in pkms** (replacing the moved sections):
 
-> Jarvis orchestration — the agent split, KB raw-source routing, `loadAgentDef` order,
+> Rune orchestration — the agent split, KB raw-source routing, `loadAgentDef` order,
 > and the review write-up pipeline — is documented in `jarvis/CLAUDE.md`.
 
 **Order:** do the content move first (so `pkms/CLAUDE.md` reaches its final state), then
@@ -189,7 +189,7 @@ enough to execute by hand in one sitting.
 
 ### Phase 1 — Content move (pkms ↔ jarvis)
 
-- [ ] Append the `## Jarvis` and `### How Reviews Work` sections to `jarvis/CLAUDE.md`
+- [ ] Append the `## Rune` and `### How Reviews Work` sections to `jarvis/CLAUDE.md`
       (placed coherently within its existing structure).
 - [ ] Remove those sections from `pkms/CLAUDE.md`; insert the pointer.
 - [ ] Read the diff in both repos; confirm the moved content is present in jarvis, absent

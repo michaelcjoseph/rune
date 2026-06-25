@@ -1,6 +1,6 @@
 # Product-Team Orchestrated Work Test Plan
 
-Verification for the merged role-agent and Jarvis-orchestrated work project: role substrate,
+Verification for the merged role-agent and Rune-orchestrated work project: role substrate,
 planner roles, `context.md`, per-task orchestration, role gates, finalizer handoff, fallback,
 and the vault-driven learning loop.
 
@@ -31,7 +31,7 @@ acceptance criteria.
 - [ ] High: Empty `memory.md` yields SOUL-only prompt without error.
 - [ ] High: Over-budget `memory.md` truncates loaded reference context with visible marker and
       leaves disk entries intact.
-- [ ] High: Jarvis is registered as a targetable product when needed.
+- [ ] High: Rune is registered as a targetable product when needed.
 - [ ] Low: Each `SOUL.md` states role mandate and review edges.
 
 ## 2. Planner roles
@@ -59,7 +59,7 @@ acceptance criteria.
 
 ### Orchestrator substrate
 
-- [ ] Critical: Jarvis selects the first unchecked task from `tasks.md` before invoking a
+- [ ] Critical: Rune selects the first unchecked task from `tasks.md` before invoking a
       task executor.
 - [ ] Critical: Task N+1 receives bounded handoff input, not Task N's transcript or
       accumulated conversation.
@@ -72,7 +72,7 @@ acceptance criteria.
 - [ ] Critical: Repeated task non-convergence stops via the Phase 14 all-low exit,
       stagnation backstop, or hard round budget; it does not retry forever or route to PM /
       blocked-on-human.
-- [ ] Critical: After restart, Jarvis reconstructs partial project run state without replaying
+- [ ] Critical: After restart, Rune reconstructs partial project run state without replaying
       completed tasks.
 - [ ] High: Stale `tasks.md` state is detected and blocks or reloads safely.
 
@@ -115,7 +115,7 @@ acceptance criteria.
 - [ ] Critical: Fixture includes a context update from task N that affects task N+1 input.
 - [ ] Critical: When no unchecked tasks remain, orchestrator hands branch/run facts to Project
       15 finalizer; it does not implement an independent merge path.
-- [ ] Critical: If Project 15 finalizer is unavailable, Jarvis records the handoff payload and
+- [ ] Critical: If Project 15 finalizer is unavailable, Rune records the handoff payload and
       stops branch-complete/blocked; it does not self-merge.
 - [ ] Critical: Finalizer failure leaves durable terminal/blocked state, not ambiguous
       "all tasks done but not finalized".
@@ -144,7 +144,7 @@ acceptance criteria.
       trigger post-mortem or memory writes.
 - [ ] Critical: Captured lessons are provenance-stamped, privacy-clean, and committed
       atomically into the attributed role's `memory.md`.
-- [ ] High: Given feedback on a known miss, Jarvis-owned post-mortem attributes it to the
+- [ ] High: Given feedback on a known miss, Rune-owned post-mortem attributes it to the
       correct stage and role.
 - [ ] High: A miss judged uncatchable produces "no lesson warranted" and writes nothing.
 - [ ] High: A lesson captured from run N loads into run N+1's role reference context.
@@ -227,7 +227,7 @@ acceptance criteria.
       and the relevant role invocation receives them.
 - [ ] Critical: Each gate block emits the same structured rejection record used by Phase 11
       corrective retries; learning does not invent a second schema.
-- [ ] Critical: The rejecting role may draft a candidate lesson, but a neutral Jarvis validation
+- [ ] Critical: The rejecting role may draft a candidate lesson, but a neutral Rune validation
       pass privacy-filters, dedupes, attributes, and may fail safe to no-lesson before any
       memory write.
 - [ ] Critical: Passing gate-time validation writes the lesson to the counterpart role's
@@ -306,7 +306,7 @@ acceptance criteria.
 - [ ] High: The coder receives the ledger severity-sorted, attempts every open finding, addresses
       the highest severity first, and reports which it addressed.
 - [ ] High: At terminal the orchestrator writes one detailed entry per remaining `>low` finding to
-      the Jarvis repo's `docs/projects/bugs.md` (finding id, source gate, class, severity, location,
+      the Rune repo's `docs/projects/bugs.md` (finding id, source gate, class, severity, location,
       rationale, reversible flag, run/task id), deduped by run/task/finding id, through the backlog
       safe-write substrate (`withFileLock`/`assertBacklogWriteAllowed`/`writeFileAtomic`) — durable
       whether the run subsequently HOLDS or merges, and not written into the product worktree.
@@ -370,13 +370,13 @@ acceptance criteria.
 
 Run a deterministic fixture through planning: PM writes a spec with assumptions, tech lead
 breaks it into tasks, role sizing, test strategy, and explicit front-end/designer-needed
-flags, PM confirms spec/tech-spec match, and Jarvis seeds `context.md`.
+flags, PM confirms spec/tech-spec match, and Rune seeds `context.md`.
 
-Run orchestrated work through injected spawners/readers: Jarvis selects task 1, QA writes
+Run orchestrated work through injected spawners/readers: Rune selects task 1, QA writes
 tests or records a no-code-test rationale according to task strategy, tech lead reviews it,
 coder implements, reviewer and tech lead review, designer runs only when the tech-lead sizing
-flag requires it, objection-class gates resolve per Outcome gating, Jarvis performs closeout
-(`tasks.md` checkbox + `context.md` + closeout checks + commit + clean worktree), Jarvis
+flag requires it, objection-class gates resolve per Outcome gating, Rune performs closeout
+(`tasks.md` checkbox + `context.md` + closeout checks + commit + clean worktree), Rune
 advances to task 2 with that context included, then hands the completed project to an injected
 Project 15 finalizer adapter. No live model call, Telegram interaction, or production push is
 required.
@@ -385,7 +385,7 @@ For Phase 15, extend the injected finalizer fixture to the local bare remote har
 Telegram or production push is required, but the acceptance run must exercise the real branch
 index-Done commit, finalizer gate/merge/push/delete ordering, and injected notification sink.
 
-Feed a valid fixture feedback record into the nightly post-mortem seam. Jarvis attributes the
+Feed a valid fixture feedback record into the nightly post-mortem seam. Rune attributes the
 miss and writes one atomic lesson into the relevant role memory. Feed a malformed record and
 assert it is skipped with a durable reason. A subsequent role invocation loads the captured
 lesson as low-authority reference.

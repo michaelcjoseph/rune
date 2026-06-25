@@ -81,13 +81,13 @@ Not started. See [spec.md](spec.md) for details.
 
 ### Phase B.5 — Headless Mac mini deployment
 
-> Optional within Phase B; required before laptop access from a headless Mac mini. Acceptance: Jarvis runs unattended on the mini, the laptop reaches the webview over Tailscale, and every step in the spec's **Deployment** subsection executes cleanly.
+> Optional within Phase B; required before laptop access from a headless Mac mini. Acceptance: Rune runs unattended on the mini, the laptop reaches the webview over Tailscale, and every step in the spec's **Deployment** subsection executes cleanly.
 
 #### macOS basics
 
 - [x] Sign in to Apple ID; finish OS setup
 - [x] System Settings → Energy: enable "Prevent automatic sleeping when display is off" and "Start up automatically after a power failure"
-- [x] System Settings → Users & Groups: set "Automatically log in as" to your user (lets launchd start Jarvis after reboot without manual unlock)
+- [x] System Settings → Users & Groups: set "Automatically log in as" to your user (lets launchd start Rune after reboot without manual unlock)
 - [x] Decide on FileVault based on your threat model. Note that FileVault blocks auto-login until manual disk unlock at boot, which conflicts with the headless-restart goal; it has no effect on the remote/internet attack surface (at-rest encryption only).
 - [x] System Settings → General → Software Update: enable automatic security updates
 - [x] Enable 2FA on Apple ID (Find My can remote-wipe the mini; protect the account)
@@ -113,7 +113,7 @@ Not started. See [spec.md](spec.md) for details.
 
 - [x] `git clone` jarvis to `~/workspace/jarvis`
 - [x] `cd ~/workspace/jarvis && npm install`
-- [x] Verify directory structure matches Jarvis's `PROJECT_ROOT` / `VAULT_DIR` expectations
+- [x] Verify directory structure matches Rune's `PROJECT_ROOT` / `VAULT_DIR` expectations
 
 #### Secrets / `.env.local`
 
@@ -123,7 +123,7 @@ Not started. See [spec.md](spec.md) for details.
 
 #### Telegram handoff
 
-- [x] Stop the laptop's Jarvis instance (one bot token = one polling client; running both produces dropped messages)
+- [x] Stop the laptop's Rune instance (one bot token = one polling client; running both produces dropped messages)
 - [x] Commit to mini as permanent home, laptop as fallback only. Running both concurrently requires a second bot token, deferred.
 
 #### Tailscale
@@ -134,14 +134,14 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Verify `tailscale serve status` shows only a `serve` entry, never `funnel` — funnel would push the origin to the public internet and bypass the tailnet trust boundary
 - [x] Set `JARVIS_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname
 - [x] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie
-- [x] Do NOT enable `tailscale funnel` (would expose Jarvis to the public internet; spec rules this out)
+- [x] Do NOT enable `tailscale funnel` (would expose Rune to the public internet; spec rules this out)
 - [x] Run the "Remote access (Tailscale Serve)" tests in `test-plan.md` end-to-end and check off each item there
 
 #### Process management (launchd)
 
 - [x] Write `~/Library/LaunchAgents/com.jarvis.daemon.plist` running `npm start` (or `npm run dev`) from `~/workspace/jarvis`, with `KeepAlive` true, stdout/stderr redirected to `~/Library/Logs/jarvis/`
 - [x] `launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist`
-- [x] Reboot the mini; confirm Jarvis comes back up unattended and the webview is reachable via Tailscale
+- [x] Reboot the mini; confirm Rune comes back up unattended and the webview is reachable via Tailscale
 
 #### Monitoring
 

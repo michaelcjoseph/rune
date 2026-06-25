@@ -1,8 +1,8 @@
-# Rebrand Jarvis to Rune Specification
+# Rune Rebrand Specification
 
 ## Overview
 
-The personal AI agent is publicly branded "Jarvis," a name that is not trademark-clean
+The personal AI agent currently carries a retired public brand that is not trademark-clean
 or distinctively ownable. This project cuts the public brand over to **Rune** across every
 identity surface: the GitHub repository, the runtime-visible identity, public metadata, the
 committed codebase, the env-var path layer, the local working checkout, and the launchd
@@ -17,7 +17,7 @@ identifiers, not brand surfaces.
 
 ### Core Value Proposition
 
-Cut the agent's public brand over from Jarvis to Rune across the repo, runtime identity, env
+Cut the agent's public brand over from the retired name to Rune across the repo, runtime identity, env
 vars, and the local checkout, with behavior unchanged and zero private paths left committed.
 
 ### Goals
@@ -109,7 +109,7 @@ Inventory + allowlist → path de-leak (verified) → brand + runtime sweep
 
 ### Brand and Identifier Sweep (Phase 2)
 
-9. WHEN "Jarvis" appears as the agent name in docs, README, CLAUDE.md files, public package
+9. WHEN the retired agent name appears in docs, README, CLAUDE.md files, public package
    and lockfile metadata, CI/workflow files, committed GitHub URLs/badges, user-facing
    strings, or prose/prompts inside agent-definition files THEN it is replaced with "Rune",
    preserving casing and voice.
@@ -187,7 +187,7 @@ const LOGS_DIR = process.env.RUNE_LOGS_DIR || computeDefaultFromRepoRoot();
 Two distinct passes, scoped by the Phase 0 inventory:
 
 - **Brand text:** README, docs, every `CLAUDE.md`, `package.json` / lockfile metadata where
-  applicable, CI/workflow files, committed `github.com/.../jarvis` URLs and badges, repository
+  applicable, CI/workflow files, committed retired-repo URLs and badges, repository
   descriptions, user-facing strings, and prose/prompts inside agent-definition file *bodies*
   (`.claude/agents/*.md`, `agents/`, `.agents/`, `.codex/agents/`, `src/intent/agent-def.ts`).
   Filenames and prompt logic are untouched.
@@ -244,7 +244,7 @@ inverse path and env edit.
 
 > Depends on: Phase 0.
 
-- [ ] Rewrite agent-name "Jarvis" to "Rune" across docs, README, CLAUDE.md files, package and
+- [ ] Rewrite retired agent-name references to "Rune" across docs, README, CLAUDE.md files, package and
       lockfile metadata, CI/workflow files, committed URLs/badges, and repository descriptions.
 - [ ] Rewrite brand text in agent-definition prose/prompt bodies without renaming files or
       altering prompt logic.
@@ -344,5 +344,5 @@ inverse path and env edit.
       before Phase 0 closes so the acceptance grep stays green.
 - [ ] Are there public identifiers beyond `jarvis-kb` (e.g. additional MCP/server names or
       command slugs) that the inventory surfaces and that need their own rename rationale?
-- [ ] Does any external consumer reference the old `github.com/.../jarvis` URL such that a
+- [ ] Does any external consumer reference the retired GitHub URL such that a
       redirect or note is warranted, or is GitHub's automatic redirect sufficient?

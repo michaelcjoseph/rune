@@ -2,11 +2,11 @@
 
 ## Overview
 
-[What this project is, why it matters, and how it fits into Jarvis.]
+[What this project is, why it matters, and how it fits into Rune.]
 
 ### Core Value Proposition
 
-[One sentence: the key benefit to Jarvis and the knowledge base.]
+[One sentence: the key benefit to Rune and the knowledge base.]
 
 ### Goals
 

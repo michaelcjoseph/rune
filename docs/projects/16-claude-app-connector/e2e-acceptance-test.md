@@ -5,7 +5,7 @@ a documented, repeatable acceptance test proving a conversation logged from
 the Claude App reaches the next nightly KB distillation through the existing
 vault → pipeline → KB funnel, with **no new pipeline stage**.
 
-Run it from a real Claude App thread with the Jarvis connector enabled and
+Run it from a real Claude App thread with the Rune connector enabled and
 the project instructions ([app-project-instructions.md](app-project-instructions.md))
 pasted in. Re-run it any time the connector or funnel changes.
 

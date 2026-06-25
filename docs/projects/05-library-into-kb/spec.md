@@ -28,7 +28,7 @@ Every insight from Lenny and Paul Graham is one `/kb` query away, automatically 
 - **PG ongoing fetcher.** PG essays get a one-time backfill of existing files. No scraper for paulgraham.com — new essays can be dropped into the folder manually.
 - **Hybrid `/lenny` and `/pg` commands.** The commands are deleted, not preserved as filtered shortcuts. If `/kb` quality on Lenny-tagged content disappoints, revisit a thin alias in v1.1 (see Open Questions).
 - **TG notifications on new Lenny content.** Quietly enqueue; no per-post Telegram ping. The existing nightly summary covers it.
-- **Re-exposing the Lenny MCP via `jarvis-kb`.** The MCP is consumed by Jarvis only (used by the `lenny-sync` agent). Other Claude Code sessions read processed wiki pages via existing `kb_query` / `kb_search` tools.
+- **Re-exposing the Lenny MCP via `jarvis-kb`.** The MCP is consumed by Rune only (used by the `lenny-sync` agent). Other Claude Code sessions read processed wiki pages via existing `kb_query` / `kb_search` tools.
 - **Schema change to `wiki-compiler`.** The agent's instructions are unchanged. Only raw-source routing and ingestion-trigger sides change.
 - **Migration of `library/` to a new vault location.** Existing folders stay where they are. The `library/lenny/` folder grows new subdirs (`posts/`, `podcasts/`) as fetched content lands.
 
@@ -158,7 +158,7 @@ Next night's run picks up where last_sync_at left off — no data loss
 | PG source | **Re-ingest existing files only**, no scraper. New essays dropped manually. |
 | Fate of `/lenny`, `/pg` | **Remove entirely.** Users use `/kb`. Resolver, skill registry, CLAUDE.md updated. |
 | Lenny MCP transport | **HTTP** at `https://mcp.lennysdata.com/mcp`. Registered in `.claude/settings.json`. |
-| Lenny MCP exposure scope | **Jarvis only** (consumed by `lenny-sync`). Not re-exposed via `jarvis-kb`. |
+| Lenny MCP exposure scope | **Rune only** (consumed by `lenny-sync`). Not re-exposed via `jarvis-kb`. |
 | TG notifications on new content | **None.** Quiet ingest. Nightly summary already surfaces KB activity. |
 | Recurring schedule | **Piggyback on the existing nightly orchestrator**, no new cron registration. |
 
@@ -262,7 +262,7 @@ Next night's run picks up where last_sync_at left off — no data loss
 
 **New files:**
 
-- `.claude/agents/lenny-sync.md` — Jarvis-resident (NOT vault-resident; no personal info). Frontmatter `tools:` allow-lists the specific Lenny MCP tool names plus `Read`, `Write`, `Bash` for filesystem writes. Body instructs the agent to read the state file, list since-timestamp, fetch each new item, write with frontmatter, update the state file.
+- `.claude/agents/lenny-sync.md` — Rune-resident (NOT vault-resident; no personal info). Frontmatter `tools:` allow-lists the specific Lenny MCP tool names plus `Read`, `Write`, `Bash` for filesystem writes. Body instructs the agent to read the state file, list since-timestamp, fetch each new item, write with frontmatter, update the state file.
 - `src/bot/commands/library-sync.ts` — TG slash that calls the same `stepLibrarySync()` function and replies with the count summary.
 - `logs/lenny-sync-state.json` — auto-created on first run. (`logs/` is gitignored.)
 

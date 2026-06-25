@@ -1,6 +1,6 @@
-# Rebrand Jarvis to Rune Test Plan
+# Rune Rebrand Test Plan
 
-Error handling checklist for the brand/identity cutover from Jarvis to Rune: inventory and
+Error handling checklist for the brand/identity cutover to Rune: inventory and
 allowlist, env-var path de-leak, brand and runtime renames, repo/remote/handle ownership,
 on-disk cutover, and final acceptance.
 
@@ -56,7 +56,7 @@ private path/env-var regressions.
 
 ### Brand text and metadata
 
-- [ ] 🔴 A user-facing string, README, or CLAUDE.md still says "Jarvis" as the agent name.
+- [ ] 🔴 A user-facing string, README, or CLAUDE.md still says "Rune" as the agent name.
       Grep confirms only allowlisted survivors remain.
 - [ ] 🟡 A casing or voice regression (e.g. "rune" mid-sentence where "Rune" is correct, or a
       mangled committed URL). Review the diff for casing and link integrity.

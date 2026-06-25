@@ -2,17 +2,17 @@
 
 ## Overview
 
-Today, the only way to talk to Jarvis is Telegram. TG desktop is fine for chat — but it has hard limits that the rest of Jarvis doesn't: messages are chunked at 4096 chars (`src/integrations/telegram/client.ts`), code blocks render as plain monospace, `[[wikilinks]]` are dead text, and there is no view into Jarvis's internal state — the ingestion queue, pending playbook drafts, recent agent runs, the active review phase. All of that lives in JSON files under `logs/` or in in-memory maps and only surfaces if you remember to ask.
+Today, the only way to talk to Rune is Telegram. TG desktop is fine for chat — but it has hard limits that the rest of Rune doesn't: messages are chunked at 4096 chars (`src/integrations/telegram/client.ts`), code blocks render as plain monospace, `[[wikilinks]]` are dead text, and there is no view into Rune's internal state — the ingestion queue, pending playbook drafts, recent agent runs, the active review phase. All of that lives in JSON files under `logs/` or in in-memory maps and only surfaces if you remember to ask.
 
-This project adds a localhost webview at `http://127.0.0.1:3847/` that talks to Jarvis through the existing single-process server. It is not a replacement for Telegram — TG remains the cross-device fallback — it is a richer desktop surface that **shares the same session** as TG via `TELEGRAM_USER_ID`. A message sent in either surface persists in the same Claude session; outbound notifications (morning prep, nightly summary, Whoop, nudges) fan out to both. The webview adds rendering fidelity (markdown, code highlight, wikilink click-through to Obsidian, streaming responses), interaction polish (multi-line input + Cmd+Enter, up-arrow recall, model dropdown), and a light cockpit sidebar that surfaces queues, recent agent runs, and pending approvals so internal state is ambient instead of hidden.
+This project adds a localhost webview at `http://127.0.0.1:3847/` that talks to Rune through the existing single-process server. It is not a replacement for Telegram — TG remains the cross-device fallback — it is a richer desktop surface that **shares the same session** as TG via `TELEGRAM_USER_ID`. A message sent in either surface persists in the same Claude session; outbound notifications (morning prep, nightly summary, Whoop, nudges) fan out to both. The webview adds rendering fidelity (markdown, code highlight, wikilink click-through to Obsidian, streaming responses), interaction polish (multi-line input + Cmd+Enter, up-arrow recall, model dropdown), and a light cockpit sidebar that surfaces queues, recent agent runs, and pending approvals so internal state is ambient instead of hidden.
 
 The implementation reuses the existing skill registry, resolver, review orchestrator, and Claude CLI plumbing without modification. The only structural change is a new `MessageSender` abstraction that sits between handlers/jobs and the wire — `TelegramSender` keeps current behavior, `WebviewSender` is the new transport — plus a `NotificationBus` that cron jobs publish to instead of holding a `bot` reference.
 
-Phase E extends the webview from a read-mostly chat surface into a chat-driven *self-update* surface. A typed mutation pipeline (`MutationDescriptor` + `MutationApplier` registry) lets the webview drive Jarvis end-to-end actions without a review session in the loop — the first concrete applier is a `/work --auto` runner that picks any project under `docs/projects/*`, spawns Claude Code with the project's `spec.md`/`tasks.md` as context, and streams output back into the webview live. The pipeline is designed to absorb later mutation kinds (project-spec edits, proposal-queue approvals, agent-file edits, cron toggles) without each one re-inventing its own endpoint, persistence, or fan-out.
+Phase E extends the webview from a read-mostly chat surface into a chat-driven *self-update* surface. A typed mutation pipeline (`MutationDescriptor` + `MutationApplier` registry) lets the webview drive Rune end-to-end actions without a review session in the loop — the first concrete applier is a `/work --auto` runner that picks any project under `docs/projects/*`, spawns Claude Code with the project's `spec.md`/`tasks.md` as context, and streams output back into the webview live. The pipeline is designed to absorb later mutation kinds (project-spec edits, proposal-queue approvals, agent-file edits, cron toggles) without each one re-inventing its own endpoint, persistence, or fan-out.
 
 ### Core Value Proposition
 
-A localhost browser surface that shares a single conversation with Telegram, renders Claude's output the way it deserves to be rendered, and turns Jarvis's internal state into ambient signal — without forking the bot, replacing TG, or adding any infrastructure beyond a new endpoint on the existing http server.
+A localhost browser surface that shares a single conversation with Telegram, renders Claude's output the way it deserves to be rendered, and turns Rune's internal state into ambient signal — without forking the bot, replacing TG, or adding any infrastructure beyond a new endpoint on the existing http server.
 
 ### Goals
 
@@ -20,13 +20,13 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 2. **Secondary:** Rendering and interaction wins that TG cannot offer: client-side markdown rendering with code-block syntax highlighting, `[[wikilink]]` anchors that open Obsidian via `obsidian://`, streaming responses chunk-by-chunk over WebSocket, a multi-line textarea with Cmd+Enter to send, up-arrow recall of the previous message, and a model indicator + dropdown (Opus/Sonnet/Haiku) bound to the existing `/opus`-`/sonnet`-`/haiku` handlers.
 3. **Tertiary:** A light cockpit sidebar (~280px) showing live state from existing JSON files and in-memory maps: active conversation/review session, ingestion queue depth, last 10 agent runs, pending playbook + proposal approvals, last morning-prep + nightly run timestamps. Polled via `GET /api/state` every 5s.
 4. **Quaternary:** Approval buttons for review-session prompts (`/weekly` outline approval, `/blog` post drafts, etc.) plus live agent-run events streamed over the WebSocket into the sidebar's "running now" indicator. Achieved by emitting structured signals from `src/reviews/interview.ts` and instrumenting `runAgent()` in `src/ai/claude.ts` with bus events.
-5. **Quinary:** A typed mutation pipeline that lets the webview drive Jarvis self-update from chat. Phase E ships the framework (`MutationDescriptor` + `MutationApplier` registry, `logs/mutations.jsonl` persistence, `mutation-event` bus channel) plus a `/work --auto` runner that executes any Jarvis dev project under `docs/projects/*` end-to-end. A new "Projects" cockpit panel surfaces status (from `index.md`) and progress (derived from `tasks.md` checkboxes) and exposes a per-project "Run /work --auto" button. Future mutation kinds (project-spec edits, proposal approvals, agent-file edits, cron toggles) plug into the registry without new endpoints.
+5. **Quinary:** A typed mutation pipeline that lets the webview drive Rune self-update from chat. Phase E ships the framework (`MutationDescriptor` + `MutationApplier` registry, `logs/mutations.jsonl` persistence, `mutation-event` bus channel) plus a `/work --auto` runner that executes any Rune dev project under `docs/projects/*` end-to-end. A new "Projects" cockpit panel surfaces status (from `index.md`) and progress (derived from `tasks.md` checkboxes) and exposes a per-project "Run /work --auto" button. Future mutation kinds (project-spec edits, proposal approvals, agent-file edits, cron toggles) plug into the registry without new endpoints.
 
 ### Non-Goals
 
 - **Replacing Telegram.** TG remains the cross-device + mobile fallback. The webview is a desktop-only complement, not a migration.
 - **Mobile-responsive UI.** v1 is laptop/desktop only. If you need to chat from the couch, use TG.
-- **Multi-user support.** Jarvis is single-user. Auth is one shared bearer token (`JARVIS_HTTP_SECRET`); session is keyed off `TELEGRAM_USER_ID`. Non-goal even at v2.
+- **Multi-user support.** Rune is single-user. Auth is one shared bearer token (`JARVIS_HTTP_SECRET`); session is keyed off `TELEGRAM_USER_ID`. Non-goal even at v2.
 - **Voice / audio messages.** No transcription pipeline today; not adding one.
 - **Browser push notifications outside the open tab.** Outbound notifications still go to TG (which has its own push); the webview only sees them when the tab is open and the WebSocket is connected. If you want a push from your laptop, TG desktop already does that.
 - **Vault file browser.** Tempting, but a slippery slope toward duplicating Obsidian. Wikilinks resolve to Obsidian; we don't host the file viewer.
@@ -218,10 +218,10 @@ upgrades succeed.
 | Transport abstraction | New `MessageSender` interface (`send`, `startTyping`, `stopTyping`). `TelegramSender` and `WebviewSender` implement it. ~70 scattered `bot.sendMessage()` callsites refactored to call the shared sender. |
 | Outbound notification fan-out | New `NotificationBus` (Node `EventEmitter`). Cron jobs (`morning-prep`, `nightly`, `whoop-sync`, `nudges`, vault watcher) publish to the bus instead of holding a `bot` reference. Both senders subscribe. |
 | Streaming protocol | **WebSocket** (bidirectional, supports cancellation, supports approval-button click-throughs as inbound frames). SSE rejected — unidirectional. Long-poll rejected — clunky. |
-| Frontend stack | **Vanilla HTML/JS/CSS**, served from `src/server/static/`. `markdown-it` + `highlight.js` from a CDN. No build step, no `node_modules` for the frontend. Matches Jarvis's no-build-step ethos. |
+| Frontend stack | **Vanilla HTML/JS/CSS**, served from `src/server/static/`. `markdown-it` + `highlight.js` from a CDN. No build step, no `node_modules` for the frontend. Matches Rune's no-build-step ethos. |
 | Session key | Webview uses `TELEGRAM_USER_ID` as the `chatId` so the existing session map is shared verbatim. No schema change to `src/vault/sessions.ts`. |
 | Auth | Shared bearer (`JARVIS_HTTP_SECRET`). On first load, client supplies it as `?token=…`; server sets a `jarvis-auth` cookie (HttpOnly, SameSite=Strict). Cookie is checked on `/api/*` and the WS upgrade. Localhost + single-user — sufficient. |
-| Listener binding | Stays at `127.0.0.1:3847` always — Jarvis itself never binds to a public interface. For the headless Mac mini deployment, a Tailscale Serve front-end terminates TLS at `https://<host>.tail-xxxx.ts.net` and proxies to `127.0.0.1:3847`; the laptop hits the tailnet origin. See **Deployment** below. |
+| Listener binding | Stays at `127.0.0.1:3847` always — Rune itself never binds to a public interface. For the headless Mac mini deployment, a Tailscale Serve front-end terminates TLS at `https://<host>.tail-xxxx.ts.net` and proxies to `127.0.0.1:3847`; the laptop hits the tailnet origin. See **Deployment** below. |
 | Cockpit data delivery | `GET /api/state` polled every 5s for the snapshot panels. Live agent-run events streamed over the WS as a separate frame `kind` (Phase D). Two channels because the snapshot is cheap and the live stream needs sub-second latency. |
 | Approval-button signal shape | Sidecar field on the WS frame: `{ kind: 'message', text, approval?: { prompt, options } }`. Webview renders buttons when `approval` is present; TG ignores it (text fallback). |
 | Static-asset hosting | Files on disk under `src/server/static/`, served by a small static-file handler in `src/server/webview.ts`. Path-traversal guard. Hot edit during dev = page refresh, no restart. |
@@ -254,7 +254,7 @@ upgrades succeed.
 11. WHEN a WS upgrade is requested at `/api/ws` with valid auth THEN the connection is registered with `WebviewSender` keyed by `TELEGRAM_USER_ID`.
 12. WHEN `GET /api/state` is hit with valid auth THEN it returns the cockpit snapshot: `{ activeSession, activeReview, ingestionQueueDepth, recentAgentRuns, pendingApprovals: { playbook, proposal }, lastMorningPrepAt, lastNightlyAt, ready }`.
 13. WHEN any `/api/*` endpoint or WS upgrade receives a request without a valid `jarvis-auth` cookie or `Authorization: Bearer <JARVIS_HTTP_SECRET>` header THEN it returns 401.
-14. WHEN any new endpoint receives a request whose `Host` header (port stripped) is not in `JARVIS_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) THEN it returns 403 (defense in depth on top of the listener binding). The allowlist is configurable so a Tailscale Serve front-end's MagicDNS hostname can be admitted in a headless Mac mini deployment without binding Jarvis to a public interface.
+14. WHEN any new endpoint receives a request whose `Host` header (port stripped) is not in `JARVIS_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) THEN it returns 403 (defense in depth on top of the listener binding). The allowlist is configurable so a Tailscale Serve front-end's MagicDNS hostname can be admitted in a headless Mac mini deployment without binding Rune to a public interface.
 15. WHEN multiple WS connections claim `TELEGRAM_USER_ID` simultaneously THEN all receive outbound frames; inbound frames are processed serially through the shared session (no extra locking — the existing `sessionLocks` map in `src/ai/claude.ts` already serializes Claude CLI calls).
 16. WHEN the bot is not yet ready THEN `/api/state` returns 503 with `{ ready: false, reason }` and the WS upgrade returns 503.
 
@@ -329,7 +329,7 @@ upgrades succeed.
 
 63. WHEN the auth-bootstrap handler sets the `jarvis-auth` cookie THEN it sets `Secure` iff the request arrived with `X-Forwarded-Proto: https` AND the immediate peer (`req.socket.remoteAddress`) is `127.0.0.1` / `::1`. `HttpOnly` and `SameSite=Strict` are set unconditionally. Trusting `X-Forwarded-Proto` from any other peer would be a header-spoofing bug, so the proxy hop is only honoured for the localhost-loopback case (which is exactly the Tailscale Serve topology).
 64. WHEN `JARVIS_ALLOWED_HOSTS` is parsed at startup THEN the value is split on commas, each entry is trimmed and lower-cased, and the result is held as a `Set<string>` queried by the Host-header guard (requirement 14). An empty / unset env var falls back to `localhost,127.0.0.1`.
-65. WHEN deploying behind Tailscale THEN the only supported front-end is `tailscale serve` bound to the tailnet. `tailscale funnel` (which publishes the origin to the public internet) is forbidden — it would bypass the tailnet trust boundary on which the single-shared-secret auth model depends. Verification at deploy time: `tailscale serve status` must show only `serve` entries, never `funnel`, and `lsof -iTCP:3847 -sTCP:LISTEN` must show only loopback (`127.0.0.1` / `::1`) for the Jarvis process.
+65. WHEN deploying behind Tailscale THEN the only supported front-end is `tailscale serve` bound to the tailnet. `tailscale funnel` (which publishes the origin to the public internet) is forbidden — it would bypass the tailnet trust boundary on which the single-shared-secret auth model depends. Verification at deploy time: `tailscale serve status` must show only `serve` entries, never `funnel`, and `lsof -iTCP:3847 -sTCP:LISTEN` must show only loopback (`127.0.0.1` / `::1`) for the Rune process.
 
 ---
 
@@ -337,9 +337,9 @@ upgrades succeed.
 
 ### Headless Mac mini + laptop access (Tailscale Serve)
 
-Goal: reach the webview from a laptop while Jarvis runs unattended on a Mac mini, without giving up the localhost-only listener binding and without standing up real OAuth.
+Goal: reach the webview from a laptop while Rune runs unattended on a Mac mini, without giving up the localhost-only listener binding and without standing up real OAuth.
 
-**Why Tailscale Serve specifically:** Jarvis stays bound to `127.0.0.1`, so even if the macOS application firewall is off, port 3847 remains unreachable from the home LAN. Tailscale Serve listens on its own tailnet-only socket at `https://<host>.tail-xxxx.ts.net:443` and proxies inbound traffic to `127.0.0.1:3847` over the loopback interface on the same host. Port 3847 is never exposed beyond loopback — only members of the tailnet can reach the proxy, and only the proxy can reach port 3847. The wire between laptop and Mac mini is encrypted by WireGuard, and the browser hop is HTTPS, which lets the auth cookie carry the `Secure` flag.
+**Why Tailscale Serve specifically:** Rune stays bound to `127.0.0.1`, so even if the macOS application firewall is off, port 3847 remains unreachable from the home LAN. Tailscale Serve listens on its own tailnet-only socket at `https://<host>.tail-xxxx.ts.net:443` and proxies inbound traffic to `127.0.0.1:3847` over the loopback interface on the same host. Port 3847 is never exposed beyond loopback — only members of the tailnet can reach the proxy, and only the proxy can reach port 3847. The wire between laptop and Mac mini is encrypted by WireGuard, and the browser hop is HTTPS, which lets the auth cookie carry the `Secure` flag.
 
 **`tailscale serve` vs `tailscale funnel`:** Use `tailscale serve` only. `tailscale funnel` publishes the same origin to the public internet via Tailscale's edge infrastructure — that would bypass the tailnet trust boundary on which the single-shared-secret auth model depends and is explicitly out of scope for this deployment (see requirement 65 and "What's out of scope" below).
 
@@ -353,7 +353,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:3847
 
 Confirm the published origin with `tailscale serve status`.
 
-**Configure Jarvis (`.env.local`):**
+**Configure Rune (`.env.local`):**
 
 ```
 JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
@@ -365,7 +365,7 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 
 **What stays the same:**
 
-- Jarvis binds to `127.0.0.1:3847`. No code path opens a public listener.
+- Rune binds to `127.0.0.1:3847`. No code path opens a public listener.
 - Auth is still the single shared `JARVIS_HTTP_SECRET`; the tailnet is the trust boundary, the cookie is the session-level convenience.
 - `requirement 14` (Host-header allowlist) enforces the tailnet hostname at the application layer in addition to the bind.
 
@@ -377,7 +377,7 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 **What's out of scope here:**
 
 - `tailscale funnel` — would expose the origin to the public internet, bypassing the tailnet trust boundary. Forbidden by requirement 65.
-- Daemonising Jarvis itself on Mac mini boot (`launchd` plist) — separate concern; `tailscale serve --bg` already persists across reboots.
+- Daemonising Rune itself on Mac mini boot (`launchd` plist) — separate concern; `tailscale serve --bg` already persists across reboots.
 - Off-tailnet access (cellular, public internet, an arbitrary LAN device) — needs real auth, deliberately deferred.
 - Self-signed certs / a local reverse proxy (nginx/Caddy) — Tailscale Serve already terminates TLS with a real `*.ts.net` cert.
 
@@ -625,8 +625,8 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 - [ ] **Server-side rate limiting.** The webview is single-user on localhost. Rate limiting feels like overkill, but the auth endpoint that exchanges `?token=` for a cookie is the one place where a misconfigured bot or stale tab could spam. Worth a light rate cap?
 - [ ] **`GET /api/state` schema versioning.** As panels evolve, the snapshot shape will change. Version the response envelope (`{ version: 1, … }`) from day one so the frontend can tolerate older servers during dev.
 - [ ] **(Phase E) Branching strategy for `/work --auto`.** Should the runner create a `work/<slug>-<ts>` branch off `main` before invoking `/work --auto`, then return to `main` on completion? Strong lean toward yes — keeps `main` clean if `/work` writes anything controversial — but the `/work` skill itself may already do this. Confirm during Phase E kickoff; if the skill handles branching, the runner stays a thin spawn.
-- [ ] **(Phase E) Per-project lockfile vs in-memory only.** The concurrency cap currently lives in the in-memory active map. Single-process Jarvis is fine. If we ever run two Jarvis instances against the same repo (HA, dev + prod side-by-side), an `flock`-based lockfile under `logs/work-locks/<slug>` becomes necessary. Defer until that happens.
-- [ ] **(Phase E) `tasks.md` checkbox feedback.** When `/work --auto` ticks off boxes mid-run, does it commit them, leave them dirty, or write to a separate progress log? Probably the `/work` skill handles its own progress-tracking semantics; Jarvis stays out of it. Surface a clear note in CLAUDE.md once observed behavior is confirmed.
+- [ ] **(Phase E) Per-project lockfile vs in-memory only.** The concurrency cap currently lives in the in-memory active map. Single-process Rune is fine. If we ever run two Rune instances against the same repo (HA, dev + prod side-by-side), an `flock`-based lockfile under `logs/work-locks/<slug>` becomes necessary. Defer until that happens.
+- [ ] **(Phase E) `tasks.md` checkbox feedback.** When `/work --auto` ticks off boxes mid-run, does it commit them, leave them dirty, or write to a separate progress log? Probably the `/work` skill handles its own progress-tracking semantics; Rune stays out of it. Surface a clear note in CLAUDE.md once observed behavior is confirmed.
 - [ ] **(Phase E) Vault life projects in the dashboard.** `projects/*.md` (life projects) have a different schema and don't have a `/work --auto` story. UI shape supports a second tab cleanly if we later want to surface them; deferred for v1 to avoid muddying the "dev project" mental model.
 - [ ] **(Phase E) Browseable mutation history.** Cockpit shows last 50 from `logs/mutations.jsonl`. If the user wants to scroll deeper, a paged `/api/mutations?cursor=<id>&limit=50` endpoint plus an "All mutations" view would land. Defer until last-50 feels insufficient.
 - [ ] **(Phase E) Future mutation kinds.** `project-edit` (inline spec edits), `proposal-action` (approve/reject queued proposals from chat without a review session), `agent-edit` (modify `.claude/agents/*.md`), `cron-toggle` (enable/disable scheduled jobs) are all listed in the `MutationKind` enum but not implemented. Each is a follow-on project that plugs into the existing pipeline. Sketch the rough design + risks for each before opening the next webview project.

@@ -1,4 +1,4 @@
-# Jarvis MVP Manual Test Plan
+# Rune MVP Manual Test Plan
 
 Full manual test plan covering all implementation phases (0-12).
 

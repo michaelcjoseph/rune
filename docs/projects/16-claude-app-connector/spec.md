@@ -1,4 +1,4 @@
-# Jarvis Conversation Surface on the Claude App — Specification
+# Rune Conversation Surface on the Claude App — Specification
 
 ## Overview
 
@@ -6,27 +6,27 @@ The conversation surface was never the moat. Claude is the brain, and the
 defensible asset is the capture-and-compound funnel: everything Michael says
 lands in one git-versioned vault that the nightly pipeline distills into the KB.
 This project makes the chat surface portable into the Claude App while leaving
-the funnel entirely owned by Jarvis and unchanged.
+the funnel entirely owned by Rune and unchanged.
 
 Today general and dev chat run through a custom Telegram conversation layer.
-Jarvis's own KB engine, vault primitives, and nightly ingestion pipeline already
+Rune's own KB engine, vault primitives, and nightly ingestion pipeline already
 exist. This project exposes a small, deliberately lean MCP tool surface as a
 Claude App connector so the App can read the live vault/KB mid-thread and write a
 finished conversation back into today's journal (and, when worthy, into the KB
 raw-source queue). The end state is dual-surface: the App becomes a first-class
 chat surface for general and dev work, while Telegram keeps ambient quick-capture
-and everything Jarvis pushes.
+and everything Rune pushes.
 
 ### Core Value Proposition
 
-Make the Jarvis chat surface portable into the Claude App through a six-tool MCP
-connector, at zero cost to the vault → pipeline → KB funnel that Jarvis still
+Make the Rune chat surface portable into the Claude App through a six-tool MCP
+connector, at zero cost to the vault → pipeline → KB funnel that Rune still
 fully owns.
 
 ### Goals
 
 1. **Primary:** General and dev chat can happen in a Claude App thread instead of
-   the custom Telegram conversation layer, with Jarvis's vault/KB read
+   the custom Telegram conversation layer, with Rune's vault/KB read
    capabilities reachable mid-thread through an MCP connector.
 2. **Secondary:** A conversation can be written back into today's journal (summary
    or full reconstruction) and, when kb-worthy, into the KB raw-source queue, all
@@ -38,7 +38,7 @@ fully owns.
 ### Non-Goals
 
 - **Retiring Telegram.** It keeps ambient quick-capture (`/diet`, `/workout`) and
-  everything Jarvis pushes (`/work` run updates, cron). The App is request-response
+  everything Rune pushes (`/work` run updates, cron). The App is request-response
   and cannot initiate.
 - **Reviews.** They stay server-orchestrated and skill-defined.
 - **Nightly ingestion pipeline changes.** No new pipeline stage is introduced. The
@@ -68,7 +68,7 @@ Open Claude App thread → ask domain questions (kb_query / vault_search)
         next nightly KB distillation picks it up, no new stage
 ```
 
-1. **Entry point** — Michael opens a thread in the Claude App with the Jarvis
+1. **Entry point** — Michael opens a thread in the Claude App with the Rune
    connector enabled and asks a general or dev question.
 2. **Mid-thread tools** — Claude calls `kb_query` and `vault_search` against the
    live vault/KB, captures ideas or bugs via `log_idea` (routed to a product
@@ -116,7 +116,7 @@ Open Claude App thread → ask domain questions (kb_query / vault_search)
    `log_conversation`.
 7. WHEN a tool returns THEN it conforms to the standard MCP text-content return
    shape.
-8. WHEN ambient/health commands (`/diet`, `/workout`) or Jarvis-pushed updates are
+8. WHEN ambient/health commands (`/diet`, `/workout`) or Rune-pushed updates are
    considered THEN they stay Telegram-only and are NOT exposed to the App.
 9. WHEN `kb_query` is called THEN it reuses the existing KB query against the live
    KB (no re-implementation).
@@ -124,7 +124,7 @@ Open Claude App thread → ask domain questions (kb_query / vault_search)
 ### Idea/bug routing (R3)
 
 10. WHEN `log_idea` is called with an explicit `product` target THEN the target is
-    validated against Jarvis's known product list (`policies/products.json`) and
+    validated against Rune's known product list (`policies/products.json`) and
     the item is filed there.
 11. WHEN `product` is omitted THEN conversational Claude in the App infers the
     intended product from thread context and passes it; the routing function

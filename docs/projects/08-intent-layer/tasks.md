@@ -19,7 +19,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] Make `/work` test-first: update `.claude/skills/work/SKILL.md` so the cycle writes failing tests before implementation (plan → write failing tests → implement → review → fix → simplify; the existing test rounds stay as regression checks). Hard stops and `--auto` semantics are preserved.
 - [x] Update `docs/projects/templates/tasks.md` to carry a per-phase **Tests (write first)** block as the standard shape, and adjust `docs/projects/templates/spec.md` / `templates/test-plan.md` cross-reference wording to match.
-- [x] Update `CLAUDE.md` (Jarvis) to document test-first as the default execution discipline for `/work` and for project task breakdowns.
+- [x] Update `CLAUDE.md` (Rune) to document test-first as the default execution discipline for `/work` and for project task breakdowns.
 
 ### Tests (write first)
 
@@ -40,7 +40,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 - [x] Implement the registration flow: create the vault product file `projects/<product>.md` if missing, add the registry entry, create the product-overlay manifest, link the repo if one exists — all propose-and-approve.
 - [x] Implement the reconciliation pass: detect a product present as a repo, or referenced in journals, but missing its vault file or registry entry, and propose the missing pieces. Idempotent.
-- [x] Run the first reconciliation pass over the current products (Assay, Aura, Jarvis, Relay-as-tracked, family, health, watt-data): create every missing vault product file and seed the registry + overlay manifests.
+- [x] Run the first reconciliation pass over the current products (Assay, Aura, Rune, Relay-as-tracked, family, health, watt-data): create every missing vault product file and seed the registry + overlay manifests.
 
 ### Product-overlay index
 
@@ -61,7 +61,7 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Escalation policy
 
-- [x] Build the escalation policy as a declarative file (data not code): the conditions under which Jarvis escalates to the blocked-on-Michael state rather than proceeding — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, a self-generated spec too consequential to approve unattended.
+- [x] Build the escalation policy as a declarative file (data not code): the conditions under which Rune escalates to the blocked-on-Michael state rather than proceeding — a high-risk change class, an unresolvable cross-model review, a run exceeding its bounds, a self-generated spec too consequential to approve unattended.
 - [x] Build the decision module that reads the policy and returns escalate/proceed for a given change, deterministically, logging the rule that fired. Fails closed on a malformed or missing policy.
 
 ### Documentation
@@ -173,14 +173,14 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Sensor layer and synthesis
 
-- [x] Build the sensor layer: ingest vault signals, product telemetry, and logged Jarvis interactions (successful and failed). Log every Jarvis interaction.
+- [x] Build the sensor layer: ingest vault signals, product telemetry, and logged Rune interactions (successful and failed). Log every Rune interaction.
 - [x] Build the synthesis stage that diarizes raw sensor signal into a compact, structured digest the loop reasons over.
 
 ### Observation loop
 
 - [x] Extend the existing Ask-Twice intent telemetry to also detect fixed bugs, recurring friction, and failed or mis-routed interactions, with de-duplication.
 - [x] Triage detected items: file the worthwhile ones as projects into `docs/projects/ideas.md`, discard the rest.
-- [x] Dispatch the existing project-execution engine at the Jarvis product to run filed projects, within the concurrency and escalation rules — no new execution subsystem. The escalation policy governs spec approval for self-generated projects.
+- [x] Dispatch the existing project-execution engine at the Rune product to run filed projects, within the concurrency and escalation rules — no new execution subsystem. The escalation policy governs spec approval for self-generated projects.
 - [x] Run the loop nightly, extending the existing nightly vault review.
 
 ### Documentation
@@ -569,6 +569,6 @@ Phase 1 in progress. See [spec.md](spec.md) for architecture and [test-plan.md](
 
 ### Live verification → Done
 
-- [ ] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Jarvis spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)
-- [ ] **(user)** Let Jarvis run a week. Confirm `logs/observation-interactions.jsonl` is growing, `docs/projects/ideas.md` is gaining entries from real friction, and a low-risk filed project gets dispatched and merges itself.
+- [ ] **(agent + user)** v1 wedge end-to-end against Aura (or Assay): a coding idea raised in chat → Planner conversation → approved spec → Rune spawns a sandboxed `/work --auto` against the worktree → cross-model `/review` adjudicates → the change auto-merges to the product's main line, no human action between spec approval and merge. (Agent drives the test setup; user observes a real run.)
+- [ ] **(user)** Let Rune run a week. Confirm `logs/observation-interactions.jsonl` is growing, `docs/projects/ideas.md` is gaining entries from real friction, and a low-risk filed project gets dispatched and merges itself.
 - [ ] **(user)** Flip the 08-intent-layer row in `docs/projects/index.md` from "In Progress" to "Done".

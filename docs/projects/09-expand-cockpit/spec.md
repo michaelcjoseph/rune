@@ -27,11 +27,11 @@ real planning session in one click.
 2. Drawer lists the full backlog for that product with full text, body for ideas, parser warnings, status, and a single primary action per item.
 3. `+` chip in the drawer header appends a new bullet.
 4. **Plan button** on each open bug **or** open idea — opens a planning session seeded with title + body, scaffolds a project on approval, marks the source bullet promoted.
-5. **Durable promotion job** that survives Jarvis restart across the `planning-started → scaffolded → marked-source` chain.
+5. **Durable promotion job** that survives Rune restart across the `planning-started → scaffolded → marked-source` chain.
 
 ## Out of v1 (separate spec to follow)
 
-- **Fix autorun** for bugs (`expand-cockpit-fix-autorun`). Cut because `/work --auto` is currently Jarvis-only; generalizing it across product repos is a separate piece of work with its own concurrency, branch, and security questions. Tracked as a follow-on idea in [`docs/projects/ideas.md`](../ideas.md) — no separate `/plan` conversation is required for this project's v1 completion.
+- **Fix autorun** for bugs (`expand-cockpit-fix-autorun`). Cut because `/work --auto` is currently Rune-only; generalizing it across product repos is a separate piece of work with its own concurrency, branch, and security questions. Tracked as a follow-on idea in [`docs/projects/ideas.md`](../ideas.md) — no separate `/plan` conversation is required for this project's v1 completion.
 - Cross-product backlog views.
 - Editing/reordering bullets in place.
 - Plan on Loop-filed ideas.
@@ -106,7 +106,7 @@ Error envelope: `{ error: { code, message, retryable } }`. Every endpoint valida
 
 ## Promotion lifecycle (durable job)
 
-New module `src/intent/promotions.ts` owns a persisted job log at `config.PROMOTIONS_FILE` (default: `logs/promotions.jsonl`, append-only). Keep this under `LOGS_DIR`, matching `mutations.jsonl`, `planning-sessions.json`, and the rest of Jarvis runtime state; do not introduce a separate top-level `state/` directory.
+New module `src/intent/promotions.ts` owns a persisted job log at `config.PROMOTIONS_FILE` (default: `logs/promotions.jsonl`, append-only). Keep this under `LOGS_DIR`, matching `mutations.jsonl`, `planning-sessions.json`, and the rest of Rune runtime state; do not introduce a separate top-level `state/` directory.
 
 ```ts
 type PromotionState =
@@ -136,11 +136,11 @@ interface Promotion {
 1. Plan click → `POST /api/backlog/:product/items/:id/plan` → server creates a `Promotion` in `planning-started` and a `StoredPlanningSession` whose `promotionId` links them. Returns both ids.
 2. Planning runs as today.
 3. On `/approve`, the existing approval path runs the scaffolder, then:
-   a. Resolve the product's `repoPath` from `policies/products.json`; the scaffolder writes to that product repo (Jarvis is just one product). The approval helper must invoke the setup writer with that repo available as a writable Claude workspace (for example a target `cwd`/`--add-dir` option, depending on the final `runAgent` API), not merely mention the path in prompt text. Parse structured `{ slug, filesCreated }` from the scaffolder's final message; validate by diffing `<repoPath>/docs/projects/` (exactly one new `NN-slug` dir with the three expected files). All `filesCreated` entries are repo-relative.
+   a. Resolve the product's `repoPath` from `policies/products.json`; the scaffolder writes to that product repo (Rune is just one product). The approval helper must invoke the setup writer with that repo available as a writable Claude workspace (for example a target `cwd`/`--add-dir` option, depending on the final `runAgent` API), not merely mention the path in prompt text. Parse structured `{ slug, filesCreated }` from the scaffolder's final message; validate by diffing `<repoPath>/docs/projects/` (exactly one new `NN-slug` dir with the three expected files). All `filesCreated` entries are repo-relative.
    b. On valid → promotion advances to `scaffolded(slug)`.
    c. On invalid → `scaffold-error` (terminal); cockpit shows the error; source bullet untouched.
 4. Post-scaffold step rewrites source bullet by snapshot match (Bugs: `[ ] → [x] + → slug` suffix. Ideas: append ` → slug` suffix). On success → `marked-source`. On `noMatch`/`ambiguous` → `mark-source-error`; retry is via `POST /api/promotions/:id/retry`, and the rewrite itself is idempotent if the source line is already marked.
-5. On Jarvis restart, the promotion job log is replayed: any promotion in `scaffolded` (i.e. scaffold succeeded but mark-source didn't run) is retried automatically with backoff.
+5. On Rune restart, the promotion job log is replayed: any promotion in `scaffolded` (i.e. scaffold succeeded but mark-source didn't run) is retried automatically with backoff.
 6. A `mark-source-error` retry is driven by an explicit retry endpoint/button (`POST /api/promotions/:id/retry`), not by requiring the user to re-run `/approve` after the planning session may have been deleted. Retries cap at a module constant that tests can override.
 
 ## Scaffold contract change (new prerequisite)
@@ -157,7 +157,7 @@ If absent or malformed, the approval path falls back to a directory diff between
 
 **Relationship to the recovery fixes:** the repo-diff verification path (Fix 2, commit `a5018e5`) is already implemented as the fallback. This project adds the structured JSON block as the primary signal and the cross-check between the two.
 
-This is not just a one-line prompt change: today `project-setup-writer` is Jarvis-workspace scoped. Phase 4 must generalize the brief + agent prompt + approval helper so the target product repo is explicit, canonicalized, and cross-checked against `policies/products.json`. Tracked as Phase 4 task 1.
+This is not just a one-line prompt change: today `project-setup-writer` is Rune-workspace scoped. Phase 4 must generalize the brief + agent prompt + approval helper so the target product repo is explicit, canonicalized, and cross-checked against `policies/products.json`. Tracked as Phase 4 task 1.
 
 ## Cockpit UX (revised)
 

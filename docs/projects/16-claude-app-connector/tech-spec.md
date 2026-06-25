@@ -1,4 +1,4 @@
-# Tech Spec — Jarvis Conversation Surface on the Claude App
+# Tech Spec — Rune Conversation Surface on the Claude App
 
 ## Grounding (verified in repo)
 - MCP server today: `jarvis/src/mcp/server.ts` exports `createKBServer()` using `McpServer` (`@modelcontextprotocol/sdk@^1.29.0`) over **`StdioServerTransport`**; entry `jarvis/src/mcp/index.ts`. Registered tools: `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Only `kb_query` is in the App surface today.

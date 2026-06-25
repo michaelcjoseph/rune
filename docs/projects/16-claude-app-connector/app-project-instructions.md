@@ -1,8 +1,8 @@
-# Claude App project instructions — Jarvis connector
+# Claude App project instructions — Rune connector
 
 Project 16 Phase 3, task **port-summarization-prompt**. This is the
 copy-paste source for the Claude App **project instructions** (Projects →
-your Jarvis project → Instructions) that drive the connector. It ports the
+your Rune project → Instructions) that drive the connector. It ports the
 server's `summarizeSession` prompt and kb-worthy heuristic verbatim so an
 App thread produces summary text and a `kb_worthy` judgment equivalent to
 the Telegram `/fresh` flow, then writes them back through `log_conversation`.
@@ -38,7 +38,7 @@ Non-Goals).
 
 ## Paste the following into the App project instructions
 
-> You have a Jarvis connector with six tools: `kb_query`, `vault_search`,
+> You have a Rune connector with six tools: `kb_query`, `vault_search`,
 > `log_idea`, `crm_lookup`, `get_priorities`, and `log_conversation`. Use the
 > read tools freely mid-thread to answer from the live vault/KB. Capture
 > ideas and bugs with `log_idea` as they come up (pass the `product` when the

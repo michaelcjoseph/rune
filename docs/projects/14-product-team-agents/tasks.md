@@ -8,7 +8,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 > its test-plan sections pass.
 >
 > This is the merged project formerly split between product-team role agents and
-> Jarvis-orchestrated work. The deliverable is one coherent workflow: role substrate,
+> Rune-orchestrated work. The deliverable is one coherent workflow: role substrate,
 > planning, per-task orchestration, `context.md`, finalizer handoff, and learning loop.
 >
 > **Autonomy rule for reopened phases:** Phases 10-15 must be runnable by `/work --auto`
@@ -51,7 +51,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Draft `agents/<role>/SOUL.md` (PROJECT_ROOT-relative, mirroring `agents/writer/`) for
       PM, tech lead, QA, coder, reviewer, and designer.
 - [x] Create empty-or-seeded `memory.md` for each role. (Empty = cold start.)
-- [x] Confirm Jarvis is registered as a product the loop can target; add only if absent.
+- [x] Confirm Rune is registered as a product the loop can target; add only if absent.
       (Already present in `policies/products.json` with `validationCommands`.)
 
 > **User-reachability:** no user surface this phase — substrate consumed by Phases 2–5.
@@ -107,7 +107,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       transcript-style dumps. (`context-curator.test.ts`)
 - [x] Context validation test: technical contract changes require tech-lead validation;
       product-intent changes require PM validation when flagged. (`context-curator.test.ts`)
-- [x] Task-selection test: Jarvis selects the first unchecked task from `tasks.md` before
+- [x] Task-selection test: Rune selects the first unchecked task from `tasks.md` before
       invoking any executor. (`orch-task.test.ts`)
 - [x] Fresh-context test: task N+1 receives bounded handoff input, not task N's transcript or
       accumulated conversation. (`orch-execution.test.ts`)
@@ -137,11 +137,11 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       closeout checks, closeout commit, clean-worktree verification, and durable block on
       failure. (`orch-closeout.ts` pure semantics — tick exactly one box / stale-refuse. The
       effectful half — commit, clean-worktree verify, durable block — is Phase 5 "Implement
-      Jarvis-owned task closeout".)
+      Rune-owned task closeout".)
 - [x] Define per-task attempt caps and escalation behavior at the cap. (`orch-attempt-cap.ts`)
 - [x] Define finalizer handoff payload shape and injectable finalizer adapter for tests.
       (`finalizer-handoff.ts`)
-- [x] Implement Jarvis-owned task selection. (`orch-task-select.ts`)
+- [x] Implement Rune-owned task selection. (`orch-task-select.ts`)
 - [x] Implement restart reconstruction for partial orchestrated runs. (`orch-reconstruct.ts`)
 - [x] Add explicit rollout/fallback configuration for orchestrated mode vs legacy `/work
       --auto`. (`orch-config.ts` `resolveDispatchMode`; the env/config toggle read is wired in
@@ -204,7 +204,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [x] Closeout test: after task N passes gates, Jarvis marks exactly that task complete,
+- [x] Closeout test: after task N passes gates, Rune marks exactly that task complete,
       updates context, runs closeout checks, records a closeout commit, verifies clean
       worktree, then advances. (`project-orchestrator.test.ts`)
 - [x] Block test: blocked/failed/objection-open task stops or retries durably and is not
@@ -213,7 +213,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       N+1's input. (`project-orchestrator.test.ts`)
 - [x] Finalizer handoff test: when all tasks are checked, orchestrator calls Project 15
       finalizer with branch/run facts rather than self-merging. (`project-orchestrator.test.ts`)
-- [x] Finalizer-unavailable test: if the real finalizer is unavailable, Jarvis records the
+- [x] Finalizer-unavailable test: if the real finalizer is unavailable, Rune records the
       handoff payload and stops branch-complete/blocked rather than self-merging.
       (`project-orchestrator.test.ts`)
 - [x] Legacy fallback test: when orchestrated mode is disabled, legacy `/work --auto` dispatch
@@ -235,7 +235,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       `runProjectOrchestration`.)
 - [x] Wire ready-for-closeout, blocked, failed, and objection-open outcomes to closeout/
       retry/block. (`runTaskWithRetries` + the outcome gate in the loop.)
-- [x] Implement Jarvis-owned task closeout and clean-worktree verification. (`performCloseout`
+- [x] Implement Rune-owned task closeout and clean-worktree verification. (`performCloseout`
       — pure sequence over injected effects: context update → tick → checks → commit →
       clean-verify, blocks durably on any failure. The real git/fs effects are bound by the
       mutation applier below.)
@@ -318,8 +318,8 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       8/8 in `learning-loop.test.ts` green. The live nightly.ts cron composition — wiring
       the production feedback reader + LLM post-mortem + `writeRoleLesson` into this core —
       lands with the downstream seam tasks below.)
-- [x] Jarvis-owned post-mortem interviews roles as witnesses and makes attribution decision.
-      (`src/intent/postmortem.ts` `runPostMortem` — a NEUTRAL Jarvis-owned `askClaudeOneShot`
+- [x] Rune-owned post-mortem interviews roles as witnesses and makes attribution decision.
+      (`src/intent/postmortem.ts` `runPostMortem` — a NEUTRAL Rune-owned `askClaudeOneShot`
       call, NOT a role: `buildPostMortemPrompt` grounds the attribution in the role roster +
       ownership table and delimits the untrusted feedback record; `parsePostMortemResult`
       fail-closes (role∈ROLE_NAMES / stage∈ROLE_STAGES / non-empty), failing safe to
@@ -874,7 +874,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 - [x] Gate-record test: each gate block in `team-task-workflow.ts` emits a structured rejection
       record (rejecting role, counterpart, what failed, notes) — the same object Phase 11A threads.
-- [x] Draft-then-validate test: the rejecting role drafts a candidate lesson; a neutral Jarvis
+- [x] Draft-then-validate test: the rejecting role drafts a candidate lesson; a neutral Rune
       pass (`runPostMortem` model) privacy-filters, dedupes, attributes, and fails safe to
       no-lesson before any write — roles never write memory directly.
 - [x] Gate-time-write test: a passing validation writes the lesson to the COUNTERPART's memory
@@ -909,7 +909,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Emit the structured gate-rejection record at each gate block in `team-task-workflow.ts`,
       shared with the Phase 11A feedback object.
 - [x] Have the rejecting role draft a candidate lesson from that record.
-- [x] Run the neutral Jarvis validation (`runPostMortem` model) synchronously at gate-time and
+- [x] Run the neutral Rune validation (`runPostMortem` model) synchronously at gate-time and
       write via `writeRoleLesson` into the counterpart's memory; fail safe to no-lesson.
 - [x] Confirm the gate-time path and nightly loop share one write path without double-writing.
 - [x] Record durable skip/error metadata when drafting, validation, or memory writing fails, and
@@ -1108,7 +1108,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 - [x] Rewrite the auto-merge / finalizer consumers (`project-orchestrator.ts`
       `maybeParkedRun` / objection-open handling, `operationalParkedRunField`, and
       `orchestrated-work-runner.ts` terminal mapping): replace the per-finding severity gate with the
-      terminal handler — drain remaining `>low` findings to the Jarvis repo's `docs/projects/bugs.md`
+      terminal handler — drain remaining `>low` findings to the Rune repo's `docs/projects/bugs.md`
       via the backlog safe-write substrate (`withFileLock` + `assertBacklogWriteAllowed` +
       `writeFileAtomic`, deduped by run/task/finding id), HOLD the branch when any remaining
       `critical`/`high` is `reversible: false`, else proceed through gated auto-merge. This subsumes
@@ -1170,7 +1170,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       index flip never fires and the run never merges — the flip is gated on the classified
       `branch-complete` outcome, not on all-tasks-checked alone.
 - [x] Index-absent-skips test: a worktree with NO `docs/projects/index.md` is a graceful skip — the
-      finalizer still merges (the index convention is Jarvis-repo-specific), no HOLD, no commit.
+      finalizer still merges (the index convention is Rune-repo-specific), no HOLD, no commit.
 - [x] Index-ambiguous-holds test: a PRESENT-but-malformed table, zero matching rows/headings, or
       multiple matches produces an operational HOLD with branch/worktree preserved; it does not
       guess, edit the base branch, or merge a completed project whose index was not safely finalized.

@@ -12,7 +12,7 @@ test-plan sections pass.
 Required verification is automated and fixture-driven. Use temp product repos/worktrees, local bare
 remotes, injected work-run streams, mocked child processes, injected process-table/kill adapters,
 fake sender surfaces, test-scoped stores, and injected clocks. Do not require a real Telegram chat,
-a production cockpit click, a real Jarvis restart, wall-clock sleeps, or a human killing a live
+a production cockpit click, a real Rune restart, wall-clock sleeps, or a human killing a live
 process tree. Phase 4's incident replay must stay disabled/skipped until Phase 1 and Phase 2 pass.
 
 > See also: [Cross-cutting test plan](../../tech/test-plan.md) for shared guidelines, monitoring, and security checks.
@@ -120,7 +120,7 @@ process tree. Phase 4's incident replay must stay disabled/skipped until Phase 1
       `missing-validation-command`, no merge.
 - [ ] 🔴 Validation command timeout → stop at `branch-complete`, no merge, and the command process
       tree is reaped.
-- [ ] 🔴 Jarvis product config includes `validationCommands: ["npm run build", "npm test"]`; tests
+- [ ] 🔴 Rune product config includes `validationCommands: ["npm run build", "npm test"]`; tests
       use product-config fixtures and never mutate the real product config except through the
       implementation task.
 - [ ] 🔴 Gate checks run in an integration worktree (or on the branch); a red result leaves local

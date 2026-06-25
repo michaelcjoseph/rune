@@ -1,4 +1,4 @@
-# Jarvis: Personal Second Brain Server
+# Rune: Personal Second Brain Server
 
 A blueprint for building an always-on personal AI assistant that connects a Telegram bot to your Obsidian vault through Claude Code CLI. Hand this document to an AI coding agent and it can build the entire system from scratch.
 

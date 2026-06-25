@@ -1,4 +1,4 @@
-# Jarvis
+# Rune
 
 Always-on personal second brain server. Connects a Telegram bot to your Obsidian vault through Claude Code CLI.
 
@@ -8,7 +8,7 @@ A single Node.js process that combines a Telegram bot, a local webview UI, an LL
 
 **Chat with your vault.** Send a message via Telegram (or the local webview) and get a vault-aware response. Free-form messages are classified by a Haiku skill resolver and routed to the matching command; the slash form is always available as a fallback. Multi-turn conversations persist across messages. Send `/fresh` to summarize, log to your journal, and reset.
 
-**Build a knowledge base.** Ingest articles, conversations, and notes into a [Karpathy-style](https://karpathy.ai/blog/wikipedia.html) LLM wiki. Raw sources are compiled into interlinked wiki pages organized by entities, concepts, topics, and comparisons. Query the wiki with natural language and get synthesized answers with citations — from inside Jarvis or from any other Claude Code session via the bundled MCP server.
+**Build a knowledge base.** Ingest articles, conversations, and notes into a [Karpathy-style](https://karpathy.ai/blog/wikipedia.html) LLM wiki. Raw sources are compiled into interlinked wiki pages organized by entities, concepts, topics, and comparisons. Query the wiki with natural language and get synthesized answers with citations — from inside Rune or from any other Claude Code session via the bundled MCP server.
 
 **Run structured reviews.** Interview-based weekly, monthly, quarterly, and yearly reviews conducted through Telegram or the webview. Prep agents scan your journals and vault systems silently, then Claude conducts a real conversation — surfacing quotes, challenging narratives, and producing write-ups appended to your journal. Post-approval, specialist agents update project pages, the playbook, world-view, and psychology profile.
 
@@ -129,7 +129,7 @@ knowledge/
 
 Sources go in, wiki pages come out. The wiki-compiler agent reads raw sources, identifies entities/concepts/topics, creates or updates wiki pages with `[[wikilinks]]`, and maintains the index. No embeddings or vector DB — search uses a two-layer approach: the LLM reads the compact index to find relevant pages, then ripgrep does full-text search for additional matches.
 
-**MCP server.** The KB is also exposed as an MCP server (`jarvis-kb`) so any Claude Code session — not just Jarvis — can query, search, ingest, or lint via the tools `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+**MCP server.** The KB is also exposed as an MCP server (`jarvis-kb`) so any Claude Code session — not just Rune — can query, search, ingest, or lint via the tools `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
 
 ## Vault Content Model
 
@@ -151,9 +151,9 @@ After a review, files touched by the post-agents are auto-enqueued for the next 
 
 ## Agents
 
-Custom Claude Code agents handle structured operations. Agents live in `.claude/agents/` in this repo (generic tooling, public) with fallback to `$VAULT_DIR/.claude/agents/` (personal content, private). `loadAgentDef` in `src/ai/claude.ts` checks Jarvis first, then the vault.
+Custom Claude Code agents handle structured operations. Agents live in `.claude/agents/` in this repo (generic tooling, public) with fallback to `$VAULT_DIR/.claude/agents/` (personal content, private). `loadAgentDef` in `src/ai/claude.ts` checks Rune first, then the vault.
 
-**Runtime agents (spawned by Jarvis):**
+**Runtime agents (spawned by Rune):**
 
 | Agent | Purpose |
 |-------|---------|
@@ -195,7 +195,7 @@ Custom Claude Code agents handle structured operations. Agents live in `.claude/
 | Agent | Purpose |
 |-------|---------|
 | test-specialist | Write/run vitest tests; bootstrap test infra |
-| code-reviewer | Review code changes for bugs, security, TS strictness, Jarvis conventions |
+| code-reviewer | Review code changes for bugs, security, TS strictness, Rune conventions |
 | security-auditor | Audit changes for secrets, PII, vault leaks, path traversal, unsafe shell |
 | architecture-reviewer | Review for vault boundaries, module boundaries, graceful shutdown, cron safety |
 | code-simplifier | Check for dead code, over-abstraction, duplication |
@@ -216,8 +216,8 @@ Custom Claude Code agents handle structured operations. Agents live in `.claude/
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/jarvis.git
-cd jarvis
+git clone https://github.com/yourusername/rune.git
+cd rune
 npm install
 ```
 
@@ -399,7 +399,7 @@ Free-form Telegram or webview messages get classified against the skill registry
 
 ### MCP server
 
-The KB is exposed as an MCP server (`jarvis-kb`) registered in `.claude/settings.json`, so any Claude Code session on the machine — not just Jarvis — can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint` as tools.
+The KB is exposed as an MCP server (`jarvis-kb`) registered in `.claude/settings.json`, so any Claude Code session on the machine — not just Rune — can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint` as tools.
 
 ### Mutation pipeline
 
@@ -407,12 +407,12 @@ Autonomous codebase operations go through `src/transport/mutations.ts`. The firs
 
 ### Vault Integration
 
-Jarvis treats the vault as a shared filesystem with a layered write model — see `CLAUDE.md` → "Vault Content Model" for the full breakdown:
+Rune treats the vault as a shared filesystem with a layered write model — see `CLAUDE.md` → "Vault Content Model" for the full breakdown:
 
 - `knowledge/` is LLM-owned — `wiki-compiler` reads and writes freely.
 - `world-view/`, `pages/playbook.md`, `projects/*.md`, `pages/psychology.md` and JSON data stores have **dedicated updater agents** (`worldview-updater`, `playbook-updater`, `project-updater`, `psychology-updater`, `json-updater`) that write under specific approval semantics (propose-only for world-view; append-on-approval for playbook; authoritative for projects/JSON).
 - `writing/voice.md` is read on every prose-producing Claude call so the assistant matches your voice in replies, summaries, reviews, and drafts.
-- All other directories are human-owned — Jarvis reads for context only.
+- All other directories are human-owned — Rune reads for context only.
 - All writes go through `readVaultFile`/`writeVaultFile` helpers in `src/vault/files.ts`, which assert paths stay within the vault boundary.
 - Git commits happen at key moments (morning prep, `/fresh`, post-review, nightly).
 
@@ -433,7 +433,7 @@ See `docs/projects/index.md` for the current project board and `docs/projects/01
 
 ## Build Your Own
 
-Want to build something like Jarvis without cloning this repo? See [`docs/idea.md`](docs/idea.md) — a self-contained blueprint you can hand to an AI coding agent to recreate the entire system from scratch.
+Want to build something like Rune without cloning this repo? See [`docs/idea.md`](docs/idea.md) — a self-contained blueprint you can hand to an AI coding agent to recreate the entire system from scratch.
 
 ## License
 

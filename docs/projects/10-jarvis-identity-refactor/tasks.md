@@ -1,4 +1,4 @@
-# Jarvis Identity Refactor — Tasks
+# Rune Identity Refactor — Tasks
 
 See [spec.md](spec.md) for the rescope rationale and approach, and [test-plan.md](test-plan.md)
 for verification.
@@ -21,7 +21,7 @@ for verification.
       verified absent.)_
 - [x] Confirm the test suite is green without it (`npm test` or the repo's runner).
       _(2946 passing; the lone failure — `claude.test.ts` "does not set JARVIS_WORKSPACE_DIR"
-      — is a pre-existing env-pollution issue unrelated to spec-10: a Jarvis-spawned session
+      — is a pre-existing env-pollution issue unrelated to spec-10: a Rune-spawned session
       exports `JARVIS_WORKSPACE_DIR` into `process.env`, which the spawn env spread leaks into
       the child. Passes in a normal terminal/CI. Not introduced by this project.)_
 
@@ -29,14 +29,14 @@ for verification.
 
 > Depends on: Phase 0. Order matters: this precedes the pkms symlink in Phase 2.
 
-- [x] Append the `## Jarvis` section (automation ownership, agent split, KB raw-source
+- [x] Append the `## Rune` section (automation ownership, agent split, KB raw-source
       routing, `loadAgentDef` order) from `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`, placed
-      coherently within its existing structure. _(New `## Jarvis` section after
+      coherently within its existing structure. _(New `## Rune` section after
       `## Architecture`; framing adapted "this vault" → "the pkms vault" per test-plan §2.7.)_
 - [x] Append the `### How Reviews Work` mechanics (prep → interview → outline →
       write-up + post-agent pipeline; the specialist updaters) into `jarvis/CLAUDE.md`.
 - [x] Remove both sections from `pkms/CLAUDE.md`.
-- [x] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Jarvis orchestration
+- [x] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Rune orchestration
       … is documented in `jarvis/CLAUDE.md`."
 - [x] Verify against the move boundary in spec.md: the listed "staying" sections remain in
       pkms (overview, vault structure, journal format, reference system, tags, schemas,

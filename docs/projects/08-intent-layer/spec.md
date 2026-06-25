@@ -2,23 +2,23 @@
 
 ## Overview
 
-Jarvis today is a reactive command-router. A message arrives on Telegram, the resolver classifies it, a skill runs, and Jarvis goes quiet until the next message or the next cron tick. Nothing in Jarvis holds a model of what Michael is trying to accomplish across his products, reasons about it over time, or initiates work on its own. The nightly job processes raw notes into the wiki, but it does not act on the intent buried in those notes, and it does not improve how Jarvis itself operates.
+Rune today is a reactive command-router. A message arrives on Telegram, the resolver classifies it, a skill runs, and Rune goes quiet until the next message or the next cron tick. Nothing in Rune holds a model of what Michael is trying to accomplish across his products, reasons about it over time, or initiates work on its own. The nightly job processes raw notes into the wiki, but it does not act on the intent buried in those notes, and it does not improve how Rune itself operates.
 
-This project evolves Jarvis from a command-router into an **orchestrator with a persistent intent layer**. The intent layer reasons about Michael's goals, discusses them with him to turn fuzzy ideas into approved specs, then dispatches and supervises sub-agents across multiple foundation models (Claude, Codex, and others) and multiple domains (coding first, content and marketing later). Jarvis stops being a thing Michael drives turn-by-turn and becomes a thing that carries goals forward between turns.
+This project evolves Rune from a command-router into an **orchestrator with a persistent intent layer**. The intent layer reasons about Michael's goals, discusses them with him to turn fuzzy ideas into approved specs, then dispatches and supervises sub-agents across multiple foundation models (Claude, Codex, and others) and multiple domains (coding first, content and marketing later). Rune stops being a thing Michael drives turn-by-turn and becomes a thing that carries goals forward between turns.
 
-The project builds on two existing pieces of Jarvis. It **extends the cockpit** that [06-webview](../06-webview/spec.md) shipped: that localhost surface becomes the intent layer's web cockpit, one of its three I/O surfaces. And it **widens self-improvement**: today's self-improvement only compiles raw notes into the wiki, and this project extends it to improve how Jarvis itself runs, by detecting fixed bugs, repeated questions that should become commands, and recurring friction, then filing the worthwhile ones as projects in Jarvis's own backlog and executing them.
+The project builds on two existing pieces of Rune. It **extends the cockpit** that [06-webview](../06-webview/spec.md) shipped: that localhost surface becomes the intent layer's web cockpit, one of its three I/O surfaces. And it **widens self-improvement**: today's self-improvement only compiles raw notes into the wiki, and this project extends it to improve how Rune itself runs, by detecting fixed bugs, repeated questions that should become commands, and recurring friction, then filing the worthwhile ones as projects in Rune's own backlog and executing them.
 
 This is a large project. The spec covers vision, architecture, and the v1 wedge. The phase-by-phase task breakdown lives in [tasks.md](tasks.md) and the verification checklist in [test-plan.md](test-plan.md); both follow this spec's phase structure, and the project is built test-first (each phase opens by writing its tests).
 
 ### Core Value Proposition
 
-Jarvis holds a persistent model of what Michael is building across all his products, turns raw thoughts into scoped specs through conversation, and dispatches and supervises multi-model sub-agents to execute, so that starting and running a project costs a conversation instead of a context-switch.
+Rune holds a persistent model of what Michael is building across all his products, turns raw thoughts into scoped specs through conversation, and dispatches and supervises multi-model sub-agents to execute, so that starting and running a project costs a conversation instead of a context-switch.
 
 ### Goals
 
 1. **Primary:** A deliberative intent layer that turns a fuzzy idea into an approved spec through conversation, then dispatches sub-agents (across Claude, Codex, and other models) to execute and cross-review the work in isolated sandboxes, supervises the runs, merges the result when the automated gates pass, and reports back.
-2. **Secondary:** A federated memory model and a product/project registry that give Jarvis a single, uniform picture of every product, its projects, and their status, spanning the vault and the individual product repos.
-3. **Tertiary:** Operational self-improvement, where Jarvis observes its own friction (bugs, repeated questions, recurring pain), files improvement projects into its own backlog, and runs them, treating itself as one of the products it orchestrates.
+2. **Secondary:** A federated memory model and a product/project registry that give Rune a single, uniform picture of every product, its projects, and their status, spanning the vault and the individual product repos.
+3. **Tertiary:** Operational self-improvement, where Rune observes its own friction (bugs, repeated questions, recurring pain), files improvement projects into its own backlog, and runs them, treating itself as one of the products it orchestrates.
 
 ### Non-Goals
 
@@ -26,7 +26,7 @@ Jarvis holds a persistent model of what Michael is building across all his produ
 - **A vault re-organization.** The vault stays organized by type. The product dimension is added as an overlay (a per-product manifest/index), not by moving files.
 - **Touching the Relay repo.** Relay is the employer's product with a different authorization and security surface. v1 does not dispatch coding work against the Relay repo. Relay-repo access is explicitly future and out of scope.
 - **Coding-style execution for products without a code repo.** Family and health (not code products) are tracked in the cockpit and registry and route raw notes in v1, but get no coding-style project execution.
-- **Adopting OpenClaw or Hermes wholesale.** Jarvis keeps its own Node/TS spine. Patterns are borrowed; neither framework is taken on as a dependency.
+- **Adopting OpenClaw or Hermes wholesale.** Rune keeps its own Node/TS spine. Patterns are borrowed; neither framework is taken on as a dependency.
 - **A consensus-voting or ensemble model layer.** Cross-model review is adjudication: one model produces, a different model verifies. It runs before every merge, but it is never a quorum of models voting on a call.
 - **A new UI framework.** The cockpit is the existing webview surface (vanilla HTML/JS). The intent layer is an engine with I/O surfaces, not a UI project.
 
@@ -45,12 +45,12 @@ The architecture below is grounded in a survey of open-source personal-agent fra
 
 - **Concurrency:** the design target is one project per product at a time, multiple products running in parallel, each in its own isolated workspace. Parallelism here is cheap. The cost that scales is reconciliation (see Open Questions).
 - **Model calls:** the deliberative intent layer is conversational and bounded by Michael's pace. The Generator-Evaluator loop is the call-heavy part: the Generator's calls scale with the number of tasks in a run, and a mandatory cross-model review adds a bounded few rounds before each merge.
-- **Memory footprint:** the registry is an aggregating index, small. Per-product structured memory lives in each product repo and scales with that product's history, not with Jarvis. The vault's raw layer is unchanged.
+- **Memory footprint:** the registry is an aggregating index, small. Per-product structured memory lives in each product repo and scales with that product's history, not with Rune. The vault's raw layer is unchanged.
 - **Cost:** dispatching across multiple foundation models means dispatch cost is no longer a single subscription line. Cost visibility per project is an open question (see Open Questions).
 
 ---
 
-## Vision: Jarvis as Intent-Layer Orchestrator
+## Vision: Rune as Intent-Layer Orchestrator
 
 The shift is from **router** to **orchestrator**.
 
@@ -58,24 +58,24 @@ A router is stateless between turns. It maps each message to a handler and forge
 
 The intent layer is the component that holds that model. It is an **engine, not a UI**. It has three I/O surfaces (journal, cockpit, chat, detailed in **Three Surfaces** below), but its job is the same regardless of surface: take intent in, reason about it, dispatch and supervise work, report back.
 
-Concretely, Jarvis gains the ability to:
+Concretely, Rune gains the ability to:
 
 - Hold a fuzzy idea and refine it into an approved spec through conversation, instead of requiring Michael to arrive with a fully-formed task.
 - Dispatch that spec to sub-agents on the right foundation model for the job, run them in isolation, and have a different model cross-review the output.
 - Run a project on each of several products concurrently, and keep a live picture of which are running and which are blocked on Michael.
 - Treat itself as one of those products, observing its own friction and filing improvement projects into its own backlog.
 
-The vision is not "Jarvis writes all the code." It is "Jarvis carries the goal." Execution quality rides on the foundation models and improves as they do. Jarvis's durable contribution is the intent layer (the planning, the memory, the supervision), which is the part the models do not provide.
+The vision is not "Rune writes all the code." It is "Rune carries the goal." Execution quality rides on the foundation models and improves as they do. Rune's durable contribution is the intent layer (the planning, the memory, the supervision), which is the part the models do not provide.
 
 ---
 
 ## Two-Regime Model: Reliable Substrate vs Light Project Execution
 
-Jarvis runs two regimes with different engineering philosophies. Conflating them is the main design risk this section heads off.
+Rune runs two regimes with different engineering philosophies. Conflating them is the main design risk this section heads off.
 
 ### Regime A: Reliable substrate
 
-This is the existing Jarvis: daily raw-note processing, the knowledge base, second-brain memory, reviews, morning prep. It is **reliability-first**. It can carry a heavy harness because correctness and durability matter more than speed. Writes into it are **propose-and-approve**. A silent mistake here corrupts the second brain, so the harness exists precisely to prevent that.
+This is the existing Rune: daily raw-note processing, the knowledge base, second-brain memory, reviews, morning prep. It is **reliability-first**. It can carry a heavy harness because correctness and durability matter more than speed. Writes into it are **propose-and-approve**. A silent mistake here corrupts the second brain, so the harness exists precisely to prevent that.
 
 This regime is not changed by this project, except that it gains a new intake path (the journal-to-intent flow, see **Three Surfaces**) which is itself propose-and-approve, consistent with the regime.
 
@@ -83,7 +83,7 @@ This regime is not changed by this project, except that it gains a new intake pa
 
 This is the new capability: kicking off and running coding projects (and, later, content and marketing projects). It is **Amp-style**. It bets on model progress and keeps the harness light. The guiding rule: do not over-build scaffolding that improving models will absorb. A failed execution run in this regime is cheap to discard and retry; it does not corrupt anything durable. So the harness is thin by design.
 
-Thin does not mean ungated, but the gate is **automated, not human**. Regime B execution writes to a **branch or worktree in the product repo**, and what lands it on the main line is a chain of automated gates: mandatory cross-model review (Layer 2), the project's own test suite, and the **escalation policy** (Foundational Tier) that decides which classes of change are too high-risk to merge unattended. When the gates pass, Jarvis merges the change itself. The human merge gate is removed because the cost of a bad run here is a discarded branch or a revert, not a corrupted second brain. Michael is involved by exception, when the escalation policy stops a run, not on every change.
+Thin does not mean ungated, but the gate is **automated, not human**. Regime B execution writes to a **branch or worktree in the product repo**, and what lands it on the main line is a chain of automated gates: mandatory cross-model review (Layer 2), the project's own test suite, and the **escalation policy** (Foundational Tier) that decides which classes of change are too high-risk to merge unattended. When the gates pass, Rune merges the change itself. The human merge gate is removed because the cost of a bad run here is a discarded branch or a revert, not a corrupted second brain. Michael is involved by exception, when the escalation policy stops a run, not on every change.
 
 ### Why the split matters
 
@@ -153,7 +153,7 @@ Five pieces sit beneath the five layers as prerequisites. They are unglamorous p
 
 ### Product/project registry
 
-There is no single data model today that ties products to projects to status. The vault has products-as-files; the Jarvis repo has projects-as-folders (`docs/projects/`); nothing connects them.
+There is no single data model today that ties products to projects to status. The vault has products-as-files; the Rune repo has projects-as-folders (`docs/projects/`); nothing connects them.
 
 The registry is a uniform **product to projects to status** data model. It is an **aggregating index**: the cockpit reads it, and the intent layer writes it. It does not own the underlying truth (the repos and vault product files do); it is the layer that makes "show me every project across every product and its status" a single query.
 
@@ -169,23 +169,23 @@ It is an overlay, not a re-org. The vault does not move. A manifest points into 
 
 ### Model-agnostic agent definitions
 
-Jarvis's agents today are `.claude/agents/*.md`, which is Claude Code's format. To dispatch the same agent to Codex or Gemini, the system needs a **neutral representation** of an agent definition (its role, its tools, its constraints) that **compiles down** to the Claude format, the Codex format, and others. This is a prerequisite for Layer 5 (multi-model dispatch); without it, every model integration re-specifies every agent.
+Rune's agents today are `.claude/agents/*.md`, which is Claude Code's format. To dispatch the same agent to Codex or Gemini, the system needs a **neutral representation** of an agent definition (its role, its tools, its constraints) that **compiles down** to the Claude format, the Codex format, and others. This is a prerequisite for Layer 5 (multi-model dispatch); without it, every model integration re-specifies every agent.
 
 The choice of standard for this neutral representation is an open question (see **Open Questions**). Note the split of concern: this format settles *how* an agent is expressed for each provider; *which* model actually runs it is the **Model selection policy** below.
 
 ### Model selection policy
 
-Several layers assume Jarvis can pick a foundation model: the Planner runs on one, the Generator on another, the Evaluator on a third and deliberately different one (Layer 2), and Layer 5 dispatches across Claude, Codex, and others. None of that works without an answer the rest of the spec leaves implicit: **what decides which model runs a given dispatch, and how that decision survives the models changing underneath it.**
+Several layers assume Rune can pick a foundation model: the Planner runs on one, the Generator on another, the Evaluator on a third and deliberately different one (Layer 2), and Layer 5 dispatches across Claude, Codex, and others. None of that works without an answer the rest of the spec leaves implicit: **what decides which model runs a given dispatch, and how that decision survives the models changing underneath it.**
 
 The answer is a **declarative model policy**: a policy file kept separate from runtime state, consistent with the practitioner finding that policy files stay separate from state files. It is data, not code. Adding, swapping, or retiring a model is an edit to this file, not a deploy. The policy has three parts.
 
-**1. A model registry.** The enumerable set of dispatchable models. Each entry carries a stable **alias** (not a pinned version ID), the **provider** and the agent-definition **format** it compiles to (Claude, Codex, Gemini), a set of **capability tags** (for example `coding`, `long-context`, `cheap-classify`, `vision`, `deep-reasoning`), a coarse **cost tier**, and a **status** (`preferred`, `active`, `deprecated`). Referencing models by alias rather than pinned ID matches how Jarvis already works: `config.ts` names model slots (`opus` / `sonnet` / `haiku`) and agent frontmatter overrides them with the same aliases, so a provider's alias upgrade is picked up for free.
+**1. A model registry.** The enumerable set of dispatchable models. Each entry carries a stable **alias** (not a pinned version ID), the **provider** and the agent-definition **format** it compiles to (Claude, Codex, Gemini), a set of **capability tags** (for example `coding`, `long-context`, `cheap-classify`, `vision`, `deep-reasoning`), a coarse **cost tier**, and a **status** (`preferred`, `active`, `deprecated`). Referencing models by alias rather than pinned ID matches how Rune already works: `config.ts` names model slots (`opus` / `sonnet` / `haiku`) and agent frontmatter overrides them with the same aliases, so a provider's alias upgrade is picked up for free.
 
 **2. Role-to-capability binding.** Agent definitions do not name a model. They declare the **capabilities the role needs** (the Generator for a coding project needs `coding` plus `long-context`). The model-agnostic agent-definition format above carries this as a field. A model is never baked into an agent, which is what keeps the definitions genuinely model-agnostic; "this agent runs on Claude" is a policy decision, not an agent property.
 
 **3. A deterministic resolver.** A small non-LLM router maps (role, declared capabilities, policy) to a concrete model at dispatch time. It is deterministic on purpose, per the practitioner finding that deterministic scripts handle routine work and the LLM is reserved for judgment, and it **logs which model it picked and which rule fired**, so every dispatch is auditable and cost-attributable.
 
-Selection precedence, highest first, mirrors the `def.model ?? config.AGENT_MODEL` fallback already in Jarvis's `runAgent`:
+Selection precedence, highest first, mirrors the `def.model ?? config.AGENT_MODEL` fallback already in Rune's `runAgent`:
 
 1. **Explicit pin.** Michael, or the Planner during scoping, pins a model for this dispatch. Always wins.
 2. **Role default.** The `preferred` model for that role whose capability tags satisfy the role's declared needs.
@@ -197,15 +197,15 @@ Selection precedence, highest first, mirrors the `def.model ?? config.AGENT_MODE
 
 - **A new model ships.** Add a registry entry with capability tags, cost tier, and status `active`. The resolver can select it for any role whose needs its tags satisfy. Flip it to `preferred` for a role to make it that role's default. No code change.
 - **A model regresses or is retired.** Set status `deprecated`. The resolver stops selecting it and warns; a dispatch that explicitly pinned it fails loudly rather than silently rerouting.
-- **The policy is itself a self-improvement target.** A model that keeps losing cross-model reviews, or a new model worth trialing, is exactly the friction signal the observation loop files as a project into Jarvis's own backlog (see Operational Self-Improvement). The policy is also the clearest case of the "build harness layers to be removable" principle (see Open Questions): as models converge, the role-to-capability bindings collapse toward one default and the policy file shrinks.
+- **The policy is itself a self-improvement target.** A model that keeps losing cross-model reviews, or a new model worth trialing, is exactly the friction signal the observation loop files as a project into Rune's own backlog (see Operational Self-Improvement). The policy is also the clearest case of the "build harness layers to be removable" principle (see Open Questions): as models converge, the role-to-capability bindings collapse toward one default and the policy file shrinks.
 
 This settles the mechanism. Two judgment calls stay open and are listed in Open Questions: the capability-tag vocabulary, and whether the Planner may pin models or only recommend them.
 
 ### Escalation policy
 
-With the human merge gate removed (see **Two-Regime Model**), Regime B runs to completion and merges on its own. That makes one question load-bearing: **when does Jarvis stop and ask Michael instead of proceeding?** The answer is an **escalation policy**, a declarative file in the same shape as the model selection policy above: data not code, editing it is not a deploy.
+With the human merge gate removed (see **Two-Regime Model**), Regime B runs to completion and merges on its own. That makes one question load-bearing: **when does Rune stop and ask Michael instead of proceeding?** The answer is an **escalation policy**, a declarative file in the same shape as the model selection policy above: data not code, editing it is not a deploy.
 
-The policy enumerates the conditions under which Jarvis must escalate to the **blocked-on-Michael state** (Layer 3) rather than proceed unattended: a self-generated spec too consequential to approve without Michael, a class of change too high-risk to merge unattended, a cross-model review the Evaluator cannot resolve, a run that exceeds its bounds. The policy is the component to build now; the specific rules are deliberately left to fill in over time. What matters at the spec level is that escalation is **policy-driven and auditable**, not ad hoc, and that "Jarvis decides for itself" and "Jarvis escalates by exception" are the same system, not opposites.
+The policy enumerates the conditions under which Rune must escalate to the **blocked-on-Michael state** (Layer 3) rather than proceed unattended: a self-generated spec too consequential to approve without Michael, a class of change too high-risk to merge unattended, a cross-model review the Evaluator cannot resolve, a run that exceeds its bounds. The policy is the component to build now; the specific rules are deliberately left to fill in over time. What matters at the spec level is that escalation is **policy-driven and auditable**, not ad hoc, and that "Rune decides for itself" and "Rune escalates by exception" are the same system, not opposites.
 
 ---
 
@@ -221,7 +221,7 @@ Turns a fuzzy idea into an approved spec through conversation. This is the **Pla
 
 Execution with review. A **separate, skeptical Evaluator**, because an agent grading its own output skews positive. Review uses **cross-model adjudication**: one model produces, a *different* model verifies ("is this reproducible and correct?"). With the human merge gate removed, cross-model review and the project's test suite together are the **merge contract**: review is **mandatory before every merge**, not an Oracle-style opt-in, and the tests are the objective bar the autonomous merge is checked against. The loop is bounded: a run the Evaluator cannot bring to a passing verdict within a few rounds is not retried indefinitely, it is escalated to the blocked-on-Michael state (Layer 3), per the escalation policy, for a human decision.
 
-Jarvis already implements both halves of this loop as skills Michael drives directly: **`/work`** is the Generator (it takes a project's task list and drives each task through plan, implement, test, fix, and simplify), and **`/review`** is the Evaluator (a five-agent review panel that returns one consolidated verdict). Both stay, and both stay directly invokable by Michael. Today they run single-model. Layer 2 adds **cross-model adjudication**: the Evaluator resolves to a model from a different provider family than the Generator (see **Model selection policy**). When the engine runs a project autonomously, cross-model adjudication is **mandatory before every merge**, because there is no human gate behind it to catch a miss. When Michael runs `/review` by hand, it stays single-model by default (fast and cheap for the everyday dev loop) and takes a **`--cross-model`** flag to opt into adjudication for a change that warrants it. Either way Layer 2 wraps the existing skills; it does not replace them.
+Rune already implements both halves of this loop as skills Michael drives directly: **`/work`** is the Generator (it takes a project's task list and drives each task through plan, implement, test, fix, and simplify), and **`/review`** is the Evaluator (a five-agent review panel that returns one consolidated verdict). Both stay, and both stay directly invokable by Michael. Today they run single-model. Layer 2 adds **cross-model adjudication**: the Evaluator resolves to a model from a different provider family than the Generator (see **Model selection policy**). When the engine runs a project autonomously, cross-model adjudication is **mandatory before every merge**, because there is no human gate behind it to catch a miss. When Michael runs `/review` by hand, it stays single-model by default (fast and cheap for the everyday dev loop) and takes a **`--cross-model`** flag to opt into adjudication for a change that warrants it. Either way Layer 2 wraps the existing skills; it does not replace them.
 
 The Generator works **test-first**. For each task it writes the tests that mirror the project's `test-plan.md`, watches them fail, then writes implementation until they pass. Fixing the contract before the code exists is what gives the Evaluator something objective to check and keeps the loop from grading vibes. This is the engine's default execution discipline, established early as a change to how `/work` runs and applied from the first phase onward. This project's own [tasks.md](tasks.md) is built the same way: every phase opens with its tests.
 
@@ -257,7 +257,7 @@ The intent layer is an engine. It has three I/O surfaces. They are not three fea
 
 ### Surface 1: Journal: passive intake
 
-Michael keeps doing what he already does: dropping raw notes into the daily journal. Jarvis translates those notes into todos and scope changes for the right product or project. This is a **new flow** and it sits in **Regime A** (the reliable substrate). It is **lossy by nature** (raw notes are ambiguous), so it is **propose-and-approve** and never silently rewrites scope. Michael sees what Jarvis inferred and confirms it.
+Michael keeps doing what he already does: dropping raw notes into the daily journal. Rune translates those notes into todos and scope changes for the right product or project. This is a **new flow** and it sits in **Regime A** (the reliable substrate). It is **lossy by nature** (raw notes are ambiguous), so it is **propose-and-approve** and never silently rewrites scope. Michael sees what Rune inferred and confirms it.
 
 ### Surface 2: Cockpit: the web view
 
@@ -315,7 +315,7 @@ explicit action buttons: **Approve**, **Refine**, **Abandon**.
 │                                                    │
 │ … (earlier transcript, scrollable) …               │
 │                                                    │
-│ Jarvis: Here is the proposed spec — please review. │
+│ Rune: Here is the proposed spec — please review. │
 │                                                    │
 │ ┌─ Proposed Spec ────────────────────────────────┐ │
 │ │ title: Growth funnel onboarding redesign        │ │
@@ -419,31 +419,31 @@ Phase 6 A4.2). On run:
 
 - if the user supplies a product slug (`/plan aura`), the session starts
   immediately scoped to that product;
-- if the user omits the product, Jarvis replies with a list of registered
+- if the user omits the product, Rune replies with a list of registered
   products and asks which one;
 - on every subsequent message until the session terminates, the resolver
   routes the message into the planning handler instead of the default
   conversation thread (the active planning session is the priority router
   signal, analogous to active review sessions today);
-- when the spec is proposed, Jarvis sends the structured-approval message
+- when the spec is proposed, Rune sends the structured-approval message
   (see Approval inline-buttons below);
 - `/clear` or `/fresh` abandons the planning session.
 
 ```
 You: /plan aura
 
-Jarvis: Planning a project for aura. What user problem does this solve?
+Rune: Planning a project for aura. What user problem does this solve?
         — planning · /clear to abandon
 
 You: onboarding completion is at 38%, want to lift it to 60%
 
-Jarvis: Got it. Is this a new flow end-to-end, or are we changing the
+Rune: Got it. Is this a new flow end-to-end, or are we changing the
         existing one? What's the highest-friction step today?
         — planning · /clear to abandon
 
 …
 
-Jarvis: Here is the proposed spec — approve to scaffold the project.
+Rune: Here is the proposed spec — approve to scaffold the project.
 
         [Approve]  [Refine]  [Abandon]
 ```
@@ -479,7 +479,7 @@ ignores `opts.approval` per the existing contract and the cockpit
 approval inbox handles the same artifact.
 
 ```
-Jarvis: Approve this journal-intent proposal for aura?
+Rune: Approve this journal-intent proposal for aura?
 
         ┌────────────────────────────────────────┐
         │ "Carry over: investigate caching layer  │
@@ -497,17 +497,17 @@ proposal acted on in either surface is reflected in both.
 
 ## Operational Self-Improvement
 
-Self-improvement today is narrow: the nightly job compiles raw notes into the wiki. That is improvement of the *knowledge base*, not of *Jarvis*.
+Self-improvement today is narrow: the nightly job compiles raw notes into the wiki. That is improvement of the *knowledge base*, not of *Rune*.
 
-This project adds self-improvement about **how Jarvis itself operates**: detecting bugs that were fixed (so the fix becomes a remembered pattern), repeated user questions that should become commands, and recurring friction in how Jarvis is used. It runs as a **nightly loop** that extends the nightly vault review Jarvis already does: today that loop reads the vault and updates the vault; this widens it to read Jarvis's own operation and improve Jarvis itself.
+This project adds self-improvement about **how Rune itself operates**: detecting bugs that were fixed (so the fix becomes a remembered pattern), repeated user questions that should become commands, and recurring friction in how Rune is used. It runs as a **nightly loop** that extends the nightly vault review Rune already does: today that loop reads the vault and updates the vault; this widens it to read Rune's own operation and improve Rune itself.
 
 ### The sensor layer
 
 The loop is only as good as what it can sense. Three sources feed it:
 
-- **The vault.** Already the largest sensor surface, and a shared one: journals, reviews, and project notes carry friction signals for every product, Jarvis included.
-- **Product telemetry.** As Aura and Assay go live they emit usage and product telemetry. Jarvis has access to those streams, and they become sensor input for each product's self-improvement.
-- **Jarvis's own interactions.** Every Jarvis interaction is logged, successful or not. Failed, mis-routed, or rephrased interactions are the highest-value signal: direct evidence of where Jarvis falls short.
+- **The vault.** Already the largest sensor surface, and a shared one: journals, reviews, and project notes carry friction signals for every product, Rune included.
+- **Product telemetry.** As Aura and Assay go live they emit usage and product telemetry. Rune has access to those streams, and they become sensor input for each product's self-improvement.
+- **Rune's own interactions.** Every Rune interaction is logged, successful or not. Failed, mis-routed, or rephrased interactions are the highest-value signal: direct evidence of where Rune falls short.
 
 ### The synthesis stage
 
@@ -517,7 +517,7 @@ Raw sensor signal cannot go straight into a decision. A night of interaction log
 
 The loop reads the synthesized digest and decides what to do about it. It has two halves. It files the friction signals worth acting on as projects, and it **discards the rest**. The discard half is not optional: a system that watches its own friction will generate marginal self-work without bound, so admission control on the backlog matters as much as detection.
 
-The key recursion: **Jarvis is itself a product.** It has a repo (`~/workspace/jarvis`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Jarvis product, fed by the observation loop above. The loop both files projects and, within the concurrency and escalation rules, dispatches the engine to execute them, improving Jarvis overnight. A self-generated project has no Michael awake at 3am to approve its spec, so the escalation policy governs that gate too: a low-risk self-improvement is specced and run unattended; anything the policy flags waits for Michael's review.
+The key recursion: **Rune is itself a product.** It has a repo (`~/workspace/jarvis`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Rune product, fed by the observation loop above. The loop both files projects and, within the concurrency and escalation rules, dispatches the engine to execute them, improving Rune overnight. A self-generated project has no Michael awake at 3am to approve its spec, so the escalation policy governs that gate too: a low-risk self-improvement is specced and run unattended; anything the policy flags waits for Michael's review.
 
 One input already exists. The **Ask-Twice telemetry** from [03-resolver](../03-resolver/spec.md) logs repeated intents and proposes new skills or crons. The observation loop generalizes it: it widens the signal from repeated questions to bugs, friction, and failed interactions, adds the synthesis and discard stages, and routes survivors as full projects rather than only skill-or-cron proposals.
 
@@ -529,7 +529,7 @@ So the engine that takes "build feature X for Aura" from idea to shipped is the 
 
 The v1 wedge, stated as a single sentence:
 
-> **Jarvis takes a coding idea, discusses it into a spec, dispatches Claude plus Codex to build and cross-review it in a sandbox, supervises the run, merges the result when the gates pass, and reports back.**
+> **Rune takes a coding idea, discusses it into a spec, dispatches Claude plus Codex to build and cross-review it in a sandbox, supervises the run, merges the result when the gates pass, and reports back.**
 
 ### Scope constraints
 
@@ -540,7 +540,7 @@ The v1 wedge, stated as a single sentence:
 
 ### Concurrency model
 
-Jarvis runs **multiple products concurrently, but only one project per product at a time**. Two products advancing in parallel (an Aura project and an Assay project) is the target state; two projects on the same product is not. Serializing per product is deliberate: with merges now autonomous (no human gate), one-project-per-product guarantees no two runs ever touch the same repo at once, so concurrent auto-merges cannot collide. A global cap still bounds total parallelism across products.
+Rune runs **multiple products concurrently, but only one project per product at a time**. Two products advancing in parallel (an Aura project and an Assay project) is the target state; two projects on the same product is not. Serializing per product is deliberate: with merges now autonomous (no human gate), one-project-per-product guarantees no two runs ever touch the same repo at once, so concurrent auto-merges cannot collide. A global cap still bounds total parallelism across products.
 
 The work-runner already enforces this shape at small scale: a global cap (`WORK_RUN_GLOBAL_CAP`) and a per-project cap (one run per project at a time). The intent layer's scheduler tightens the per-project cap into a **per-product** cap of one and generalizes the global cap; it does not introduce a new concurrency model.
 
@@ -550,7 +550,7 @@ Per-project isolation via a **git worktree per project**. Each running project g
 
 ### Build-vs-adopt
 
-Settled: **keep Jarvis's own Node/TS spine.** Borrow patterns from OpenClaw, Hermes, Amp, and the practitioner survey. Adopt **neither** OpenClaw nor Hermes wholesale as a framework. The plumbing patterns are well-understood; re-implementing them on Jarvis's existing spine is cheaper than absorbing a framework's worldview.
+Settled: **keep Rune's own Node/TS spine.** Borrow patterns from OpenClaw, Hermes, Amp, and the practitioner survey. Adopt **neither** OpenClaw nor Hermes wholesale as a framework. The plumbing patterns are well-understood; re-implementing them on Rune's existing spine is cheaper than absorbing a framework's worldview.
 
 ### Definition of done (v1 wedge)
 
@@ -562,11 +562,11 @@ satisfied until a user can trigger or observe it from that surface.
 
 - A coding idea, raised in chat or surfaced from the journal, becomes an **approved spec** through conversation. Michael's only required inputs are answering scoping questions and approving the spec.
   *Reachable from: Telegram (`/plan <product>` command) and cockpit (project card → **Plan** button → planning panel).*
-- The approved spec is **dispatched into a sandboxed run** (git worktree, scoped credentials), a **different model cross-reviews** the output, and when cross-review and the test suite pass, Jarvis **merges the result itself** onto the product repo's main line.
+- The approved spec is **dispatched into a sandboxed run** (git worktree, scoped credentials), a **different model cross-reviews** the output, and when cross-review and the test suite pass, Rune **merges the result itself** onto the product repo's main line.
   *Reachable from: cockpit (planning panel → **Approve** triggers the dispatch; in-flight run progress shows the round-by-round status).*
 - The cockpit shows, without Michael asking, **which projects are running and which are blocked on him.**
   *Reachable from: cockpit (in-flight run progress on the project card + approval inbox for the blocked-on-human escalations).*
-- **Merging is autonomous.** When the automated gates pass, Jarvis lands the change; Michael is involved only when the escalation policy flags a change as too high-risk to merge unattended.
+- **Merging is autonomous.** When the automated gates pass, Rune lands the change; Michael is involved only when the escalation policy flags a change as too high-risk to merge unattended.
   *Reachable from: Telegram (engine notification on terminal merge — `✅ aura/02-growth merged to main…`).*
 - Two projects running concurrently across two products do not corrupt either repo's working tree.
   *Reachable from: cockpit (two project cards both showing `running` status concurrently); confirmable by inspecting the worktrees on disk after the run.*
@@ -598,7 +598,7 @@ The ordering principle: build the foundational tier first (everything depends on
 
 > Depends on: Phase 1 registry.
 
-- Extend the cockpit. 06-webview shipped the cockpit's first version (the localhost surface, the Telegram session sharing, the light sidebar); this phase extends it into the full product/project cockpit reading the registry. 06-webview is **not** retired or folded in: it stays as the historical record of what it shipped. No project owns the cockpit. The cockpit is part of the Jarvis product; one project launched it, this one improves it, and later projects will too.
+- Extend the cockpit. 06-webview shipped the cockpit's first version (the localhost surface, the Telegram session sharing, the light sidebar); this phase extends it into the full product/project cockpit reading the registry. 06-webview is **not** retired or folded in: it stays as the historical record of what it shipped. No project owns the cockpit. The cockpit is part of the Rune product; one project launched it, this one improves it, and later projects will too.
 - Journal-to-intent flow: synthesize journal notes into vault product files, propose carried-over roadmap items, propose-and-approve.
 
 ### Phase 3: Deliberative intent layer and v1 wedge core
@@ -623,9 +623,9 @@ The ordering principle: build the foundational tier first (everything depends on
 
 > Depends on: the engine from Phases 3 and 4.
 
-- The sensor layer (vault, product telemetry, logged Jarvis interactions) and the synthesis stage that diarizes raw signal into a digest.
+- The sensor layer (vault, product telemetry, logged Rune interactions) and the synthesis stage that diarizes raw signal into a digest.
 - The observation loop: extend the existing Ask-Twice telemetry to also notice fixed bugs, recurring friction, and failed interactions; triage candidates, file the survivors as projects into `docs/projects/ideas.md`, discard the rest.
-- Point the existing engine at the Jarvis product, running as a nightly loop. No new execution subsystem.
+- Point the existing engine at the Rune product, running as a nightly loop. No new execution subsystem.
 
 ### Later (out of v1)
 

@@ -46,10 +46,10 @@ a trigger fires.
      `<WORKTREE_ROOT>/<product>/<project>` tree.
    - **Credential scoping** (A1.2): the spawn env contains only the run's own
      product's credentials plus a small `process.env` allowlist
-     (`PATH HOME USER LANG LC_ALL TERM SHELL TMPDIR`). Jarvis's own secrets
+     (`PATH HOME USER LANG LC_ALL TERM SHELL TMPDIR`). Rune's own secrets
      (TELEGRAM_BOT_TOKEN, READWISE_TOKEN, …) never reach the child.
-   - **No Jarvis credentials → no exfiltration path that matters most.** A run
-     cannot leak Jarvis secrets because it cannot read them. The remaining
+   - **No Rune credentials → no exfiltration path that matters most.** A run
+     cannot leak Rune secrets because it cannot read them. The remaining
      concern is leaking the product's own repo state, which would happen via the
      credentials a run is allowed to use anyway. Note specifically that the
      starter allowlist (`github.com` + the npm registry) covers **write**
