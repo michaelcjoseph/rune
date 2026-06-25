@@ -102,7 +102,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, update the
+- [x] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, update the
       local git remote URL, and verify remote operations from the renamed checkout with
       `git fetch` plus either an authenticated dry-run push or a real temporary-branch push.
       Update any local repo metadata that depends on the remote name. May proceed independently
