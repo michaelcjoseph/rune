@@ -39,7 +39,7 @@ const config = {
   TELEGRAM_USER_ID: Number(required('TELEGRAM_USER_ID')),
 
   VAULT_DIR: required('VAULT_DIR'),
-  WORKSPACE_DIR: optional('WORKSPACE_DIR'),
+  WORKSPACE_DIR: optional('RUNE_WORKSPACE_DIR') ?? PROJECT_ROOT,
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
   LENNY_MCP_TOKEN: process.env['LENNY_MCP_TOKEN'] || '',
@@ -73,7 +73,7 @@ const config = {
   IMPLICIT_CRM_NAMES: (process.env['IMPLICIT_CRM_NAMES'] || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
-  LOGS_DIR: join(PROJECT_ROOT, 'logs'),
+  LOGS_DIR: optional('RUNE_LOGS_DIR') ?? join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {
     return join(this.LOGS_DIR, 'tg-sessions.json');

@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Listener = (event?: any) => unknown;
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const WORKSPACE_ROOT = process.env.RUNE_WORKSPACE_DIR || PROJECT_ROOT;
+const LIVE_WORKTREE_PATH = join(WORKSPACE_ROOT, '.worktrees', 'aura', '17-cockpit-redesign');
 
 function makeRoot() {
   let html = '';
@@ -192,7 +197,7 @@ function productView(overrides: Record<string, unknown> = {}) {
       state: 'running',
       startedAt: '2026-06-23T12:00:00.000Z',
       elapsedMs: 125_000,
-      worktreePath: '/Users/jarvis/workspace/jarvis/.worktrees/aura/17-cockpit-redesign',
+      worktreePath: LIVE_WORKTREE_PATH,
       agents: [
         { role: 'qa', active: true },
         { role: 'coder', active: false },
@@ -210,7 +215,7 @@ const liveSnapshot = {
   state: 'running',
   tasks: { done: 4, total: 9 },
   elapsedMs: 130_000,
-  worktreePath: '/Users/jarvis/workspace/jarvis/.worktrees/aura/17-cockpit-redesign',
+  worktreePath: LIVE_WORKTREE_PATH,
   agents: [
     { role: 'qa', active: true },
     { role: 'coder', active: true },
@@ -429,7 +434,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/4\s*(\/|of)\s*9|4\s+done/i);
     expect(html).toMatch(/running/i);
     expect(html).toMatch(/2m5s|2m10s|2\s*min/i);
-    expect(html).toContain('/Users/jarvis/workspace/jarvis/.worktrees/aura/17-cockpit-redesign');
+    expect(html).toContain(LIVE_WORKTREE_PATH);
     expect(html).toMatch(/qa[\s\S]*active|active[\s\S]*qa/i);
     expect(html).toMatch(/coder[\s\S]*active|active[\s\S]*coder/i);
     expect(html).toContain('qa wrote failing tests');

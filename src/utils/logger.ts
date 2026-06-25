@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 type Level = 'info' | 'warn' | 'error' | 'debug';
 
 const LOGGER_PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const LOGGER_LOGS_DIR = process.env.JARVIS_LOGS_DIR || join(LOGGER_PROJECT_ROOT, 'logs');
+const LOGGER_LOGS_DIR = process.env.RUNE_LOGS_DIR || join(LOGGER_PROJECT_ROOT, 'logs');
 const LOG_FILE_NAME = 'jarvis.log';
 const LOG_ROTATE_BYTES = 50 * 1024 * 1024; // 50 MB → rename to .1 on next open
 

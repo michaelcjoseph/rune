@@ -121,6 +121,11 @@ _None yet._
 
 ## Next Task Handoff
 
-- tests failed, `24` passed.
+- : removed the hardcoded private checkout fixture path.
 
-The failures are clean assertion failures covering the expected Phase 1 contract: `RUNE_LOGS_DIR`, `RUNE_WORKSPACE_DIR`, stale `JARVIS_LOGS_DIR`, and the two known private path holdouts. No implementation changes were made, and `git status --short` is clean after the run.
+Verified:
+- `npm test -- --run src/rebrand-paths.test.ts src/config.test.ts src/utils/logger.test.ts` — 32 passed
+- `npm test -- --run src/server/static/product-deep-view-client.test.ts` — 43 passed
+- `git diff --check` — clean
+
+No commit made.

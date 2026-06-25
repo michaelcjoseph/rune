@@ -39,7 +39,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **env-var-path-extraction** — Extract remaining hardcoded
+- [x] **env-var-path-extraction** — Extract remaining hardcoded
       `/Users/jarvis/workspace/jarvis/...` references into `RUNE_*` env vars following the
       existing `process.env.<VAR> || <computedDefault>` style. In the same pass, rename
       `JARVIS_LOGS_DIR` to `RUNE_LOGS_DIR`, update `logger.ts` and every consumer, and convert
