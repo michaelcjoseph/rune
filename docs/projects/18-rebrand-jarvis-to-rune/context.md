@@ -121,6 +121,17 @@ _None yet._
 
 ## Next Task Handoff
 
-- -only prompt-body sweep.
+- pected against the pre-rename implementation:
 
-One note: [.agents/skills/work/SKILL.md](jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune/.agents/skills/work/SKILL.md:263) still has a parenthetical `(Jarvis)`, but `.agents` is read-only in this sandbox. I attempted a patch and it was rejected by the permission profile.
+- `src/config.test.ts`: 3 failed, 22 passed
+- `src/server/auth.test.ts`: 10 failed, 9 passed
+- `src/mcp/server.test.ts`: 3 failed, 11 passed
+- `src/bot/handlers/text.test.ts`: 2 failed, 108 passed
+
+No implementation files changed and no commit was made.
+- est.ts src/config.test.ts src/mcp/server.test.ts src/server/auth.test.ts`
+
+Result: red, 18 failing tests. The remaining failures are the intended runtime-rename implementation gaps: current code still returns `jarvis-kb`, old auth/config names, and Jarvis help text/tool descriptions. No commit made.
+- o hits.
+- `git diff --check -- ...` passed.
+- `npm test -- src/bot/handlers/text.test.ts src/config.test.ts src/mcp/server.test.ts src/server/auth.test.ts` runs, and remains red as intended for the test-first runtime rename: 18 failures where production still emits/reads the old runtime identifiers.

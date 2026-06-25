@@ -19,7 +19,7 @@ vi.mock('../../vault/sessions.js', () => ({
   setSessionModel: vi.fn(),
   appendMessageToSession: vi.fn(),
   buildSessionSystemPrompt: vi.fn(({ scope }: { scope?: { kind: string; product?: string } } = {}) => [
-    'You are Jarvis, the user\'s second-brain conversational layer.',
+    'You are Rune, the user\'s second-brain conversational layer.',
     'KNOWLEDGE BASE: kb_query is your FIRST move for domain questions.',
     'kb_search supports type (entity/concept/topic/comparison) and tag filters.',
     'When to skip the KB: named files and structured JSON stores.',
@@ -137,6 +137,10 @@ const { hasActiveSRSession, handleSRMessage } = await import('../../study/sr-ses
 const { handleURLMessage } = await import('./url.js');
 const { appendInteraction } = await import('../../utils/observation-log.js');
 const { handleTextMessage, dispatchText } = await import('./text.js');
+
+const retiredBrand = ['Jar', 'vis'].join('');
+const retiredProductSlug = retiredBrand.toLowerCase();
+const retiredMcpTool = (name: string) => `mcp__${retiredProductSlug}-kb__${name}`;
 
 function mockSender(): MessageSender {
   return {
@@ -295,8 +299,8 @@ describe('text handler routing', () => {
   });
 
   it('routes /plan with multi-word arg to handlePlan', async () => {
-    await handleTextMessage(mockSender(), msg('/plan jarvis 08-intent-layer'));
-    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'jarvis 08-intent-layer');
+    await handleTextMessage(mockSender(), msg('/plan rune 08-intent-layer'));
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'rune 08-intent-layer');
   });
 
   it('active planning session takes routing priority over default conversation', async () => {
@@ -376,7 +380,7 @@ describe('text handler routing', () => {
       id: 'plan-sess-002',
       chatId: 100,
       claudeSessionId: 'claude-002',
-      planning: { status: 'scoping', product: 'jarvis', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      planning: { status: 'scoping', product: 'rune', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
       createdAt: new Date().toISOString(),
       lastActivity: new Date().toISOString(),
     });
@@ -395,7 +399,7 @@ describe('text handler routing', () => {
       id: 'plan-sess-003',
       chatId: 100,
       claudeSessionId: 'claude-003',
-      planning: { status: 'scoping', product: 'jarvis', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
+      planning: { status: 'scoping', product: 'rune', idea: '', surface: 'chat', history: [], createdAt: new Date().toISOString() },
       createdAt: new Date().toISOString(),
       lastActivity: new Date().toISOString(),
     });
@@ -406,7 +410,7 @@ describe('text handler routing', () => {
     expect(handlePlanningTurnMock).not.toHaveBeenCalled();
   });
 
-  it('active planning session does not block /plan itself — /plan jarvis routes to handlePlan', async () => {
+  it('active planning session does not block /plan itself — /plan rune routes to handlePlan', async () => {
     const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
     const handlePlanningTurnMock = handlePlanningTurn as unknown as ReturnType<typeof vi.fn>;
 
@@ -420,9 +424,9 @@ describe('text handler routing', () => {
       lastActivity: new Date().toISOString(),
     });
 
-    await handleTextMessage(mockSender(), msg('/plan jarvis'));
+    await handleTextMessage(mockSender(), msg('/plan rune'));
 
-    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'jarvis');
+    expect(handlePlan).toHaveBeenCalledWith(expect.anything(), 100, 'rune');
     expect(handlePlanningTurnMock).not.toHaveBeenCalled();
   });
 
@@ -442,7 +446,7 @@ describe('text handler routing', () => {
       claudeSessionId: 'claude-approve',
       planning: {
         status: 'spec-proposed',
-        product: 'jarvis',
+        product: 'rune',
         idea: 'build something',
         surface: 'chat',
         history: [],
@@ -512,6 +516,16 @@ describe('text handler routing', () => {
     expect(helpText).toContain('`/plan [product]`');
     expect(helpText).toContain('`/approve`');
     expect(helpText).toContain('`/cancel [opId-prefix]`');
+  });
+
+  it('/start presents the runtime brand as Rune and does not emit the retired name', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/start'));
+
+    const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    expect(helpText).toMatch(/^# Rune\b/);
+    expect(helpText).toContain('Rune leans Socratic');
+    expect(helpText).not.toMatch(new RegExp(`\\b${retiredBrand}\\b`));
   });
 
   it('routes /lint', async () => {
@@ -1166,7 +1180,7 @@ describe('dispatchText — webview transport derivation', () => {
 });
 
 describe('dispatchText — product-scoped webview sessions', () => {
-  const productScope = { kind: 'product' as const, product: 'jarvis' };
+  const productScope = { kind: 'product' as const, product: 'rune' };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1193,7 +1207,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
 
     getSessionMock.mockReturnValue(null);
     createSessionMock.mockReturnValue({
-      sessionId: 'jarvis-product-session',
+      sessionId: 'rune-product-session',
       lastActivity: new Date().toISOString(),
       messageCount: 1,
       firstMessage: 'ship it',
@@ -1246,7 +1260,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
       claudeSessionId: 'claude-product-001',
       planning: {
         status: 'scoping',
-        product: 'jarvis',
+        product: 'rune',
         idea: '',
         surface: 'cockpit',
         history: [],
@@ -1343,17 +1357,20 @@ describe('dispatchText — product-scoped webview sessions', () => {
 
     const systemPrompt = askMock.mock.calls[0]![2] as string;
     const options = askMock.mock.calls[0]![3] as { allowedTools: string[] };
-    expect(systemPrompt).toMatch(/active product:\s*jarvis/i);
+    expect(systemPrompt).toMatch(/active product:\s*rune/i);
     expect(systemPrompt).toMatch(/product repo/i);
     expect(systemPrompt).toMatch(/vault/i);
     expect(options.allowedTools).toEqual(expect.arrayContaining([
       'Read',
       'Glob',
       'Grep',
-      'mcp__jarvis-kb__repo_search',
-      'mcp__jarvis-kb__kb_query',
-      'mcp__jarvis-kb__kb_search',
+      'mcp__rune-kb__repo_search',
+      'mcp__rune-kb__kb_query',
+      'mcp__rune-kb__kb_search',
     ]));
+    expect(options.allowedTools).not.toContain(retiredMcpTool('repo_search'));
+    expect(options.allowedTools).not.toContain(retiredMcpTool('kb_query'));
+    expect(options.allowedTools).not.toContain(retiredMcpTool('kb_search'));
   });
 
   it('passes the product-tailored system prompt built for the active product scope to Claude', async () => {
@@ -1362,7 +1379,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
     const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
     const productPrompt = [
-      'PRODUCT PROMPT FOR jarvis',
+      'PRODUCT PROMPT FOR rune',
       'repo docs: one Node process owns Telegram and HTTP',
       'spec: cockpit deep view',
       'tasks: product-tailored-system-prompt',

@@ -78,7 +78,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **runtime-identifier-and-string-rename** — test-plan.md §4. Cover
+- [x] Write the test suite for **runtime-identifier-and-string-rename** — test-plan.md §4. Cover
       command routing, MCP/server metadata, config resolution, and representative user-facing
       output affected by the rename.
 - [ ] Confirm the suite fails (red) before implementation begins.

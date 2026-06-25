@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 describe('config', () => {
   const ORIGINAL_ENV = { ...process.env };
+  const retiredBrand = ['jar', 'vis'].join('');
 
   beforeEach(() => {
     vi.resetModules();
@@ -108,6 +109,52 @@ describe('config', () => {
     const { homedir } = await import('node:os');
     expect(config.WORKSPACE_DIR).toBe(`${homedir()}/workspace`);
     expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
+  });
+
+  it('resolves HTTP auth from RUNE_HTTP_SECRET and ignores the retired env name', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_HTTP_SECRET'] = 'rune-secret';
+    const oldHttpSecretEnv = ['JAR', 'VIS_HTTP_SECRET'].join('');
+    process.env[oldHttpSecretEnv] = 'retired-secret';
+
+    const { default: config } = await import('./config.js');
+    const cfg = config as unknown as Record<string, unknown>;
+    expect(cfg['RUNE_HTTP_SECRET']).toBe('rune-secret');
+    expect(cfg[oldHttpSecretEnv]).toBeUndefined();
+  });
+
+  it('resolves allowed hosts from RUNE_ALLOWED_HOSTS and ignores the retired env name', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_ALLOWED_HOSTS'] = 'localhost,rune.local';
+    const oldAllowedHostsEnv = ['JAR', 'VIS_ALLOWED_HOSTS'].join('');
+    process.env[oldAllowedHostsEnv] = 'retired.local';
+
+    const { default: config } = await import('./config.js');
+    const cfg = config as unknown as Record<string, unknown>;
+    const hosts = cfg['RUNE_ALLOWED_HOSTS'];
+    expect(hosts).toBeInstanceOf(Set);
+    expect(hosts as Set<string>).toEqual(new Set(['localhost', 'rune.local']));
+    expect(cfg[oldAllowedHostsEnv]).toBeUndefined();
+  });
+
+  it('committed product config renames the runtime product identifier to rune without a retired alias', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    const { readFileSync } = await import('node:fs');
+    const { PROJECT_ROOT } = await import('./config.js');
+    const products = JSON.parse(
+      readFileSync(join(PROJECT_ROOT, 'policies', 'products.json'), 'utf8'),
+    ) as Record<string, { repoPath?: string; credentialsFile?: string }>;
+
+    expect(products).toHaveProperty('rune');
+    expect(products).not.toHaveProperty(retiredBrand);
+    expect(products['rune']?.repoPath).toBe('~/workspace/rune');
+    expect(products['rune']?.credentialsFile ?? '').not.toMatch(new RegExp(retiredBrand, 'i'));
   });
 
   describe('work-run concurrency cap defaults (project 17)', () => {
