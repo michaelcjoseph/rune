@@ -119,7 +119,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
+- [x] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
       public platform under a controlled login, then record ownership details privately. If the
       handle is no longer available, escalate immediately and pause approval because the
       brand-ownability premise has failed; do not silently proceed with a substitute handle.

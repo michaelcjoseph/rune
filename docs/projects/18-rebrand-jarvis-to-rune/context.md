@@ -121,6 +121,6 @@ _None yet._
 
 ## Next Task Handoff
 
-- est rationale for `secure-runeai-handle` in [test-plan.md](jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune/docs/projects/18-rebrand-jarvis-to-rune/test-plan.md:89).
+- i` resolves to an existing GitHub organization named `RuneAI`, so if GitHub is the intended public platform, the spec requires escalation and pause rather than choosing another handle.
 
-No tests run; this was a documentation-only rationale update. I left `tasks.md` checkbox state unchanged per coder role boundaries.
+Verification: `git status --short` is clean; no tests run because this task has a reviewed no-code-test rationale.
