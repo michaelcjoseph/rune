@@ -33,7 +33,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **env-var-path-extraction** — test-plan.md §2. Prove that unset
+- [x] Write the test suite for **env-var-path-extraction** — test-plan.md §2. Prove that unset
       `RUNE_*` defaults resolve to working computed paths and that overrides win.
 - [ ] Confirm the suite fails (red) before implementation begins.
 

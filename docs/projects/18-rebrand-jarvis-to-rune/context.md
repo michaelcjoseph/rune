@@ -121,9 +121,4 @@ _None yet._
 
 ## Next Task Handoff
 
-- `
-- `git ls-files | rg -i jarvis | wc -l` → `11`
-- `git grep -ino -I 'com\.jarvis\.daemon' | wc -l` → `40`
-- `rg -i 'jarvis' docs/rebrand-rune-phase-0-inventory.md` → no matches
-
-No code tests run; this is the docs/config-only inventory task, and the verification is command-based per QA’s rationale.
+- t.ts src/utils/logger.test.ts` is red as expected for this write-first task: 8 failures against the current unimplemented path layer. `git add` was blocked by sandbox permissions on the external git index, so my final `config.test.ts` refinement is unstaged on top of the already-staged test changes.
