@@ -96,7 +96,7 @@ try {
   log.error('FixAttempt startup reconcile threw', { error: (err as Error).message });
 }
 
-// Fail fast if .claude/settings.json (declaring the jarvis-kb MCP server) is
+// Fail fast if .claude/settings.json (declaring the rune-kb MCP server) is
 // missing — every Claude CLI spawn passes --mcp-config to it. Without this
 // check a missing file would surface as per-call CLI errors across chat,
 // agents, and cron.
@@ -251,11 +251,11 @@ void cleanupOrphanWorktrees({
 });
 
 // /mcp Claude App connector (project 16): mounted only when the gate secret
-// exists — the OAuth consent flow is gated on JARVIS_HTTP_SECRET, and tokens
+// exists — the OAuth consent flow is gated on RUNE_HTTP_SECRET, and tokens
 // bind to the one known user id. Without the secret the route stays absent.
-const mcpOauth = config.JARVIS_HTTP_SECRET
+const mcpOauth = config.RUNE_HTTP_SECRET
   ? createMcpOAuth({
-      gateSecret: config.JARVIS_HTTP_SECRET,
+      gateSecret: config.RUNE_HTTP_SECRET,
       userId: String(config.TELEGRAM_USER_ID),
       issuerBaseUrl: config.MCP_ISSUER_URL || undefined,
       // Never-expire, persisted: the App authenticates once and survives
@@ -266,7 +266,7 @@ const mcpOauth = config.JARVIS_HTTP_SECRET
     })
   : null;
 if (!mcpOauth) {
-  log.warn('JARVIS_HTTP_SECRET not set — /mcp (Claude App connector) not mounted');
+  log.warn('RUNE_HTTP_SECRET not set — /mcp (Claude App connector) not mounted');
 }
 const server = startHttpServer(
   { webview, isReady: () => ready },
@@ -291,7 +291,7 @@ getSkillRegistry();
 
 ready = true;
 
-log.info('Jarvis started', {
+log.info('Rune started', {
   vault: config.VAULT_DIR,
   http: `${config.HTTP_HOST}:${config.HTTP_PORT}`,
 });

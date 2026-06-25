@@ -55,12 +55,12 @@ describe('formatToolUse', () => {
     expect(formatToolUse('Bash', { command: 'ls -la' })).toBe('Bash: ls -la');
   });
 
-  it('formats jarvis-kb MCP tools with friendly prefixes', () => {
-    expect(formatToolUse('mcp__jarvis-kb__kb_query', { query: 'capital flows' }))
+  it('formats rune-kb MCP tools with friendly prefixes', () => {
+    expect(formatToolUse('mcp__rune-kb__kb_query', { query: 'capital flows' }))
       .toBe('KB query: capital flows');
-    expect(formatToolUse('mcp__jarvis-kb__kb_search', { query: 'X' })).toBe('KB search: X');
-    expect(formatToolUse('mcp__jarvis-kb__kb_stats', {})).toBe('KB stats');
-    expect(formatToolUse('mcp__jarvis-kb__kb_lint', {})).toBe('KB lint');
+    expect(formatToolUse('mcp__rune-kb__kb_search', { query: 'X' })).toBe('KB search: X');
+    expect(formatToolUse('mcp__rune-kb__kb_stats', {})).toBe('KB stats');
+    expect(formatToolUse('mcp__rune-kb__kb_lint', {})).toBe('KB lint');
   });
 
   it('formats other MCP tools with a generic MCP prefix', () => {

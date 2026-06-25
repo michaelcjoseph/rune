@@ -23,11 +23,11 @@
       "registry.npmjs.org"
     ]
   },
-  "jarvis": {
-    "repoPath": "~/workspace/jarvis",
+  "rune": {
+    "repoPath": "~/workspace/rune",
     "baseBranch": "main",
     "orchestratedMode": true,
-    "credentialsFile": "~/.config/jarvis/credentials/jarvis/.env",
+    "credentialsFile": "~/.config/rune/credentials/rune/.env",
     "egressAllowlist": [
       "github.com",
       "api.github.com",

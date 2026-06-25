@@ -21,6 +21,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -83,10 +84,10 @@ type RuntimeMcpFactory = (opts: { tools: string[] }) => McpServer;
 
 const retiredBrand = ['Jar', 'vis'].join('');
 const retiredServerName = `${retiredBrand.toLowerCase()}-kb`;
-const legacyFactoryExport = ['create', 'Jar', 'vis', 'McpServer'].join('');
+const renamedFactoryExport = 'createRuneMcpServer';
 
 function getFactory(): RuntimeMcpFactory | undefined {
-  return (serverModule as Record<string, unknown>)[legacyFactoryExport] as
+  return (serverModule as Record<string, unknown>)[renamedFactoryExport] as
     | RuntimeMcpFactory
     | undefined;
 }
@@ -165,15 +166,15 @@ describe('MCP server factory contract', () => {
     // Clean assertion: if the export is missing this fails with a descriptive
     // message, not a file-level crash.
     expect(
-      typeof (serverModule as Record<string, unknown>)[legacyFactoryExport],
-      `${legacyFactoryExport} must be exported from src/mcp/server.ts`,
+      typeof (serverModule as Record<string, unknown>)[renamedFactoryExport],
+      `${renamedFactoryExport} must be exported from src/mcp/server.ts`,
     ).toBe('function');
   });
 
   it('App-surface opts register exactly the six App tools', async () => {
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
-      expect.fail(`${legacyFactoryExport} is not exported — implementation pending`);
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     const APP_SURFACE_TOOLS = (serverModule as Record<string, unknown>)['APP_SURFACE_TOOLS'] as string[] | undefined;
@@ -195,7 +196,7 @@ describe('MCP server factory contract', () => {
   it('admin opts register exactly the kb_* tools plus repo_search', async () => {
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
-      expect.fail(`${legacyFactoryExport} is not exported — implementation pending`);
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     const ADMIN_TOOLS = (serverModule as Record<string, unknown>)['ADMIN_TOOLS'] as string[] | undefined;
@@ -217,7 +218,7 @@ describe('MCP server factory contract', () => {
   it('reports the renamed MCP server identity as rune-kb by default', async () => {
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
-      expect.fail(`${legacyFactoryExport} is not exported — implementation pending`);
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     const server = createMcpServer({ tools: ['kb_query'] });
@@ -243,6 +244,16 @@ describe('runtime rename — MCP public strings', () => {
     );
 
     await client.close();
+  });
+
+  it('registers the renamed MCP server key in Claude settings without a retired alias', () => {
+    const settings = JSON.parse(
+      readFileSync(new URL('../../.claude/settings.json', import.meta.url), 'utf8'),
+    ) as { mcpServers?: Record<string, unknown> };
+
+    const names = Object.keys(settings.mcpServers ?? {});
+    expect(names).toContain('rune-kb');
+    expect(names).not.toContain(retiredServerName);
   });
 });
 
@@ -309,7 +320,7 @@ describe('MCP server factory — unknown tool name', () => {
   it('throws at construction when an unknown tool name is requested', () => {
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
-      expect.fail(`${legacyFactoryExport} is not exported — implementation pending`);
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     expect(() =>
@@ -323,7 +334,7 @@ describe('MCP server factory — unknown tool name', () => {
     // register zero tools.
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
-      expect.fail(`${legacyFactoryExport} is not exported — implementation pending`);
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     expect(() => createMcpServer({ tools: [] })).toThrow();

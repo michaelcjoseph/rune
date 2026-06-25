@@ -43,13 +43,13 @@ function resolveClaudePath(): string {
  *  spawn claude directly (e.g. work-runner) to keep binary resolution centralized. */
 export const CLAUDE_BIN = resolveClaudePath();
 
-/** Absolute path to Jarvis's project-local Claude settings (declares the
- *  single `jarvis-kb` MCP server). Passed to every spawn via
+/** Absolute path to Rune's project-local Claude settings (declares the
+ *  single `rune-kb` MCP server). Passed to every spawn via
  *  `--mcp-config` + `--strict-mcp-config` so the CLI ignores the user's
  *  global `~/.claude/settings.json`. */
 const PROJECT_SETTINGS_PATH = join(PROJECT_ROOT, '.claude', 'settings.json');
 
-/** Args that pin a Claude CLI spawn to Jarvis's project-local MCP config.
+/** Args that pin a Claude CLI spawn to Rune's project-local MCP config.
  *  Exported so external spawners (work-runner) can apply the same isolation
  *  — without this the spawn would inherit every MCP server the user has
  *  globally registered (claude.ai Knowledge Base, Linear, Gmail, …), each
@@ -66,8 +66,8 @@ export function assertProjectMcpConfig(): void {
   if (!existsSync(PROJECT_SETTINGS_PATH)) {
     throw new Error(
       `Missing ${PROJECT_SETTINGS_PATH}. Every Claude CLI spawn passes ` +
-      `--mcp-config to this file; it must exist (it declares the jarvis-kb ` +
-      `MCP server). Restore it from git or re-create with the jarvis-kb entry.`,
+      `--mcp-config to this file; it must exist (it declares the rune-kb ` +
+      `MCP server). Restore it from git or re-create with the rune-kb entry.`,
     );
   }
 }
@@ -252,13 +252,13 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
     const child = spawn(CLAUDE_BIN, fullArgs, {
       cwd: writeScope?.cwd ?? config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
-      // Expose PROJECT_ROOT so agents that shell out can locate the Jarvis
+      // Expose PROJECT_ROOT so agents that shell out can locate the Rune
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
       // agent, which runs `npm run intent-scan` from the project root.
       env: {
         ...process.env,
-        JARVIS_PROJECT_ROOT: PROJECT_ROOT,
-        ...(config.WORKSPACE_DIR ? { JARVIS_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+        RUNE_PROJECT_ROOT: PROJECT_ROOT,
+        ...(config.WORKSPACE_DIR ? { RUNE_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
       },
     });
 

@@ -85,7 +85,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **runtime-identifier-and-string-rename** — Per the Phase 0 inventory, rename public
+- [x] **runtime-identifier-and-string-rename** — Per the Phase 0 inventory, rename public
       runtime identifiers and user-visible strings that carry the old name, including MCP/server
       names such as `jarvis-kb`, command/slug names, generated messages, HTTP/MCP metadata
       names, and code-owned public labels. Update all references in one pass with no

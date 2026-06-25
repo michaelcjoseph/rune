@@ -4,7 +4,7 @@
  *
  * Minimal authorization server for ONE user: Dynamic Client Registration,
  * an authorization-code + PKCE (S256-only) flow whose human-approval gate is
- * the JARVIS_HTTP_SECRET, and bearer verification consumed by the /mcp
+ * the RUNE_HTTP_SECRET, and bearer verification consumed by the /mcp
  * transport (src/server/mcp-transport.ts) on every request.
  *
  * SECURITY PROPERTIES (pinned by mcp-oauth.test.ts):
@@ -31,7 +31,7 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('mcp-oauth');
 
 export interface McpOAuthDeps {
-  /** The human-approval gate: authorization requires this secret (JARVIS_HTTP_SECRET). */
+  /** The human-approval gate: authorization requires this secret (RUNE_HTTP_SECRET). */
   gateSecret: string;
   /** The ONE known user id every issued token binds to. */
   userId: string;
@@ -297,14 +297,14 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
     });
     res.end(`<!doctype html>
 <html>
-  <head><title>Jarvis MCP — authorize</title></head>
+  <head><title>Rune MCP — authorize</title></head>
   <body>
-    <h1>Authorize Claude App access to Jarvis</h1>
+    <h1>Authorize Claude App access to Rune</h1>
     <p>The authorization code will be sent to: <strong>${escapeHtml(destination)}</strong></p>
-    <p>Only approve if YOU initiated this connection. Enter the Jarvis HTTP secret to approve.</p>
+    <p>Only approve if YOU initiated this connection. Enter the Rune HTTP secret to approve.</p>
     <form method="POST" action="${AUTHORIZE_PATH}">
       ${fields}
-      <input type="password" name="secret" autocomplete="off" placeholder="JARVIS_HTTP_SECRET">
+      <input type="password" name="secret" autocomplete="off" placeholder="RUNE_HTTP_SECRET">
       <button type="submit">Approve</button>
     </form>
   </body>

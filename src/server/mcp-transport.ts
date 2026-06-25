@@ -33,7 +33,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createJarvisMcpServer, APP_SURFACE_TOOLS } from '../mcp/server.js';
+import { createRuneMcpServer, APP_SURFACE_TOOLS } from '../mcp/server.js';
 import { isAllowedHost } from './auth.js';
 import { readBody, BodyTooLargeError } from './read-body.js';
 import { createLogger } from '../utils/logger.js';
@@ -79,7 +79,7 @@ function reject(res: ServerResponse, status: number, message: string): void {
  */
 export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
   const getServer =
-    opts?.getServer ?? (() => createJarvisMcpServer({ tools: APP_SURFACE_TOOLS }));
+    opts?.getServer ?? (() => createRuneMcpServer({ tools: APP_SURFACE_TOOLS }));
   // Fail-closed default: an /mcp mount without an injected verifier rejects
   // every request rather than exposing tools unauthenticated.
   const verifyBearer = opts?.verifyBearer ?? (() => false);

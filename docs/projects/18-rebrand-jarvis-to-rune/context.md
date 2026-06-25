@@ -121,7 +121,17 @@ _None yet._
 
 ## Next Task Handoff
 
-- ver/auth.test.ts --reporter=verbose --pool=threads --maxWorkers=1
-```
+- =verbose --pool=threads --maxWorkers=1` passed: 14/14
 
-Result: exit code `1`, `18 failed | 150 passed` across 4 files. Failures match the intended Phase 3 runtime-rename gaps: `jarvis-kb`, old auth/config names, Jarvis help text, and old MCP tool names/descriptions. No files changed.
+`npm run build` still fails, but on broad pre-existing type/test issues outside this task, not on the renamed config/MCP surfaces. The combined four-suite Vitest command hung silently and was interrupted; each suite passed when run individually.
+- rvis-to-rune/.claude/agents/project-updater.md:11): the MCP tool grant now uses `mcp__rune-kb__kb_query`.
+
+Verified:
+- `rg -n "mcp__jarvis-kb__|jarvis-kb" .claude agents src` returns no hits.
+- `npm test -- src/mcp/server.test.ts --reporter=verbose --pool=threads --maxWorkers=1` passes: 15/15 tests.
+- comments to `RUNE_*`.
+
+Verification:
+- `npm test -- src/mcp/server.test.ts src/server/mcp-transport.test.ts --reporter=verbose --pool=threads --maxWorkers=1`
+- Result: `2 passed`, `21 passed`.
+- `rg -n "createJarvisMcpServer|JarvisMcp|jarvis-mcp|jarvis-kb" src .claude/settings.json` returns no hits.
