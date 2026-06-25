@@ -80,6 +80,12 @@ private path/env-var regressions.
 
 ## 5. Repo, Remote, and Handle (docs/config — reviewed rationale)
 
+No executable red test is required for `github-repo-remote-rename`. The task changes external
+GitHub repository state and local git remote configuration, not application behavior or
+committed TypeScript logic. A unit or integration test would only mock the remote operation, so
+correctness is verified operationally after the rename with `git remote -v`, `git fetch`, and
+an authenticated dry-run or temporary-branch push against the renamed `rune` repository.
+
 ### Remote operations and handle
 
 - [ ] 🔴 After the GitHub rename, the local remote URL is stale and push/fetch fail. Verify
