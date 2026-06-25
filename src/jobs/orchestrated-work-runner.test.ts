@@ -2064,10 +2064,10 @@ describe('orchestratedWorkApplier', () => {
         expect(phases).toEqual([
           'classified',
           'transcript-flushed',
+          'merged-not-pushed',
           'project-marked-done',
           'summary-written',
           'index-appended',
-          'merged-not-pushed',
           'pushed-not-deleted',
           'worktree-resolved',
           'finalized',

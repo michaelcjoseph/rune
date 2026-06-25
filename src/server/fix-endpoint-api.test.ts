@@ -56,6 +56,9 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
     aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     relay: { repoPath: '/test/workspace/relay', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   })),
+  createWorktree: vi.fn(),
+  destroyWorktree: vi.fn(),
+  getProductConfig: vi.fn(() => ({ product: 'aura', repoPath: '/test/workspace/aura', baseBranch: 'main', egressAllowlist: [] })),
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 

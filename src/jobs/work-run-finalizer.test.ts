@@ -678,7 +678,7 @@ describe('runFinalizer — hold mode (P0.4a)', () => {
 // ---------------------------------------------------------------------------
 
 describe('runFinalizer — gated-merge mode (P1.5)', () => {
-  it('branch-complete project completion marks docs/projects/index.md Done exactly once before summary/index persistence and gate (Phase 15)', async () => {
+  it('branch-complete project completion marks docs/projects/index.md Done exactly once after gate and merge but before summary/index persistence (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({
       kind: 'committed',
@@ -706,19 +706,22 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     const summaryOrder = vi.mocked(effects.writeSummary).mock.invocationCallOrder[0]!;
     const indexOrder = vi.mocked(effects.appendIndexRow).mock.invocationCallOrder[0]!;
     const gateOrder = vi.mocked(effects.gate!).mock.invocationCallOrder[0]!;
+    const mergeOrder = vi.mocked(effects.mergeBranch!).mock.invocationCallOrder[0]!;
     expect(classifyOrder).toBeLessThan(markOrder);
+    expect(gateOrder).toBeLessThan(markOrder);
+    expect(mergeOrder).toBeLessThan(markOrder);
     expect(markOrder).toBeLessThan(summaryOrder);
     expect(markOrder).toBeLessThan(indexOrder);
-    expect(markOrder).toBeLessThan(gateOrder);
 
     const recorded = phases as string[];
     expect(recorded).toContain('project-marked-done');
     expect(recorded.indexOf('classified')).toBeLessThan(recorded.indexOf('project-marked-done'));
+    expect(recorded.indexOf('merged-not-pushed')).toBeLessThan(recorded.indexOf('project-marked-done'));
     expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('summary-written'));
     expect(recorded.indexOf('project-marked-done')).toBeLessThan(recorded.indexOf('index-appended'));
   });
 
-  it('clean run orders finalizer effects: classify → index-Done commit → refreshed persistence → gate → merge → push → cleanup → notify → run-end (Phase 15)', async () => {
+  it('clean run orders finalizer effects: classify → gate → merge → index-Done commit → refreshed persistence → push → cleanup → notify → run-end (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const order: string[] = [];
     const classify = vi.fn(async () => {
@@ -791,11 +794,11 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
 
     expect(order).toEqual([
       'eligibility-classify',
+      'gate',
+      'merge',
       'index-done-commit',
       'refreshed-summary-write',
       'refreshed-index-write',
-      'gate',
-      'merge',
       'push',
       'remove-worktree',
       'delete-branch',
@@ -1073,7 +1076,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(phases).not.toContain('project-marked-done');
   });
 
-  it('ambiguous docs/projects/index.md produces an operational HOLD: no gate, no merge, worktree preserved (Phase 15)', async () => {
+  it('ambiguous docs/projects/index.md after a clean gate/merge produces an operational HOLD before push, with worktree preserved (Phase 15)', async () => {
     const ev = branchCompleteEvent();
     const markProjectDone = vi.fn(async () => ({
       kind: 'ambiguous',
@@ -1086,21 +1089,21 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     const result = await runFinalizer(gatedMergeInput(), effects);
 
     expect(markProjectDone).toHaveBeenCalledOnce();
-    expect(effects.gate).not.toHaveBeenCalled();
-    expect(effects.mergeBranch).not.toHaveBeenCalled();
+    expect(effects.gate).toHaveBeenCalledOnce();
+    expect(effects.mergeBranch).toHaveBeenCalledOnce();
     expect(effects.pushBranch).not.toHaveBeenCalled();
     expect(effects.deleteBranch).not.toHaveBeenCalled();
     expect(effects.writeSummary).not.toHaveBeenCalled();
     expect(effects.appendIndexRow).not.toHaveBeenCalled();
     expect(effects.removeWorktree).not.toHaveBeenCalled();
     expect(result.outcome).toBe('branch-complete');
-    expect(result.merged).toBe(false);
+    expect(result.merged).toBe(true);
     expect(result.branchDeleted).toBe(false);
     expect(result.worktreeRemoved).toBe(false);
     expect(phases).not.toContain('project-marked-done');
     expect(phases).not.toContain('summary-written');
     expect(phases).not.toContain('index-appended');
-    expect(phases).not.toContain('merged-not-pushed');
+    expect(phases).toContain('merged-not-pushed');
   });
 
   it('happy path: classify branch-complete → gate green → merge → push → branch delete → terminal merged', async () => {
@@ -1134,10 +1137,10 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(phases).toEqual([
       'classified',
       'transcript-flushed',
+      'merged-not-pushed',
       'project-marked-done',
       'summary-written',
       'index-appended',
-      'merged-not-pushed',
       'pushed-not-deleted',
       'worktree-resolved',
       'finalized',
@@ -1227,7 +1230,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
 
     const result = await runFinalizer(gatedMergeInput(), effects);
 
-    expect(markProjectDone).toHaveBeenCalledOnce();
+    expect(markProjectDone).not.toHaveBeenCalled();
     expect(result.merged).toBe(false);
     expect(result.worktreeRemoved).toBe(false);
     expect(effects.alert).toHaveBeenCalledWith('merge-conflict');
@@ -1307,7 +1310,6 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
           }),
           abortMerge: vi.fn(async () => {}),
         },
-        expectMarkAttempt: true,
       },
     ];
 
@@ -1327,7 +1329,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
 
       const result = await runFinalizer(gatedMergeInput(), effects);
 
-      expect(result.merged, holdCase.label).toBe(false);
+      expect(result.merged, holdCase.label).toBe(holdCase.label === 'ambiguous-index HOLD');
       expect(result.branchDeleted, holdCase.label).toBe(false);
       expect(onLanded, holdCase.label).not.toHaveBeenCalled();
       expect(phases, holdCase.label).not.toContain('project-marked-done');
@@ -1510,8 +1512,9 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
 
     // The merge already landed before the crash — never re-merge.
     expect(effects.mergeBranch).not.toHaveBeenCalled();
-    // The append-only index row was already written — never duplicate it.
-    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    // Crash happened immediately after the local merge checkpoint; summary and
+    // index persistence had not necessarily happened yet in the new order.
+    expect(effects.appendIndexRow).toHaveBeenCalledOnce();
     // Resume completes the remaining mutating steps, push BEFORE delete.
     expect(effects.pushBranch).toHaveBeenCalledOnce();
     expect(effects.deleteBranch).toHaveBeenCalledOnce();
@@ -1547,7 +1550,7 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
     expect(markProjectDone).not.toHaveBeenCalled();
     expect(effects.gate).not.toHaveBeenCalled();
     expect(effects.mergeBranch).not.toHaveBeenCalled();
-    expect(effects.appendIndexRow).not.toHaveBeenCalled();
+    expect(effects.appendIndexRow).toHaveBeenCalledOnce();
     expect(effects.pushBranch).toHaveBeenCalledOnce();
     expect(effects.deleteBranch).toHaveBeenCalledOnce();
     expect(result.merged).toBe(true);
@@ -1572,10 +1575,10 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
     expect(result.branchDeleted).toBe(true);
   });
 
-  it('resume from `index-appended` (pre-merge): re-evaluates the gate and merges exactly once', async () => {
-    // The crash happened AFTER the index row but BEFORE the merge, so the merge
-    // never landed — resume must run gate → merge → push → delete, merging once,
-    // and must NOT re-append the index row (already written).
+  it('resume from `index-appended` (post-merge): skips gate/merge/index and completes push/delete', async () => {
+    // In the new order the index row is written after the local merge and
+    // project-Done phase. Resume must not re-run any already-recorded step; it
+    // only pushes the local merge and deletes the branch.
     const { effects } = makeEffects(branchCompleteEvent(), {
       readLastPhase: vi.fn((): FinalizerPhase => 'index-appended'),
     });
@@ -1583,8 +1586,8 @@ describe('runFinalizer — gated-merge crash-resume matrix (P1.5)', () => {
     const result = await runFinalizer(gatedMergeInput(), effects);
 
     expect(effects.appendIndexRow).not.toHaveBeenCalled();
-    expect(effects.gate).toHaveBeenCalledOnce();
-    expect(effects.mergeBranch).toHaveBeenCalledOnce();
+    expect(effects.gate).not.toHaveBeenCalled();
+    expect(effects.mergeBranch).not.toHaveBeenCalled();
     expect(effects.pushBranch).toHaveBeenCalledOnce();
     expect(effects.deleteBranch).toHaveBeenCalledOnce();
     expect(result.merged).toBe(true);

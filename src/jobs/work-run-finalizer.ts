@@ -291,10 +291,10 @@ export interface FinalizerResult {
 export const PHASE_ORDER: FinalizerPhase[] = [
   'classified',
   'transcript-flushed',
+  'merged-not-pushed',
   'project-marked-done',
   'summary-written',
   'index-appended',
-  'merged-not-pushed',
   'pushed-not-deleted',
   'worktree-resolved',
   'finalized',
@@ -770,6 +770,7 @@ function writeOperationalHoldTerminal(
   effects: FinalizerEffects,
   terminalEvent: MutationEvent,
   phases: FinalizerPhase[],
+  opts: { merged?: boolean } = {},
 ): FinalizerResult {
   // Do not record `finalized` here: in PHASE_ORDER it implies the merge/push
   // checkpoints were reached, but this operational hold preserves the branch
@@ -782,7 +783,7 @@ function writeOperationalHoldTerminal(
     terminalEvent,
     supervisionStatus,
     worktreeRemoved: false,
-    merged: false,
+    merged: opts.merged === true,
     branchDeleted: false,
     phases,
   };
@@ -841,10 +842,11 @@ export async function runFinalizer(
  * `gated-merge` mode (P1.5): the policy path that lands a clean, complete run on
  * the base branch through the hard gate. Sequence (fresh run):
  *
- *   classify → flush → mark project Done → summary → index → gate → merge → push → delete → terminal
+ *   classify → flush → gate → merge → mark project Done → summary → index → push → delete → terminal
  *
- * recording `project-marked-done` before summary/index persistence,
- * `merged-not-pushed` after the merge, and `pushed-not-deleted` after the push
+ * recording `merged-not-pushed` immediately after the merge, then
+ * `project-marked-done` before summary/index persistence, and
+ * `pushed-not-deleted` after the push
  * so a crash mid-finalize resumes at the right step (push happens BEFORE
  * delete — origin is the durable backup before the local branch is removed). A
  * failed gate STOPS at `branch-complete`: it alerts and never touches the base
@@ -905,39 +907,6 @@ async function runGatedMerge(
       // push/delete sequence.
       return writeOperationalHoldTerminal(effects, terminalEvent, phases);
     } else {
-      const shouldMarkProjectDone = !reached('project-marked-done');
-      let markProjectDoneResult: MarkProjectDoneResult | undefined;
-      if (shouldMarkProjectDone) {
-        markProjectDoneResult = await effects.markProjectDone?.(input, terminalEvent);
-      }
-      if (markProjectDoneResult?.kind === 'ambiguous') {
-        const supervisionStatus: FinalizerSupervisionStatus =
-          terminalEvent.kind === 'completed' ? 'completed' : 'failed';
-        return {
-          outcome,
-          terminalEvent,
-          supervisionStatus,
-          worktreeRemoved: false,
-          merged: false,
-          branchDeleted: false,
-          phases,
-        };
-      }
-
-      const projectDoneCommitted = markProjectDoneResult?.kind === 'committed';
-      if (projectDoneCommitted) {
-        refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
-        record('project-marked-done');
-        if (!completed('summary-written')) {
-          effects.writeSummary(terminalEvent);
-          record('summary-written');
-        }
-        if (!completed('index-appended')) {
-          effects.appendIndexRow(terminalEvent);
-          record('index-appended');
-        }
-      }
-
       const gateThroughMerge = async () => {
         const verdict = await gate();
         if (verdict.ok === true) {
@@ -952,17 +921,6 @@ async function runGatedMerge(
             alert('merge-conflict');
             mergeConflictHold = true;
             return;
-          }
-          if (shouldMarkProjectDone && !markProjectDoneResult) {
-            record('project-marked-done');
-          }
-          if (!projectDoneCommitted && !completed('summary-written')) {
-            effects.writeSummary(terminalEvent);
-            record('summary-written');
-          }
-          if (!projectDoneCommitted && !completed('index-appended')) {
-            effects.appendIndexRow(terminalEvent);
-            record('index-appended');
           }
           record('merged-not-pushed');
           merged = true;
@@ -983,7 +941,22 @@ async function runGatedMerge(
     return writeOperationalHoldTerminal(effects, terminalEvent, phases);
   }
 
-  if (!gateAllowedBranchComplete) {
+  if (outcome === 'branch-complete' && merged) {
+    const shouldMarkProjectDone = !reached('project-marked-done') && !isPreMergeHoldTerminal(terminalEvent);
+    const markProjectDoneResult = shouldMarkProjectDone
+      ? await effects.markProjectDone?.(input, terminalEvent)
+      : undefined;
+    if (markProjectDoneResult?.kind === 'ambiguous') {
+      return writeOperationalHoldTerminal(effects, terminalEvent, phases, { merged });
+    }
+
+    const projectDoneCommitted = markProjectDoneResult?.kind === 'committed';
+    if (projectDoneCommitted) {
+      refreshWorkProductForProjectDoneCommit(terminalEvent, markProjectDoneResult);
+    }
+    if (shouldMarkProjectDone && (projectDoneCommitted || !markProjectDoneResult)) {
+      record('project-marked-done');
+    }
     if (!completed('summary-written')) {
       effects.writeSummary(terminalEvent);
       record('summary-written');
@@ -992,7 +965,9 @@ async function runGatedMerge(
       effects.appendIndexRow(terminalEvent);
       record('index-appended');
     }
-  } else if (reached('merged-not-pushed')) {
+  }
+
+  if (!gateAllowedBranchComplete) {
     if (!completed('summary-written')) {
       effects.writeSummary(terminalEvent);
       record('summary-written');

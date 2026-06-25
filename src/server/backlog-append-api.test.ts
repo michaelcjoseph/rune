@@ -92,6 +92,9 @@ vi.mock('../jobs/sandbox-runtime.js', () => ({
   readProductsConfig: vi.fn(() => ({
     aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   })),
+  createWorktree: vi.fn(),
+  destroyWorktree: vi.fn(),
+  getProductConfig: vi.fn(() => ({ product: 'aura', repoPath: '/test/workspace/aura', baseBranch: 'main', egressAllowlist: [] })),
   // The audit-log git probe; empty stdout → branch 'unknown', dirty false.
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));

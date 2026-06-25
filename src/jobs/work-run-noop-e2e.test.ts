@@ -38,6 +38,7 @@ vi.mock('../utils/logger.js', () => ({
 const mockSpawn = vi.fn();
 vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
+  execFile: vi.fn((_file, _args, cb) => cb(null, { stdout: '', stderr: '' })),
   execFileSync: vi.fn(() => '/usr/local/bin/claude'),
 }));
 

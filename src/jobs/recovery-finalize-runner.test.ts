@@ -234,7 +234,7 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(recordedPhases).toHaveLength(countsAfterFirstPass.phases);
   });
 
-  it('resumes from `project-marked-done`: skips the already-committed index flip, then gates/merges/pushes/deletes exactly once (Phase 15)', async () => {
+  it('resumes from `project-marked-done`: skips the already-committed merge and index flip, then pushes/deletes exactly once (Phase 15)', async () => {
     const run = makeRun();
     const gitCalls: string[][] = [];
     const recordedPhases: string[] = [];
@@ -260,7 +260,6 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(recordedPhases).toEqual(expect.arrayContaining([
       'summary-written',
       'index-appended',
-      'merged-not-pushed',
       'pushed-not-deleted',
       'worktree-resolved',
       'finalized',
@@ -269,12 +268,11 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     const mergeIdx = gitCalls.findIndex(a => a.includes('merge') && !a.includes('merge-base'));
     const pushIdx = gitCalls.findIndex(a => a.includes('push'));
     const deleteIdx = gitCalls.findIndex(a => a.includes('branch') && a.includes('-d'));
-    expect(mergeIdx).toBeGreaterThanOrEqual(0);
+    expect(mergeIdx).toBe(-1);
     expect(pushIdx).toBeGreaterThanOrEqual(0);
     expect(deleteIdx).toBeGreaterThanOrEqual(0);
-    expect(mergeIdx).toBeLessThan(pushIdx);
     expect(pushIdx).toBeLessThan(deleteIdx);
-    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(1);
+    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(0);
     expect(gitCalls.filter(a => a.includes('push'))).toHaveLength(1);
 
     expect(captured.removed).toHaveLength(1);
@@ -309,19 +307,17 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     const status = await __finalizeStaleRunForTest(run, io);
 
     expect(status).toBe('completed');
-    expect(runGate).toHaveBeenCalledTimes(1);
-    expect(runGate).toHaveBeenCalledWith(expect.objectContaining({ tasksRemaining: 0 }));
+    expect(runGate).not.toHaveBeenCalled();
     expect(recordedPhases).not.toContain('project-marked-done');
     expect(recordedPhases).toEqual(expect.arrayContaining([
       'summary-written',
       'index-appended',
-      'merged-not-pushed',
       'pushed-not-deleted',
       'worktree-resolved',
       'finalized',
     ]));
 
-    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(1);
+    expect(gitCalls.filter(a => a.includes('merge') && !a.includes('merge-base'))).toHaveLength(0);
     expect(gitCalls.filter(a => a.includes('push'))).toHaveLength(1);
     expect(gitCalls.filter(a => a.includes('branch') && a.includes('-d'))).toHaveLength(1);
     expect(captured.removed).toHaveLength(1);
@@ -331,46 +327,6 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(lastSummary.workProduct.transitions.tasksRemaining).toBe(1);
     expect(lastSummary.merged).toBe(true);
     expect(lastSummary.branchDeleted).toBe(true);
-  });
-
-  it('keeps the project-marked-done recovery gate and merge under the same base-branch lock', async () => {
-    const runA = makeRun({ id: 'mut-recover-a', project: '15-work-run-finalizer-a' });
-    const runB = makeRun({ id: 'mut-recover-b', project: '15-work-run-finalizer-b' });
-    let mergeInFlight = false;
-    let gateRanDuringMerge = false;
-    let mergeStarted!: () => void;
-    let releaseMerge!: () => void;
-    const mergeStartedPromise = new Promise<void>((resolve) => { mergeStarted = resolve; });
-    const releaseMergePromise = new Promise<void>((resolve) => { releaseMerge = resolve; });
-
-    const { io } = makeIO({
-      runGit: vi.fn(async (args: string[]) => {
-        if (args.some(a => a.includes('merge-base'))) return { stdout: 'base000sha\n', stderr: '' };
-        if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\nprojectDone3\n', stderr: '' };
-        if (args[0] === 'merge') {
-          mergeInFlight = true;
-          mergeStarted();
-          await releaseMergePromise;
-          mergeInFlight = false;
-        }
-        return { stdout: '', stderr: '' };
-      }),
-      readLastPhase: () => 'project-marked-done',
-      runGate: vi.fn(async () => {
-        if (mergeInFlight) gateRanDuringMerge = true;
-        return { ok: true as const };
-      }),
-    });
-
-    const first = __finalizeStaleRunForTest(runA, io);
-    await mergeStartedPromise;
-    const second = __finalizeStaleRunForTest(runB, io);
-    await Promise.resolve();
-    expect(gateRanDuringMerge).toBe(false);
-
-    releaseMerge();
-    await Promise.all([first, second]);
-    expect(gateRanDuringMerge).toBe(false);
   });
 
   it('a run with NO recorded merge phase re-drives in hold mode — never initiates a merge at boot (Phase 3.5)', async () => {
@@ -383,7 +339,7 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
         if (args.some(a => a.includes('rev-list'))) return { stdout: 'a1\nb2\n', stderr: '' };
         return { stdout: '', stderr: '' };
       }),
-      readLastPhase: () => 'index-appended', // crashed BEFORE the merge
+      readLastPhase: () => 'transcript-flushed', // crashed BEFORE the merge
     });
 
     await __finalizeStaleRunForTest(run, io);

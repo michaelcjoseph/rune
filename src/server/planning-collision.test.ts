@@ -32,6 +32,9 @@ const mockConfig = {
 vi.mock('../config.js', () => ({ default: mockConfig, PROJECT_ROOT: '/test/project' }));
 vi.mock('../jobs/sandbox-runtime.js', () => ({
   readProductsConfig: vi.fn(() => ({ aura: { repoPath: '/test/workspace/aura', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] } })),
+  createWorktree: vi.fn(),
+  destroyWorktree: vi.fn(),
+  getProductConfig: vi.fn(() => ({ product: 'aura', repoPath: '/test/workspace/aura', baseBranch: 'main', egressAllowlist: [] })),
   defaultRunGit: vi.fn(async () => ({ stdout: '', stderr: '' })),
 }));
 vi.mock('./restart.js', () => ({ restartServer: vi.fn(() => ({ ok: true as const })) }));
