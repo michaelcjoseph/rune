@@ -153,7 +153,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **cutover-acceptance-verification** — Run the full Definition of Done against the
+- [x] **cutover-acceptance-verification** — Run the full Definition of Done against the
       renamed, env-driven, moved checkout: GitHub repo and remote are `rune`; fetch and
       authenticated push work from `~/workspace/rune/`; `@runeai` is secured; case-insensitive
       grep for `jarvis` returns only Phase 0 allowlisted survivors; greps for `/Users/jarvis`,

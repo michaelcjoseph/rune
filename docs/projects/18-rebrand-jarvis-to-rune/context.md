@@ -121,4 +121,8 @@ _None yet._
 
 ## Next Task Handoff
 
-- ot run the live acceptance command because this sandbox is still under the old checkout path and the suite intentionally requires the real post-cutover daemon, remote, handle proof, and agent environment. `npm run build` is currently blocked by unrelated existing TypeScript errors outside this task.
+- `fake` output before running the agent.
+
+Verification:
+- `npx vitest run scripts/run-rune-rebrand-acceptance.test.ts` passes.
+- `npm run acceptance:rebrand` was attempted and correctly fails at the live cutover gate because this sandbox is still under the old checkout path and `rune` does not exist.

@@ -314,7 +314,12 @@ async function assertRoutineAgentUsesEnvLogPath(): Promise<void> {
   const logsDir = mkdtempSync(join(tmpdir(), 'rune-acceptance-logs-'));
   process.env['RUNE_LOGS_DIR'] = logsDir;
 
-  const { runAgent, killActiveProcesses, waitForActiveProcesses } = await import('../src/ai/claude.js');
+  const { CLAUDE_BIN, runAgent, killActiveProcesses, waitForActiveProcesses } = await import('../src/ai/claude.js');
+  const version = commandOk('real Claude CLI preflight', CLAUDE_BIN, ['--version'], { timeoutMs: 30_000 });
+  const versionText = `${version.stdout}\n${version.stderr}`;
+  assert(/claude/i.test(versionText), `real Claude CLI preflight did not identify Claude: ${versionText.slice(0, 500)}`);
+  assert(!/\b(stub|mock|fake)\b/i.test(versionText), `real Claude CLI preflight rejected stub output: ${versionText.slice(0, 500)}`);
+
   try {
     const result = await runAgent(
       'session-summarizer',
