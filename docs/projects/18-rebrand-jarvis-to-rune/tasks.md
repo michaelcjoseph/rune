@@ -114,7 +114,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] No code-test-required tasks — `secure-runeai-handle` is `docs-or-config-only`; record and
+- [x] No code-test-required tasks — `secure-runeai-handle` is `docs-or-config-only`; record and
       review the no-code-test rationale (test-plan.md §5).
 
 ### Implementation

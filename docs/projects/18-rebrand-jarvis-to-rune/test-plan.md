@@ -86,6 +86,12 @@ committed TypeScript logic. A unit or integration test would only mock the remot
 correctness is verified operationally after the rename with `git remote -v`, `git fetch`, and
 an authenticated dry-run or temporary-branch push against the renamed `rune` repository.
 
+No executable red test is required for `secure-runeai-handle`. The task changes external
+account ownership and a private ownership record, not a repository code path, exported API,
+runtime behavior, or config parser. A unit or integration test would only fabricate a mock
+claim flow, so correctness is verified operationally with authenticated ownership of
+`@runeai` plus the private ownership record before proceeding.
+
 ### Remote operations and handle
 
 - [ ] 🔴 After the GitHub rename, the local remote URL is stale and push/fetch fail. Verify
