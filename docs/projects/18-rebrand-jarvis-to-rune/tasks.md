@@ -148,7 +148,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the acceptance verification suite — test-plan.md §7. Tests-as-deliverable: the
+- [x] Write the acceptance verification suite — test-plan.md §7. Tests-as-deliverable: the
       verification itself is the deliverable, run with no stubs on load-bearing components.
 
 ### Implementation

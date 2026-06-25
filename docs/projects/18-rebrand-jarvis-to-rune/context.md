@@ -121,9 +121,4 @@ _None yet._
 
 ## Next Task Handoff
 
-- an, no output.
-- `git diff --stat`: clean, no output.
-- Phase 1 path/env tests still pass: `4` files, `78` tests passed.
-- Current checkout is still at `jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune`.
-
-No files changed and no disk move / launchd edit was performed from this sandboxed task turn.
+- ot run the live acceptance command because this sandbox is still under the old checkout path and the suite intentionally requires the real post-cutover daemon, remote, handle proof, and agent environment. `npm run build` is currently blocked by unrelated existing TypeScript errors outside this task.
