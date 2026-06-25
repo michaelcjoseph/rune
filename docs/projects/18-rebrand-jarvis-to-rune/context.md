@@ -121,4 +121,6 @@ _None yet._
 
 ## Next Task Handoff
 
-- t.ts src/utils/logger.test.ts` is red as expected for this write-first task: 8 failures against the current unimplemented path layer. `git add` was blocked by sandbox permissions on the external git index, so my final `config.test.ts` refinement is unstaged on top of the already-staged test changes.
+- tests failed, `24` passed.
+
+The failures are clean assertion failures covering the expected Phase 1 contract: `RUNE_LOGS_DIR`, `RUNE_WORKSPACE_DIR`, stale `JARVIS_LOGS_DIR`, and the two known private path holdouts. No implementation changes were made, and `git status --short` is clean after the run.
