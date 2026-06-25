@@ -121,6 +121,9 @@ _None yet._
 
 ## Next Task Handoff
 
-- it`, which looks inconsistent with the checked-off repo-rename task.
+- an, no output.
+- `git diff --stat`: clean, no output.
+- Phase 1 path/env tests still pass: `4` files, `78` tests passed.
+- Current checkout is still at `jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune`.
 
-Handoff: Phase 6 is not completed. It needs an operator/unrestricted environment to stop/unload launchd, move `jarvis` to `rune`, update deployed `RUNE_*` env values and the plist `WorkingDirectory`, then reload and verify health.
+No files changed and no disk move / launchd edit was performed from this sandboxed task turn.

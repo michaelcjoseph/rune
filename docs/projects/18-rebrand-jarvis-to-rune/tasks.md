@@ -135,7 +135,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
+- [x] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
       enough for cutover and no long-running daemon work would be interrupted. Stop or unload
       the daemon as needed, rename `~/workspace/jarvis/` to `~/workspace/rune/`, update the
       deployed `RUNE_*` env-var values to the new path, update the single path line in
