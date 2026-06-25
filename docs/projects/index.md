@@ -22,7 +22,8 @@ its `spec.md`.
 | [14-product-team-agents](14-product-team-agents/spec.md) | Done | Jarvis coordinates a simulated product team across a whole project: PM/tech-lead planning, QA-first per-task execution, bounded `context.md` handoff, reviewer/designer gates, Project 15 finalizer handoff, and feedback-driven role memory. Phases 1-9 DONE (live execution binding + planning critique — proof `live-acceptance-6abf35cf.md`). **Reopened 2026-06-14 — Phase 10 (observability + auto-merge)** and **Phase 11 (orchestration resilience):** Phase 10 makes codex AND claude role activity observable on the cockpit (and reuses the stream as the finalizer transcript so clean runs auto-merge); Phase 11 fixes two failure modes the overnight project-17 run exposed — gate rejections that discard their feedback (QA retried blindly, then blocked), and a server restart that orphans a run instead of resuming it. Phase 12 makes the team learn: reference exemplars of good output per role, and gate failures that write neutral-validated lessons into the counterpart's memory. |
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Jarvis chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Jarvis still owns. |
-| [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Not Started | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
+| [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Jarvis across all products, with realtime run visibility and Fix as the headline bug action. |
+| [18-rebrand-jarvis-to-rune](18-rebrand-jarvis-to-rune/spec.md) | Not Started | Cut the agent's public brand over from Jarvis to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 ---
 
 ## 01-mvp — Done
@@ -348,7 +349,7 @@ Make the Jarvis chat surface portable into the Claude App via a lean six-tool MC
 - **Provenance:** built test-first per phase (factory/routing/tool suites red → green; transport + OAuth suites red → green). Tunnel exposure, App connector registration, and the funnel-intact e2e acceptance test were operator-completed live; the repeatable acceptance procedure is [e2e-acceptance-test.md](16-claude-app-connector/e2e-acceptance-test.md). App project instructions: [app-project-instructions.md](16-claude-app-connector/app-project-instructions.md).
 - **Task breakdown & test plan:** see [tasks.md](16-claude-app-connector/tasks.md) and [test-plan.md](16-claude-app-connector/test-plan.md). Test-first per phase.
 
-## 17-cockpit-redesign — Not Started
+## 17-cockpit-redesign — Done
 
 [Spec](17-cockpit-redesign/spec.md)
 
@@ -362,3 +363,18 @@ Reframes the web view from ~90% chat into a development cockpit, now that KB res
 - **Chat & sessions:** per-product dev/planning chat is the only web-view chat; session scoping moves to per product + Telegram; search broadens to repo + vault; `/fresh`, `/fresh-full`, `/clear` preserved.
 - **Scope boundary:** surface redesign only — the cross-repo autorun plumbing behind Fix and the bug-to-bug sweep are separate deferred ideas; `/work` execution, finalization, and the backlog parser/promotion mechanics are unchanged.
 - **Task breakdown & test plan:** see [tasks.md](17-cockpit-redesign/tasks.md) and [test-plan.md](17-cockpit-redesign/test-plan.md). Test-first per phase.
+
+## 18-rebrand-jarvis-to-rune — Not Started
+
+[Spec](18-rebrand-jarvis-to-rune/spec.md)
+
+Cut the agent's public brand over from Jarvis to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged.
+
+"Jarvis" is not trademark-clean or distinctively ownable; **Rune** is the chosen name, with `@runeai` as the public handle and part of the brand-ownability premise. The cutover is complete only when the public repo is renamed, the local checkout runs from `~/workspace/rune/`, the handle is owned, old public brand references are gone, private paths no longer leak into committed code, and the launchd daemon is healthy after the move.
+
+- **Inventory first:** a case-insensitive `jarvis` sweep classifies every hit (brand-rewrite / public-identifier / private-functional / excluded-filename) and outputs the explicit acceptance allowlist.
+- **Path de-leak:** extract hardcoded `/Users/jarvis/workspace/jarvis/...` references behind `RUNE_*` env vars with computed defaults, rename `JARVIS_LOGS_DIR` to `RUNE_LOGS_DIR`, and convert the known holdouts; lands and is verified before any disk move.
+- **Brand + runtime sweep:** rewrite agent-name "Jarvis" to "Rune" across docs, metadata, CI, URLs, and agent-prompt prose, and rename public runtime identifiers (e.g. the `jarvis-kb` MCP server) with focused tests.
+- **Repo, handle, cutover:** rename the GitHub repo to `rune` and claim `@runeai` (independent of the disk move), then move the checkout to `~/workspace/rune/` and reload the daemon (label stays `com.jarvis.daemon`).
+- **Non-goals:** no macOS account/home rename, no launchd label rename, no agent-filename renames, no history rewrite, no visual identity, no compatibility alias.
+- **Task breakdown & test plan:** see [tasks.md](18-rebrand-jarvis-to-rune/tasks.md) and [test-plan.md](18-rebrand-jarvis-to-rune/test-plan.md). Test-first per phase.
