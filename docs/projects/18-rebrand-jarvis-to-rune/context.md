@@ -121,8 +121,9 @@ _None yet._
 
 ## Next Task Handoff
 
-- , MCP names, CLI names, slugs, branch prefixes, journal labels, or hardcoded checkout paths are allowlisted.
+- `
+- `git ls-files | rg -i jarvis | wc -l` → `11`
+- `git grep -ino -I 'com\.jarvis\.daemon' | wc -l` → `40`
+- `rg -i 'jarvis' docs/rebrand-rune-phase-0-inventory.md` → no matches
 
-Verification run:
-- `rg -i 'jarvis' docs/rebrand-rune-phase-0-inventory.md` returns no matches, so the artifact itself is grep-safe.
-- No code tests run, per QA’s docs/config-only rationale.
+No code tests run; this is the docs/config-only inventory task, and the verification is command-based per QA’s rationale.

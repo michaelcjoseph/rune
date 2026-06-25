@@ -18,7 +18,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [ ] **jarvis-inventory-and-allowlist** — Produce an authoritative case-insensitive inventory
+- [x] **jarvis-inventory-and-allowlist** — Produce an authoritative case-insensitive inventory
       of every `jarvis` occurrence across the repo and classify each into: brand
       text/prose/prompt to rewrite, public identifier to rename (package metadata, committed
       repo URLs/badges, CI/workflow references, MCP/server names such as `jarvis-kb`,

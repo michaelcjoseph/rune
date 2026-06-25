@@ -7,7 +7,7 @@ This artifact is intentionally grep-safe: the retired token is escaped as `j\u00
 - Content command: `git grep -in -I <old-token>`.
 - Occurrence command: `git grep -ino -I <old-token> | wc -l`.
 - Pathname command: `git ls-files | rg -i <old-token>`.
-- Tracked content result: 1996 matching lines, 2232 token occurrences, 383 files.
+- Tracked content result: 1996 matching lines, 2230 token occurrences, 383 files.
 - Tracked pathname result: 11 paths.
 
 ## Classification summary
@@ -15,8 +15,8 @@ This artifact is intentionally grep-safe: the retired token is escaped as `j\u00
 | Class | Token occurrences | Lines touched | Action |
 | --- | ---: | ---: | --- |
 | brand-rewrite | 850 | 785 | Rewrite prose, docs, prompts, comments, and user-facing brand text to Rune. |
-| public-identifier | 1341 | 1203 | Rename or extract runtime/config/path/slug/CLI/MCP identifiers. |
-| private-functional | 41 | 40 | Keep only where the exact launchd label appears. |
+| public-identifier | 1340 | 1203 | Rename or extract runtime/config/path/slug/CLI/MCP identifiers. |
+| private-functional | 40 | 40 | Keep only where the exact launchd label appears. |
 | excluded-filename | 0 | 0 | None in content. |
 
 ## Final acceptance allowlist
