@@ -121,11 +121,7 @@ _None yet._
 
 ## Next Task Handoff
 
-- : removed the hardcoded private checkout fixture path.
+- ocs/projects/18-rebrand-jarvis-to-rune/tasks.md)
+- [test-plan.md](jarvis/.worktrees/jarvis/18-rebrand-jarvis-to-rune/docs/projects/18-rebrand-jarvis-to-rune/test-plan.md)
 
-Verified:
-- `npm test -- --run src/rebrand-paths.test.ts src/config.test.ts src/utils/logger.test.ts` — 32 passed
-- `npm test -- --run src/server/static/product-deep-view-client.test.ts` — 43 passed
-- `git diff --check` — clean
-
-No commit made.
+Verification: `git diff --check` passed. No executable tests run because this selected task is docs/config-only. No commit made.

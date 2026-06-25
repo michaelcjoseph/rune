@@ -48,6 +48,12 @@ verified by grep gates and a daemon liveness check.
 
 ## 3. Brand Sweep (docs/config — reviewed rationale)
 
+No executable red test is required for this phase. The two selected brand-sweep tasks only
+rewrite docs, metadata, and agent-definition prose/prompt bodies; they do not change runtime
+logic, filenames, command routing, or generated behavior. Correctness is reviewed from the
+text diff and later verified by the acceptance grep gates for retired-brand survivors and
+private path/env-var regressions.
+
 ### Brand text and metadata
 
 - [ ] 🔴 A user-facing string, README, or CLAUDE.md still says "Jarvis" as the agent name.
