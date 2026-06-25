@@ -130,7 +130,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] No code-test-required tasks — `disk-move-and-daemon-cutover` is `docs-or-config-only`;
+- [x] No code-test-required tasks — `disk-move-and-daemon-cutover` is `docs-or-config-only`;
       verification is a daemon liveness check and grep gates (test-plan.md §6).
 
 ### Implementation

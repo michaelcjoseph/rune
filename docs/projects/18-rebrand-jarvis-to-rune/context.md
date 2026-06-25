@@ -121,6 +121,6 @@ _None yet._
 
 ## Next Task Handoff
 
-- i` resolves to an existing GitHub organization named `RuneAI`, so if GitHub is the intended public platform, the spec requires escalation and pause rather than choosing another handle.
+- it`, which looks inconsistent with the checked-off repo-rename task.
 
-Verification: `git status --short` is clean; no tests run because this task has a reviewed no-code-test rationale.
+Handoff: Phase 6 is not completed. It needs an operator/unrestricted environment to stop/unload launchd, move `jarvis` to `rune`, update deployed `RUNE_*` env values and the plist `WorkingDirectory`, then reload and verify health.
