@@ -13,7 +13,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] No code-test-required tasks — `jarvis-inventory-and-allowlist` is `docs-or-config-only`;
+- [x] No code-test-required tasks — `jarvis-inventory-and-allowlist` is `docs-or-config-only`;
       record and review the no-code-test rationale (test-plan.md §1).
 
 ### Implementation

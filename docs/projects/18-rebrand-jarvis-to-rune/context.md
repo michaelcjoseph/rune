@@ -121,4 +121,8 @@ _None yet._
 
 ## Next Task Handoff
 
-Start with: Produce an authoritative case-insensitive inventory of every 'jarvis' occurrence across the repo and classify each into: (a) brand text/prose/prompt to rewrite to 'Rune'; (b) public identifier to rename, including package metadata, committed repo URLs/badges, CI/workflow references, MCP/server names such as `jarvis-kb`, command or slug names, and runtime-visible names; (c) private functional identifier kept as-is with written rationale, such as the `com.jarvis.daemon` launchd label; (d) excluded agent-definition filenames. The inventory may be a transient approval artifact or a sanitized committed artifact, but it must not itself cause the final grep gates to fail. Output the explicit final allowlist used by acceptance.
+- , MCP names, CLI names, slugs, branch prefixes, journal labels, or hardcoded checkout paths are allowlisted.
+
+Verification run:
+- `rg -i 'jarvis' docs/rebrand-rune-phase-0-inventory.md` returns no matches, so the artifact itself is grep-safe.
+- No code tests run, per QA’s docs/config-only rationale.
