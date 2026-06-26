@@ -102,7 +102,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [x] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, update the
+- [ ] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, update the
       local git remote URL, and verify remote operations from the renamed checkout with
       `git fetch` plus either an authenticated dry-run push or a real temporary-branch push.
       Update any local repo metadata that depends on the remote name. May proceed independently
@@ -119,7 +119,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [x] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
+- [ ] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
       public platform under a controlled login, then record ownership details privately. If the
       handle is no longer available, escalate immediately and pause approval because the
       brand-ownability premise has failed; do not silently proceed with a substitute handle.
@@ -135,7 +135,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [x] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
+- [ ] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
       enough for cutover and no long-running daemon work would be interrupted. Stop or unload
       the daemon as needed, rename `~/workspace/jarvis/` to `~/workspace/rune/`, update the
       deployed `RUNE_*` env-var values to the new path, update the single path line in
@@ -153,7 +153,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Implementation
 
-- [x] **cutover-acceptance-verification** — Run the full Definition of Done against the
+- [ ] **cutover-acceptance-verification** — Run the full Definition of Done against the
       renamed, env-driven, moved checkout: GitHub repo and remote are `rune`; fetch and
       authenticated push work from `~/workspace/rune/`; `@runeai` is secured; case-insensitive
       grep for `jarvis` returns only Phase 0 allowlisted survivors; greps for `/Users/jarvis`,
