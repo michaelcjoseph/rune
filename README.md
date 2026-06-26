@@ -1,58 +1,61 @@
 # Rune
 
-Always-on personal second brain server. Connects a Telegram bot to your Obsidian vault through Claude Code CLI.
+Always-on personal second brain server. Connects a Telegram bot to your Obsidian vault through the Claude Code CLI.
 
-A single Node.js process that combines a Telegram bot, a local webview UI, an LLM-powered knowledge base, scheduled daily workflows, autonomous codebase ops, and deep vault awareness — all backed by Claude Code with no API keys required.
+A single Node.js process that combines a Telegram bot, a local webview/cockpit UI, an LLM-powered knowledge base, scheduled daily workflows, and an autonomous product-team orchestration platform — all backed by Claude Code with no API keys required.
 
 ## What it does
 
 **Chat with your vault.** Send a message via Telegram (or the local webview) and get a vault-aware response. Free-form messages are classified by a Haiku skill resolver and routed to the matching command; the slash form is always available as a fallback. Multi-turn conversations persist across messages. Send `/fresh` to summarize, log to your journal, and reset.
 
-**Build a knowledge base.** Ingest articles, conversations, and notes into a [Karpathy-style](https://karpathy.ai/blog/wikipedia.html) LLM wiki. Raw sources are compiled into interlinked wiki pages organized by entities, concepts, topics, and comparisons. Query the wiki with natural language and get synthesized answers with citations — from inside Rune or from any other Claude Code session via the bundled MCP server.
+**Build a knowledge base.** Ingest articles, conversations, and notes into a [Karpathy-style](https://karpathy.ai/blog/wikipedia.html) LLM wiki. Raw sources are compiled into interlinked wiki pages organized by entities, concepts, topics, and comparisons. Query the wiki with natural language and get synthesized answers with citations — from inside Rune, from any other Claude Code session via the bundled `rune-kb` MCP server, or remotely from the Claude App via the OAuth-gated `/mcp` connector.
 
-**Run structured reviews.** Interview-based weekly, monthly, quarterly, and yearly reviews conducted through Telegram or the webview. Prep agents scan your journals and vault systems silently, then Claude conducts a real conversation — surfacing quotes, challenging narratives, and producing write-ups appended to your journal. Post-approval, specialist agents update project pages, the playbook, world-view, and psychology profile.
+**Run structured reviews.** Interview-based daily, weekly, monthly, quarterly, and yearly reviews conducted through Telegram or the webview. Prep agents scan your journals and vault systems silently, then Claude conducts a real conversation — surfacing quotes, challenging narratives, and producing write-ups appended to your journal. Post-approval, specialist agents update project pages, the playbook, world-view, and psychology profile.
 
-**Automate daily operations.** Morning journal prep (priorities, study plan, writing topic), end-of-day tag processing (`#books`, `#crm`, `#workout`, etc. to JSON data stores), nightly session capture, Whoop sync, and review nudges on a schedule.
+**Automate daily operations.** Morning journal prep (priorities, study plan, writing topic), end-of-day tag processing (`#books`, `#crm`, `#workout`, etc. → JSON data stores), a 15-step nightly orchestrator (session capture, KB ingestion, playbook extraction, Whoop sync, observation + learning loops, KB lint), and review nudges on a schedule.
 
-**Run autonomous codebase work.** The mutation pipeline + work-runner spawns Claude with `/work --auto` against a project's `spec.md` + `tasks.md`; transitions stream to the webview as cancellable in-flight ops, and the full state-transition log lives in `logs/mutations.jsonl`.
+**Run autonomous codebase work.** A mutation pipeline drives Claude (and optionally Codex) against a project's `spec.md` + `tasks.md`. The legacy work-runner spawns `/work --auto`; the orchestrated path runs a six-role product team (PM, tech-lead, QA, coder, reviewer, designer) through a planned task graph. Runs stream to the cockpit as cancellable, supervised operations with durable transcripts, work-product classification, and a gated-merge finalizer. See [Advanced capabilities](#advanced-capabilities).
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                   Node.js Process                     │
-│                                                       │
-│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ Telegram │  │ HTTP server  │  │  Scheduler   │    │
-│  │   Bot    │  │ API + WS +   │  │   (cron)     │    │
-│  │ (polling)│  │   webview    │  │              │    │
-│  └────┬─────┘  └──────┬───────┘  └──────┬───────┘    │
-│       │               │                 │             │
-│  ┌────┴───────────────┴─────────────────┴────────┐   │
-│  │   Transport: senders, in-flight ops, mutations │   │
-│  └───────────────────────┬────────────────────────┘   │
-│                          │                            │
-│  ┌───────────────────────┴────────────────────────┐   │
-│  │             Claude Code CLI                    │   │
-│  │  (spawned per call; ops are cancellable;       │   │
-│  │   prose-producing calls inject writing voice)  │   │
-│  └────┬───────────────────────┬───────────────────┘   │
-│       │                       │                       │
-│  ┌────┴──────────────┐  ┌─────┴────────────────┐      │
-│  │   MCP: rune-kb  │  │ Obsidian Vault (iCloud)│    │
-│  │ (KB tools exposed │  │ journals/ pages/      │    │
-│  │  to other Claude  │  │ knowledge/ projects/  │    │
-│  │  Code sessions)   │  │ world-view/ health/   │    │
-│  └───────────────────┘  └───────────────────────┘    │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                     Node.js Process                       │
+│                                                           │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────┐        │
+│  │ Telegram │  │ HTTP server  │  │  Scheduler   │        │
+│  │   Bot    │  │ API + WS +   │  │   (cron)     │        │
+│  │ (polling)│  │ cockpit + MCP│  │              │        │
+│  └────┬─────┘  └──────┬───────┘  └──────┬───────┘        │
+│       │               │                 │                 │
+│  ┌────┴───────────────┴─────────────────┴────────────┐   │
+│  │ Transport: senders, in-flight ops, mutation        │   │
+│  │ pipeline, supervision/stall-check                   │   │
+│  └───────────────────────┬─────────────────────────────┘  │
+│                          │                                │
+│  ┌───────────────────────┴─────────────────────────────┐  │
+│  │           Claude Code CLI  (+ Codex, optional)       │  │
+│  │  (spawned per call; ops cancellable + supervised;    │  │
+│  │   prose calls inject writing voice)                  │  │
+│  └────┬───────────────────────┬─────────────────────────┘  │
+│       │                       │                            │
+│  ┌────┴──────────────┐  ┌─────┴────────────────┐          │
+│  │ MCP: rune-kb +    │  │ Obsidian Vault (iCloud)│        │
+│  │ /mcp App connector│  │ journals/ pages/        │        │
+│  │ (KB tools exposed │  │ knowledge/ projects/    │        │
+│  │  locally + remote)│  │ world-view/ health/     │        │
+│  └───────────────────┘  └───────────────────────┘          │
+└──────────────────────────────────────────────────────────┘
 ```
 
-- **Telegram bot** (polling) — chat, commands, multi-turn sessions, review interviews, photo + URL triage
-- **HTTP server** (localhost:3847) — REST API, WebSocket, and a vanilla HTML/JS **webview** at `/` with cookie auth and host-guard allowlist
+- **Telegram bot** (polling) — chat, commands, multi-turn sessions, review/planning interviews, photo + URL triage
+- **HTTP server** (localhost:3847) — REST API, WebSocket, the **cockpit/webview** at `/` (cookie auth + host-guard), and an optional OAuth-gated `/mcp` Claude App connector
 - **Scheduler** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges, intent-scan
-- **Transport** — `MessageSender` abstraction (TG + webview), in-flight op tracker (`/cancel`), mutation pipeline (autonomous ops with append-only `logs/mutations.jsonl`)
-- **Knowledge base** — two-layer search (LLM reads compact index → ripgrep full-text), no vector DB; also exposed via MCP (`rune-kb`) to other Claude Code sessions
-- **Claude Code CLI** — all AI operations; no API key needed (runs on Max subscription); prose-producing callers opt into a writing-voice prepend from `writing/voice.md`
+- **Transport** — `MessageSender` abstraction (TG + webview), in-flight op tracker (`/cancel`), mutation pipeline with supervision + stall-check (append-only `logs/mutations.jsonl`)
+- **Knowledge base** — two-layer search (LLM reads compact index → ripgrep full-text), no vector DB; exposed via MCP locally and remotely
+- **Claude Code CLI** — all AI operations; no API key needed (runs on Max subscription); prose-producing callers opt into a writing-voice prepend from `writing/voice.md`; multi-model dispatch can route to Codex
+
+For the system internals, see [`docs/architecture/`](docs/architecture/) — `subsystems.md` (mutation pipeline, supervision, work-run lifecycle, orchestration, MCP/OAuth), `module-reference.md` (per-file map), `reviews-kb-vault.md`, and `configuration.md`.
 
 ## Commands
 
@@ -67,6 +70,7 @@ Free-form messages are classified by a Haiku skill resolver against the slash-co
 | `/journal <text>` | Append timestamped entry to today's journal |
 | `/ask <question>` | One-shot vault query |
 | `/cancel [op-id-prefix]` | SIGTERM an in-flight Claude op (most recent for you, or by id prefix) |
+| `/active-context` | Report which session you're in (chat / planning / review / study) and the right escape hatch |
 | `/status` | Uptime, active sessions, recent agent runs |
 
 ### Knowledge Base
@@ -78,7 +82,7 @@ Free-form messages are classified by a Haiku skill resolver against the slash-co
 | `/seed` | Bulk-seed the KB from existing vault files |
 | `/library-sync` | Pull new Lenny posts + podcasts via MCP into `library/lenny/` |
 
-### Reviews
+### Reviews & Planning
 | Command | Description |
 |---------|-------------|
 | `/daily` | End-of-day tag processing and JSON updates |
@@ -88,7 +92,10 @@ Free-form messages are classified by a Haiku skill resolver against the slash-co
 | `/yearly` | Annual reflection with 7 Questions framework |
 | `/health` | Health coaching session (multi-turn, Whoop-aware) |
 | `/blog <topic>` | Interview-based blog drafting (matches your writing voice) |
+| `/cancel-review` | Cancel an in-progress review session |
 | `/new-project [topic]` | Product-style interview that drafts a project brief + spec/tasks/test-plan files |
+| `/plan [product]` | Start a Planner conversation scoped to a product (idea → approved spec) |
+| `/approve` | Approve a spec-proposed planning session and scaffold the project files |
 
 ### Vault Operations
 | Command | Description |
@@ -97,7 +104,8 @@ Free-form messages are classified by a Haiku skill resolver against the slash-co
 | `/priorities` | Show `#priorities` from a given journal (today, yesterday, or day-of-week) |
 | `/workout [home\|gym] [focus]` | Generate a tailored workout (warmup → main → cooldown) from goals, equipment, recent training, and Whoop recovery |
 | `/done-workout` | Append the last generated workout to today's journal with a `#workout` tag |
-| `/study` | Current study progress and syllabus |
+| `/study` | Spaced-repetition session: quiz over due wiki concepts |
+| `/syllabus` | Current study syllabus progress and assignments |
 | `/career` | Active job applications with staleness warnings |
 | `/family` | 14-day journal scan for configured family-name mentions (requires `FAMILY_NAMES`) |
 
@@ -129,7 +137,9 @@ knowledge/
 
 Sources go in, wiki pages come out. The wiki-compiler agent reads raw sources, identifies entities/concepts/topics, creates or updates wiki pages with `[[wikilinks]]`, and maintains the index. No embeddings or vector DB — search uses a two-layer approach: the LLM reads the compact index to find relevant pages, then ripgrep does full-text search for additional matches.
 
-**MCP server.** The KB is also exposed as an MCP server (`rune-kb`) so any Claude Code session — not just Rune — can query, search, ingest, or lint via the tools `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+**MCP exposure.** The KB is reachable two ways:
+- **Local stdio (`rune-kb`)** — registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+- **Remote (`/mcp` Claude App connector)** — a single-user OAuth 2.1 endpoint (RFC 8414 + RFC 9728) serving the six App-surface tools (`kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation`). The admin `kb_*` tools are never remotely reachable. Mounted only when `RUNE_HTTP_SECRET` is set. See [`docs/architecture/subsystems.md`](docs/architecture/subsystems.md).
 
 ## Vault Content Model
 
@@ -145,63 +155,33 @@ The vault has four LLM-mutable content layers with **different write semantics**
 
 `knowledge/` is the neutral reference layer — wiki pages *cite* the other three (via `knowledge/raw/{world-view,playbook,projects}/`). The flow is one-way: human-authored layers feed the KB as raw sources; the KB does not own them.
 
-`writing/voice.md` is read on every prose-producing Claude call (chat replies, summaries, reviews, drafts) so the assistant writes in your voice — see `CLAUDE.md` → *Writing voice* for the exact opt-in list and char budget.
-
-After a review, files touched by the post-agents are auto-enqueued for the next nightly KB ingestion so wiki citations stay fresh. See `CLAUDE.md` for the full mechanics (review→post-agent flow, worldview-drift detection, KB raw-source routing).
+After a review, files touched by the post-agents are auto-enqueued for the next nightly KB ingestion so wiki citations stay fresh. See [`docs/architecture/reviews-kb-vault.md`](docs/architecture/reviews-kb-vault.md) for the full mechanics (review→post-agent flow, worldview-drift detection, KB raw-source routing, writer/role memory loops).
 
 ## Agents
 
 Custom Claude Code agents handle structured operations. Agents live in `.claude/agents/` in this repo (generic tooling, public) with fallback to `$VAULT_DIR/.claude/agents/` (personal content, private). `loadAgentDef` in `src/ai/claude.ts` checks Rune first, then the vault.
 
-**Runtime agents (spawned by Rune):**
+**Runtime agents (spawned by Rune):** wiki-compiler, kb-query, wiki-linter, morning-prep, session-summarizer, content-triager, photo-classifier, system-scanner, workout-generator, lenny-sync, intent-scan, daily-content-updater, sr-question-generator, sr-grader, project-setup-writer.
 
-| Agent | Purpose |
-|-------|---------|
-| wiki-compiler | Compile raw sources into wiki pages |
-| kb-query | Search wiki + vault, synthesize answers with `[[wikilink]]` citations |
-| wiki-linter | Health-check wiki integrity |
-| morning-prep | Gather vault data into a structured morning journal section |
-| content-triager | Classify URLs/text → kb-ingest, readwise, journal, or skip |
-| photo-classifier | Classify photos → book, receipt, whiteboard, etc. with routing |
-| system-scanner | Review prep: summarize state of health/study/psychology/etc. |
-| workout-generator | One-shot daily workout tailored to goals, equipment, recent load, Whoop recovery |
-| lenny-sync | Pull new Lenny posts + podcasts via MCP, update sync state |
-| intent-scan | Weekly Ask-Twice scan that drafts skill/cron proposals from `logs/intent-log.jsonl` |
-| daily-content-updater | Nightly: apply daily-journal updates to `health/nutrition.md`, `projects/ideas.md`, `writing/topics.md` |
+**Post-review agents (run after user approval of a review outline):** project-updater, playbook-proposer, playbook-updater, worldview-updater, psychology-updater, json-updater, proposal-updater.
 
-**Post-review agents (run after user approval of a review outline):**
+**Vault-resident (personal specifics kept out of the public repo):** journal-scanner, project-scanner, review-writer.
 
-| Agent | Purpose |
-|-------|---------|
-| project-updater | Apply approved updates to `projects/*.md` (status, thesis, decisions, summaries) |
-| playbook-proposer | Nightly: draft playbook entries from `#playbook`-tagged journals into the queue |
-| playbook-updater | Append approved drafts from queue to `pages/playbook.md` |
-| worldview-updater | Apply approved diffs to `world-view/*.md` with dated changelog (propose-only) |
-| psychology-updater | Scoped updates to `pages/psychology.md` (observation / pattern_check / reassessment / rewrite) |
-| json-updater | Apply updates to JSON data stores (books, CRM, places, workouts, applications, investments, study) |
-| proposal-updater | Action approved Ask-Twice proposals: create new agent files, register cron frontmatter, mark queue |
-| project-setup-writer | Generate `spec.md` + `tasks.md` + `test-plan.md` for an approved new-project brief |
+**Dev-tooling agents (used by `/work` and `/review` skills):** test-specialist, code-reviewer, security-auditor, architecture-reviewer, code-simplifier, docs-sync, release-notes.
 
-**Vault-resident (personal specifics kept out of the public repo):**
+**Product-team roles (autonomous orchestration, `agents/<role>/` with SOUL + memory):** pm, tech-lead, qa, coder, reviewer, designer — plus the writer role (`agents/writer/`) used by `/blog`.
 
-| Agent | Purpose |
-|-------|---------|
-| journal-scanner | Review prep: scan journals by date range + focus areas |
-| project-scanner | Review prep: compare project pages against recent journal activity |
-| review-writer | Review writeup: append formatted review to the journal (matches your writing voice) |
+## Advanced capabilities
 
-**Dev-tooling agents (used by `/work` and `/review` skills, not spawned at runtime):**
+Beyond the personal-assistant core, Rune runs an autonomous product-team orchestration platform. These features are off by default and gated behind config. Depth lives in [`docs/architecture/subsystems.md`](docs/architecture/subsystems.md).
 
-| Agent | Purpose |
-|-------|---------|
-| test-specialist | Write/run vitest tests; bootstrap test infra |
-| code-reviewer | Review code changes for bugs, security, TS strictness, Rune conventions |
-| security-auditor | Audit changes for secrets, PII, vault leaks, path traversal, unsafe shell |
-| architecture-reviewer | Review for vault boundaries, module boundaries, graceful shutdown, cron safety |
-| code-simplifier | Check for dead code, over-abstraction, duplication |
-| docs-sync | Update `CLAUDE.md` and project docs after structural changes |
-| release-notes | Generate changelog from recent git history |
-| session-summarizer | Summarize a Claude Code session transcript with vault context |
+- **Cockpit.** The webview at `/` includes a cockpit sidebar that renders each registered product's projects with lifecycle status, live run status, and per-project action buttons (start / continue / enter-planning). It also surfaces a backlog drawer (per-product bugs/ideas with Plan buttons + an add chip), a pending-approvals inbox, a per-product deep-view, and a real-time run-feed (transcript + outcome). A production-only "↻ Restart server" button relaunches the launchd daemon.
+- **Mutation pipeline + work runs.** Autonomous codebase ops go through `src/transport/mutations.ts`. The legacy `work-runner` spawns Claude with `/work --auto` against a project's `spec.md` + `tasks.md`. Each run streams a durable transcript (`logs/work-runs/<id>/`), classifies its outcome on the actual work product (branch-complete / partial / noop / dirty / failed), exports a forensics bundle, and finalizes through a **gated-merge finalizer** that runs validation in an integration worktree before merging. Supervision + a stall-check loop monitor liveness; a run can **park** for human input and is released from Telegram or the cockpit.
+- **Orchestrated product team.** When enabled (`ORCHESTRATED_WORK_ENABLED`, or per-product `orchestratedMode`), Start routes to the orchestrated applier: a six-role team (PM, tech-lead, QA, coder, reviewer, designer) drives a planned task graph with test-first gates, an independent-provider reviewer, and a Rune-owned closeout. It never self-merges — a completed run holds branch-complete for operator merge. Roles carry a SOUL charter + a learning `memory.md` updated by the nightly learning loop.
+- **Planning → backlog → promotions.** `/plan` (or a cockpit backlog item's Plan button) opens a Socratic planning conversation that hardens an idea into a spec; `/approve` scaffolds the project files. A durable promotion job (`logs/promotions.jsonl`) survives restarts so a half-scaffolded item is re-driven on boot.
+- **Multi-model dispatch.** A model-selection policy (`policies/model-policy.json`) routes each role/agent to a model; cross-model work can dispatch to **Codex** (GPT-5.x) with a fail-closed provider probe. Planning runs an optional sequential cross-model critique pass (Claude then Codex) before the human approval gate.
+
+Live end-to-end proofs: `npm run acceptance:orchestrated` and `npm run acceptance:cockpit-real` (both make real model calls).
 
 ## Setup
 
@@ -212,6 +192,7 @@ Custom Claude Code agents handle structured operations. Agents live in `.claude/
 - An Obsidian vault (local or iCloud-synced)
 - A Telegram bot token (from [@BotFather](https://t.me/BotFather))
 - Your Telegram user ID (from [@userinfobot](https://t.me/userinfobot))
+- _(optional, for cross-model dispatch)_ the Codex CLI, logged in
 
 ### Install
 
@@ -224,10 +205,10 @@ npm install
 ### Configure
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Edit `.env`:
+Edit `.env.local`:
 ```
 # Required
 TELEGRAM_BOT_TOKEN=your-bot-token
@@ -240,15 +221,17 @@ WHOOP_CLIENT_SECRET=...
 READWISE_TOKEN=...                       # for Readwise article scanning
 LENNY_MCP_TOKEN=...                      # JWT for the Lenny MCP server (/library-sync)
 
-# Optional — webview / HTTP
-RUNE_HTTP_SECRET=...                   # required to enable webview auth
+# Optional — webview / HTTP / MCP connector
+RUNE_HTTP_SECRET=...                     # enables webview auth AND the /mcp App connector
+MCP_ISSUER_URL=https://rune.example.com  # pinned issuer for /mcp OAuth metadata (public tunnel host)
 OBSIDIAN_VAULT_NAME=my-vault             # display name in the webview header (defaults to basename of VAULT_DIR)
-RUNE_ALLOWED_HOSTS=localhost,127.0.0.1 # host-guard allowlist for webview endpoints
+RUNE_ALLOWED_HOSTS=localhost,127.0.0.1   # host-guard allowlist for webview endpoints
 
-# Optional — workspace (autonomous codebase ops)
-WORKSPACE_DIR=/path/to/workspace         # root for /work mutations (agents get read access)
-WORK_RUN_PER_PROJECT_CAP=1               # max concurrent work-run mutations per project slug
-WORK_RUN_GLOBAL_CAP=2                    # max concurrent work-run mutations across projects
+# Optional — autonomous codebase ops
+RUNE_WORKSPACE_DIR=/abs/path/to/workspace  # absolute (no ~) root for /work mutations
+ORCHESTRATED_WORK_ENABLED=false          # route Start to the orchestrated product-team applier
+WORK_RUN_PER_PROJECT_CAP=1               # max concurrent work runs per project slug
+WORK_RUN_GLOBAL_CAP=2                    # max concurrent work runs across projects
 
 # Optional — resolver
 RESOLVER_CONFIDENCE_THRESHOLD=0.7        # min confidence for the Haiku resolver to dispatch a skill
@@ -258,7 +241,7 @@ RESOLVER_MIN_WORDS=5                     # skip resolver for shorter messages
 FAMILY_NAMES=Alice,Bob                   # enables /family
 ```
 
-`LOGS_DIR` is not configurable — it's hardcoded to `<project-root>/logs/` (gitignored).
+`LOGS_DIR` is not configurable — it's hardcoded to `<project-root>/logs/` (gitignored). For the full env-var reference, see [`docs/architecture/configuration.md`](docs/architecture/configuration.md).
 
 ### Run
 
@@ -271,9 +254,12 @@ npm run cli               # local interactive CLI
 npm run evals             # run agent eval YAMLs under evals/
 npm run intent-scan       # run the weekly Ask-Twice intent scan manually
 npm run library-backfill  # bulk-ingest existing library entries into the KB
+npm run dispatch-review   # multi-model dispatch troubleshooting
+npm run acceptance:orchestrated  # LIVE orchestrated-work end-to-end proof
+npm run acceptance:cockpit-real  # LIVE cockpit + real-product acceptance
 ```
 
-The server starts the Telegram bot (polling), HTTP server on port 3847, the MCP server (`rune-kb`), and the cron scheduler. With `RUNE_HTTP_SECRET` set, the webview is reachable at `http://localhost:3847/`.
+The server starts the Telegram bot (polling), the HTTP server on port 3847, the local `rune-kb` MCP server, and the cron scheduler. With `RUNE_HTTP_SECRET` set, the cockpit/webview is reachable at `http://localhost:3847/` and the `/mcp` connector is mounted.
 
 ### Initialize the Knowledge Base
 
@@ -281,159 +267,71 @@ Send `/ingest` via Telegram with a path to any markdown file in your vault, or r
 
 ## Project Structure
 
+Top-level `src/` areas (per-file detail in [`docs/architecture/module-reference.md`](docs/architecture/module-reference.md)):
+
 ```
 src/
-├── index.ts                 # Entry: boots HTTP, Telegram, scheduler, MCP
-├── config.ts                # Typed env vars and constants
-├── ai/
-│   ├── claude.ts            # Claude CLI spawning (askClaude, askClaudeWithContext, askClaudeOneShot, runAgent) — with in-flight op tracking + writing-voice opt-in
-│   └── tool-labels.ts       # Friendly labels for streaming tool-use events
-├── bot/
-│   ├── telegram.ts          # Bot init + handler wiring
-│   ├── resolver.ts          # Haiku skill classifier for free-form messages
-│   ├── skill-registry.ts    # Slash + agent skill metadata for the resolver
-│   ├── handlers/            # text.ts (routing + conversation), url.ts, photo.ts
-│   └── commands/            # One file per slash command
-├── transport/
-│   ├── sender.ts            # MessageSender interface (TG + webview)
-│   ├── telegram-sender.ts   # TG sender + in-flight tracker messages
-│   ├── webview-sender.ts    # WS fan-out to connected webview clients
-│   ├── notification-bus.ts  # Typed event bus (message / agent-event / mutation-event / op-event)
-│   ├── in-flight.ts         # In-flight Claude-op registry + cancel
-│   ├── mutations.ts         # Mutation pipeline + applier registry
-│   └── op-labels.ts         # Friendly op labels for the status pill
-├── server/
-│   ├── http.ts              # HTTP server: health, session capture, Whoop OAuth
-│   ├── webview.ts           # Webview routes: /, /static/*, /api/*, /api/ws
-│   ├── auth.ts              # Cookie + host-guard auth helpers
-│   ├── webview-bootstrap.ts # Thin adapter from webview into the TG dispatcher
-│   ├── state-snapshot.ts    # GET /api/state — sessions, mutations, in-flight ops
-│   ├── projects-snapshot.ts # Project task progress for the webview
-│   └── static/              # Vanilla HTML/JS/CSS webview
-├── kb/
-│   ├── engine.ts            # Ingest/query/lint orchestration
-│   ├── ingest.ts            # Source → raw/ → wiki-compiler agent
-│   ├── query.ts             # Search + kb-query agent → answer
-│   ├── entity-extract.ts    # Wikilink bare mentions from JSON + family names
-│   ├── search.ts            # ripgrep full-text search
-│   ├── queue.ts             # JSON-file ingestion queue
-│   ├── seed.ts              # Bulk-enumerate vault files into the queue
-│   ├── schema.ts            # Wiki schema constants
-│   ├── init.ts              # First-run KB scaffolding
-│   └── lint.ts              # Wiki health check
-├── mcp/
-│   ├── server.ts            # MCP server registering kb_query/search/ingest/stats/lint
-│   └── index.ts             # Standalone stdio entry point
-├── jobs/
-│   ├── scheduler.ts         # node-cron registration
-│   ├── nightly.ts           # Capture → daily tags → birthdays → playbook → meetings → KB queue → Whoop → lint → commit
-│   ├── morning-prep.ts      # Morning journal preparation
-│   ├── capture.ts           # Session capture (used by nightly + HTTP)
-│   ├── whoop-sync.ts        # Whoop sleep/activity sync + trends
-│   ├── playbook-extract.ts  # Scan #playbook tags → draft entries into queue
-│   ├── meeting-extract.ts   # Scan #meeting blocks → structured Meeting[]
-│   ├── book-summarizer.ts   # 1–2 sentence book summary via Claude
-│   ├── intent-scan.ts       # Weekly Ask-Twice scan → skill/cron proposals
-│   ├── proposal-queue.ts    # Proposal queue CRUD
-│   ├── lenny-sync.ts        # Library sync runner
-│   ├── work-runner.ts       # `work-run` mutation applier (autonomous /work)
-│   ├── mutations-log.ts     # Append-only JSONL log + orphan reconciliation
-│   └── nudges.ts            # Weekly/review nudge hooks
-├── reviews/
-│   ├── orchestrator.ts      # Review handler registry + dispatch
-│   ├── session.ts           # ReviewSession lifecycle
-│   ├── interview.ts         # Multi-phase interview state machine + post-agent dispatch
-│   ├── worldview-drift.ts   # Flag projects whose thesis cites a recently-shifted worldview topic
-│   ├── kb-activity.ts       # Recent KB-ingest digest for prep context
-│   ├── blog.ts, health.ts, new-project.ts # Topical interview handlers
-│   └── {daily,weekly,monthly,quarterly,yearly}.ts
-├── vault/
-│   ├── files.ts             # Read/write/list vault files (path-guarded)
-│   ├── journal.ts           # Journal append + morning prep
-│   ├── git.ts               # Git commit/push helpers
-│   ├── sessions.ts          # TG session persistence + crash recovery
-│   ├── learnings.ts         # /learn JSONL store + prompt prepend
-│   ├── voice.ts             # writing/voice.md → prompt-prepend section
-│   ├── equipment.ts         # Parse health/equipment.md for /workout
-│   ├── whoop-recent.ts      # Recent Whoop days for /workout
-│   └── watcher.ts           # FSWatcher for Readwise notifications + KB enqueue
-├── workspace/
-│   └── files.ts             # Read/write/append/list workspace files (path-guarded)
-├── integrations/
-│   ├── telegram/client.ts   # Message chunking, typing indicators
-│   ├── whoop/               # Whoop OAuth + API client + keychain storage
-│   └── readwise/client.ts   # Readwise Reader API
-└── utils/
-    ├── time.ts              # America/Chicago timezone helpers
-    ├── intent-log.ts        # Ask-Twice telemetry → logs/intent-log.jsonl
-    └── logger.ts            # Structured JSON logging
+├── index.ts, config.ts   # Entry (boot/recovery sequence) + typed env config
+├── ai/                   # All Claude/Codex CLI spawning (claude.ts is the only Claude chokepoint)
+├── bot/                  # Telegram bot, slash-command handlers, resolver, skill registry
+├── transport/            # MessageSender, notification bus, mutation pipeline, in-flight ops
+├── reviews/              # Session-based reviews + planning sessions
+├── server/               # HTTP, webview/cockpit + REST API, MCP transport + OAuth
+├── kb/                   # Knowledge base engine (ingest/query/lint/search/queue/seed)
+├── jobs/                 # Scheduler, nightly, work-run runners + finalizer, supervision, GC
+├── intent/               # Registry, planner, orchestration, backlog, promotions, dispatch, policy
+├── mcp/                  # MCP server factory + per-tool handlers
+├── study/                # Spaced-repetition engine
+├── integrations/         # telegram / whoop / readwise clients
+├── vault/, workspace/    # Guarded file accessors, journal, git, sessions, voice
+├── writer/, roles/       # Role-agent SOUL + memory loaders
+└── utils/                # Time (America/Chicago), logging, path scrubbing, telemetry
+cli/   # Local CLI   ·   scripts/  # Dev tools   ·   policies/  # model/escalation/products config
 ```
 
 ## How It Works
 
 ### AI Runtime
 
-All AI operations spawn Claude Code CLI as a child process. No API keys, no token counting, no cost management — it runs on your Max subscription.
+All AI operations spawn the Claude Code CLI (and optionally Codex) as a child process. No API keys, no token counting, no cost management — it runs on your Max subscription.
 
 ```
 askClaude(message, sessionId, ...)        → multi-turn conversation
 askClaudeWithContext(msg, sid, sys, opts) → multi-turn + system prompt (options bag)
 askClaudeOneShot(message, ...)            → one-shot query (no session)
-runAgent(name, prompt, ...)               → structured agent invocation
-askHaikuOneShot(prompt, ...)              → classifier (resolver, intent-scan)
+runAgent(name, prompt, ...)               → structured agent invocation (policy-resolved model)
 ```
 
-Every spawn registers an in-flight op so the user can `/cancel` (TG tracker message or webview pill). Per-session request queues prevent concurrent writes. The CLI runs with `cwd` set to your vault directory, so Claude automatically loads your vault's `CLAUDE.md` for context. Prose-producing call sites opt into a writing-voice prepend; classifiers and structured-data agents stay deterministic.
-
-### Session Management
-
-Each Telegram conversation gets a persistent session (UUID-based). Sessions survive bot restarts via JSON file persistence. Send `/fresh` to summarize and archive a session to your journal, `/fresh-full` to log the verbatim transcript, or `/clear` to drop the session without journaling.
+Claude CLI spawning is centralized in `src/ai/claude.ts`; Codex spawning in `src/ai/codex.ts`. Every spawn registers an in-flight op so the user can `/cancel` (TG tracker message or webview pill). Per-session request queues prevent concurrent writes. The CLI runs with `cwd` set to your vault directory, so Claude automatically loads your vault's `CLAUDE.md`. Prose-producing call sites opt into a writing-voice prepend; classifiers and structured-data agents stay deterministic.
 
 ### Skill resolver
 
-Free-form Telegram or webview messages get classified against the skill registry (slash commands + agent skills) by a Haiku one-shot. If the top match's confidence ≥ `RESOLVER_CONFIDENCE_THRESHOLD`, the message is routed to that handler; otherwise it falls through to multi-turn conversation. Messages shorter than `RESOLVER_MIN_WORDS` skip the classifier entirely. `/learn` is the runtime knob — entries get prepended to every future agent invocation, so you can correct routing or shape behavior without touching code.
+Free-form Telegram or webview messages get classified against the skill registry (slash commands + agent skills) by a Haiku one-shot. If the top match's confidence ≥ `RESOLVER_CONFIDENCE_THRESHOLD`, the message is routed to that handler; otherwise it falls through to multi-turn conversation. Messages shorter than `RESOLVER_MIN_WORDS` skip the classifier. `/learn` is the runtime knob — entries get prepended to every future agent invocation.
 
-### Webview
+### Webview / cockpit
 
-`http://localhost:3847/` hosts a vanilla HTML/JS chat UI that mirrors the TG dispatcher in real time. Auth is a `RUNE_HTTP_SECRET` cookie behind a host-guard allowlist (`RUNE_ALLOWED_HOSTS`). The page is a thin shell over a WebSocket (`/api/ws`) plus REST endpoints (`/api/chat`, `/api/state`, `/api/mutations`, `/api/ops/:id/cancel`). It surfaces session messages, in-flight Claude ops with friendly labels, and active + recent mutations from the work-runner.
-
-### MCP server
-
-The KB is exposed as an MCP server (`rune-kb`) registered in `.claude/settings.json`, so any Claude Code session on the machine — not just Rune — can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint` as tools.
-
-### Mutation pipeline
-
-Autonomous codebase operations go through `src/transport/mutations.ts`. The first applier is `work-runner` (`src/jobs/work-runner.ts`): given a project slug, it spawns Claude with `/work --auto` against the project's `spec.md` + `tasks.md`, streams stdout/stderr as `MutationEvent` frames, and enforces per-project and global concurrency caps. State transitions are logged append-only to `logs/mutations.jsonl`; orphaned `running` entries are flipped to `failed` on startup. The webview shows active + recent mutations and lets you cancel.
+`http://localhost:3847/` hosts a vanilla HTML/JS UI that mirrors the TG dispatcher in real time plus a product-orchestration cockpit. Auth is a `RUNE_HTTP_SECRET` cookie behind a host-guard allowlist (`RUNE_ALLOWED_HOSTS`). It surfaces session messages, in-flight ops, the cockpit sidebar (per-product/project lifecycle + run status + actions), a backlog drawer, a pending-approvals inbox, a per-product deep-view, and a real-time run-feed.
 
 ### Vault Integration
 
-Rune treats the vault as a shared filesystem with a layered write model — see `CLAUDE.md` → "Vault Content Model" for the full breakdown:
+Rune treats the vault as a shared filesystem with a layered write model — see [`docs/architecture/reviews-kb-vault.md`](docs/architecture/reviews-kb-vault.md):
 
 - `knowledge/` is LLM-owned — `wiki-compiler` reads and writes freely.
-- `world-view/`, `pages/playbook.md`, `projects/*.md`, `pages/psychology.md` and JSON data stores have **dedicated updater agents** (`worldview-updater`, `playbook-updater`, `project-updater`, `psychology-updater`, `json-updater`) that write under specific approval semantics (propose-only for world-view; append-on-approval for playbook; authoritative for projects/JSON).
-- `writing/voice.md` is read on every prose-producing Claude call so the assistant matches your voice in replies, summaries, reviews, and drafts.
+- `world-view/`, `pages/playbook.md`, `projects/*.md`, `pages/psychology.md` and JSON data stores have **dedicated updater agents** that write under specific approval semantics (propose-only for world-view; append-on-approval for playbook; authoritative for projects/JSON).
+- `writing/voice.md` is read on every prose-producing Claude call so the assistant matches your voice.
 - All other directories are human-owned — Rune reads for context only.
 - All writes go through `readVaultFile`/`writeVaultFile` helpers in `src/vault/files.ts`, which assert paths stay within the vault boundary.
-- Git commits happen at key moments (morning prep, `/fresh`, post-review, nightly).
-
-## Development
-
-```bash
-npm run dev      # Start with tsx watch (hot reload on file changes)
-npm run build    # Type-check only (no emit)
-```
-
-The project uses ESM (`"type": "module"`) with `.js` import extensions. TypeScript runs directly via `tsx` — no build step needed.
+- Git commits happen at key moments (morning prep, `/fresh`, post-review, nightly) and only on `main`.
 
 ## Status
 
-Core surface is mature: Telegram bot + webview, knowledge base + MCP exposure, morning prep + nightly job, content + photo triage, all review commands, Whoop integration, vault commands, and the multi-layer vault content updaters (project / playbook / worldview / psychology / JSON). Recent additions: mutation pipeline + work-runner for autonomous `/work` runs, in-flight op cancellation, skill resolver for free-form routing, and writing-voice injection. Active iteration on the webview, MCP tooling, and spaced-repetition project.
+Core surface is mature: Telegram bot + cockpit/webview, knowledge base + local & remote MCP exposure, morning prep + nightly job, content + photo triage, all review commands, Whoop integration, vault commands, and the multi-layer vault content updaters. The autonomous platform (projects 09–18) adds the cockpit redesign, work-run observability + finalizer, supervision/monitoring, the product-team orchestration path, planning/backlog/promotions, multi-model dispatch, and the `/mcp` Claude App connector. Active iteration on spaced repetition (project 07) and the intent layer (project 08).
 
-See `docs/projects/index.md` for the current project board and `docs/projects/01-mvp/` for the original spec and task breakdown.
+See [`docs/projects/index.md`](docs/projects/index.md) for the project board and [`docs/architecture/`](docs/architecture/) for system internals.
 
 ## Build Your Own
 
-Want to build something like Rune without cloning this repo? See [`docs/idea.md`](docs/idea.md) — a self-contained blueprint you can hand to an AI coding agent to recreate the entire system from scratch.
+Want to build something like Rune without cloning this repo? See [`docs/idea.md`](docs/idea.md) — a self-contained blueprint you can hand to an AI coding agent to recreate the system from scratch.
 
 ## License
 

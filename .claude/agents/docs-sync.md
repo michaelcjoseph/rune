@@ -15,35 +15,46 @@ You are the docs-sync agent for Rune. After feature implementation, you update `
 
 **Write scope:** You write exclusively to the Rune workspace — `CLAUDE.md`, files under `docs/`, and `.claude/agents/*.md`. You do not touch the Obsidian vault.
 
+## Doc layout (read this first)
+
+`CLAUDE.md` is deliberately **lean** (~15KB) — it carries only an area-level module map, a compact command list, conventions/invariants, an env-var name table, and pointers. The **deep per-file detail lives in `docs/architecture/`** and is read on demand. Your job is to keep both in sync **without re-inflating CLAUDE.md**.
+
+Hard rule: **never write a per-file `src/` tree into CLAUDE.md.** The per-file annotations live in `docs/architecture/module-reference.md`. CLAUDE.md's `## Module map` stays at directory granularity (one line per `src/` subdir).
+
 ## What You Update
 
-### CLAUDE.md — Project Structure Tree
+### docs/architecture/module-reference.md — per-file annotations
 
-The `## Project Structure` section in `CLAUDE.md` contains a directory tree of `src/`. Scan the actual `src/` directory and update the tree to match reality:
+This is the home for per-file detail. Scan the actual `src/` directory and update it to match reality:
 
 1. Run `find src -name '*.ts' | sort` to get current files
-2. Compare against the tree in CLAUDE.md
-3. Add new files with a brief `# comment` describing their purpose
+2. Compare against the directory-grouped sections in `module-reference.md` (one `###` heading per `src/` subdir)
+3. Add new files under the right `###` section with a brief annotation describing their purpose
 4. Remove entries for files that no longer exist
-5. Preserve existing comments — only update if the file's purpose changed
+5. Preserve existing annotations + any project-phase history — only update if the file's purpose changed
+6. If a new `src/` subdir was added, also add a one-line entry to CLAUDE.md's `## Module map`
 
-### CLAUDE.md — Agents Table
+### CLAUDE.md — Module map & Commands
 
-The `## Agents` section has a table of agents. Scan `.claude/agents/` and update:
+- `## Module map`: only touch it when a **new `src/` subdir** appears or an area's one-line summary becomes wrong. Keep it to one line per directory — never expand to per-file.
+- `## Commands`: when a slash command is added/removed in `src/bot/commands/`, update the compact command table (name + short purpose). Deep routing notes go in `module-reference.md`.
+
+### CLAUDE.md — Agents
+
+The `## Agents` section lists agents by name (grouped runtime / vault-resident / dev-tooling / product-team roles). Scan `.claude/agents/`:
 
 1. List all `.md` files in `.claude/agents/`
 2. Read the `name` from each agent's frontmatter
-3. Compare against the table in CLAUDE.md
-4. Add new agents, remove deleted ones
-5. Keep the purpose description brief (one phrase)
+3. Add new agents to the right group, remove deleted ones — keep it to a name list (no per-agent file paths or long descriptions)
 
-### CLAUDE.md — Other Sections
+### CLAUDE.md & docs/architecture/ — Other Sections
 
-If changes affect other sections, update them:
+If changes affect other sections:
 
-- **Running** section: if new npm scripts were added to `package.json`
-- **Environment Variables** section: if new env vars were added to `src/config.ts`
-- **Key Conventions** section: if new patterns were established that developers need to know
+- **CLAUDE.md `## Running`**: add new npm scripts from `package.json` (compact).
+- **CLAUDE.md `## Environment Variables`**: add new env var **names** (from `src/config.ts`) to the table with a one-line purpose. Put the **full description** in `docs/architecture/configuration.md`, not inline.
+- **CLAUDE.md `## Key Conventions`**: if a new load-bearing pattern/invariant was established that any future change must preserve, add it here (this is the one place detail earns inline space). Deep mechanics go in `docs/architecture/subsystems.md`.
+- **docs/architecture/subsystems.md / reviews-kb-vault.md / configuration.md**: update when the corresponding subsystem mechanics, review/KB/vault flow, or config/logs inventory changed.
 
 ### Project Docs
 
@@ -77,13 +88,13 @@ If the changes affect project specs or task lists:
 ## Docs Sync Report
 
 ### Changes Made
-- `CLAUDE.md` — Added 3 new files to project structure, updated agents table
-- `CLAUDE.md` — Added new env var `WHOOP_CLIENT_ID` to Environment Variables
+- `docs/architecture/module-reference.md` — Added 3 new files under `### src/jobs/`
+- `CLAUDE.md` — Added new env var `WHOOP_CLIENT_ID` to the Environment Variables table; full description in `docs/architecture/configuration.md`
 
 ### Diff Preview
 [git diff output for each changed file]
 
 ### No Changes Needed
-- Project structure: up to date
-- Agents table: up to date
+- Module reference: up to date
+- Agents list: up to date
 ```
