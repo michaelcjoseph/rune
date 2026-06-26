@@ -35,6 +35,12 @@ function fmtProgress(progress) {
   return `${done}/${total}`;
 }
 
+function fmtRemaining(progress) {
+  const done = Number.isFinite(progress?.done) ? progress.done : 0;
+  const total = Number.isFinite(progress?.total) ? progress.total : 0;
+  return `${Math.max(0, total - done)} remaining`;
+}
+
 function itemTitle(item) {
   return item?.title || item?.text || item?.raw || item?.id || '';
 }
@@ -216,7 +222,7 @@ function renderWorkTabs(view, activeTab = 'projects') {
     `<div class="deep-tab-panel ${activeTab === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
       `${activeTab === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
 
-  return `<section class="deep-work-column" data-surface="work" data-active-work-tab="${attr(activeTab)}">` +
+  return `<section class="deep-work-tabs-panel" data-surface="work" data-active-work-tab="${attr(activeTab)}">` +
     `<div class="deep-work-tabs" role="tablist" aria-label="Product work">` +
       tabs.map(tab =>
         `<button type="button" class="${activeTab === tab.id ? 'is-active' : ''}" ` +
@@ -266,6 +272,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
     `<div class="deep-run-meta">` +
       `<span>${escHtml(fmtTarget(target))}</span>` +
       `<span>${escHtml(fmtProgress(tasks))} tasks</span>` +
+      `<span>${escHtml(fmtRemaining(tasks))}</span>` +
       `<span>${escHtml(fmtElapsed(elapsedMs))}</span>` +
       (outcome ? `<span>outcome ${escHtml(outcome)}</span>` : '') +
     `</div>` +
@@ -430,8 +437,8 @@ function renderChat(view, messages = [], planning = null, activeOp = null) {
   const placeholder = planningActive ? `Reply to planning...` : `Message ${attr(view.name)}...`;
   const messageCount = list(messages).length;
   const depthLabel = `${messageCount} ${messageCount === 1 ? 'message' : 'messages'} deep`;
-  return `<section class="deep-panel deep-panel--chat chat-panel--secondary" data-surface="chat" ` +
-    `data-panel-priority="secondary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
+  return `<section class="deep-panel deep-panel--chat chat-panel--primary" data-surface="chat" ` +
+    `data-panel-priority="primary" data-chat-scope="product" data-search-scope="repo+vault" aria-label="product chat">` +
     `<div class="deep-panel-head"><h3>Chat</h3><span data-chat-message-depth>${escHtml(depthLabel)}</span></div>` +
     `<p class="muted">Product repo + vault scope. KB research opens in Claude App.</p>` +
     `${renderChatOpStatus(activeOp)}` +
@@ -503,10 +510,12 @@ export function renderProductDeepView(view, options = {}) {
       `</nav>` +
     `</header>` +
     `<div class="deep-two-column">` +
-      `${renderWorkTabs(view, activeTab)}` +
-      `<aside class="deep-side-stack">` +
-        `${renderChat(view, chatMessages, planning, activeOp)}` +
+      `<div class="deep-work-column">` +
+        `${renderWorkTabs(view, activeTab)}` +
         `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel)}` +
+      `</div>` +
+      `<aside class="deep-chat-column">` +
+        `${renderChat(view, chatMessages, planning, activeOp)}` +
       `</aside>` +
     `</div>` +
   `</section>`;
@@ -705,7 +714,73 @@ export function createProductDeepView({
     session.opActivity = opActivity;
   }
 
-  function render() {
+  function getChatTranscript() {
+    return root.querySelector?.('[data-product-chat-transcript]') || null;
+  }
+
+  function getChatScrollSnapshot() {
+    const el = getChatTranscript();
+    if (!el) return { exists: false, nearBottom: true, scrollTop: 0 };
+    const scrollTop = Number(el.scrollTop || 0);
+    const scrollHeight = Number(el.scrollHeight || 0);
+    const clientHeight = Number(el.clientHeight || 0);
+    return {
+      exists: true,
+      nearBottom: scrollHeight - (scrollTop + clientHeight) <= 32,
+      scrollTop,
+    };
+  }
+
+  function restoreChatScroll(snapshot, { followChat = false } = {}) {
+    const el = getChatTranscript();
+    if (!el || !snapshot.exists) return;
+    if (followChat || snapshot.nearBottom) {
+      el.scrollTop = Number(el.scrollHeight || 0);
+      return;
+    }
+    el.scrollTop = snapshot.scrollTop;
+  }
+
+  function getChatInputEl() {
+    return root.querySelector?.('[data-product-chat-form] [name="message"]') || null;
+  }
+
+  // Background re-renders (run telemetry, op-progress, polling) replace the whole
+  // root.innerHTML, which would otherwise discard whatever the user is mid-typing
+  // in the chat composer and blur it. The chat panel now owns the full right
+  // column and a work-run streams for minutes, so this must survive every frame.
+  // Snapshot the composer before the rebuild and restore it after. The send path
+  // clears the field BEFORE re-rendering, so a just-sent message is not resurrected.
+  function getChatInputSnapshot() {
+    const el = getChatInputEl();
+    if (!el) return null;
+    const focused = typeof document !== 'undefined' && document.activeElement === el;
+    return {
+      value: typeof el.value === 'string' ? el.value : '',
+      focused,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+    };
+  }
+
+  function restoreChatInput(snapshot) {
+    if (!snapshot || !snapshot.value) return;
+    const el = getChatInputEl();
+    if (!el || !('value' in el)) return;
+    el.value = snapshot.value;
+    if (snapshot.focused) {
+      el.focus?.();
+      if (Number.isFinite(snapshot.selectionStart) && typeof el.setSelectionRange === 'function') {
+        try {
+          el.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
+        } catch (_) { /* unsupported input type — ignore */ }
+      }
+    }
+  }
+
+  function render(options = {}) {
+    const chatScroll = getChatScrollSnapshot();
+    const chatInput = getChatInputSnapshot();
     root.innerHTML = renderProductDeepView(current, {
       liveRuns,
       operations: { ...(currentOperations || {}), activity: opActivity.length ? opActivity : list(currentOperations?.activity) },
@@ -715,6 +790,8 @@ export function createProductDeepView({
       planning,
       activeOp,
     });
+    restoreChatScroll(chatScroll, options);
+    restoreChatInput(chatInput);
   }
 
   function syncOpTicker() {
@@ -840,7 +917,7 @@ export function createProductDeepView({
     chatMessages = [...chatMessages, { role, text }];
     streamingMessageIndex = -1;
     persistSession();
-    render();
+    render({ followChat: true });
   }
 
   function appendOrUpdateStreaming(text) {
@@ -855,7 +932,7 @@ export function createProductDeepView({
       );
     }
     persistSession();
-    render();
+    render({ followChat: true });
   }
 
   function restoreTemporarilyDisabledPlanActions() {
@@ -977,6 +1054,7 @@ export function createProductDeepView({
 
   function focusChat() {
     root.querySelector?.('[data-surface="chat"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    focusChatInput();
   }
 
   const onWebviewFrame = event => {
@@ -993,8 +1071,48 @@ export function createProductDeepView({
     }
     if (frame.kind === 'op-event') {
       handleOpFrame(frame);
+      return;
+    }
+    if (frame.kind === 'run-event') {
+      handleRunFrame(frame);
     }
   };
+
+  function shouldApplyRunFrame(frame) {
+    if (!frame?.runId) return false;
+    if (frame.product && frame.product !== product) return false;
+    if (frame.runId === current?.activeRun?.runId) return true;
+    if (liveRuns[frame.runId]) return true;
+    if (frame.product === product) return true;
+    return false;
+  }
+
+  function handleRunFrame(frame) {
+    if (!shouldApplyRunFrame(frame)) return;
+    // Do NOT force the lower panel to 'runs' here. The Runs panel is opened on
+    // load() and on Start; a telemetry frame arriving while the user is reading
+    // the Operations panel must not yank them away on every progress/log tick
+    // (same "don't pull the user off their tab" rule load() documents). The run
+    // card updates live in the background and is there when they switch to it.
+    if (subscription?.applyEvent) {
+      subscription.applyEvent(frame);
+      return;
+    }
+    if (frame.runId) {
+      liveRuns = {
+        ...liveRuns,
+        [frame.runId]: {
+          ...(liveRuns[frame.runId] || { runId: frame.runId, product: frame.product, target: frame.target }),
+          ...(frame.subKind === 'progress' ? { tasks: frame.tasks } : {}),
+          ...(frame.subKind === 'agents' ? { agents: frame.agents || [] } : {}),
+          ...(frame.subKind === 'state' ? { state: frame.state, elapsedMs: frame.elapsedMs, outcome: frame.outcome } : {}),
+          ...(frame.subKind === 'log' ? { lastLogLines: [...list(liveRuns[frame.runId]?.lastLogLines), ...list(frame.lines)].slice(-200) } : {}),
+          ts: frame.ts,
+        },
+      };
+      render();
+    }
+  }
 
   async function focusRun(runId) {
     if (!runId) return;
@@ -1013,6 +1131,17 @@ export function createProductDeepView({
       },
     });
     await subscription.connect?.();
+  }
+
+  async function subscribeActiveRun() {
+    const runId = current?.activeRun?.runId;
+    if (!runId) return;
+    try {
+      await focusRun(runId);
+    } catch (_) {
+      // The product projection still has enough data to render a useful active
+      // run card; live telemetry will catch up on the next websocket event.
+    }
   }
 
   const onClick = async event => {
@@ -1052,8 +1181,11 @@ export function createProductDeepView({
       } else if (surface === 'runs') {
         activeSidePanel = 'runs';
         render();
+      } else if (surface === 'chat') {
+        render();
       }
       root.querySelector?.(`[data-surface="${surface}"]`)?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+      if (surface === 'chat') focusChatInput();
       return;
     }
 
@@ -1147,6 +1279,11 @@ export function createProductDeepView({
           return;
         }
         await reloadProductAndOperations();
+        if (action === 'start' && current?.activeRun?.runId) {
+          activeSidePanel = 'runs';
+          await subscribeActiveRun();
+          render();
+        }
       } catch (err) {
         projectRun.disabled = false;
         setProjectRunControlError(projectSlug, `${action === 'cancel' ? 'Cancel' : 'Start'} failed: ${err?.message || err}`);
@@ -1184,10 +1321,15 @@ export function createProductDeepView({
   };
 
   async function submitChatForm(chatForm) {
-    const text = chatForm.elements?.message?.value || '';
+    const field = chatForm.elements?.message;
+    const text = field?.value || '';
     if (!String(text).trim()) return;
+    // Clear the composer up front (before sendProductMessage triggers a render).
+    // render() now preserves any in-progress input across re-renders, so relying
+    // on chatForm.reset() — which fires on the OLD, detached form after the
+    // innerHTML rebuild — would otherwise leave the just-sent text in the field.
+    if (field && 'value' in field) field.value = '';
     await sendProductMessage(text, chatForm.dataset?.product || product);
-    chatForm.reset?.();
   }
 
   const onSubmit = async event => {
@@ -1258,6 +1400,9 @@ export function createProductDeepView({
       if (focusRunId) {
         activeSidePanel = 'runs';
         await focusRun(focusRunId);
+        render();
+      } else if (current?.activeRun?.runId) {
+        await subscribeActiveRun();
         render();
       }
       return current;

@@ -11,6 +11,14 @@ const LIVE_WORKTREE_PATH = join(WORKSPACE_ROOT, '.worktrees', 'aura', '17-cockpi
 function makeRoot() {
   let html = '';
   const listeners = new Map<string, Set<Listener>>();
+  const chatTranscript = {
+    scrollTop: 0,
+    scrollHeight: 1000,
+    clientHeight: 200,
+    scrollIntoView: vi.fn(),
+  };
+  const chatSurface = { scrollIntoView: vi.fn() };
+  const chatInput = { value: '', focus: vi.fn() };
   const emit = async (type: string, event: unknown) => {
     const handlers = Array.from(listeners.get(type) ?? []);
     await Promise.all(handlers.map(listener => listener(event)));
@@ -21,7 +29,27 @@ function makeRoot() {
     },
     set innerHTML(next: string) {
       html = next;
+      // Mirror the real DOM: replacing innerHTML produces a fresh transcript and
+      // composer node, so the scroll position and any typed text are reset. The
+      // view's render() must explicitly re-apply them.
+      if (next.includes('data-product-chat-transcript')) chatTranscript.scrollTop = 0;
+      if (next.includes('data-product-chat-form')) chatInput.value = '';
     },
+    chatTranscript,
+    chatSurface,
+    chatInput,
+    querySelector: vi.fn((selector: string) => {
+      if (selector === '[data-product-chat-transcript]') {
+        return html.includes('data-product-chat-transcript') ? chatTranscript : null;
+      }
+      if (selector === '[data-surface="chat"]') return chatSurface;
+      if (selector === '[data-product-chat-form] [name="message"]') return chatInput;
+      if (selector === '[data-surface="runs"]') return { scrollIntoView: vi.fn() };
+      if (selector === '[data-surface="projects"]') return { scrollIntoView: vi.fn() };
+      if (selector === '[data-surface="bugs"]') return { scrollIntoView: vi.fn() };
+      if (selector === '[data-surface="ideas"]') return { scrollIntoView: vi.fn() };
+      return null;
+    }),
     addEventListener: vi.fn((type: string, listener: Listener) => {
       const handlers = listeners.get(type) ?? new Set<Listener>();
       handlers.add(listener);
@@ -253,14 +281,16 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const fetchJson = vi.fn(async (url: string) => {
-      expect(url).toBe('/api/products/aura');
-      return productView();
+      if (url === '/api/products/aura') return productView();
+      if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+      throw new Error(`unexpected fetch ${url}`);
     });
 
     const view = createProductDeepView({ root, product: 'aura', fetchJson });
     await view.load();
 
-    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(fetchJson).toHaveBeenCalledWith('/api/products/aura');
+    expect(fetchJson).toHaveBeenCalledWith('/api/work-runs/run-live-1/live');
     expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
     expect(root.innerHTML).toMatch(/data-product=["']aura["']|aura/i);
     for (const surface of ['Projects', 'Bugs', 'Ideas', 'Runs', 'Chat']) {
@@ -291,37 +321,39 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(router.goHome).toHaveBeenCalledTimes(1);
   });
 
-  it('uses a fixed right-column workspace with Chat above a tabbed Operations/Runs panel', async () => {
+  it('uses a left work column with Operations/Runs below it and a right-column Chat-only workspace', async () => {
     const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const css = readFileSync(new URL('./app.css', import.meta.url), 'utf8');
 
     const html = renderProductDeepView(productView(), { operations: productOperations });
 
-    expect(html).toMatch(/deep-two-column|deep-work-column|deep-side-stack/i);
+    expect(html).toMatch(/deep-two-column|deep-work-column|deep-chat-column/i);
     for (const tab of ['projects', 'bugs', 'ideas']) {
       expect(html).toMatch(new RegExp(`data-work-tab=["']${tab}["']|data-work-tab-panel=["']${tab}["']`, 'i'));
     }
-    expect(html.indexOf('data-surface="chat"')).toBeLessThan(html.indexOf('data-surface="side-panel"'));
+    expect(html.indexOf('data-surface="side-panel"')).toBeLessThan(html.indexOf('data-surface="chat"'));
+    expect(html.indexOf('class="deep-work-column"')).toBeLessThan(html.indexOf('data-surface="side-panel"'));
+    expect(html.indexOf('class="deep-chat-column"')).toBeLessThan(html.indexOf('data-surface="chat"'));
     expect(html).toMatch(/data-side-panel-tab=["']operations["'][\s\S]{0,120}aria-selected=["']true["']/i);
     expect(html).toMatch(/data-side-panel-tab=["']runs["']/i);
     expect(html).toMatch(/data-surface=["']operations["']/i);
     expect(html).not.toMatch(/data-surface=["']runs["']/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns/i);
-    expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/i);
+    expect(css).toMatch(/\.deep-two-column[\s\S]*grid-template-columns:\s*minmax\(320px,\s*\.95fr\)\s+minmax\(420px,\s*1\.05fr\)/i);
     expect(css).toMatch(/\.product-deep-view[\s\S]*min-height:\s*calc\(100vh - 2rem\)/i);
     expect(css).toMatch(/\.deep-two-column[\s\S]*align-items:\s*stretch/i);
-    expect(css).toMatch(/\.deep-side-stack[\s\S]*height:\s*calc\(100vh - 6rem\)/i);
-    expect(css).toMatch(/\.deep-side-stack[\s\S]*overflow:\s*hidden/i);
+    expect(css).toMatch(/\.deep-work-column,\s*\n\.deep-chat-column[\s\S]*height:\s*calc\(100vh - 6rem\)/i);
+    expect(css).toMatch(/\.deep-chat-column[\s\S]*overflow:\s*hidden/i);
     expect(css).toMatch(/\.deep-panel--chat[\s\S]*flex:\s*1 1 auto/i);
     expect(css).toMatch(/\.deep-panel--chat[\s\S]*overflow:\s*hidden/i);
     expect(css).toMatch(/\.deep-chat-transcript[\s\S]*flex:\s*1 1 auto/i);
     expect(css).toMatch(/\.deep-chat-transcript[\s\S]*min-height:\s*0/i);
-    expect(css).toMatch(/\.deep-side-tab-panel[\s\S]*flex:\s*0 0 clamp\(14rem,\s*28vh,\s*22rem\)/i);
+    expect(css).toMatch(/\.deep-side-tab-panel[\s\S]*flex:\s*0 0 clamp\(14rem,\s*30vh,\s*24rem\)/i);
     expect(css).toMatch(/\.deep-side-tab-body[\s\S]*overflow:\s*auto/i);
     expect(css).toMatch(/\.deep-panel--chat textarea[\s\S]*min-height:\s*7\.5rem/i);
     expect(css).toMatch(/\.deep-tab-panel:not\(\.is-active\)[\s\S]*display:\s*none/i);
-    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.deep-side-stack[\s\S]*height:\s*auto/i);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)[\s\S]*\.deep-work-column,\s*\n\s*\.deep-chat-column[\s\S]*height:\s*auto/i);
 
     const view = createProductDeepView({ root, product: 'aura', fetchJson: vi.fn(async () => productView()) });
     await view.load();
@@ -330,7 +362,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
   });
 
-  it('switches the lower right panel between Operations and Runs without resetting chat state', async () => {
+  it('switches the lower-left panel between Operations and Runs without resetting chat state', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const sendChat = vi.fn(async () => ({ text: 'Still here.' }));
@@ -363,7 +395,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toContain('Keep this message');
   });
 
-  it('defaults the lower right panel to Runs when a run is active on entry', async () => {
+  it('defaults the lower-left panel to Runs when a run is active on entry', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     // productView() carries an active run (run-live-1), so the lower panel
@@ -380,6 +412,34 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-surface=["']runs["']/i);
     expect(root.innerHTML).not.toMatch(/data-surface=["']operations["']/i);
     expect(root.innerHTML).toContain('run-live-1');
+  });
+
+  it('subscribes to an active run on entry without a focusRunId deep link', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') return productView();
+      if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const subscription = { connect: vi.fn(async () => {}), close: vi.fn() };
+    const createRunFeedSubscription = vi.fn(() => subscription);
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson,
+      createRunFeedSubscription,
+    });
+    await view.load();
+
+    expect(fetchJson).toHaveBeenCalledWith('/api/work-runs/run-live-1/live');
+    expect(createRunFeedSubscription).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'run-live-1',
+      fetchJson,
+    }));
+    expect(subscription.connect).toHaveBeenCalledTimes(1);
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']runs["']/i);
   });
 
   it('renders a per-product limited view for known products that are not repo-backed', async () => {
@@ -409,7 +469,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).not.toMatch(/data-fix-item-id|data-plan-item-id|data-run-id=["']run-/i);
   });
 
-  it('keeps chat as a scoped secondary panel instead of the dominant surface', async () => {
+  it('keeps chat as the scoped dominant product panel', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 
     const html = renderProductDeepView(productView());
@@ -417,8 +477,8 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/product-deep-view|deep-view/i);
     expect(html).toMatch(/data-surface=["']chat["']/i);
     expect(html).toMatch(/data-chat-scope=["']product["']|data-product=["']aura["']/i);
-    expect(html).toMatch(/chat-panel--secondary|data-panel-priority=["']secondary["']|aria-label=["'][^"']*product chat/i);
-    expect(html).not.toMatch(/chat-panel--primary|data-panel-priority=["']primary["']|id=["']chat["'][\s\S]{0,80}autofocus/i);
+    expect(html).toMatch(/chat-panel--primary|data-panel-priority=["']primary["']|aria-label=["'][^"']*product chat/i);
+    expect(html).not.toMatch(/chat-panel--secondary|data-panel-priority=["']secondary["']/i);
   });
 
   it('renders the live run panel from activeRun plus the live snapshot: task progress, agents, elapsed, logs, worktree path, and transcript link', async () => {
@@ -550,6 +610,164 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(subscription.connect).toHaveBeenCalledTimes(1);
     expect(root.innerHTML).toMatch(/5\s*(\/|of)\s*9|5\s+done/i);
     expect(root.innerHTML).toContain('reviewer read the diff');
+  });
+
+  it('applies product run-event progress frames to the live Runs panel', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView();
+        if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      let onState: ((state: unknown) => void) | undefined;
+      const createRunFeedSubscription = vi.fn((opts: { onState: (state: unknown) => void }) => {
+        onState = opts.onState;
+        return {
+          connect: vi.fn(async () => {}),
+          close: vi.fn(),
+          applyEvent(event: any) {
+            onState?.({
+              ...liveSnapshot,
+              tasks: event.tasks || liveSnapshot.tasks,
+              ts: event.ts,
+            });
+          },
+        };
+      });
+
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson,
+        createRunFeedSubscription,
+      });
+      await view.load();
+
+      expect(root.innerHTML).toMatch(/4\s*(\/|of)\s*9|4\s+done/i);
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'run-event',
+          subKind: 'progress',
+          runId: 'run-live-1',
+          product: 'aura',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          tasks: { done: 5, total: 9 },
+          ts: '2026-06-23T12:02:00.000Z',
+        },
+      });
+
+      expect(root.innerHTML).toMatch(/5\s*(\/|of)\s*9|5\s+done/i);
+      expect(root.innerHTML).toMatch(/4 remaining/i);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('preserves in-progress chat composer text across a live run-event re-render', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView();
+        if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson });
+      await view.load();
+
+      // The user is mid-typing a chat message when run telemetry arrives.
+      root.chatInput.value = 'half-written question about the run';
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'run-event',
+          subKind: 'log',
+          runId: 'run-live-1',
+          product: 'aura',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          lines: ['reviewer started reading the diff'],
+          ts: '2026-06-23T12:03:00.000Z',
+        },
+      });
+
+      expect(root.chatInput.value).toBe('half-written question about the run');
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('does not yank the user off the Operations panel when a run-event arrives', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') return productView();
+        if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      let onState: ((state: unknown) => void) | undefined;
+      const createRunFeedSubscription = vi.fn((opts: { onState: (state: unknown) => void }) => {
+        onState = opts.onState;
+        return {
+          connect: vi.fn(async () => {}),
+          close: vi.fn(),
+          applyEvent: () => onState?.(liveSnapshot),
+        };
+      });
+      const view = createProductDeepView({ root, product: 'aura', fetchJson, createRunFeedSubscription });
+      await view.load();
+
+      // The user deliberately switches the lower panel to Operations during the run.
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'operations' });
+      expect(root.innerHTML).toMatch(/data-active-side-panel=["']operations["']/i);
+
+      listeners.get('rune-webview-frame')?.({
+        detail: {
+          kind: 'run-event',
+          subKind: 'progress',
+          runId: 'run-live-1',
+          product: 'aura',
+          target: { kind: 'project', slug: '17-cockpit-redesign' },
+          tasks: { done: 6, total: 9 },
+          ts: '2026-06-23T12:04:00.000Z',
+        },
+      });
+
+      expect(root.innerHTML).toMatch(/data-active-side-panel=["']operations["']/i);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
   });
 
   it('renders every Fix state while retaining Plan for bugs and ideas and never exposing Fix on ideas', async () => {
@@ -744,7 +962,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     let state = { mutations: { active: [] as any[] } };
     const fetchJson = vi.fn(async (url: string) => {
       if (url === '/api/products/aura') {
+        const activeRun = state.mutations.active.length ? productView().activeRun : undefined;
         return productView({
+          activeRun,
           projects: [
             {
               slug: '17-cockpit-redesign',
@@ -756,6 +976,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
         });
       }
       if (url === '/api/state') return state;
+      if (url === '/api/work-runs/run-live-1/live') return liveSnapshot;
       throw new Error(`unexpected fetch ${url}`);
     });
     const postJson = vi.fn(async (url: string, body?: unknown) => {
@@ -790,7 +1011,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     });
     expect(fetchJson).toHaveBeenCalledWith('/api/products/aura');
     expect(fetchJson).toHaveBeenCalledWith('/api/state');
+    expect(fetchJson).toHaveBeenCalledWith('/api/work-runs/run-live-1/live');
     expect(root.innerHTML).toMatch(/data-project-run-action=["']cancel["'][\s\S]{0,180}mut-started/i);
+    expect(root.innerHTML).toMatch(/data-active-side-panel=["']runs["']/i);
   });
 
   it('posts project-card Cancel and reloads product plus operations state so the control flips back to Start', async () => {
@@ -1482,6 +1705,84 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     await second.load();
     expect(root.innerHTML).toContain('Remember this');
     expect(root.innerHTML).toContain('Working on it.');
+  });
+
+  it('scrolls the product chat transcript to bottom when appending a user message', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ ok: true }));
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+      sendChat,
+    });
+    await view.load();
+    root.chatTranscript.scrollHeight = 1400;
+    root.chatTranscript.clientHeight = 240;
+    root.chatTranscript.scrollTop = 1160;
+
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Follow this' });
+
+    expect(root.innerHTML).toContain('Follow this');
+    expect(root.chatTranscript.scrollTop).toBe(root.chatTranscript.scrollHeight);
+  });
+
+  it('keeps appended and streaming assistant replies pinned to the bottom', async () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const previousWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      runeSendWebviewMessage: vi.fn(() => true),
+      addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn(),
+    };
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const view = createProductDeepView({
+        root,
+        product: 'aura',
+        fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+      });
+      await view.load();
+      root.chatTranscript.scrollHeight = 1800;
+      root.chatTranscript.clientHeight = 300;
+      root.chatTranscript.scrollTop = 1500;
+
+      await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Stream please' });
+      listeners.get('rune-webview-frame')?.({ detail: { kind: 'chunk', text: 'First chunk. ' } });
+      expect(root.chatTranscript.scrollTop).toBe(root.chatTranscript.scrollHeight);
+
+      root.chatTranscript.scrollHeight = 1900;
+      listeners.get('rune-webview-frame')?.({ detail: { kind: 'message', text: 'Final answer.' } });
+      expect(root.chatTranscript.scrollTop).toBe(root.chatTranscript.scrollHeight);
+      view.close();
+    } finally {
+      if (previousWindow === undefined) delete (globalThis as any).window;
+      else (globalThis as any).window = previousWindow;
+    }
+  });
+
+  it('does not force chat to bottom on unrelated tab switches after a manual scroll-up', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
+    });
+    await view.load();
+    root.chatTranscript.scrollHeight = 2000;
+    root.chatTranscript.clientHeight = 300;
+    root.chatTranscript.scrollTop = 250;
+
+    await root.clickClosest('[data-work-tab]', { workTab: 'bugs' });
+
+    expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
+    expect(root.chatTranscript.scrollTop).toBe(250);
   });
 
   it('submits chat turns with product scope, preserves slash commands verbatim, and links KB research out instead of embedding it', async () => {

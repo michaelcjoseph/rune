@@ -477,21 +477,31 @@ body[data-view="product"] #product-root {
 }
 .deep-two-column {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(320px, .95fr) minmax(420px, 1.05fr);
   gap: .9rem;
   align-items: stretch;
   flex: 1;
   min-height: 0;
 }
 .deep-work-column,
-.deep-side-stack {
+.deep-chat-column {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: .8rem;
-}
-.deep-side-stack {
   height: calc(100vh - 6rem);
+  min-height: 0;
+}
+.deep-work-tabs-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.deep-chat-column {
+  overflow: hidden;
+}
+.deep-chat-column > .deep-panel--chat {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -554,7 +564,7 @@ body[data-view="product"] #product-root {
   overflow: hidden;
 }
 .deep-side-tab-panel {
-  flex: 0 0 clamp(14rem, 28vh, 22rem);
+  flex: 0 0 clamp(14rem, 30vh, 24rem);
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1029,9 +1039,13 @@ body[data-view="product"] #product-root {
     display: flex;
     flex-direction: column;
   }
-  .deep-side-stack {
+  .deep-work-column,
+  .deep-chat-column {
     height: auto;
     min-height: 0;
+    overflow: visible;
+  }
+  .deep-work-tabs-panel {
     overflow: visible;
   }
   .deep-panel--chat {
