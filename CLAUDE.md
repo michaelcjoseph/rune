@@ -410,7 +410,7 @@ Optional:
 - `MCP_ISSUER_URL` — pinned issuer base URL for the /mcp OAuth metadata (the public tunnel hostname, e.g. `https://rune-mcp.example.com`). Empty = metadata falls back to the request Host header (local use only — the header is caller-controlled)
 - `RESOLVER_CONFIDENCE_THRESHOLD` — minimum confidence for resolver to dispatch a skill (default `0.7`)
 - `RESOLVER_MIN_WORDS` — minimum word count before resolver runs (default `5`)
-- `WORKSPACE_DIR` — path to workspace root (e.g. `~/workspace`). When set, agents receive it as context and as `RUNE_WORKSPACE_DIR` env var so they can read project files outside the vault.
+- `RUNE_WORKSPACE_DIR` — absolute path to the workspace root (e.g. `/Users/you/workspace`, **not** `~/workspace` — the value is passed to `realpathSync`, which does not expand `~`). Read by `config.WORKSPACE_DIR` (falls back to `PROJECT_ROOT` when unset). When set, agents receive it as context and as the `RUNE_WORKSPACE_DIR` env var so they can read project files outside the vault.
 - `LENNY_MCP_TOKEN` — JWT Bearer token for the Lenny MCP server (`https://mcp.lennysdata.com/mcp`). Required for `/library-sync` and the nightly Library sync step.
 - `OBSIDIAN_VAULT_NAME` — optional, defaults to basename of `VAULT_DIR`; injected into webview `<meta>` tag for Obsidian wikilink resolution
 - `RUNE_ALLOWED_HOSTS` — optional, defaults to `localhost,127.0.0.1`; host-guard allowlist for webview endpoints (`isAllowedHost`)

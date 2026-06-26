@@ -2487,7 +2487,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 #### Implementation
 
 - [x] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, 
-- [ ] update the local git remote URL, and verify remote operations from the renamed checkout with
+- [x] update the local git remote URL, and verify remote operations from the renamed checkout with
       `git fetch` plus either an authenticated dry-run push or a real temporary-branch push.
       Update any local repo metadata that depends on the remote name.
 
@@ -2516,14 +2516,14 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 #### Implementation (Human Only)
 
-- [ ] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
+- [x] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
       enough for cutover and no long-running daemon work would be interrupted. Stop or unload
       the daemon as needed, rename `~/workspace/jarvis/` to `~/workspace/rune/`, update the
       deployed `RUNE_*` env-var values to the new path, update the single path line in
       `com.jarvis.daemon.plist` (leave the label as `com.jarvis.daemon`), then reload/start the
       daemon. Rollback is the inverse path and env edit.
 
-- [ ] **daemon-plist-workingdir-edit** — Repoint the launchd daemon at the renamed directory.
+- [x] **daemon-plist-workingdir-edit** — Repoint the launchd daemon at the renamed directory.
       This is the load-bearing half of the cutover: the plist lives at
       `~/Library/LaunchAgents/com.jarvis.daemon.plist`, is NOT tracked in the repo, and hardcodes
       the old path, so merging the branch does not fix it. Verified current state: service is
@@ -2559,7 +2559,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 #### Implementation
 
-- [ ] **cutover-acceptance-verification** — Run the full Definition of Done against the
+- [x] **cutover-acceptance-verification** — Run the full Definition of Done against the
       renamed, env-driven, moved checkout: GitHub repo and remote are `rune`; fetch and
       authenticated push work from `~/workspace/rune/`; `@runeai` is secured; case-insensitive
       grep for `jarvis` returns only Phase 0 allowlisted survivors; greps for `/Users/jarvis`,

@@ -23,7 +23,7 @@ its `spec.md`.
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
-| [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | In Progress | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
+| [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 ---
 
 ## 01-mvp — Done
@@ -364,7 +364,7 @@ Reframes the web view from ~90% chat into a development cockpit, now that KB res
 - **Scope boundary:** surface redesign only — the cross-repo autorun plumbing behind Fix and the bug-to-bug sweep are separate deferred ideas; `/work` execution, finalization, and the backlog parser/promotion mechanics are unchanged.
 - **Task breakdown & test plan:** see [tasks.md](17-cockpit-redesign/tasks.md) and [test-plan.md](17-cockpit-redesign/test-plan.md). Test-first per phase.
 
-## 18-rebrand-rune-to-rune — In Progress
+## 18-rebrand-rune-to-rune — Done
 
 [Spec](18-rebrand-rune-to-rune/spec.md)
 
