@@ -2486,11 +2486,10 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 #### Implementation
 
-- [ ] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, update the
-      local git remote URL, and verify remote operations from the renamed checkout with
+- [x] **github-repo-remote-rename** — Rename the public GitHub repository to `rune`, 
+- [ ] update the local git remote URL, and verify remote operations from the renamed checkout with
       `git fetch` plus either an authenticated dry-run push or a real temporary-branch push.
-      Update any local repo metadata that depends on the remote name. May proceed independently
-      of the disk move; normal branch and commit discipline applies.
+      Update any local repo metadata that depends on the remote name.
 
 ### Handle Ownership (was Phase 5)
 > Independent of the disk move.
@@ -2502,7 +2501,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 #### Implementation
 
-- [ ] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
+- [x] **secure-runeai-handle** — Claim and secure the public `@runeai` handle on the intended
       public platform under a controlled login, then record ownership details privately. If the
       handle is no longer available, escalate immediately and pause approval because the
       brand-ownability premise has failed; do not silently proceed with a substitute handle.
@@ -2515,7 +2514,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] No code-test-required tasks — `disk-move-and-daemon-cutover` is `docs-or-config-only`;
       verification is a daemon liveness check and grep gates (test-plan.md §6).
 
-#### Implementation
+#### Implementation (Human Only)
 
 - [ ] **disk-move-and-daemon-cutover** — Before touching disk, confirm the worktree is clean
       enough for cutover and no long-running daemon work would be interrupted. Stop or unload
