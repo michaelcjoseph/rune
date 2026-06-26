@@ -2524,6 +2524,32 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       `com.jarvis.daemon.plist` (leave the label as `com.jarvis.daemon`), then reload/start the
       daemon. Rollback is the inverse path and env edit.
 
+- [ ] **daemon-plist-workingdir-edit** — Repoint the launchd daemon at the renamed directory.
+      This is the load-bearing half of the cutover: the plist lives at
+      `~/Library/LaunchAgents/com.jarvis.daemon.plist`, is NOT tracked in the repo, and hardcodes
+      the old path, so merging the branch does not fix it. Verified current state: service is
+      loaded as `com.jarvis.daemon` (was PID 36939) with
+      `<key>WorkingDirectory</key>` → `<string>/Users/jarvis/workspace/jarvis</string>`. Steps:
+  1. **Pre-flight.** Confirm the directory rename to `~/workspace/rune` is done, and that no
+     orchestrated/work-run is in flight (the bounce kills the running process). Check current
+     state: `launchctl list | grep com.jarvis.daemon` (expect one entry; note its PID).
+  2. **Edit one line.** In `~/Library/LaunchAgents/com.jarvis.daemon.plist`, change the
+     `WorkingDirectory` value from `/Users/jarvis/workspace/jarvis` to
+     `/Users/jarvis/workspace/rune`. Leave everything else untouched: `Label` stays
+     `com.jarvis.daemon`, `ProgramArguments` (`npm run start`), the `PATH` env var, and the
+     `StandardOutPath`/`StandardErrorPath` log paths under `~/Library/Logs/jarvis/` (those are
+     outside the workspace and must not change).
+  3. **Reload so launchd re-reads the plist.** `kickstart -k` alone reuses the already-loaded
+     config and will NOT pick up the path change. Run:
+     `launchctl bootout gui/$(id -u)/com.jarvis.daemon` then
+     `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvis.daemon.plist`
+     (equivalently `launchctl unload`/`load` of the plist).
+  4. **Verify boot.** `launchctl list | grep com.jarvis.daemon` shows a NEW pid and last-exit
+     status `0` (not `78`/`-`); the HTTP server answers on `localhost:3847`; and
+     `tail ~/Library/Logs/jarvis/stderr.log` shows a clean start with no chdir/path error.
+  5. **Rollback.** If the daemon fails to boot, revert the `WorkingDirectory` line to
+     `/Users/jarvis/workspace/jarvis` (rename the directory back if needed) and re-run step 3.
+
 ### Acceptance (was Phase 7)
 > Depends on: all prior phases.
 
