@@ -183,7 +183,7 @@ interface RunResult {
   timedOut: boolean;
 }
 
-/** Minimal env for the harness's own git/node spawns — Jarvis secrets
+/** Minimal env for the harness's own git/node spawns — Rune secrets
  *  (TELEGRAM_BOT_TOKEN, VAULT_DIR, …) have no business in a fixture git
  *  commit or the dependency-free test runner. The live role spawns inside
  *  apply() get their scoped env from the production credential-injector, not
@@ -334,13 +334,13 @@ async function makeFixture(args: {
     ),
   );
 
-  // git init + initial commit on `main`. MINIMAL_ENV keeps Jarvis secrets out
+  // git init + initial commit on `main`. MINIMAL_ENV keeps Rune secrets out
   // of the fixture's git environment.
   const git = (args: string[]) =>
     run('git', args, { cwd: repoPath, timeoutMs: 30_000, env: MINIMAL_ENV });
   await git(['init', '-q', '-b', 'main']);
-  await git(['config', 'user.email', 'acceptance@jarvis.local']);
-  await git(['config', 'user.name', 'Jarvis Acceptance']);
+  await git(['config', 'user.email', 'acceptance@rune.local']);
+  await git(['config', 'user.name', 'Rune Acceptance']);
   await git(['add', '-A']);
   const commit = await git(['commit', '-q', '-m', 'seed: live-accept-sum fixture']);
   if (commit.code !== 0) {
@@ -440,7 +440,7 @@ async function driveApplier(fixture: Fixture): Promise<DriveResult> {
     };
   });
 
-  // The daemon's public validate() resolves projects under this Jarvis
+  // The daemon's public validate() resolves projects under this Rune
   // checkout's PROJECT_ROOT. This harness intentionally points production
   // apply() at a throwaway product repo in /tmp, so validation is bypassed here
   // only; createMutation/startApply still own supervision, active-runs, and

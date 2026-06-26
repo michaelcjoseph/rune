@@ -34,7 +34,7 @@ function entry(id: string, overrides: Partial<GcRunEntry> = {}): GcRunEntry {
     bytes: 100,
     endedAt: '2026-05-30T10:00:00.000Z',
     terminal: true,
-    branch: `jarvis-work/${id}`,
+    branch: `rune-work/${id}`,
     ...overrides,
   };
 }
@@ -123,7 +123,7 @@ describe('gcWorkRuns', () => {
     writeFileSync(join(dir, 'transcript.jsonl'), 'x'.repeat(bytes));
     writeFileSync(
       join(dir, 'summary.json'),
-      JSON.stringify({ id, outcome: 'noop', branch: `jarvis-work/${id}`, endedAt: `2026-05-30T1${i}:00:00.000Z` }),
+      JSON.stringify({ id, outcome: 'noop', branch: `rune-work/${id}`, endedAt: `2026-05-30T1${i}:00:00.000Z` }),
     );
   }
 
@@ -147,12 +147,12 @@ describe('gcWorkRuns', () => {
 
   it('never deletes a branch a worktree has checked out, but does prune the others (over cap)', async () => {
     for (let i = 0; i < 4; i++) seedRun(`run-${i}`, i);
-    const { stub } = makeGitStub('jarvis-work/run-0'); // run-0's branch is live
+    const { stub } = makeGitStub('rune-work/run-0'); // run-0's branch is live
 
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -179,7 +179,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(['run-0']), // run-0 is parked (blocked-on-human)
       maxRuns: 1,
@@ -189,7 +189,7 @@ describe('gcWorkRuns', () => {
     // The parked run (oldest) is protected despite being over the count cap…
     expect(result.deletedIds).not.toContain('run-0');
     // …and its branch ref is never pruned.
-    expect(calls.some((c) => c.includes('branch') && c.some((a) => a.includes('jarvis-work/run-0')))).toBe(false);
+    expect(calls.some((c) => c.includes('branch') && c.some((a) => a.includes('rune-work/run-0')))).toBe(false);
     // The other over-cap unprotected runs ARE pruned.
     expect(result.deletedIds.length).toBeGreaterThan(0);
   });
@@ -201,7 +201,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -212,7 +212,7 @@ describe('gcWorkRuns', () => {
     expect(result.deletedIds).toContain('run-0');
     const branchPrune = calls.find(c => c.includes('branch') && (c.includes('-d') || c.includes('-D')));
     expect(branchPrune).toBeDefined();
-    expect(branchPrune!.some(a => a.includes('jarvis-work/run-0'))).toBe(true);
+    expect(branchPrune!.some(a => a.includes('rune-work/run-0'))).toBe(true);
   });
 
   /** Seed a run that lives on a SPECIFIC (shared) branch — the stable
@@ -232,14 +232,14 @@ describe('gcWorkRuns', () => {
     // cap forces the 2 oldest dirs out, but the branch must survive because the
     // newest retained run still lives on it — else GC re-creates the data-loss
     // the resume fix exists to prevent (docs/projects/bugs.md).
-    const SHARED = 'jarvis-work/09-expand-cockpit';
+    const SHARED = 'rune-work/09-expand-cockpit';
     for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
     const { stub, calls } = makeGitStub();
 
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 1,
@@ -254,14 +254,14 @@ describe('gcWorkRuns', () => {
   });
 
   it('force-deletes the shared branch only once its LAST run ages out', async () => {
-    const SHARED = 'jarvis-work/09-expand-cockpit';
+    const SHARED = 'rune-work/09-expand-cockpit';
     for (let i = 0; i < 3; i++) seedRunOnBranch(`run-${i}`, i, SHARED);
     const { stub, calls } = makeGitStub();
 
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 0, // prune every run → no run retains the branch
@@ -275,7 +275,7 @@ describe('gcWorkRuns', () => {
   });
 
   it('prunes each run\'s branch in its OWN product repo, and checks every repo\'s worktrees', async () => {
-    // A jarvis run and an aura run both age out. Each branch ref lives in its own
+    // A rune run and an aura run both age out. Each branch ref lives in its own
     // product repo, so GC must prune in the right repo — not a single hardcoded
     // one (the cross-repo GC gap).
     const seed = (id: string, i: number, product: string, branch: string) => {
@@ -287,8 +287,8 @@ describe('gcWorkRuns', () => {
         JSON.stringify({ id, outcome: 'noop', product, branch, endedAt: `2026-05-30T1${i}:00:00.000Z` }),
       );
     };
-    seed('run-jarvis', 0, 'jarvis', 'jarvis-work/09-cockpit');
-    seed('run-aura', 1, 'aura', 'jarvis-work/03-mobile');
+    seed('run-rune', 0, 'rune', 'rune-work/09-cockpit');
+    seed('run-aura', 1, 'aura', 'rune-work/03-mobile');
 
     // A cwd-recording stub (makeGitStub records args only).
     const calls: Array<{ args: string[]; cwd?: string }> = [];
@@ -300,26 +300,26 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/repos/jarvis', aura: '/repos/aura' },
+      productRepos: { rune: '/repos/rune', aura: '/repos/aura' },
       activeIds: new Set(),
       nonTerminalIds: new Set(),
       maxRuns: 0, // age everything out
       maxBytes: 100_000,
     });
 
-    expect([...result.deletedIds].sort()).toEqual(['run-aura', 'run-jarvis']);
+    expect([...result.deletedIds].sort()).toEqual(['run-aura', 'run-rune']);
 
     // Each branch is force-deleted in ITS product's repo.
-    const jarvisPrune = calls.find(c => c.args.includes('branch') && c.args.includes('jarvis-work/09-cockpit'));
-    const auraPrune = calls.find(c => c.args.includes('branch') && c.args.includes('jarvis-work/03-mobile'));
-    expect(jarvisPrune?.cwd).toBe('/repos/jarvis');
+    const runePrune = calls.find(c => c.args.includes('branch') && c.args.includes('rune-work/09-cockpit'));
+    const auraPrune = calls.find(c => c.args.includes('branch') && c.args.includes('rune-work/03-mobile'));
+    expect(runePrune?.cwd).toBe('/repos/rune');
     expect(auraPrune?.cwd).toBe('/repos/aura');
 
     // Worktree-checkout protection reads EVERY repo's worktree list.
     const wtListCwds = calls
       .filter(c => c.args.includes('worktree') && c.args.includes('list'))
       .map(c => c.cwd);
-    expect(wtListCwds).toContain('/repos/jarvis');
+    expect(wtListCwds).toContain('/repos/rune');
     expect(wtListCwds).toContain('/repos/aura');
   });
 
@@ -329,7 +329,7 @@ describe('gcWorkRuns', () => {
     const opts = {
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set<string>(),
       nonTerminalIds: new Set<string>(),
       maxRuns: 2,
@@ -353,7 +353,7 @@ describe('gcWorkRuns', () => {
     const result = await gcWorkRuns({
       workRunsDir,
       runGit: stub,
-      productRepos: { jarvis: '/fake/repo' },
+      productRepos: { rune: '/fake/repo' },
       activeIds: new Set(['run-0']),
       nonTerminalIds: new Set(['run-1']),
       maxRuns: 1,

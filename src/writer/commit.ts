@@ -2,7 +2,7 @@
  * Memory-scoped commit helper (project 12, Phase 2).
  *
  * Captured lessons are auto-committed, one atomic commit per capture. This helper
- * stages ONLY `agents/writer/memory.md` in the jarvis repo and makes a single
+ * stages ONLY `agents/writer/memory.md` in the rune repo and makes a single
  * commit — deliberately NOT the vault's `gitCommitAndPush` (which runs
  * `git add -A` in `VAULT_DIR` and so cannot guarantee atomicity here, and would
  * sweep in unrelated dirty files). No push: capture commits locally; review and
@@ -35,7 +35,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const MEMORY_REPO_PATH = 'agents/writer/memory.md';
 
 export interface CommitWriterMemoryOpts {
-  /** Repo root containing `agents/writer/memory.md`. Defaults to the jarvis repo
+  /** Repo root containing `agents/writer/memory.md`. Defaults to the rune repo
    *  root, derived from the module path the same way `src/writer/memory.ts`
    *  derives WRITER_DIR (NOT via env-heavy config), so this stays self-contained.
    *  TRUSTED test seam — tests point this at a temp git repo. */

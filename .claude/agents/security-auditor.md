@@ -44,7 +44,7 @@ Run `git diff HEAD` (or the diff provided in the prompt) to see the changes, the
 - Telegram handlers check `TELEGRAM_USER_ID` before processing (authorized user gate)
 - No user input passed unsanitized to shell commands (`execFileSync`, `spawn`, etc.)
 - No user input used to construct file paths without validation (path traversal)
-- HTTP endpoints validate `JARVIS_HTTP_SECRET` before processing
+- HTTP endpoints validate `RUNE_HTTP_SECRET` before processing
 - No secrets leaked in log output, error messages, or bot responses
 - Claude CLI spawning uses `execFileSync`/`spawn` with array args (not shell string interpolation)
 

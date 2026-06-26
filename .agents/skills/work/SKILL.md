@@ -260,7 +260,7 @@ Skip this step if step 14 made no code changes.
 
 If the task modified agent behavior in any of these ways, run the relevant evals:
 
-- Any file under `.codex/agents/`, `.claude/agents/` (Jarvis), or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
+- Any file under `.codex/agents/`, `.claude/agents/` (Rune), or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
 - The prompt strings, context assembly, or args passed to `runAgent()` / Codex subagent spawning changed in a source file
 - Agent model-selection or agent-loading logic changed
 

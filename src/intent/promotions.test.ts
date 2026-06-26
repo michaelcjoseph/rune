@@ -7,7 +7,7 @@ import { join } from 'node:path';
  * Test suite for the durable promotion job (09-expand-cockpit, Phase 4, written test-first).
  *
  * `promotions.ts` drives a backlog item through `planning-started → scaffolded → marked-source`,
- * persisting each transition to an append-only JSONL log so the chain survives a Jarvis restart.
+ * persisting each transition to an append-only JSONL log so the chain survives a Rune restart.
  * Terminal states (`marked-source`, `planning-abandoned`, `scaffold-error`) never transition out;
  * `mark-source-error` is retryable with backoff up to a capped attempt count. On restart the log
  * is replayed: any promotion stuck at `scaffolded` (scaffold succeeded, mark-source didn't run) is
@@ -43,7 +43,7 @@ function tmpLog(): string {
 function newPromotion(over: Partial<Promotion> = {}): Promotion {
   return createPromotion({
     id: 'promo-1',
-    product: 'jarvis',
+    product: 'rune',
     backlogItemId: 'b-abc123',
     snapshotRaw: '- [ ] Cockpit shows wrong status',
     planningSessionId: 'sess-1',
@@ -59,7 +59,7 @@ describe('promotions — createPromotion', () => {
     expect(p.attempts).toBe(0);
     expect(p.slug).toBeUndefined();
     expect(p.errors).toEqual([]);
-    expect(p.product).toBe('jarvis');
+    expect(p.product).toBe('rune');
     expect(p.backlogItemId).toBe('b-abc123');
   });
 });

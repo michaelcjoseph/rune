@@ -25,7 +25,7 @@ import {
   type SweepIO,
 } from './worktree-sweep.js';
 
-const WT = '/tmp/worktrees/jarvis/15-work-run-finalizer';
+const WT = '/tmp/worktrees/rune/15-work-run-finalizer';
 
 function proc(pid: number, cwd: string): SweepProcess {
   return { pid, cwd };
@@ -42,7 +42,7 @@ describe('planWorktreeScopedReap — cwd-scoped fallback reap (P2.7)', () => {
   });
 
   it('leaves a process whose cwd is OUTSIDE the worktree untouched', () => {
-    const procs = [proc(201, '/tmp/worktrees/jarvis/99-other-project')];
+    const procs = [proc(201, '/tmp/worktrees/rune/99-other-project')];
     expect(planWorktreeScopedReap(procs, WT).toKill).toEqual([]);
   });
 
@@ -55,7 +55,7 @@ describe('planWorktreeScopedReap — cwd-scoped fallback reap (P2.7)', () => {
   it('selects ONLY the in-worktree pids from a mixed snapshot (scoped to one path)', () => {
     const procs = [
       proc(1, `${WT}/a`), // in
-      proc(2, '/tmp/worktrees/jarvis/99-other'), // out (other run)
+      proc(2, '/tmp/worktrees/rune/99-other'), // out (other run)
       proc(3, WT), // in (the worktree itself)
       proc(4, '/usr/local/bin'), // out (unrelated)
       proc(5, `${WT}-evil`), // out (prefix sibling)
@@ -104,7 +104,7 @@ describe('sweepWorktreeProcesses — runtime fallback reap (P2.7)', () => {
   it('SIGKILLs only the in-worktree processes and spares those outside', () => {
     const { io, killed } = makeIO([
       { pid: 1, cwd: `${WT}/a` }, // in
-      { pid: 2, cwd: '/tmp/worktrees/jarvis/99-other' }, // out
+      { pid: 2, cwd: '/tmp/worktrees/rune/99-other' }, // out
       { pid: 3, cwd: WT }, // in
       { pid: 4, cwd: `${WT}-evil` }, // out (prefix sibling)
     ]);
@@ -117,7 +117,7 @@ describe('sweepWorktreeProcesses — runtime fallback reap (P2.7)', () => {
     // Stub realpath maps the symlinked /tmp form to the /private/tmp real form.
     const realed = (p: string) => p.replace(/^\/tmp\//, '/private/tmp/');
     const { io, killed } = makeIO(
-      [{ pid: 10, cwd: '/private/tmp/worktrees/jarvis/15-work-run-finalizer/sub' }],
+      [{ pid: 10, cwd: '/private/tmp/worktrees/rune/15-work-run-finalizer/sub' }],
       { realpath: realed },
     );
     // Caller passes the symlinked /tmp form; realpath aligns both sides.

@@ -2,7 +2,7 @@
   "aura": {
     "repoPath": "~/workspace/aura",
     "baseBranch": "main",
-    "credentialsFile": "~/.config/jarvis/credentials/aura/.env",
+    "credentialsFile": "~/.config/rune/credentials/aura/.env",
     "egressAllowlist": [
       "github.com",
       "api.github.com",
@@ -14,7 +14,7 @@
   "assay": {
     "repoPath": "~/workspace/assay",
     "baseBranch": "main",
-    "credentialsFile": "~/.config/jarvis/credentials/assay/.env",
+    "credentialsFile": "~/.config/rune/credentials/assay/.env",
     "egressAllowlist": [
       "github.com",
       "api.github.com",
@@ -43,7 +43,7 @@
   "relay": {
     "repoPath": "~/workspace/relay",
     "baseBranch": "main",
-    "credentialsFile": "~/.config/jarvis/credentials/relay/.env",
+    "credentialsFile": "~/.config/rune/credentials/relay/.env",
     "egressAllowlist": [
       "github.com",
       "api.github.com",

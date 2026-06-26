@@ -1,4 +1,4 @@
-# Jarvis Eval Framework
+# Rune Eval Framework
 
 MVP behavioral-regression harness for the agents in `.claude/agents/` (and the
 vault-resident agents loaded via `loadAgentDef`). One YAML file per agent —

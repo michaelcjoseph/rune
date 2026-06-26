@@ -40,7 +40,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 - [x] Add `src/study/sr-session.ts` exporting `runSRSession({ source, cap, userId })`. Orchestrates: select due → for each concept, generate question → send via `MessageSender` → wait for reply (Phase 1: synchronous wait via existing conversation hook; 30-min timeout deferred to Phase 2) → grade → advance state → next.
 - [x] Add `src/bot/commands/study.ts` (new file). Parse args: no arg → cap 5; integer arg → cap clamped to [1, 10]; `status` arg → status reply (Phase 2 will add lapse hotspots; Phase 1 returns pool size + due today only).
 - [x] Register `/study` (and the `/study N`, `/study status` shapes) in `src/bot/handlers/text.ts` and `src/bot/skill-registry.ts` with triggers like "quiz me", "review wiki", "spaced repetition", "lunch review".
-- [x] CLI: add `study` subcommand in `cli/jarvis.ts` so `npm run cli -- study [N]` runs a session and prints the question/answer cycle.
+- [x] CLI: add `study` subcommand in `cli/rune.ts` so `npm run cli -- study [N]` runs a session and prints the question/answer cycle.
 
 ### Hand-seeded pool
 

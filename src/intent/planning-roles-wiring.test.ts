@@ -138,7 +138,7 @@ const SPLIT_BREAKDOWN_REPLY = [
 ].join('\n');
 
 const QA_PROJECT_EXEMPLAR = [
-  '# QA exemplar for Jarvis',
+  '# QA exemplar for Rune',
   '',
   'For security-boundary work, use a raw token-shaped fixture and assert the output removes it.',
 ].join('\n');
@@ -214,7 +214,7 @@ describe('planning-roles-wiring — PM assessment seam', () => {
 
   it('split format: spec markdown with unescaped quotes + a nested code fence survives verbatim', async () => {
     const { call } = stubModelCall({ pm: [SPLIT_SPECIFIED_REPLY] });
-    const result = await defaultPlanningRoleDeps(call).pmAssessAndSpec({ brief: 'cockpit', product: 'jarvis' });
+    const result = await defaultPlanningRoleDeps(call).pmAssessAndSpec({ brief: 'cockpit', product: 'rune' });
     expect(result.specifiedEnough).toBe(true);
     if (result.specifiedEnough) {
       expect(result.title).toBe('Cockpit redesign');
@@ -255,7 +255,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
 
     await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
-      product: 'jarvis',
+      product: 'rune',
       spec: 's',
     });
 
@@ -281,7 +281,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
 
   it('split format: tech spec markdown with a nested code fence survives, tasks still parse', async () => {
     const { call } = stubModelCall({ 'tech-lead': SPLIT_BREAKDOWN_REPLY });
-    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'jarvis', spec: 's' });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({ brief: 'x', product: 'rune', spec: 's' });
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0]?.id).toBe('p1-core');
     expect(result.techSpec).toContain('```ts');
@@ -293,7 +293,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_EXEMPLARS_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
-      product: 'jarvis',
+      product: 'rune',
       spec: 's',
     });
 
@@ -304,7 +304,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_TASK_LOCAL_EXEMPLARS_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
-      product: 'jarvis',
+      product: 'rune',
       spec: 's',
     });
 
@@ -316,7 +316,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     const { call } = stubModelCall({ 'tech-lead': SPLIT_BREAKDOWN_REPLY });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
-      product: 'jarvis',
+      product: 'rune',
       spec: 's',
     });
 
@@ -333,7 +333,7 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     });
     const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
-      product: 'jarvis',
+      product: 'rune',
       spec: 's',
     });
 

@@ -12,13 +12,13 @@
  *
  * The lock is an in-process async mutex keyed on `<product>:<baseBranch>` (the
  * same shape as `withFileLock` in src/intent/backlog-write-lock.ts). It guards
- * only Jarvis's OWN finalize sequence; the `/work` child is a separate actor.
- * Because Jarvis is a single local daemon (the single-writer assumption), an
- * in-process mutex is sufficient — there is no second Jarvis process contending
+ * only Rune's OWN finalize sequence; the `/work` child is a separate actor.
+ * Because Rune is a single local daemon (the single-writer assumption), an
+ * in-process mutex is sufficient — there is no second Rune process contending
  * for the same `main`.
  *
  * The same single-writer assumption is documented in
- * `src/jobs/supervision-store.ts` (one Jarvis process per machine is the v1
+ * `src/jobs/supervision-store.ts` (one Rune process per machine is the v1
  * trust model).
  *
  * IMPL NOTE (P1.5): do NOT re-implement the tail-chaining queue — reuse the
@@ -43,7 +43,7 @@ import { withFileLock } from '../intent/backlog-write-lock.js';
  * branch share a key (they serialize); a different base branch (or product) is a
  * different key (they don't block each other). The `:` delimiter guards against
  * a delimiter-less format letting (`jar`,`vis/main`) collide with
- * (`jarvis`,`/main`). Takes no project arg — that is the whole point.
+ * (`rune`,`/main`). Takes no project arg — that is the whole point.
  */
 export function baseBranchLockKey(product: string, baseBranch: string): string {
   return `${product}:${baseBranch}`;

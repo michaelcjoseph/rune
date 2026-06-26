@@ -62,7 +62,7 @@ function loadRealPolicy(): ModelPolicy {
 
 function makeSandbox(): SandboxSpec {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: 'demo',
     worktree: '/tmp/fake-worktree',
     egressAllowlist: [],

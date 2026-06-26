@@ -37,7 +37,7 @@ import { __finalizeStaleRunForTest, type RecoveryFinalizeIO } from './recovery-f
 function makeRun(over: Partial<SupervisedRun> = {}): SupervisedRun {
   return {
     id: 'mut-recover-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '15-work-run-finalizer',
     status: 'running',
     startedAt: '2026-06-07T00:00:00.000Z',
@@ -110,7 +110,7 @@ describe('finalizeStaleRun (P0.4 recovery wiring)', () => {
     expect(captured.summaries).toHaveLength(1);
     expect(captured.summaries[0]!.summary.outcome).toBe('branch-complete');
     expect(captured.summaries[0]!.summary.baseSha).toBe('base000sha');
-    expect(captured.summaries[0]!.summary.branch).toBe('jarvis-work/15-work-run-finalizer');
+    expect(captured.summaries[0]!.summary.branch).toBe('rune-work/15-work-run-finalizer');
     // Index row + terminal supervision upsert + worktree removal all happened.
     expect(captured.indexRows).toHaveLength(1);
     expect(captured.indexRows[0]!.row.outcome).toBe('branch-complete');

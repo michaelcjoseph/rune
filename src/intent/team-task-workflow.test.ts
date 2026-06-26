@@ -9,7 +9,7 @@
  * test review, coder, independent-provider reviewer (+ tech lead), designer when
  * the sizing flag requires it, objection-class gates, bounded severity convergence — and
  * returns STRUCTURED EVIDENCE. It does NOT mark `tasks.md`, write `context.md`, or
- * merge: Jarvis owns closeout. Every role seam is injected so the whole flow runs
+ * merge: Rune owns closeout. Every role seam is injected so the whole flow runs
  * on fixtures with no live model call.
  *
  * See: docs/projects/14-product-team-agents/test-plan.md §4

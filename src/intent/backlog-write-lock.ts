@@ -39,7 +39,7 @@ const locks = new Map<string, Promise<unknown>>();
  * same key has settled. Different keys never block each other. The map entry is pruned once the
  * tail settles (when no newer waiter has replaced it) so the lock table doesn't grow unboundedly.
  *
- * This guards only Jarvis's OWN in-process writes; a Claude CLI child (work-run) is a separate
+ * This guards only Rune's OWN in-process writes; a Claude CLI child (work-run) is a separate
  * actor with no shared lock. The returned promise REJECTS if `fn` throws (a synchronous throw in
  * `fn` surfaces as a rejected `run`) — callers must `await` or attach `.catch()`; the internal
  * cleanup chain never rejects.

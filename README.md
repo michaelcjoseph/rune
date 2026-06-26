@@ -39,7 +39,7 @@ A single Node.js process that combines a Telegram bot, a local webview UI, an LL
 │  └────┬───────────────────────┬───────────────────┘   │
 │       │                       │                       │
 │  ┌────┴──────────────┐  ┌─────┴────────────────┐      │
-│  │   MCP: jarvis-kb  │  │ Obsidian Vault (iCloud)│    │
+│  │   MCP: rune-kb  │  │ Obsidian Vault (iCloud)│    │
 │  │ (KB tools exposed │  │ journals/ pages/      │    │
 │  │  to other Claude  │  │ knowledge/ projects/  │    │
 │  │  Code sessions)   │  │ world-view/ health/   │    │
@@ -51,7 +51,7 @@ A single Node.js process that combines a Telegram bot, a local webview UI, an LL
 - **HTTP server** (localhost:3847) — REST API, WebSocket, and a vanilla HTML/JS **webview** at `/` with cookie auth and host-guard allowlist
 - **Scheduler** (node-cron) — morning prep, Whoop sync, nightly processing, review nudges, intent-scan
 - **Transport** — `MessageSender` abstraction (TG + webview), in-flight op tracker (`/cancel`), mutation pipeline (autonomous ops with append-only `logs/mutations.jsonl`)
-- **Knowledge base** — two-layer search (LLM reads compact index → ripgrep full-text), no vector DB; also exposed via MCP (`jarvis-kb`) to other Claude Code sessions
+- **Knowledge base** — two-layer search (LLM reads compact index → ripgrep full-text), no vector DB; also exposed via MCP (`rune-kb`) to other Claude Code sessions
 - **Claude Code CLI** — all AI operations; no API key needed (runs on Max subscription); prose-producing callers opt into a writing-voice prepend from `writing/voice.md`
 
 ## Commands
@@ -129,7 +129,7 @@ knowledge/
 
 Sources go in, wiki pages come out. The wiki-compiler agent reads raw sources, identifies entities/concepts/topics, creates or updates wiki pages with `[[wikilinks]]`, and maintains the index. No embeddings or vector DB — search uses a two-layer approach: the LLM reads the compact index to find relevant pages, then ripgrep does full-text search for additional matches.
 
-**MCP server.** The KB is also exposed as an MCP server (`jarvis-kb`) so any Claude Code session — not just Rune — can query, search, ingest, or lint via the tools `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+**MCP server.** The KB is also exposed as an MCP server (`rune-kb`) so any Claude Code session — not just Rune — can query, search, ingest, or lint via the tools `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
 
 ## Vault Content Model
 
@@ -241,9 +241,9 @@ READWISE_TOKEN=...                       # for Readwise article scanning
 LENNY_MCP_TOKEN=...                      # JWT for the Lenny MCP server (/library-sync)
 
 # Optional — webview / HTTP
-JARVIS_HTTP_SECRET=...                   # required to enable webview auth
+RUNE_HTTP_SECRET=...                   # required to enable webview auth
 OBSIDIAN_VAULT_NAME=my-vault             # display name in the webview header (defaults to basename of VAULT_DIR)
-JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1 # host-guard allowlist for webview endpoints
+RUNE_ALLOWED_HOSTS=localhost,127.0.0.1 # host-guard allowlist for webview endpoints
 
 # Optional — workspace (autonomous codebase ops)
 WORKSPACE_DIR=/path/to/workspace         # root for /work mutations (agents get read access)
@@ -273,7 +273,7 @@ npm run intent-scan       # run the weekly Ask-Twice intent scan manually
 npm run library-backfill  # bulk-ingest existing library entries into the KB
 ```
 
-The server starts the Telegram bot (polling), HTTP server on port 3847, the MCP server (`jarvis-kb`), and the cron scheduler. With `JARVIS_HTTP_SECRET` set, the webview is reachable at `http://localhost:3847/`.
+The server starts the Telegram bot (polling), HTTP server on port 3847, the MCP server (`rune-kb`), and the cron scheduler. With `RUNE_HTTP_SECRET` set, the webview is reachable at `http://localhost:3847/`.
 
 ### Initialize the Knowledge Base
 
@@ -395,11 +395,11 @@ Free-form Telegram or webview messages get classified against the skill registry
 
 ### Webview
 
-`http://localhost:3847/` hosts a vanilla HTML/JS chat UI that mirrors the TG dispatcher in real time. Auth is a `JARVIS_HTTP_SECRET` cookie behind a host-guard allowlist (`JARVIS_ALLOWED_HOSTS`). The page is a thin shell over a WebSocket (`/api/ws`) plus REST endpoints (`/api/chat`, `/api/state`, `/api/mutations`, `/api/ops/:id/cancel`). It surfaces session messages, in-flight Claude ops with friendly labels, and active + recent mutations from the work-runner.
+`http://localhost:3847/` hosts a vanilla HTML/JS chat UI that mirrors the TG dispatcher in real time. Auth is a `RUNE_HTTP_SECRET` cookie behind a host-guard allowlist (`RUNE_ALLOWED_HOSTS`). The page is a thin shell over a WebSocket (`/api/ws`) plus REST endpoints (`/api/chat`, `/api/state`, `/api/mutations`, `/api/ops/:id/cancel`). It surfaces session messages, in-flight Claude ops with friendly labels, and active + recent mutations from the work-runner.
 
 ### MCP server
 
-The KB is exposed as an MCP server (`jarvis-kb`) registered in `.claude/settings.json`, so any Claude Code session on the machine — not just Rune — can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint` as tools.
+The KB is exposed as an MCP server (`rune-kb`) registered in `.claude/settings.json`, so any Claude Code session on the machine — not just Rune — can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, and `kb_lint` as tools.
 
 ### Mutation pipeline
 

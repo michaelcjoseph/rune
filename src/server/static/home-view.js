@@ -218,7 +218,7 @@ function isProductionSurface() {
 
 function currentConnectionStatus() {
   if (typeof window === 'undefined') return 'disconnected';
-  return window.jarvisConnectionStatus || 'disconnected';
+  return window.runeConnectionStatus || 'disconnected';
 }
 
 export function createHomeView({ root, fetchJson, postJson, router }) {
@@ -241,7 +241,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
   };
 
   if (typeof window !== 'undefined') {
-    window.addEventListener?.('jarvis-connection-status', onConnectionStatus);
+    window.addEventListener?.('rune-connection-status', onConnectionStatus);
   }
 
   root.addEventListener?.('click', event => {
@@ -312,7 +312,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     },
     close() {
       if (typeof window !== 'undefined') {
-        window.removeEventListener?.('jarvis-connection-status', onConnectionStatus);
+        window.removeEventListener?.('rune-connection-status', onConnectionStatus);
       }
     },
   };

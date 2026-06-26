@@ -13,7 +13,7 @@ the harness self-verified real work with zero human intervention.
 
 - **Terminal:** `completed` + `held:true` — branch-complete, holding for the
   Project 15 finalizer. Orchestrated runs never self-merge (spec req 17).
-- **Branch:** `jarvis-work/live-accept-sum`
+- **Branch:** `rune-work/live-accept-sum`
 - **Diff touches target (`impl/sum.mjs`):** yes
 - **QA test passes against the coder's diff (`node impl/sum.test.mjs`):** yes
 - **Reviewer/objection gate:** passed (transitive — branch-complete is
@@ -33,7 +33,7 @@ docs/projects/live-accept-sum/context.md | 11 ++++++++++-
 
 ```jsonl
     {"mutationId":"14165a44-5241-409f-9a72-e507a578cd14","ts":"2026-06-14T02:56:18.966Z","kind":"log","data":{"line":"orchestrated run starting for live-accept-sum"}}
-    {"mutationId":"14165a44-5241-409f-9a72-e507a578cd14","ts":"2026-06-14T02:57:30.809Z","kind":"completed","data":{"projectSlug":"live-accept-sum","product":"accept-live","dispatchMode":"orchestrated","held":true,"reason":"branch-complete; held for the Project 15 finalizer (not wired)","branch":"jarvis-work/live-accept-sum","baseBranch":"main","taskCount":1}}
+    {"mutationId":"14165a44-5241-409f-9a72-e507a578cd14","ts":"2026-06-14T02:57:30.809Z","kind":"completed","data":{"projectSlug":"live-accept-sum","product":"accept-live","dispatchMode":"orchestrated","held":true,"reason":"branch-complete; held for the Project 15 finalizer (not wired)","branch":"rune-work/live-accept-sum","baseBranch":"main","taskCount":1}}
 ```
 
 > The throwaway repo, its worktrees, and the temp product entry were created in

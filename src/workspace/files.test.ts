@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Two distinct temp roots: one for WORKSPACE_DIR override, one for PROJECT_ROOT fallback
-const workspaceRoot = join(tmpdir(), `jarvis-workspace-test-${Date.now()}`);
-const projectRoot = join(tmpdir(), `jarvis-project-root-test-${Date.now()}`);
+const workspaceRoot = join(tmpdir(), `rune-workspace-test-${Date.now()}`);
+const projectRoot = join(tmpdir(), `rune-project-root-test-${Date.now()}`);
 mkdirSync(workspaceRoot, { recursive: true });
 mkdirSync(projectRoot, { recursive: true });
 

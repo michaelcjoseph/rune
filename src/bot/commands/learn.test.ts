@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MessageSender } from '../../transport/sender.js';
 
-const tmpDir = join(tmpdir(), `jarvis-learn-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-learn-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 vi.mock('../../config.js', () => ({

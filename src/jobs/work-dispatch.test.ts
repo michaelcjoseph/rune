@@ -66,10 +66,10 @@ describe('readDispatchModeInput — toggle read from products.json over a global
 
   it('per-product orchestratedMode:true overrides a global-disabled default', () => {
     writeConfig({
-      jarvis: { repoPath: '/repo/jarvis', baseBranch: 'main', orchestratedMode: true },
+      rune: { repoPath: '/repo/rune', baseBranch: 'main', orchestratedMode: true },
     });
     const input = readDispatchModeInput({
-      product: 'jarvis',
+      product: 'rune',
       productsConfigPath: cfgPath,
       globalEnabled: false,
     });
@@ -78,10 +78,10 @@ describe('readDispatchModeInput — toggle read from products.json over a global
 
   it('per-product orchestratedMode:false overrides a global-enabled default', () => {
     writeConfig({
-      jarvis: { repoPath: '/repo/jarvis', baseBranch: 'main', orchestratedMode: false },
+      rune: { repoPath: '/repo/rune', baseBranch: 'main', orchestratedMode: false },
     });
     const input = readDispatchModeInput({
-      product: 'jarvis',
+      product: 'rune',
       productsConfigPath: cfgPath,
       globalEnabled: true,
     });
@@ -89,9 +89,9 @@ describe('readDispatchModeInput — toggle read from products.json over a global
   });
 
   it('falls back to the global default when the product omits orchestratedMode', () => {
-    writeConfig({ jarvis: { repoPath: '/repo/jarvis', baseBranch: 'main' } });
+    writeConfig({ rune: { repoPath: '/repo/rune', baseBranch: 'main' } });
     const input = readDispatchModeInput({
-      product: 'jarvis',
+      product: 'rune',
       productsConfigPath: cfgPath,
       globalEnabled: true,
     });
@@ -99,7 +99,7 @@ describe('readDispatchModeInput — toggle read from products.json over a global
   });
 
   it('falls back to the global default (no crash) for an unknown/unreadable product', () => {
-    writeConfig({ jarvis: { repoPath: '/repo/jarvis', baseBranch: 'main' } });
+    writeConfig({ rune: { repoPath: '/repo/rune', baseBranch: 'main' } });
     const input = readDispatchModeInput({
       product: 'does-not-exist',
       productsConfigPath: cfgPath,
@@ -109,9 +109,9 @@ describe('readDispatchModeInput — toggle read from products.json over a global
   });
 
   it('threads forceLegacy + reason through to the DispatchModeInput', () => {
-    writeConfig({ jarvis: { repoPath: '/repo/jarvis', baseBranch: 'main', orchestratedMode: true } });
+    writeConfig({ rune: { repoPath: '/repo/rune', baseBranch: 'main', orchestratedMode: true } });
     const input = readDispatchModeInput({
-      product: 'jarvis',
+      product: 'rune',
       productsConfigPath: cfgPath,
       globalEnabled: true,
       forceLegacy: true,

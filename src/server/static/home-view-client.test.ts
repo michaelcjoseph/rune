@@ -117,7 +117,7 @@ const homeOperations = {
       id: 'intent-proposal:0',
       type: 'intent-proposal',
       source: 'intent-proposal',
-      productProject: 'jarvis',
+      productProject: 'rune',
       summary: 'capture product idea',
       age: 30,
     },
@@ -259,7 +259,7 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     const previousWindow = (globalThis as any).window;
     const listeners = new Map<string, Listener>();
     (globalThis as any).window = {
-      jarvisConnectionStatus: 'disconnected',
+      runeConnectionStatus: 'disconnected',
       addEventListener: vi.fn((type: string, listener: Listener) => {
         listeners.set(type, listener);
       }),
@@ -277,12 +277,12 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
 
       expect(root.innerHTML).toMatch(/data-home-connection-status=["']disconnected["'][\s\S]{0,140}Disconnected/i);
 
-      (globalThis as any).window.jarvisConnectionStatus = 'connected';
-      listeners.get('jarvis-connection-status')?.({ detail: { status: 'connected' } });
+      (globalThis as any).window.runeConnectionStatus = 'connected';
+      listeners.get('rune-connection-status')?.({ detail: { status: 'connected' } });
 
       expect(root.innerHTML).toMatch(/data-home-connection-status=["']connected["'][\s\S]{0,120}Connected/i);
       home.close?.();
-      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('jarvis-connection-status', expect.any(Function));
+      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('rune-connection-status', expect.any(Function));
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;
@@ -345,7 +345,7 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
       available: true,
       products: [
         {
-          name: 'jarvis',
+          name: 'rune',
           repoBacked: true,
           activeRun: {
             runId: 'run-live-1',

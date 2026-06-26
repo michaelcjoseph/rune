@@ -39,13 +39,13 @@ Coverage checklist for the localhost webview chat surface, the transport abstrac
 
 ### Auth gating
 
-- [ ] 🔴 `GET /` without a `jarvis-auth` cookie shows the auth-required bootstrap page (not the chat shell).
+- [ ] 🔴 `GET /` without a `rune-auth` cookie shows the auth-required bootstrap page (not the chat shell).
 - [ ] 🔴 `GET /api/state` without auth returns 401.
 - [ ] 🔴 `WS /api/ws` upgrade without auth returns 401 (does not upgrade).
-- [ ] 🔴 `GET /api/state` with `Authorization: Bearer $JARVIS_HTTP_SECRET` returns 200.
-- [ ] 🔴 `GET /api/state` with `jarvis-auth` cookie returns 200.
-- [ ] 🔴 Any new endpoint with `Host` header (port stripped) not in `JARVIS_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) returns 403 (defense in depth on top of the listener binding).
-- [ ] 🟡 With `JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net`, a request whose `Host` header is `mac-mini.tail-xxxx.ts.net` is admitted; a request with `Host: evil.example.com` returns 403.
+- [ ] 🔴 `GET /api/state` with `Authorization: Bearer $RUNE_HTTP_SECRET` returns 200.
+- [ ] 🔴 `GET /api/state` with `rune-auth` cookie returns 200.
+- [ ] 🔴 Any new endpoint with `Host` header (port stripped) not in `RUNE_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) returns 403 (defense in depth on top of the listener binding).
+- [ ] 🟡 With `RUNE_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net`, a request whose `Host` header is `mac-mini.tail-xxxx.ts.net` is admitted; a request with `Host: evil.example.com` returns 403.
 - [ ] 🟡 Host header carrying an explicit port (e.g., `localhost:3847`) is admitted (port stripped before comparison).
 - [ ] 🟡 `?token=` URL handling: the token is consumed, exchanged for a cookie, and removed from the URL via redirect; reloading the page does not re-expose the token.
 - [ ] 🟢 Auth failures are logged with the requesting `Host` and path (no sensitive data).
@@ -166,7 +166,7 @@ Coverage checklist for the localhost webview chat surface, the transport abstrac
 - [ ] 🟡 CDN unreachable (markdown-it / highlight.js fail to load): chat falls back to raw `<pre>` rendering; functionality preserved.
 - [ ] 🟡 Browser refresh during a review: chat scroll resets; sidebar repopulates; the next message routes to the still-active review session.
 - [ ] 🟡 Bot not yet ready on page load: `/api/state` returns 503 with `{ ready: false }`; sidebar shows "starting up..." banner; WS retries with backoff.
-- [ ] 🟢 `JARVIS_HTTP_SECRET` rotated while a tab is open: cookie validation fails on next request; tab redirects to auth-required page.
+- [ ] 🟢 `RUNE_HTTP_SECRET` rotated while a tab is open: cookie validation fails on next request; tab redirects to auth-required page.
 
 ## 8.5. Remote access (Tailscale Serve, Phase B.5)
 
@@ -176,11 +176,11 @@ Coverage checklist for the localhost webview chat surface, the transport abstrac
 
 - Mac mini has Tailscale installed and signed in; `tailscale serve --bg --https=443 http://127.0.0.1:3847` is active and `tailscale serve status` shows the `*.ts.net` origin.
 - Laptop has Tailscale installed and signed in to the same tailnet.
-- `.env.local` on the Mac mini contains `JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,<actual-magic-dns-host>` and `JARVIS_HTTP_SECRET` is set.
+- `.env.local` on the Mac mini contains `RUNE_ALLOWED_HOSTS=localhost,127.0.0.1,<actual-magic-dns-host>` and `RUNE_HTTP_SECRET` is set.
 
 ### Tests
 
-- [ ] 🔴 First-load auth bootstrap: from the laptop, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`. Page returns 200, redirects to `/` with the token stripped, sets the `jarvis-auth` cookie. DevTools shows the cookie with `Secure; HttpOnly; SameSite=Strict` (all three flags present).
+- [ ] 🔴 First-load auth bootstrap: from the laptop, browse `https://<host>.tail-xxxx.ts.net/?token=$RUNE_HTTP_SECRET`. Page returns 200, redirects to `/` with the token stripped, sets the `rune-auth` cookie. DevTools shows the cookie with `Secure; HttpOnly; SameSite=Strict` (all three flags present).
 - [ ] 🔴 Subsequent-visit cookie reuse: close the tab, reopen `https://<host>.tail-xxxx.ts.net/`, page loads chat shell without re-prompting for token.
 - [ ] 🔴 End-to-end chat round-trip: type a message in the laptop tab; receive a streamed response identical in content to what TG would receive for the same input.
 - [ ] 🔴 Localhost listener invariant intact: from another machine on the home LAN that is **not** on the tailnet, attempt `http://<mac-mini-LAN-IP>:3847/` and `http://<mac-mini-LAN-IP>:3847/api/state`. Both must fail (connection refused / unreachable). Rune must not be listening on a non-loopback interface.
@@ -189,14 +189,14 @@ Coverage checklist for the localhost webview chat surface, the transport abstrac
 - [ ] 🟡 `Secure` cookie conditioning: against a local dev server reached via plain `http://localhost:3847/?token=…` (no Tailscale Serve in front), the cookie is set without `Secure` — confirming the flag is conditional on the trusted forwarded-HTTPS hop, not always-on.
 - [ ] 🟡 X-Forwarded-Proto trust scoping: `curl -H "X-Forwarded-Proto: https" http://127.0.0.1:3847/api/auth-bootstrap …` from the Mac mini sets `Secure` (peer is loopback). The same header injected from the LAN (via a hypothetical second proxy) must NOT set `Secure` — the bootstrap handler only honours the header when the immediate peer is `127.0.0.1`/`::1`. Verify with a unit test in `src/server/auth.test.ts` covering both peer cases.
 - [ ] 🟢 Reboot persistence: reboot the Mac mini; once Rune is back up, the laptop tab reconnects WS without re-bootstrapping auth (cookie still valid; `tailscale serve` config persists across reboots).
-- [ ] 🟢 MagicDNS hostname rotation: if the user re-signs into a fresh tailnet and the MagicDNS hostname changes, updating `JARVIS_ALLOWED_HOSTS` and restarting Rune is sufficient — no code change needed.
+- [ ] 🟢 MagicDNS hostname rotation: if the user re-signs into a fresh tailnet and the MagicDNS hostname changes, updating `RUNE_ALLOWED_HOSTS` and restarting Rune is sufficient — no code change needed.
 
 ## 9. Documentation parity
 
 - [ ] 🟡 After Phase B ships, `CLAUDE.md` Project Structure includes `src/transport/`, `src/server/static/`, `src/server/webview.ts`, `src/server/auth.ts`.
 - [ ] 🟡 After Phase B ships, `CLAUDE.md` Architecture mentions the webview as a second transport sharing session via `TELEGRAM_USER_ID`.
 - [ ] 🟡 `OBSIDIAN_VAULT_NAME` is documented in `CLAUDE.md` Environment Variables (optional, with default).
-- [ ] 🟡 `JARVIS_ALLOWED_HOSTS` is documented in `CLAUDE.md` Environment Variables alongside `JARVIS_HTTP_SECRET`, with the headless-Mac-mini Tailscale Serve example.
+- [ ] 🟡 `RUNE_ALLOWED_HOSTS` is documented in `CLAUDE.md` Environment Variables alongside `RUNE_HTTP_SECRET`, with the headless-Mac-mini Tailscale Serve example.
 - [ ] 🟢 `docs/projects/index.md` row for `06-webview` reflects the current shipped phase (`Spec` → `In Progress` → `Done`).
 - [ ] 🟡 After Phase E ships, `CLAUDE.md` Architecture has a "Mutation pipeline" subsection covering `MutationDescriptor`, `MutationApplier`, `logs/mutations.jsonl`, and the registered kinds (`work-run` implemented; others reserved).
 - [ ] 🟡 After Phase E ships, `CLAUDE.md` Project Structure includes `src/transport/mutations.ts`, `src/jobs/work-runner.ts`, `src/jobs/mutations-log.ts`, `src/server/projects-snapshot.ts`.

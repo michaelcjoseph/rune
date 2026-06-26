@@ -57,7 +57,7 @@ export interface GateRuntimeOpts {
   repoPath: string;
   /** The base branch the run would land on (e.g. `main`). */
   baseBranch: string;
-  /** The feature/work branch (e.g. `jarvis-work/15-…`). */
+  /** The feature/work branch (e.g. `rune-work/15-…`). */
   branch: string;
   /** Path for the throwaway integration worktree — created here, torn down here,
    *  never the product's real base-branch checkout. */
@@ -124,7 +124,7 @@ export interface GateRuntimeIO {
  * `timeoutMs`. The child is spawned `detached` into its own process group and a
  * timeout reaps the WHOLE group (SIGTERM → SIGKILL after the reap grace) so a
  * command that forks (e.g. `npm` → `node`) can't outlive its budget. Registered
- * with the active-process registry so a graceful Jarvis shutdown reaps it too.
+ * with the active-process registry so a graceful Rune shutdown reaps it too.
  */
 function defaultRunValidationCommand(
   command: string,
@@ -152,7 +152,7 @@ function defaultRunValidationCommand(
         /* group already gone */
       }
     };
-    // unref'd so a validation command in flight during a graceful Jarvis
+    // unref'd so a validation command in flight during a graceful Rune
     // shutdown can't hold the process alive for the full timeout window.
     const timer = setTimeout(() => {
       timedOut = true;

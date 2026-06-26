@@ -55,7 +55,7 @@ function makeSummary(overrides: Partial<WorkRunSummary> = {}): WorkRunSummary {
   return {
     id: 'mut-test-001',
     project: '11-work-run-observability',
-    product: 'jarvis',
+    product: 'rune',
     outcome: 'noop',
     reason: 'zero commits + clean tree',
     exit: { exitCode: 0, signal: null, cancelled: false, durationMs: 1200 },
@@ -74,7 +74,7 @@ function makeSummary(overrides: Partial<WorkRunSummary> = {}): WorkRunSummary {
       },
     },
     baseSha: 'deadbeef1234567890abcdef1234567890abcdef',
-    branch: 'jarvis-gen-eval/mut-test-001',
+    branch: 'rune-gen-eval/mut-test-001',
     startedAt: '2026-05-30T10:00:00.000Z',
     endedAt: '2026-05-30T10:00:01.200Z',
     transcriptPath: '/tmp/logs/work-runs/mut-test-001/transcript.jsonl',

@@ -404,7 +404,7 @@ async function reconcileResumedBranchBase(
   opts: ReconcileResumeOpts,
 ): Promise<{ baseSha: string; baseReconciled?: SandboxSpec['baseReconciled'] }> {
   const { runGit, worktree, branch, baseBranch, previousTip } = opts;
-  // Reconcile against the LOCAL base ref — no `git fetch`. Jarvis lands its
+  // Reconcile against the LOCAL base ref — no `git fetch`. Rune lands its
   // out-of-band fixes as commits on the daemon's local base branch (the exact
   // scenario this guards, docs/projects/bugs.md), so the local ref is
   // authoritative; consulting origin would risk rebasing onto unreviewed state.

@@ -23,7 +23,7 @@ export async function captureSessions(source = 'nightly'): Promise<{ captured: n
       if (result.text) {
         const ts = getTimestamp();
         const summaryLines = result.text.split('\n').map((l) => `\t- ${l}`).join('\n');
-        const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n${summaryLines}`;
+        const entry = `- ${ts} [[rune]] ${transportLabel(transport)}\n${summaryLines}`;
         appendToJournal(entry);
         captured++;
         capturedKeys.push({ userId, transport, scope });

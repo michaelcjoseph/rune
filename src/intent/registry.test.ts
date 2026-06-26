@@ -20,7 +20,7 @@ vi.mock('../utils/logger.js', () => ({ createLogger: () => mockLog }));
 
 vi.mock('../config.js', () => ({
   default: { LOGS_DIR: '/test/logs', REGISTRY_FILE: '/test/logs/registry.json' },
-  PROJECT_ROOT: '/test/jarvis',
+  PROJECT_ROOT: '/test/rune',
 }));
 
 // vi.hoisted so the mocks exist before registry.ts's module-load `node:fs` import.
@@ -58,7 +58,7 @@ function indexMd(rows: Array<{ slug: string; status: string }>): string {
   return `# Projects\n\n${header}\n${body}\n`;
 }
 
-const JARVIS_INDEX = indexMd([
+const RUNE_INDEX = indexMd([
   { slug: '01-mvp', status: 'Done' },
   { slug: '07-spaced-repetition', status: 'In Progress' },
   { slug: '08-intent-layer', status: 'Planned' },
@@ -70,7 +70,7 @@ const ASSAY_INDEX = indexMd([{ slug: '01-core', status: 'In Progress' }]);
 function sampleSources(): RegistrySources {
   return {
     products: [
-      { name: 'jarvis', repoBacked: true, projectsIndex: JARVIS_INDEX },
+      { name: 'rune', repoBacked: true, projectsIndex: RUNE_INDEX },
       { name: 'assay', repoBacked: true, projectsIndex: ASSAY_INDEX },
       { name: 'family', repoBacked: false, projectsIndex: null },
     ],
@@ -84,20 +84,20 @@ beforeEach(() => {
 describe('registry — aggregation (test-plan §1)', () => {
   it('returns every product and its projects in one query, across all sources', () => {
     const registry = buildRegistry(sampleSources());
-    expect(registry.products.map((p) => p.name).sort()).toEqual(['assay', 'family', 'jarvis']);
+    expect(registry.products.map((p) => p.name).sort()).toEqual(['assay', 'family', 'rune']);
 
     const all = getAllProjects(registry);
-    // 3 jarvis projects + 1 assay project + 0 family projects.
+    // 3 rune projects + 1 assay project + 0 family projects.
     expect(all).toHaveLength(4);
-    expect(all.filter((p) => p.product === 'jarvis')).toHaveLength(3);
+    expect(all.filter((p) => p.product === 'rune')).toHaveLength(3);
     expect(all.filter((p) => p.product === 'assay')).toHaveLength(1);
     expect(all.filter((p) => p.product === 'family')).toHaveLength(0);
   });
 
   it('derives lifecycle status from the repo index Status column', () => {
     const registry = buildRegistry(sampleSources());
-    const jarvis = registry.products.find((p) => p.name === 'jarvis')!;
-    const bySlug = Object.fromEntries(jarvis.projects.map((p) => [p.slug, p.status]));
+    const rune = registry.products.find((p) => p.name === 'rune')!;
+    const bySlug = Object.fromEntries(rune.projects.map((p) => [p.slug, p.status]));
     expect(bySlug['01-mvp']).toBe('done'); // "Done"
     expect(bySlug['07-spaced-repetition']).toBe('active'); // "In Progress"
     expect(bySlug['08-intent-layer']).toBe('planned'); // "Planned"
@@ -107,9 +107,9 @@ describe('registry — aggregation (test-plan §1)', () => {
     const registry = buildRegistry({
       products: [
         {
-          name: 'jarvis',
+          name: 'rune',
           repoBacked: true,
-          projectsIndex: JARVIS_INDEX,
+          projectsIndex: RUNE_INDEX,
           taskProgress: {
             '01-mvp': { done: 5, total: 5 },
             '07-spaced-repetition': { done: 2, total: 8 },
@@ -118,8 +118,8 @@ describe('registry — aggregation (test-plan §1)', () => {
         },
       ],
     });
-    const jarvis = registry.products.find((p) => p.name === 'jarvis')!;
-    const bySlug = Object.fromEntries(jarvis.projects.map((p) => [p.slug, p.progress]));
+    const rune = registry.products.find((p) => p.name === 'rune')!;
+    const bySlug = Object.fromEntries(rune.projects.map((p) => [p.slug, p.progress]));
     expect(bySlug['01-mvp']).toEqual({ done: 5, total: 5 });
     expect(bySlug['07-spaced-repetition']).toEqual({ done: 2, total: 8 });
     // A slug absent from the map carries no progress field at all.
@@ -261,6 +261,6 @@ describe('registry — cockpit query API (test-plan §1)', () => {
       expect(typeof project.slug).toBe('string');
       expect(['planned', 'active', 'done']).toContain(project.status);
     }
-    expect(all.some((p) => p.product === 'jarvis' && p.slug === '08-intent-layer')).toBe(true);
+    expect(all.some((p) => p.product === 'rune' && p.slug === '08-intent-layer')).toBe(true);
   });
 });

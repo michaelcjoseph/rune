@@ -68,7 +68,7 @@ describe('Telegram UX — /plan command (C4)', () => {
     'subsequent free-form messages route through handlePlanningTurn until the session terminates',
   );
   it.todo(
-    'when handlePlanningTurn returns spec-proposed, Jarvis sends an inline-keyboard approval message (C6)',
+    'when handlePlanningTurn returns spec-proposed, Rune sends an inline-keyboard approval message (C6)',
   );
   it.todo('/plan with no product lists registered products and waits for the user\'s choice');
   it.todo('/clear or /fresh during a planning session abandons it');

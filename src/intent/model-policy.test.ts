@@ -221,6 +221,6 @@ describe('model selection policy — loadModelPolicy and the shipped file (test-
   it('loadModelPolicy returns null when the policy file is absent', () => {
     // A missing policy file is tolerated — callers fall back to pre-policy behavior — so
     // loadModelPolicy returns null rather than throwing.
-    expect(loadModelPolicy('/tmp/jarvis-nonexistent-model-policy.json')).toBeNull();
+    expect(loadModelPolicy('/tmp/rune-nonexistent-model-policy.json')).toBeNull();
   });
 });

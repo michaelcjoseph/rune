@@ -602,7 +602,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
       after the Phase 8 live-acceptance harness exited green.
       Reverses the 2026-06-11 `e8424bd` revert to legacy `/work`.
       (DONE 2026-06-13: operator took the go-live decision. `ORCHESTRATED_WORK_ENABLED=true`
-      in `.env.local` and `orchestratedMode: true` restored on the `jarvis` product in
+      in `.env.local` and `orchestratedMode: true` restored on the `rune` product in
       `policies/products.json`. The earlier block — the confirmation target
       `18-agent-activity-label` living only on a feature branch — is moot: that project was
       retired, and the live-acceptance proof `live-acceptance-6abf35cf.md` stands as the green

@@ -235,7 +235,7 @@ knowledge/
 
 ### Agents
 
-**Rune agents** (in `jarvis/.claude/agents/`):
+**Rune agents** (in `rune/.claude/agents/`):
 
 | Agent | Purpose |
 |---|---|
@@ -402,7 +402,7 @@ Two-layer, no vector DB:
 
 ### Phase 11: CLI Interface
 
-- [ ] Local CLI entry point (cli/jarvis.ts)
+- [ ] Local CLI entry point (cli/rune.ts)
 - [ ] Commands: query, ingest, lint, status, search
 
 ### Phase 12: Mac Mini Deployment

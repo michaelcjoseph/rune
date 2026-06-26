@@ -5,7 +5,7 @@
  * check, a credential prompt, a human decision) ends its FINAL result line with
  * exactly:
  *
- *   JARVIS_WORK_RUN_SENTINEL { "version": 1, "pendingCheck": "…", "command"?: "…", "reason"?: "…" }
+ *   RUNE_WORK_RUN_SENTINEL { "version": 1, "pendingCheck": "…", "command"?: "…", "reason"?: "…" }
  *
  * `work-runner` parses this from the RAW `assistant`/`result` envelope text
  * (before display scrubbing) and, on a valid sentinel, PARKS the run: it writes
@@ -20,7 +20,7 @@
  */
 
 /** The exact marker that opens a sentinel line. */
-export const WORK_RUN_SENTINEL_MARKER = 'JARVIS_WORK_RUN_SENTINEL';
+export const WORK_RUN_SENTINEL_MARKER = 'RUNE_WORK_RUN_SENTINEL';
 
 /** The only schema version accepted in Phase 1. */
 export const WORK_RUN_SENTINEL_VERSION = 1;
@@ -53,7 +53,7 @@ export interface WorkRunSentinel {
  * envelope's `result` string, or an assistant message's concatenated text).
  *
  * Contract:
- *  - The sentinel is `JARVIS_WORK_RUN_SENTINEL ` followed by a JSON object, on a
+ *  - The sentinel is `RUNE_WORK_RUN_SENTINEL ` followed by a JSON object, on a
  *    single (final) line. The LAST sentinel line in the text wins.
  *  - `version` MUST be `1`, `pendingCheck` MUST be a non-empty string,
  *    `command`/`reason` are optional strings (wrong types reject the sentinel).
@@ -70,7 +70,7 @@ export function parseWorkRunSentinel(text: string): WorkRunSentinel | null {
   // The sentinel is a single line opening with the marker. The LAST such line
   // wins (a run may print a stale draft before the final stop). Match only when
   // the marker opens the (trimmed) line, so a bare mention in prose
-  // ("the JARVIS_WORK_RUN_SENTINEL is…") never trips a false park.
+  // ("the RUNE_WORK_RUN_SENTINEL is…") never trips a false park.
   let candidate: string | null = null;
   for (const line of text.split('\n')) {
     const trimmed = line.trim();

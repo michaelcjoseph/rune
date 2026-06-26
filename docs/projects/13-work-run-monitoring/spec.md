@@ -40,7 +40,7 @@ work disappearing or bypassing the normal merge gate.
 
 - **Durable integration branches.** Cut from this spec — the proposed topology was
   invalid (see Deferred). Phase 1 changes nothing about which branch a run is cut from
-  (`jarvis-work/<run-id>` off repo HEAD, as today) and defines no new merge path.
+  (`rune-work/<run-id>` off repo HEAD, as today) and defines no new merge path.
 - **Changing how `/work` executes** (the plan→test→implement→review cycle in
   `.claude/skills/work/SKILL.md`). Same boundary project 11 held.
 - **Parking the orchestrated-work applier.** Parking is scoped to the **legacy `work-run`
@@ -90,7 +90,7 @@ on 2026-06-08.
    its protected set from active mutation ids **plus every non-terminal supervised run**, where
    `TERMINAL_STATUSES = {completed, failed}` — so a `blocked-on-human` record is already protected
    (`work-run-gc-runner.ts:21`, `:55–62`). GC also protects branches checked out in any worktree
-   and refuses to prune outside the `jarvis-work/` prefix. **Implication:** the GC carve-out is
+   and refuses to prune outside the `rune-work/` prefix. **Implication:** the GC carve-out is
    *verify-not-implement* — no code change, only a regression test that a parked run survives a GC
    pass.
 5. **`cleanupOrphanWorktrees` already preserves parked worktrees.** It only `rmSync`s on-disk dirs
@@ -296,7 +296,7 @@ concrete:
 parses then converts to display lines (`work-runner.ts:661`); there is no custom stream-event
 channel, and the `/work` SKILL today only says hard stops "report to the user" with no machine
 payload (`SKILL.md:23`). **Decision (Codex's contract):** the `/work --auto` SKILL must end a
-blocked-on-human stop with one exact final line — `JARVIS_WORK_RUN_SENTINEL { ...json... }` — and
+blocked-on-human stop with one exact final line — `RUNE_WORK_RUN_SENTINEL { ...json... }` — and
 `work-runner` parses that sentinel from the **raw `assistant`/`result` envelope before display
 scrubbing**, not from a tasks.md freetext marker. The sentinel JSON carries the pending-check
 description and any command to run. A run that needs a human but emits no sentinel falls through to
@@ -503,10 +503,10 @@ implicit reject.
 ## Deferred (cut from this spec)
 
 - **Durable per-project integration branches + promotion.** The original Phase 2. Cut because the
-  proposed topology was invalid — `refs/heads/jarvis-work/<project>` and
-  `refs/heads/jarvis-work/<project>/<run-id>` cannot coexist (a ref is a file; a nested ref needs it
+  proposed topology was invalid — `refs/heads/rune-work/<project>` and
+  `refs/heads/rune-work/<project>/<run-id>` cannot coexist (a ref is a file; a nested ref needs it
   to be a directory). If revived, the correct mechanism (per the Codex critique) is a machine-owned
-  ref **outside** `refs/heads` (e.g. `refs/jarvis/integration/<product>/<project>`), advanced by
+  ref **outside** `refs/heads` (e.g. `refs/rune/integration/<product>/<project>`), advanced by
   compare-and-swap and never checked out by a human; Michael refreshes a separate view worktree via
   `git merge --ff-only`. It is a separate product decision with real git-topology cost, and it does
   not unblock the motivating incident — track it as a future spec, not here.

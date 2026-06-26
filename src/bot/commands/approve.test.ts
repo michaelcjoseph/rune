@@ -53,10 +53,10 @@ const BASE_SESSION = {
   claudeSessionId: 'claude-approve',
   planning: {
     status: 'spec-proposed' as const,
-    product: 'jarvis',
+    product: 'rune',
     idea: 'build something cool',
     surface: 'chat' as const,
-    artifact: { product: 'jarvis', title: 'Test Project', spec: 'A spec.', tasks: 'tasks', testPlan: 'tp' },
+    artifact: { product: 'rune', title: 'Test Project', spec: 'A spec.', tasks: 'tasks', testPlan: 'tp' },
   },
   createdAt: new Date().toISOString(),
   lastActivity: new Date().toISOString(),

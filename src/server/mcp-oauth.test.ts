@@ -8,7 +8,7 @@
  * Contract under test (future src/server/mcp-oauth.ts):
  *
  *   export interface McpOAuthDeps {
- *     gateSecret: string;       // JARVIS_HTTP_SECRET — the human-approval gate
+ *     gateSecret: string;       // RUNE_HTTP_SECRET — the human-approval gate
  *     userId: string;           // the ONE known user id every token binds to
  *     now?: () => number;       // injectable clock (expiry tests)
  *     tokenTtlMs?: number;      // access-token TTL (default 1h)
@@ -25,7 +25,7 @@
  * (application/x-www-form-urlencoded: the oauth params + `secret`) to the
  * same path; only a correct secret yields the 302 redirect carrying the
  * code. Query strings land in tunnel/server logs and browser history — a
- * GET-with-secret contract would bake the JARVIS_HTTP_SECRET into all of
+ * GET-with-secret contract would bake the RUNE_HTTP_SECRET into all of
  * them. The 302 Location must never echo the secret.
  *
  * Mechanics:
@@ -63,8 +63,8 @@ const mockConfig = vi.hoisted(() => ({
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_HTTP_SECRET: 'test-secret',
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   TELEGRAM_USER_ID: 0,
 }));
 
@@ -420,7 +420,7 @@ describe('server/mcp-oauth (§7 MCP single-user OAuth)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test 3 🔴 — Gate on JARVIS_HTTP_SECRET (the consent POST)
+  // Test 3 🔴 — Gate on RUNE_HTTP_SECRET (the consent POST)
   //
   // Wrong or missing secret in the consent POST → 401-403, NO code in any
   // Location header; a fabricated code must not exchange.

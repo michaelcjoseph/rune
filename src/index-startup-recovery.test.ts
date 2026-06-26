@@ -13,18 +13,18 @@ vi.mock('node:fs', () => ({
 }));
 
 vi.mock('./config.js', () => ({
-  PROJECT_ROOT: '/tmp/jarvis',
+  PROJECT_ROOT: '/tmp/rune',
   default: {
-    LOGS_DIR: '/tmp/jarvis/logs',
-    WORKTREE_ROOT: '/tmp/jarvis/worktrees',
-    PRODUCTS_CONFIG_FILE: '/tmp/jarvis/products.json',
-    WORK_RUNS_DIR: '/tmp/jarvis/work-runs',
-    SUPERVISED_RUNS_FILE: '/tmp/jarvis/supervised-runs.json',
+    LOGS_DIR: '/tmp/rune/logs',
+    WORKTREE_ROOT: '/tmp/rune/worktrees',
+    PRODUCTS_CONFIG_FILE: '/tmp/rune/products.json',
+    WORK_RUNS_DIR: '/tmp/rune/work-runs',
+    SUPERVISED_RUNS_FILE: '/tmp/rune/supervised-runs.json',
     HTTP_HOST: '127.0.0.1',
     HTTP_PORT: 3847,
     VAULT_DIR: '/tmp/vault',
     TELEGRAM_USER_ID: 12345,
-    JARVIS_HTTP_SECRET: '',
+    RUNE_HTTP_SECRET: '',
     MCP_ISSUER_URL: '',
   },
 }));
@@ -158,8 +158,8 @@ vi.mock('./jobs/work-run-reconciler.js', () => ({
   defaultTerminalWorkRunReconcilerDeps: vi.fn(async () => {
     calls.push('default-terminal-work-run-reconciler-deps');
     return {
-      supervisedRunsFile: '/tmp/jarvis/supervised-runs.json',
-      workRunsDir: '/tmp/jarvis/work-runs',
+      supervisedRunsFile: '/tmp/rune/supervised-runs.json',
+      workRunsDir: '/tmp/rune/work-runs',
       terminalizeMutation: vi.fn(),
       findRunningMutation: vi.fn(),
       now: () => '2026-06-19T12:00:00.000Z',

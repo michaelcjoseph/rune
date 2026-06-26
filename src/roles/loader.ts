@@ -11,7 +11,7 @@
  *                   rules. On any SOUL ↔ memory contradiction, SOUL wins.
  *
  * Both files are read directly from disk (node:fs), NOT via `readVaultFile` —
- * they live in the jarvis repo, not the Obsidian vault. The role is a closed
+ * they live in the rune repo, not the Obsidian vault. The role is a closed
  * union, so the read API can never be steered outside `agents/<role>/` via a
  * `../`-laden role name.
  */
@@ -42,7 +42,7 @@ export const ROLE_NAMES: readonly RoleName[] = [
   'designer',
 ] as const;
 
-/** Root holding every role's `<role>/{SOUL.md,memory.md}`, in the jarvis repo. */
+/** Root holding every role's `<role>/{SOUL.md,memory.md}`, in the rune repo. */
 export const ROLES_ROOT = join(REPO_ROOT, 'agents');
 
 /** Directory for a single role's charter + memory. */

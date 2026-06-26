@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpLogs = join(tmpdir(), `jarvis-intent-scan-test-${Date.now()}`);
+const tmpLogs = join(tmpdir(), `rune-intent-scan-test-${Date.now()}`);
 mkdirSync(tmpLogs, { recursive: true });
 const PROPOSAL_QUEUE_FILE = join(tmpLogs, 'proposal-queue.json');
 const INTENT_LOG_FILE = join(tmpLogs, 'intent-log.jsonl');

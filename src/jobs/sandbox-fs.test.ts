@@ -61,7 +61,7 @@ function sandboxFor(worktree: string): SandboxSpec {
  * skips the cases loudly rather than silently passing.
  */
 const symlinksSupported = (() => {
-  const probeDir = mkdtempSync(join(tmpdir(), 'jarvis-sandbox-fs-probe-'));
+  const probeDir = mkdtempSync(join(tmpdir(), 'rune-sandbox-fs-probe-'));
   try {
     symlinkSync('/tmp', join(probeDir, 'probe-link'));
     return true;
@@ -79,7 +79,7 @@ const symlinksSupported = (() => {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-sandbox-fs-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-sandbox-fs-test-'));
 });
 
 afterEach(() => {
@@ -112,12 +112,12 @@ describe('assertWritable — happy path', () => {
 
 describe('assertWritable — lexical denial', () => {
   it('throws for /etc/passwd against a worktree wholly outside /etc', () => {
-    const sandbox = sandboxFor(join('/tmp', 'jarvis-worktrees', 'aura', '01-growth'));
+    const sandbox = sandboxFor(join('/tmp', 'rune-worktrees', 'aura', '01-growth'));
     expect(() => assertWritable(sandbox, '/etc/passwd')).toThrow();
   });
 
   it('thrown error mentions the original target path', () => {
-    const sandbox = sandboxFor(join('/tmp', 'jarvis-worktrees', 'aura', '01-growth'));
+    const sandbox = sandboxFor(join('/tmp', 'rune-worktrees', 'aura', '01-growth'));
     let message = '';
     try {
       assertWritable(sandbox, '/etc/passwd');
@@ -157,7 +157,7 @@ describe.runIf(symlinksSupported)('assertWritable — symlink resolution catches
     // target doesn't exist yet, but its parent 'escape' is a symlink pointing to
     // a real dir outside the worktree — resolution must catch this.
     const sandbox = sandboxFor(tmpDir);
-    const outside = mkdtempSync(join(tmpdir(), 'jarvis-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'rune-outside-'));
     try {
       const escapeLink = join(tmpDir, 'escape');
       symlinkSync(outside, escapeLink);
@@ -263,7 +263,7 @@ describe('writeFileInSandbox', () => {
     // We use a non-existent path well outside the worktree and verify no file
     // materializes (we cannot check /etc/passwd directly since we lack write
     // permission, but we confirm the throw and that the guard fired first).
-    const targetOutside = '/etc/__jarvis_test_should_not_exist__';
+    const targetOutside = '/etc/__rune_test_should_not_exist__';
     try {
       writeFileInSandbox(sandbox, targetOutside, 'data');
     } catch {
@@ -316,7 +316,7 @@ describe('appendFileInSandbox', () => {
   it('does not append when targetPath is outside the worktree', () => {
     // Guard must fire before any fs syscall — use a path we control so we can
     // verify nothing was written.
-    const outside = mkdtempSync(join(tmpdir(), 'jarvis-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'rune-outside-'));
     const outsideFile = join(outside, 'victim.txt');
     writeFileSync(outsideFile, 'original');
     const sandbox = sandboxFor(tmpDir);
@@ -358,7 +358,7 @@ describe('mkdirInSandbox', () => {
   it('does not create the directory when targetPath is outside the worktree', () => {
     // Guard fires before fs.mkdirSync — use a path inside a controlled outside
     // temp dir and verify the subdir was not created.
-    const outside = mkdtempSync(join(tmpdir(), 'jarvis-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'rune-outside-'));
     const targetSubdir = join(outside, 'should-not-exist');
     const sandbox = sandboxFor(tmpDir);
     try {
@@ -401,7 +401,7 @@ describe('rmInSandbox', () => {
   it('does not remove the file when targetPath is outside the worktree', () => {
     // Verify the guard fires BEFORE fs.rmSync — create a file in a controlled
     // location outside the worktree and confirm it survives the denied call.
-    const outside = mkdtempSync(join(tmpdir(), 'jarvis-outside-'));
+    const outside = mkdtempSync(join(tmpdir(), 'rune-outside-'));
     const outsideFile = join(outside, 'precious.txt');
     writeFileSync(outsideFile, 'keep me');
     const sandbox = sandboxFor(tmpDir);

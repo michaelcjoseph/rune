@@ -1,7 +1,7 @@
 /**
  * Phase 12 gate-time neutral validation regression.
  *
- * The production gate-learning binding must reuse Jarvis's neutral
+ * The production gate-learning binding must reuse Rune's neutral
  * `runPostMortem` attribution seam at gate time. A bespoke role prompt can
  * look equivalent, but it bypasses the post-mortem guard the spec names.
  */
@@ -94,7 +94,7 @@ const models: TeamRoleModels = {
 
 function sandbox(): SandboxSpec {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: 'demo',
     worktree: '/tmp/fake-worktree',
     egressAllowlist: [],

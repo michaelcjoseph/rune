@@ -322,9 +322,9 @@ describe('TelegramSender', () => {
         data: {
           event: 'merge-success',
           projectSlug: 'demo',
-          product: 'jarvis',
+          product: 'rune',
           baseBranch: 'trunk',
-          branch: 'jarvis-work/demo',
+          branch: 'rune-work/demo',
         },
       } as any);
       await flush();
@@ -446,7 +446,7 @@ describe('TelegramSender', () => {
           taskText: 'Render the streak card',
           commitSha: 'abc123456789',
           shortSha: 'abc1234',
-          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+          commitSubject: 'rune(rune): closeout — Render the streak card',
           tasksDone: 3,
           tasksTotal: 12,
           tasksRemaining: 9,
@@ -460,7 +460,7 @@ describe('TelegramSender', () => {
       expect(text).toContain('abc1234');
       expect(text).toMatch(/3\/12 done/i);
       expect(text).toMatch(/9 remaining/i);
-      expect(text).toContain('jarvis(jarvis): closeout');
+      expect(text).toContain('rune(rune): closeout');
     });
 
     it('does not deliver a progress event for a non-work-run mutation', async () => {
@@ -496,9 +496,9 @@ describe('TelegramSender', () => {
       // is a local surface, so the raw `cd`-able path is delivered verbatim. Use a
       // synthetic `/tmp` fixture (never a real `/Users/<name>` host path) so this
       // committed test leaks no OS username.
-      const worktree = '/tmp/worktrees/jarvis/06-webview';
+      const worktree = '/tmp/worktrees/rune/06-webview';
       sender.onMutationEvent(
-        workRunStart({ operatorWorktreePath: worktree, runId: 'run-1234', projectSlug: '06-webview', product: 'jarvis' }),
+        workRunStart({ operatorWorktreePath: worktree, runId: 'run-1234', projectSlug: '06-webview', product: 'rune' }),
       );
       await flush();
       expect(mockSendLongMessage).toHaveBeenCalledOnce();
@@ -538,7 +538,7 @@ describe('TelegramSender', () => {
       sender.onMutationEvent(
         workRunEvent('completed', {
           parked: true,
-          operatorWorktreePath: '/tmp/worktrees/jarvis/demo',
+          operatorWorktreePath: '/tmp/worktrees/rune/demo',
           pendingCheck: 'Run the interactive Codex check and confirm the result',
           command: 'npm run codex-check',
           reason: 'needs a human at the keyboard',
@@ -557,7 +557,7 @@ describe('TelegramSender', () => {
       expect(text.toLowerCase()).toMatch(/park|paused|needs you|blocked on you|awaiting/);
       // Carries the pending check + the un-scrubbed operator path so Michael can act.
       expect(text).toContain('Run the interactive Codex check and confirm the result');
-      expect(text).toContain('/tmp/worktrees/jarvis/demo');
+      expect(text).toContain('/tmp/worktrees/rune/demo');
       // The Release button's callback id routes through the shared release runtime.
       const button = opts.reply_markup!.inline_keyboard[0]![0]!;
       expect(button.callback_data).toMatch(/^work-run-release:/);

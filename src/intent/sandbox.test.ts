@@ -23,14 +23,14 @@ import {
 
 // --- Fixtures ---
 
-const WORKTREE_ROOT = '/tmp/jarvis-worktrees';
+const WORKTREE_ROOT = '/tmp/rune-worktrees';
 
 /** A sandbox for an Aura project; override any field per test. */
 function sandbox(overrides: Partial<SandboxSpec> = {}): SandboxSpec {
   return {
     product: 'aura',
     project: '02-growth',
-    worktree: '/tmp/jarvis-worktrees/aura/02-growth',
+    worktree: '/tmp/rune-worktrees/aura/02-growth',
     egressAllowlist: ['github.com', 'registry.npmjs.org'],
     ...overrides,
   };
@@ -71,7 +71,7 @@ describe('sandbox — worktree isolation (test-plan §11)', () => {
 
 describe('sandbox — write boundary (test-plan §11)', () => {
   it('allows a write inside the run\'s own worktree', () => {
-    expect(isWriteAllowed('/tmp/jarvis-worktrees/aura/02-growth/src/app.ts', sandbox())).toBe(true);
+    expect(isWriteAllowed('/tmp/rune-worktrees/aura/02-growth/src/app.ts', sandbox())).toBe(true);
   });
 
   it('denies a write to the vault — Regime B never writes the vault', () => {
@@ -83,22 +83,22 @@ describe('sandbox — write boundary (test-plan §11)', () => {
   });
 
   it('denies a `..` traversal that escapes the worktree', () => {
-    const escaping = '/tmp/jarvis-worktrees/aura/02-growth/../../../../etc/passwd';
+    const escaping = '/tmp/rune-worktrees/aura/02-growth/../../../../etc/passwd';
     expect(isWriteAllowed(escaping, sandbox())).toBe(false);
   });
 
   it('denies a sibling path that merely shares the worktree name as a prefix', () => {
-    // `/tmp/jarvis-worktrees/aura/02-growth-evil` must not pass as inside `.../02-growth`.
-    expect(isWriteAllowed('/tmp/jarvis-worktrees/aura/02-growth-evil/x.ts', sandbox())).toBe(false);
+    // `/tmp/rune-worktrees/aura/02-growth-evil` must not pass as inside `.../02-growth`.
+    expect(isWriteAllowed('/tmp/rune-worktrees/aura/02-growth-evil/x.ts', sandbox())).toBe(false);
   });
 
   it('does not let one run write into another run\'s worktree', () => {
-    const relayPath = '/tmp/jarvis-worktrees/relay/01-relay-core/src/index.ts';
+    const relayPath = '/tmp/rune-worktrees/relay/01-relay-core/src/index.ts';
     expect(isWriteAllowed(relayPath, sandbox())).toBe(false);
   });
 
   it('allows a write at the worktree root itself', () => {
-    expect(isWriteAllowed('/tmp/jarvis-worktrees/aura/02-growth', sandbox())).toBe(true);
+    expect(isWriteAllowed('/tmp/rune-worktrees/aura/02-growth', sandbox())).toBe(true);
   });
 
   it('throws when the sandbox worktree is not an absolute path', () => {
@@ -160,7 +160,7 @@ describe('sandbox — credential scoping (test-plan §11)', () => {
     expect(canReachCredential(sandbox({ product: 'aura' }), 'Aura')).toBe(false);
   });
 
-  it("never lets a run reach Jarvis's own credentials", () => {
-    expect(canReachCredential(sandbox({ product: 'aura' }), 'jarvis')).toBe(false);
+  it("never lets a run reach Rune's own credentials", () => {
+    expect(canReachCredential(sandbox({ product: 'aura' }), 'rune')).toBe(false);
   });
 });

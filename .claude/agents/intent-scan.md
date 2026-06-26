@@ -15,10 +15,10 @@ agent frontmatter (skill-frontmatter-cron dogfood).
 When you run, execute exactly this command and nothing else:
 
 ```
-cd "$JARVIS_PROJECT_ROOT" && npm run intent-scan
+cd "$RUNE_PROJECT_ROOT" && npm run intent-scan
 ```
 
-The `JARVIS_PROJECT_ROOT` env var is set by the Claude CLI spawner in
+The `RUNE_PROJECT_ROOT` env var is set by the Claude CLI spawner in
 `src/ai/claude.ts`; the default cwd is the vault, which has no
 `package.json`, so the `cd` is required.
 

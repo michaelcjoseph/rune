@@ -1,5 +1,5 @@
 /**
- * Phase 3 test suite for `src/intent/context-curator.ts` — the Jarvis-owned
+ * Phase 3 test suite for `src/intent/context-curator.ts` — the Rune-owned
  * post-task `context.md` update + validation (project 14, test-plan §3
  * "context.md").
  *

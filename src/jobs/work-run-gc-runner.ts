@@ -25,7 +25,7 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed']);
  * Protects every active mutation and every non-terminal supervised run. Resolves
  * regardless of outcome (errors are logged), so callers can `void` it.
  *
- * Scope note: `workRunsDir` (`logs/work-runs/`) is Jarvis-global, so the dir-level
+ * Scope note: `workRunsDir` (`logs/work-runs/`) is Rune-global, so the dir-level
  * retention is computed once over every product's run dirs. Worktree-checkout
  * protection and `branch -D` pruning are per-repo — `gcWorkRuns` reads each
  * product's worktree list and prunes each run's branch in the repo named by its

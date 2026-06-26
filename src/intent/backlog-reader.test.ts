@@ -101,7 +101,7 @@ function hasWarning(b: ProductBacklog, code: string): boolean {
 describe('backlog-reader — registry roll-up', () => {
   it('reads and parses bugs + ideas for every repo-backed product', () => {
     const root = makeRoot('backlog-rollup-');
-    scaffoldRepo(root, 'jarvis', {
+    scaffoldRepo(root, 'rune', {
       bugs: '- [ ] Cockpit shows wrong status\n- [x] Whoop date mismatch\n',
       ideas: '## User-authored\n- Some idea\n',
     });
@@ -112,24 +112,24 @@ describe('backlog-reader — registry roll-up', () => {
 
     const result = readBacklogs(
       registryWith([
-        { name: 'jarvis', repoBacked: true },
+        { name: 'rune', repoBacked: true },
         { name: 'aura', repoBacked: true },
       ]),
-      configWith({ jarvis: join(root, 'jarvis'), aura: join(root, 'aura') }),
+      configWith({ rune: join(root, 'rune'), aura: join(root, 'aura') }),
       { workspaceRoot: root },
     );
 
     expect(result).toHaveLength(2);
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.notRepoBacked).toBe(false);
-    expect(jarvis.bugs.map((b) => b.text)).toEqual([
+    const rune = byProduct(result, 'rune');
+    expect(rune.notRepoBacked).toBe(false);
+    expect(rune.bugs.map((b) => b.text)).toEqual([
       'Cockpit shows wrong status',
       'Whoop date mismatch',
     ]);
-    expect(jarvis.bugs[1]!.status).toBe('done');
-    expect(jarvis.ideas.map((i) => i.text)).toEqual(['Some idea']);
-    expect(jarvis.fileWarnings).toEqual([]);
+    expect(rune.bugs[1]!.status).toBe('done');
+    expect(rune.ideas.map((i) => i.text)).toEqual(['Some idea']);
+    expect(rune.fileWarnings).toEqual([]);
 
     const aura = byProduct(result, 'aura');
     expect(aura.bugs.map((b) => b.text)).toEqual(['Aura login bug']);
@@ -138,15 +138,15 @@ describe('backlog-reader — registry roll-up', () => {
 
   it('reports source.file as the repo-relative path, never the absolute host path', () => {
     const root = makeRoot('backlog-relpath-');
-    scaffoldRepo(root, 'jarvis', { bugs: '- [ ] A bug\n' });
+    scaffoldRepo(root, 'rune', { bugs: '- [ ] A bug\n' });
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: join(root, 'jarvis') }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: join(root, 'rune') }),
       { workspaceRoot: root },
     );
 
-    const bug = byProduct(result, 'jarvis').bugs[0]!;
+    const bug = byProduct(result, 'rune').bugs[0]!;
     expect(bug.source.file).toBe('docs/projects/bugs.md');
     expect(bug.source.file).not.toContain(root);
   });
@@ -155,21 +155,21 @@ describe('backlog-reader — registry roll-up', () => {
 describe('backlog-reader — product-local ids', () => {
   it('gives byte-identical bullets in different products the same id (route namespaces by product)', () => {
     const root = makeRoot('backlog-ids-');
-    scaffoldRepo(root, 'jarvis', { bugs: '- [ ] Shared bug text\n' });
+    scaffoldRepo(root, 'rune', { bugs: '- [ ] Shared bug text\n' });
     scaffoldRepo(root, 'aura', { bugs: '- [ ] Shared bug text\n' });
 
     const result = readBacklogs(
       registryWith([
-        { name: 'jarvis', repoBacked: true },
+        { name: 'rune', repoBacked: true },
         { name: 'aura', repoBacked: true },
       ]),
-      configWith({ jarvis: join(root, 'jarvis'), aura: join(root, 'aura') }),
+      configWith({ rune: join(root, 'rune'), aura: join(root, 'aura') }),
       { workspaceRoot: root },
     );
 
     // Same repo-relative path + line + raw → same id string. Disambiguation is the API
     // route's `:product` segment, not the id (spec Data model + test-plan §2/§3).
-    expect(byProduct(result, 'jarvis').bugs[0]!.id).toBe(byProduct(result, 'aura').bugs[0]!.id);
+    expect(byProduct(result, 'rune').bugs[0]!.id).toBe(byProduct(result, 'aura').bugs[0]!.id);
   });
 });
 
@@ -195,62 +195,62 @@ describe('backlog-reader — missing and unreadable files', () => {
   it('returns an empty backlog with no warning when the files do not exist', () => {
     const root = makeRoot('backlog-missing-');
     // Repo dir exists (docs/projects scaffolded) but neither bugs.md nor ideas.md written.
-    mkdirSync(join(root, 'jarvis', 'docs', 'projects'), { recursive: true });
+    mkdirSync(join(root, 'rune', 'docs', 'projects'), { recursive: true });
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: join(root, 'jarvis') }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: join(root, 'rune') }),
       { workspaceRoot: root },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs).toEqual([]);
-    expect(jarvis.ideas).toEqual([]);
-    expect(jarvis.fileWarnings).toEqual([]);
-    expect(jarvis.notRepoBacked).toBe(false);
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs).toEqual([]);
+    expect(rune.ideas).toEqual([]);
+    expect(rune.fileWarnings).toEqual([]);
+    expect(rune.notRepoBacked).toBe(false);
   });
 
   it('surfaces a file warning and an empty list when a backlog file is unreadable', () => {
     const root = makeRoot('backlog-unreadable-');
-    const repoPath = join(root, 'jarvis');
+    const repoPath = join(root, 'rune');
     mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
     // A directory where bugs.md should be → readFileSync throws EISDIR.
     mkdirSync(join(repoPath, 'docs', 'projects', 'bugs.md'));
     writeFileSync(join(repoPath, 'docs', 'projects', 'ideas.md'), '## User-authored\n- ok idea\n');
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: repoPath }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: repoPath }),
       { workspaceRoot: root },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs).toEqual([]);
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs).toEqual([]);
     // `unreadable-file` is the generic code for any non-ENOENT read error (EISDIR here,
     // but also EACCES etc.) — distinct from a simply-missing file, which is silent.
-    expect(hasWarning(jarvis, 'unreadable-file')).toBe(true);
+    expect(hasWarning(rune, 'unreadable-file')).toBe(true);
     // The other file still reads — one unreadable file does not poison the product.
-    expect(jarvis.ideas.map((i) => i.text)).toEqual(['ok idea']);
+    expect(rune.ideas.map((i) => i.text)).toEqual(['ok idea']);
   });
 });
 
 describe('backlog-reader — warning surfacing', () => {
   it('suppresses indented detail bullets while keeping actionable warnings', () => {
     const root = makeRoot('backlog-warning-noise-');
-    scaffoldRepo(root, 'jarvis', {
+    scaffoldRepo(root, 'rune', {
       bugs: '- [ ] top bug\n  - detail bullet\n* wrong top-level bullet\n',
       ideas: '## User-authored\n- idea\n   - too deep\n> wrong top-level quote\n',
     });
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: join(root, 'jarvis') }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: join(root, 'rune') }),
       { workspaceRoot: root },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs.map((b) => b.text)).toEqual(['top bug']);
-    expect(jarvis.fileWarnings.map((w) => `${w.file}:${w.code}`)).toEqual([
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs.map((b) => b.text)).toEqual(['top bug']);
+    expect(rune.fileWarnings.map((w) => `${w.file}:${w.code}`)).toEqual([
       'docs/projects/bugs.md:star-bullet',
       'docs/projects/ideas.md:blockquote',
     ]);
@@ -259,18 +259,18 @@ describe('backlog-reader — warning surfacing', () => {
 
 describe('backlog-reader — computeBacklogCounts', () => {
   function backlog(over: Partial<ProductBacklog>): ProductBacklog {
-    return { product: 'jarvis', notRepoBacked: false, bugs: [], ideas: [], fileWarnings: [], ...over };
+    return { product: 'rune', notRepoBacked: false, bugs: [], ideas: [], fileWarnings: [], ...over };
   }
 
   it('tallies open/done for bugs and ideas and counts file warnings', () => {
     const root = makeRoot('backlog-counts-');
-    scaffoldRepo(root, 'jarvis', {
+    scaffoldRepo(root, 'rune', {
       bugs: '- [ ] open bug\n- [x] done bug\n- [ ] another open\n',
       ideas: '## User-authored\n- open idea\n- promoted idea → 09-expand-cockpit\n\t- tab warning\n',
     });
     const [product] = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: join(root, 'jarvis') }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: join(root, 'rune') }),
       { workspaceRoot: root },
     );
     const counts = computeBacklogCounts(product!);
@@ -291,7 +291,7 @@ describe('backlog-reader — computeBacklogCounts', () => {
 describe('backlog-reader — security: symlink and path escape', () => {
   it('rejects a backlog file that symlinks outside the repo, surfacing a warning and reading nothing', () => {
     const root = makeRoot('backlog-symlink-');
-    const repoPath = join(root, 'jarvis');
+    const repoPath = join(root, 'rune');
     mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
 
     // A secret outside the repo (but inside the workspace) that bugs.md points at.
@@ -300,16 +300,16 @@ describe('backlog-reader — security: symlink and path escape', () => {
     symlinkSync(secret, join(repoPath, 'docs', 'projects', 'bugs.md'));
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: repoPath }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: repoPath }),
       { workspaceRoot: root },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs).toEqual([]);
-    expect(hasWarning(jarvis, 'symlink-escape')).toBe(true);
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs).toEqual([]);
+    expect(hasWarning(rune, 'symlink-escape')).toBe(true);
     // The escaped content must never appear in the parsed output.
-    expect(JSON.stringify(jarvis.bugs)).not.toContain('exfiltrated');
+    expect(JSON.stringify(rune.bugs)).not.toContain('exfiltrated');
   });
 
   it('rejects a symlink whose target escapes the workspace entirely (guard is repoPath-containment, not workspace-level)', () => {
@@ -320,7 +320,7 @@ describe('backlog-reader — security: symlink and path escape', () => {
     // workspace, outside the repo) only passes for the correct repoPath-containment guard.
     const workspaceRoot = makeRoot('backlog-symlink-ws-');
     const elsewhere = makeRoot('backlog-symlink-elsewhere-');
-    const repoPath = join(workspaceRoot, 'jarvis');
+    const repoPath = join(workspaceRoot, 'rune');
     mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
 
     const target = join(elsewhere, 'secret.md');
@@ -328,33 +328,33 @@ describe('backlog-reader — security: symlink and path escape', () => {
     symlinkSync(target, join(repoPath, 'docs', 'projects', 'bugs.md'));
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: repoPath }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: repoPath }),
       { workspaceRoot },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs).toEqual([]);
-    expect(hasWarning(jarvis, 'symlink-escape')).toBe(true);
-    expect(JSON.stringify(jarvis.bugs)).not.toContain('exfiltrated');
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs).toEqual([]);
+    expect(hasWarning(rune, 'symlink-escape')).toBe(true);
+    expect(JSON.stringify(rune.bugs)).not.toContain('exfiltrated');
   });
 
   it('rejects a product whose repoPath lives outside $WORKSPACE_ROOT, reading nothing', () => {
     const workspaceRoot = makeRoot('backlog-ws-');
     const outsideRoot = makeRoot('backlog-outside-'); // a sibling tmpdir, NOT under workspaceRoot
-    const repoPath = scaffoldRepo(outsideRoot, 'jarvis', { bugs: '- [ ] off-limits bug\n' });
+    const repoPath = scaffoldRepo(outsideRoot, 'rune', { bugs: '- [ ] off-limits bug\n' });
 
     const result = readBacklogs(
-      registryWith([{ name: 'jarvis', repoBacked: true }]),
-      configWith({ jarvis: repoPath }),
+      registryWith([{ name: 'rune', repoBacked: true }]),
+      configWith({ rune: repoPath }),
       { workspaceRoot },
     );
 
-    const jarvis = byProduct(result, 'jarvis');
-    expect(jarvis.bugs).toEqual([]);
-    expect(jarvis.ideas).toEqual([]);
-    expect(hasWarning(jarvis, 'repo-outside-workspace')).toBe(true);
+    const rune = byProduct(result, 'rune');
+    expect(rune.bugs).toEqual([]);
+    expect(rune.ideas).toEqual([]);
+    expect(hasWarning(rune, 'repo-outside-workspace')).toBe(true);
     // The out-of-bounds bug must never be read.
-    expect(JSON.stringify(jarvis.bugs)).not.toContain('off-limits');
+    expect(JSON.stringify(rune.bugs)).not.toContain('off-limits');
   });
 });

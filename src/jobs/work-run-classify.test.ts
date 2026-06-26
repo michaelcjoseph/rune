@@ -340,7 +340,7 @@ describe('classifyOutcome — exit-fact taxonomy (P0.3)', () => {
     expect(classifyOutcome(facts).outcome).toBe('failed');
   });
 
-  // --- system-cancel: a Jarvis backstop reap (quiet→cancel / max-runtime) is
+  // --- system-cancel: a Rune backstop reap (quiet→cancel / max-runtime) is
   //     NOT a user cancel — classify on work product, never as failed/cancelled. ---
 
   it('system-cancel + complete branch → branch-complete (a backstop reap must not read as a cancel)', () => {
@@ -577,7 +577,7 @@ describe('computeWorkProduct', () => {
     'injects runGit with baseSha..branch range (not "main" or "HEAD")',
     async () => {
       const baseSha = 'deadbeef1234567890abcdef1234567890abcdef';
-      const branch = 'jarvis-gen-eval/mut-abc';
+      const branch = 'rune-gen-eval/mut-abc';
       const rangePrefix = `${baseSha}..${branch}`;
 
       const { stub, calls } = makeRunGitStub({
@@ -615,7 +615,7 @@ describe('computeWorkProduct', () => {
     'diff base is stable: same baseSha on two calls never becomes HEAD',
     async () => {
       const baseSha = 'cafebabe1234567890abcdef1234567890abcdef';
-      const branch = 'jarvis-gen-eval/mut-xyz';
+      const branch = 'rune-gen-eval/mut-xyz';
       const { stub, calls } = makeRunGitStub({
         '--count': { stdout: '1\n', stderr: '' },
         'rev-list': { stdout: 'abc1234\n', stderr: '' },

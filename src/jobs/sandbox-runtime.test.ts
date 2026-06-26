@@ -63,7 +63,7 @@ const FIXTURE_WITH_TILDE = {
   aura: {
     repoPath: '~/workspace/aura',
     baseBranch: 'main',
-    credentialsFile: '~/.config/jarvis/credentials/aura/.env',
+    credentialsFile: '~/.config/rune/credentials/aura/.env',
     egressAllowlist: ['github.com'],
   },
 };
@@ -103,7 +103,7 @@ function porcelainListing(worktreePath: string): string {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-sandbox-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-sandbox-test-'));
 });
 
 afterEach(() => {
@@ -148,7 +148,7 @@ describe('readProductsConfig', () => {
 
     const home = homedir();
     expect(result['aura']!.credentialsFile).toBe(
-      join(home, '.config/jarvis/credentials/aura/.env'),
+      join(home, '.config/rune/credentials/aura/.env'),
     );
     expect(result['aura']!.credentialsFile).not.toContain('~');
   });
@@ -259,18 +259,18 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
     expect(result['aura']!.validationCommands).toEqual(['npm test', '42']);
   });
 
-  it('the REAL Jarvis product config declares validationCommands ["npm run build", "npm test"]', () => {
+  it('the REAL Rune product config declares validationCommands ["npm run build", "npm test"]', () => {
     // Read-only against the committed policies/products.json (test-plan §6:
-    // "Jarvis product config includes validationCommands"). RED until the P1.5
+    // "Rune product config includes validationCommands"). RED until the P1.5
     // impl task adds the field to the real file — this test never mutates it.
-    // The exact list is a spec-pinned policy choice (spec req 16); if Jarvis's
+    // The exact list is a spec-pinned policy choice (spec req 16); if Rune's
     // build/test commands ever change, update the spec + this assertion together
     // (deliberately) rather than treating a drift as a silent false alarm.
     const realConfigPath = fileURLToPath(
       new URL('../../policies/products.json', import.meta.url),
     );
     const result = readProductsConfig(realConfigPath);
-    expect(result['jarvis']!.validationCommands).toEqual(['npm run build', 'npm test']);
+    expect(result['rune']!.validationCommands).toEqual(['npm run build', 'npm test']);
   });
 });
 
@@ -305,7 +305,7 @@ describe('getProductConfig', () => {
 // ---------------------------------------------------------------------------
 
 describe('createWorktree', () => {
-  const WORKTREE_ROOT = '/tmp/jarvis-worktrees-test';
+  const WORKTREE_ROOT = '/tmp/rune-worktrees-test';
 
   it('happy path: returns a SandboxSpec with worktree matching worktreePathFor', async () => {
     const configPath = writeProductsJson(tmpDir);
@@ -406,7 +406,7 @@ describe('createWorktree', () => {
     const spec = await createWorktree({
       product: 'aura',
       project: '01-growth',
-      branch: 'jarvis-work/abc',
+      branch: 'rune-work/abc',
       worktreeRoot: WORKTREE_ROOT,
       productsConfigPath: configPath,
       runGit,
@@ -436,7 +436,7 @@ describe('createWorktree', () => {
       createWorktree({
         product: 'aura',
         project: '01-growth',
-        branch: 'jarvis-work/fail',
+        branch: 'rune-work/fail',
         worktreeRoot: WORKTREE_ROOT,
         productsConfigPath: configPath,
         runGit,
@@ -451,7 +451,7 @@ describe('createWorktree', () => {
       createWorktree({
         product: 'aura',
         project: '01-growth',
-        branch: 'jarvis-work/empty',
+        branch: 'rune-work/empty',
         worktreeRoot: WORKTREE_ROOT,
         productsConfigPath: configPath,
         runGit,
@@ -466,7 +466,7 @@ describe('createWorktree', () => {
     const spec = await createWorktree({
       product: 'aura',
       project: '01-growth',
-      branch: 'jarvis-work/xyz',
+      branch: 'rune-work/xyz',
       startPoint: 'abc1234base',
       worktreeRoot: WORKTREE_ROOT,
       productsConfigPath: configPath,
@@ -488,7 +488,7 @@ describe('createWorktree', () => {
     const configPath = writeProductsJson(tmpDir);
     const tip = 'resumetip0987654321fedcba0987654321fedcba';
     const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
-    const branch = 'jarvis-work/01-growth';
+    const branch = 'rune-work/01-growth';
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
@@ -528,7 +528,7 @@ describe('createWorktree', () => {
     const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
     const mergeBase = 'mergebase987654321fedcba987654321fedcba';
     const newTip = 'newtip0987654321fedcba0987654321fedcba000';
-    const branch = 'jarvis-work/01-growth';
+    const branch = 'rune-work/01-growth';
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
@@ -570,7 +570,7 @@ describe('createWorktree', () => {
     const previousTip = 'previous0987654321fedcba0987654321fedcba';
     const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
     const mergeBase = 'mergebase987654321fedcba987654321fedcba';
-    const branch = 'jarvis-work/01-growth';
+    const branch = 'rune-work/01-growth';
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
@@ -594,7 +594,7 @@ describe('createWorktree', () => {
         productsConfigPath: configPath,
         runGit,
       }),
-    ).rejects.toThrow(/base reconciliation failed.*jarvis-work\/01-growth.*main.*previous0987654321fedcba0987654321fedcba.*base ahead 3/i);
+    ).rejects.toThrow(/base reconciliation failed.*rune-work\/01-growth.*main.*previous0987654321fedcba0987654321fedcba.*base ahead 3/i);
 
     const abortCall = runGit.mock.calls.find(c => c[0][0] === 'rebase' && c[0][1] === '--abort');
     expect(abortCall?.[1]?.cwd).toBe(expectedPath);
@@ -607,7 +607,7 @@ describe('createWorktree', () => {
   it('RESUMES an existing branch with base inspection failure: removes the just-created worktree', async () => {
     const configPath = writeProductsJson(tmpDir);
     const previousTip = 'previous0987654321fedcba0987654321fedcba';
-    const branch = 'jarvis-work/01-growth';
+    const branch = 'rune-work/01-growth';
     const expectedPath = join(WORKTREE_ROOT, 'aura', '01-growth');
     const runGit = vi.fn<GitRunner>(async (args: string[]) => {
       if (args[0] === 'show-ref') return { stdout: `${previousTip} refs/heads/${branch}\n`, stderr: '' };
@@ -649,7 +649,7 @@ describe('createWorktree', () => {
     const spec = await createWorktree({
       product: 'aura',
       project: '01-growth',
-      branch: 'jarvis-work/01-growth',
+      branch: 'rune-work/01-growth',
       worktreeRoot: WORKTREE_ROOT,
       productsConfigPath: configPath,
       runGit,
@@ -743,8 +743,8 @@ describe('linkWorktreeDeps', () => {
   let worktree: string;
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'jarvis-deps-repo-'));
-    worktree = mkdtempSync(join(tmpdir(), 'jarvis-deps-wt-'));
+    repo = mkdtempSync(join(tmpdir(), 'rune-deps-repo-'));
+    worktree = mkdtempSync(join(tmpdir(), 'rune-deps-wt-'));
   });
 
   afterEach(() => {
@@ -791,7 +791,7 @@ describe('linkWorktreeDeps', () => {
 // ---------------------------------------------------------------------------
 
 describe('destroyWorktree', () => {
-  const WORKTREE_PATH = '/tmp/jarvis-worktrees-test/aura/01-growth';
+  const WORKTREE_PATH = '/tmp/rune-worktrees-test/aura/01-growth';
 
   function makeSpec(overrides: Partial<SandboxSpec> = {}): SandboxSpec {
     return {
@@ -865,7 +865,7 @@ describe('destroyWorktree', () => {
     await expect(
       destroyWorktree(spec, {
         productsConfigPath: configPath,
-        worktreeRoot: '/tmp/jarvis-worktrees-test',
+        worktreeRoot: '/tmp/rune-worktrees-test',
         runGit,
       }),
     ).rejects.toThrow(/worktreeRoot|inside/i);
@@ -876,13 +876,13 @@ describe('destroyWorktree', () => {
   it('refuses a sibling that merely shares the worktreeRoot prefix', async () => {
     const configPath = writeProductsJson(tmpDir);
     const runGit = makeRunGit();
-    // `/tmp/jarvis-worktrees-test-evil/...` is NOT inside `/tmp/jarvis-worktrees-test`.
-    const spec = makeSpec({ worktree: '/tmp/jarvis-worktrees-test-evil/aura/x' });
+    // `/tmp/rune-worktrees-test-evil/...` is NOT inside `/tmp/rune-worktrees-test`.
+    const spec = makeSpec({ worktree: '/tmp/rune-worktrees-test-evil/aura/x' });
 
     await expect(
       destroyWorktree(spec, {
         productsConfigPath: configPath,
-        worktreeRoot: '/tmp/jarvis-worktrees-test',
+        worktreeRoot: '/tmp/rune-worktrees-test',
         runGit,
       }),
     ).rejects.toThrow(/worktreeRoot|inside/i);
@@ -1029,7 +1029,7 @@ describe('cleanupOrphanWorktrees', () => {
       runId,
       product: 'aura',
       project: '14-product-team-agents',
-      branch: 'jarvis-work/14-product-team-agents',
+      branch: 'rune-work/14-product-team-agents',
       baseBranch: 'main',
       worktreePath: resumableDir,
       attemptCap: 3,
@@ -1080,7 +1080,7 @@ describe('cleanupOrphanWorktrees', () => {
       runId,
       product: 'aura',
       project: '14-product-team-agents',
-      branch: 'jarvis-work/14-product-team-agents',
+      branch: 'rune-work/14-product-team-agents',
       baseBranch: 'main',
       worktreePath: staleDir,
       attemptCap: 3,

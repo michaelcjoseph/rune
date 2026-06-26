@@ -30,7 +30,7 @@ const NOW_ISO = new Date(NOW).toISOString();
 function run(overrides: Partial<SupervisedRun> = {}): SupervisedRun {
   return {
     id: 'mut-quiet-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '11-work-run-observability',
     status: 'running',
     startedAt: SIX_MIN_AGO,
@@ -111,6 +111,6 @@ describe('formatQuietNudge', () => {
     expect(msg.toLowerCase()).toContain('quiet');
     // Distinct from the stall nudge — must not read as a child-dead "stalled".
     expect(msg.toLowerCase()).not.toContain('stalled');
-    expect(msg).toContain('jarvis/11-work-run-observability');
+    expect(msg).toContain('rune/11-work-run-observability');
   });
 });

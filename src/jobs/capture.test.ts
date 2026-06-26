@@ -107,7 +107,7 @@ describe('jobs/capture', () => {
 
     const entry = appendMock.mock.calls[0]![0] as string;
     expect(entry).toContain('23:00');
-    expect(entry).toContain('[[jarvis]]');
+    expect(entry).toContain('[[rune]]');
     expect(entry).toContain('\t- Line A');
     expect(entry).toContain('\t- Line B');
   });
@@ -129,7 +129,7 @@ describe('jobs/capture', () => {
   });
 
   it('deletes captured product-scoped sessions with their scope so nightly capture does not leave them stranded', async () => {
-    const scope = { kind: 'product', product: 'jarvis' };
+    const scope = { kind: 'product', product: 'rune' };
     getAllMock.mockReturnValue([
       {
         userId: 202,

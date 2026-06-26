@@ -2,7 +2,7 @@
  * Phase 1 charter check for `agents/writer/SOUL.md` (project 12, test-plan §1,
  * the 🟢 "SOUL references voice.md without duplicating" contract).
  *
- * Reads the real charter from the jarvis repo. No vault coupling: rather than
+ * Reads the real charter from the rune repo. No vault coupling: rather than
  * diff against the live voice.md, it asserts the charter points at voice.md and
  * does NOT inline voice.md's distinctive content (which would let the two drift).
  */

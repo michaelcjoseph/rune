@@ -33,7 +33,7 @@ async function loadRoutingModule(): Promise<Record<string, unknown> | null> {
 
 /** Fixture: mirrors policies/products.json keys. Never reads the real file. */
 function knownProducts(): string[] {
-  return ['aura', 'assay', 'jarvis', 'relay'];
+  return ['aura', 'assay', 'rune', 'relay'];
 }
 
 const IMPL_PENDING = 'src/intent/product-routing.ts not implemented yet — implementation pending';
@@ -113,7 +113,7 @@ describe('resolveProductTarget — Part A (product-routing.ts)', () => {
   it('5b: case-insensitive exact match works for all known products', async () => {
     const { resolveProductTarget } = await requireRoutingFn();
 
-    expect(resolveProductTarget('JARVIS', knownProducts)).toMatchObject({ product: 'jarvis', routed: true });
+    expect(resolveProductTarget('RUNE', knownProducts)).toMatchObject({ product: 'rune', routed: true });
     expect(resolveProductTarget('RELAY', knownProducts)).toMatchObject({ product: 'relay', routed: true });
   });
 
@@ -181,7 +181,7 @@ let ideasPath: string;
 
 function registerTempIdeasFile(): void {
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-product-routing-test-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'rune-product-routing-test-'));
     ideasPath = join(tmpDir, 'ideas.md');
   });
 

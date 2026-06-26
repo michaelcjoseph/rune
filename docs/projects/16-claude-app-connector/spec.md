@@ -161,7 +161,7 @@ Open Claude App thread → ask domain questions (kb_query / vault_search)
 
 The existing `src/mcp/server.ts` builds a KB-tool MCP server consumed locally over
 `StdioServerTransport` (entry `src/mcp/index.ts`). This project refactors
-`createKBServer()` into a shared `createJarvisMcpServer(opts)` factory that
+`createKBServer()` into a shared `createRuneMcpServer(opts)` factory that
 registers a configurable tool set on one `McpServer` instance. The stdio entry
 keeps working unchanged. App-surface tools are split from the `kb_*` admin tools so
 the remote endpoint can expose exactly the six App tools while the local stdio
@@ -194,10 +194,10 @@ confident match resolves. `ProjectIdea` and the `ideas.md` bullet writer gain a
 
 `StreamableHTTPServerTransport` mounts at a new `/mcp` route on the existing daemon
 HTTP server (`src/server/http.ts`), backed by the shared
-`createJarvisMcpServer` instance exposing only the six App-surface tools and
+`createRuneMcpServer` instance exposing only the six App-surface tools and
 conforming to the existing host-allowlisting. Single-user OAuth 2.1 (DCR plus
 authorization-code flow via the SDK auth helpers) gates the endpoint on
-`JARVIS_HTTP_SECRET` and binds issued access tokens to the one known user id;
+`RUNE_HTTP_SECRET` and binds issued access tokens to the one known user id;
 every `/mcp` request validates its bearer token before the transport handles it. A
 named Cloudflare Tunnel exposes only the `/mcp` route at a stable HTTPS hostname
 with TLS at the edge and no inbound ports on the host.
@@ -228,7 +228,7 @@ App's project instructions so the App produces equivalent summary text and a
 
 ### Phase 1: Core tool surface
 
-- [ ] Refactor `createKBServer()` into a shared `createJarvisMcpServer(opts)`
+- [ ] Refactor `createKBServer()` into a shared `createRuneMcpServer(opts)`
       factory; keep the stdio entry working; split App-surface from `kb_*` tools.
 - [ ] Implement `resolveProductTarget()` with explicit-target validation and an
       explicit inbox/unrouted fallback; add a `product` field to `ProjectIdea` and
@@ -245,7 +245,7 @@ App's project instructions so the App produces equivalent summary text and a
 - [ ] Mount `StreamableHTTPServerTransport` at `/mcp` on the daemon HTTP server,
       exposing only the six App-surface tools.
 - [ ] Implement single-user OAuth 2.1 for `/mcp` (DCR + authorization-code,
-      gated on `JARVIS_HTTP_SECRET`, bearer-validated per request).
+      gated on `RUNE_HTTP_SECRET`, bearer-validated per request).
 - [ ] Stand up a named Cloudflare Tunnel exposing only `/mcp` at a stable HTTPS
       hostname; document config, secret handling, and runbook.
 

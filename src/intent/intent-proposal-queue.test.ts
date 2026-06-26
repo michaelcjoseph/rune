@@ -23,7 +23,7 @@ vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
 }));
 vi.mock('../config.js', () => ({
-  default: { INTENT_PROPOSAL_QUEUE_FILE: '/tmp/jarvis-test-intent-proposal-queue.json' },
+  default: { INTENT_PROPOSAL_QUEUE_FILE: '/tmp/rune-test-intent-proposal-queue.json' },
 }));
 
 import {

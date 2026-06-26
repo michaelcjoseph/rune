@@ -72,7 +72,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Tests (write first)
 
-- [x] Write sentinel parser tests for valid `JARVIS_WORK_RUN_SENTINEL` payloads, malformed JSON,
+- [x] Write sentinel parser tests for valid `RUNE_WORK_RUN_SENTINEL` payloads, malformed JSON,
       unsupported `version`, missing/empty `pendingCheck`, optional `command`, optional `reason`,
       and consumed-not-rendered output — test-plan.md §2. (`src/jobs/work-run-sentinel.test.ts` →
       `parseWorkRunSentinel`; `src/jobs/work-run-sentinel.ts` stub returns null. 4 valid-parse RED,
@@ -121,7 +121,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 
 ### Sentinel contract
 
-- [x] Define the `JARVIS_WORK_RUN_SENTINEL { … }` line contract in `.claude/skills/work/SKILL.md`:
+- [x] Define the `RUNE_WORK_RUN_SENTINEL { … }` line contract in `.claude/skills/work/SKILL.md`:
       a blocked-on-human hard stop ends its final result with exactly this line, JSON carrying:
       `version: 1`, non-empty `pendingCheck`, optional `command`, and optional `reason`.
       (Added "Blocked-on-human sentinel (`--auto` only)" subsection to SKILL.md.)

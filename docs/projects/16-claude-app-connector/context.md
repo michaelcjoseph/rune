@@ -1,6 +1,6 @@
 # Project Context: Move the Rune conversation surface to the Claude App via a remote MCP connector
 
-> Orchestration state for the `jarvis` project "Move the Rune conversation surface to the Claude App via a remote MCP connector".
+> Orchestration state for the `rune` project "Move the Rune conversation surface to the Claude App via a remote MCP connector".
 > Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 
@@ -27,16 +27,16 @@
 # Tech Spec — Rune Conversation Surface on the Claude App
 
 ## Grounding (verified in repo)
-- MCP server today: `jarvis/src/mcp/server.ts` exports `createKBServer()` using `McpServer` (`@modelcontextprotocol/sdk@^1.29.0`) over **`StdioServerTransport`**; entry `jarvis/src/mcp/index.ts`. Registered tools: `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Only `kb_query` is in the App surface today.
+- MCP server today: `rune/src/mcp/server.ts` exports `createKBServer()` using `McpServer` (`@modelcontextprotocol/sdk@^1.29.0`) over **`StdioServerTransport`**; entry `rune/src/mcp/index.ts`. Registered tools: `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Only `kb_query` is in the App surface today.
 - Tool return shape is `{ content: [{ type:'text', text }], isError? }` — every new tool conforms.
-- Vault primitives (`jarvis/src/vault/`): `appendToJournal(text): string`; `gitCommitAndPush(message): Promise<void>` (auto-heals to `main`, never throws); `readVaultFile/writeVaultFile/appendVaultFile/vaultFileExists/listVaultFiles/getVaultPath` (all path-validated via `assertWithinVault`).
-- KB queue (`jarvis/src/kb/queue.ts`): `enqueue(source, guidance?)`, `getPriority()` (gives `conversation` paths priority 20), `dequeue()`. Raw-source path convention: `knowledge/raw/conversations/conversation-YYYY-MM-DD-HHMMSS.md`.
-- Conversation layer (`jarvis/src/bot/commands/fresh.ts`, `fresh-full.ts`): `closeConversation()`, `parseKBWorthy(summary)`, `saveConversationSource(text)`. Summarizer prompt + kb-worthy heuristic live in `jarvis/src/ai/claude.ts` `summarizeSession()` (~lines 704-715). Sessions in `jarvis/src/vault/sessions.ts`.
-- Idea routing: product registry `jarvis/policies/products.json` (`aura`, `assay`, `jarvis`, `relay`). `ProjectIdea = { title, friction, id }` — **no `product` field** (the attribution gap). Ideas filed to `pkms/projects/ideas.md` `## Loop-filed` section via `readFiledIdeas()/appendFiledIdeas()/deriveIdeaId()` (`jarvis/src/intent/observation-ideas-io.ts`).
-- Daemon HTTP server: `jarvis/src/server/http.ts` `startHttpServer()` on `127.0.0.1:3847`, runs inside the daemon process that already holds the live `VAULT_DIR` working tree. Auth `jarvis/src/server/auth.ts` `verifyAuth()` (Bearer/cookie, timing-safe) + `JARVIS_ALLOWED_HOSTS`. No remote MCP transport today.
+- Vault primitives (`rune/src/vault/`): `appendToJournal(text): string`; `gitCommitAndPush(message): Promise<void>` (auto-heals to `main`, never throws); `readVaultFile/writeVaultFile/appendVaultFile/vaultFileExists/listVaultFiles/getVaultPath` (all path-validated via `assertWithinVault`).
+- KB queue (`rune/src/kb/queue.ts`): `enqueue(source, guidance?)`, `getPriority()` (gives `conversation` paths priority 20), `dequeue()`. Raw-source path convention: `knowledge/raw/conversations/conversation-YYYY-MM-DD-HHMMSS.md`.
+- Conversation layer (`rune/src/bot/commands/fresh.ts`, `fresh-full.ts`): `closeConversation()`, `parseKBWorthy(summary)`, `saveConversationSource(text)`. Summarizer prompt + kb-worthy heuristic live in `rune/src/ai/claude.ts` `summarizeSession()` (~lines 704-715). Sessions in `rune/src/vault/sessions.ts`.
+- Idea routing: product registry `rune/policies/products.json` (`aura`, `assay`, `rune`, `relay`). `ProjectIdea = { title, friction, id }` — **no `product` field** (the attribution gap). Ideas filed to `pkms/projects/ideas.md` `## Loop-filed` section via `readFiledIdeas()/appendFiledIdeas()/deriveIdeaId()` (`rune/src/intent/observation-ideas-io.ts`).
+- Daemon HTTP server: `rune/src/server/http.ts` `startHttpServer()` on `127.0.0.1:3847`, runs inside the daemon process that already holds the live `VAULT_DIR` working tree. Auth `rune/src/server/auth.ts` `verifyAuth()` (Bearer/cookie, timing-safe) + `RUNE_ALLOWED_HOSTS`. No remote MCP transport today.
 
 ## Architecture decision (R4): extend, don't fork
-**Decision: one server, one process.** Refactor `createKBServer()` into a shared `createJarvisMcpServer(opts)` factory that registers the full tool set, then expose it two ways from the SAME `McpServer` instance:
+**Decision: one server, one process.** Refactor `createKBServer()` into a shared `createRuneMcpServer(opts)` factory that registers the full tool set, then expose it two ways from the SAME `McpServer` instance:
 1. **stdio** (`mcp/index.ts`) — unchanged, for the daemon's CLI spawns.
 2. **Streamable HTTP** — a new `/mcp` route mounted on the existing daemon HTTP server using the SDK's `StreamableHTTPServerTransport`.
 
@@ -44,7 +44,7 @@ Rationale: the daemon process already runs on the machine with the live vault wo
 
 **Remote reachability:** the daemon binds `127.0.0.1`. Expose `/mcp` at a stable HTTPS hostname via a named tunnel (Cloudflare Tunnel preferred — stable hostname, no inbound ports, TLS terminated at edge). The tunnel is the only public surface; it forwards only `/mcp`.
 
-**Auth (R4(a), single-user):** Claude App custom connectors require OAuth 2.1 for remote MCP. Implement a minimal single-user authorization server on the daemon using the SDK auth helpers (`mcpAuthRouter` + a single-tenant `OAuthServerProvider`): support Dynamic Client Registration + authorization-code flow, but the authorize step gates on the existing `JARVIS_HTTP_SECRET` (only Michael possesses it) and issues access tokens bound to the single known user id. Every `/mcp` request validates the bearer token before the transport handles it. No multi-user/account model — tokens map to the one user.
+**Auth (R4(a), single-user):** Claude App custom connectors require OAuth 2.1 for remote MCP. Implement a minimal single-user authorization server on the daemon using the SDK auth helpers (`mcpAuthRouter` + a single-tenant `OAuthServerProvider`): support Dynamic Client Registration + authorization-code flow, but the authorize step gates on the existing `RUNE_HTTP_SECRET` (only Michael possesses it) and issues access tokens bound to the single known user id. Every `/mcp` request validates the bearer token before the transport handles it. No multi-user/account model — tokens map to the one user.
 
 ## Tool surface (R2) — exactly six
 All six registered on the shared server; only these are exposed on the HTTP/App transport (stdio may also carry the existing kb_* admin tools, which are NOT in the App surface). Each tool is a thin wrapper over existing primitives; no business logic lives in the transport layer.
@@ -90,4 +90,4 @@ _None yet._
 
 ## Next Task Handoff
 
-Start with: Refactor createKBServer() into a shared createJarvisMcpServer(opts) factory that registers a configurable tool set on one McpServer instance. Keep the stdio entry (mcp/index.ts) working unchanged and split App-surface tools from kb_* admin tools. No behavior change to existing tools.
+Start with: Refactor createKBServer() into a shared createRuneMcpServer(opts) factory that registers a configurable tool set on one McpServer instance. Keep the stdio entry (mcp/index.ts) working unchanged and split App-surface tools from kb_* admin tools. No behavior change to existing tools.

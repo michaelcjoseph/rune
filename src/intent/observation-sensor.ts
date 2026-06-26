@@ -1,12 +1,12 @@
 /**
  * Sensor layer for Phase 5's observation loop. The loop reasons over a digest of diarized
  * signals; this module is the layer that **produces** those signals from three sources:
- * vault signals, product telemetry, and logged Jarvis interactions (successful or not).
+ * vault signals, product telemetry, and logged Rune interactions (successful or not).
  *
  * `readSensors` is the deterministic composer — it fans the three source readers in a stable
  * order. The readers themselves (reading vault files, polling product repos, replaying the
  * interaction log) are integration that fills `SignalReader` in. The cross-cutting wiring
- * that appends an `InteractionLogRecord` from every Jarvis call site (Telegram handlers,
+ * that appends an `InteractionLogRecord` from every Rune call site (Telegram handlers,
  * agent invocations, command dispatch) is separate, multi-file integration that this module
  * declares the shape for.
  *
@@ -19,7 +19,7 @@
 import type { SensorSignal } from './observation-loop.js';
 
 /**
- * A log record for one Jarvis interaction — Telegram message, agent invocation, command
+ * A log record for one Rune interaction — Telegram message, agent invocation, command
  * dispatch, webview action, etc. Every interaction (successful, failed, cancelled) is
  * appended so the sensor's `interactions` reader can replay them as signal.
  */

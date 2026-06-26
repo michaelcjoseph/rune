@@ -10,7 +10,7 @@
  * (`readInteractionSignals`) consumes the file this writer produces.
  *
  * Safety model (same as intent-log.ts):
- * 1. Jarvis is a single Node.js process — `appendFileSync` is synchronous,
+ * 1. Rune is a single Node.js process — `appendFileSync` is synchronous,
  *    so concurrent handlers are serialized by the event loop. No
  *    interleaving is possible within this process.
  * 2. POSIX O_APPEND writes are atomic when the entry fits in PIPE_BUF

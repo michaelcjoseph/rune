@@ -67,7 +67,7 @@ describe('createLogger', () => {
     spy.mockRestore();
   });
 
-  it('file sink is disabled under vitest (so test runs do not append to real jarvis.log)', () => {
+  it('file sink is disabled under vitest (so test runs do not append to real rune.log)', () => {
     // VITEST is set by vitest itself — sanity check the sentinel our logger uses.
     expect(process.env.VITEST).toBeTruthy();
   });

@@ -16,7 +16,7 @@ import type { MessageSender } from '../../transport/sender.js';
 const log = createLogger('cmd-fresh-full');
 
 function formatMessage(role: 'user' | 'assistant', text: string): string {
-  const label = role === 'user' ? 'Me' : 'Jarvis';
+  const label = role === 'user' ? 'Me' : 'Rune';
   const lines = text.split('\n');
   const first = `\t- [${label}] ${lines[0] ?? ''}`;
   if (lines.length === 1) return first;
@@ -53,7 +53,7 @@ export async function handleFreshFull(
   try {
     const transcript = messages.map((m) => formatMessage(m.role, m.text)).join('\n');
     const ts = getTimestamp();
-    const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)} (full transcript)\n${transcript}`;
+    const entry = `- ${ts} [[rune]] ${transportLabel(transport)} (full transcript)\n${transcript}`;
     appendToJournal(entry);
     log.info('Full transcript logged', { userId, transport, messageCount: messages.length });
 

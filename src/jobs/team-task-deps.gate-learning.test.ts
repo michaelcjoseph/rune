@@ -146,7 +146,7 @@ const models: TeamRoleModels = {
 
 function sandbox(): SandboxSpec {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: 'demo',
     worktree: '/tmp/fake-worktree',
     egressAllowlist: [],

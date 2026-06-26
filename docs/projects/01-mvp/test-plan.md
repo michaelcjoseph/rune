@@ -63,7 +63,7 @@ Full manual test plan covering all implementation phases (0-12).
 - [ ] 🔴 Start a conversation, then `curl -X POST http://localhost:3847/capture-sessions` — sessions are summarized and logged to journal
 - [ ] 🟡 Sessions are cleared after capture
 - [ ] 🟡 Git commit with message "TG sessions captured (nightly)"
-- [ ] 🟢 When `JARVIS_HTTP_SECRET` is set, unauthenticated POST returns 401
+- [ ] 🟢 When `RUNE_HTTP_SECRET` is set, unauthenticated POST returns 401
 
 ## 8. Error Recovery
 

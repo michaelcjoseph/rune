@@ -43,7 +43,7 @@ export interface SpecArtifact {
   /** The tech lead's technical spec (project 14 role flow) — scaffolded into
    *  `tech-spec.md`. Optional: legacy single-shot proposals omit it. */
   techSpec?: string;
-  /** Jarvis-seeded orchestration `context.md` (project 14). Written
+  /** Rune-seeded orchestration `context.md` (project 14). Written
    *  DETERMINISTICALLY by the scaffolder, not authored by the setup-writer agent,
    *  so the spec invariant "roles/agents never author context.md" holds. Optional
    *  for legacy proposals. */
@@ -141,10 +141,10 @@ export function isScaffoldReady(session: PlanningSession): boolean {
  *
  * When `targetRepoPath` is supplied (09-expand-cockpit: the product's canonical repo path
  * resolved from `policies/products.json`), the brief tells the agent to scaffold into THAT
- * repo's `docs/projects/` — Jarvis is just one product — and to emit a `scaffold-result`
+ * repo's `docs/projects/` — Rune is just one product — and to emit a `scaffold-result`
  * JSON block with the new slug and the repo-relative paths it created, the structured signal
  * the approval path cross-checks against the repo diff. Omitting it preserves the legacy
- * Jarvis-workspace-scoped brief.
+ * Rune-workspace-scoped brief.
  */
 export function buildSetupWriterBrief(session: PlanningSession, targetRepoPath?: string): string {
   const { artifact } = session;
@@ -165,7 +165,7 @@ export function buildSetupWriterBrief(session: PlanningSession, targetRepoPath?:
       `Target repo: ${targetRepoPath}`,
       '',
       `Scaffold into \`${targetRepoPath}/docs/projects/\` — this is the target product's repo, ` +
-        `not necessarily Jarvis. Determine the next project number from that repo's ` +
+        `not necessarily Rune. Determine the next project number from that repo's ` +
         `\`docs/projects/index.md\`.`,
       '',
       'When done, emit a fenced ```scaffold-result block as the LAST thing in your reply:',

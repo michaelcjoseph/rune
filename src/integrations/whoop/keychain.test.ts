@@ -30,7 +30,7 @@ describe('whoop/keychain', () => {
       expect(result).toBe('my-secret-value');
       expect(execMock).toHaveBeenCalledWith(
         'security',
-        ['find-generic-password', '-s', 'jarvis-whoop', '-a', 'access-token', '-w'],
+        ['find-generic-password', '-s', 'rune-whoop', '-a', 'access-token', '-w'],
         { encoding: 'utf8', timeout: 5000 },
       );
     });
@@ -50,11 +50,11 @@ describe('whoop/keychain', () => {
       expect(execMock).toHaveBeenCalledTimes(2);
       // First call: delete
       expect(execMock).toHaveBeenNthCalledWith(1, 'security', [
-        'delete-generic-password', '-s', 'jarvis-whoop', '-a', 'access-token',
+        'delete-generic-password', '-s', 'rune-whoop', '-a', 'access-token',
       ], { timeout: 5000 });
       // Second call: add
       expect(execMock).toHaveBeenNthCalledWith(2, 'security', [
-        'add-generic-password', '-s', 'jarvis-whoop', '-a', 'access-token', '-w', 'new-value',
+        'add-generic-password', '-s', 'rune-whoop', '-a', 'access-token', '-w', 'new-value',
       ], { timeout: 5000 });
     });
 
@@ -99,7 +99,7 @@ describe('whoop/keychain', () => {
       deleteKeychainValue('access-token');
       expect(execMock).toHaveBeenCalledWith(
         'security',
-        ['delete-generic-password', '-s', 'jarvis-whoop', '-a', 'access-token'],
+        ['delete-generic-password', '-s', 'rune-whoop', '-a', 'access-token'],
         { timeout: 5000 },
       );
     });

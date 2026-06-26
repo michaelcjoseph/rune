@@ -184,7 +184,7 @@ type WorkRunPayload = {
   projectSlug: string;
   /**
    * Product key (matches an entry in `policies/products.json`). Defaults to
-   * `'jarvis'` for back-compat with existing cockpit start paths that didn't
+   * `'rune'` for back-compat with existing cockpit start paths that didn't
    * yet wire the product through. Cockpit's `handleApiMutations` should pass
    * the registry's product for the project so a future aura/assay work-run
    * targets the right repo.
@@ -215,7 +215,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
 
     // Pre-flight against the live tree. The actual run reads from the
     // worktree, but the worktree is created off the repo's HEAD which (for
-    // jarvis-on-jarvis) is the same commit the live tree is on.
+    // rune-on-rune) is the same commit the live tree is on.
     const dir = findProjectDir(projectSlug, PROJECT_ROOT);
     if (!dir) {
       return { ok: false, reason: `project not found: ${projectSlug}` };
@@ -234,7 +234,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
     //       crash-lost-record backstop (recovery relabels a lost record
     //       'unknown', so (a) misses it, but the worktree still occupies disk).
     // (b) is sync (no async `git worktree list`) so it fits this sync validate().
-    const product = payload.product ?? 'jarvis';
+    const product = payload.product ?? 'rune';
     let parkedForSlug = false;
     try {
       parkedForSlug = readAllRuns(config.SUPERVISED_RUNS_FILE).some(
@@ -283,7 +283,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
 
   async *apply(descriptor: MutationDescriptor<WorkRunPayload>, ctx: ApplyContext): AsyncIterable<MutationEvent> {
     const { projectSlug } = descriptor.payload;
-    const product = descriptor.payload.product ?? 'jarvis';
+    const product = descriptor.payload.product ?? 'rune';
     // Snapshot the classification/persist seam once per run so every artifact
     // path + git call reads a single consistent deps object (rather than
     // re-reading the module-level `runtimeDeps`, which a concurrent test reset
@@ -413,7 +413,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
 
       // cwd = sandbox.worktree (NOT PROJECT_ROOT) — the whole point of
       // Fix 1. Spawning into the live tree triggers tsx watch to SIGTERM
-      // the parent when the agent edits Jarvis's own source files. The
+      // the parent when the agent edits Rune's own source files. The
       // worktree lives under `<WORKTREE_ROOT>/<product>/<project>`, outside
       // PROJECT_ROOT/src, so tsx watch ignores it.
       //
@@ -495,7 +495,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         const streamResult = step.value;
 
         // --- Parked branch (project 13, Phase 1b) ---
-        // The run emitted a valid JARVIS_WORK_RUN_SENTINEL — it hit a step
+        // The run emitted a valid RUNE_WORK_RUN_SENTINEL — it hit a step
         // `--auto` can't take and needs a human. PARK it: write the durable
         // supervision `blocked-on-human` record FIRST (before any terminal step,
         // so a crash can't strand a `running` record that recovery would
@@ -630,7 +630,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
             h =>
               h.descriptor.kind === 'work-run' &&
               h.descriptor.id !== descriptor.id &&
-              ((h.descriptor.payload as WorkRunPayload).product ?? 'jarvis') === product &&
+              ((h.descriptor.payload as WorkRunPayload).product ?? 'rune') === product &&
               h.descriptor.status === 'running',
           );
         // Throwaway integration worktree the gate creates + tears down to test
@@ -847,7 +847,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           // tests. Push BEFORE delete (the finalizer records the durable
           // checkpoints between them); delete is best-effort.
           mergeBranch: async () => {
-            const message = `jarvis(${product}): merge work-run branch ${branch}`;
+            const message = `rune(${product}): merge work-run branch ${branch}`;
             try {
               await deps.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
             } catch (err) {

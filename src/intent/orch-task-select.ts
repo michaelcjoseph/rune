@@ -1,5 +1,5 @@
 /**
- * Jarvis-owned task selection (project 14, Phase 3).
+ * Rune-owned task selection (project 14, Phase 3).
  *
  * The orchestrator — not the executor model — picks the task. `selectNextTask`
  * returns the FIRST unchecked `- [ ]` in `tasks.md` in document order, with a

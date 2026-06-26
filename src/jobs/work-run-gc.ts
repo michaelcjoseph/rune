@@ -48,8 +48,8 @@ export interface GcRunEntry {
    *  branch is checked out in a worktree). */
   branch?: string;
   /** The product the run belongs to — selects which repo the branch ref lives
-   *  in for pruning. Absent on pre-multi-product summaries (all jarvis then),
-   *  so callers default to `'jarvis'`. */
+   *  in for pruning. Absent on pre-multi-product summaries (all rune then),
+   *  so callers default to `'rune'`. */
   product?: string;
 }
 
@@ -207,7 +207,7 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
     }
   }
 
-  // The stable per-project resume branch (`jarvis-work/<slug>`) is shared by
+  // The stable per-project resume branch (`rune-work/<slug>`) is shared by
   // EVERY run for that project, so the same branch name appears in many runs'
   // summaries. Pruning an aged-out run must never delete a branch a RETAINED
   // (newer) run still lives on — that would throw away the project's resume
@@ -236,13 +236,13 @@ export async function gcWorkRuns(opts: GcWorkRunsOpts): Promise<GcResult> {
     // blocked by the checked-out-branch protection + git's own refusal to delete
     // a checked-out ref, but this prefix guard closes the residual gap when the
     // `worktree list` read failed (empty protection set).
-    if (!branch.startsWith('jarvis-work/')) {
+    if (!branch.startsWith('rune-work/')) {
       log.warn('gcWorkRuns: refusing to prune a non-work-run branch', { id, branch });
       continue;
     }
-    // The branch lives in the run's own product repo. Default to 'jarvis' for
-    // pre-multi-product summaries (every run was jarvis then).
-    const product = e?.product ?? 'jarvis';
+    // The branch lives in the run's own product repo. Default to 'rune' for
+    // pre-multi-product summaries (every run was rune then).
+    const product = e?.product ?? 'rune';
     const repoPath = productRepos[product];
     if (!repoPath) {
       log.warn('gcWorkRuns: no repo for run product; skipping branch prune', { id, product, branch });

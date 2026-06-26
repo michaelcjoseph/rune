@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 function writeJsonl(lines: string[]): string {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-feedback-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-feedback-'));
   const file = join(tmpDir, 'feedback.jsonl');
   writeFileSync(file, lines.join('\n'), 'utf8');
   return file;
@@ -123,7 +123,7 @@ describe('feedback-reader — feedbackRecordId', () => {
 
 describe('feedback-reader — processed-id set persistence', () => {
   function processedPath(): string {
-    tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-feedback-proc-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'rune-feedback-proc-'));
     return join(tmpDir, 'feedback-processed.json');
   }
 
@@ -141,7 +141,7 @@ describe('feedback-reader — processed-id set persistence', () => {
   });
 
   it('treats a corrupt processed file as empty', () => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-feedback-proc-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'rune-feedback-proc-'));
     const file = join(tmpDir, 'feedback-processed.json');
     writeFileSync(file, '{ not json', 'utf8');
     expect(readProcessedFeedbackIds(file).size).toBe(0);

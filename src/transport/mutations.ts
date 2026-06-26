@@ -31,8 +31,8 @@ function appendMutationSnapshot(descriptor: MutationDescriptor): void {
  * Build a SupervisedRun for a mutation descriptor. The supervision visibility
  * surface keys runs by id (using the mutation id keeps the two stores aligned).
  * `product` comes from the payload if present (gen-eval-loop-runner sets it
- * explicitly); otherwise defaults to 'jarvis' since today's only auto-approve
- * applier is the work-runner operating on the Jarvis repo itself. `project`
+ * explicitly); otherwise defaults to 'rune' since today's only auto-approve
+ * applier is the work-runner operating on the Rune repo itself. `project`
  * comes from `payload.projectSlug` / `payload.ref` / `target.ref` in order.
  *
  * `startedAt` is always `descriptor.createdAt` — the user's intent for the run
@@ -56,7 +56,7 @@ function buildSupervisedRun(
   operatorWorktreePath?: string,
 ): SupervisedRun {
   const p = d.payload as Record<string, unknown>;
-  const product = typeof p['product'] === 'string' ? p['product'] : 'jarvis';
+  const product = typeof p['product'] === 'string' ? p['product'] : 'rune';
   const project =
     typeof p['projectSlug'] === 'string' ? p['projectSlug']
     : typeof p['ref'] === 'string' ? p['ref']
@@ -128,7 +128,7 @@ function runEventBase(descriptor: MutationDescriptor, ts: string) {
   const payload = descriptor.payload as Record<string, unknown>;
   return {
     runId: descriptor.id,
-    product: typeof payload['product'] === 'string' ? payload['product'] : 'jarvis',
+    product: typeof payload['product'] === 'string' ? payload['product'] : 'rune',
     target: runTargetFromDescriptor(descriptor),
     ts,
     userId: config.TELEGRAM_USER_ID,
@@ -219,7 +219,7 @@ function isTerminalMutationStatus(status: MutationStatus): boolean {
 
 export type MutationKind =
   | 'work-run'
-  // Project 14 Phase 5: the Jarvis-owned multi-task orchestration loop. The
+  // Project 14 Phase 5: the Rune-owned multi-task orchestration loop. The
   // cockpit Start action dispatches this kind when the orchestrated-work toggle
   // selects orchestrated mode (see src/jobs/work-dispatch.ts); otherwise it
   // dispatches the legacy `work-run` applier as the recorded fallback.
@@ -290,7 +290,7 @@ export interface MutationEvent {
 
 /**
  * Who initiated a cancel. `user` is an explicit human action (the /cancel
- * surface, the cockpit Cancel button). `system` is a Jarvis backstop reaping a
+ * surface, the cockpit Cancel button). `system` is a Rune backstop reaping a
  * run on its own (the P2.7 quiet→cancel escalation, the max-runtime ceiling).
  * The two share the cancel mechanics (SIGTERM the tree) but MUST classify
  * differently: a user cancel is terminal-fail regardless of work product, while
@@ -477,7 +477,7 @@ export async function createMutation(
 
 /** Cancel a running mutation by calling its cancel hook. `reason` records
  *  WHO initiated it (default `user`) so the classifier can tell an explicit
- *  human cancel from a Jarvis backstop reap — see {@link CancelReason}. */
+ *  human cancel from a Rune backstop reap — see {@link CancelReason}. */
 export function cancelMutation(
   id: string,
   reason: CancelReason = 'user',

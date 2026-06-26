@@ -6,8 +6,8 @@
  * its own write-up): does the defined scope actually achieve the stated goal,
  * and does completing every task leave a project a real user can use?
  *
- * This is a Jarvis-owned NEUTRAL step, not a seventh role — like the
- * learning-loop post-mortem, Jarvis runs it over the role artifacts (PM-owned
+ * This is a Rune-owned NEUTRAL step, not a seventh role — like the
+ * learning-loop post-mortem, Rune runs it over the role artifacts (PM-owned
  * spec + tech-lead-owned tasks together) rather than assigning it to one role.
  *
  * The pass is SEQUENTIAL and CROSS-MODEL, one pass per model:

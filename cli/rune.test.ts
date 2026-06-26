@@ -70,7 +70,7 @@ afterEach(() => {
  * Each import triggers the module-level main().catch(...) call.
  */
 async function runCLI(...args: string[]): Promise<void> {
-  process.argv = ['node', 'jarvis', ...args];
+  process.argv = ['node', 'rune', ...args];
   // Reset module registry so the CLI module re-executes on import
   vi.resetModules();
   // Re-register mocks after resetModules (resetModules clears the mock registry too)
@@ -96,20 +96,20 @@ async function runCLI(...args: string[]): Promise<void> {
     handleSRMessage: vi.fn().mockResolvedValue(undefined),
   }));
   // Import the CLI module — this triggers main()
-  await import('./jarvis.js');
+  await import('./rune.js');
   // Allow any microtasks (the main().catch() promise) to settle
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-describe('cli/jarvis', () => {
+describe('cli/rune', () => {
   describe('help output', () => {
     it('prints help when no command is given', async () => {
       await runCLI();
 
       expect(logSpy).toHaveBeenCalledWith(
-        'Jarvis CLI — Knowledge base operations from the terminal\n',
+        'Rune CLI — Knowledge base operations from the terminal\n',
       );
-      expect(logSpy).toHaveBeenCalledWith('Usage: jarvis <command> [args]\n');
+      expect(logSpy).toHaveBeenCalledWith('Usage: rune <command> [args]\n');
       expect(logSpy).toHaveBeenCalledWith('Commands:');
       expect(process.exitCode).toBeUndefined();
     });
@@ -118,7 +118,7 @@ describe('cli/jarvis', () => {
       await runCLI('help');
 
       expect(logSpy).toHaveBeenCalledWith(
-        'Jarvis CLI — Knowledge base operations from the terminal\n',
+        'Rune CLI — Knowledge base operations from the terminal\n',
       );
       expect(process.exitCode).toBeUndefined();
     });
@@ -127,7 +127,7 @@ describe('cli/jarvis', () => {
       await runCLI('--help');
 
       expect(logSpy).toHaveBeenCalledWith(
-        'Jarvis CLI — Knowledge base operations from the terminal\n',
+        'Rune CLI — Knowledge base operations from the terminal\n',
       );
       expect(process.exitCode).toBeUndefined();
     });
@@ -138,7 +138,7 @@ describe('cli/jarvis', () => {
       await runCLI('query', '--help');
 
       expect(logSpy).toHaveBeenCalledWith(
-        'Jarvis CLI — Knowledge base operations from the terminal\n',
+        'Rune CLI — Knowledge base operations from the terminal\n',
       );
       expect(queryMock).not.toHaveBeenCalled();
       expect(process.exitCode).toBeUndefined();
@@ -170,7 +170,7 @@ describe('cli/jarvis', () => {
     it('prints usage error when no question is provided', async () => {
       await runCLI('query');
 
-      expect(errorSpy).toHaveBeenCalledWith('Usage: jarvis query <question>');
+      expect(errorSpy).toHaveBeenCalledWith('Usage: rune query <question>');
       expect(process.exitCode).toBe(1);
     });
 
@@ -199,7 +199,7 @@ describe('cli/jarvis', () => {
       await runCLI('ingest');
 
       expect(logSpy).toHaveBeenCalledWith(
-        'Ingestion queue is empty. Usage: jarvis ingest <vault-relative-path> [--guidance "..."]',
+        'Ingestion queue is empty. Usage: rune ingest <vault-relative-path> [--guidance "..."]',
       );
     });
 
@@ -299,7 +299,7 @@ describe('cli/jarvis', () => {
       await runCLI('search');
 
       expect(errorSpy).toHaveBeenCalledWith(
-        'Usage: jarvis search <term> [--type entity|concept|topic|comparison]',
+        'Usage: rune search <term> [--type entity|concept|topic|comparison]',
       );
       expect(process.exitCode).toBe(1);
     });
@@ -440,7 +440,7 @@ describe('cli/jarvis', () => {
       expect(handleStudyMock).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(
-        '`jarvis study` needs an interactive terminal — use `jarvis study status` for a non-interactive summary.',
+        '`rune study` needs an interactive terminal — use `rune study status` for a non-interactive summary.',
       );
     });
   });

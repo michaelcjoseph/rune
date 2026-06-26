@@ -1,5 +1,5 @@
 /**
- * Strip Jarvis's absolute host paths from a string before it is surfaced to a user (a chat reply,
+ * Strip Rune's absolute host paths from a string before it is surfaced to a user (a chat reply,
  * an HTTP error body, the cockpit drawer). The full message is preserved in the structured logs;
  * this only scrubs the *user-facing* copy so the filesystem layout (and the host username embedded
  * in it) never leaks. Reads config at call-time so a test's config mock applies.

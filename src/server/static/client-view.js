@@ -117,4 +117,4 @@ if (router.getState().view === 'product' && productRoot) {
   router.replace(router.getState());
 }
 
-window.jarvisClientRouter = router;
+window.runeClientRouter = router;

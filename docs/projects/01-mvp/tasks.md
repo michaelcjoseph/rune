@@ -127,7 +127,7 @@ In progress. See [spec.md](spec.md) for details.
 
 ## Phase 10: CLI Interface
 
-- [x] CLI entry point (cli/jarvis.ts)
+- [x] CLI entry point (cli/rune.ts)
 - [x] query command — query KB from terminal
 - [x] ingest command — trigger ingestion from terminal
 - [x] lint command — run wiki health check

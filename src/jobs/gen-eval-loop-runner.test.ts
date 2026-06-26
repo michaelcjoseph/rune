@@ -81,7 +81,7 @@ const resolveModelMock = resolveModel as unknown as ReturnType<typeof vi.fn>;
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-gel-runner-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-gel-runner-test-'));
   const productsPath = join(tmpDir, 'products.json');
   writeFileSync(productsPath, JSON.stringify({
     aura: {
@@ -267,7 +267,7 @@ describe('runGenEvalLoop — orchestration', () => {
         return {
           product: 'aura',
           project: '01-growth',
-          worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+          worktree: '/tmp/rune-worktrees/aura/01-growth',
           egressAllowlist: [],
         };
       }),
@@ -295,7 +295,7 @@ describe('runGenEvalLoop — orchestration', () => {
     for await (const ev of runGenEvalLoop({
       mutationId: 'mut-1',
       payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
-      worktreeRoot: '/tmp/jarvis-worktrees',
+      worktreeRoot: '/tmp/rune-worktrees',
       productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
       // Orchestration tests inject maxEvaluatorRounds directly; the cap
       // read from the policy is exercised in its own describe block.
@@ -533,7 +533,7 @@ describe('runGenEvalLoop — cross-model resolution', () => {
       createWorktree: vi.fn(async () => ({
         product: 'aura',
         project: '01-growth',
-        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        worktree: '/tmp/rune-worktrees/aura/01-growth',
         egressAllowlist: [],
       })),
       destroyWorktree: vi.fn(async () => {}),
@@ -552,7 +552,7 @@ describe('runGenEvalLoop — cross-model resolution', () => {
     for await (const ev of runGenEvalLoop({
       mutationId: 'mut-res-1',
       payload: { product: 'aura', project: '01-growth' },
-      worktreeRoot: '/tmp/jarvis-worktrees',
+      worktreeRoot: '/tmp/rune-worktrees',
       productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
       escalationPolicyPath: '/test/no-such-policy.json',
       modelPolicyPath: opts.modelPolicyPath ?? '/test/no-such-policy.json',
@@ -676,7 +676,7 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
       createWorktree: vi.fn(async () => ({
         product: 'aura',
         project: '01-growth',
-        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        worktree: '/tmp/rune-worktrees/aura/01-growth',
         egressAllowlist: [],
       })),
       destroyWorktree: vi.fn(async () => {}),
@@ -697,7 +697,7 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
     for await (const ev of runGenEvalLoop({
       mutationId: 'mut-merge-1',
       payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
-      worktreeRoot: '/tmp/jarvis-worktrees',
+      worktreeRoot: '/tmp/rune-worktrees',
       productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
       escalationPolicyPath: '/test/no-such-policy.json',
       modelPolicyPath: '/test/no-such-policy.json',
@@ -817,7 +817,7 @@ describe('runGenEvalLoop — merge contract (A7.2)', () => {
 //
 // After the A7.2 merge-ready gate clears, the runner must:
 //   1. Call `spawners.createWorktree` with a deterministic feature-branch arg
-//      derived from the mutationId (`'jarvis-gen-eval/' + mutationId.slice(0,8)`).
+//      derived from the mutationId (`'rune-gen-eval/' + mutationId.slice(0,8)`).
 //   2. On the merge-ready path, call `spawners.mergeBranch(sandbox, branch, opts)`.
 //   3. `mergeBranch` ok:true  → emit `completed`.
 //   4. `mergeBranch` ok:false → emit `failed` (reason carries 'merge failed: ...');
@@ -849,7 +849,7 @@ describe('runGenEvalLoop — merge step (A7.3)', () => {
       createWorktree: vi.fn(async () => ({
         product: 'aura',
         project: '01-growth',
-        worktree: '/tmp/jarvis-worktrees/aura/01-growth',
+        worktree: '/tmp/rune-worktrees/aura/01-growth',
         egressAllowlist: [],
       })),
       destroyWorktree: vi.fn(async () => {}),
@@ -868,7 +868,7 @@ describe('runGenEvalLoop — merge step (A7.3)', () => {
     for await (const ev of runGenEvalLoop({
       mutationId: 'mut-1',
       payload: { product: 'aura', project: '01-growth', maxEvaluatorRounds: opts.maxEvaluatorRounds },
-      worktreeRoot: '/tmp/jarvis-worktrees',
+      worktreeRoot: '/tmp/rune-worktrees',
       productsConfigPath: mockConfig.PRODUCTS_CONFIG_FILE,
       escalationPolicyPath: '/test/no-such-policy.json',
       modelPolicyPath: '/test/no-such-policy.json',
@@ -882,18 +882,18 @@ describe('runGenEvalLoop — merge step (A7.3)', () => {
 
   it('createWorktree is called with a deterministic feature branch arg', async () => {
     // The runner must call createWorktree with a `branch` field derived from
-    // the mutationId: 'jarvis-gen-eval/' + mutationId.slice(0, 8).
-    // mutationId is 'mut-1' here, so the branch is 'jarvis-gen-eval/mut-1'.
+    // the mutationId: 'rune-gen-eval/' + mutationId.slice(0, 8).
+    // mutationId is 'mut-1' here, so the branch is 'rune-gen-eval/mut-1'.
     const spawners = fakeSpawners({ workExits: [0], reviewVerdicts: ['pass'] });
     await runLoop(spawners);
 
     expect(spawners.createWorktree).toHaveBeenCalledOnce();
     const firstCall = spawners.createWorktree.mock.calls[0]![0] as Record<string, unknown>;
     expect(firstCall).toMatchObject({
-      branch: expect.stringMatching(/^jarvis-gen-eval\//),
+      branch: expect.stringMatching(/^rune-gen-eval\//),
     });
     // The suffix is derived from mutationId 'mut-1'.slice(0, 8) = 'mut-1'.
-    expect(firstCall['branch']).toBe('jarvis-gen-eval/mut-1');
+    expect(firstCall['branch']).toBe('rune-gen-eval/mut-1');
   });
 
   it('merge-ready + mergeBranch success → emits completed', async () => {
@@ -917,7 +917,7 @@ describe('runGenEvalLoop — merge step (A7.3)', () => {
     const [callSandbox, callBranch] = spawners.mergeBranch.mock.calls[0] as [unknown, string, unknown];
     expect(callSandbox).toBeDefined();
     expect(typeof callBranch).toBe('string');
-    expect(callBranch).toMatch(/^jarvis-gen-eval\//);
+    expect(callBranch).toMatch(/^rune-gen-eval\//);
 
     // completed event must fire — the run is merged
     const terminal = events[events.length - 1]!;

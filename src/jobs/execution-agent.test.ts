@@ -67,7 +67,7 @@ vi.mock('../ai/codex.js', () => ({
 }));
 
 vi.mock('../config.js', () => ({
-  PROJECT_ROOT: '/tmp/test-jarvis',
+  PROJECT_ROOT: '/tmp/test-rune',
   default: {
     CLAUDE_TIMEOUT_MS: 5_000,
     WORK_RUN_REAP_GRACE_MS: 100,
@@ -104,7 +104,7 @@ afterEach(() => {
 
 function makeSandbox(): SandboxSpec {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: 'demo',
     worktree: repoDir,
     egressAllowlist: [],
@@ -317,7 +317,7 @@ describe('runExecutionAgent — Codex JSON event forwarding', () => {
 
   it('sanitizes the no-event Codex text fallback', async () => {
     mockRunCodex.mockResolvedValue({
-      text: 'legacy stdout from /tmp/test-jarvis/private/file.md',
+      text: 'legacy stdout from /tmp/test-rune/private/file.md',
       error: null,
       exitCode: 0,
     });

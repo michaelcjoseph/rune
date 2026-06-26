@@ -15,7 +15,7 @@ its `spec.md`.
 | [07-spaced-repetition](07-spaced-repetition/spec.md) | In Progress | A daily spaced-repetition quiz over the wiki. |
 | [08-intent-layer](08-intent-layer/spec.md) | In Progress | Rune becomes an intent-layer orchestrator over multi-model sub-agents. |
 | [09-expand-cockpit](09-expand-cockpit/spec.md) | Done | Per-product bugs and ideas in the cockpit, with one-click Plan to start a real planning session. |
-| [10-jarvis-identity-refactor](10-jarvis-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Rune orchestrator identity out of pkms/CLAUDE.md into jarvis. Rescoped from a compiler build — see spec. |
+| [10-rune-identity-refactor](10-rune-identity-refactor/spec.md) | Done | Symlink AGENTS.md → CLAUDE.md per repo (drift becomes impossible) and move Rune orchestrator identity out of pkms/CLAUDE.md into rune. Rescoped from a compiler build — see spec. |
 | [11-work-run-observability](11-work-run-observability/spec.md) | Done | Make `/work --auto` runs observable: classify outcome on work product (not exit code), persist a durable transcript, retain forensics, and alert truthfully. |
 | [12-writer-memory](12-writer-memory/spec.md) | Done | A content-writer role-agent (SOUL.md charter + accumulating memory.md) behind `/blog` that captures craft lessons from feedback and compounds them into the next piece. The smallest test of role-agent + memory. |
 | [13-work-run-monitoring](13-work-run-monitoring/spec.md) | Done | Make automated `/work --auto` runs findable and testable: surface the worktree path, keep a parked run's worktree alive when a task needs a human, and release clean parked work back to the Project 15 finalizer. |
@@ -23,7 +23,7 @@ its `spec.md`.
 | [15-work-run-finalizer](15-work-run-finalizer/spec.md) | Done | Make every `/work --auto` run reach a correct terminal state on its own — even when the agent emits `result: success` then never exits — and give plain work-runs one gated, resumable path onto `main`. Closes the six-defect "wedges open AGAIN" incident. |
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
-| [18-rebrand-jarvis-to-rune](18-rebrand-jarvis-to-rune/spec.md) | Not Started | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
+| [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | In Progress | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 ---
 
 ## 01-mvp — Done
@@ -142,17 +142,17 @@ Pulls each repo-backed product's `docs/projects/bugs.md` and `docs/projects/idea
 - **Provenance:** recovered from the 2026-05-26 `/plan` conversation; spec is the post-Codex-critique revision the user approved. See [`08-intent-layer/agent-lessons.md`](08-intent-layer/agent-lessons.md) Lessons 8–11.
 - **Task breakdown & test plan:** see [tasks.md](09-expand-cockpit/tasks.md) and [test-plan.md](09-expand-cockpit/test-plan.md). Test-first per phase.
 
-## 10-jarvis-identity-refactor — Done
+## 10-rune-identity-refactor — Done
 
-[Spec](10-jarvis-identity-refactor/spec.md)
+[Spec](10-rune-identity-refactor/spec.md)
 
-Two surgical edits: make `AGENTS.md` a symlink to `CLAUDE.md` per repo so the two can never drift, and move Rune's orchestrator identity out of `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`. **Rescoped 2026-06-02** from a five-repo canonical-source compiler — see the spec's Scope change section.
+Two surgical edits: make `AGENTS.md` a symlink to `CLAUDE.md` per repo so the two can never drift, and move Rune's orchestrator identity out of `pkms/CLAUDE.md` into `rune/CLAUDE.md`. **Rescoped 2026-06-02** from a five-repo canonical-source compiler — see the spec's Scope change section.
 
 - **Why rescoped:** no instruction will ever differ between CLAUDE.md and AGENTS.md (same instructions, different per-model prompts), so a compiler whose renderers must produce identical output is a copy with extra steps. A symlink delivers zero drift for zero machinery.
-- **Drift fix:** `ln -s CLAUDE.md AGENTS.md`. Core repos jarvis + pkms (both currently drifted); best-effort assay + aura; relay has no instruction files.
-- **Identity fix:** move the `## Rune` and `### How Reviews Work` sections from pkms to jarvis, leave a one-line pointer. The git diff is the proof of preservation.
-- **Dropped:** the compiler, IR, renderers, manifest, `$JARVIS_HOME` wrapper, inventory verifier, CI drift checks, and `per-repo-migration.md`. The persistent-role-agent / SOUL.md / per-agent-memory architecture is a separate project (ideas.md → "Better agentic systems").
-- **Task breakdown & test plan:** see [tasks.md](10-jarvis-identity-refactor/tasks.md) and [test-plan.md](10-jarvis-identity-refactor/test-plan.md).
+- **Drift fix:** `ln -s CLAUDE.md AGENTS.md`. Core repos rune + pkms (both currently drifted); best-effort assay + aura; relay has no instruction files.
+- **Identity fix:** move the `## Rune` and `### How Reviews Work` sections from pkms to rune, leave a one-line pointer. The git diff is the proof of preservation.
+- **Dropped:** the compiler, IR, renderers, manifest, `$RUNE_HOME` wrapper, inventory verifier, CI drift checks, and `per-repo-migration.md`. The persistent-role-agent / SOUL.md / per-agent-memory architecture is a separate project (ideas.md → "Better agentic systems").
+- **Task breakdown & test plan:** see [tasks.md](10-rune-identity-refactor/tasks.md) and [test-plan.md](10-rune-identity-refactor/test-plan.md).
 
 ## 11-work-run-observability — Done
 
@@ -177,12 +177,12 @@ A content-writer role-agent that accumulates craft across pieces.
 
 The smallest end-to-end test of the "better agentic systems" bet: a role-agent defined by a hand-authored charter (`SOUL.md`) plus a compounding memory (`memory.md`) beats a stateless one. Runs behind the existing `/blog` flow; v1 proves the loop closes, quality is judged later via engagement metrics.
 
-- **The role:** `jarvis/agents/writer/{SOUL.md, memory.md}` in the jarvis repo. `SOUL.md` (charter, system-prompt authority) references `writing/voice.md`; `memory.md` (accumulating craft lessons, low-authority reference) loads in the user turn, never the system prompt.
+- **The role:** `rune/agents/writer/{SOUL.md, memory.md}` in the rune repo. `SOUL.md` (charter, system-prompt authority) references `writing/voice.md`; `memory.md` (accumulating craft lessons, low-authority reference) loads in the user turn, never the system prompt.
 - **Read path:** a loader reading from `PROJECT_ROOT/agents/writer/` returns `{ systemInstructions, referenceContext }` so memory never gains command authority; char-budgeted with a truncation marker.
-- **Write path:** after a mandatory feedback checkpoint the writer emits a completion sentinel; `blogHandler` closes the session and a TypeScript `captureLessons()` dedupes, privacy-filters, appends, and atomically commits to the jarvis repo. No approval gate; Michael reviews later.
+- **Write path:** after a mandatory feedback checkpoint the writer emits a completion sentinel; `blogHandler` closes the session and a TypeScript `captureLessons()` dedupes, privacy-filters, appends, and atomically commits to the rune repo. No approval gate; Michael reviews later.
 - **Gate:** loop closure, not quality — a fixture lesson captured on piece N appears in piece N+1's reference context. Quality eval (engagement metrics) is a future phase in [ideas.md](ideas.md).
 - **Outcome (loop closes ✅):** all three phases shipped. The automated gate `src/writer/loop-closure.test.ts` proves a marked lesson captured via the real `captureLessons` → temp `memory.md` → real `composeWriterContext` round-trips into piece N+1's `referenceContext` (and never the system channel). The blog flow runs the writer role end-to-end (SOUL on the system channel, seeded `memory.md` as user-turn reference, sentinel-driven server-owned closure, fault-isolated + timeout-bounded auto-commit of memory.md on `main` only). Seed baseline: 20 provenance-stamped craft bullets mined from 46 spec links.
-- **Scope:** one role, jarvis repo only, no cross-product. The planning pipeline and engagement-driven lessons are separate ideas in [ideas.md](ideas.md).
+- **Scope:** one role, rune repo only, no cross-product. The planning pipeline and engagement-driven lessons are separate ideas in [ideas.md](ideas.md).
 - **Provenance:** planned 2026-06-02 from the top `ideas.md` bullet ("Better agentic systems"); three Codex critique rounds (over-engineering → adjust → architecture-fit) cut it from a five-role memory-substrate-plus-pipeline build down to this single-role wedge.
 - **Task breakdown & test plan:** see [tasks.md](12-writer-memory/tasks.md) and [test-plan.md](12-writer-memory/test-plan.md). Test-first per phase.
 
@@ -341,10 +341,10 @@ exits).
 Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. **Shipped 2026-06-10/11: live in the Claude App over a Tailscale Funnel; general/dev chat no longer requires Telegram.**
 
 - **The bet:** the conversation surface was never the moat. Claude is the brain; the funnel (vault → pipeline → KB) is the asset. Port the surface into the Claude App, keep the funnel unchanged and Rune-owned. Dual-surface end state, not a Telegram retirement.
-- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Built behind a shared `createJarvisMcpServer` factory that splits the App-surface tools from the `kb_*` admin set (the admin tools are never remotely reachable). Ambient/health commands and Rune-pushed updates stay Telegram-only.
+- **Six-tool surface:** `kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation` — exposed as a Claude App connector, kept deliberately lean. Built behind a shared `createRuneMcpServer` factory that splits the App-surface tools from the `kb_*` admin set (the admin tools are never remotely reachable). Ambient/health commands and Rune-pushed updates stay Telegram-only.
 - **Write-back, no new stage:** `log_conversation` writes a finished thread into today's journal (summary or full reconstruction) and, when kb-worthy, into the KB raw-source queue; the nightly pipeline ingests it unchanged. The `summarizeSession` prompt + kb-worthy heuristic were ported verbatim into the App project instructions (the server is stateless to the App — no session lifecycle).
 - **Routing:** `resolveProductTarget()` attributes captured ideas/bugs to the right product with an explicit inbox fallback — never dropped, never mis-attributed; loop-filed and App-filed ideas share one `product` attribution schema.
-- **Transport + auth:** `StreamableHTTPServerTransport` at `/mcp` on the daemon HTTP server (host-allowlist → fail-closed bearer → SDK transport), and hand-rolled single-user OAuth 2.1 — DCR, a consent-form gate on `JARVIS_HTTP_SECRET` (secret only ever in the POST body), PKCE S256-only, single-use codes, tokens bound to the one user id. Tokens are **persisted + never-expire** (`logs/mcp-oauth-store.json`, 0600) so the App authenticates once and survives daemon restarts; revoke by deleting the store + restarting.
+- **Transport + auth:** `StreamableHTTPServerTransport` at `/mcp` on the daemon HTTP server (host-allowlist → fail-closed bearer → SDK transport), and hand-rolled single-user OAuth 2.1 — DCR, a consent-form gate on `RUNE_HTTP_SECRET` (secret only ever in the POST body), PKCE S256-only, single-use codes, tokens bound to the one user id. Tokens are **persisted + never-expire** (`logs/mcp-oauth-store.json`, 0600) so the App authenticates once and survives daemon restarts; revoke by deleting the store + restarting.
 - **Remote reachability:** a Tailscale Funnel exposes only `/mcp` + the OAuth-discovery paths at a stable `ts.net` hostname (TLS on-host, no inbound ports, the webview stays localhost-only). Chosen over Cloudflare Tunnel — no domain, no extra daemon, $0 — with the Cloudflare procedure kept as a documented fallback. See [tunnel-runbook.md](16-claude-app-connector/tunnel-runbook.md).
 - **Provenance:** built test-first per phase (factory/routing/tool suites red → green; transport + OAuth suites red → green). Tunnel exposure, App connector registration, and the funnel-intact e2e acceptance test were operator-completed live; the repeatable acceptance procedure is [e2e-acceptance-test.md](16-claude-app-connector/e2e-acceptance-test.md). App project instructions: [app-project-instructions.md](16-claude-app-connector/app-project-instructions.md).
 - **Task breakdown & test plan:** see [tasks.md](16-claude-app-connector/tasks.md) and [test-plan.md](16-claude-app-connector/test-plan.md). Test-first per phase.
@@ -364,17 +364,17 @@ Reframes the web view from ~90% chat into a development cockpit, now that KB res
 - **Scope boundary:** surface redesign only — the cross-repo autorun plumbing behind Fix and the bug-to-bug sweep are separate deferred ideas; `/work` execution, finalization, and the backlog parser/promotion mechanics are unchanged.
 - **Task breakdown & test plan:** see [tasks.md](17-cockpit-redesign/tasks.md) and [test-plan.md](17-cockpit-redesign/test-plan.md). Test-first per phase.
 
-## 18-rebrand-jarvis-to-rune — Not Started
+## 18-rebrand-rune-to-rune — In Progress
 
-[Spec](18-rebrand-jarvis-to-rune/spec.md)
+[Spec](18-rebrand-rune-to-rune/spec.md)
 
 Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged.
 
 The retired brand is not trademark-clean or distinctively ownable; **Rune** is the chosen name, with `@runeai` as the public handle and part of the brand-ownability premise. The cutover is complete only when the public repo is renamed, the local checkout runs from `~/workspace/rune/`, the handle is owned, old public brand references are gone, private paths no longer leak into committed code, and the launchd daemon is healthy after the move.
 
-- **Inventory first:** a case-insensitive `jarvis` sweep classifies every hit (brand-rewrite / public-identifier / private-functional / excluded-filename) and outputs the explicit acceptance allowlist.
-- **Path de-leak:** extract hardcoded `/Users/jarvis/workspace/jarvis/...` references behind `RUNE_*` env vars with computed defaults, rename `JARVIS_LOGS_DIR` to `RUNE_LOGS_DIR`, and convert the known holdouts; lands and is verified before any disk move.
-- **Brand + runtime sweep:** rewrite agent-name references across docs, metadata, CI, URLs, and agent-prompt prose, and rename public runtime identifiers (e.g. the `jarvis-kb` MCP server) with focused tests.
+- **Inventory first:** a case-insensitive `rune` sweep classifies every hit (brand-rewrite / public-identifier / private-functional / excluded-filename) and outputs the explicit acceptance allowlist.
+- **Path de-leak:** extract hardcoded `/Users/jarvis/workspace/rune/...` references behind `RUNE_*` env vars with computed defaults, rename `RUNE_LOGS_DIR` to `RUNE_LOGS_DIR`, and convert the known holdouts; lands and is verified before any disk move.
+- **Brand + runtime sweep:** rewrite agent-name references across docs, metadata, CI, URLs, and agent-prompt prose, and rename public runtime identifiers (e.g. the `rune-kb` MCP server) with focused tests.
 - **Repo, handle, cutover:** rename the GitHub repo to `rune` and claim `@runeai` (independent of the disk move), then move the checkout to `~/workspace/rune/` and reload the daemon (label stays `com.jarvis.daemon`).
 - **Non-goals:** no macOS account/home rename, no launchd label rename, no agent-filename renames, no history rewrite, no visual identity, no compatibility alias.
-- **Task breakdown & test plan:** see [tasks.md](18-rebrand-jarvis-to-rune/tasks.md) and [test-plan.md](18-rebrand-jarvis-to-rune/test-plan.md). Test-first per phase.
+- **Task breakdown & test plan:** see [tasks.md](18-rebrand-rune-to-rune/tasks.md) and [test-plan.md](18-rebrand-rune-to-rune/test-plan.md). Test-first per phase.

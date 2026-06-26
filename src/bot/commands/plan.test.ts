@@ -49,7 +49,7 @@ function makeRegistry() {
         projects: [{ slug: '01-mvp', status: 'active' }],
       },
       {
-        name: 'jarvis',
+        name: 'rune',
         repoBacked: true,
         projects: [{ slug: '08-intent-layer', status: 'active' }],
       },
@@ -134,7 +134,7 @@ describe('handlePlan', () => {
 
       const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
       expect(reply).toContain('aura');
-      expect(reply).toContain('jarvis');
+      expect(reply).toContain('rune');
     });
   });
 
@@ -155,7 +155,7 @@ describe('handlePlan', () => {
 
       const reply = vi.mocked(sender.send).mock.calls[0]![1] as string;
       expect(reply).toContain('aura');
-      expect(reply).toContain('jarvis');
+      expect(reply).toContain('rune');
       // Usage hint should mention /plan
       expect(reply).toContain('/plan');
     });

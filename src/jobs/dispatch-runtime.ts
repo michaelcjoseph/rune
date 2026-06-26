@@ -8,9 +8,9 @@
  *
  * 1. Branches by `handoff.target` and spawns the right executor —
  *    `runAgent` for Claude, `runCodex` for Codex. The Claude target uses
- *    Jarvis's `.claude/agents/<name>.md` directly (the CLI knows the
+ *    Rune's `.claude/agents/<name>.md` directly (the CLI knows the
  *    agent); the Codex target inlines the compiled-to-Codex agent
- *    document since Codex doesn't know Jarvis's agents dir.
+ *    document since Codex doesn't know Rune's agents dir.
  * 2. Maps the executor's `{text, error}` result into a `DispatchResult`
  *    (`completed` / `failed`+`failureReason`).
  * 3. Calls `recordDispatch` to build the `DispatchLogEntry`.
@@ -21,7 +21,7 @@
  * Sandbox seam: callers running against a product worktree must pass
  * `opts.env` built via `buildSandboxEnv` (see `RunCodexOpts.env`'s
  * JSDoc) — the default inherits the full `process.env`, which is safe
- * only for in-Jarvis dispatches.
+ * only for in-Rune dispatches.
  *
  * Model determination: `opts.model` overrides the per-target default
  * (`sonnet` for Claude, `codex` for Codex). When A6 registers Codex in
@@ -114,7 +114,7 @@ export interface DispatchToExecutorOpts {
   cwd?: string;
   /** Environment for the executor child (Codex only). Sandbox callers
    *  must supply `buildSandboxEnv(...)`; the default inherits
-   *  `process.env`, which is safe only for in-Jarvis dispatches. */
+   *  `process.env`, which is safe only for in-Rune dispatches. */
   env?: NodeJS.ProcessEnv;
   /** Codex sandbox policy passed via `-s`. Ignored for Claude target. */
   sandboxMode?: CodexSandboxMode;
@@ -227,7 +227,7 @@ export async function dispatchToExecutor(
       log.warn('Codex dispatch skipped — provider unavailable', { reason: probe.reason });
     } else {
       // Codex target — inline the compiled neutral agent doc since Codex
-      // doesn't know Jarvis's agents dir. `runCodex` reads each option with
+      // doesn't know Rune's agents dir. `runCodex` reads each option with
       // `?? default`, so plain undefined fields are equivalent to absent
       // ones (no need for conditional spreads).
       const loader = opts.loadNeutralAgent ?? defaultLoadNeutralAgent;

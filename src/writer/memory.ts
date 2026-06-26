@@ -10,7 +10,7 @@
  *                   rules. On any SOUL ↔ memory contradiction, SOUL wins.
  *
  * Both files are read directly from disk (node:fs), NOT via `readVaultFile`
- * — they live in the jarvis repo, not the Obsidian vault.
+ * — they live in the rune repo, not the Obsidian vault.
  */
 
 import { readFileSync } from 'node:fs';
@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 // its tests runnable without the app's env vars.
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Directory holding the writer role's charter + memory, in the jarvis repo. */
+/** Directory holding the writer role's charter + memory, in the rune repo. */
 export const WRITER_DIR = join(REPO_ROOT, 'agents', 'writer');
 
 export const SOUL_FILENAME = 'SOUL.md';

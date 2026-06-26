@@ -11,9 +11,9 @@
  *    `src/intent/sandbox.ts` is asserted at injection time as defense in
  *    depth.
  *
- * 2. **Jarvis's own secrets in `process.env` never reach the child.** The
+ * 2. **Rune's own secrets in `process.env` never reach the child.** The
  *    parent's environment (TELEGRAM_BOT_TOKEN, READWISE_TOKEN, WHOOP_*, etc.)
- *    is **not** passed through wholesale the way the in-Jarvis Claude CLI
+ *    is **not** passed through wholesale the way the in-Rune Claude CLI
  *    spawn does. Instead a small allowlist of innocuous shell vars (PATH,
  *    HOME, USER, LANG, ...) is copied over, and the per-product credentials
  *    layer on top of that. A product can override PATH via its credentials
@@ -139,7 +139,7 @@ export function readCredentials(path: string): Record<string, string> {
  * Return the subset of `process.env` whose keys are in `allowlist`. Keys not
  * present in `process.env` are omitted (no `KEY: undefined` entries).
  *
- * This is the gate that keeps Jarvis's own secrets (TELEGRAM_BOT_TOKEN,
+ * This is the gate that keeps Rune's own secrets (TELEGRAM_BOT_TOKEN,
  * READWISE_TOKEN, …) from reaching a sandboxed child — anything not in the
  * allowlist is dropped.
  */

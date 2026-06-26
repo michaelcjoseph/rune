@@ -20,7 +20,7 @@ function makeRun(id: string, overrides: Partial<SupervisedRun> = {}): Supervised
   return {
     id,
     kind: 'orchestrated-work',
-    product: 'jarvis',
+    product: 'rune',
     project: '14-product-team-agents',
     status: 'running',
     startedAt: '2026-06-18T03:00:00.000Z',
@@ -51,7 +51,7 @@ function summary(id: string, outcome: WorkOutcome): WorkRunSummary {
   return {
     id,
     project: '14-product-team-agents',
-    product: 'jarvis',
+    product: 'rune',
     outcome,
     reason: `${outcome} recorded in terminal summary`,
     exit: {
@@ -88,7 +88,7 @@ function makeDescriptor(id: string, overrides: Partial<MutationDescriptor> = {})
     source: 'webview',
     target: { type: 'orchestrated-work', ref: '14-product-team-agents' },
     preview: { summary: 'orchestrated-work on 14-product-team-agents' },
-    payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
+    payload: { projectSlug: '14-product-team-agents', product: 'rune' },
     createdAt: '2026-06-18T03:00:00.000Z',
     status: 'running',
     ...overrides,
@@ -96,7 +96,7 @@ function makeDescriptor(id: string, overrides: Partial<MutationDescriptor> = {})
 }
 
 function withTempDir<T>(fn: (dir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'jarvis-work-run-reconciler-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'rune-work-run-reconciler-test-'));
   try {
     return fn(dir);
   } finally {

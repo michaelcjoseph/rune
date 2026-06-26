@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
  * `runObservationLoop`, so the suite is green.
  *
  * Scope note: §16's "extends Ask-Twice telemetry rather than duplicating it", "every
- * Jarvis interaction is logged", "synthesis diarizes before the loop reasons", "runs
+ * Rune interaction is logged", "synthesis diarizes before the loop reasons", "runs
  * nightly", and "uses the existing project-execution engine" are integration concerns —
  * the loop's wiring into nightly + sensor + engine. This suite pins the deterministic
  * core: the triage walk with an injected callback, dedupe, and the quiet-period gate.

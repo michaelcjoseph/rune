@@ -23,7 +23,7 @@ let tmpDir: string;
 let ideasPath: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-ideas-io-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-ideas-io-test-'));
   ideasPath = join(tmpDir, 'ideas.md');
 });
 

@@ -53,7 +53,7 @@ vi.mock('node:fs', () => ({
   statSync: mockStatSync,
 }));
 
-const TEST_PROJECT_ROOT = '/test/jarvis';
+const TEST_PROJECT_ROOT = '/test/rune';
 
 // Merged config: work-runner reads PROJECT_ROOT/caps/WORK_RUNS_DIR; telegram-
 // sender reads TG_MAX_MESSAGE_LENGTH/TELEGRAM_BOT_TOKEN/TELEGRAM_USER_ID.
@@ -98,8 +98,8 @@ vi.mock('./sandbox-runtime.js', () => ({
   // repoPath / validationCommands) in the common apply() path. A noop run never
   // reaches the gate/merge, so this just needs to resolve.
   getProductConfig: vi.fn(() => ({
-    product: 'jarvis',
-    repoPath: '/test/repo/jarvis',
+    product: 'rune',
+    repoPath: '/test/repo/rune',
     baseBranch: 'main',
     egressAllowlist: [],
     validationCommands: ['npm run build', 'npm test'],
@@ -114,10 +114,10 @@ vi.mock('../integrations/telegram/client.js', () => ({
   stopTyping: vi.fn(),
 }));
 
-const FAKE_WORKTREE = '/test/worktrees/jarvis/06-webview';
+const FAKE_WORKTREE = '/test/worktrees/rune/06-webview';
 function fakeSandboxSpec(overrides: Record<string, unknown> = {}) {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: '06-webview',
     worktree: FAKE_WORKTREE,
     egressAllowlist: [],

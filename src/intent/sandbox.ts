@@ -80,7 +80,7 @@ export const VALID_SLUG = /^[a-z0-9][a-z0-9-]*$/;
  * back-compat with existing importers.
  */
 export function workBranchName(projectSlug: string): string {
-  return `jarvis-work/${projectSlug}`;
+  return `rune-work/${projectSlug}`;
 }
 
 /**
@@ -172,7 +172,7 @@ export function isEgressAllowed(host: string, sandbox: SandboxSpec): boolean {
 /**
  * Whether the run may read credentials owned by `credentialProduct` — true only when it is
  * **exactly** the run's own product. A run can never reach another product's secrets,
- * Jarvis's own credentials, or a prefix/case-variant of its product name. Both values are
+ * Rune's own credentials, or a prefix/case-variant of its product name. Both values are
  * registry slugs; a non-slug `credentialProduct` simply fails the exact match (deny).
  */
 export function canReachCredential(sandbox: SandboxSpec, credentialProduct: string): boolean {

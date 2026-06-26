@@ -534,8 +534,8 @@ function defaultPostJson(url, body) {
 }
 
 function defaultSendChat({ product, text }) {
-  if (typeof window !== 'undefined' && typeof window.jarvisSendWebviewMessage === 'function') {
-    const sent = window.jarvisSendWebviewMessage({ product, text });
+  if (typeof window !== 'undefined' && typeof window.runeSendWebviewMessage === 'function') {
+    const sent = window.runeSendWebviewMessage({ product, text });
     if (sent) return Promise.resolve({ live: true });
   }
   return defaultPostJson('/api/chat', { product, message: text });
@@ -551,7 +551,7 @@ function mutationProduct(mutation) {
   const payload = mutation?.payload || {};
   return typeof mutation?.product === 'string' ? mutation.product
     : typeof payload.product === 'string' ? payload.product
-    : 'jarvis';
+    : 'rune';
 }
 
 function mutationProjectSlug(mutation) {
@@ -1226,7 +1226,7 @@ export function createProductDeepView({
   root.addEventListener?.('submit', onSubmit);
   root.addEventListener?.('keydown', onKeyDown);
   if (typeof window !== 'undefined') {
-    window.addEventListener?.('jarvis-webview-frame', onWebviewFrame);
+    window.addEventListener?.('rune-webview-frame', onWebviewFrame);
   }
 
   return {
@@ -1283,7 +1283,7 @@ export function createProductDeepView({
       root.removeEventListener?.('submit', onSubmit);
       root.removeEventListener?.('keydown', onKeyDown);
       if (typeof window !== 'undefined') {
-        window.removeEventListener?.('jarvis-webview-frame', onWebviewFrame);
+        window.removeEventListener?.('rune-webview-frame', onWebviewFrame);
       }
     },
   };

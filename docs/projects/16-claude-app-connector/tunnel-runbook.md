@@ -79,10 +79,10 @@ ACLs do not protect these paths; the OAuth gate is the access control.
 4. Update Rune env (`.env.local`) and restart the daemon:
    - `MCP_ISSUER_URL=https://<machine>.<tailnet>.ts.net` — pins the OAuth
      issuer so the metadata never trusts the caller-controlled Host header.
-   - `JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,<machine>.<tailnet>.ts.net` —
+   - `RUNE_ALLOWED_HOSTS=localhost,127.0.0.1,<machine>.<tailnet>.ts.net` —
      the /mcp host-allowlist gate must accept the public hostname or every
      funneled request 403s.
-   - `JARVIS_HTTP_SECRET` must be set (the /mcp surface is not mounted
+   - `RUNE_HTTP_SECRET` must be set (the /mcp surface is not mounted
      without it; it is also the consent-form approval secret).
 
 ## Secret handling
@@ -90,7 +90,7 @@ ACLs do not protect these paths; the OAuth gate is the access control.
 - No new credentials are introduced: Funnel rides the existing tailscaled
   node identity, and the Let's Encrypt cert for the ts.net name is
   provisioned and rotated by Tailscale automatically.
-- `JARVIS_HTTP_SECRET` stays in `.env.local` (gitignored). The human types
+- `RUNE_HTTP_SECRET` stays in `.env.local` (gitignored). The human types
   it into the consent form over HTTPS — it never appears in a URL, and the
   OAuth module never echoes it into a redirect.
 - Access tokens are **persisted and never-expire** (`logs/mcp-oauth-store.json`,
@@ -121,12 +121,12 @@ curl -s -o /dev/null -w '%{http_code}' $HOST/health       # → 404
 | Symptom | Action |
 | --- | --- |
 | App connector reports unreachable | `tailscale funnel status`; if empty, re-run the three mount commands. Check `tailscale status` for tailnet connectivity. Never open an inbound host port as a fallback. |
-| 403 on every funneled request | The ts.net hostname is missing from `JARVIS_ALLOWED_HOSTS` — fix env, restart Rune. |
+| 403 on every funneled request | The ts.net hostname is missing from `RUNE_ALLOWED_HOSTS` — fix env, restart Rune. |
 | 401 loop in the App after a Rune restart | Expected: tokens are in-memory. The App re-runs the OAuth handshake; approve via the consent form. |
 | Issuer in metadata shows the wrong host | `MCP_ISSUER_URL` unset or stale — fix env, restart Rune. |
 | Funnel CLI syntax changed after a Tailscale upgrade (beta caveat) | `tailscale funnel status` / `tailscale serve status` to inspect; re-create the mounts per the current `tailscale funnel --help`. The surface definition above (three mounts, nothing else) is the contract. |
 | Revoke all App tokens | `rm logs/mcp-oauth-store.json` then restart the daemon — every issued token dies; the App re-runs the OAuth handshake on its next call. |
-| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), `rm logs/mcp-oauth-store.json`, rotate `JARVIS_HTTP_SECRET`, restart Rune (revokes all tokens). |
+| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), `rm logs/mcp-oauth-store.json`, rotate `RUNE_HTTP_SECRET`, restart Rune (revokes all tokens). |
 | Take the surface offline NOW | `tailscale serve reset` — kills all mounts immediately. The daemon keeps running locally; nothing else exposes it. |
 
 ---
@@ -141,29 +141,29 @@ plaintext, unlike Funnel.
 
 1. `brew install cloudflared`
 2. `cloudflared tunnel login` (browser; writes `~/.cloudflared/cert.pem`)
-3. `cloudflared tunnel create jarvis-mcp` → writes credentials
+3. `cloudflared tunnel create rune-mcp` → writes credentials
    `~/.cloudflared/<TUNNEL_UUID>.json` (both files live outside every repo,
    never committed; rotation = delete + re-create the tunnel)
-4. `cloudflared tunnel route dns jarvis-mcp jarvis-mcp.<your-domain>`
+4. `cloudflared tunnel route dns rune-mcp rune-mcp.<your-domain>`
 5. `~/.cloudflared/config.yml`:
    ```yaml
-   tunnel: jarvis-mcp
+   tunnel: rune-mcp
    credentials-file: /Users/<user>/.cloudflared/<TUNNEL_UUID>.json
 
    ingress:
-     - hostname: jarvis-mcp.<your-domain>
+     - hostname: rune-mcp.<your-domain>
        path: ^/mcp(/.*)?$
        service: http://127.0.0.1:3847
-     - hostname: jarvis-mcp.<your-domain>
+     - hostname: rune-mcp.<your-domain>
        path: ^/\.well-known/oauth-(authorization-server|protected-resource)(/.*)?$
        service: http://127.0.0.1:3847
      # Required hostname-less catch-all; keeps the webview unreachable.
      - service: http_status:404
    ```
-6. Env: `MCP_ISSUER_URL=https://jarvis-mcp.<your-domain>`, add the hostname
-   to `JARVIS_ALLOWED_HOSTS`, restart Rune.
+6. Env: `MCP_ISSUER_URL=https://rune-mcp.<your-domain>`, add the hostname
+   to `RUNE_ALLOWED_HOSTS`, restart Rune.
 7. `sudo cloudflared service install` to run as a LaunchDaemon; verify with
    the same three curls as above against the Cloudflare hostname.
-8. Recovery: `cloudflared tunnel info jarvis-mcp`; restart via
+8. Recovery: `cloudflared tunnel info rune-mcp`; restart via
    `sudo launchctl kickstart -k system/com.cloudflare.cloudflared`; offline
    NOW via `sudo launchctl bootout system/com.cloudflare.cloudflared`.

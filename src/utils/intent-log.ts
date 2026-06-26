@@ -32,7 +32,7 @@ export function intentLogPath(): string {
 
 /** Append one entry to logs/intent-log.jsonl.
  *  Safety model for concurrent TG messages:
- *   1. Primary guarantee — Jarvis is a single Node.js process and `appendFileSync`
+ *   1. Primary guarantee — Rune is a single Node.js process and `appendFileSync`
  *      is synchronous, so calls from concurrent handlers are serialized by the
  *      event loop. No interleaving is possible within this process.
  *   2. Secondary OS-level guarantee — POSIX O_APPEND writes are atomic when the

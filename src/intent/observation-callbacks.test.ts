@@ -117,13 +117,13 @@ describe('triage', () => {
   });
 
   it('happy path — discard verdict: parses {file:false, reason:"..."}', async () => {
-    const reply = JSON.stringify({ file: false, reason: 'not Jarvis friction' });
+    const reply = JSON.stringify({ file: false, reason: 'not Rune friction' });
     runAgentMock.mockResolvedValue({ text: reply, error: null });
 
     const out = await triage(SAMPLE_SIGNAL);
     expect(out.file).toBe(false);
     if (!out.file) {
-      expect(out.reason).toBe('not Jarvis friction');
+      expect(out.reason).toBe('not Rune friction');
     }
   });
 

@@ -9,7 +9,7 @@
  * `techLeadBreakdown`, `pmReviewMatch` — so these tests use deterministic
  * fixtures and require NO live model call. That mirrors the spec: "Automated
  * tests use fixtures: one specified-enough path for loop closure and one
- * underspecified path that asserts Jarvis blocks rather than fabricating a spec."
+ * underspecified path that asserts Rune blocks rather than fabricating a spec."
  *
  * See: docs/projects/14-product-team-agents/test-plan.md §2
  */

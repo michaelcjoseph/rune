@@ -66,7 +66,7 @@ export async function closeConversation(
 
     const ts = getTimestamp();
     const summaryLines = journalSummary.split('\n').map((l) => `\t- ${l}`).join('\n');
-    const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n${summaryLines}`;
+    const entry = `- ${ts} [[rune]] ${transportLabel(transport)}\n${summaryLines}`;
     appendToJournal(entry);
 
     if (isKBWorthy) {

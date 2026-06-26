@@ -51,7 +51,7 @@ export type WorkOutcome = 'branch-complete' | 'partial' | 'noop' | 'dirty-uncomm
  *    `failed`).
  *  - `user-cancel` — the user invoked /cancel (ctx.cancel). ALWAYS terminal-fail,
  *    even if the branch looks complete (a real cancel must never read as success).
- *  - `system-cancel` — a Jarvis backstop reaped the run on its own (the P2.7
+ *  - `system-cancel` — a Rune backstop reaped the run on its own (the P2.7
  *    quiet→cancel escalation or the max-runtime ceiling), NOT the user. The agent
  *    didn't declare done, but the run wasn't a failure either — it was killed for
  *    taking too long / going quiet. Classify on WORK PRODUCT (a backstop kill of a
@@ -327,7 +327,7 @@ function classifyByExitFact(
       // Reached only if `cancelled` wasn't set (unusual) — still a cancel.
       return { outcome: 'failed', reason: 'cancelled' };
     case 'system-cancel': {
-      // A Jarvis backstop reap (quiet→cancel / max-runtime ceiling), not a user
+      // A Rune backstop reap (quiet→cancel / max-runtime ceiling), not a user
       // cancel and not an agent failure. Classify on the WORK PRODUCT so a
       // complete branch reads branch-complete (never a cancel the user never
       // made); annotate the reason so the manner of stop stays visible.

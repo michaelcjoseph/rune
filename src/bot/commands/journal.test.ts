@@ -58,7 +58,7 @@ describe('handleJournal', () => {
       await handleJournal(sender, 100, 'telegram', 'walked the dog');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] telegram chat');
+      expect(entry).toContain('[[rune]] telegram chat');
       expect(entry).not.toContain('webview chat');
     });
 
@@ -69,7 +69,7 @@ describe('handleJournal', () => {
       await handleJournal(sender, 100, 'webview', 'logged from browser');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] webview chat');
+      expect(entry).toContain('[[rune]] webview chat');
       expect(entry).not.toContain('telegram chat');
     });
   });
@@ -115,7 +115,7 @@ describe('handleJournal', () => {
   });
 
   it('closes the active product-scoped webview session after journaling', async () => {
-    const scope = { kind: 'product', product: 'jarvis' };
+    const scope = { kind: 'product', product: 'rune' };
     getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
     summarizeMock.mockResolvedValue({
       text: 'Scoped product summary\nKB-worthy: no',

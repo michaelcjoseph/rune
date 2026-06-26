@@ -170,7 +170,7 @@ describe('createSenders', () => {
           taskText: 'Render the streak card',
           commitSha: 'abc123456789',
           shortSha: 'abc1234',
-          commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+          commitSubject: 'rune(rune): closeout — Render the streak card',
           tasksDone: 3,
           tasksTotal: 12,
           tasksRemaining: 9,
@@ -219,8 +219,8 @@ describe('createSenders', () => {
           data: {
             event: 'merge-success',
             projectSlug: 'demo',
-            product: 'jarvis',
-            branch: 'jarvis-work/demo',
+            product: 'rune',
+            branch: 'rune-work/demo',
             baseBranch: 'main',
           },
         }),
@@ -230,7 +230,7 @@ describe('createSenders', () => {
 
       expect(mockSendLongMessage).toHaveBeenCalledOnce();
       const text = mockSendLongMessage.mock.calls[0]![2] as string;
-      expect(text.toLowerCase()).toContain('jarvis/demo');
+      expect(text.toLowerCase()).toContain('rune/demo');
       expect(text.toLowerCase()).toContain('merged to main');
     });
   });

@@ -1108,7 +1108,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       });
       await view.load();
 
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'start',
@@ -1124,7 +1124,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(root.innerHTML).toMatch(/Asking Claude/i);
       expect(root.innerHTML).toMatch(/data-cancel-op-id=["']op-chat-1["']/i);
 
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'progress',
@@ -1140,7 +1140,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(root.innerHTML).toMatch(/data-product-op-activity/i);
       expect(root.innerHTML).toContain('Read: package.json');
 
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'end',
@@ -1181,7 +1181,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       });
       await view.load();
 
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'start',
@@ -1221,7 +1221,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       });
       await view.load();
 
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'start',
@@ -1262,7 +1262,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
         postJson,
       });
       await view.load();
-      listeners.get('jarvis-webview-frame')?.({
+      listeners.get('rune-webview-frame')?.({
         detail: {
           kind: 'op-event',
           subKind: 'start',
@@ -1580,7 +1580,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const listeners = new Map<string, (event: unknown) => void>();
     const previousWindow = (globalThis as any).window;
     (globalThis as any).window = {
-      jarvisSendWebviewMessage: vi.fn(() => true),
+      runeSendWebviewMessage: vi.fn(() => true),
       addEventListener: vi.fn((type: string, listener: (event: unknown) => void) => {
         listeners.set(type, listener);
       }),
@@ -1597,17 +1597,17 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       await view.load();
       await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'What is next?' });
 
-      expect((globalThis as any).window.jarvisSendWebviewMessage).toHaveBeenCalledWith({
+      expect((globalThis as any).window.runeSendWebviewMessage).toHaveBeenCalledWith({
         product: 'aura',
         text: 'What is next?',
       });
       expect(root.innerHTML).toMatch(/data-chat-message-role=["']user["'][\s\S]{0,120}What is next\?/i);
 
-      listeners.get('jarvis-webview-frame')?.({ detail: { kind: 'message', text: 'Next: pick the highest-risk task.' } });
+      listeners.get('rune-webview-frame')?.({ detail: { kind: 'message', text: 'Next: pick the highest-risk task.' } });
 
       expect(root.innerHTML).toMatch(/data-chat-message-role=["']assistant["'][\s\S]{0,160}highest-risk task/i);
       view.close();
-      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('jarvis-webview-frame', expect.any(Function));
+      expect((globalThis as any).window.removeEventListener).toHaveBeenCalledWith('rune-webview-frame', expect.any(Function));
     } finally {
       if (previousWindow === undefined) delete (globalThis as any).window;
       else (globalThis as any).window = previousWindow;

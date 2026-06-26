@@ -48,7 +48,7 @@ describe('plan-e2e — append → plan → scaffold → mark-source', () => {
 
     // 2. Plan click — create a Promotion linked to the appended bullet.
     let promotion: Promotion = createPromotion({
-      id: 'promo-e2e', product: 'jarvis', backlogItemId: 'b-e2e',
+      id: 'promo-e2e', product: 'rune', backlogItemId: 'b-e2e',
       snapshotRaw: SNAPSHOT, planningSessionId: 'sess-e2e', now: 'T0',
     });
     expect(promotion.state).toBe('planning-started');
@@ -82,7 +82,7 @@ describe('plan-e2e — append → plan → scaffold → mark-source', () => {
     // A promotion that scaffolded but whose mark-source transition didn't persist (the restart
     // case). Its stored snapshotRaw is the ORIGINAL bullet; the file already shows the promoted line.
     let promotion = createPromotion({
-      id: 'promo-retry', product: 'jarvis', backlogItemId: 'b-retry',
+      id: 'promo-retry', product: 'rune', backlogItemId: 'b-retry',
       snapshotRaw: SNAPSHOT, planningSessionId: 'sess-retry', now: 'T0',
     });
     const scaffolded = transitionPromotion(promotion, 'scaffolded', { slug: SLUG, now: 'T1' });

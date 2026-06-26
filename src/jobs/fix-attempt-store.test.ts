@@ -88,11 +88,11 @@ describe('fix-attempt-store - cockpit redesign Phase 3', () => {
       updatedAt: '2026-06-23T12:00:00.000Z',
     }));
     appendFixAttempt(file, attempt({
-      attemptId: 'jarvis-proceeding',
-      product: 'jarvis',
+      attemptId: 'rune-proceeding',
+      product: 'rune',
       bugId: 'shared-bug-id',
       state: 'proceeding',
-      runId: 'run-jarvis-fix',
+      runId: 'run-rune-fix',
       updatedAt: '2026-06-23T12:01:00.000Z',
     }));
 
@@ -104,12 +104,12 @@ describe('fix-attempt-store - cockpit redesign Phase 3', () => {
       bugId: 'shared-bug-id',
       state: 'gating',
     });
-    expect(getLatestFixAttempt(latest, 'jarvis', 'shared-bug-id')).toMatchObject({
-      attemptId: 'jarvis-proceeding',
-      product: 'jarvis',
+    expect(getLatestFixAttempt(latest, 'rune', 'shared-bug-id')).toMatchObject({
+      attemptId: 'rune-proceeding',
+      product: 'rune',
       bugId: 'shared-bug-id',
       state: 'proceeding',
-      runId: 'run-jarvis-fix',
+      runId: 'run-rune-fix',
     });
   });
 

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 // Isolated temp vault — created before mocking so readVaultFile resolves into it.
-const tmpDir = join(tmpdir(), `jarvis-voice-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-voice-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 vi.mock('../config.js', () => ({

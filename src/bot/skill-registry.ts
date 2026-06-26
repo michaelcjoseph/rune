@@ -222,9 +222,9 @@ export function buildSkillRegistry(agents: AgentDefLite[]): SkillEntry[] {
 
 let cache: SkillEntry[] | null = null;
 
-/** Scan Jarvis + vault `.claude/agents/` for agents with `triggers:` frontmatter
+/** Scan Rune + vault `.claude/agents/` for agents with `triggers:` frontmatter
  *  and assemble the full registry. Cached — call `reloadSkillRegistry()` after
- *  frontmatter edits. Jarvis-first precedence matches loadAgentDef.
+ *  frontmatter edits. Rune-first precedence matches loadAgentDef.
  *
  *  Uses the same two-pass layout as `scanAgentCronJobs` in src/jobs/scheduler.ts
  *  (collect names → load defs) so `loadAgentDef`'s internal precedence cannot

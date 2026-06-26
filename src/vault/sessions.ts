@@ -264,7 +264,7 @@ function sessionKey(userId: number, transport: Transport, scope: SessionScope = 
   return `${transport}:${userId}`;
 }
 
-/** Journal-entry source label used wherever a "[[jarvis]] <label>" line is
+/** Journal-entry source label used wherever a "[[rune]] <label>" line is
  *  written for a transport. Centralized so the four call sites (fresh,
  *  fresh-full, journal, capture) stay in sync if a third transport is added. */
 export function transportLabel(transport: Transport): string {

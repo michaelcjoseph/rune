@@ -6,7 +6,7 @@
  * Storage shape: one `StoredPlanningSession` per chatId, persisted as JSON
  * to `config.PLANNING_SESSIONS_FILE`. Atomic temp-then-rename writes
  * (matching review-session); restore on startup brings the in-memory map
- * back from disk so a Jarvis restart doesn't lose an in-flight planning
+ * back from disk so a Rune restart doesn't lose an in-flight planning
  * conversation.
  *
  * The orchestration that drives the Planner's questions, surfaces

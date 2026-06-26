@@ -133,7 +133,7 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
             if (p.suggested_cron) parts.push(`  Suggested cron: \`${p.suggested_cron}\``);
             return parts.join('\n');
           }).join('\n\n');
-          prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved proposals are actioned after outline approval: the proposal-updater agent creates new files in .claude/agents/ and registers cron frontmatter. Restart Jarvis to pick up any newly-registered crons.*`);
+          prepSections.push(`# Pending Ask-Twice Proposals (${proposals.length})\n${proposalList}\n\n*Surface these during the review so the user can approve, reject, or edit them. Approved proposals are actioned after outline approval: the proposal-updater agent creates new files in .claude/agents/ and registers cron frontmatter. Restart Rune to pick up any newly-registered crons.*`);
         }
 
         // Journal-to-intent proposals surface here for approval. The post-approval
@@ -412,9 +412,9 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
           // drops the actioned entries so the queue doesn't grow unbounded.
           // PROJECT_ROOT is passed explicitly because execClaude runs with
           // cwd=VAULT_DIR, so bare `.claude/agents/` would resolve to the
-          // vault, not the Jarvis repo.
+          // vault, not the Rune repo.
           agentPromises.push(runPostAgent('proposals', 'proposal-updater',
-            `Action approved Ask-Twice proposals from \`${PROJECT_ROOT}/logs/proposal-queue.json\`. Create new agent files at \`${PROJECT_ROOT}/.claude/agents/<slug>.md\` for approved skills. Register cron frontmatter on existing agents at the same path for approved crons. Leave unapproved entries as 'pending'. Jarvis project root: \`${PROJECT_ROOT}\`.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
+            `Action approved Ask-Twice proposals from \`${PROJECT_ROOT}/logs/proposal-queue.json\`. Create new agent files at \`${PROJECT_ROOT}/.claude/agents/<slug>.md\` for approved skills. Register cron frontmatter on existing agents at the same path for approved crons. Leave unapproved entries as 'pending'. Rune project root: \`${PROJECT_ROOT}\`.\n\nPrep context:\n${session.prepContext}\n\nOutline:\n${session.outline}`,
             false,
             () => clearApprovedProposals()));
         }
@@ -454,7 +454,7 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
         summarize('json_updates', 'JSON data updated.', 'JSON update failed.', 'JSON updates skipped (agent missing).'),
         summarize('worldview', 'Worldview updated.', 'Worldview update failed.', 'Worldview skipped (agent missing).'),
         summarize('playbook', 'Playbook entries added.', 'Playbook update failed.', 'Playbook skipped (agent missing).'),
-        summarize('proposals', 'Ask-Twice proposals actioned (restart Jarvis to pick up new cron agents).', 'Proposal update failed.', 'Proposal update skipped (agent missing).'),
+        summarize('proposals', 'Ask-Twice proposals actioned (restart Rune to pick up new cron agents).', 'Proposal update failed.', 'Proposal update skipped (agent missing).'),
       ].filter(Boolean).join('\n');
 
       updateReviewSession(session.chatId, { phase: 'done' });

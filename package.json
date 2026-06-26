@@ -6,7 +6,7 @@
     "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
     "start": "NODE_ENV=production tsx --env-file-if-exists=.env.local src/index.ts",
     "build": "tsc --noEmit",
-    "cli": "tsx --env-file-if-exists=.env.local cli/jarvis.ts",
+    "cli": "tsx --env-file-if-exists=.env.local cli/rune.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts",

@@ -1,5 +1,5 @@
 /**
- * Context curator — the Jarvis-owned `context.md` update + validation (project
+ * Context curator — the Rune-owned `context.md` update + validation (project
  * 14, Phase 3).
  *
  * `context.md` is orchestration state, and THIS module is its only writer. Roles

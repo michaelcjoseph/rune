@@ -36,7 +36,7 @@ const NOW_ISO = new Date(NOW).toISOString();
 function parked(overrides: Partial<SupervisedRun> = {}): SupervisedRun {
   return {
     id: 'mut-parked-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '13-work-run-monitoring',
     status: 'blocked-on-human',
     startedAt: TWENTY_FIVE_H_AGO,

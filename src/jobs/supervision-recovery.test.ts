@@ -31,7 +31,7 @@ let tmpDir: string;
 let filePath: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-supervision-recovery-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-supervision-recovery-test-'));
   filePath = join(tmpDir, 'supervised-runs.json');
 });
 
@@ -236,7 +236,7 @@ describe('recoverAndFinalizeStaleRuns (P0.4)', () => {
   });
 
   it('project 13 crash-window: a sentinel-emitting run whose parked write was LOST (still running) is finalized as an ordinary terminal — no park, no crash', async () => {
-    // The dangerous window (spec Edge Cases): Jarvis dies AFTER the agent emits
+    // The dangerous window (spec Edge Cases): Rune dies AFTER the agent emits
     // the sentinel but BEFORE the durable blocked-on-human write lands, so the
     // on-disk record is still 'running'. At next boot recovery finalizes it to a
     // real terminal (hold mode removes the worktree) — the human hand-back is

@@ -87,7 +87,7 @@ async function requireLogIdeaFn(): Promise<LogIdeaFn> {
 
 /** The four products that exist in policies/products.json (fixture). */
 function knownProducts(): string[] {
-  return ['aura', 'assay', 'jarvis', 'relay'];
+  return ['aura', 'assay', 'rune', 'relay'];
 }
 
 /** Builds a minimal valid deps bag where no ideas are pre-filed. All fns are

@@ -339,7 +339,7 @@ function parsePmReview(text: string): SpecMatchResult {
 }
 
 // ---------------------------------------------------------------------------
-// Planning critique pass (Phase 9) — Jarvis-owned neutral cross-model step
+// Planning critique pass (Phase 9) — Rune-owned neutral cross-model step
 // ---------------------------------------------------------------------------
 
 /** Neutral system framing — the critique is NOT a role; it critiques the whole
@@ -493,7 +493,7 @@ const defaultCritiqueClaudeCall = async (system: string, message: string): Promi
 const defaultCritiqueCodexCall = async (message: string): Promise<string | null> => {
   // read-only sandbox: the critique only returns text, it never edits the repo.
   // Slim env (defense-in-depth): a text-only internal critique has no need for
-  // Jarvis's Telegram/HTTP secrets — pass only what the Codex CLI itself needs.
+  // Rune's Telegram/HTTP secrets — pass only what the Codex CLI itself needs.
   const [{ runCodex }, { getBaseEnv }] = await Promise.all([
     import('../ai/codex.js'),
     import('../jobs/credential-injector.js'),
@@ -607,7 +607,7 @@ export function defaultPlanningRoleDeps(
       return parsePmReview(reply);
     },
 
-    // Phase 9: the Jarvis-owned cross-model critique pass (Claude → Codex,
+    // Phase 9: the Rune-owned cross-model critique pass (Claude → Codex,
     // degrade-to-Claude when Codex is unavailable). Wired with the live model
     // calls; runPlannerRoles invokes it after the spec/tech-spec match gate.
     critiquePlan: buildProductionCritiquePlan(),

@@ -95,7 +95,7 @@ async function handleWhoopOAuth(req: IncomingMessage, res: ServerResponse): Prom
     res.end('<h1>Whoop connected!</h1><p>Tokens stored in Keychain. You can close this window.</p>');
   } else {
     res.writeHead(500, { 'Content-Type': 'text/html' });
-    res.end('<h1>Whoop connection failed</h1><p>Check Jarvis logs for details.</p>');
+    res.end('<h1>Whoop connection failed</h1><p>Check Rune logs for details.</p>');
   }
 }
 

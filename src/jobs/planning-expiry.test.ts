@@ -40,7 +40,7 @@ function makeSession(chatId: number, lastActivityIso: string): StoredPlanningSes
     id: `sess-${chatId}`,
     chatId,
     claudeSessionId: `claude-${chatId}`,
-    planning: { status: 'scoping' as const, product: 'jarvis', idea: '', surface: 'chat' as const },
+    planning: { status: 'scoping' as const, product: 'rune', idea: '', surface: 'chat' as const },
     createdAt: '2026-01-01T00:00:00.000Z',
     lastActivity: lastActivityIso,
   };
@@ -180,7 +180,7 @@ describe('findExpiredPlanningSessions', () => {
         ...makeSession(chatId, STALE),
         planning: {
           status,
-          product: 'jarvis',
+          product: 'rune',
           idea: '',
           surface: 'chat' as const,
         },

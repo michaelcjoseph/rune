@@ -26,7 +26,7 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 
 - **Replacing Telegram.** TG remains the cross-device + mobile fallback. The webview is a desktop-only complement, not a migration.
 - **Mobile-responsive UI.** v1 is laptop/desktop only. If you need to chat from the couch, use TG.
-- **Multi-user support.** Rune is single-user. Auth is one shared bearer token (`JARVIS_HTTP_SECRET`); session is keyed off `TELEGRAM_USER_ID`. Non-goal even at v2.
+- **Multi-user support.** Rune is single-user. Auth is one shared bearer token (`RUNE_HTTP_SECRET`); session is keyed off `TELEGRAM_USER_ID`. Non-goal even at v2.
 - **Voice / audio messages.** No transcription pipeline today; not adding one.
 - **Browser push notifications outside the open tab.** Outbound notifications still go to TG (which has its own push); the webview only sees them when the tab is open and the WebSocket is connected. If you want a push from your laptop, TG desktop already does that.
 - **Vault file browser.** Tempting, but a slippery slope toward duplicating Obsidian. Wikilinks resolve to Obsidian; we don't host the file viewer.
@@ -43,7 +43,7 @@ A localhost browser surface that shares a single conversation with Telegram, ren
 - **Backlog while disconnected:** outbound bus fan-out to a disconnected webview is dropped (TG still gets it). When the tab reconnects, sidebar polls catch up the cockpit; chat history starts fresh. No server-side replay buffer in v1.
 - **Bandwidth:** localhost. Free.
 - **Static-asset size:** `index.html` + `app.js` + `app.css` aim for <50KB total before CDN deps. CDN deps add ~150KB of JS for `markdown-it` + `highlight.js`. Cached after first load.
-- **No new env vars beyond `JARVIS_HTTP_SECRET`** (already exists). One new optional config: `OBSIDIAN_VAULT_NAME` for building the `obsidian://` URI; defaults to the basename of `VAULT_DIR`.
+- **No new env vars beyond `RUNE_HTTP_SECRET`** (already exists). One new optional config: `OBSIDIAN_VAULT_NAME` for building the `obsidian://` URI; defaults to the basename of `VAULT_DIR`.
 
 ---
 
@@ -199,7 +199,7 @@ upgrades succeed.
 
 ### Entry Points
 
-- **Browser**: `http://127.0.0.1:3847/`. Auth handled on first load via `JARVIS_HTTP_SECRET` query param (`/?token=…`) which the page exchanges for a `jarvis-auth` cookie. Subsequent visits re-use the cookie.
+- **Browser**: `http://127.0.0.1:3847/`. Auth handled on first load via `RUNE_HTTP_SECRET` query param (`/?token=…`) which the page exchanges for a `rune-auth` cookie. Subsequent visits re-use the cookie.
 - **No slash command, no resolver entry**: the webview surface is operator-facing, opened directly. The TG bot is unaware the webview exists.
 - **No CLI**: the existing `npm run cli` is unchanged; webview is browser-only.
 
@@ -220,7 +220,7 @@ upgrades succeed.
 | Streaming protocol | **WebSocket** (bidirectional, supports cancellation, supports approval-button click-throughs as inbound frames). SSE rejected — unidirectional. Long-poll rejected — clunky. |
 | Frontend stack | **Vanilla HTML/JS/CSS**, served from `src/server/static/`. `markdown-it` + `highlight.js` from a CDN. No build step, no `node_modules` for the frontend. Matches Rune's no-build-step ethos. |
 | Session key | Webview uses `TELEGRAM_USER_ID` as the `chatId` so the existing session map is shared verbatim. No schema change to `src/vault/sessions.ts`. |
-| Auth | Shared bearer (`JARVIS_HTTP_SECRET`). On first load, client supplies it as `?token=…`; server sets a `jarvis-auth` cookie (HttpOnly, SameSite=Strict). Cookie is checked on `/api/*` and the WS upgrade. Localhost + single-user — sufficient. |
+| Auth | Shared bearer (`RUNE_HTTP_SECRET`). On first load, client supplies it as `?token=…`; server sets a `rune-auth` cookie (HttpOnly, SameSite=Strict). Cookie is checked on `/api/*` and the WS upgrade. Localhost + single-user — sufficient. |
 | Listener binding | Stays at `127.0.0.1:3847` always — Rune itself never binds to a public interface. For the headless Mac mini deployment, a Tailscale Serve front-end terminates TLS at `https://<host>.tail-xxxx.ts.net` and proxies to `127.0.0.1:3847`; the laptop hits the tailnet origin. See **Deployment** below. |
 | Cockpit data delivery | `GET /api/state` polled every 5s for the snapshot panels. Live agent-run events streamed over the WS as a separate frame `kind` (Phase D). Two channels because the snapshot is cheap and the live stream needs sub-second latency. |
 | Approval-button signal shape | Sidecar field on the WS frame: `{ kind: 'message', text, approval?: { prompt, options } }`. Webview renders buttons when `approval` is present; TG ignores it (text fallback). |
@@ -253,8 +253,8 @@ upgrades succeed.
 10. WHEN `POST /api/chat` is hit with valid auth and body `{ message: string }` THEN the request is dispatched to the same code path as a TG text message and a JSON response `{ text, sessionId, model }` is returned. (Non-streaming fallback for clients that can't WS.)
 11. WHEN a WS upgrade is requested at `/api/ws` with valid auth THEN the connection is registered with `WebviewSender` keyed by `TELEGRAM_USER_ID`.
 12. WHEN `GET /api/state` is hit with valid auth THEN it returns the cockpit snapshot: `{ activeSession, activeReview, ingestionQueueDepth, recentAgentRuns, pendingApprovals: { playbook, proposal }, lastMorningPrepAt, lastNightlyAt, ready }`.
-13. WHEN any `/api/*` endpoint or WS upgrade receives a request without a valid `jarvis-auth` cookie or `Authorization: Bearer <JARVIS_HTTP_SECRET>` header THEN it returns 401.
-14. WHEN any new endpoint receives a request whose `Host` header (port stripped) is not in `JARVIS_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) THEN it returns 403 (defense in depth on top of the listener binding). The allowlist is configurable so a Tailscale Serve front-end's MagicDNS hostname can be admitted in a headless Mac mini deployment without binding Rune to a public interface.
+13. WHEN any `/api/*` endpoint or WS upgrade receives a request without a valid `rune-auth` cookie or `Authorization: Bearer <RUNE_HTTP_SECRET>` header THEN it returns 401.
+14. WHEN any new endpoint receives a request whose `Host` header (port stripped) is not in `RUNE_ALLOWED_HOSTS` (default `localhost,127.0.0.1`) THEN it returns 403 (defense in depth on top of the listener binding). The allowlist is configurable so a Tailscale Serve front-end's MagicDNS hostname can be admitted in a headless Mac mini deployment without binding Rune to a public interface.
 15. WHEN multiple WS connections claim `TELEGRAM_USER_ID` simultaneously THEN all receive outbound frames; inbound frames are processed serially through the shared session (no extra locking — the existing `sessionLocks` map in `src/ai/claude.ts` already serializes Claude CLI calls).
 16. WHEN the bot is not yet ready THEN `/api/state` returns 503 with `{ ready: false, reason }` and the WS upgrade returns 503.
 
@@ -327,8 +327,8 @@ upgrades succeed.
 
 ### Remote access (deployment)
 
-63. WHEN the auth-bootstrap handler sets the `jarvis-auth` cookie THEN it sets `Secure` iff the request arrived with `X-Forwarded-Proto: https` AND the immediate peer (`req.socket.remoteAddress`) is `127.0.0.1` / `::1`. `HttpOnly` and `SameSite=Strict` are set unconditionally. Trusting `X-Forwarded-Proto` from any other peer would be a header-spoofing bug, so the proxy hop is only honoured for the localhost-loopback case (which is exactly the Tailscale Serve topology).
-64. WHEN `JARVIS_ALLOWED_HOSTS` is parsed at startup THEN the value is split on commas, each entry is trimmed and lower-cased, and the result is held as a `Set<string>` queried by the Host-header guard (requirement 14). An empty / unset env var falls back to `localhost,127.0.0.1`.
+63. WHEN the auth-bootstrap handler sets the `rune-auth` cookie THEN it sets `Secure` iff the request arrived with `X-Forwarded-Proto: https` AND the immediate peer (`req.socket.remoteAddress`) is `127.0.0.1` / `::1`. `HttpOnly` and `SameSite=Strict` are set unconditionally. Trusting `X-Forwarded-Proto` from any other peer would be a header-spoofing bug, so the proxy hop is only honoured for the localhost-loopback case (which is exactly the Tailscale Serve topology).
+64. WHEN `RUNE_ALLOWED_HOSTS` is parsed at startup THEN the value is split on commas, each entry is trimmed and lower-cased, and the result is held as a `Set<string>` queried by the Host-header guard (requirement 14). An empty / unset env var falls back to `localhost,127.0.0.1`.
 65. WHEN deploying behind Tailscale THEN the only supported front-end is `tailscale serve` bound to the tailnet. `tailscale funnel` (which publishes the origin to the public internet) is forbidden — it would bypass the tailnet trust boundary on which the single-shared-secret auth model depends. Verification at deploy time: `tailscale serve status` must show only `serve` entries, never `funnel`, and `lsof -iTCP:3847 -sTCP:LISTEN` must show only loopback (`127.0.0.1` / `::1`) for the Rune process.
 
 ---
@@ -356,17 +356,17 @@ Confirm the published origin with `tailscale serve status`.
 **Configure Rune (`.env.local`):**
 
 ```
-JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
+RUNE_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 ```
 
 (Replace `mac-mini.tail-xxxx.ts.net` with the actual MagicDNS name from `tailscale status`. Anything not in this list is rejected by requirement 14.)
 
-**On the laptop:** install Tailscale, sign in to the same tailnet. First load: `https://mac-mini.tail-xxxx.ts.net/?token=<JARVIS_HTTP_SECRET>` — the page exchanges the token for the `jarvis-auth` cookie (set with `Secure; HttpOnly; SameSite=Strict` because the request arrived over forwarded HTTPS from `127.0.0.1`). Subsequent visits drop the `?token` query.
+**On the laptop:** install Tailscale, sign in to the same tailnet. First load: `https://mac-mini.tail-xxxx.ts.net/?token=<RUNE_HTTP_SECRET>` — the page exchanges the token for the `rune-auth` cookie (set with `Secure; HttpOnly; SameSite=Strict` because the request arrived over forwarded HTTPS from `127.0.0.1`). Subsequent visits drop the `?token` query.
 
 **What stays the same:**
 
 - Rune binds to `127.0.0.1:3847`. No code path opens a public listener.
-- Auth is still the single shared `JARVIS_HTTP_SECRET`; the tailnet is the trust boundary, the cookie is the session-level convenience.
+- Auth is still the single shared `RUNE_HTTP_SECRET`; the tailnet is the trust boundary, the cookie is the session-level convenience.
 - `requirement 14` (Host-header allowlist) enforces the tailnet hostname at the application layer in addition to the bind.
 
 **Verification (run on the Mac mini after first setup):**
@@ -452,7 +452,7 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 
 - `src/server/webview.test.ts` — integration: spin up an in-process http server with a stubbed Claude CLI; POST `/api/chat`, assert response shape; open a WS, send a message frame, assert streaming chunks arrive.
 - `src/server/auth.test.ts` — auth gating: 401 on missing token, 401 on wrong token, 200 on cookie + bearer, 403 on non-localhost Host.
-- Manual smoke: `npm run dev`, browser to `http://127.0.0.1:3847/?token=$JARVIS_HTTP_SECRET`, exchange a message, verify rendering, wikilink click.
+- Manual smoke: `npm run dev`, browser to `http://127.0.0.1:3847/?token=$RUNE_HTTP_SECRET`, exchange a message, verify rendering, wikilink click.
 
 ### Phase C — Cockpit sidebar
 
@@ -564,10 +564,10 @@ JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 
 ### Auth
 
-- **Missing or wrong bearer token on first load**: page renders a minimal "auth required — visit `/?token=$JARVIS_HTTP_SECRET`" message. No leakage of any other state.
-- **Cookie expired**: not applicable in v1 — cookie has no expiry and is invalidated only by changing `JARVIS_HTTP_SECRET`.
+- **Missing or wrong bearer token on first load**: page renders a minimal "auth required — visit `/?token=$RUNE_HTTP_SECRET`" message. No leakage of any other state.
+- **Cookie expired**: not applicable in v1 — cookie has no expiry and is invalidated only by changing `RUNE_HTTP_SECRET`.
 - **Non-localhost Host header**: 403 even though the listener already binds to 127.0.0.1. Defense in depth.
-- **Auth cookie present but `JARVIS_HTTP_SECRET` rotated**: cookie validation fails on every endpoint; user sees auth-required page; visits `/?token=…` again to re-bootstrap.
+- **Auth cookie present but `RUNE_HTTP_SECRET` rotated**: cookie validation fails on every endpoint; user sees auth-required page; visits `/?token=…` again to re-bootstrap.
 
 ### Sender / bus
 

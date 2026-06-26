@@ -1,4 +1,4 @@
-/* Jarvis webview client */
+/* Rune webview client */
 'use strict';
 
 (function () {
@@ -96,7 +96,7 @@
   let reconnectDelay = 2000;
   let streamingDiv = null;
   let streamingText = '';
-  window.jarvisConnectionStatus = 'disconnected';
+  window.runeConnectionStatus = 'disconnected';
 
   function connect() {
     const wsScheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -110,10 +110,10 @@
     ws.onmessage = (event) => {
       let frame;
       try { frame = JSON.parse(event.data); } catch { return; }
-      window.dispatchEvent(new CustomEvent('jarvis-webview-frame', { detail: frame }));
+      window.dispatchEvent(new CustomEvent('rune-webview-frame', { detail: frame }));
 
       // In the product deep view the product chat panel owns its own transcript
-      // (it consumes the same frame via the jarvis-webview-frame event above).
+      // (it consumes the same frame via the rune-webview-frame event above).
       // The global #messages list is hidden there, so appending to it would only
       // grow the DOM unboundedly across a session — skip message/chunk rendering.
       const inProductView = typeof document !== 'undefined'
@@ -211,7 +211,7 @@
     ws.send(JSON.stringify({ kind: 'message', text }));
   }
 
-  window.jarvisSendWebviewMessage = function ({ product, text } = {}) {
+  window.runeSendWebviewMessage = function ({ product, text } = {}) {
     const trimmed = String(text || '').trim();
     if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
     const frame = { kind: 'message', text: trimmed };
@@ -221,8 +221,8 @@
   };
 
   function updateStatus(status) {
-    window.jarvisConnectionStatus = status;
-    window.dispatchEvent(new CustomEvent('jarvis-connection-status', { detail: { status } }));
+    window.runeConnectionStatus = status;
+    window.dispatchEvent(new CustomEvent('rune-connection-status', { detail: { status } }));
     const el = document.getElementById('ws-status');
     if (el) { el.textContent = status; el.className = `ws-status ${status}`; }
   }
@@ -1344,7 +1344,7 @@
     hideConfirmModal();
     if (!slug) return;
     // Include `product` so work-runner creates the worktree against the
-    // right repo. Optional in the API (defaults to 'jarvis' server-side
+    // right repo. Optional in the API (defaults to 'rune' server-side
     // for back-compat with callers that haven't been wired through), but
     // the cockpit always knows which product owns the project.
     const payload = product ? { projectSlug: slug, product } : { projectSlug: slug };

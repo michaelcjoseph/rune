@@ -1,5 +1,5 @@
 {
-  "_comment": "Declarative escalation policy for the intent layer (project 08). Data, not code — editing this file is not a deploy. It enumerates the conditions under which Jarvis escalates to the blocked-on-Michael state instead of proceeding unattended. The specific rules are deliberately conservative and meant to be tuned over time. See docs/projects/08-intent-layer/spec.md (the 'Escalation policy' section) and src/intent/escalation.ts.",
+  "_comment": "Declarative escalation policy for the intent layer (project 08). Data, not code — editing this file is not a deploy. It enumerates the conditions under which Rune escalates to the blocked-on-Michael state instead of proceeding unattended. The specific rules are deliberately conservative and meant to be tuned over time. See docs/projects/08-intent-layer/spec.md (the 'Escalation policy' section) and src/intent/escalation.ts.",
   "version": 1,
   "rules": [
     {

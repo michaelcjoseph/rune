@@ -34,7 +34,7 @@ vi.mock('node:fs', () => ({
 }));
 
 // The project root used by work-runner
-const TEST_PROJECT_ROOT = '/test/jarvis';
+const TEST_PROJECT_ROOT = '/test/rune';
 
 vi.mock('../config.js', () => ({
   PROJECT_ROOT: TEST_PROJECT_ROOT,
@@ -111,8 +111,8 @@ const mockDestroyWorktree = vi.fn();
 // reads `getProductConfig(product, …).baseBranch` to know what `main` the run
 // would land on. Inert until that wiring imports it (hold mode never reads it).
 const mockGetProductConfig = vi.fn(() => ({
-  product: 'jarvis',
-  repoPath: '/test/repo/jarvis',
+  product: 'rune',
+  repoPath: '/test/repo/rune',
   baseBranch: 'main',
   egressAllowlist: [],
   validationCommands: ['npm run build', 'npm test'],
@@ -154,10 +154,10 @@ vi.mock('./work-run-merge-lock.js', () => ({
   baseBranchLockKey: (p: string, b: string) => `${p}:${b}`,
 }));
 
-const FAKE_WORKTREE = '/test/worktrees/jarvis/06-webview';
+const FAKE_WORKTREE = '/test/worktrees/rune/06-webview';
 function fakeSandboxSpec(overrides: Record<string, unknown> = {}) {
   return {
-    product: 'jarvis',
+    product: 'rune',
     project: '06-webview',
     worktree: FAKE_WORKTREE,
     egressAllowlist: [],
@@ -314,7 +314,7 @@ async function runApply(
   const descriptor = {
     id,
     kind: 'work-run',
-    payload: { projectSlug: '06-webview', product: 'jarvis' },
+    payload: { projectSlug: '06-webview', product: 'rune' },
     status: 'running',
   } as any;
   const events: any[] = [];
@@ -479,7 +479,7 @@ describe('workRunApplier', () => {
   describe('apply — spawn args', () => {
     it('spawns claude with cwd=sandbox.worktree (NOT PROJECT_ROOT) for self-edit isolation', async () => {
       // The root cause of the 2026-05-27 incident: spawning into PROJECT_ROOT
-      // means an agent editing Jarvis's source files triggers tsx watch to
+      // means an agent editing Rune's source files triggers tsx watch to
       // SIGTERM the parent. Running inside a worktree breaks the loop —
       // tsx watch only watches PROJECT_ROOT, not the worktree under
       // .worktrees/<product>/<project>.
@@ -1069,7 +1069,7 @@ describe('workRunApplier', () => {
       });
     });
 
-    it('calls createWorktree with product=jarvis, project=slug, branch=jarvis-work/<slug>', async () => {
+    it('calls createWorktree with product=rune, project=slug, branch=rune-work/<slug>', async () => {
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });
       mockSpawn.mockReturnValue(fakeChild);
@@ -1088,12 +1088,12 @@ describe('workRunApplier', () => {
 
       expect(mockCreateWorktree).toHaveBeenCalledOnce();
       const callArgs = mockCreateWorktree.mock.calls[0]![0] as Record<string, unknown>;
-      expect(callArgs.product).toBe('jarvis');
+      expect(callArgs.product).toBe('rune');
       expect(callArgs.project).toBe('06-webview');
       // Stable per-PROJECT branch (NOT per-run-id), so the next run resumes this
       // branch instead of re-forking off main and restarting from Phase 1
       // (docs/projects/bugs.md). Independent of the run id.
-      expect(callArgs.branch).toBe('jarvis-work/06-webview');
+      expect(callArgs.branch).toBe('rune-work/06-webview');
     });
 
     it('adds a RESUME note to the agent prompt when createWorktree resumed an existing branch', async () => {
@@ -1137,10 +1137,10 @@ describe('workRunApplier', () => {
       expect(prompt).not.toContain('RESUMED');
     });
 
-    it('honors payload.product when present (not hardcoded to jarvis)', async () => {
+    it('honors payload.product when present (not hardcoded to rune)', async () => {
       // The cockpit knows each project's product from the registry; once
       // wired through, work-run for an aura project must create the
-      // worktree against aura's repo, not jarvis.
+      // worktree against aura's repo, not rune.
       setupValidProject('02-growth');
       const fakeChild = makeFakeChild({ exitCode: 0 });
       mockSpawn.mockReturnValue(fakeChild);
@@ -1605,7 +1605,7 @@ describe('workRunApplier', () => {
 
       const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal.data.projectSlug).toBe('06-webview');
-      expect(terminal.data.product).toBe('jarvis');
+      expect(terminal.data.product).toBe('rune');
     });
 
     it('emits a throttled progress event when the parent-side poll detects a new commit', async () => {
@@ -1676,7 +1676,7 @@ describe('workRunApplier', () => {
       expect(forensicsCalledAtTerminal).toBe(true);
       const opts = runForensicsSpy.mock.calls[0]![0] as any;
       expect(opts.worktree).toBe(FAKE_WORKTREE);
-      expect(opts.branch).toBe('jarvis-work/06-webview'); // stable per-project branch
+      expect(opts.branch).toBe('rune-work/06-webview'); // stable per-project branch
       expect(opts.outDir).toBe('/tmp/test-work-runs/mut-forensics');
       // The default git stub reports a clean tree → noop → nonClean false.
       expect(opts.nonClean).toBe(false);
@@ -1959,7 +1959,7 @@ describe('workRunApplier', () => {
       // The real gated-merge finalizer the wiring routes through invokes the gate
       // effect, which acquires the per-product/per-base-branch lock and runs the
       // gate inside it.
-      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('jarvis', 'main', expect.any(Function));
+      expect(mockWithBaseBranchLock).toHaveBeenCalledWith('rune', 'main', expect.any(Function));
       expect(mockRunGate).toHaveBeenCalled();
     });
 
@@ -2173,7 +2173,7 @@ describe('workRunApplier', () => {
     // A worktree under the configured WORKTREE_ROOT (`/tmp/test-worktrees`), so
     // `scrubPathsInText` WOULD strip the `/tmp/test-worktrees/` prefix — making
     // the "stays un-scrubbed" assertion meaningful (a scrubbed copy differs).
-    const OPERATOR_WORKTREE = '/tmp/test-worktrees/jarvis/06-webview';
+    const OPERATOR_WORKTREE = '/tmp/test-worktrees/rune/06-webview';
 
     /** Drive a clean exit-0 run rooted at `worktree` (thin wrapper over the
      *  module-level `runApply`). */
@@ -2247,7 +2247,7 @@ describe('workRunApplier', () => {
       const descriptor = {
         id: 'mut-nopath',
         kind: 'work-run',
-        payload: { projectSlug: '06-webview', product: 'jarvis' },
+        payload: { projectSlug: '06-webview', product: 'rune' },
         status: 'running',
       } as any;
       const ctx = { bus: null as any, cancel: () => false };
@@ -2276,7 +2276,7 @@ describe('workRunApplier', () => {
   // -------------------------------------------------------------------------
   //
   // Written test-first. RED until the parked path lands in work-runner:
-  //  - On a parsed JARVIS_WORK_RUN_SENTINEL, write a durable supervision
+  //  - On a parsed RUNE_WORK_RUN_SENTINEL, write a durable supervision
   //    `blocked-on-human` record FIRST, SKIP `runFinalizer` (leave the worktree
   //    live), and yield a terminal event carrying `parked: true` +
   //    operatorWorktreePath + pendingCheck.
@@ -2290,7 +2290,7 @@ describe('workRunApplier', () => {
       subtype: 'success',
       result:
         'Worked through tasks 1-3, but task 4 needs an interactive Codex login.\n' +
-        'JARVIS_WORK_RUN_SENTINEL {"version":1,"pendingCheck":"Run the interactive Codex check and confirm","command":"npm run codex-check"}',
+        'RUNE_WORK_RUN_SENTINEL {"version":1,"pendingCheck":"Run the interactive Codex check and confirm","command":"npm run codex-check"}',
     });
 
     /** Drive a run whose stream emits a blocked-on-human sentinel (thin wrapper
@@ -2339,9 +2339,9 @@ describe('workRunApplier', () => {
       // the cap can scope by product+project, consistent with the existsSync
       // backstop's worktreePathFor(product, project, …) check below.
       mockReadAllRuns.mockReturnValue([
-        { id: 'parked-1', product: 'jarvis', project: '06-webview', status: 'blocked-on-human', startedAt: nowIso, lastHeartbeatAt: nowIso },
+        { id: 'parked-1', product: 'rune', project: '06-webview', status: 'blocked-on-human', startedAt: nowIso, lastHeartbeatAt: nowIso },
       ]);
-      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'rune' });
       expect(result.ok).toBe(false);
     });
 
@@ -2355,7 +2355,7 @@ describe('workRunApplier', () => {
       // runs BEFORE createWorktree, so there is no sandbox.worktree to read.
       // This differs from FAKE_WORKTREE (the mock sandbox's arbitrary path); in
       // production they coincide.
-      const worktree = '/tmp/test-worktrees/jarvis/06-webview';
+      const worktree = '/tmp/test-worktrees/rune/06-webview';
       setupValidProject('06-webview');
       mockReadAllRuns.mockReturnValue([]); // no parked record survives
       mockExistsSync.mockImplementation(
@@ -2364,7 +2364,7 @@ describe('workRunApplier', () => {
           p === join(liveDir, 'tasks.md') ||
           p === worktree,
       );
-      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'jarvis' });
+      const result = workRunApplier.validate({ projectSlug: '06-webview', product: 'rune' });
       expect(result.ok).toBe(false);
     });
   });

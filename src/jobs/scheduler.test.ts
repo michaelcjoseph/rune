@@ -229,7 +229,7 @@ describe('jobs/scheduler', () => {
       expect(jobs).toEqual([]);
     });
 
-    it('dedupes by filename stem — Jarvis agent dir wins over vault', () => {
+    it('dedupes by filename stem — Rune agent dir wins over vault', () => {
       vi.mocked(readdirSync).mockImplementation(((dir: string) => {
         if (dir.includes('/test/project/')) return ['dup.md'];
         if (dir.includes('/test/vault/')) return ['dup.md'];

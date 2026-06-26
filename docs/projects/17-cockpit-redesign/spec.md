@@ -465,7 +465,7 @@ reused so a no-op or dirty run never reads as success.
 
 > Depends on: Phase 6
 
-- [ ] `e2e-acceptance-on-jarvis` stub-free end-to-end acceptance on a real product
+- [ ] `e2e-acceptance-on-rune` stub-free end-to-end acceptance on a real product
 
 ---
 

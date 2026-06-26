@@ -143,7 +143,7 @@ export interface FinalizerInput {
   runId: string;
   project: string;
   product: string;
-  /** The work branch (e.g. `jarvis-work/15-...`). */
+  /** The work branch (e.g. `rune-work/15-...`). */
   branch: string;
   /** The base branch a `gated-merge` would land on (e.g. `main`). Optional in
    *  `hold` mode, which never reads it. */
@@ -500,9 +500,9 @@ function changedProjectIndexTokens(before: string, after: string, slug: string):
 }
 
 function gitIdentityEnv(): NodeJS.ProcessEnv {
-  const committerName = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? 'Jarvis';
+  const committerName = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME ?? 'Rune';
   const committerEmail =
-    process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? 'jarvis@example.com';
+    process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL ?? 'rune@example.com';
   return {
     ...process.env,
     GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? committerName,

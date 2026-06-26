@@ -1,6 +1,6 @@
 # Project Context: Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Rune across all products
 
-> Orchestration state for the `jarvis` project "Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Rune across all products".
+> Orchestration state for the `rune` project "Cockpit Redesign — Surface Rethink (Workstream A): a dev-focused, two-tier cockpit for working with Rune across all products".
 > Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 
@@ -302,4 +302,4 @@ place a stub is acceptable.
 
 ## Next Task Handoff
 
-- ceptance, because it requires the real Rune daemon, `JARVIS_HTTP_SECRET`, and `JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1`. `npm run build` still fails on broad pre-existing branch TypeScript errors outside this task; `src/server/webview.test.ts` also cannot bind `127.0.0.1` in this sandbox (`EPERM`).
+- ceptance, because it requires the real Rune daemon, `RUNE_HTTP_SECRET`, and `RUNE_ACCEPTANCE_MUTATE_REAL_RUNE=1`. `npm run build` still fails on broad pre-existing branch TypeScript errors outside this task; `src/server/webview.test.ts` also cannot bind `127.0.0.1` in this sandbox (`EPERM`).

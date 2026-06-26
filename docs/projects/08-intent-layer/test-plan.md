@@ -157,7 +157,7 @@ interaction (no restart needed if the policy cache invalidates).
 evaluator rounds surfaces in the cockpit approval inbox (§19) as
 `blocked-on-human` with the escalation reason; deleting
 `policies/escalation-policy.json` makes the next escalation decision
-fail-closed (visible in `logs/jarvis.log` as an `error`-level entry).
+fail-closed (visible in `logs/rune.log` as an `error`-level entry).
 
 ## 7. Product/project cockpit (Phase 2)
 

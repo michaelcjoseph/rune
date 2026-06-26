@@ -355,7 +355,7 @@ async function finalizeStaleRun(run: SupervisedRun, io: RecoveryFinalizeIO): Pro
           if (resumeAfterMerge) {
             throw new Error('recovery resume must not re-merge (merge already landed)');
           }
-          const message = `jarvis(${run.product}): merge recovered work-run branch ${branch}`;
+          const message = `rune(${run.product}): merge recovered work-run branch ${branch}`;
           try {
             await io.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: product.repoPath });
           } catch (err) {

@@ -8,7 +8,7 @@
  *
  * See docs/projects/08-intent-layer/tasks.md — Phase 6 A1 (A1.2).
  *
- * IMPORTANT: No test reads ~/.config/jarvis/credentials/ or any real on-disk
+ * IMPORTANT: No test reads ~/.config/rune/credentials/ or any real on-disk
  * credentials. All credential files are written to mkdtempSync temp dirs and
  * cleaned up in afterEach. vi.stubEnv / vi.unstubAllEnvs manage process.env
  * mutations.
@@ -68,7 +68,7 @@ function makeSandbox(product: string, project = '01-test'): SandboxSpec {
   return {
     product,
     project,
-    worktree: `/tmp/jarvis-worktrees/${product}/${project}`,
+    worktree: `/tmp/rune-worktrees/${product}/${project}`,
     egressAllowlist: ['github.com'],
   };
 }
@@ -80,7 +80,7 @@ function makeSandbox(product: string, project = '01-test'): SandboxSpec {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-cred-injector-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-cred-injector-test-'));
 });
 
 afterEach(() => {
@@ -215,9 +215,9 @@ describe('getBaseEnv', () => {
 
   it('omits allowlisted keys that are undefined in process.env', () => {
     // Use a key that almost certainly does not exist in process.env
-    const result = getBaseEnv(['__JARVIS_TEST_KEY_THAT_DOES_NOT_EXIST__']);
+    const result = getBaseEnv(['__RUNE_TEST_KEY_THAT_DOES_NOT_EXIST__']);
 
-    expect(result).not.toHaveProperty('__JARVIS_TEST_KEY_THAT_DOES_NOT_EXIST__');
+    expect(result).not.toHaveProperty('__RUNE_TEST_KEY_THAT_DOES_NOT_EXIST__');
   });
 
   it('returns {} for an empty allowlist', () => {
@@ -270,11 +270,11 @@ describe('DEFAULT_BASE_ENV_KEYS', () => {
     }
   });
 
-  it('does NOT contain Jarvis-specific secret keys', () => {
+  it('does NOT contain Rune-specific secret keys', () => {
     const forbidden = [
       'TELEGRAM_BOT_TOKEN',
       'READWISE_TOKEN',
-      'JARVIS_HTTP_SECRET',
+      'RUNE_HTTP_SECRET',
       'WHOOP_CLIENT_SECRET',
     ];
     for (const key of forbidden) {

@@ -27,7 +27,7 @@ path stays silent.
 ## Verification
 
 ```sh
-TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=12345 VAULT_DIR=/tmp/vault JARVIS_HTTP_SECRET=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
+TELEGRAM_BOT_TOKEN=test-token TELEGRAM_USER_ID=12345 VAULT_DIR=/tmp/vault RUNE_HTTP_SECRET=test-secret OBSIDIAN_VAULT_NAME=TestVault WORKSPACE_DIR=/tmp/workspace npm test -- --configLoader runner src/jobs/orchestrated-work-runner.test.ts -t "active-harm probe" --reporter=verbose
 ```
 
 Result: `1 passed | 21 skipped`.

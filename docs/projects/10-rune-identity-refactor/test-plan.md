@@ -19,26 +19,26 @@ for steps.
 
 ## 1. Symlink correctness
 
-- [ ] 🔴 In jarvis and pkms, `AGENTS.md` is a symlink to `CLAUDE.md`:
+- [ ] 🔴 In rune and pkms, `AGENTS.md` is a symlink to `CLAUDE.md`:
       `test -L AGENTS.md && [ "$(readlink AGENTS.md)" = "CLAUDE.md" ]` succeeds.
 - [ ] 🔴 In every touched repo, `diff CLAUDE.md AGENTS.md` exits 0 (same bytes via the link).
-- [ ] 🔴 **Manual:** open a Codex session in jarvis; confirm it loads instructions through
+- [ ] 🔴 **Manual:** open a Codex session in rune; confirm it loads instructions through
       `AGENTS.md` (the symlink) — the orchestrator identity is present in context. This is
       the one assumption gating the symlink approach (spec.md → Risks). If it fails, the
       `cp` + `diff` fallback applies and this plan's symlink assertions are replaced by a
       copy-equality assertion.
-- [ ] 🔴 **Manual:** open Claude Code in jarvis; confirm `CLAUDE.md` loads as before.
+- [ ] 🔴 **Manual:** open Claude Code in rune; confirm `CLAUDE.md` loads as before.
 - [ ] 🟢 Best-effort: assay and aura have `AGENTS.md` as a symlink to `CLAUDE.md` (same
       assertions). relay has neither file (nothing to assert).
 - [ ] 🟡 Git stores the symlink as a link, not a copied regular file:
       `git ls-files -s AGENTS.md` shows mode `120000`.
 
-## 2. Content move (pkms → jarvis)
+## 2. Content move (pkms → rune)
 
 - [ ] 🔴 The `## Rune` section and the `### How Reviews Work` mechanics appear in
-      `jarvis/CLAUDE.md` after the move.
+      `rune/CLAUDE.md` after the move.
 - [ ] 🔴 Both sections are absent from `pkms/CLAUDE.md` after the move.
-- [ ] 🔴 The pointer line ("Rune orchestration … is documented in `jarvis/CLAUDE.md`")
+- [ ] 🔴 The pointer line ("Rune orchestration … is documented in `rune/CLAUDE.md`")
       is present in `pkms/CLAUDE.md`.
 - [ ] 🔴 The "staying" sections from spec.md remain intact in `pkms/CLAUDE.md`: repository
       overview, vault structure, journal format, reference system, tags, JSON schemas, the
@@ -46,7 +46,7 @@ for steps.
       What I'm Working On, Git discipline.
 - [ ] 🟡 The move is content-preserving: a git diff review across both repos shows the moved
       text is the same text (allowed deltas: heading-level adjustment and surrounding prose
-      to fit jarvis's structure). Read the diff — it is the proof, replacing the dropped
+      to fit rune's structure). Read the diff — it is the proof, replacing the dropped
       named-token verifier.
 - [ ] 🟢 Incidental agent-name references left in pkms (e.g. the worldview "propose-only"
       note) are acceptable and need not be removed.
@@ -63,8 +63,8 @@ for steps.
 
 ## Integration verification
 
-> After both phases: a developer (or Codex/Claude session) opening jarvis loads a single
+> After both phases: a developer (or Codex/Claude session) opening rune loads a single
 > canonical instruction file under either name, with the orchestrator identity now present.
-> Opening pkms loads vault-only instructions plus a one-line pointer to jarvis. Editing
+> Opening pkms loads vault-only instructions plus a one-line pointer to rune. Editing
 > `CLAUDE.md` in any touched repo updates `AGENTS.md` for free — drift is structurally
 > impossible.

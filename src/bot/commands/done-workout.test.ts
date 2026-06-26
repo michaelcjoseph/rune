@@ -12,7 +12,7 @@ const { logsTmpDir } = vi.hoisted(() => {
   const { tmpdir: td } = require('node:os') as typeof import('node:os');
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { join: jn } = require('node:path') as typeof import('node:path');
-  const logsTmpDir = jn(td(), `jarvis-done-workout-logs-${Date.now()}`);
+  const logsTmpDir = jn(td(), `rune-done-workout-logs-${Date.now()}`);
   mkd(logsTmpDir, { recursive: true });
   return { logsTmpDir };
 });

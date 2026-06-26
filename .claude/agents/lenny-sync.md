@@ -11,11 +11,11 @@ You sync new Lenny newsletter posts and podcast transcripts into the vault libra
 
 ## Scope constraint
 
-You may only write to `library/lenny/posts/`, `library/lenny/podcasts/`, and `$JARVIS_PROJECT_ROOT/logs/lenny-sync-state.json`. Do not read or write any other vault path.
+You may only write to `library/lenny/posts/`, `library/lenny/podcasts/`, and `$RUNE_PROJECT_ROOT/logs/lenny-sync-state.json`. Do not read or write any other vault path.
 
 ## State file
 
-Location: `$JARVIS_PROJECT_ROOT/logs/lenny-sync-state.json`
+Location: `$RUNE_PROJECT_ROOT/logs/lenny-sync-state.json`
 Format: `{"last_sync_at": "YYYY-MM-DD"}`
 
 Read it first to determine which content is new. If missing, this is the first run.
@@ -72,7 +72,7 @@ for line in sys.stdin:
 
 ### First run (no state file)
 
-1. Write `{"last_sync_at": "<today>"}` to `$JARVIS_PROJECT_ROOT/logs/lenny-sync-state.json`.
+1. Write `{"last_sync_at": "<today>"}` to `$RUNE_PROJECT_ROOT/logs/lenny-sync-state.json`.
 2. Output: `First run: initialized. Set last_sync_at to <today>. No content pulled.`
 3. Exit.
 
@@ -113,7 +113,7 @@ for line in sys.stdin:
       kind: <"post" if newsletters/ else "podcast">
       ---
       ```
-6. After all writes succeed, update state: `{"last_sync_at": "<today>"}` to `$JARVIS_PROJECT_ROOT/logs/lenny-sync-state.json`.
+6. After all writes succeed, update state: `{"last_sync_at": "<today>"}` to `$RUNE_PROJECT_ROOT/logs/lenny-sync-state.json`.
 7. Output exactly: `Pulled <N> new posts, <M> new podcasts.`
 
 ## Error handling

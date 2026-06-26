@@ -39,7 +39,7 @@ export interface RegistryProject {
 
 /** A product and the projects under it. */
 export interface RegistryProduct {
-  /** Product name, e.g. `jarvis`, `assay`. */
+  /** Product name, e.g. `rune`, `assay`. */
   name: string;
   /** Whether the product has a code repo (repo-backed products are executable). */
   repoBacked: boolean;

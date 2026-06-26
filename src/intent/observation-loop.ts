@@ -1,5 +1,5 @@
 /**
- * Observation loop — Phase 5's operational self-improvement core. Jarvis observes its own
+ * Observation loop — Phase 5's operational self-improvement core. Rune observes its own
  * operation: a sensor layer (vault signals, product telemetry, logged interactions) feeds a
  * synthesis stage that diarizes raw signal into a compact, structured digest; the loop
  * reasons over that digest and **triages** each signal — discarding noise, or filing a

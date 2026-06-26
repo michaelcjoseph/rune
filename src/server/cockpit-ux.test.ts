@@ -59,10 +59,10 @@ const mockConfig = {
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
+  RUNE_HTTP_SECRET: 'test-secret',
   OBSIDIAN_VAULT_NAME: 'TestVault',
   TELEGRAM_USER_ID: 42,
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
 };
 vi.mock('../config.js', () => ({
   default: mockConfig,
@@ -187,7 +187,7 @@ let server: Server;
 let webviewHandler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 let port: number;
 
-const AUTH_COOKIE = 'jarvis-auth=test-secret';
+const AUTH_COOKIE = 'rune-auth=test-secret';
 
 beforeAll(async () => {
   server = http.createServer(async (req, res) => {

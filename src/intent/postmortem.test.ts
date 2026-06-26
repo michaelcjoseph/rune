@@ -1,12 +1,12 @@
 /**
- * Phase 6 test suite for `src/intent/postmortem.ts` — the Jarvis-owned post-mortem
+ * Phase 6 test suite for `src/intent/postmortem.ts` — the Rune-owned post-mortem
  * that turns one feedback record into an attribution decision (project 14,
  * test-plan §6.4, §6.5, §6.6).
  *
  * TEST-FIRST. The module under test does not exist yet; until it lands these tests
  * fail RED on module-not-found.
  *
- * The post-mortem is JARVIS-owned, not a role: a neutral LLM call (injected `ask`
+ * The post-mortem is RUNE-owned, not a role: a neutral LLM call (injected `ask`
  * seam) proposes a structured attribution that this module parses and validates
  * deterministically. Parsing is FAIL-SAFE — an unparseable / invalid / empty
  * post-mortem output yields `no-lesson`, never a fabricated lesson, so a broken

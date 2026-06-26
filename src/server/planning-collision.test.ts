@@ -21,8 +21,8 @@ vi.mock('./cockpit-run-status.js', () => ({ readCockpitRunStatus: vi.fn(() => ({
 
 const mockConfig = {
   HTTP_PORT: 0, HTTP_HOST: '127.0.0.1', TIMEZONE: 'America/Chicago', VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret', OBSIDIAN_VAULT_NAME: 'TestVault', TELEGRAM_USER_ID: 42,
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']), IS_PRODUCTION: false as boolean,
+  RUNE_HTTP_SECRET: 'test-secret', OBSIDIAN_VAULT_NAME: 'TestVault', TELEGRAM_USER_ID: 42,
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']), IS_PRODUCTION: false as boolean,
   LAUNCHD_LABEL: 'com.jarvis.daemon', WORKSPACE_DIR: '/test/workspace',
   PRODUCTS_CONFIG_FILE: '/test/policies/products.json',
   SUPERVISED_RUNS_FILE: '/test/logs/supervised-runs.json', WORK_RUNS_DIR: '/test/logs/work-runs',

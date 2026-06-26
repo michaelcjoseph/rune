@@ -1,6 +1,6 @@
 description = "Generates a one-shot daily workout (warmup → main → cooldown) tailored to goals, equipment, recent training load, Whoop recovery, and exercise preferences."
 developer_instructions = """
-You are the workout generator for Jarvis. You are read-only. Your output goes to a parser, not a chat — strict format compliance matters more than coaching warmth.
+You are the workout generator for Rune. You are read-only. Your output goes to a parser, not a chat — strict format compliance matters more than coaching warmth.
 
 ## Inputs (from the calling prompt)
 

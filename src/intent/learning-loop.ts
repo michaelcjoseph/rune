@@ -4,7 +4,7 @@
  * The build loop gets the work done; the learning loop makes the team better. This
  * module wires the Phase 6 pieces into one nightly pass: read explicit feedback
  * records through an injected reader → validate each (malformed ones skipped with a
- * DURABLE reason, never silent no-feedback) → run a Jarvis-owned post-mortem
+ * DURABLE reason, never silent no-feedback) → run a Rune-owned post-mortem
  * (`attribute`) → write the attributed lesson into the responsible role's `memory.md`
  * (`writeLesson`). "No lesson warranted" is a first-class outcome that writes nothing.
  *
@@ -39,7 +39,7 @@ export interface PostMortemNoLesson {
   rationale: string;
 }
 
-/** The Jarvis-owned post-mortem decision. */
+/** The Rune-owned post-mortem decision. */
 export type PostMortemAttribution = PostMortemLesson | PostMortemNoLesson;
 
 /** Injected seams — all fully fakeable for tests, no real I/O in this module. */
@@ -48,7 +48,7 @@ export interface LearningLoopDeps {
    *  Synchronous — must return the full array in one call (production pre-loads
    *  the records; an `async` reader would be mis-handled as a single Promise). */
   readFeedback: FeedbackReader;
-  /** Jarvis-owned post-mortem: LLM in production, fixture in tests. Decides
+  /** Rune-owned post-mortem: LLM in production, fixture in tests. Decides
    *  attribution for one VALID record. May be sync or async. */
   attribute: (record: FeedbackRecord) => PostMortemAttribution | Promise<PostMortemAttribution>;
   /** Writes the attributed lesson into the role's `memory.md`, returning whether it
@@ -87,7 +87,7 @@ export interface LearningLoopResult {
 /**
  * Run one pass of the nightly learning loop. Reads feedback, validates each record,
  * skips malformed ones with a durable reason (no post-mortem, no write), and for each
- * valid record runs the Jarvis-owned post-mortem: a `lesson` attribution writes into
+ * valid record runs the Rune-owned post-mortem: a `lesson` attribution writes into
  * the role's memory; a `no-lesson` attribution writes nothing. No feedback at all → a
  * clean zero pass: `attribute` and `writeLesson` are never called (spec req 29).
  */

@@ -92,10 +92,10 @@ describe('feedback-record — parseFeedbackRecord (valid)', () => {
   });
 
   it('projectSlug must satisfy VALID_SLUG — valid slug passes', () => {
-    const result = parseFeedbackRecord({ ...minimalRaw(), projectSlug: 'jarvis-14' });
+    const result = parseFeedbackRecord({ ...minimalRaw(), projectSlug: 'rune-14' });
     expect(result.ok).toBe(true);
     // Sanity: the same slug must satisfy the shared regex
-    expect(VALID_SLUG.test('jarvis-14')).toBe(true);
+    expect(VALID_SLUG.test('rune-14')).toBe(true);
   });
 });
 

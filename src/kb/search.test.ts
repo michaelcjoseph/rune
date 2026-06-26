@@ -97,7 +97,7 @@ describe('kb/search', () => {
       JSON.stringify({
         type: 'match',
         data: {
-          path: { text: '/workspace/jarvis/src/server/webview.ts' },
+          path: { text: '/workspace/rune/src/server/webview.ts' },
           line_number: 42,
           lines: { text: 'handleApiProducts reads the product deep view' },
         },
@@ -105,7 +105,7 @@ describe('kb/search', () => {
       JSON.stringify({
         type: 'match',
         data: {
-          path: { text: '/workspace/jarvis/docs/projects/17-cockpit-redesign/spec.md' },
+          path: { text: '/workspace/rune/docs/projects/17-cockpit-redesign/spec.md' },
           line_number: 330,
           lines: { text: 'per-product chat search is repo plus vault' },
         },
@@ -115,7 +115,7 @@ describe('kb/search', () => {
     execMock.mockReturnValue(Buffer.from(rgOutput));
 
     expect(searchRepo!('product deep view', {
-      repoPath: '/workspace/jarvis',
+      repoPath: '/workspace/rune',
       maxResults: 5,
     })).toEqual([
       { file: 'src/server/webview.ts', line: 42, content: 'handleApiProducts reads the product deep view' },
@@ -127,7 +127,7 @@ describe('kb/search', () => {
     ]);
     expect(execMock).toHaveBeenCalledWith(
       'rg',
-      expect.arrayContaining(['/workspace/jarvis']),
+      expect.arrayContaining(['/workspace/rune']),
       expect.any(Object),
     );
     expect(execMock).not.toHaveBeenCalledWith(

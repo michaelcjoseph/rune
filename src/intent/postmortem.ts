@@ -1,11 +1,11 @@
 /**
- * Jarvis-owned post-mortem (project 14, Phase 6).
+ * Rune-owned post-mortem (project 14, Phase 6).
  *
  * Turns ONE validated feedback record into an attribution decision: which stage/role
  * to credit the miss to, and the one craft lesson to add to that role's memory — or
- * "no lesson warranted". The post-mortem is JARVIS-owned, not a role: a neutral LLM
+ * "no lesson warranted". The post-mortem is RUNE-owned, not a role: a neutral LLM
  * call (the injected `ask` seam) proposes a structured attribution that THIS module
- * parses and validates deterministically. Jarvis makes the attribution call; the
+ * parses and validates deterministically. Rune makes the attribution call; the
  * roles are witnesses, not the judge (spec §"Learning Loop").
  *
  * Parsing is FAIL-SAFE. An unparseable, invalid, or empty post-mortem output yields
@@ -63,7 +63,7 @@ export function buildPostMortemPrompt(record: FeedbackRecord): string {
     .join('\n');
 
   return [
-    'You are Jarvis running a neutral engineering post-mortem on ONE piece of feedback',
+    'You are Rune running a neutral engineering post-mortem on ONE piece of feedback',
     'about a past product-team run. Decide whether a CATCHABLE miss can be attributed to',
     'a specific stage/role, and if so, distill exactly ONE durable, abstract craft lesson',
     "for that role's memory. The roles are witnesses; you make the attribution call.",
@@ -136,7 +136,7 @@ export interface PostMortemDeps {
   ask: (prompt: string) => Promise<{ text: string | null; error: string | null }>;
 }
 
-/** Run the Jarvis-owned post-mortem for one record. Builds the prompt, calls the
+/** Run the Rune-owned post-mortem for one record. Builds the prompt, calls the
  *  injected `ask` seam, and parses the result — failing SAFE to `no-lesson` on no
  *  output or unparseable/invalid output (never fabricates a lesson). This is the
  *  production `attribute` seam the learning loop dispatches each valid record through. */

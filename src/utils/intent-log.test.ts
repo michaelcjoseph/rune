@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Use a unique temp dir per run so tests are isolated.
-const tmpLogsDir = join(tmpdir(), `jarvis-intent-log-test-${Date.now()}`);
+const tmpLogsDir = join(tmpdir(), `rune-intent-log-test-${Date.now()}`);
 
 vi.mock('../config.js', () => ({
   default: {
@@ -112,7 +112,7 @@ describe('intent-log', () => {
   it('tight-loop writes — 20 rapid appends all land as valid JSON lines', async () => {
     // Because appendIntent is synchronous, wrapping each call in Promise.resolve
     // does not actually yield — all 20 calls serialize in the same microtask
-    // batch. This matches Jarvis's single-process event-loop model: concurrent
+    // batch. This matches Rune's single-process event-loop model: concurrent
     // TG handlers are serialized by the event loop, so true OS-level concurrency
     // doesn't happen here. This test verifies that serial tight-loop writes
     // preserve every entry without truncation or corruption.

@@ -28,7 +28,7 @@ vi.mock('../src/config.js', () => ({
     READWISE_TOKEN: '',
     WHOOP_CLIENT_ID: '',
     WHOOP_CLIENT_SECRET: '',
-    JARVIS_HTTP_SECRET: '',
+    RUNE_HTTP_SECRET: '',
     CLASSIFIER_MODEL: 'haiku',
     CLASSIFIER_TIMEOUT_MS: 20_000,
     RESOLVER_CONFIDENCE_THRESHOLD: 0.7,

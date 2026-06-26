@@ -494,21 +494,21 @@ export function clearAgentDefCache(): void {
 }
 
 /** Load an agent definition from .claude/agents/<name>.md, parsing frontmatter and body.
- *  Jarvis's own .claude/agents/ is checked first (generic, public, versioned with code);
+ *  Rune's own .claude/agents/ is checked first (generic, public, versioned with code);
  *  the vault's .claude/agents/ is the fallback (user-owned, private, may contain
  *  personal references like family names, employer, project codenames). */
 export function loadAgentDef(agentName: string): AgentDef {
   const cached = agentDefCache.get(agentName);
   if (cached) return cached;
 
-  const jarvisPath = join(PROJECT_ROOT, '.claude', 'agents', `${agentName}.md`);
+  const runePath = join(PROJECT_ROOT, '.claude', 'agents', `${agentName}.md`);
   const vaultPath = join(config.VAULT_DIR, '.claude', 'agents', `${agentName}.md`);
 
   let raw: string;
   let filePath: string;
   try {
-    raw = readFileSync(jarvisPath, 'utf8');
-    filePath = jarvisPath;
+    raw = readFileSync(runePath, 'utf8');
+    filePath = runePath;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     // Fall back to vault. If this also throws ENOENT, runAgent's caller will
@@ -552,7 +552,7 @@ export function loadAgentDef(agentName: string): AgentDef {
 /** Extract a single-line scalar value from a YAML frontmatter string.
  *  Supports: `key: value`, `key: "value"`, `key: 'value'`. Returns undefined
  *  if the field is absent. Values are trimmed. Only looks at line-leading keys
- *  (not nested). Good enough for Jarvis's flat frontmatter schema. */
+ *  (not nested). Good enough for Rune's flat frontmatter schema. */
 function parseYamlScalarField(frontmatter: string, key: string): string | undefined {
   const escKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`^${escKey}:[ \\t]*(.*?)\\s*$`, 'm');

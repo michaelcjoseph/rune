@@ -16,8 +16,8 @@ const COMMANDS: Record<string, string> = {
 };
 
 function printHelp(): void {
-  console.log('Jarvis CLI — Knowledge base operations from the terminal\n');
-  console.log('Usage: jarvis <command> [args]\n');
+  console.log('Rune CLI — Knowledge base operations from the terminal\n');
+  console.log('Usage: rune <command> [args]\n');
   console.log('Commands:');
   for (const [name, desc] of Object.entries(COMMANDS)) {
     console.log(`  ${name.padEnd(10)} ${desc}`);
@@ -104,7 +104,7 @@ async function cmdQuery(
 ): Promise<void> {
   const question = args.join(' ');
   if (!question) {
-    console.error('Usage: jarvis query <question>');
+    console.error('Usage: rune query <question>');
     process.exitCode = 1;
     return;
   }
@@ -132,7 +132,7 @@ async function cmdIngest(
     const { getQueue } = await import('../src/kb/queue.js');
     const queue = getQueue();
     if (queue.length === 0) {
-      console.log('Ingestion queue is empty. Usage: jarvis ingest <vault-relative-path> [--guidance "..."]');
+      console.log('Ingestion queue is empty. Usage: rune ingest <vault-relative-path> [--guidance "..."]');
       return;
     }
     console.log(`Processing ${queue.length} queued source(s)...`);
@@ -214,7 +214,7 @@ async function cmdSearch(args: string[]): Promise<void> {
   const { positional, flags } = parseFlags(args);
   const query = positional.join(' ');
   if (!query) {
-    console.error('Usage: jarvis search <term> [--type entity|concept|topic|comparison]');
+    console.error('Usage: rune search <term> [--type entity|concept|topic|comparison]');
     process.exitCode = 1;
     return;
   }
@@ -263,7 +263,7 @@ async function cmdStudy(args: string[]): Promise<void> {
   // `status` query just prints one line, so it is exempt.
   if (arg.toLowerCase() !== 'status' && !process.stdin.isTTY) {
     console.error(
-      '`jarvis study` needs an interactive terminal — use `jarvis study status` for a non-interactive summary.',
+      '`rune study` needs an interactive terminal — use `rune study status` for a non-interactive summary.',
     );
     process.exitCode = 1;
     return;

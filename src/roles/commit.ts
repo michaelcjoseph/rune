@@ -3,7 +3,7 @@
  *
  * Generalizes `src/writer/commit.ts` to the six product-team roles. Captured
  * lessons are auto-committed one atomic commit per write. This helper stages ONLY
- * `agents/<role>/memory.md` in the jarvis repo — never `git add -A`, so unrelated
+ * `agents/<role>/memory.md` in the rune repo — never `git add -A`, so unrelated
  * dirty files stay untouched and a learning-loop write can never sweep in other
  * work. No push: capture commits locally; review and any revert happen later, one
  * commit at a time. Refuses to commit off `main` (mirrors the vault's on-main guard).
@@ -40,7 +40,7 @@ export interface CommitRoleMemoryOpts {
   role: RoleName;
   /** Commit subject. */
   message: string;
-  /** Repo root containing `agents/<role>/memory.md`. Defaults to the jarvis repo
+  /** Repo root containing `agents/<role>/memory.md`. Defaults to the rune repo
    *  root, derived from the module path. TRUSTED test seam — tests point this at a
    *  temp git repo. */
   cwd?: string;

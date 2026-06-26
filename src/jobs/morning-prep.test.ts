@@ -461,7 +461,7 @@ describe('jobs/morning-prep — runMorningPrep', () => {
   it('fallback: redacts absolute paths from synthError before publishing', async () => {
     mockAskClaudeOneShot.mockResolvedValue({
       text: null,
-      error: 'spawn ENOENT /Users/somebody/workspace/jarvis/node_modules/.bin/claude',
+      error: 'spawn ENOENT /Users/somebody/workspace/rune/node_modules/.bin/claude',
     });
     const bus = mockBus();
 

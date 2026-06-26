@@ -24,15 +24,15 @@ function makeProject(repo: string, slug: string, tasks: string | null) {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'jarvis-registry-scan-'));
+  root = mkdtempSync(join(tmpdir(), 'rune-registry-scan-'));
 
-  // jarvis: two projects, both with tasks.md
-  const jarvis = join(root, 'jarvis');
-  makeProject(jarvis, '01-mvp', '- [x] a\n- [x] b\n');
-  makeProject(jarvis, '10-thing', '- [x] a\n- [ ] b\n- [ ] c\n');
-  mkdirSync(join(jarvis, 'docs', 'projects'), { recursive: true });
+  // rune: two projects, both with tasks.md
+  const rune = join(root, 'rune');
+  makeProject(rune, '01-mvp', '- [x] a\n- [x] b\n');
+  makeProject(rune, '10-thing', '- [x] a\n- [ ] b\n- [ ] c\n');
+  mkdirSync(join(rune, 'docs', 'projects'), { recursive: true });
   writeFileSync(
-    join(jarvis, 'docs', 'projects', 'index.md'),
+    join(rune, 'docs', 'projects', 'index.md'),
     repoIndex([{ slug: '01-mvp', status: 'Done' }, { slug: '10-thing', status: 'In Progress' }]),
     'utf8',
   );
@@ -50,7 +50,7 @@ beforeEach(() => {
   mkdirSync(join(root, 'relay'), { recursive: true });
 
   const productsJson = {
-    jarvis: { repoPath: jarvis, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    rune: { repoPath: rune, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     aura: { repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     relay: { repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     // a product whose repo is absent on disk entirely
@@ -66,14 +66,14 @@ afterEach(() => {
 describe('scanRegistrySources', () => {
   it('scans every product in products.json', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
-    expect(sources.products.map((p) => p.name).sort()).toEqual(['aura', 'ghost', 'jarvis', 'relay']);
+    expect(sources.products.map((p) => p.name).sort()).toEqual(['aura', 'ghost', 'relay', 'rune']);
   });
 
   it('reads each repo index and per-project task progress', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
-    const jarvis = sources.products.find((p) => p.name === 'jarvis')!;
-    expect(jarvis.projectsIndex).toContain('10-thing');
-    expect(jarvis.taskProgress).toEqual({
+    const rune = sources.products.find((p) => p.name === 'rune')!;
+    expect(rune.projectsIndex).toContain('10-thing');
+    expect(rune.taskProgress).toEqual({
       '01-mvp': { done: 2, total: 2 },
       '10-thing': { done: 1, total: 3 },
     });

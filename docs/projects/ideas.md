@@ -19,11 +19,11 @@ below it.
 - Engagement-driven writing lessons (extends project 12)
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
 - Per product loop where if Rune isn't working on something, it picks up the next scoped bug or project
-  - **The actual gap — automated dispatch is jarvis-only and partly unwired.** Three layers, only the top one done:
+  - **The actual gap — automated dispatch is rune-only and partly unwired.** Three layers, only the top one done:
       - *Layer A — manual trigger:* works (above).
-      - *Layer B — the automated work-run dispatch isn't wired for any repo.* The nightly observation loop creates `gen-eval-loop` mutations hardcoded to `product: 'jarvis'` (`nightly.ts`), not `work-run`. `observation-dispatch.ts` documents routing self-generated dispatches through `work-run`, but that path is designed, not wired.
+      - *Layer B — the automated work-run dispatch isn't wired for any repo.* The nightly observation loop creates `gen-eval-loop` mutations hardcoded to `product: 'rune'` (`nightly.ts`), not `work-run`. `observation-dispatch.ts` documents routing self-generated dispatches through `work-run`, but that path is designed, not wired.
       - *Layer C — self-generated ideas carry no product (the design question).* `ProjectIdea` is `{ title, friction, id }`. Nothing attributes a detected friction to "this belongs in aura's repo." Auto-dispatch cross-repo needs product attribution — the sensor tagging its source product, a `product` field set at triage, or a registry lookup for friction that already maps to a known project (the registry maps slug→product; a brand-new self-generated project does not). A new project also needs scaffolding **in the target repo** (the scaffold-approval/promotion machinery), its own surface.
-    - The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `jarvis-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
+    - The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `rune-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
     - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
 - Easily add new products to Rune
 - quarterly and annual SEC reports ingestion of companies I'm following (Claude Cowork?)
@@ -45,14 +45,14 @@ below it.
   - **Motivation:** trademark concern with the name "Rune," and this is an open-source repo, so the name must change everywhere consistently — not a cosmetic chat-only relabel.
   - **Blast-radius inventory** (so a later planning session starts informed; verify each by searching the repo/vault):
       - The persona/display name in chat.
-      - The `[[jarvis]]` wikilink appended into vault journals on session capture (`src/jobs/capture.ts` writes `- <ts> [[jarvis]] ...`) — a vault-wide historical-journal rewrite, the trickiest migration.
-      - The MCP server name `jarvis-kb` (default name in `src/mcp/server.ts`).
+      - The `[[rune]]` wikilink appended into vault journals on session capture (`src/jobs/capture.ts` writes `- <ts> [[rune]] ...`) — a vault-wide historical-journal rewrite, the trickiest migration.
+      - The MCP server name `rune-kb` (default name in `src/mcp/server.ts`).
       - Code identifiers, module names, and directory names.
       - Agent definitions under `.claude/agents/` and `agents/`.
       - The repo name itself.
       - `CLAUDE.md` / `README.md` and other docs.
       - Any user-facing strings and config keys.
-  - **Scope:** full rename across code + repo + identifiers + vault wikilinks. Needs its own planning session given the blast radius; flag the historical `[[jarvis]]` journal rewrite as the migration risk to design carefully.
+  - **Scope:** full rename across code + repo + identifiers + vault wikilinks. Needs its own planning session given the blast radius; flag the historical `[[rune]]` journal rewrite as the migration risk to design carefully.
 - Default to an ELI5 / first-principles posture when I talk to Rune
   - **Premise:** When I talk to Rune it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
   - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)

@@ -60,7 +60,7 @@ export async function handleApprove(sender: MessageSender, userId: number): Prom
       case 'wrong-status':
         await sender.send(
           userId,
-          'No spec proposed yet — keep scoping until Jarvis proposes one.',
+          'No spec proposed yet — keep scoping until Rune proposes one.',
         );
         return;
     }

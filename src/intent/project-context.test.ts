@@ -5,7 +5,7 @@
  * Written TEST-FIRST. Until `project-context.ts` lands, the import fails and
  * every test here is RED.
  *
- * `context.md` is Jarvis-owned orchestration state, NOT role memory and NOT a
+ * `context.md` is Rune-owned orchestration state, NOT role memory and NOT a
  * seventh role. Phase 2 seeds it at planning completion; Phase 3 adds the
  * update/validation helpers. The five required sections are the contract both
  * phases hold.

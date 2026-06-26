@@ -101,7 +101,7 @@ strength, speed, power}. Vocabularies don't overlap, so parse order-free.
 ### Entry Points
 
 - **TG slash command**: `/workout` and `/done-workout` via `src/bot/handlers/text.ts`.
-- **CLI**: `npm run cli -- workout [home|gym] [focus]` and `npm run cli -- done-workout` via `cli/jarvis.ts`.
+- **CLI**: `npm run cli -- workout [home|gym] [focus]` and `npm run cli -- done-workout` via `cli/rune.ts`.
 - **Resolver**: free-form phrases like "give me a workout", "I'm at the gym what should I do", "workout done", "log my workout" classify to these skills via `src/bot/skill-registry.ts` triggers.
 
 ### Exit Points
@@ -231,7 +231,7 @@ Requirement #27 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts
 
 - `src/bot/handlers/text.ts` — register `/done-workout` (add to the slash dispatch table alongside `/workout`).
 - `src/bot/skill-registry.ts` — add resolver triggers for both commands.
-- `cli/jarvis.ts` — wire `workout` and `done-workout` CLI subcommands; reuse the same underlying functions as the TG handlers.
+- `cli/rune.ts` — wire `workout` and `done-workout` CLI subcommands; reuse the same underlying functions as the TG handlers.
 
 **Morning-prep decoupling:**
 
@@ -279,7 +279,7 @@ Requirement #27 is satisfied: the nightly `/daily` prompt (`src/reviews/daily.ts
 - [ ] Add `src/bot/commands/done-workout.ts`
 - [ ] Register command in `src/bot/handlers/text.ts`
 - [ ] Add resolver triggers in `src/bot/skill-registry.ts` for both commands
-- [ ] Wire both commands into `cli/jarvis.ts`
+- [ ] Wire both commands into `cli/rune.ts`
 - [ ] Tests: `/done-workout` with / without prior `/workout`, 48-hour stale warning + confirmation, journal append format, `logs/last-workout.json` cleared on success / preserved on failure
 - [ ] Update `CLAUDE.md` `Agents` section with `workout-generator`
 - [ ] Update `CLAUDE.md` `Project Structure` section with new files

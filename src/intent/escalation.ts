@@ -1,9 +1,9 @@
 /**
- * Escalation policy — a declarative file deciding when Jarvis stops and asks Michael
+ * Escalation policy — a declarative file deciding when Rune stops and asks Michael
  * instead of proceeding unattended, and a deterministic (non-LLM) decision module over it.
  *
  * With the human merge gate removed (spec § Two-Regime Model), Regime B runs to completion
- * and merges on its own. That makes one question load-bearing: **when does Jarvis escalate
+ * and merges on its own. That makes one question load-bearing: **when does Rune escalate
  * to the blocked-on-Michael state (Layer 3) rather than proceed?** The answer is this
  * policy — the same shape as the model selection policy: data not code, editing it is not
  * a deploy.

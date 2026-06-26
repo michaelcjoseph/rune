@@ -546,7 +546,7 @@ const BACKLOG_REL: Record<'bugs' | 'ideas', string> = {
 
 /** Best-effort current branch + worktree-dirty status for the audit log. Never throws. The two
  *  git probes run in parallel. Captured BEFORE the write (inside the lock) so `dirty` reflects
- *  whether the repo had uncommitted work prior to Jarvis's append, not the always-true
+ *  whether the repo had uncommitted work prior to Rune's append, not the always-true
  *  post-write state. */
 async function getBacklogGitState(repoPath: string): Promise<{ branch: string; dirty: boolean }> {
   try {

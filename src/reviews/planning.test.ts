@@ -51,7 +51,7 @@ import { createPromotion, appendPromotion, loadPromotions, transitionPromotion }
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-planning-store-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-planning-store-test-'));
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
   mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
   mockConfig.PROMOTIONS_FILE = join(tmpDir, 'promotions.jsonl');
@@ -319,14 +319,14 @@ describe('spec-artifact snapshots', () => {
 describe('deletePlanningSession — linked promotion abandonment (09-expand-cockpit)', () => {
   function seedPromotion(id: string) {
     return createPromotion({
-      id, product: 'jarvis', backlogItemId: 'b1',
+      id, product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- some idea', planningSessionId: 's', now: 'T0',
     });
   }
 
   it('advances a linked planning-started promotion to planning-abandoned on delete', () => {
     appendPromotion(mockConfig.PROMOTIONS_FILE, seedPromotion('p1'));
-    createPlanningSession(7, 'idea', 'cockpit', 'jarvis');
+    createPlanningSession(7, 'idea', 'cockpit', 'rune');
     updatePlanningSession(7, (s) => ({ ...s, promotionId: 'p1' }));
 
     deletePlanningSession(7);
@@ -336,7 +336,7 @@ describe('deletePlanningSession — linked promotion abandonment (09-expand-cock
 
   it('also fires through /clear-style abandonment (abandonActivePlanningSession → delete)', () => {
     appendPromotion(mockConfig.PROMOTIONS_FILE, seedPromotion('p2'));
-    createPlanningSession(8, 'idea', 'cockpit', 'jarvis');
+    createPlanningSession(8, 'idea', 'cockpit', 'rune');
     updatePlanningSession(8, (s) => ({ ...s, promotionId: 'p2' }));
 
     abandonActivePlanningSession(8);
@@ -352,7 +352,7 @@ describe('deletePlanningSession — linked promotion abandonment (09-expand-cock
     const done = transitionPromotion(sc.promotion, 'marked-source', { now: 'T2' });
     if (!done.ok) throw new Error('setup');
     appendPromotion(mockConfig.PROMOTIONS_FILE, done.promotion);
-    createPlanningSession(11, 'idea', 'cockpit', 'jarvis');
+    createPlanningSession(11, 'idea', 'cockpit', 'rune');
     updatePlanningSession(11, (s) => ({ ...s, promotionId: 'p-done' }));
 
     deletePlanningSession(11);
@@ -364,7 +364,7 @@ describe('deletePlanningSession — linked promotion abandonment (09-expand-cock
     const sc = transitionPromotion(seedPromotion('p3'), 'scaffolded', { slug: '09-x', now: 'T1' });
     if (!sc.ok) throw new Error('setup');
     appendPromotion(mockConfig.PROMOTIONS_FILE, sc.promotion);
-    createPlanningSession(9, 'idea', 'cockpit', 'jarvis');
+    createPlanningSession(9, 'idea', 'cockpit', 'rune');
     updatePlanningSession(9, (s) => ({ ...s, promotionId: 'p3' }));
 
     deletePlanningSession(9);
@@ -373,7 +373,7 @@ describe('deletePlanningSession — linked promotion abandonment (09-expand-cock
   });
 
   it('a plain session with no promotionId writes nothing to the promotions log', () => {
-    createPlanningSession(10, 'idea', 'cockpit', 'jarvis');
+    createPlanningSession(10, 'idea', 'cockpit', 'rune');
     deletePlanningSession(10);
     expect(loadPromotions(mockConfig.PROMOTIONS_FILE).size).toBe(0);
   });

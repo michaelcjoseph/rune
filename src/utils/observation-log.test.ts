@@ -14,7 +14,7 @@ import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpLogsDir = join(tmpdir(), `jarvis-observation-log-test-${Date.now()}`);
+const tmpLogsDir = join(tmpdir(), `rune-observation-log-test-${Date.now()}`);
 
 vi.mock('../config.js', () => ({
   default: {

@@ -101,7 +101,7 @@ describe('SLASH_COMMAND_METADATA', () => {
   it('covers the core review and content-capture commands', () => {
     const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
     // Smoke-check: if these disappear from the table, the resolver loses
-    // visibility into Jarvis's most commonly-used capabilities.
+    // visibility into Rune's most commonly-used capabilities.
     for (const required of ['journal', 'weekly', 'family', 'learn', 'workout']) {
       expect(names.has(required), `missing slash metadata for /${required}`).toBe(true);
     }
@@ -175,7 +175,7 @@ describe('getSkillRegistry', () => {
     expect(agents[0]!.triggers).toEqual(['do the thing']);
   });
 
-  it('dedupes agents by filename stem with Jarvis dir winning over vault', () => {
+  it('dedupes agents by filename stem with Rune dir winning over vault', () => {
     vi.mocked(readdirSync).mockImplementation(((dir: string) => {
       if (dir.includes('/test/project/')) return ['dup.md'];
       if (dir.includes('/test/vault/')) return ['dup.md'];

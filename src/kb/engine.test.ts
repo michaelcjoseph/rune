@@ -86,7 +86,7 @@ describe('kb/engine', () => {
     });
 
     it('dequeues sources flagged as permanent failures (e.g. missing file)', async () => {
-      // Regression: a stuck `projects/jarvis.md` entry re-failed every nightly
+      // Regression: a stuck `projects/rune.md` entry re-failed every nightly
       // because nothing dequeued it. ingestSource now flags missing-file
       // failures with `permanent: true` and the engine acts on that.
       queueMock.mockReturnValue([{ source: 'projects/ghost.md', addedAt: '' }]);

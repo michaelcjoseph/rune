@@ -36,7 +36,7 @@ function iso(ms: number): string {
 function run(overrides: Partial<SupervisedRun> = {}): SupervisedRun {
   return {
     id: 'mut-qc-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '15-work-run-finalizer',
     status: 'running',
     startedAt: iso(NOW - 60 * 60 * 1000),

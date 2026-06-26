@@ -53,7 +53,7 @@ import type { PlanningRolesOutcome, SizedTask } from '../intent/planning-roles.j
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-planning-handler-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-planning-handler-test-'));
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
   mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
   restorePlanningSessions();

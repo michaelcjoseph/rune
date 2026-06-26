@@ -28,10 +28,10 @@ function makeSession(over: Partial<StoredPlanningSession> = {}): StoredPlanningS
     claudeSessionId: 'c1',
     planning: {
       status: 'approved',
-      product: 'jarvis',
+      product: 'rune',
       idea: 'idea',
       surface: 'chat',
-      artifact: { product: 'jarvis', title: 'T', spec: 'spec', tasks: 'Tests (write first)', testPlan: 'tp' },
+      artifact: { product: 'rune', title: 'T', spec: 'spec', tasks: 'Tests (write first)', testPlan: 'tp' },
     },
     createdAt: '',
     lastActivity: '',
@@ -56,7 +56,7 @@ function makeHarness(over: Partial<ScaffoldApprovalDeps> = {}, backlogContent = 
   const registry: Registry = {
     version: 1,
     builtAt: '',
-    products: [{ name: 'jarvis', repoBacked: true, projects: [] }],
+    products: [{ name: 'rune', repoBacked: true, projects: [] }],
   };
   const deps: ScaffoldApprovalDeps = {
     runAgent: async () => {
@@ -65,7 +65,7 @@ function makeHarness(over: Partial<ScaffoldApprovalDeps> = {}, backlogContent = 
     },
     readRegistry: () => registry,
     readProductsConfig: () => ({
-      jarvis: { repoPath: '/ws/jarvis', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+      rune: { repoPath: '/ws/rune', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     }),
     productsConfigPath: '/cfg/products.json',
     workspaceRoot: '/ws',
@@ -109,8 +109,8 @@ describe('runScaffoldApproval — plain session (no promotion)', () => {
     const out = await runScaffoldApproval(session, h.deps);
     expect(out.ok).toBe(true);
     const paths = h.projectWrites.map((w) => w.path);
-    expect(paths).toContain(`/ws/jarvis/docs/projects/${SLUG}/tech-spec.md`);
-    expect(paths).toContain(`/ws/jarvis/docs/projects/${SLUG}/context.md`);
+    expect(paths).toContain(`/ws/rune/docs/projects/${SLUG}/tech-spec.md`);
+    expect(paths).toContain(`/ws/rune/docs/projects/${SLUG}/context.md`);
     expect(h.projectWrites.find((w) => w.path.endsWith('tech-spec.md'))?.content).toBe('The tech spec body.');
   });
 
@@ -131,7 +131,7 @@ describe('runScaffoldApproval — plain session (no promotion)', () => {
 
     expect(out.ok).toBe(true);
     expect(h.projectWrites).toContainEqual({
-      path: `/ws/jarvis/docs/projects/${SLUG}/examples/qa.md`,
+      path: `/ws/rune/docs/projects/${SLUG}/examples/qa.md`,
       content: qaExemplar,
     });
   });
@@ -148,7 +148,7 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
   it('marks an idea source bullet and drives the promotion to marked-source', async () => {
     const h = makeHarness({}, '- Expand the cockpit\n');
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
     }));
     const out = await runScaffoldApproval(makeSession({ promotionId: 'p1' }), h.deps);
@@ -156,7 +156,7 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
     if (out.ok) expect(out.promotion).toBe('marked-source');
     expect(h.writes).toHaveLength(1);
     expect(h.writes[0]!.content).toBe(`- Expand the cockpit → ${SLUG}\n`);
-    expect(h.writes[0]!.path).toBe('/ws/jarvis/docs/projects/ideas.md');
+    expect(h.writes[0]!.path).toBe('/ws/rune/docs/projects/ideas.md');
     // scaffolded then marked-source appended
     expect(h.appended.map((p) => p.state)).toEqual(['scaffolded', 'marked-source']);
   });
@@ -164,19 +164,19 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
   it('flips a bug checkbox and writes bugs.md', async () => {
     const h = makeHarness({}, '- [ ] A bug\n');
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- [ ] A bug', planningSessionId: 's1', now: 'T0',
     }));
     const out = await runScaffoldApproval(makeSession({ promotionId: 'p1' }), h.deps);
     expect(out.ok).toBe(true);
-    expect(h.writes[0]!.path).toBe('/ws/jarvis/docs/projects/bugs.md');
+    expect(h.writes[0]!.path).toBe('/ws/rune/docs/projects/bugs.md');
     expect(h.writes[0]!.content).toBe(`- [x] A bug → ${SLUG}\n`);
   });
 
   it('idempotent retry: already-promoted content writes nothing but still reaches marked-source', async () => {
     const h = makeHarness({}, `- Expand the cockpit → ${SLUG}\n`);
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
     }));
     const out = await runScaffoldApproval(makeSession({ promotionId: 'p1' }), h.deps);
@@ -189,7 +189,7 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
     const h = makeHarness({}, '- Expand the cockpit\n');
     // A promotion that scaffolded, then failed mark-source on a prior attempt.
     const base = createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
     });
     h.promotions.set('p1', { ...base, state: 'mark-source-error', slug: SLUG, attempts: 1 });
@@ -204,7 +204,7 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
   it('snapshot no-match → mark-source-error (scaffold still succeeded)', async () => {
     const h = makeHarness({}, '- A different idea\n');
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
     }));
     const out = await runScaffoldApproval(makeSession({ promotionId: 'p1' }), h.deps);
@@ -218,7 +218,7 @@ describe('runScaffoldApproval — promotion drive (success)', () => {
 describe('runScaffoldApproval — failures', () => {
   it('rejects a not-repo-backed product before scaffolding', async () => {
     const h = makeHarness({
-      readRegistry: () => ({ version: 1, builtAt: '', products: [{ name: 'jarvis', repoBacked: false, projects: [] }] }),
+      readRegistry: () => ({ version: 1, builtAt: '', products: [{ name: 'rune', repoBacked: false, projects: [] }] }),
     });
     const out = await runScaffoldApproval(makeSession(), h.deps);
     expect(out.ok).toBe(false);
@@ -228,7 +228,7 @@ describe('runScaffoldApproval — failures', () => {
   it('records scaffold-error on a linked promotion when the agent fails', async () => {
     const h = makeHarness({ runAgent: async () => ({ text: null, error: 'boom' }) });
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- idea', planningSessionId: 's1', now: 'T0',
     }));
     const out = await runScaffoldApproval(makeSession({ promotionId: 'p1' }), h.deps);
@@ -260,7 +260,7 @@ describe('runScaffoldApproval — failures', () => {
   it('rejects a repo path that escapes the workspace root', async () => {
     const h = makeHarness({
       readProductsConfig: () => ({
-        jarvis: { repoPath: '/elsewhere/jarvis', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+        rune: { repoPath: '/elsewhere/rune', baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
       }),
     });
     const out = await runScaffoldApproval(makeSession(), h.deps);
@@ -280,7 +280,7 @@ describe('retryPromotionMarkSource', () => {
   it('returns not-retryable for a non-error promotion', async () => {
     const h = makeHarness();
     h.promotions.set('p1', createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- idea', planningSessionId: 's1', now: 'T0',
     }));
     const out = await retryPromotionMarkSource('p1', h.deps);
@@ -291,7 +291,7 @@ describe('retryPromotionMarkSource', () => {
   it('re-marks a mark-source-error promotion and reaches marked-source (does not re-scaffold)', async () => {
     const h = makeHarness({}, '- Expand the cockpit\n');
     const base = createPromotion({
-      id: 'p1', product: 'jarvis', backlogItemId: 'b1',
+      id: 'p1', product: 'rune', backlogItemId: 'b1',
       snapshotRaw: '- Expand the cockpit', planningSessionId: 's1', now: 'T0',
     });
     h.promotions.set('p1', { ...base, state: 'mark-source-error', slug: SLUG, attempts: 1 });

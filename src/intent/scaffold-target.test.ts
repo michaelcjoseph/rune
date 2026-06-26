@@ -4,12 +4,12 @@ import { describe, it, expect } from 'vitest';
  * Test suite for scaffold-target resolution (09-expand-cockpit, Phase 4, written test-first).
  *
  * When a planning session is approved, the scaffolder must write into the TARGET PRODUCT's repo,
- * not always Jarvis's. `resolveScaffoldTarget(product, registry, productsConfig)` rejects unknown
+ * not always Rune's. `resolveScaffoldTarget(product, registry, productsConfig)` rejects unknown
  * products (absent from the registry) and non-repo-backed products (in the registry but
  * `repoBacked: false`) BEFORE the setup writer runs, and otherwise resolves the repoPath from
  * `policies/products.json`. `scaffoldWriteScope(repoPath)` produces the runAgent write-scope so the
  * agent gets REAL write access to the target repo (cwd + a single allowed directory), not just the
- * path in prompt text. Jarvis is just another registry/products entry — never a hard-coded default.
+ * path in prompt text. Rune is just another registry/products entry — never a hard-coded default.
  *
  * "Test suite as deliverable": stays RED until the Phase 4 build lands `scaffold-target.ts`.
  */
@@ -26,14 +26,14 @@ type ProductsConfigLike = Record<string, { repoPath: string }>;
 
 const REGISTRY: RegistryLike = {
   products: [
-    { name: 'jarvis', repoBacked: true },
+    { name: 'rune', repoBacked: true },
     { name: 'aura', repoBacked: true },
     { name: 'relay', repoBacked: false }, // tracked-only — no repo
   ],
 };
 // products.json only lists repo-backed products (relay is absent — it has no repo).
 const CONFIG: ProductsConfigLike = {
-  jarvis: { repoPath: '/home/u/workspace/jarvis' },
+  rune: { repoPath: '/home/u/workspace/rune' },
   aura: { repoPath: '/home/u/workspace/aura' },
 };
 
@@ -50,17 +50,17 @@ describe('scaffold-target — resolveScaffoldTarget', () => {
     });
   });
 
-  it('treats jarvis as a normal product — its repoPath comes from config, not a hard-coded default', () => {
-    expect(okTarget(resolveScaffoldTarget('jarvis', REGISTRY, CONFIG)).repoPath).toBe(
-      '/home/u/workspace/jarvis',
+  it('treats rune as a normal product — its repoPath comes from config, not a hard-coded default', () => {
+    expect(okTarget(resolveScaffoldTarget('rune', REGISTRY, CONFIG)).repoPath).toBe(
+      '/home/u/workspace/rune',
     );
   });
 
-  it('reads the jarvis repoPath from the supplied config, not any constant (custom path proves no hardcode)', () => {
-    const customReg: RegistryLike = { products: [{ name: 'jarvis', repoBacked: true }] };
-    const customCfg: ProductsConfigLike = { jarvis: { repoPath: '/custom/elsewhere/jarvis' } };
-    expect(okTarget(resolveScaffoldTarget('jarvis', customReg, customCfg)).repoPath).toBe(
-      '/custom/elsewhere/jarvis',
+  it('reads the rune repoPath from the supplied config, not any constant (custom path proves no hardcode)', () => {
+    const customReg: RegistryLike = { products: [{ name: 'rune', repoBacked: true }] };
+    const customCfg: ProductsConfigLike = { rune: { repoPath: '/custom/elsewhere/rune' } };
+    expect(okTarget(resolveScaffoldTarget('rune', customReg, customCfg)).repoPath).toBe(
+      '/custom/elsewhere/rune',
     );
   });
 
@@ -91,10 +91,10 @@ describe('scaffold-target — scaffoldWriteScope (real write access, not prompt 
     expect(scope.writableDirs).toEqual(['/home/u/workspace/aura']); // exactly the target repo — no broader scope
   });
 
-  it('scopes writes to the target repo, not Jarvis — a different product gets a different scope', () => {
+  it('scopes writes to the target repo, not Rune — a different product gets a different scope', () => {
     const aura = scaffoldWriteScope('/home/u/workspace/aura');
-    const jarvis = scaffoldWriteScope('/home/u/workspace/jarvis');
-    expect(aura.cwd).not.toBe(jarvis.cwd);
-    expect(aura.writableDirs).not.toEqual(jarvis.writableDirs);
+    const rune = scaffoldWriteScope('/home/u/workspace/rune');
+    expect(aura.cwd).not.toBe(rune.cwd);
+    expect(aura.writableDirs).not.toEqual(rune.writableDirs);
   });
 });

@@ -12,10 +12,10 @@ pasted in. Re-run it any time the connector or funnel changes.
 ## Preconditions
 
 - `tailscale funnel status` shows the three `/mcp` + `.well-known` mounts on
-  `https://jarvis.tail6b86b9.ts.net` (Funnel on).
+  `https://rune.tail6b86b9.ts.net` (Funnel on).
 - The daemon is running (`curl -s -o /dev/null -w '%{http_code}'
-  http://127.0.0.1:3847/health` → `200`) with `JARVIS_HTTP_SECRET`,
-  `MCP_ISSUER_URL`, and the ts.net hostname in `JARVIS_ALLOWED_HOSTS`.
+  http://127.0.0.1:3847/health` → `200`) with `RUNE_HTTP_SECRET`,
+  `MCP_ISSUER_URL`, and the ts.net hostname in `RUNE_ALLOWED_HOSTS`.
 - The App connector is registered and shows exactly six tools.
 
 ## Test procedure (from a Claude App thread)
@@ -90,7 +90,7 @@ path without waiting:
 
 ```bash
 # On-demand: process the KB queue now (same code the nightly step calls).
-cd ~/workspace/jarvis && npm run seed    # or the KB-ingest entry the queue uses
+cd ~/workspace/rune && npm run seed    # or the KB-ingest entry the queue uses
 ```
 
 **Pass:** the queued conversation source is ingested and a wiki page is

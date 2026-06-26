@@ -1,6 +1,6 @@
 /**
  * Pure parser for a project's `tasks.md` checkbox tally. Operates on the file's
- * text so both callers — the cockpit's live jarvis-local read
+ * text so both callers — the cockpit's live rune-local read
  * (`src/server/projects-snapshot.ts`) and the cross-product registry scanner
  * (`src/jobs/registry-rebuild.ts`) — share one implementation instead of two
  * drifting copies. No filesystem or runtime-config dependency: callers read the

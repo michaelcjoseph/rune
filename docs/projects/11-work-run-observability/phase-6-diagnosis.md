@@ -8,7 +8,7 @@
 ## The validation run
 
 On 2026-06-01 a Work run was dispatched from the cockpit against
-`10-jarvis-identity-refactor` (run `7b8410fb`, branch `jarvis-work/7b8410fb`,
+`10-rune-identity-refactor` (run `7b8410fb`, branch `rune-work/7b8410fb`,
 base `84d3ca5`). It ran 428s and classified:
 
 ```

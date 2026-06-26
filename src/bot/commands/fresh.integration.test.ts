@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MessageSender } from '../../transport/sender.js';
 
-const tmpDir = join(tmpdir(), `jarvis-fresh-int-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-fresh-int-${Date.now()}`);
 const logsDir = join(tmpDir, 'logs');
 mkdirSync(logsDir, { recursive: true });
 
@@ -186,7 +186,7 @@ describe('conversation-to-KB pipeline (e2e)', () => {
     const journalFile = join(tmpDir, 'journals', '2026_04_14.md');
     expect(existsSync(journalFile)).toBe(true);
     const journalContent = readFileSync(journalFile, 'utf8');
-    expect(journalContent).toContain('[[jarvis]] telegram chat');
+    expect(journalContent).toContain('[[rune]] telegram chat');
     expect(journalContent).toContain('Transformer deep dive');
     expect(journalContent).not.toContain('KB-worthy');
   });

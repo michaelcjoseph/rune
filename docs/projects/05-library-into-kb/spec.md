@@ -28,7 +28,7 @@ Every insight from Lenny and Paul Graham is one `/kb` query away, automatically 
 - **PG ongoing fetcher.** PG essays get a one-time backfill of existing files. No scraper for paulgraham.com — new essays can be dropped into the folder manually.
 - **Hybrid `/lenny` and `/pg` commands.** The commands are deleted, not preserved as filtered shortcuts. If `/kb` quality on Lenny-tagged content disappoints, revisit a thin alias in v1.1 (see Open Questions).
 - **TG notifications on new Lenny content.** Quietly enqueue; no per-post Telegram ping. The existing nightly summary covers it.
-- **Re-exposing the Lenny MCP via `jarvis-kb`.** The MCP is consumed by Rune only (used by the `lenny-sync` agent). Other Claude Code sessions read processed wiki pages via existing `kb_query` / `kb_search` tools.
+- **Re-exposing the Lenny MCP via `rune-kb`.** The MCP is consumed by Rune only (used by the `lenny-sync` agent). Other Claude Code sessions read processed wiki pages via existing `kb_query` / `kb_search` tools.
 - **Schema change to `wiki-compiler`.** The agent's instructions are unchanged. Only raw-source routing and ingestion-trigger sides change.
 - **Migration of `library/` to a new vault location.** Existing folders stay where they are. The `library/lenny/` folder grows new subdirs (`posts/`, `podcasts/`) as fetched content lands.
 
@@ -158,7 +158,7 @@ Next night's run picks up where last_sync_at left off — no data loss
 | PG source | **Re-ingest existing files only**, no scraper. New essays dropped manually. |
 | Fate of `/lenny`, `/pg` | **Remove entirely.** Users use `/kb`. Resolver, skill registry, CLAUDE.md updated. |
 | Lenny MCP transport | **HTTP** at `https://mcp.lennysdata.com/mcp`. Registered in `.claude/settings.json`. |
-| Lenny MCP exposure scope | **Rune only** (consumed by `lenny-sync`). Not re-exposed via `jarvis-kb`. |
+| Lenny MCP exposure scope | **Rune only** (consumed by `lenny-sync`). Not re-exposed via `rune-kb`. |
 | TG notifications on new content | **None.** Quiet ingest. Nightly summary already surfaces KB activity. |
 | Recurring schedule | **Piggyback on the existing nightly orchestrator**, no new cron registration. |
 

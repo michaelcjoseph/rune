@@ -7,7 +7,7 @@ const mockConfig = {
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
+  RUNE_HTTP_SECRET: 'test-secret',
 };
 
 vi.mock('../config.js', () => ({
@@ -69,7 +69,7 @@ describe('server/http', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getAllMock.mockReturnValue([]);
-    mockConfig.JARVIS_HTTP_SECRET = 'test-secret';
+    mockConfig.RUNE_HTTP_SECRET = 'test-secret';
   });
 
   it('GET /health returns status, uptime, session count', async () => {

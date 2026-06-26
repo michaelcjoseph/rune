@@ -360,13 +360,13 @@ preview — what would happen on approve).
 │ ▸ aura · journal-intent · "carry roadmap…" · 2h    │
 │   [ Approve ]  [ Reject ]  [ Open ]                 │
 │                                                     │
-│ ▸ jarvis · playbook · "weekly review timing" · 5h   │
+│ ▸ rune · playbook · "weekly review timing" · 5h   │
 │   [ Approve ]  [ Reject ]  [ Open ]                 │
 │                                                     │
 │ ▸ aura · merge-escalation · "auth/** changed" · 1d  │
 │   [ Approve ]  [ Reject ]  [ Open ]                 │
 │                                                     │
-│ ▸ jarvis · ask-twice · "/foo skill proposal" · 2d   │
+│ ▸ rune · ask-twice · "/foo skill proposal" · 2d   │
 │   [ Approve ]  [ Reject ]  [ Open ]                 │
 └─────────────────────────────────────────────────────┘
 ```
@@ -517,7 +517,7 @@ Raw sensor signal cannot go straight into a decision. A night of interaction log
 
 The loop reads the synthesized digest and decides what to do about it. It has two halves. It files the friction signals worth acting on as projects, and it **discards the rest**. The discard half is not optional: a system that watches its own friction will generate marginal self-work without bound, so admission control on the backlog matters as much as detection.
 
-The key recursion: **Rune is itself a product.** It has a repo (`~/workspace/jarvis`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Rune product, fed by the observation loop above. The loop both files projects and, within the concurrency and escalation rules, dispatches the engine to execute them, improving Rune overnight. A self-generated project has no Michael awake at 3am to approve its spec, so the escalation policy governs that gate too: a low-risk self-improvement is specced and run unattended; anything the policy flags waits for Michael's review.
+The key recursion: **Rune is itself a product.** It has a repo (`~/workspace/rune`) and a backlog (`docs/projects/ideas.md`). Operational self-improvement is **not a separate subsystem**. It is the project-execution engine (the five layers) pointed at the Rune product, fed by the observation loop above. The loop both files projects and, within the concurrency and escalation rules, dispatches the engine to execute them, improving Rune overnight. A self-generated project has no Michael awake at 3am to approve its spec, so the escalation policy governs that gate too: a low-risk self-improvement is specced and run unattended; anything the policy flags waits for Michael's review.
 
 One input already exists. The **Ask-Twice telemetry** from [03-resolver](../03-resolver/spec.md) logs repeated intents and proposes new skills or crons. The observation loop generalizes it: it widens the signal from repeated questions to bugs, friction, and failed interactions, adds the synthesis and discard stages, and routes survivors as full projects rather than only skill-or-cron proposals.
 

@@ -29,7 +29,7 @@ function descriptor(overrides: Partial<MutationDescriptor> = {}): MutationDescri
     source: 'webview',
     target: { type: 'work-run', ref: 'demo' },
     preview: { summary: 'work-run on demo' },
-    payload: { projectSlug: 'demo', product: 'jarvis' },
+    payload: { projectSlug: 'demo', product: 'rune' },
     createdAt: '2026-06-17T12:00:00.000Z',
     status: 'running',
     ...overrides,
@@ -56,7 +56,7 @@ describe('mutations-log orchestrated recovery interaction', () => {
       kind: 'orchestrated-work',
       target: { type: 'orchestrated-work', ref: '14-product-team-agents' },
       preview: { summary: 'orchestrated-work on 14-product-team-agents' },
-      payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
+      payload: { projectSlug: '14-product-team-agents', product: 'rune' },
     });
     const legacy = descriptor({ id: 'mut-legacy-running' });
 

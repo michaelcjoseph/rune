@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { MessageSender } from '../../transport/sender.js';
 
 // Isolated temp dir — must be created before mocking so learningsPath() sees it.
-const tmpDir = join(tmpdir(), `jarvis-learn-list-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-learn-list-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 vi.mock('../../config.js', () => ({

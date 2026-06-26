@@ -3,7 +3,7 @@ import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('whoop-keychain');
 
-const SERVICE = 'jarvis-whoop';
+const SERVICE = 'rune-whoop';
 
 export function getKeychainValue(key: string): string | null {
   try {

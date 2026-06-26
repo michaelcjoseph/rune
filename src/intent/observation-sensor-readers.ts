@@ -190,14 +190,14 @@ export function readVaultSignals(opts: ReadVaultSignalsOpts = {}): SensorSignal[
 // readTelemetrySignals (Phase 6 B2.2)
 // ---------------------------------------------------------------------------
 //
-// Source: `logs/agent-runs.jsonl` and `logs/mutations.jsonl` — Jarvis's
+// Source: `logs/agent-runs.jsonl` and `logs/mutations.jsonl` — Rune's
 // own operational logs. The reader detects failure-heavy windows on the
 // agent side and repeated work-run failures on the mutation side.
 //
 // Per-product (Aura/Assay) telemetry is deferred: a product's own CI
 // signal, deploy failures, error-budget burn, etc. would require either
 // a webhook/poll integration with each product or a shared telemetry
-// sink we don't have yet. The wedge here is Jarvis's own observability;
+// sink we don't have yet. The wedge here is Rune's own observability;
 // per-product wiring is a follow-up task.
 
 /** Default failure-count threshold per agent within the window. Three

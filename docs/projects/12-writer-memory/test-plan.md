@@ -71,6 +71,6 @@ auto-commit write path, and the loop-closure gate. See [spec.md](spec.md) and
 > composition and capture seams. The writer loads SOUL + seeded memory (memory as user-turn
 > reference, not system prompt). A fixture feedback/candidate block plus final sentinel closes
 > the session; `captureLessons()` writes abstract, stamped lessons and commits only
-> `agents/writer/memory.md` to the jarvis repo. A later composed `/blog` start loads one of
+> `agents/writer/memory.md` to the rune repo. A later composed `/blog` start loads one of
 > those lessons into its `referenceContext` — the loop is closed. Quality (does it write
 > better) is deferred to the engagement-metrics phase in `ideas.md`.

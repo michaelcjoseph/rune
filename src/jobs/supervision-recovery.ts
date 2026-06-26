@@ -1,7 +1,7 @@
 /**
  * Supervision startup recovery — walk every persisted SupervisedRun and apply
  * `recoverRun` (flipping stale `'running'` entries to `'unknown'` since they
- * can't be observed across a Jarvis restart). Mirrors `reconcileOrphans()`
+ * can't be observed across a Rune restart). Mirrors `reconcileOrphans()`
  * in `mutations-log.ts` for the supervision store.
  *
  * Idempotent: terminal entries (`completed` / `failed`) and durable states

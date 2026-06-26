@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-playbook-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-playbook-test-${Date.now()}`);
 const queueFile = join(tmpDir, 'playbook-queue.json');
 mkdirSync(tmpDir, { recursive: true });
 

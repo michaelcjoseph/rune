@@ -44,7 +44,7 @@ function snapshotSupervisedRuns(): SupervisedRun[] {
     if (byId.has(descriptor.id)) continue;
 
     const payload = descriptor.payload as Record<string, unknown>;
-    const product = typeof payload['product'] === 'string' ? payload['product'] : 'jarvis';
+    const product = typeof payload['product'] === 'string' ? payload['product'] : 'rune';
     const project =
       typeof payload['projectSlug'] === 'string' ? payload['projectSlug']
       : typeof payload['ref'] === 'string' ? payload['ref']

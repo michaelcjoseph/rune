@@ -42,7 +42,7 @@ human manually inspecting a worktree. Live smoke testing is optional after these
 
 ### Sentinel parsing
 
-- [ ] 🔴 A final `JARVIS_WORK_RUN_SENTINEL { … }` line in the result envelope is parsed from the
+- [ ] 🔴 A final `RUNE_WORK_RUN_SENTINEL { … }` line in the result envelope is parsed from the
       raw envelope, before display scrubbing, and triggers the parked path.
 - [ ] 🔴 Valid sentinel schema is enforced: `version: 1`, non-empty `pendingCheck`, optional
       `command`, and optional `reason`.

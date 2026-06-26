@@ -113,9 +113,9 @@ describe('bot/commands/fresh-full', () => {
       expect(appendMock).toHaveBeenCalledTimes(1);
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('14:30');
-      expect(entry).toContain('[[jarvis]]');
+      expect(entry).toContain('[[rune]]');
       expect(entry).toContain('[Me]');
-      expect(entry).toContain('[Jarvis]');
+      expect(entry).toContain('[Rune]');
       expect(entry).toContain('Hello');
       expect(entry).toContain('Hi there!');
     });
@@ -171,7 +171,7 @@ describe('bot/commands/fresh-full', () => {
       await handleFreshFull(sender, 123, 'telegram');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('\t- [Jarvis] Line one');
+      expect(entry).toContain('\t- [Rune] Line one');
       expect(entry).toContain('\t  Line two');
       expect(entry).toContain('\t  Line three');
     });
@@ -188,7 +188,7 @@ describe('bot/commands/fresh-full', () => {
       await handleFreshFull(sender, 123, 'webview');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] webview chat (full transcript)');
+      expect(entry).toContain('[[rune]] webview chat (full transcript)');
       expect(entry).not.toContain('telegram chat');
     });
 
@@ -202,7 +202,7 @@ describe('bot/commands/fresh-full', () => {
       await handleFreshFull(sender, 456, 'telegram');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] telegram chat (full transcript)');
+      expect(entry).toContain('[[rune]] telegram chat (full transcript)');
       expect(entry).not.toContain('webview chat');
     });
   });

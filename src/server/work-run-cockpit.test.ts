@@ -47,7 +47,7 @@ import type { CockpitView } from '../intent/cockpit.js';
 // ---------------------------------------------------------------------------
 
 const { WORK_RUNS_DIR } = vi.hoisted(() => ({
-  WORK_RUNS_DIR: `/tmp/jarvis-test-work-run-cockpit-${process.pid}`,
+  WORK_RUNS_DIR: `/tmp/rune-test-work-run-cockpit-${process.pid}`,
 }));
 
 // ---------------------------------------------------------------------------
@@ -89,10 +89,10 @@ const mockConfig = {
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
+  RUNE_HTTP_SECRET: 'test-secret',
   OBSIDIAN_VAULT_NAME: 'TestVault',
   TELEGRAM_USER_ID: 42,
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   IS_PRODUCTION: false,
   WORK_RUNS_DIR,
   WORK_RUNS_INDEX_FILE: join(WORK_RUNS_DIR, 'index.jsonl'),
@@ -232,7 +232,7 @@ let server: Server;
 let webviewHandler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 let port: number;
 
-const AUTH_COOKIE = 'jarvis-auth=test-secret';
+const AUTH_COOKIE = 'rune-auth=test-secret';
 
 // A run fixture seeded under WORK_RUNS_DIR/<id>/ — summary.json + transcript.jsonl.
 const RUN_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -252,7 +252,7 @@ const SUMMARY_FIXTURE = {
     transitions: { tasksNewlyChecked: 3, tasksRemaining: 2, tasksAdded: 0, tasksRemoved: 0 },
   },
   baseSha: 'base000',
-  branch: 'jarvis-work/02-growth',
+  branch: 'rune-work/02-growth',
   startedAt: '2026-05-30T12:00:00.000Z',
   endedAt: '2026-05-30T12:00:12.000Z',
   transcriptPath: join(WORK_RUNS_DIR, RUN_ID, 'transcript.jsonl'),

@@ -20,7 +20,7 @@ compounds instead of resetting every time.
 
 ### Goals
 
-1. **Primary:** a writer role (`SOUL.md` + `memory.md`) in the jarvis repo, running behind
+1. **Primary:** a writer role (`SOUL.md` + `memory.md`) in the rune repo, running behind
    the `/blog` flow, that loads its charter as instructions and its memory as reference
    before writing.
 2. **Secondary:** a feedback-then-capture step — the writer solicits your feedback before
@@ -30,7 +30,7 @@ compounds instead of resetting every time.
 
 ### Non-Goals
 
-- Cross-product / per-product memory, a global tier. One role, jarvis repo only.
+- Cross-product / per-product memory, a global tier. One role, rune repo only.
 - Typed schema, cascade composer, conflict/expiry engine. Whole-file markdown.
 - The planning pipeline — its own project (`ideas.md`).
 - Additional roles beyond the writer; a general role-dispatch runtime (v1 is the blog flow only).
@@ -45,7 +45,7 @@ compounds instead of resetting every time.
 ## The writer role
 
 ```
-jarvis/agents/writer/
+rune/agents/writer/
   SOUL.md      # charter — stable repo file, system-prompt authority
   memory.md    # craft notes — accumulating, low-authority reference
 ```
@@ -62,7 +62,7 @@ private names, opaque source slugs. Capped at a fixed load-time char budget
 (`WRITER_MEMORY_CHAR_BUDGET`, ~12–16k); past it, the loaded reference context truncates with a
 visible marker.
 
-Both files live in the **jarvis repo** at `PROJECT_ROOT/agents/writer/`. They are read from
+Both files live in the **rune repo** at `PROJECT_ROOT/agents/writer/`. They are read from
 that path directly, **not** via the vault's `readVaultFile`.
 
 ---
@@ -126,7 +126,7 @@ session.
 `captureLessons()` function does the rest deterministically: parse the candidate block, dedupe
 against existing entries, privacy filter, provenance-stamp, append to `memory.md`, and make
 **one atomic commit** via a memory-scoped commit helper that stages **only**
-`agents/writer/memory.md` in the jarvis repo (not the vault's `git add -A` helper, which runs
+`agents/writer/memory.md` in the rune repo (not the vault's `git add -A` helper, which runs
 in `VAULT_DIR` and can't guarantee atomicity here).
 
 Candidate block contract:
@@ -288,7 +288,7 @@ to the engagement phase (`ideas.md`), where metrics make it objective.
 | Metric | Target | How measured |
 | --- | --- | --- |
 | Memory stays low-authority | always | Composed call has SOUL in `--append-system-prompt`, memory in the user turn; memory text absent from the appended system prompt |
-| Lesson capture works | ≥1 per feedback session with valid candidate lessons | `captureLessons()` emits a stamped, privacy-clean lesson, atomically committed to the jarvis repo |
+| Lesson capture works | ≥1 per feedback session with valid candidate lessons | `captureLessons()` emits a stamped, privacy-clean lesson, atomically committed to the rune repo |
 | No phantom writes | enforced | No feedback → no memory write |
 | Loop closes (the gate) | yes | An automated fixture lesson from piece N is present in piece N+1's `referenceContext` |
 | Cold start safe | no error | Empty memory → valid SOUL + voice prompt |

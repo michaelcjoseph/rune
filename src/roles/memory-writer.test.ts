@@ -319,7 +319,7 @@ afterEach(() => {
 describe('memory-writer — compounding (§6.7): written lesson loads into next context', () => {
   it('a lesson written via writeRoleLesson appears in referenceContext but not systemInstructions', async () => {
     // Create a real tmp dir that acts as the role dir
-    tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-test-role-'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'rune-test-role-'));
 
     // Write a minimal SOUL.md so composeRoleContext has a charter
     writeFileSync(join(tmpDir, 'SOUL.md'), '# Coder SOUL\nWrite correct, tested code.');

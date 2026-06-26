@@ -1,7 +1,7 @@
 /**
  * Restart reconstruction for a partial orchestrated run (project 14, Phase 3).
  *
- * After a crash/restart, Jarvis rebuilds where a project run stood from durable
+ * After a crash/restart, Rune rebuilds where a project run stood from durable
  * inputs — the task run records plus the on-disk `tasks.md` — WITHOUT replaying
  * tasks already done. It also surfaces DRIFT: a record that claims a task
  * complete while `tasks.md` still shows it unchecked (a closeout that didn't

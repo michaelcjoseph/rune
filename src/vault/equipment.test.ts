@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-equipment-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-equipment-test-${Date.now()}`);
 mkdirSync(join(tmpDir, 'health'), { recursive: true });
 
 afterAll(() => {

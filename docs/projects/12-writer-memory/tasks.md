@@ -30,7 +30,7 @@ test-first: each phase opens with a **Tests (write first)** block, red before im
 
 **Implementation**
 
-- [x] Write `jarvis/agents/writer/SOUL.md` from this spec — charter referencing
+- [x] Write `rune/agents/writer/SOUL.md` from this spec — charter referencing
       `writing/voice.md` (no duplication). (`agents/writer/SOUL.md`; contract pinned
       by `src/writer/soul.test.ts`.)
 - [x] Build the loader returning `{ systemInstructions: SOUL (+ existing voice:true),
@@ -105,7 +105,7 @@ blog tests stay green.
       markdown+reference links / wikilinks / bare URLs / email / phone / long quotes) + async
       `captureLessons` (gate → filter → dedupe → stamp → append → commit seam). 23 capture tests
       green incl. hardening guards. Commit seam wiring is the next task.)
-- [x] Build the memory-scoped commit helper (jarvis repo, stages only
+- [x] Build the memory-scoped commit helper (rune repo, stages only
       `agents/writer/memory.md`); call it from `captureLessons()`. Commit only, no approval
       gate and no push requirement. (`src/writer/commit.ts` `commitWriterMemory`: on-`main`
       guard, pathspec add+commit of only memory.md, no-op when unchanged, no push; called via

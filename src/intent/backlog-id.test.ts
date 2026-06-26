@@ -116,11 +116,11 @@ describe('backlog-id — normalization', () => {
 describe('backlog-id — product-locality', () => {
   it('collides across products that share a repo-relative path: the differing absolute repoPath is not in the formula', () => {
     // The formula's file term is the REPO-RELATIVE path. Two distinct product repos — say
-    // jarvis at /Users/x/workspace/jarvis and aura at /Users/x/workspace/aura — both hold a
+    // rune at /Users/x/workspace/rune and aura at /Users/x/workspace/aura — both hold a
     // byte-identical bullet at `docs/projects/bugs.md:1`. Because the absolute repoPath is
     // deliberately absent from the formula, both yield the same id string. Global uniqueness
     // comes from the API route's `:product` segment, not the id. See test-plan §2.
-    const jarvisItem = computeBacklogId({
+    const runeItem = computeBacklogId({
       kind: 'bugs',
       file: 'docs/projects/bugs.md',
       lineNumber: 1,
@@ -132,6 +132,6 @@ describe('backlog-id — product-locality', () => {
       lineNumber: 1,
       raw: '- [ ] Shared bullet text',
     });
-    expect(jarvisItem).toBe(auraItem);
+    expect(runeItem).toBe(auraItem);
   });
 });

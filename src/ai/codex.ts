@@ -54,7 +54,7 @@ export function resolveCodexPath(): string {
 /** Lazily-resolved path to the Codex CLI binary. The first `runCodex` call
  *  resolves the path; subsequent calls reuse it. Lazy (vs. CLAUDE_BIN's
  *  module-load fail-fast) because Codex is the optional second executor —
- *  Jarvis must boot and serve Claude-backed features on machines without
+ *  Rune must boot and serve Claude-backed features on machines without
  *  Codex installed. A5.3's provider-availability probe (`isCodexAvailable`)
  *  also depends on this being non-throwing at import time. */
 let _codexBin: string | null = null;
@@ -188,10 +188,10 @@ export interface RunCodexOpts {
    *  **Sandbox callers MUST pass an env**: A5.2's `dispatchToExecutor`
    *  drives runs against product worktrees and must supply
    *  `buildSandboxEnv(sandbox, …)` from `src/jobs/credential-injector.ts`,
-   *  not rely on the default — the default leaks every Jarvis secret
-   *  (TELEGRAM_BOT_TOKEN, JARVIS_HTTP_SECRET, …) into the product child,
+   *  not rely on the default — the default leaks every Rune secret
+   *  (TELEGRAM_BOT_TOKEN, RUNE_HTTP_SECRET, …) into the product child,
    *  violating the credential-isolation invariant the sandbox layer
-   *  enforces. Non-sandboxed callers (internal Jarvis dispatches) keep
+   *  enforces. Non-sandboxed callers (internal Rune dispatches) keep
    *  the default. */
   env?: NodeJS.ProcessEnv;
   /** Optional raw stdout observer. Receives each stdout chunk as emitted by

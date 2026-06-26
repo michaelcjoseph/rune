@@ -37,12 +37,12 @@ describe('formatOpLabel', () => {
     expect(formatOpLabel('agent', 'unmapped')).toBe('Unmapped');
   });
 
-  // Regression guard — every agent file shipped in jarvis's own
+  // Regression guard — every agent file shipped in rune's own
   // .claude/agents/ should have a curated friendly phrase, not just a
   // titleCase fallback. Vault-resident agents (journal-scanner, etc.) and
   // dev-tooling agents (test-specialist, etc.) live elsewhere so they're not
   // filesystem-discoverable from here and are listed manually in op-labels.
-  it('every Jarvis-resident agent has a curated entry in AGENT_LABELS', () => {
+  it('every Rune-resident agent has a curated entry in AGENT_LABELS', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const agentsDir = join(here, '..', '..', '.claude', 'agents');
     const agents = readdirSync(agentsDir)

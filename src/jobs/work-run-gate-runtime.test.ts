@@ -33,7 +33,7 @@ let repoPath: string;
 let integrationWorktree: string;
 let tmpRoot: string;
 const BASE = 'main';
-const BRANCH = 'jarvis-work/feature';
+const BRANCH = 'rune-work/feature';
 const TRACKED_FILE = 'app.txt';
 
 /** Run a git subcommand synchronously in `cwd`, returning trimmed stdout. */
@@ -75,7 +75,7 @@ function baseState(): {
 
 function gateOpts(over: Partial<GateRuntimeOpts> = {}): GateRuntimeOpts {
   return {
-    product: 'jarvis',
+    product: 'rune',
     repoPath,
     baseBranch: BASE,
     branch: BRANCH,
@@ -99,7 +99,7 @@ function gateIO(commandResult: ValidationCommandResult): GateRuntimeIO {
 }
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), 'jarvis-gate-runtime-test-'));
+  tmpRoot = mkdtempSync(join(tmpdir(), 'rune-gate-runtime-test-'));
   repoPath = join(tmpRoot, 'repo');
   integrationWorktree = join(tmpRoot, 'integration-wt');
 

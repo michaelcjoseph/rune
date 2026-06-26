@@ -19,7 +19,7 @@ describe('server/webview-bootstrap', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('forwards product scope from webview frames into the shared text dispatcher', async () => {
-    const scope = { kind: 'product' as const, product: 'jarvis' };
+    const scope = { kind: 'product' as const, product: 'rune' };
 
     await (handleWebviewMessage as any)(sender(), 42, 'hello from product chat', scope);
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-watcher-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-watcher-test-${Date.now()}`);
 
 vi.mock('../config.js', () => ({
   default: {

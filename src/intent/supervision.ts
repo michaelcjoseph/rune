@@ -342,7 +342,7 @@ export function markCrashed(run: SupervisedRun): SupervisedRun {
 }
 
 /**
- * Recover a run after a Jarvis restart. A run that was `running` cannot be observed across
+ * Recover a run after a Rune restart. A run that was `running` cannot be observed across
  * a restart, so it is marked `unknown` rather than left falsely `running` forever. A run
  * already in a terminal or blocked state is returned unchanged — those states are durable.
  */

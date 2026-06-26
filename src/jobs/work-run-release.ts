@@ -503,7 +503,7 @@ async function coldFinalizeGatedMergeProd(run: SupervisedRun, worktreePath: stri
       log.warn('release: held at branch-complete (gate failed)', { id: run.id, branch, reason });
     },
     mergeBranch: async () => {
-      const message = `jarvis(${run.product}): merge released work-run branch ${branch}`;
+      const message = `rune(${run.product}): merge released work-run branch ${branch}`;
       try {
         await defaultRunGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
       } catch (err) {
@@ -561,7 +561,7 @@ function hasConcurrentRunForProduct(product: string, releaseRunId: string): bool
     (h) =>
       h.descriptor.kind === 'work-run' &&
       h.descriptor.id !== releaseRunId &&
-      ((h.descriptor.payload as { product?: string }).product ?? 'jarvis') === product &&
+      ((h.descriptor.payload as { product?: string }).product ?? 'rune') === product &&
       h.descriptor.status === 'running',
   );
 }

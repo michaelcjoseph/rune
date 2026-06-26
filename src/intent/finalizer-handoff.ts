@@ -1,7 +1,7 @@
 /**
  * Finalizer handoff — the seam to Project 15 (project 14, Phase 3).
  *
- * When no unchecked tasks remain, Jarvis hands the completed project's branch /
+ * When no unchecked tasks remain, Rune hands the completed project's branch /
  * run facts to the Project 15 finalizer through an INJECTED adapter. It never
  * implements its own merge: the finalizer owns terminal classification, the
  * gated merge, push, cleanup, and terminal writes. If the real finalizer is
@@ -23,7 +23,7 @@ export interface FinalizerHandoff {
   runId: string;
   project: string;
   product: string;
-  /** The work branch (e.g. `jarvis-work/14-...`). */
+  /** The work branch (e.g. `rune-work/14-...`). */
   branch: string;
   /** The base branch a gated merge would land on. */
   baseBranch?: string;

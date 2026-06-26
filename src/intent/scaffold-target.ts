@@ -2,13 +2,13 @@
  * Scaffold-target resolution (09-expand-cockpit, Phase 4).
  *
  * When a planning session is approved, the `project-setup-writer` agent must scaffold into the
- * TARGET PRODUCT's repo — not always Jarvis's. This module is the pure boundary that turns a
+ * TARGET PRODUCT's repo — not always Rune's. This module is the pure boundary that turns a
  * product name into a concrete, writable repo path:
  *
  * - `resolveScaffoldTarget(product, registry, productsConfig)` validates the product against the
  *   registry (unknown / not-repo-backed are rejected BEFORE any agent dispatch) and resolves its
- *   `repoPath` from `policies/products.json`. Jarvis is just another registry/products entry — it
- *   is never a hard-coded default, so a custom config path for `jarvis` resolves to that path.
+ *   `repoPath` from `policies/products.json`. Rune is just another registry/products entry — it
+ *   is never a hard-coded default, so a custom config path for `rune` resolves to that path.
  * - `scaffoldWriteScope(repoPath)` produces the runAgent write-scope (cwd + the single writable
  *   directory) so the agent gets REAL write access to the target repo, not merely the path in
  *   prompt text.
@@ -16,7 +16,7 @@
  * Pure — no I/O. Callers supply the already-read registry and products config.
  *
  * Security boundary note: `scaffoldWriteScope` asserts the path is absolute (a relative cwd would
- * silently anchor the child to Jarvis's own cwd). Full canonicalization — `realpath` + containment
+ * silently anchor the child to Rune's own cwd). Full canonicalization — `realpath` + containment
  * under `$WORKSPACE_ROOT`, mirroring `assertBacklogWriteAllowed` / `backlog-reader.ts` — is the
  * responsibility of the approval-path wiring task that actually constructs the scope from
  * `policies/products.json`; this pure module deliberately does no I/O (no `realpathSync`).
@@ -75,11 +75,11 @@ export function resolveScaffoldTarget(
 
 /**
  * Build the runAgent write-scope for a resolved target repo: the repo is both the agent's cwd and
- * its single writable directory. Scoping writes to exactly the target repo (not Jarvis, not a
+ * its single writable directory. Scoping writes to exactly the target repo (not Rune, not a
  * parent dir) is what keeps a scaffold for product A from being able to write into product B.
  */
 export function scaffoldWriteScope(repoPath: string): ScaffoldWriteScope {
-  // A relative or empty path would anchor the child's cwd to Jarvis's own process cwd rather than
+  // A relative or empty path would anchor the child's cwd to Rune's own process cwd rather than
   // the intended repo root — reject it before it reaches the spawn. (Deeper realpath/containment
   // canonicalization is the wiring task's job — see the module header.)
   if (!isAbsolute(repoPath)) {

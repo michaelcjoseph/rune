@@ -16,7 +16,7 @@ vi.mock('../config.js', () => ({
     WORKSPACE_DIR: '/home/user/workspace',
     CLAUDE_STREAM_LOG: '/tmp/test-logs/claude-stream.jsonl',
     // Points to a nonexistent path so loadModelPolicy returns null → pre-policy fallback.
-    MODEL_POLICY_FILE: '/tmp/jarvis-nonexistent-model-policy.json',
+    MODEL_POLICY_FILE: '/tmp/rune-nonexistent-model-policy.json',
   },
   PROJECT_ROOT: '/tmp/test-project',
 }));
@@ -76,18 +76,18 @@ describe('ai/claude WORKSPACE_DIR set', () => {
   });
 
   describe('execClaude env passthrough', () => {
-    it('sets JARVIS_WORKSPACE_DIR in child process env when WORKSPACE_DIR is configured', async () => {
+    it('sets RUNE_WORKSPACE_DIR in child process env when WORKSPACE_DIR is configured', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
-      expect(spawnEnv['JARVIS_WORKSPACE_DIR']).toBe('/home/user/workspace');
+      expect(spawnEnv['RUNE_WORKSPACE_DIR']).toBe('/home/user/workspace');
     });
 
-    it('always sets JARVIS_PROJECT_ROOT regardless of WORKSPACE_DIR', async () => {
+    it('always sets RUNE_PROJECT_ROOT regardless of WORKSPACE_DIR', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
-      expect(spawnEnv['JARVIS_PROJECT_ROOT']).toBe('/tmp/test-project');
+      expect(spawnEnv['RUNE_PROJECT_ROOT']).toBe('/tmp/test-project');
     });
   });
 

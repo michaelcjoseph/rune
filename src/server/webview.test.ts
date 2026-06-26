@@ -47,10 +47,10 @@ const mockConfig = {
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
+  RUNE_HTTP_SECRET: 'test-secret',
   OBSIDIAN_VAULT_NAME: 'TestVault',
   TELEGRAM_USER_ID: 42,
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   IS_PRODUCTION: false as boolean,
   LAUNCHD_LABEL: 'com.jarvis.daemon',
   // Project 14 Phase 5 dispatch seam. PRODUCTS_CONFIG_FILE points at a path that
@@ -251,7 +251,7 @@ describe('server/webview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockActiveRunsMap.clear();
-    mockConfig.JARVIS_HTTP_SECRET = 'test-secret';
+    mockConfig.RUNE_HTTP_SECRET = 'test-secret';
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -338,7 +338,7 @@ describe('server/webview', () => {
 
   describe('POST /api/auth-bootstrap', () => {
     it('returns 401 when no secret is configured', async () => {
-      mockConfig.JARVIS_HTTP_SECRET = '';
+      mockConfig.RUNE_HTTP_SECRET = '';
       const res = await makeRequest(port, '/api/auth-bootstrap', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -380,7 +380,7 @@ describe('server/webview', () => {
       const cookies = res.headers['set-cookie'] as unknown as string[];
       expect(Array.isArray(cookies)).toBe(true);
       const cookieStr = cookies.join('; ');
-      expect(cookieStr).toContain('jarvis-auth=test-secret');
+      expect(cookieStr).toContain('rune-auth=test-secret');
       expect(cookieStr).toContain('HttpOnly');
       expect(cookieStr).toContain('SameSite=Strict');
     });
@@ -531,15 +531,15 @@ describe('server/webview', () => {
       });
     });
 
-    it('overlays a live read of jarvis tasks.md onto jarvis project cards', async () => {
-      // handleApiCockpit overlays getProjectSummaries() (a fresh, jarvis-local
-      // read) onto the registry's jarvis product so jarvis cards update in real
-      // time. The overlay is scoped to the jarvis product to avoid a slug shared
+    it('overlays a live read of rune tasks.md onto rune project cards', async () => {
+      // handleApiCockpit overlays getProjectSummaries() (a fresh, rune-local
+      // read) onto the registry's rune product so rune cards update in real
+      // time. The overlay is scoped to the rune product to avoid a slug shared
       // with another product overriding its counts.
       (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
         version: 1,
         builtAt: '2026-06-03T00:00:00.000Z',
-        products: [{ name: 'jarvis', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] }],
+        products: [{ name: 'rune', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] }],
       });
       mockGetProjectSummaries.mockReturnValueOnce([
         { slug: '01-mvp', progress: { done: 7, total: 12, perPhase: [] }, status: 'In Progress', specPath: '', lastModified: null } as any,
@@ -554,20 +554,20 @@ describe('server/webview', () => {
       });
     });
 
-    it('surfaces a non-jarvis product\'s task progress from the registry, not the live jarvis read', async () => {
+    it('surfaces a non-rune product\'s task progress from the registry, not the live rune read', async () => {
       // Cross-product progress rides on the registry entry (refreshed on rebuild);
-      // the live jarvis-local read must NOT bleed onto another product even when
-      // slugs collide. Here both jarvis and aura have a '01-mvp'; aura keeps its
+      // the live rune-local read must NOT bleed onto another product even when
+      // slugs collide. Here both rune and aura have a '01-mvp'; aura keeps its
       // registry-baked counts.
       (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
         version: 1,
         builtAt: '2026-06-03T00:00:00.000Z',
         products: [
           { name: 'aura', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active', progress: { done: 2, total: 9 } }] },
-          { name: 'jarvis', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] },
+          { name: 'rune', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] },
         ],
       });
-      // Live jarvis read reports different counts for the same slug.
+      // Live rune read reports different counts for the same slug.
       mockGetProjectSummaries.mockReturnValueOnce([
         { slug: '01-mvp', progress: { done: 7, total: 12, perPhase: [] }, status: 'In Progress', specPath: '', lastModified: null } as any,
       ]);
@@ -576,9 +576,9 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(200);
       const aura = res.body.products.find((p: any) => p.name === 'aura');
-      const jarvis = res.body.products.find((p: any) => p.name === 'jarvis');
+      const rune = res.body.products.find((p: any) => p.name === 'rune');
       expect(aura.projects[0].taskProgress).toEqual({ done: 2, total: 9 }); // registry, not the live read
-      expect(jarvis.projects[0].taskProgress).toEqual({ done: 7, total: 12 }); // live overlay
+      expect(rune.projects[0].taskProgress).toEqual({ done: 7, total: 12 }); // live overlay
     });
 
     it('survives a getProjectSummaries throw — cockpit still renders without taskProgress', async () => {
@@ -692,7 +692,7 @@ describe('server/webview', () => {
           authorization: 'Bearer test-secret',
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ message: 'stay global', product: '../jarvis' }),
+        body: JSON.stringify({ message: 'stay global', product: '../rune' }),
       });
 
       expect(handleWebviewMessage).toHaveBeenCalledWith(
@@ -858,7 +858,7 @@ describe('server/webview', () => {
       await makeRequest(port, '/api/mutations', {
         method: 'POST',
         headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'jarvis' } }),
+        body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'rune' } }),
       });
 
       expect(mockCreateMutation).toHaveBeenCalledTimes(1);
@@ -878,7 +878,7 @@ describe('server/webview', () => {
         await makeRequest(port, '/api/mutations', {
           method: 'POST',
           headers: { authorization: 'Bearer test-secret', 'content-type': 'application/json' },
-          body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'jarvis' } }),
+          body: JSON.stringify({ kind: 'work-run', payload: { projectSlug: 'demo', product: 'rune' } }),
         });
 
         const [kind, payload] = mockCreateMutation.mock.calls[0]!;

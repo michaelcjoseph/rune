@@ -456,7 +456,7 @@ describe('streamJsonToDisplay', () => {
             {
               tool_use_id: 'toolu_non_error',
               type: 'tool_result',
-              content: '---BRANCH---\njarvis-work/7b8410fb',
+              content: '---BRANCH---\nrune-work/7b8410fb',
               is_error: false,
             },
           ],

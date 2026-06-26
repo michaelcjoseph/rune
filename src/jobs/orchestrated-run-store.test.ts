@@ -99,11 +99,11 @@ function readyRecord(overrides: Partial<TaskRunRecord> = {}): TaskRunRecord {
 function cursor(overrides: Partial<OrchestrationRunCursor> = {}): OrchestrationRunCursor {
   return {
     runId: 'mut-orch-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '14-product-team-agents',
-    branch: 'jarvis-work/14-product-team-agents',
+    branch: 'rune-work/14-product-team-agents',
     baseBranch: 'main',
-    worktreePath: '/tmp/jarvis-worktrees/jarvis/14-product-team-agents',
+    worktreePath: '/tmp/rune-worktrees/rune/14-product-team-agents',
     resumeMarker: 'resumable',
     cursor: {
       completedTaskIds: ['persist-records-and-cursor'],
@@ -271,8 +271,8 @@ describe('orchestrated run store', () => {
 
     const publication = {
       kind: 'merge-success' as const,
-      key: 'mut-orch-1:merge-success:jarvis-work/demo:pushed-not-deleted',
-      branch: 'jarvis-work/demo',
+      key: 'mut-orch-1:merge-success:rune-work/demo:pushed-not-deleted',
+      branch: 'rune-work/demo',
       phase: 'pushed-not-deleted',
     };
 
@@ -286,14 +286,14 @@ describe('orchestrated run store', () => {
       expect.objectContaining({
         kind: 'merge-success',
         key: publication.key,
-        branch: 'jarvis-work/demo',
+        branch: 'rune-work/demo',
         phase: 'pushed-not-deleted',
         status: 'published',
       }),
       expect.objectContaining({
         kind: 'merge-success',
         key: publication.key,
-        branch: 'jarvis-work/demo',
+        branch: 'rune-work/demo',
         phase: 'pushed-not-deleted',
         status: 'error',
         error: 'operator event bus down',

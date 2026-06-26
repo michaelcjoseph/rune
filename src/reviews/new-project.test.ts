@@ -123,7 +123,7 @@ describe('reviews/new-project', () => {
       expect(sender.send).toHaveBeenCalledWith(100, 'Starting project planning interview. Send /done to cancel at any time.');
       expect(sender.startTyping).toHaveBeenCalledWith(100);
       expect(askClaudeMock).toHaveBeenCalledWith(
-        "Let's plan a new Jarvis project.",
+        "Let's plan a new Rune project.",
         'claude-np-001',
         expect.any(String),
         { opLabel: 'review:new-project', voice: true },
@@ -157,7 +157,7 @@ describe('reviews/new-project', () => {
         (c: any[]) => c[1] && 'prepContext' in c[1],
       );
       expect(prepContextCall).toBeDefined();
-      expect(prepContextCall![1].prepContext).toContain('plan a new Jarvis project');
+      expect(prepContextCall![1].prepContext).toContain('plan a new Rune project');
     });
   });
 
@@ -311,7 +311,7 @@ Send daily digests.`;
 Send daily digests to keep you informed.
 
 ### Requirements
-WHEN the user runs /digest THEN Jarvis sends a summary of today's articles.`;
+WHEN the user runs /digest THEN Rune sends a summary of today's articles.`;
 
     async function setupInterview() {
       const session = makeSession({ phase: 'prep' });

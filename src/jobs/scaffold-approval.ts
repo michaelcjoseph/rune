@@ -9,7 +9,7 @@
  * The flow (all effects injected via {@link ScaffoldApprovalDeps} so the unit test never touches
  * real git/fs/agent):
  *  1. Resolve the session's product to a target repo via `resolveScaffoldTarget` (products.json) —
- *     jarvis is just another product, never a hard-coded default. Reject unknown/not-repo-backed.
+ *     rune is just another product, never a hard-coded default. Reject unknown/not-repo-backed.
  *  2. Canonicalize the repo path (realpath) and require it under `$WORKSPACE_ROOT` — the security
  *     containment the scaffold-target module deferred to this wiring task.
  *  3. Snapshot the target repo's `docs/projects/`, spawn `project-setup-writer` with a write-scope
@@ -190,7 +190,7 @@ export function defaultScaffoldApprovalDeps(): ScaffoldApprovalDeps {
  * Write the role-flow artifacts (tech spec + seeded context + per-project
  * exemplars) into the scaffolded
  * project dir (project 14). Each is optional — legacy single-shot proposals carry
- * none, so this is a no-op for them. `context.md` is Jarvis-owned orchestration
+ * none, so this is a no-op for them. `context.md` is Rune-owned orchestration
  * state seeded at planning time, and exemplars are tech-lead planning output;
  * writing both here (not via the setup-writer agent) keeps those artifacts
  * deterministic once the project slug is verified.
@@ -314,7 +314,7 @@ export async function runScaffoldApproval(
   }
 
   // Project 14: when planning ran the PM/tech-lead role flow, the artifact carries
-  // a tech spec, a Jarvis-seeded context.md, and possibly per-project role
+  // a tech spec, a Rune-seeded context.md, and possibly per-project role
   // exemplars. Write them DETERMINISTICALLY here — never via the setup-writer
   // agent — so role/context artifacts do not depend on agent formatting.
   writeRoleArtifacts(session.planning.artifact, join(projectsDir, slug), deps);

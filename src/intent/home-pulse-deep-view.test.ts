@@ -110,7 +110,7 @@ function deps(overrides: Record<string, unknown> = {}) {
         project: '01-mvp',
         status: 'blocked-on-human',
         startedAt: '2026-06-23T12:00:00.000Z',
-        operatorWorktreePath: '/tmp/jarvis-aura-01-mvp',
+        operatorWorktreePath: '/tmp/rune-aura-01-mvp',
       }),
     ]),
     readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [
@@ -136,7 +136,7 @@ function deps(overrides: Record<string, unknown> = {}) {
     readBacklogs: vi.fn(() => [auraBacklog, relayBacklog]),
     readFixAttempts: vi.fn(() => new Map()),
     readTaskRunRecords: vi.fn(() => [{ rolesInvoked: ['qa', 'coder', 'reviewer'] }]),
-    worktreePathFor: vi.fn((product: string, slug: string) => `/tmp/jarvis-${product}-${slug}`),
+    worktreePathFor: vi.fn((product: string, slug: string) => `/tmp/rune-${product}-${slug}`),
     now: vi.fn(() => NOW_MS),
     ...overrides,
   };
@@ -415,7 +415,7 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       state: 'parked',
       startedAt: '2026-06-23T12:00:00.000Z',
       elapsedMs: 30_000,
-      worktreePath: '/tmp/jarvis-aura-01-mvp',
+      worktreePath: '/tmp/rune-aura-01-mvp',
       transcriptUrl: '/api/work-runs/run-parked/transcript',
       agents: [
         { role: 'qa', active: true },
@@ -557,7 +557,7 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
       state: 'running',
       startedAt: '2026-06-23T12:00:10.000Z',
       elapsedMs: 20_000,
-      worktreePath: '/tmp/jarvis-aura-b-open',
+      worktreePath: '/tmp/rune-aura-b-open',
       transcriptUrl: '/api/work-runs/run-bug-fix/transcript',
       agents: [
         { role: 'pm', active: true, model: 'claude' },

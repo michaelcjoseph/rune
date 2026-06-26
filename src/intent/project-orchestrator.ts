@@ -1,13 +1,13 @@
 /**
  * Multi-task project orchestrator loop (project 14, Phase 5).
  *
- * Jarvis owns the project loop. It ties the Phase 3/4 substrate together:
+ * Rune owns the project loop. It ties the Phase 3/4 substrate together:
  *
  *   while an unchecked task remains:
  *     select the first unchecked task            (orch-task-select)
  *     assemble bounded context                   (orch-context-assembly)
  *     run the team-task workflow                  (team-task-workflow)
- *     on ready-for-closeout, perform Jarvis-owned CLOSEOUT:
+ *     on ready-for-closeout, perform Rune-owned CLOSEOUT:
  *       update context.md                        (context-curator)
  *       mark EXACTLY the selected task complete  (orch-closeout)
  *       run closeout checks
@@ -222,7 +222,7 @@ export async function runProjectOrchestration(
       };
     }
 
-    // --- Jarvis-owned closeout ---
+    // --- Rune-owned closeout ---
     const closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
     if (closeout.kind === 'blocked') {
       return buildOperationalHold(deps, closeout.reason, taskRecords);

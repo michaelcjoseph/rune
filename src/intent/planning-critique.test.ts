@@ -6,7 +6,7 @@
  * grows a `critiquePlan` seam + `codexCritiqueSkipped` outcome flag), the import
  * fails / the integration assertions fail — every test here is RED.
  *
- * The critique is a Jarvis-owned NEUTRAL step (not a seventh role): a pure
+ * The critique is a Rune-owned NEUTRAL step (not a seventh role): a pure
  * orchestration over injected per-model seams — Claude (Opus 4.8) critiques and
  * revises first, then Codex (GPT-5.5) critiques and revises Claude's output —
  * one pass each, no looping, degrade-to-Claude when Codex is unavailable. These

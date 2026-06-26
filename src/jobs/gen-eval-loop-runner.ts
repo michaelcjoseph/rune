@@ -270,7 +270,7 @@ async function realMergeBranch(
   opts: { productsConfigPath: string },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const product = getProductConfig(sandbox.product, opts.productsConfigPath);
-  const message = `jarvis(${sandbox.product}): merge gen-eval-loop branch ${branch}`;
+  const message = `rune(${sandbox.product}): merge gen-eval-loop branch ${branch}`;
   const merge = await runGitCmd(
     ['merge', '--no-ff', branch, '-m', message],
     product.repoPath,
@@ -540,7 +540,7 @@ export async function* runGenEvalLoop(
   // mutation id so every gen-eval run has its own branch. Commits from
   // `/work --auto` land on this branch; the A7.3 merge step merges it
   // into the product's `baseBranch` in the main repo on merge-ready.
-  const branch = `jarvis-gen-eval/${opts.mutationId.slice(0, 8)}`;
+  const branch = `rune-gen-eval/${opts.mutationId.slice(0, 8)}`;
 
   let sandbox: SandboxSpec | null = null;
   try {

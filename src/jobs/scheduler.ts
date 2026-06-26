@@ -167,7 +167,7 @@ function checkMissedJobs(jobs: JobDefinition[]): void {
   }
 }
 
-/** Scan `.claude/agents/` (Jarvis first, vault fallback) for agent files that
+/** Scan `.claude/agents/` (Rune first, vault fallback) for agent files that
  *  declare a `cron:` frontmatter field. Returns a JobDefinition per agent whose
  *  handler calls runAgent(name, cron_args) and routes output per cron_chat.
  *  Invalid cron expressions are logged and skipped (no crash). */
@@ -181,7 +181,7 @@ export function scanAgentCronJobs(bus: NotificationBus): JobDefinition[] {
   const seen = new Set<string>();
   const agentNames: string[] = [];
 
-  // Jarvis-first precedence matches loadAgentDef: project dir wins over vault.
+  // Rune-first precedence matches loadAgentDef: project dir wins over vault.
   for (const dir of [join(PROJECT_ROOT, '.claude', 'agents'), join(config.VAULT_DIR, '.claude', 'agents')]) {
     let entries: string[];
     try {

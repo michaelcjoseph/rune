@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-vault-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-vault-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 vi.mock('../config.js', () => ({

@@ -12,8 +12,8 @@ const { vaultTmpDir, logsTmpDir } = vi.hoisted(() => {
   const { tmpdir: td } = require('node:os') as typeof import('node:os');
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { join: jn } = require('node:path') as typeof import('node:path');
-  const vaultTmpDir = jn(td(), `jarvis-workout-vault-${Date.now()}`);
-  const logsTmpDir = jn(td(), `jarvis-workout-logs-${Date.now()}`);
+  const vaultTmpDir = jn(td(), `rune-workout-vault-${Date.now()}`);
+  const logsTmpDir = jn(td(), `rune-workout-logs-${Date.now()}`);
   mkd(vaultTmpDir, { recursive: true });
   mkd(logsTmpDir, { recursive: true });
   return { vaultTmpDir, logsTmpDir };

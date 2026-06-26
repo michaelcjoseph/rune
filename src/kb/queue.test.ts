@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 const queueFile = join(tmpDir, 'kb-ingestion-queue.json');
 

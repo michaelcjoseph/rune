@@ -4,7 +4,7 @@
  * A role-gate rejection can teach the rejected counterpart, but the rejecting
  * role must not write memory directly. This module orchestrates the safe path:
  * rejecting role drafts a candidate lesson from structured rejection feedback
- * -> neutral Jarvis validates/transforms it into a lesson or no-lesson decision
+ * -> neutral Rune validates/transforms it into a lesson or no-lesson decision
  * -> the shared role-memory writer receives only the neutral validated lesson.
  *
  * Pure over injected seams: no LLM call, filesystem access, or git operation.
@@ -23,7 +23,7 @@ export interface GateLessonCandidate {
   lesson: string;
 }
 
-/** Neutral Jarvis validation accepted and attributed a memory lesson. */
+/** Neutral Rune validation accepted and attributed a memory lesson. */
 export interface GateValidatedLesson {
   kind: 'lesson';
   stage: RoleStage;
@@ -31,7 +31,7 @@ export interface GateValidatedLesson {
   lesson: string;
 }
 
-/** Neutral Jarvis validation declined to write a lesson. */
+/** Neutral Rune validation declined to write a lesson. */
 export interface GateNoLesson {
   kind: 'no-lesson';
   rationale: string;
@@ -55,7 +55,7 @@ export interface GateLearningDeps {
   draftLesson: (input: {
     rejection: GateRejectionFeedback;
   }) => unknown | Promise<unknown>;
-  /** Neutral Jarvis validation/privacy/dedup attribution step. */
+  /** Neutral Rune validation/privacy/dedup attribution step. */
   validateLesson: (input: {
     rejection: GateRejectionFeedback;
     candidate: GateLessonCandidate;

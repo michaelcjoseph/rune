@@ -193,13 +193,13 @@ describe('mutations-log', () => {
         id: 'orch-terminal-1',
         kind: 'orchestrated-work',
         status: 'running',
-        payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
+        payload: { projectSlug: '14-product-team-agents', product: 'rune' },
       });
       const staleOrchestrated = makeDescriptor({
         id: 'orch-stale-1',
         kind: 'orchestrated-work',
         status: 'running',
-        payload: { projectSlug: 'stale-run', product: 'jarvis' },
+        payload: { projectSlug: 'stale-run', product: 'rune' },
       });
       const legacyRunning = makeDescriptor({ id: 'legacy-run-1', status: 'running' });
 

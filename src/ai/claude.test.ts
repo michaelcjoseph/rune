@@ -930,11 +930,11 @@ Body.`);
   });
 
   describe('WORKSPACE_DIR env passthrough (WORKSPACE_DIR unset)', () => {
-    it('does not set JARVIS_WORKSPACE_DIR when WORKSPACE_DIR is empty', async () => {
+    it('does not set RUNE_WORKSPACE_DIR when WORKSPACE_DIR is empty', async () => {
       spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
       await askClaudeOneShot('test prompt');
       const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
-      expect(spawnEnv).not.toHaveProperty('JARVIS_WORKSPACE_DIR');
+      expect(spawnEnv).not.toHaveProperty('RUNE_WORKSPACE_DIR');
     });
 
     it('runAgent prompt does not contain workspace directory line when WORKSPACE_DIR is empty', async () => {

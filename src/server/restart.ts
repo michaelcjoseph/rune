@@ -7,7 +7,7 @@ const log = createLogger('server-restart');
 export type RestartResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * Restart the Jarvis daemon by asking launchd to kill + relaunch it.
+ * Restart the Rune daemon by asking launchd to kill + relaunch it.
  *
  * The launchd plist sets `KeepAlive = { SuccessfulExit: false }`, so a clean
  * `process.exit(0)` would NOT respawn the server — only crashes respawn. The

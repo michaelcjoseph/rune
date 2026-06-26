@@ -164,7 +164,7 @@ describe('state-snapshot / getStateSnapshot', () => {
 
   it('surfaces product-scoped sessions without replacing the legacy global session slots', () => {
     const globalWebview = makeSession({ sessionId: 'global-webview', model: 'haiku', messageCount: 2 });
-    const productWebview = makeSession({ sessionId: 'jarvis-webview', model: 'opus', messageCount: 4 });
+    const productWebview = makeSession({ sessionId: 'rune-webview', model: 'opus', messageCount: 4 });
     mockGetSession
       .mockReturnValueOnce(globalWebview)
       .mockReturnValueOnce(null);
@@ -172,7 +172,7 @@ describe('state-snapshot / getStateSnapshot', () => {
       {
         userId: mockConfig.TELEGRAM_USER_ID,
         transport: 'webview',
-        scope: { kind: 'product', product: 'jarvis' },
+        scope: { kind: 'product', product: 'rune' },
         session: productWebview,
       },
     ]);
@@ -184,7 +184,7 @@ describe('state-snapshot / getStateSnapshot', () => {
       telegram: null,
     });
     expect((snap as any).productSessions).toEqual([
-      { product: 'jarvis', transport: 'webview', sessionId: 'jarvis-webview', model: 'opus', messageCount: 4 },
+      { product: 'rune', transport: 'webview', sessionId: 'rune-webview', model: 'opus', messageCount: 4 },
     ]);
   });
 
@@ -208,11 +208,11 @@ describe('state-snapshot / getStateSnapshot', () => {
 
   it('maps active planning to { product, status, surface }', () => {
     mockGetActivePlanningSession.mockReturnValue({
-      planning: { product: 'jarvis', status: 'scoping', surface: 'cockpit' },
+      planning: { product: 'rune', status: 'scoping', surface: 'cockpit' },
     });
     const snap = getStateSnapshot();
     expect(snap.activePlanning).toEqual({
-      product: 'jarvis',
+      product: 'rune',
       status: 'scoping',
       surface: 'cockpit',
     });

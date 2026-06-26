@@ -34,13 +34,13 @@ import type { SupervisedRun } from '../intent/supervision.js';
 import type { MutationEvent } from '../transport/mutations.js';
 
 const NOW_ISO = '2026-06-09T00:00:00.000Z';
-const WORKTREE = '/tmp/test-worktrees/jarvis/06-webview';
+const WORKTREE = '/tmp/test-worktrees/rune/06-webview';
 
 /** A parked (blocked-on-human) supervised run for the release surfaces. */
 function parkedRun(overrides: Partial<SupervisedRun> = {}): SupervisedRun {
   return {
     id: 'mut-parked-1',
-    product: 'jarvis',
+    product: 'rune',
     project: '06-webview',
     status: 'blocked-on-human',
     startedAt: NOW_ISO,
@@ -55,7 +55,7 @@ function branchCompleteTerminal(id = 'mut-parked-1'): MutationEvent {
     mutationId: id,
     ts: NOW_ISO,
     kind: 'completed',
-    data: { outcome: 'branch-complete', merged: true, projectSlug: '06-webview', product: 'jarvis' },
+    data: { outcome: 'branch-complete', merged: true, projectSlug: '06-webview', product: 'rune' },
   };
 }
 

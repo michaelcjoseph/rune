@@ -38,17 +38,17 @@ Not started. See [spec.md](spec.md) for details.
 
 > Depends on: Phase A.
 
-- [x] Create `src/server/auth.ts`: `verifyAuth(req): { ok: true; userId } | { ok: false }`. Reads `jarvis-auth` cookie or `Authorization: Bearer …` header. Validates against `JARVIS_HTTP_SECRET`.
+- [x] Create `src/server/auth.ts`: `verifyAuth(req): { ok: true; userId } | { ok: false }`. Reads `rune-auth` cookie or `Authorization: Bearer …` header. Validates against `RUNE_HTTP_SECRET`.
 - [x] Create `src/server/webview.ts`: `mountWebviewRoutes(server, bus, senders, deps)`. Wires:
   - `GET /` → serve `index.html` with server-rendered `<meta name="obsidian-vault" content="…">`.
   - `GET /static/*` → serve `src/server/static/*` with path-traversal guard.
   - `POST /api/chat` → auth check → dispatch via `webview-bootstrap.ts` → JSON `{ text, sessionId, model }`.
   - `WS /api/ws` upgrade → auth check → register on `WebviewSender`. On `message` frame → dispatch. On `close` → unregister.
   - `GET /api/state` → 503 if not ready, else 200 with `getStateSnapshot()` (Phase C wires this fully; Phase B returns a stub).
-  - 401 on missing/invalid auth; 403 on Host header not in `JARVIS_ALLOWED_HOSTS` (port stripped before comparison).
-- [x] Modify `src/config.ts`: add `JARVIS_ALLOWED_HOSTS` env var. Parsed at startup (split on `,`, trim + lower-case each entry) into a `Set<string>` exported alongside the rest of the config; default `localhost,127.0.0.1`.
-- [x] Wire `JARVIS_ALLOWED_HOSTS` into the Host-guard in `src/server/webview.ts` (requirement 14). The guard runs before auth so a misrouted request never advances to the secret-comparison codepath.
-- [x] In the `POST /api/auth-bootstrap` handler (cookie-set path): set `Secure` on the `jarvis-auth` cookie iff `req.headers['x-forwarded-proto'] === 'https'` AND `req.socket.remoteAddress` is `127.0.0.1` / `::1`. Always set `HttpOnly` and `SameSite=Strict`. (Requirement 63.)
+  - 401 on missing/invalid auth; 403 on Host header not in `RUNE_ALLOWED_HOSTS` (port stripped before comparison).
+- [x] Modify `src/config.ts`: add `RUNE_ALLOWED_HOSTS` env var. Parsed at startup (split on `,`, trim + lower-case each entry) into a `Set<string>` exported alongside the rest of the config; default `localhost,127.0.0.1`.
+- [x] Wire `RUNE_ALLOWED_HOSTS` into the Host-guard in `src/server/webview.ts` (requirement 14). The guard runs before auth so a misrouted request never advances to the secret-comparison codepath.
+- [x] In the `POST /api/auth-bootstrap` handler (cookie-set path): set `Secure` on the `rune-auth` cookie iff `req.headers['x-forwarded-proto'] === 'https'` AND `req.socket.remoteAddress` is `127.0.0.1` / `::1`. Always set `HttpOnly` and `SameSite=Strict`. (Requirement 63.)
 - [x] Create `src/server/webview-bootstrap.ts`: extracted dispatch entrypoint that mirrors `handleTextMessage` but takes a plain `{ userId, text }` instead of a TG `Message`. Handles slash-command branch, review-active branch, resolver branch, freeform branch.
 - [x] Modify `src/server/http.ts`: call `mountWebviewRoutes(...)` after the existing `/health`, `/capture-sessions`, `/oauth/whoop` routes.
 - [x] Wire `src/transport/webview-sender.ts` for real: `register(userId, ws)`, `unregister(userId, ws)`, per-user fan-out on bus events.
@@ -69,15 +69,15 @@ Not started. See [spec.md](spec.md) for details.
   - Auto-scroll with user-override detection (suspended if user scrolls up; resumed at bottom).
   - Model dropdown: bound to `/opus` / `/sonnet` / `/haiku` — selecting an option sends the slash command as the next message.
 - [x] Create `src/server/static/app.css`: minimal dark theme. Sidebar layout placeholder (Phase C fills it).
-- [x] Add `POST /api/auth-bootstrap` route: validates `?token=` body, sets `jarvis-auth` cookie (HttpOnly, SameSite=Strict).
+- [x] Add `POST /api/auth-bootstrap` route: validates `?token=` body, sets `rune-auth` cookie (HttpOnly, SameSite=Strict).
 - [x] Vitest: `src/server/auth.test.ts` — 401 missing, 401 wrong, 200 cookie, 200 bearer, 403 non-localhost.
 - [x] Vitest: `src/server/webview.test.ts` — integration: stub Claude CLI, POST `/api/chat`, assert response shape; open WS, send a message frame, assert outbound chunks.
-- [x] Manual smoke: `npm run dev` → browser to `http://127.0.0.1:3847/?token=$JARVIS_HTTP_SECRET` → exchange a message → verify rendering and wikilink click opens Obsidian.
+- [x] Manual smoke: `npm run dev` → browser to `http://127.0.0.1:3847/?token=$RUNE_HTTP_SECRET` → exchange a message → verify rendering and wikilink click opens Obsidian.
 - [x] Update `CLAUDE.md`:
   - **Architecture** section: mention webview as second transport sharing session via `TELEGRAM_USER_ID`.
   - **HTTP server** section: list new endpoints.
   - **Project Structure** section: add `src/server/static/`, `src/server/webview.ts`, `src/server/auth.ts`, `src/server/webview-bootstrap.ts`.
-  - **Environment Variables** section: document `OBSIDIAN_VAULT_NAME` and `JARVIS_ALLOWED_HOSTS`.
+  - **Environment Variables** section: document `OBSIDIAN_VAULT_NAME` and `RUNE_ALLOWED_HOSTS`.
 
 ### Phase B.5 — Headless Mac mini deployment
 
@@ -111,15 +111,15 @@ Not started. See [spec.md](spec.md) for details.
 
 #### Repos + dependencies
 
-- [x] `git clone` jarvis to `~/workspace/jarvis`
-- [x] `cd ~/workspace/jarvis && npm install`
+- [x] `git clone` rune to `~/workspace/rune`
+- [x] `cd ~/workspace/rune && npm install`
 - [x] Verify directory structure matches Rune's `PROJECT_ROOT` / `VAULT_DIR` expectations
 
 #### Secrets / `.env.local`
 
 - [x] `scp` `.env.local` from laptop to mini (do NOT email or Slack secrets)
 - [x] Update path-dependent vars (`VAULT_DIR`, `PROJECT_ROOT`, log paths) for mini paths
-- [x] Verify all required vars are present: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_USER_ID`, `JARVIS_HTTP_SECRET`, Whoop OAuth (`WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, refresh token), Readwise token, `OBSIDIAN_VAULT_NAME` if overriding default.
+- [x] Verify all required vars are present: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_USER_ID`, `RUNE_HTTP_SECRET`, Whoop OAuth (`WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, refresh token), Readwise token, `OBSIDIAN_VAULT_NAME` if overriding default.
 
 #### Telegram handoff
 
@@ -132,20 +132,20 @@ Not started. See [spec.md](spec.md) for details.
 - [x] Run `tailscale serve --bg --https=443 http://127.0.0.1:3847`; capture the published origin from `tailscale serve status`
 - [x] Verify port 3847 stays loopback-only: `lsof -iTCP:3847 -sTCP:LISTEN` must show `127.0.0.1` (and/or `::1`) only — never `*` or a LAN/tailnet address. Tailscale Serve listens on its own tailnet port and proxies inward over loopback; if 3847 itself becomes externally bound, the listener invariant has been broken.
 - [x] Verify `tailscale serve status` shows only a `serve` entry, never `funnel` — funnel would push the origin to the public internet and bypass the tailnet trust boundary
-- [x] Set `JARVIS_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname
-- [x] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$JARVIS_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie
+- [x] Set `RUNE_ALLOWED_HOSTS` in `.env.local` to include the actual MagicDNS hostname
+- [x] On the laptop: install Tailscale, sign in to the same tailnet, browse `https://<host>.tail-xxxx.ts.net/?token=$RUNE_HTTP_SECRET`, confirm the page exchanges the token for a `Secure; HttpOnly; SameSite=Strict` cookie
 - [x] Do NOT enable `tailscale funnel` (would expose Rune to the public internet; spec rules this out)
 - [x] Run the "Remote access (Tailscale Serve)" tests in `test-plan.md` end-to-end and check off each item there
 
 #### Process management (launchd)
 
-- [x] Write `~/Library/LaunchAgents/com.jarvis.daemon.plist` running `npm start` (or `npm run dev`) from `~/workspace/jarvis`, with `KeepAlive` true, stdout/stderr redirected to `~/Library/Logs/jarvis/`
+- [x] Write `~/Library/LaunchAgents/com.jarvis.daemon.plist` running `npm start` (or `npm run dev`) from `~/workspace/rune`, with `KeepAlive` true, stdout/stderr redirected to `~/Library/Logs/rune/`
 - [x] `launchctl load ~/Library/LaunchAgents/com.jarvis.daemon.plist`
 - [x] Reboot the mini; confirm Rune comes back up unattended and the webview is reachable via Tailscale
 
 #### Monitoring
 
-- [x] Confirm log access from laptop: `ssh mini "tail -f ~/Library/Logs/jarvis/stdout.log"`
+- [x] Confirm log access from laptop: `ssh mini "tail -f ~/Library/Logs/rune/stdout.log"`
 - [x] Optional: periodic `/health` ping from laptop to catch silent failures
 
 ## Phase C — Cockpit sidebar

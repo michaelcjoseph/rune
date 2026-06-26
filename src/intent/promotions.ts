@@ -3,7 +3,7 @@
  *
  * A "promotion" drives one backlog item from a Plan click through the
  * `planning-started → scaffolded → marked-source` chain, persisting every transition to an
- * append-only JSONL log so the chain survives a Jarvis restart. The state machine is pure; the only
+ * append-only JSONL log so the chain survives a Rune restart. The state machine is pure; the only
  * I/O is the append-only log (`config.PROMOTIONS_FILE`, default `logs/promotions.jsonl`).
  *
  * State model:

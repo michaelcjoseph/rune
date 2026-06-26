@@ -16,7 +16,7 @@ export async function handleJournal(
   scope?: SessionScope,
 ): Promise<void> {
   const ts = getTimestamp();
-  const entry = `- ${ts} [[jarvis]] ${transportLabel(transport)}\n\t- ${text}`;
+  const entry = `- ${ts} [[rune]] ${transportLabel(transport)}\n\t- ${text}`;
   appendToJournal(entry);
 
   // If a multi-turn conversation is active, journaling closes the thread.

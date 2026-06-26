@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-whoop-recent-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-whoop-recent-test-${Date.now()}`);
 const WHOOP_DIR = join(tmpDir, 'health/whoop');
 mkdirSync(WHOOP_DIR, { recursive: true });
 

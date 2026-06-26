@@ -78,14 +78,14 @@ describe('scanJournalForIntent (C7)', () => {
     } catch {}
     expect(scan).toBeDefined();
     const notes = scan!(
-      '- 10am #aura #jarvis cross-cutting friction with the resolver',
+      '- 10am #aura #rune cross-cutting friction with the resolver',
     );
     expect(notes.length).toBeGreaterThanOrEqual(1);
     const first = notes[0]!;
     expect(first.products.length).toBeGreaterThanOrEqual(2);
     // Routing through the planner produces a disambiguation proposal.
     const plan = planJournalIntent({
-      notes, roadmapCandidates: [], registeredProducts: ['aura', 'jarvis'],
+      notes, roadmapCandidates: [], registeredProducts: ['aura', 'rune'],
     });
     expect(plan.proposals.some((p: IntentProposal) => p.kind === 'disambiguation')).toBe(true);
   });
@@ -292,7 +292,7 @@ describe('actionApprovedIntentProposal (C8)', () => {
     expect(action).toBeDefined();
     const d = deps();
     await action!(
-      { kind: 'disambiguation', note: 'cross-cutting friction', candidates: ['aura', 'jarvis'] },
+      { kind: 'disambiguation', note: 'cross-cutting friction', candidates: ['aura', 'rune'] },
       d,
     );
     expect(d.invokeVaultUpdater).not.toHaveBeenCalled();

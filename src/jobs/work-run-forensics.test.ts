@@ -79,7 +79,7 @@ function baseOpts(overrides: Partial<ForensicsInput> = {}): ForensicsInput {
     worktree: '/fake/worktree',
     outDir,
     baseSha: 'deadbeef1234567890abcdef1234567890abcdef',
-    branch: 'jarvis-work/abcd1234',
+    branch: 'rune-work/abcd1234',
     nonClean: true,
     ...overrides,
   };
@@ -94,7 +94,7 @@ describe('exportForensics', () => {
     expect(readFileSync(join(outDir, 'diffstat.txt'), 'utf8')).toContain('1 file changed');
     // The stat range is the captured baseSha..branch, not main/HEAD…
     const statCall = calls.find(c => c.args.includes('--stat'));
-    expect(statCall?.args.some(a => a.includes('deadbeef1234567890abcdef1234567890abcdef..jarvis-work/abcd1234'))).toBe(true);
+    expect(statCall?.args.some(a => a.includes('deadbeef1234567890abcdef1234567890abcdef..rune-work/abcd1234'))).toBe(true);
     // …and git runs in the worktree, not the output dir.
     expect(statCall?.cwd).toBe('/fake/worktree');
   });
@@ -120,7 +120,7 @@ describe('exportForensics', () => {
     // The bundle is created from the run branch, in the worktree.
     const bundleCall = calls.find(c => c.args.includes('bundle') && c.args.includes('create'));
     expect(bundleCall).toBeDefined();
-    expect(bundleCall!.args.some(a => a.includes('jarvis-work/abcd1234'))).toBe(true);
+    expect(bundleCall!.args.some(a => a.includes('rune-work/abcd1234'))).toBe(true);
     expect(bundleCall!.cwd).toBe('/fake/worktree');
   });
 

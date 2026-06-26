@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, existsSync, unlinkSync, readFileSync } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-review-sessions-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-review-sessions-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 const reviewSessionsFile = join(tmpDir, 'review-sessions.json');
 

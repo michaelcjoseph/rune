@@ -55,12 +55,12 @@ async function main(): Promise<void> {
 
   // The handoff carries a product/project pair — for the manual /review
   // skill these are descriptive labels (the review isn't bound to a
-  // specific product workflow). Using `jarvis` / `review-cross-model` so
+  // specific product workflow). Using `rune` / `review-cross-model` so
   // the dispatch log entry is self-describing.
   const handoff = buildHandoff({
     target: 'codex',
     agent,
-    product: 'jarvis',
+    product: 'rune',
     project: 'review-cross-model',
     objective: `Run the ${agent} review panel against the changes described in the context.`,
     context,

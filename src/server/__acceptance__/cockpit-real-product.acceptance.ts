@@ -1,21 +1,21 @@
 #!/usr/bin/env tsx
 /**
- * Cockpit Redesign Phase 7 - LIVE real-product acceptance for Jarvis itself.
+ * Cockpit Redesign Phase 7 - LIVE real-product acceptance for Rune itself.
  *
  * This is deliberately not a Vitest unit test. It drives the authenticated
- * local Jarvis cockpit over HTTP/WebSocket against the real `jarvis` product,
+ * local Rune cockpit over HTTP/WebSocket against the real `rune` product,
  * with no mocked projections, no mocked PM/TL gate, and no mocked realtime run
  * feed. The deferred Fix autorun hand-off is the only acceptable seam.
  *
  * Required:
- *   JARVIS_HTTP_SECRET=<local cockpit secret>
- *   JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1
+ *   RUNE_HTTP_SECRET=<local cockpit secret>
+ *   RUNE_ACCEPTANCE_MUTATE_REAL_RUNE=1
  *
  * Optional:
- *   JARVIS_ACCEPTANCE_BASE_URL=http://127.0.0.1:3847
- *   JARVIS_ACCEPTANCE_PRODUCT=jarvis
- *   JARVIS_ACCEPTANCE_PROJECT=17-cockpit-redesign
- *   JARVIS_ACCEPTANCE_TIMEOUT_MS=7200000
+ *   RUNE_ACCEPTANCE_BASE_URL=http://127.0.0.1:3847
+ *   RUNE_ACCEPTANCE_PRODUCT=rune
+ *   RUNE_ACCEPTANCE_PROJECT=17-cockpit-redesign
+ *   RUNE_ACCEPTANCE_TIMEOUT_MS=7200000
  *
  * Exit 0 means the real cockpit passed the Phase 7 walkthrough. Exit non-zero
  * names the first contract breach.
@@ -25,12 +25,12 @@ import { WebSocket } from 'ws';
 
 type Json = Record<string, unknown>;
 
-const BASE_URL = env('JARVIS_ACCEPTANCE_BASE_URL', 'http://127.0.0.1:3847').replace(/\/$/, '');
-const SECRET = env('JARVIS_HTTP_SECRET');
-const PRODUCT = env('JARVIS_ACCEPTANCE_PRODUCT', 'jarvis');
-const PROJECT = env('JARVIS_ACCEPTANCE_PROJECT', '17-cockpit-redesign');
-const TIMEOUT_MS = Number(env('JARVIS_ACCEPTANCE_TIMEOUT_MS', String(2 * 60 * 60 * 1000)));
-const MUTATE_REAL_JARVIS = process.env['JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS'] === '1';
+const BASE_URL = env('RUNE_ACCEPTANCE_BASE_URL', 'http://127.0.0.1:3847').replace(/\/$/, '');
+const SECRET = env('RUNE_HTTP_SECRET');
+const PRODUCT = env('RUNE_ACCEPTANCE_PRODUCT', 'rune');
+const PROJECT = env('RUNE_ACCEPTANCE_PROJECT', '17-cockpit-redesign');
+const TIMEOUT_MS = Number(env('RUNE_ACCEPTANCE_TIMEOUT_MS', String(2 * 60 * 60 * 1000)));
+const MUTATE_REAL_RUNE = process.env['RUNE_ACCEPTANCE_MUTATE_REAL_RUNE'] === '1';
 const FIXTURE_TAG = `cockpit-phase7-${Date.now().toString(36)}`;
 
 class AcceptanceError extends Error {
@@ -149,8 +149,8 @@ async function assertHomeAndDeepView(): Promise<Json> {
       assert(outcome !== 'parked', `${product.name} leaked parked as a terminal outcome`);
     }
   }
-  const jarvisPulse = productFromPulse(home, PRODUCT);
-  assert(jarvisPulse.repoBacked === true, `${PRODUCT} must be repo-backed for real-product acceptance`);
+  const runePulse = productFromPulse(home, PRODUCT);
+  assert(runePulse.repoBacked === true, `${PRODUCT} must be repo-backed for real-product acceptance`);
 
   log('product', `checking deep view for ${PRODUCT}`);
   const view = asRecord((await request('GET', `/api/products/${encodeURIComponent(PRODUCT)}`)).body, 'ProductDeepView');
@@ -385,13 +385,13 @@ async function assertOperationalRail(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  assert(MUTATE_REAL_JARVIS, 'set JARVIS_ACCEPTANCE_MUTATE_REAL_JARVIS=1 to run the real-product mutating acceptance');
-  assert(Number.isFinite(TIMEOUT_MS) && TIMEOUT_MS > 0, 'JARVIS_ACCEPTANCE_TIMEOUT_MS must be a positive number');
+  assert(MUTATE_REAL_RUNE, 'set RUNE_ACCEPTANCE_MUTATE_REAL_RUNE=1 to run the real-product mutating acceptance');
+  assert(Number.isFinite(TIMEOUT_MS) && TIMEOUT_MS > 0, 'RUNE_ACCEPTANCE_TIMEOUT_MS must be a positive number');
 
   const deadline = Date.now() + TIMEOUT_MS;
   const remaining = () => Math.max(1, deadline - Date.now());
 
-  await poll('Jarvis cockpit server', async () => {
+  await poll('Rune cockpit server', async () => {
     const health = await fetch(`${BASE_URL}/health`).catch(() => null);
     return health?.ok ? true : null;
   }, { timeoutMs: 30_000, intervalMs: 1_000 });

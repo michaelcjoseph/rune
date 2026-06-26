@@ -1,6 +1,6 @@
 /**
  * Phase 6 test suite for `src/intent/learning-loop.ts` — the vault-driven
- * nightly learning loop that reads feedback records, runs a Jarvis-owned
+ * nightly learning loop that reads feedback records, runs a Rune-owned
  * post-mortem, and writes attributed lessons into role memory
  * (project 14, test-plan §6.1, §6.5, §6.6, §6.8).
  *

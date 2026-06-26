@@ -46,21 +46,21 @@ function flush(): Promise<void> {
 describe('baseBranchLockKey — per-product / per-base-branch (P1.5)', () => {
   it('is the `<product>:<baseBranch>` composite (delimiter guards against collision-prone formats)', () => {
     // Pin the concrete shape: a delimiter-less `product+baseBranch` would let
-    // ("jar","vis/main") collide with ("jarvis","/main"). The gate runtime keys
+    // ("jar","vis/main") collide with ("rune","/main"). The gate runtime keys
     // its concurrent-run check on this exact string.
-    expect(baseBranchLockKey('jarvis', 'main')).toBe('jarvis:main');
+    expect(baseBranchLockKey('rune', 'main')).toBe('rune:main');
   });
 
   it('is identical for the same product + base branch (so they serialize)', () => {
-    expect(baseBranchLockKey('jarvis', 'main')).toBe(baseBranchLockKey('jarvis', 'main'));
+    expect(baseBranchLockKey('rune', 'main')).toBe(baseBranchLockKey('rune', 'main'));
   });
 
   it('differs by base branch within one product', () => {
-    expect(baseBranchLockKey('jarvis', 'main')).not.toBe(baseBranchLockKey('jarvis', 'release'));
+    expect(baseBranchLockKey('rune', 'main')).not.toBe(baseBranchLockKey('rune', 'release'));
   });
 
   it('differs by product for the same base branch name', () => {
-    expect(baseBranchLockKey('jarvis', 'main')).not.toBe(baseBranchLockKey('aura', 'main'));
+    expect(baseBranchLockKey('rune', 'main')).not.toBe(baseBranchLockKey('aura', 'main'));
   });
 
   it('does NOT depend on the project slug — two projects of one product collide on one key', () => {
@@ -69,10 +69,10 @@ describe('baseBranchLockKey — per-product / per-base-branch (P1.5)', () => {
     // an extra arg the signature ignores) yields the SAME key — the two projects
     // necessarily serialize on it.
     const keyA = (baseBranchLockKey as (p: string, b: string, project?: string) => string)(
-      'jarvis', 'main', 'project-A',
+      'rune', 'main', 'project-A',
     );
     const keyB = (baseBranchLockKey as (p: string, b: string, project?: string) => string)(
-      'jarvis', 'main', 'project-B',
+      'rune', 'main', 'project-B',
     );
     expect(keyA).toBe(keyB);
   });
@@ -85,12 +85,12 @@ describe('withBaseBranchLock — serialization (P1.5)', () => {
     const order: string[] = [];
     const firstHolds = deferred();
 
-    const p1 = withBaseBranchLock('jarvis', 'main', async () => {
+    const p1 = withBaseBranchLock('rune', 'main', async () => {
       order.push('p1:start'); // project A
       await firstHolds.promise; // hold the lock open
       order.push('p1:end');
     });
-    const p2 = withBaseBranchLock('jarvis', 'main', async () => {
+    const p2 = withBaseBranchLock('rune', 'main', async () => {
       order.push('p2:start'); // project B — must wait for A to finish
     });
 
@@ -109,12 +109,12 @@ describe('withBaseBranchLock — serialization (P1.5)', () => {
     const order: string[] = [];
     const aHolds = deferred();
 
-    const a = withBaseBranchLock('jarvis', 'main', async () => {
+    const a = withBaseBranchLock('rune', 'main', async () => {
       order.push('main:start');
       await aHolds.promise;
       order.push('main:end');
     });
-    const b = withBaseBranchLock('jarvis', 'release', async () => {
+    const b = withBaseBranchLock('rune', 'release', async () => {
       order.push('release:start'); // distinct key — runs immediately
     });
 
@@ -128,18 +128,18 @@ describe('withBaseBranchLock — serialization (P1.5)', () => {
 
   it('releases the lock even when fn throws — one failed finalize never deadlocks the next', async () => {
     await expect(
-      withBaseBranchLock('jarvis', 'main', async () => {
+      withBaseBranchLock('rune', 'main', async () => {
         throw new Error('merge blew up');
       }),
     ).rejects.toThrow('merge blew up');
 
     // A subsequent acquisition of the same key still proceeds.
-    const ran = await withBaseBranchLock('jarvis', 'main', async () => 'ok');
+    const ran = await withBaseBranchLock('rune', 'main', async () => 'ok');
     expect(ran).toBe('ok');
   });
 
   it('returns fn\'s resolved value to the caller', async () => {
-    const value = await withBaseBranchLock('jarvis', 'main', async () => 42);
+    const value = await withBaseBranchLock('rune', 'main', async () => 42);
     expect(value).toBe(42);
   });
 });

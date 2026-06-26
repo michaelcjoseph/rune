@@ -3,7 +3,7 @@
  *
  * A gate rejection should teach the counterpart role without letting any role
  * write memory directly. The rejecting role drafts a candidate lesson from the
- * structured gate-rejection record; neutral Jarvis validation then privacy-filters,
+ * structured gate-rejection record; neutral Rune validation then privacy-filters,
  * dedupes, attributes/transforms, and may fail safe to no-lesson BEFORE the shared
  * memory-writer seam is called.
  *

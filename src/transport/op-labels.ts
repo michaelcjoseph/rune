@@ -4,7 +4,7 @@ import type { OpKind } from './notification-bus.js';
  *  (without `.md`); values are short user-facing phrases. Unknown agents fall
  *  back to a titlecased version of the agent name. */
 const AGENT_LABELS: Record<string, string> = {
-  // Runtime agents (Jarvis-resident)
+  // Runtime agents (Rune-resident)
   'kb-query':              'Querying knowledge base',
   'wiki-compiler':         'Compiling wiki entry',
   'wiki-linter':           'Checking knowledge base',

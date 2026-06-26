@@ -20,7 +20,7 @@ test-plan sections pass.
 
 ### Factory refactor
 
-- [ ] 🔴 `createJarvisMcpServer(opts)` registers exactly the requested tool set on one `McpServer` instance; the App-surface opts yield the six App tools, the admin opts yield the `kb_*` set.
+- [ ] 🔴 `createRuneMcpServer(opts)` registers exactly the requested tool set on one `McpServer` instance; the App-surface opts yield the six App tools, the admin opts yield the `kb_*` set.
 - [ ] 🔴 The stdio entry (`mcp/index.ts`) keeps working with no behavior change to existing tools — a no-behavior-change test pins the admin tool list and outputs.
 - [ ] 🟡 Requesting an unknown tool name in `opts` fails loudly at construction rather than silently registering nothing.
 
@@ -80,7 +80,7 @@ test-plan sections pass.
 
 - [ ] 🔴 A request without a valid bearer token is rejected before the transport handles it.
 - [ ] 🔴 An access token bound to a non-Michael user id is rejected; tokens bind to the one known user id.
-- [ ] 🔴 Authorization is gated on `JARVIS_HTTP_SECRET` (DCR + authorization-code flow).
+- [ ] 🔴 Authorization is gated on `RUNE_HTTP_SECRET` (DCR + authorization-code flow).
 - [ ] 🟡 An expired/replayed token is rejected.
 - [ ] 🟢 A clear auth-failure response is returned (no tool exposure to an unauthenticated caller).
 

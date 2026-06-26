@@ -1,7 +1,7 @@
 /**
  * Orchestrated task run record (project 14, Phase 3).
  *
- * One record per task attempt — the durable, truthful evidence Jarvis keeps for
+ * One record per task attempt — the durable, truthful evidence Rune keeps for
  * each task it drives. It is what restart reconstruction reads and what the
  * finalizer handoff carries. The field set is fixed by test-plan §3: a record
  * that drops a field can't be the audit source of truth.

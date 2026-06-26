@@ -159,7 +159,7 @@ export function isLessonPrivacySafe(lesson: string, privateNames: string[]): boo
 
 // Per-process serialization so two near-simultaneous session closures can't
 // interleave the read-dedupe → append → commit sequence on memory.md (which would
-// risk duplicate lessons or `.git/index.lock` contention). Only one Jarvis runs at
+// risk duplicate lessons or `.git/index.lock` contention). Only one Rune runs at
 // a time, so a single promise chain is sufficient; a rejected run never poisons it.
 let captureChain: Promise<unknown> = Promise.resolve();
 

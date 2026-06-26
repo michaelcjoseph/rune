@@ -179,12 +179,12 @@ describe('finalizer-handoff — payload + adapter', () => {
     const h = buildFinalizerHandoff({
       runId: 'run-1',
       project: '14-product-team-agents',
-      product: 'jarvis',
-      branch: 'jarvis-work/14-x',
+      product: 'rune',
+      branch: 'rune-work/14-x',
       baseBranch: 'main',
       taskRecords: records,
     });
-    expect(h.branch).toBe('jarvis-work/14-x');
+    expect(h.branch).toBe('rune-work/14-x');
     expect(h.baseBranch).toBe('main');
     expect(h.taskRecords).toHaveLength(1);
   });
@@ -198,7 +198,7 @@ describe('finalizer-handoff — payload + adapter', () => {
     const h = buildFinalizerHandoff({
       runId: 'run-1',
       project: 'p',
-      product: 'jarvis',
+      product: 'rune',
       branch: 'b',
       baseBranch: 'main',
       taskRecords: records,
@@ -213,7 +213,7 @@ describe('finalizer-handoff — payload + adapter', () => {
     const h = buildFinalizerHandoff({
       runId: 'run-1',
       project: 'p',
-      product: 'jarvis',
+      product: 'rune',
       branch: 'b',
       baseBranch: 'main',
       taskRecords: records,

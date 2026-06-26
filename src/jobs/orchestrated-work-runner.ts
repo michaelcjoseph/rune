@@ -1,7 +1,7 @@
 /**
  * Orchestrated-work mutation applier (project 14, Phase 5).
  *
- * The Jarvis-owned multi-task orchestration loop dispatched through the existing
+ * The Rune-owned multi-task orchestration loop dispatched through the existing
  * mutation pipeline. The cockpit Start action routes here (instead of the legacy
  * `/work --auto` `work-run` applier) when the orchestrated-work toggle selects
  * orchestrated mode — see `src/jobs/work-dispatch.ts`. The legacy applier stays
@@ -353,7 +353,7 @@ function buildOrchestrationDeps(args: {
     runCloseoutChecks: async () => true,
 
     commitCloseout: async (task: SelectedTask): Promise<CloseoutCommit> => {
-      const message = `jarvis(${product}): closeout — ${task.text}`.slice(0, 200);
+      const message = `rune(${product}): closeout — ${task.text}`.slice(0, 200);
       // `-A` (not `-u`) is deliberate: a task's work product routinely includes
       // NEW files (new source/test modules), which `-u` would miss. This runs in
       // the isolated throwaway worktree on a GC'd branch — never the live repo —
@@ -831,7 +831,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
     ctx: ApplyContext,
   ): AsyncIterable<MutationEvent> {
     const { projectSlug } = descriptor.payload;
-    const product = descriptor.payload.product ?? 'jarvis';
+    const product = descriptor.payload.product ?? 'rune';
     const deps = runtimeDeps;
     const recovery = recoveryRedispatchOptions.get(descriptor);
     recoveryRedispatchOptions.delete(descriptor);
@@ -983,7 +983,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
               (h) =>
                 (h.descriptor.kind === 'orchestrated-work' || h.descriptor.kind === 'work-run') &&
                 h.descriptor.id !== descriptor.id &&
-                ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'jarvis') === product &&
+                ((h.descriptor.payload as OrchestratedWorkPayload).product ?? 'rune') === product &&
                 h.descriptor.status === 'running',
             );
 
@@ -1115,7 +1115,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
               });
             },
             mergeBranch: async () => {
-              const message = `jarvis(${product}): merge orchestrated branch ${branch}`;
+              const message = `rune(${product}): merge orchestrated branch ${branch}`;
               try {
                 await deps.runGit(['merge', '--no-ff', branch, '-m', message], { cwd: repoPath });
               } catch (err) {
@@ -1616,7 +1616,7 @@ function buildTerminalSupervisedRun(
   status: SupervisedRun['status'],
   terminal: MutationEvent,
 ): SupervisedRun {
-  const product = descriptor.payload.product ?? 'jarvis';
+  const product = descriptor.payload.product ?? 'rune';
   const project = descriptor.payload.projectSlug || descriptor.target.ref || descriptor.id;
   const run: SupervisedRun = {
     id: descriptor.id,

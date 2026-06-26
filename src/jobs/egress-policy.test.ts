@@ -67,7 +67,7 @@ function makeSandbox(product: string, project = '01-test'): SandboxSpec {
   return {
     product,
     project,
-    worktree: `/tmp/jarvis-worktrees/${product}/${project}`,
+    worktree: `/tmp/rune-worktrees/${product}/${project}`,
     egressAllowlist: [], // checkEgress reads from productsConfigPath, not this field
   };
 }
@@ -89,7 +89,7 @@ let tmpDir: string;
 let denialLogPath: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'jarvis-egress-policy-test-'));
+  tmpDir = mkdtempSync(join(tmpdir(), 'rune-egress-policy-test-'));
   denialLogPath = join(tmpDir, 'egress-denials.jsonl');
 });
 

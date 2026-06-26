@@ -3,7 +3,7 @@
  *
  * The cockpit per-project Start action (and any other surface that starts a
  * project run) goes through this seam to decide WHICH applier handles the run:
- * the Jarvis-owned orchestrated loop (`orchestrated-work`) or the legacy
+ * the Rune-owned orchestrated loop (`orchestrated-work`) or the legacy
  * long-process `/work --auto` runner (`work-run`). The legacy path stays
  * reachable as a recorded fallback while the orchestrated path is proven —
  * and a fallback ALWAYS carries a reason so a run can never silently

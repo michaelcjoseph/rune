@@ -163,7 +163,7 @@ This is not just a one-line prompt change: today `project-setup-writer` is Rune-
 
 **Sidebar (the product card):**
 ```
-┌─ jarvis ────────────────────────────────┐
+┌─ rune ────────────────────────────────┐
 │ ▼ Projects (3)                          │
 │   08-intent-layer    active  12/18      │
 │   07-spaced-repet.   active  8/8        │
@@ -175,7 +175,7 @@ One compact line shows open-counts plus warning count. Clicking opens the drawer
 
 **Backlog drawer (right side, reuses `mutation-drawer` pattern):**
 ```
-┌─ jarvis backlog ────────────────── [✕] ─┐
+┌─ rune backlog ────────────────── [✕] ─┐
 │ [Bugs (4)] [Ideas (7)]   ⚠ 2 warnings  │
 ├─────────────────────────────────────────┤
 │ ## Bugs                          [ + ]  │

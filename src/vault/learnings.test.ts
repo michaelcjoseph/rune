@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Isolated temp dir — must be created before mocking so learningsPath() sees it.
-const tmpDir = join(tmpdir(), `jarvis-learnings-test-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-learnings-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 vi.mock('../config.js', () => ({

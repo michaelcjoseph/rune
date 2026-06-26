@@ -223,7 +223,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       command is bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`. (Added a `readProductsConfig —
       validationCommands (P1.5)` describe to `sandbox-runtime.test.ts`: 5 fixture tests — parses the
       array, fail-closed `[]` when absent, non-array→`[]`, `String()`-coerces entries (mirrors
-      egressAllowlist), and a read-only real-`products.json` test pinning jarvis =
+      egressAllowlist), and a read-only real-`products.json` test pinning rune =
       `["npm run build","npm test"]`. Added the optional `validationCommands?: string[]` field to
       `ProductConfig` (type-only scaffold; parsing is the P1.5 impl task) with a security-sensitive
       JSDoc. The per-command timeout is the constant `WORK_RUN_GATE_COMMAND_TIMEOUT_MS` (default
@@ -315,7 +315,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
       Rune to `["npm run build", "npm test"]`. (`readProductsConfig` now parses `validationCommands`
       into the ProductConfig literal mirroring `egressAllowlist` — `Array.isArray ? .map(String) : []`,
       always an array, fail-closed `[]`. Added `"validationCommands": ["npm run build","npm test"]` to
-      the jarvis entry in `policies/products.json`; other products omit it → `[]` → gate fails closed
+      the rune entry in `policies/products.json`; other products omit it → `[]` → gate fails closed
       with `missing-validation-command`. Field kept optional on the type so unrelated ProductConfig
       test literals still compile (the gate-runtime reads it as `?? []`); added `validationCommands: []`
       to the recovery-finalize test fixture. 5 sandbox-runtime validationCommands tests green (46 total);
@@ -392,14 +392,14 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 >
 > **Operator decision (2026-06-07):** option #2 — *activate gated-merge live now*. The P1.6 note and
 > P1.5 note both deferred this as "the live work-runner gated-merge wiring"; it is no longer deferred.
-> This turns on autonomous merges to jarvis's real `main` behind the hard gate.
+> This turns on autonomous merges to rune's real `main` behind the hard gate.
 >
 > **Run non-interactively.** The run that surfaced this decision (`5808d5cd`) died because its
 > `AskUserQuestion` auto-denied in an unattended run — the exact terminal-correctness bug this project
 > fixes. Do NOT gate activation on an interactive question; the decision is recorded here. If a genuine
 > blocker appears, stop at `blocked-on-human` and alert, do not silently re-ask.
 >
-> **Go-live (merge this branch → `main` + restart the jarvis server) stays a human step**, performed by
+> **Go-live (merge this branch → `main` + restart the rune server) stays a human step**, performed by
 > the operator after this phase is green and Phase 4 proves the chain. Do not self-merge this branch.
 
 ### Tests (write first)

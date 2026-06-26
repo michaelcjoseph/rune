@@ -68,8 +68,8 @@ function holdInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
     mode: 'hold',
     runId: DEFAULT_RUN_ID,
     project: '15-work-run-finalizer',
-    product: 'jarvis',
-    branch: 'jarvis-work/15-work-run-finalizer',
+    product: 'rune',
+    branch: 'rune-work/15-work-run-finalizer',
     baseBranch: 'main',
     ...over,
   };
@@ -191,7 +191,7 @@ function gatedMergeInput(over: Partial<FinalizerInput> = {}): FinalizerInput {
 }
 
 function mergeSuccessPublicationKey(): string {
-  return `${DEFAULT_RUN_ID}:merge-success:jarvis-work/15-work-run-finalizer:pushed-not-deleted`;
+  return `${DEFAULT_RUN_ID}:merge-success:rune-work/15-work-run-finalizer:pushed-not-deleted`;
 }
 
 type MarkProjectIndexDoneInText = (
@@ -453,9 +453,9 @@ describe('markProjectDoneOnBranch — Phase 15 branch-owned project completion c
   });
 
   function makeRepo(indexContent: string): { repoPath: string; branch: string; baseSha: string } {
-    tmpRoot = mkdtempSync(join(tmpdir(), 'jarvis-project-done-branch-test-'));
+    tmpRoot = mkdtempSync(join(tmpdir(), 'rune-project-done-branch-test-'));
     const repoPath = join(tmpRoot, 'repo');
-    const branch = 'jarvis-work/14-product-team-agents';
+    const branch = 'rune-work/14-product-team-agents';
     mkdirSync(join(repoPath, 'docs/projects'), { recursive: true });
     git(tmpRoot, 'init', '-q', '-b', 'main', repoPath);
     writeFileSync(join(repoPath, 'docs/projects/index.md'), indexContent, 'utf8');
@@ -548,13 +548,13 @@ describe('markProjectDoneOnBranch — Phase 15 branch-owned project completion c
 
   it('skips gracefully when the worktree has no docs/projects/index.md', async () => {
     const markProjectDoneOnBranch = await loadMarkProjectDoneOnBranch();
-    tmpRoot = mkdtempSync(join(tmpdir(), 'jarvis-project-done-branch-test-'));
+    tmpRoot = mkdtempSync(join(tmpdir(), 'rune-project-done-branch-test-'));
     const repoPath = join(tmpRoot, 'repo');
     git(tmpRoot, 'init', '-q', '-b', 'main', repoPath);
     writeFileSync(join(repoPath, 'README.md'), 'no project index here\n', 'utf8');
     git(repoPath, 'add', '.');
     git(repoPath, 'commit', '-q', '-m', 'seed repo');
-    git(repoPath, 'checkout', '-q', '-b', 'jarvis-work/no-index');
+    git(repoPath, 'checkout', '-q', '-b', 'rune-work/no-index');
     const headBefore = git(repoPath, 'rev-parse', 'HEAD');
 
     const result = await markProjectDoneOnBranch({
@@ -695,8 +695,8 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
         mode: 'gated-merge',
         runId: DEFAULT_RUN_ID,
         project: '15-work-run-finalizer',
-        product: 'jarvis',
-        branch: 'jarvis-work/15-work-run-finalizer',
+        product: 'rune',
+        branch: 'rune-work/15-work-run-finalizer',
         baseBranch: 'main',
       }),
       ev,
@@ -819,8 +819,8 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
       event: 'merge-success',
       runId: DEFAULT_RUN_ID,
       projectSlug: '15-work-run-finalizer',
-      product: 'jarvis',
-      branch: 'jarvis-work/15-work-run-finalizer',
+      product: 'rune',
+      branch: 'rune-work/15-work-run-finalizer',
       baseBranch: 'main',
     });
     const pushOrder = vi.mocked(effects.pushBranch!).mock.invocationCallOrder[0]!;
@@ -909,7 +909,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
     expect(effects.writeSupervisionTerminal).toHaveBeenCalledWith('completed', ev);
     expect(recordNotificationPublication).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'merge-success',
-      key: expect.stringMatching(new RegExp(`${DEFAULT_RUN_ID}.*jarvis-work/15-work-run-finalizer.*pushed-not-deleted`)),
+      key: expect.stringMatching(new RegExp(`${DEFAULT_RUN_ID}.*rune-work/15-work-run-finalizer.*pushed-not-deleted`)),
       status: 'error',
       error: expect.stringMatching(/operator event bus down/),
     }));

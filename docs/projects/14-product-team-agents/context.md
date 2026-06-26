@@ -1,6 +1,6 @@
 # Project Context: Product-Team Orchestrated Work — a simulated PM/tech-lead/QA/coder/reviewer/designer team that owns a project's per-task build loop end-to-end
 
-> Orchestration state for the `jarvis` project "Product-Team Orchestrated Work".
+> Orchestration state for the `rune` project "Product-Team Orchestrated Work".
 > Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 

@@ -12,7 +12,7 @@
  * read-modify-write callers in the same process are bounded by Node's
  * single-threaded event loop within each call; this module is not safe
  * against cross-process races, which the v1 trust model excludes (one
- * Jarvis process per machine).
+ * Rune process per machine).
  *
  * See spec.md §"Layer 3", tasks.md Phase 6 A2.1.
  */
@@ -70,7 +70,7 @@ export function readAllRuns(filePath: string): SupervisedRun[] {
 
   // Defense in depth — drop entries that don't have the required fields a
   // SupervisedRun must carry. A corrupt entry would otherwise reach the
-  // visibility surface as a typed-but-broken record. (Only Jarvis writes
+  // visibility surface as a typed-but-broken record. (Only Rune writes
   // this file in practice, so corrupt rows are unexpected; logging at warn
   // lets the operator see if drift ever happens.)
   const valid: SupervisedRun[] = [];
@@ -111,7 +111,7 @@ function isSupervisedRun(value: unknown): value is SupervisedRun {
  * `mutations-log.ts` pattern.
  */
 export function writeAllRuns(runs: SupervisedRun[], filePath: string): void {
-  // PID-tagged temp name avoids collisions with other Jarvis processes only;
+  // PID-tagged temp name avoids collisions with other Rune processes only;
   // intra-process safety is guaranteed by Node's single-threaded event loop.
   const tmp = join(dirname(filePath), `.${basename(filePath)}.${process.pid}.tmp`);
   try {

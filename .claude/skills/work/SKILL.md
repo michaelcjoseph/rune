@@ -28,16 +28,16 @@ Because `--auto` commits everything in the working tree at the end of each task,
 
 ### Blocked-on-human sentinel (`--auto` only)
 
-When running under `--auto`, you have no human at the keyboard. If you reach a step you genuinely cannot complete headless — an **interactive** check that needs a person (e.g. an interactive Codex/login flow), a credential prompt only a human can answer, or a decision that is the user's to make — you cannot pause and wait. Instead, **park the run for a human**: do as much as you safely can, leave the work committed on the branch, then end your **final** message with exactly one sentinel line so Jarvis can detect the block, keep this worktree alive, and hand it to the operator.
+When running under `--auto`, you have no human at the keyboard. If you reach a step you genuinely cannot complete headless — an **interactive** check that needs a person (e.g. an interactive Codex/login flow), a credential prompt only a human can answer, or a decision that is the user's to make — you cannot pause and wait. Instead, **park the run for a human**: do as much as you safely can, leave the work committed on the branch, then end your **final** message with exactly one sentinel line so Rune can detect the block, keep this worktree alive, and hand it to the operator.
 
 The sentinel is a single line whose final form is:
 
 ```
-JARVIS_WORK_RUN_SENTINEL { "version": 1, "pendingCheck": "<what a human must do>", "command": "<optional shell command for the operator>", "reason": "<optional short reason --auto could not proceed>" }
+RUNE_WORK_RUN_SENTINEL { "version": 1, "pendingCheck": "<what a human must do>", "command": "<optional shell command for the operator>", "reason": "<optional short reason --auto could not proceed>" }
 ```
 
 Rules:
-- It MUST be the **last line** of your final result, on its own line, opening with the exact marker `JARVIS_WORK_RUN_SENTINEL` followed by a single JSON object.
+- It MUST be the **last line** of your final result, on its own line, opening with the exact marker `RUNE_WORK_RUN_SENTINEL` followed by a single JSON object.
 - `version` MUST be `1`. `pendingCheck` MUST be a non-empty string describing the exact thing a human needs to do. `command` and `reason` are optional strings.
 - Emit it ONLY for a genuine human-required block — not for an ordinary test failure, a review BLOCK you can address, or a task you can still finish. A run that simply finishes (or fails for a reason `--auto` can act on) must NOT emit a sentinel.
 - A malformed, partial, or absent sentinel is ignored — the run falls through to its ordinary terminal outcome (no park). So if you mean to park, emit the line exactly.
@@ -271,7 +271,7 @@ Skip this step if step 14 made no code changes.
 
 If the task modified agent behavior in any of these ways, run the relevant evals:
 
-- Any file under `.claude/agents/` (Jarvis) or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
+- Any file under `.claude/agents/` (Rune) or `$VAULT_DIR/.claude/agents/` (vault-resident) changed
 - The prompt strings, context assembly, or args passed to `runAgent()` changed in a source file (grep the diff for `runAgent(`)
 - `AGENT_MODEL` / agent-loading logic in `src/ai/claude.ts` changed
 

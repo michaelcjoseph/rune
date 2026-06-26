@@ -99,7 +99,7 @@ describe('handleClear', () => {
   });
 
   it('clears the product-scoped webview session when a scope is supplied', async () => {
-    const scope = { kind: 'product', product: 'jarvis' };
+    const scope = { kind: 'product', product: 'rune' };
     getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
     const sender = makeSender();
 
@@ -122,7 +122,7 @@ describe('handleClear', () => {
       claudeSessionId: 'claude-xyz',
       planning: {
         status: 'scoping',
-        product: 'jarvis',
+        product: 'rune',
         idea: '',
         surface: 'chat',
         history: [],

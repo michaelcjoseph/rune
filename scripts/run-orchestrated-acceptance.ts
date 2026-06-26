@@ -5,10 +5,10 @@
 //
 // Drives the production `orchestratedWorkApplier` in-process — the same
 // applier the cockpit Start action dispatches to — so the run exercises the
-// real path: sandboxed worktree (resume if `jarvis-work/<slug>` already
+// real path: sandboxed worktree (resume if `rune-work/<slug>` already
 // exists), `runProjectOrchestration`, live role spawns via
 // `createProductionTaskWorkflowRunner` (QA/coder → codex, judgment roles →
-// claude), Jarvis-owned closeout commits, and the deliberate finalizer hold.
+// claude), Rune-owned closeout commits, and the deliberate finalizer hold.
 //
 // The mutation pipeline glue (createMutation/supervision/bus fan-out) is NOT
 // exercised here — it is fixture-proven elsewhere; this driver is about the
@@ -36,7 +36,7 @@ function argValue(flag: string): string | undefined {
 
 async function main(): Promise<void> {
   const projectSlug = argValue('--project');
-  const product = argValue('--product') ?? 'jarvis';
+  const product = argValue('--product') ?? 'rune';
   if (!projectSlug) {
     console.error(
       'Usage: run-orchestrated-acceptance.ts --project <slug> [--product <product>]',

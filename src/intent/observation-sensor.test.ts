@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
  * stable order. The actual source readers (reading vault files, product repo telemetry, and
  * the interaction log) are integration around this — they are the `SignalReader` callbacks
  * the composer takes. The cross-cutting wiring that appends to the interaction log from
- * every Jarvis call site is genuine multi-file integration, separately handled.
+ * every Rune call site is genuine multi-file integration, separately handled.
  */
 
 import { readSensors, type SignalReader } from './observation-sensor.js';

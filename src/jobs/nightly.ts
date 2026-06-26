@@ -524,7 +524,7 @@ async function stepObservation(bus?: NotificationBus): Promise<NightlyStepResult
     if (plan.action === 'dispatch') {
       const create = await createMutation(
         'gen-eval-loop',
-        { product: 'jarvis', project: plan.projectSlug },
+        { product: 'rune', project: plan.projectSlug },
         'cron',
       );
       if (create.ok) {
@@ -587,9 +587,9 @@ const LEARNING_LOOP_MAX_PER_PASS = 20;
 const POSTMORTEM_TIMEOUT_MS = 60_000;
 
 /** Product-team learning loop (project 14, Phase 6). Reads machine-readable feedback
- *  records, runs the Jarvis-owned post-mortem on each NOT-yet-processed record (up to
+ *  records, runs the Rune-owned post-mortem on each NOT-yet-processed record (up to
  *  a per-pass cap), and writes one attributed, privacy-clean lesson into the
- *  responsible role's memory.md (its own atomic commit in the jarvis repo). Each
+ *  responsible role's memory.md (its own atomic commit in the rune repo). Each
  *  record is processed exactly once via a content-hash marker, so the post-mortem LLM
  *  call never re-fires for the same record on later nights. No feedback / nothing new
  *  → skipped. Each malformed record is a durable skip, never silent no-feedback.

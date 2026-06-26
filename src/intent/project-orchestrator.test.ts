@@ -7,7 +7,7 @@
  *
  * The loop ties the Phase 3/4 substrate together: select the first unchecked
  * task → assemble bounded context → run the team-task workflow → on
- * ready-for-closeout, perform Jarvis-owned closeout (context update + tick
+ * ready-for-closeout, perform Rune-owned closeout (context update + tick
  * exactly the selected task + closeout checks + commit + clean-worktree verify) →
  * advance. A blocked/failed/objection task stops durably (never skipped). When no
  * tasks remain, it hands branch/run facts to the injected finalizer rather than
@@ -97,7 +97,7 @@ function makeHarness(over: Partial<OrchestrationDeps> = {}, tasksMd = TWO_TASKS)
     runId: 'run-1',
     project: '14-x',
     product: 'aura',
-    branch: 'jarvis-work/14-x',
+    branch: 'rune-work/14-x',
     baseBranch: 'main',
     readTasksMd: async () => state.tasksMd,
     readContextMd: async () => state.contextMd,
@@ -176,7 +176,7 @@ function expectOperationalHold(
   expect(String(raw['reason'] ?? '')).toMatch(opts.reason);
   expect(raw).not.toHaveProperty('parked');
   expect(JSON.stringify(raw)).not.toMatch(/blocked-on-human/i);
-  expect(raw['branch'] ?? handoff['branch']).toBe('jarvis-work/14-x');
+  expect(raw['branch'] ?? handoff['branch']).toBe('rune-work/14-x');
   expect(raw['worktreePath'] ?? handoff['worktreePath']).toBe(opts.worktreePath);
   expect(raw['preserveBranch'] ?? handoff['preserveBranch']).toBe(true);
   expect(raw['preserveWorktree'] ?? handoff['preserveWorktree']).toBe(true);
@@ -196,7 +196,7 @@ function expectFindingHold(
   expect(String(raw['reason'] ?? '')).toMatch(opts.reason);
   expect(raw).not.toHaveProperty('parked');
   expect(JSON.stringify(raw)).not.toMatch(/blocked-on-human|PM|wrap-up/i);
-  expect(raw['branch'] ?? handoff['branch']).toBe('jarvis-work/14-x');
+  expect(raw['branch'] ?? handoff['branch']).toBe('rune-work/14-x');
   expect(raw['worktreePath'] ?? handoff['worktreePath']).toBe(opts.worktreePath);
   expect(raw['preserveBranch'] ?? handoff['preserveBranch']).toBe(true);
   expect(raw['preserveWorktree'] ?? handoff['preserveWorktree']).toBe(true);
@@ -250,7 +250,7 @@ describe('project-orchestrator — closeout', () => {
   });
 
   it('holds durably without advancing when closeout cannot produce a clean checkpoint', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-dirty-worktree';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-dirty-worktree';
     const h = makeHarness({ verifyCleanWorktree: async () => false });
     const res = await runProjectOrchestration({ ...h.deps, worktreePath });
     expectOperationalHold(res, {
@@ -332,7 +332,7 @@ describe('project-orchestrator — closeout', () => {
 
 describe('project-orchestrator — operational terminal', () => {
   it('treats malformed gate output as a non-finding operational HOLD with branch/worktree preserved', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-malformed-gate-output';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-malformed-gate-output';
     let workflowCalls = 0;
     const h = makeHarness({
       runTaskWorkflow: async (task) => {
@@ -606,7 +606,7 @@ describe('project-orchestrator — block', () => {
   });
 
   it('stops without blocked-on-human parking when feedback retries exhaust', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
     const h = makeHarness({
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
@@ -639,7 +639,7 @@ describe('project-orchestrator — block', () => {
   it.each(['high', 'critical'] as const)(
     'stops without blocked-on-human parking when an open %s objection blocks a task',
     async (severity) => {
-      const worktreePath = `/tmp/jarvis-worktrees/aura/14-x-${severity}`;
+      const worktreePath = `/tmp/rune-worktrees/aura/14-x-${severity}`;
       const h = makeHarness({
         runTaskWorkflow: async (task) => ({
           taskId: task.id,
@@ -681,7 +681,7 @@ describe('project-orchestrator — block', () => {
   );
 
   it('stops without blocked-on-human parking when an objection-open block has no severity details', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x-objection-open';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x-objection-open';
     const h = makeHarness({
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
@@ -762,7 +762,7 @@ describe('project-orchestrator — retry feedback', () => {
   });
 
   it('holds before finalization when terminal evidence has a non-reversible high finding', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-non-reversible-terminal';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-non-reversible-terminal';
     const bugEntries: TerminalBugEntry[] = [];
     const terminalFinding: FindingsLedgerEntry = {
       id: 'finding-auth-write-leak',
@@ -895,7 +895,7 @@ describe('project-orchestrator — retry feedback', () => {
 
     expect(res.kind).toBe('finalized');
     expect(finalizerHandoff).toMatchObject({
-      branch: 'jarvis-work/14-x',
+      branch: 'rune-work/14-x',
       taskRecords: [expect.objectContaining({ taskId: 'log-reversible-terminal-findings' })],
     });
     expect(bugEntries).toEqual([
@@ -990,7 +990,7 @@ describe('project-orchestrator — context influence', () => {
 
 describe('project-orchestrator — durable run state', () => {
   it('persists TaskRunRecords and a resumable cursor after closeout before advancing', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-x';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-x';
     const persistedRecords: TaskRunRecord[] = [];
     const persistedCursors: PersistedRunCursor[] = [];
     let workflowCalls = 0;
@@ -1040,7 +1040,7 @@ describe('project-orchestrator — durable run state', () => {
       runId: 'run-1',
       product: 'aura',
       project: '14-x',
-      branch: 'jarvis-work/14-x',
+      branch: 'rune-work/14-x',
       baseBranch: 'main',
       worktreePath,
       resumeMarker: 'resumable',
@@ -1277,7 +1277,7 @@ describe('project-orchestrator — durable run state', () => {
   });
 
   it('holds as an operational terminal when warning recording fails, without re-running the coder workflow', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-recording-failure';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-recording-failure';
     const warningFinding = {
       class: 'cost-perf',
       severity: 'low',
@@ -1339,7 +1339,7 @@ describe('project-orchestrator — durable run state', () => {
   });
 
   it('holds as an operational terminal when acceptance recording fails, without parking blocked-on-human', async () => {
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-acceptance-recording-failure';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-acceptance-recording-failure';
     let workflowCalls = 0;
     const h = makeHarness({
       runTaskWorkflow: async (task) => {
@@ -1395,7 +1395,7 @@ describe('project-orchestrator — durable run state', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Terminal bug recording — unresolved >low findings become Jarvis bugs
+// Terminal bug recording — unresolved >low findings become Rune bugs
 // ---------------------------------------------------------------------------
 
 describe('project-orchestrator — terminal bug recording', () => {
@@ -1468,7 +1468,7 @@ describe('project-orchestrator — terminal bug recording', () => {
     ]);
   });
 
-  it('writes one detailed Jarvis bugs.md entry per remaining open >low finding before finalization', async () => {
+  it('writes one detailed Rune bugs.md entry per remaining open >low finding before finalization', async () => {
     const bugEntries: TerminalBugEntry[] = [];
     const order: string[] = [];
     const terminalFindings: FindingsLedgerEntry[] = [
@@ -1677,7 +1677,7 @@ describe('project-orchestrator — finalizer handoff', () => {
       },
     });
     const res = await runProjectOrchestration(h.deps);
-    expect(handoffBranch).toBe('jarvis-work/14-x');
+    expect(handoffBranch).toBe('rune-work/14-x');
     expect(res.kind).toBe('finalized');
   });
 
@@ -1688,7 +1688,7 @@ describe('project-orchestrator — finalizer handoff', () => {
     const res = await runProjectOrchestration(h.deps);
     expect(res.kind).toBe('held');
     if (res.kind === 'held') {
-      expect(res.handoff.branch).toBe('jarvis-work/14-x');
+      expect(res.handoff.branch).toBe('rune-work/14-x');
     }
     // Both tasks still completed; only the terminal landing is held.
     expect(h.state.commits).toHaveLength(2);
@@ -1696,7 +1696,7 @@ describe('project-orchestrator — finalizer handoff', () => {
 
   it('does not finalize when an operational closeout failure holds mid-way', async () => {
     // A run that holds on an operational terminal never reaches the finalizer.
-    const worktreePath = '/tmp/jarvis-worktrees/aura/14-closeout-checks';
+    const worktreePath = '/tmp/rune-worktrees/aura/14-closeout-checks';
     const h = makeHarness({ runCloseoutChecks: async () => false });
     const res = await runProjectOrchestration({ ...h.deps, worktreePath });
     expectOperationalHold(res, {

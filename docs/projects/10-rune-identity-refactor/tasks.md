@@ -5,7 +5,7 @@ for verification.
 
 > **Rescoped 2026-06-02.** This is no longer a compiler build — it is two surgical edits:
 > symlink `AGENTS.md` → `CLAUDE.md` per repo, and move orchestrator identity from
-> `pkms/CLAUDE.md` to `jarvis/CLAUDE.md`. The prior compiler/manifest/verifier/CI/playbook
+> `pkms/CLAUDE.md` to `rune/CLAUDE.md`. The prior compiler/manifest/verifier/CI/playbook
 > tasks are dropped (see spec.md → Scope change). Small enough to do by hand in one sitting;
 > no `/work --auto` orchestration needed.
 
@@ -16,36 +16,36 @@ for verification.
 > so it can never pass under the rescope. Delete it before anything else.
 
 - [x] Delete `scripts/identity-refactor-phase1.test.ts` (the only spec-10 test; the
-      `'10-jarvis-identity-refactor'` string in `src/jobs/supervision-store.test.ts` is
+      `'10-rune-identity-refactor'` string in `src/jobs/supervision-store.test.ts` is
       unrelated test data — leave it). _(Already removed in the rescope commit `ffd7178`;
       verified absent.)_
 - [x] Confirm the test suite is green without it (`npm test` or the repo's runner).
-      _(2946 passing; the lone failure — `claude.test.ts` "does not set JARVIS_WORKSPACE_DIR"
+      _(2946 passing; the lone failure — `claude.test.ts` "does not set RUNE_WORKSPACE_DIR"
       — is a pre-existing env-pollution issue unrelated to spec-10: a Rune-spawned session
-      exports `JARVIS_WORKSPACE_DIR` into `process.env`, which the spawn env spread leaks into
+      exports `RUNE_WORKSPACE_DIR` into `process.env`, which the spawn env spread leaks into
       the child. Passes in a normal terminal/CI. Not introduced by this project.)_
 
-## Phase 1 — Content move (pkms ↔ jarvis)
+## Phase 1 — Content move (pkms ↔ rune)
 
 > Depends on: Phase 0. Order matters: this precedes the pkms symlink in Phase 2.
 
 - [x] Append the `## Rune` section (automation ownership, agent split, KB raw-source
-      routing, `loadAgentDef` order) from `pkms/CLAUDE.md` into `jarvis/CLAUDE.md`, placed
+      routing, `loadAgentDef` order) from `pkms/CLAUDE.md` into `rune/CLAUDE.md`, placed
       coherently within its existing structure. _(New `## Rune` section after
       `## Architecture`; framing adapted "this vault" → "the pkms vault" per test-plan §2.7.)_
 - [x] Append the `### How Reviews Work` mechanics (prep → interview → outline →
-      write-up + post-agent pipeline; the specialist updaters) into `jarvis/CLAUDE.md`.
+      write-up + post-agent pipeline; the specialist updaters) into `rune/CLAUDE.md`.
 - [x] Remove both sections from `pkms/CLAUDE.md`.
 - [x] Insert the pointer in `pkms/CLAUDE.md` where the sections were: "Rune orchestration
-      … is documented in `jarvis/CLAUDE.md`."
+      … is documented in `rune/CLAUDE.md`."
 - [x] Verify against the move boundary in spec.md: the listed "staying" sections remain in
       pkms (overview, vault structure, journal format, reference system, tags, schemas,
       cadence tables, command tables, About Me, etc.).
-- [x] Read the git diff in both repos — moved content present in jarvis, absent in pkms,
+- [x] Read the git diff in both repos — moved content present in rune, absent in pkms,
       pointer present (test-plan §2). _(Diffs reviewed; PII/secret leak check on the added
       public-repo content passed.)_
-- [x] Commit jarvis to `main`. Commit pkms straight to `main` (no-branch rule). _(jarvis
-      lands on the work branch `jarvis-work/2d0534db` → merges to main downstream, the
+- [x] Commit rune to `main`. Commit pkms straight to `main` (no-branch rule). _(rune
+      lands on the work branch `rune-work/2d0534db` → merges to main downstream, the
       standard `/work` flow; pkms committed straight to `main` with selective staging —
       only `CLAUDE.md`, leaving live journal edits untouched; nothing pushed.)_
 
@@ -55,13 +55,13 @@ for verification.
 
 ### Core repos
 
-- [x] **jarvis:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
+- [x] **rune:** `git rm AGENTS.md`; `ln -s CLAUDE.md AGENTS.md`; `git add AGENTS.md`.
       _(Done. Deterministic checks pass: `readlink`=CLAUDE.md, git mode `120000`,
       `diff CLAUDE.md AGENTS.md` exits 0.)_
-- [x] **Verify Codex reads through the symlink** in jarvis — open a Codex session, confirm
+- [x] **Verify Codex reads through the symlink** in rune — open a Codex session, confirm
       it loads the orchestrator identity — **before** rolling the pattern to other repos
       (test-plan §1). If it fails, apply the `cp` + `diff` fallback (spec.md → Risks) and
-      stop. _(Verified manually 2026-06-03: Michael opened a Codex session in the jarvis
+      stop. _(Verified manually 2026-06-03: Michael opened a Codex session in the rune
       worktree and confirmed it loads the orchestrator identity through the symlink. The
       `--auto` block was only the interactive-session limitation, not a failed check — the
       gated Phase 2 rollout (pkms; assay/aura best-effort) is now clear to proceed.)_
@@ -80,13 +80,13 @@ for verification.
 ### Verify + commit
 
 - [x] In each touched repo, confirm `diff CLAUDE.md AGENTS.md` exits 0 and
-      `readlink AGENTS.md` = `CLAUDE.md` (test-plan §1). _(All four — jarvis, pkms, assay,
+      `readlink AGENTS.md` = `CLAUDE.md` (test-plan §1). _(All four — rune, pkms, assay,
       aura — verified: byte-identical, mode `120000`, `readlink`=CLAUDE.md.)_
 - [x] Confirm `~/.claude/CLAUDE.md` sha256 is unchanged from project start (test-plan §3).
       _(No baseline sha was captured at project start, so this is verified by construction:
       `~/.claude/CLAUDE.md` lives outside all four touched repos and no step in this project
       writes to it. Current sha `7a8b43f4…0863df` for the record.)_
-- [x] Commit each repo to `main`. _(jarvis `53d91de`, pkms `eeb572f`, assay `dbf277e`,
+- [x] Commit each repo to `main`. _(rune `53d91de`, pkms `eeb572f`, assay `dbf277e`,
       aura `5e8a0cc` — all on `main`.)_
 
 ---
@@ -96,7 +96,7 @@ for verification.
 Dropped from the prior plan; not deferred, not tracked elsewhere under this project:
 
 - The `compile-instructions` compiler, IR, `claude`/`agents` renderers, YAML manifest.
-- The `$JARVIS_HOME` wrapper and `wrapper-template.sh`.
+- The `$RUNE_HOME` wrapper and `wrapper-template.sh`.
 - The named-token inventory verifier and `ownership.md` / snapshot audit artifacts.
 - CI drift-check steps and the optional pre-commit hook.
 - `per-repo-migration.md` and the aura/assay/relay consumer-migration *projects* (the

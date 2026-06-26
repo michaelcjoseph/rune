@@ -102,7 +102,7 @@ function registry(): Registry {
     builtAt: '2026-01-15T00:00:00.000Z',
     products: [
       {
-        name: 'jarvis',
+        name: 'rune',
         repoBacked: true,
         projects: [
           { slug: '14-product-team-agents', status: 'active' },

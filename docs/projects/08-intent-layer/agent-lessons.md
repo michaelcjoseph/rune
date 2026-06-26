@@ -394,7 +394,7 @@ disk. The agent had responded conversationally to the brief (asking
 clarifying questions of an absent user) instead of calling `Write`.
 
 The spec was recovered only because the `/plan` conversation lived in a
-Claude Code session transcript at `~/.claude/projects/-Users-jarvis-workspace-pkms/`
+Claude Code session transcript at `~/.claude/projects/-Users-rune-workspace-pkms/`
 that happened to still be on disk. That recovery path is incidental and
 not load-bearing — without it the user would have lost ~45 minutes of
 spec work plus the Codex critique cycle.

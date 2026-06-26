@@ -200,7 +200,7 @@ describe('bot/commands/fresh', () => {
     });
 
     it('summarizes and deletes the product-scoped webview session when a scope is supplied', async () => {
-      const scope = { kind: 'product', product: 'jarvis' };
+      const scope = { kind: 'product', product: 'rune' };
       getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
       summarizeMock.mockResolvedValue({
         text: 'Scoped product discussion\nKB-worthy: no',
@@ -226,7 +226,7 @@ describe('bot/commands/fresh', () => {
       await closeConversation(123, 'webview');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] webview chat');
+      expect(entry).toContain('[[rune]] webview chat');
       expect(entry).not.toContain('telegram chat');
     });
 
@@ -240,7 +240,7 @@ describe('bot/commands/fresh', () => {
       await closeConversation(456, 'telegram');
 
       const entry = appendMock.mock.calls[0]![0] as string;
-      expect(entry).toContain('[[jarvis]] telegram chat');
+      expect(entry).toContain('[[rune]] telegram chat');
       expect(entry).not.toContain('webview chat');
     });
   });
@@ -278,7 +278,7 @@ describe('bot/commands/fresh', () => {
     });
 
     it('uses the product-scoped webview session for /fresh when a scope is supplied', async () => {
-      const scope = { kind: 'product', product: 'jarvis' };
+      const scope = { kind: 'product', product: 'rune' };
       getSessionMock.mockReturnValue({ sessionId: 'sess-product' });
       summarizeMock.mockResolvedValue({
         text: 'Scoped summary\nKB-worthy: no',
@@ -346,7 +346,7 @@ describe('bot/commands/fresh', () => {
 
       const entry = appendMock.mock.calls[0]![0] as string;
       expect(entry).toContain('14:30');
-      expect(entry).toContain('[[jarvis]]');
+      expect(entry).toContain('[[rune]]');
       expect(entry).toContain('\t- Summary line');
       expect(entry).not.toContain('KB-worthy');
     });

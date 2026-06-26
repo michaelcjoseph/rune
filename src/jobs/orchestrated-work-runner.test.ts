@@ -119,7 +119,7 @@ function makeWorktree(project = 'demo', tasks = '- [ ] task one\n'): { sandbox: 
   writeFileSync(join(projDir, 'context.md'), '# Project Context\n', 'utf8');
   return {
     sandbox: {
-      product: 'jarvis',
+      product: 'rune',
       project,
       worktree: dir,
       egressAllowlist: [],
@@ -144,7 +144,7 @@ function initGitRepo(dir: string): void {
 }
 
 function makeDescriptor(
-  payload: { projectSlug: string; product?: string } = { projectSlug: 'demo', product: 'jarvis' },
+  payload: { projectSlug: string; product?: string } = { projectSlug: 'demo', product: 'rune' },
   id = 'mut-1',
 ): MutationDescriptor<{ projectSlug: string; product?: string }> {
   return {
@@ -198,8 +198,8 @@ async function finalizeAsOrchestrationResult(
   const handoff: FinalizerHandoff = {
     runId: 'test-run',
     project: 'demo',
-    product: 'jarvis',
-    branch: 'jarvis-work/demo',
+    product: 'rune',
+    branch: 'rune-work/demo',
     baseBranch: 'main',
     taskRecords: [],
   };
@@ -357,9 +357,9 @@ describe('orchestratedWorkApplier', () => {
       });
 
       registerApplier(orchestratedWorkApplier);
-      const descriptor = makeDescriptor({ projectSlug, product: 'jarvis' }, 'mut-recovered-redispatch');
+      const descriptor = makeDescriptor({ projectSlug, product: 'rune' }, 'mut-recovered-redispatch');
       const result = redispatchRecoveredOrchestratedMutation(descriptor, {
-        branch: 'jarvis-work/recovered-branch',
+        branch: 'rune-work/recovered-branch',
         baseBranch: 'main',
         worktreePath: recovered.dir,
         reconstruction: {
@@ -376,7 +376,7 @@ describe('orchestratedWorkApplier', () => {
 
       expect(createWorktree).not.toHaveBeenCalled();
       expect(seenDeps).toEqual({
-        branch: 'jarvis-work/recovered-branch',
+        branch: 'rune-work/recovered-branch',
         baseBranch: 'main',
         worktreePath: recovered.dir,
       });
@@ -443,8 +443,8 @@ describe('orchestratedWorkApplier', () => {
           handoff: {
             runId: 'mut-orch-atomic-held',
             project: 'demo',
-            product: 'jarvis',
-            branch: 'jarvis-work/demo',
+            product: 'rune',
+            branch: 'rune-work/demo',
             taskRecords: [],
           },
         }),
@@ -696,7 +696,7 @@ describe('orchestratedWorkApplier', () => {
         registerApplier(orchestratedWorkApplier);
         const createdMutation = await createMutation(
           'orchestrated-work',
-          { projectSlug, product: 'jarvis' },
+          { projectSlug, product: 'rune' },
           'webview',
         );
         if (!createdMutation.ok) throw new Error(createdMutation.reason);
@@ -1065,7 +1065,7 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
-    it('pumps Jarvis-owned orchestration lifecycle events as activity before the terminal event', async () => {
+    it('pumps Rune-owned orchestration lifecycle events as activity before the terminal event', async () => {
       const gitCalls: string[][] = [];
       const runGit = vi.fn(async (gitArgs: string[]) => {
         gitCalls.push([...gitArgs]);
@@ -1171,7 +1171,7 @@ describe('orchestratedWorkApplier', () => {
       );
       expect(gitCalls).toEqual(expect.arrayContaining([
         ['add', '-A'],
-        ['commit', '-m', 'jarvis(jarvis): closeout — Build the streak core'],
+        ['commit', '-m', 'rune(rune): closeout — Build the streak core'],
         ['rev-parse', 'HEAD'],
       ]));
       expect(destroyed).toBe(true);
@@ -1393,12 +1393,12 @@ describe('orchestratedWorkApplier', () => {
           data: {
             event: 'closeout-commit',
             projectSlug: 'demo',
-            product: 'jarvis',
+            product: 'rune',
             taskId: 'build-the-streak-core',
             taskText: 'Build the streak core',
             commitSha: '1111111aaaaaaa',
             shortSha: '1111111',
-            commitSubject: 'jarvis(jarvis): closeout — Build the streak core',
+            commitSubject: 'rune(rune): closeout — Build the streak core',
             tasksDone: 1,
             tasksTotal: 2,
             tasksRemaining: 1,
@@ -1411,12 +1411,12 @@ describe('orchestratedWorkApplier', () => {
           data: {
             event: 'closeout-commit',
             projectSlug: 'demo',
-            product: 'jarvis',
+            product: 'rune',
             taskId: 'render-the-streak-card',
             taskText: 'Render the streak card',
             commitSha: '2222222bbbbbbb',
             shortSha: '2222222',
-            commitSubject: 'jarvis(jarvis): closeout — Render the streak card',
+            commitSubject: 'rune(rune): closeout — Render the streak card',
             tasksDone: 2,
             tasksTotal: 2,
             tasksRemaining: 0,
@@ -1661,7 +1661,7 @@ describe('orchestratedWorkApplier', () => {
       expect(summary).toMatchObject({
         id: runId,
         project: 'demo',
-        product: 'jarvis',
+        product: 'rune',
         outcome: 'branch-complete',
       });
       expect(summary['transcriptPath']).toBe(join(runDir, 'transcript.jsonl'));
@@ -1701,8 +1701,8 @@ describe('orchestratedWorkApplier', () => {
         mode: 'gated-merge',
         runId,
         project: 'demo',
-        product: 'jarvis',
-        branch: 'jarvis-work/demo',
+        product: 'rune',
+        branch: 'rune-work/demo',
         baseBranch: 'main',
       });
       expect(typeof effects.classify).toBe('function');
@@ -1785,8 +1785,8 @@ describe('orchestratedWorkApplier', () => {
         data: {
           event: 'merge-success',
           projectSlug: 'demo',
-          product: 'jarvis',
-          branch: 'jarvis-work/demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
           baseBranch: 'main',
         },
       });
@@ -1845,8 +1845,8 @@ describe('orchestratedWorkApplier', () => {
           mode: 'gated-merge',
           runId,
           project: 'demo',
-          product: 'jarvis',
-          branch: 'jarvis-work/demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
           baseBranch: 'main',
         });
         expect(effects.markProjectDone).toEqual(expect.any(Function));
@@ -1993,7 +1993,7 @@ describe('orchestratedWorkApplier', () => {
       writeFileSync(
         productsFile,
         JSON.stringify({
-          jarvis: {
+          rune: {
             repoPath,
             baseBranch: 'trunk',
             credentialsFile: '',
@@ -2044,14 +2044,14 @@ describe('orchestratedWorkApplier', () => {
 
         expect(mockRunFinalizer).toHaveBeenCalledTimes(1);
         expect(mockRunGate).toHaveBeenCalledWith(expect.objectContaining({
-          product: 'jarvis',
+          product: 'rune',
           repoPath,
           baseBranch: 'trunk',
-          branch: 'jarvis-work/demo',
+          branch: 'rune-work/demo',
           validationCommands: ['npm test -- --runInBand'],
           tasksRemaining: 0,
           concurrentRun: false,
-          integrationWorktree: expect.stringContaining(`gate-jarvis-${runId}`),
+          integrationWorktree: expect.stringContaining(`gate-rune-${runId}`),
         }));
         expect(terminal?.kind).toBe('completed');
         expect(terminal?.data).toMatchObject({
@@ -2075,11 +2075,11 @@ describe('orchestratedWorkApplier', () => {
         expect(operations).toEqual(['merge', 'push', 'destroy-worktree', 'delete-branch']);
         expect(calls).toEqual(expect.arrayContaining([
           expect.objectContaining({
-            args: ['merge', '--no-ff', 'jarvis-work/demo', '-m', 'jarvis(jarvis): merge orchestrated branch jarvis-work/demo'],
+            args: ['merge', '--no-ff', 'rune-work/demo', '-m', 'rune(rune): merge orchestrated branch rune-work/demo'],
             cwd: repoPath,
           }),
           expect.objectContaining({ args: ['push', 'origin', 'trunk'], cwd: repoPath }),
-          expect.objectContaining({ args: ['branch', '-d', 'jarvis-work/demo'], cwd: repoPath }),
+          expect.objectContaining({ args: ['branch', '-d', 'rune-work/demo'], cwd: repoPath }),
         ]));
         expect(destroyed).toBe(true);
       } finally {
@@ -2252,9 +2252,9 @@ describe('orchestratedWorkApplier', () => {
         const baseMutations = calls.filter(({ args }) => {
           const command = args[0];
           return (
-            (command === 'merge' && args.includes('jarvis-work/demo')) ||
+            (command === 'merge' && args.includes('rune-work/demo')) ||
             (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
-            (command === 'branch' && args[1] === '-d' && args[2] === 'jarvis-work/demo')
+            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/demo')
           );
         });
         expect(baseMutations).toEqual([]);
@@ -2364,7 +2364,7 @@ describe('orchestratedWorkApplier', () => {
           });
           expect(summary['baseSha']).toBe(baseSha);
 
-          const expectedRange = `${baseSha}..jarvis-work/demo`;
+          const expectedRange = `${baseSha}..rune-work/demo`;
           expect(calls).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ args: ['rev-list', expectedRange] }),
@@ -2385,8 +2385,8 @@ describe('orchestratedWorkApplier', () => {
         handoff: {
           runId: 'mut-1',
           project: 'demo',
-          product: 'jarvis',
-          branch: 'jarvis-work/demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
           taskRecords: [],
         },
       });
@@ -2411,8 +2411,8 @@ describe('orchestratedWorkApplier', () => {
         handoff: {
           runId: 'mut-1',
           project: 'demo',
-          product: 'jarvis',
-          branch: 'jarvis-work/demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
           taskRecords: [],
         },
       });
@@ -2425,19 +2425,19 @@ describe('orchestratedWorkApplier', () => {
     });
 
     it('finding-driven held terminals preserve the live worktree and do not run the finalizer', async () => {
-      const worktreePath = '/tmp/jarvis-worktrees/jarvis/demo-non-reversible';
+      const worktreePath = '/tmp/rune-worktrees/rune/demo-non-reversible';
       inject({
         kind: 'held',
         reason: 'non-reversible high terminal finding remains after severity convergence',
-        branch: 'jarvis-work/demo',
+        branch: 'rune-work/demo',
         worktreePath,
         preserveBranch: true,
         preserveWorktree: true,
         handoff: {
           runId: 'mut-1',
           project: 'demo',
-          product: 'jarvis',
-          branch: 'jarvis-work/demo',
+          product: 'rune',
+          branch: 'rune-work/demo',
           taskRecords: [],
         },
       });
@@ -2450,7 +2450,7 @@ describe('orchestratedWorkApplier', () => {
       const data = terminal?.data as Record<string, unknown>;
       expect(data['held']).toBe(true);
       expect(String(data['reason'] ?? '')).toMatch(/non-reversible|terminal finding|hold/i);
-      expect(data['branch']).toBe('jarvis-work/demo');
+      expect(data['branch']).toBe('rune-work/demo');
       expect(data['operatorWorktreePath']).toBe(worktreePath);
       expect(data['preserveBranch']).toBe(true);
       expect(data['preserveWorktree']).toBe(true);
@@ -2550,7 +2550,7 @@ describe('orchestratedWorkApplier', () => {
           held: true,
           reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           operatorWorktreePath: wtDir,
-          branch: 'jarvis-work/demo',
+          branch: 'rune-work/demo',
           baseBranch: 'main',
           preserveBranch: true,
           preserveWorktree: true,
@@ -2560,7 +2560,7 @@ describe('orchestratedWorkApplier', () => {
         const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, unknown>;
         expect(summary).toMatchObject({
           id: runId,
-          branch: 'jarvis-work/demo',
+          branch: 'rune-work/demo',
           reason: expect.stringMatching(/non-reversible|high|terminal finding|hold/i),
           baseSha: 'base-objection-123',
         });
@@ -2568,9 +2568,9 @@ describe('orchestratedWorkApplier', () => {
         const baseMutations = calls.filter(({ args }) => {
           const command = args[0];
           return (
-            (command === 'merge' && args.includes('jarvis-work/demo')) ||
+            (command === 'merge' && args.includes('rune-work/demo')) ||
             (command === 'push' && args[1] === 'origin' && args[2] === 'main') ||
-            (command === 'branch' && args[1] === '-d' && args[2] === 'jarvis-work/demo')
+            (command === 'branch' && args[1] === '-d' && args[2] === 'rune-work/demo')
           );
         });
         expect(baseMutations).toEqual([]);
@@ -2620,7 +2620,7 @@ describe('orchestratedWorkApplier', () => {
         registerApplier(orchestratedWorkApplier);
         const createdMutation = await createMutation(
           'orchestrated-work',
-          { projectSlug, product: 'jarvis' },
+          { projectSlug, product: 'rune' },
           'webview',
         );
         if (!createdMutation.ok) throw new Error(createdMutation.reason);
@@ -2685,7 +2685,7 @@ describe('orchestratedWorkApplier', () => {
         registerApplier(orchestratedWorkApplier);
         const createdMutation = await createMutation(
           'orchestrated-work',
-          { projectSlug, product: 'jarvis' },
+          { projectSlug, product: 'rune' },
           'webview',
         );
         if (!createdMutation.ok) throw new Error(createdMutation.reason);
@@ -2795,7 +2795,7 @@ describe('orchestratedWorkApplier', () => {
         registerApplier(orchestratedWorkApplier);
         const createdMutation = await createMutation(
           'orchestrated-work',
-          { projectSlug, product: 'jarvis' },
+          { projectSlug, product: 'rune' },
           'webview',
         );
         if (!createdMutation.ok) throw new Error(createdMutation.reason);
@@ -2861,7 +2861,7 @@ describe('fileTerminalBugsToBacklog', () => {
   let repoPath: string;
   let mutationsLog: string;
   const bugsRel = join('docs', 'projects', 'bugs.md');
-  const noopGit: GitRunner = async () => ({ stdout: 'jarvis-work/x', stderr: '' });
+  const noopGit: GitRunner = async () => ({ stdout: 'rune-work/x', stderr: '' });
 
   function bug(over: Partial<OrchestrationTerminalBugEntry> = {}): OrchestrationTerminalBugEntry {
     return {
@@ -2879,7 +2879,7 @@ describe('fileTerminalBugsToBacklog', () => {
   }
 
   beforeEach(() => {
-    repoPath = mkdtempSync(join(tmpdir(), 'jarvis-bugs-'));
+    repoPath = mkdtempSync(join(tmpdir(), 'rune-bugs-'));
     mkdirSync(join(repoPath, 'docs', 'projects'), { recursive: true });
     writeFileSync(join(repoPath, bugsRel), '# Bugs\n', 'utf8');
     mutationsLog = join(repoPath, 'mutations.jsonl');
@@ -2891,7 +2891,7 @@ describe('fileTerminalBugsToBacklog', () => {
   it('writes a Loop-filed bullet to the canonical bugs.md and audits it', async () => {
     const res = await fileTerminalBugsToBacklog({
       repoPath,
-      product: 'jarvis',
+      product: 'rune',
       entries: [bug()],
       runGit: noopGit,
       mutationsLogFile: mutationsLog,
@@ -2906,7 +2906,7 @@ describe('fileTerminalBugsToBacklog', () => {
   it('does not re-file a defect already present (dedup through disk)', async () => {
     await fileTerminalBugsToBacklog({
       repoPath,
-      product: 'jarvis',
+      product: 'rune',
       entries: [bug()],
       runGit: noopGit,
       mutationsLogFile: mutationsLog,
@@ -2914,7 +2914,7 @@ describe('fileTerminalBugsToBacklog', () => {
     const first = readFileSync(join(repoPath, bugsRel), 'utf8');
     const res = await fileTerminalBugsToBacklog({
       repoPath,
-      product: 'jarvis',
+      product: 'rune',
       entries: [bug({ findingId: 'finding-new-id' })],
       runGit: noopGit,
       mutationsLogFile: mutationsLog,
@@ -2926,7 +2926,7 @@ describe('fileTerminalBugsToBacklog', () => {
   it('is a no-op for an empty entry list', async () => {
     const res = await fileTerminalBugsToBacklog({
       repoPath,
-      product: 'jarvis',
+      product: 'rune',
       entries: [],
       runGit: noopGit,
       mutationsLogFile: mutationsLog,

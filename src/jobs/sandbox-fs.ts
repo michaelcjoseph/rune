@@ -4,7 +4,7 @@
  *
  * ## Scope
  *
- * These wrappers protect **Jarvis's own writes when acting on behalf of a
+ * These wrappers protect **Rune's own writes when acting on behalf of a
  * sandboxed Regime B run** (e.g., the future gen-eval-loop runner writing a
  * prompt file, a checkpoint, or a run-scoped temp file under the run's
  * worktree). They are not, and cannot be, a guard against the child process's

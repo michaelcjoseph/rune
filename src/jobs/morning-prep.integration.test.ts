@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, unlinkSync, rmSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const tmpDir = join(tmpdir(), `jarvis-morning-prep-int-${Date.now()}`);
+const tmpDir = join(tmpdir(), `rune-morning-prep-int-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 
 const todayJournal = join(tmpDir, 'journals', '2026_04_09.md');

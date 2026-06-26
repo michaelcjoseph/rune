@@ -66,7 +66,7 @@ function formatGenEvalLoopTerminal(event: BusMutationEvent): string {
  *  local-operator surface that carries this field; every PERSISTED/COMMITTED
  *  surface (mutations.jsonl, summary/index, transcript, forensics) stays
  *  scrubbed. NOTE: both exemptions assume the cockpit stays local — broadening
- *  `JARVIS_ALLOWED_HOSTS` to a remote origin must revisit this field. Returns
+ *  `RUNE_ALLOWED_HOSTS` to a remote origin must revisit this field. Returns
  *  null when no path is present so the caller never surfaces an empty alert. */
 function formatWorkRunStart(event: BusMutationEvent): string | null {
   const data = (event.data ?? {}) as Record<string, unknown>;

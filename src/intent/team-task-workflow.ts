@@ -17,7 +17,7 @@
  *     → cap reached: return machine terminal evidence; never PM wrap-up /
  *       blocked-on-human from a per-task path
  *
- * It does NOT mark `tasks.md`, write `context.md`, or merge — Jarvis owns
+ * It does NOT mark `tasks.md`, write `context.md`, or merge — Rune owns
  * closeout. Every role is an injected seam, so the whole flow runs on fixtures
  * with no live model call.
  */
@@ -250,7 +250,7 @@ export type WorkflowOutcome = 'ready-for-closeout' | 'blocked' | 'failed';
 
 /** The structured evidence the workflow returns — data only. It carries no
  *  writer/commit/merge handle: marking `tasks.md`, writing `context.md`, and
- *  merging are Jarvis's closeout, not the workflow's. */
+ *  merging are Rune's closeout, not the workflow's. */
 export interface TaskEvidence {
   taskId: string;
   outcome: WorkflowOutcome;

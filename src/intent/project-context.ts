@@ -1,11 +1,11 @@
 /**
  * `context.md` schema + planning-time seed (project 14).
  *
- * `docs/projects/<project>/context.md` is Jarvis-owned ORCHESTRATION STATE that
+ * `docs/projects/<project>/context.md` is Rune-owned ORCHESTRATION STATE that
  * carries high-signal continuity between fresh per-task execution contexts. It is
  * NOT role memory and NOT a seventh role: roles may read a bounded slice of it as
  * low-authority reference and emit handoff notes, but they never author the file —
- * Jarvis's context curator owns every write.
+ * Rune's context curator owns every write.
  *
  * This module owns the section SCHEMA and the planning-time SEED (Phase 2). The
  * post-task update / budget / validation helpers and the fs read/write layer land
@@ -102,7 +102,7 @@ export function seedProjectContext(input: ContextSeedInput): string {
     `# Project Context: ${title}`,
     '',
     `> Orchestration state for the \`${input.product}\` project "${title}".`,
-    '> Owned by Jarvis\'s context curator — roles read a bounded slice and emit handoff',
+    '> Owned by Rune\'s context curator — roles read a bounded slice and emit handoff',
     '> notes; they do not author this file directly.',
     '',
   ];

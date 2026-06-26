@@ -388,7 +388,7 @@ describe('mutations', () => {
           data: {
             parked: true,
             outcome: 'noop',
-            operatorWorktreePath: '/tmp/worktrees/jarvis/demo',
+            operatorWorktreePath: '/tmp/worktrees/rune/demo',
             pendingCheck: 'Run the interactive check',
           },
         };

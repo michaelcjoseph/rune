@@ -31,7 +31,7 @@ function runningOrchestratedMutation(): MutationDescriptor<{ projectSlug: string
     source: 'webview',
     target: { type: 'orchestrated-work', ref: '14-product-team-agents' },
     preview: { summary: 'orchestrated-work on 14-product-team-agents' },
-    payload: { projectSlug: '14-product-team-agents', product: 'jarvis' },
+    payload: { projectSlug: '14-product-team-agents', product: 'rune' },
     createdAt: '2026-06-17T12:00:00.000Z',
     status: 'running',
   };
@@ -56,11 +56,11 @@ function readyRecord(): TaskRunRecord {
 function cursor(): OrchestrationRunCursor {
   return {
     runId: 'mut-orch-resume',
-    product: 'jarvis',
+    product: 'rune',
     project: '14-product-team-agents',
-    branch: 'jarvis-work/14-product-team-agents',
+    branch: 'rune-work/14-product-team-agents',
     baseBranch: 'main',
-    worktreePath: '/tmp/jarvis-worktrees/jarvis/14-product-team-agents',
+    worktreePath: '/tmp/rune-worktrees/rune/14-product-team-agents',
     resumeMarker: 'resumable',
     cursor: {
       completedTaskIds: ['persist-records-and-cursor'],

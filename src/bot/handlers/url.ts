@@ -61,7 +61,7 @@ async function fetchContent(url: string): Promise<string> {
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Jarvis/1.0 (Personal Knowledge Bot)' },
+      headers: { 'User-Agent': 'Rune/1.0 (Personal Knowledge Bot)' },
       redirect: 'follow',
     });
 

@@ -8,7 +8,7 @@
  *             no  → PM enters interview-needed / blocked-on-human state
  *           → tech lead writes tech spec, task breakdown, role sizing, test strategy
  *           → PM reviews tech spec against product spec
- *           → Jarvis seeds context.md
+ *           → Rune seeds context.md
  *
  * This module is the deterministic ORCHESTRATION over three injected role seams.
  * The seams (the actual PM / tech-lead model calls) are injected so the whole
@@ -110,7 +110,7 @@ export interface PlanningRoleDeps {
     techSpec: string;
     tasks: SizedTask[];
   }) => Promise<SpecMatchResult>;
-  /** Phase 9: the Jarvis-owned cross-model critique pass — runs AFTER the
+  /** Phase 9: the Rune-owned cross-model critique pass — runs AFTER the
    *  spec/tech-spec match gate and BEFORE the context seed, refining the
    *  assembled artifacts before the human approval gate. Optional: when absent
    *  the planner skips the critique (plan unchanged) — backward-compatible for

@@ -251,8 +251,8 @@ describe('readAllRuns / writeAllRuns — lastChildAliveAt back-compat', () => {
     // bogus value.
     const legacyOnDisk = {
       id: 'run-legacy',
-      product: 'jarvis',
-      project: '10-jarvis-identity-refactor',
+      product: 'rune',
+      project: '10-rune-identity-refactor',
       status: 'failed',
       startedAt: '2026-05-27T20:12:05.818Z',
       lastHeartbeatAt: '2026-05-27T20:17:48.203Z',

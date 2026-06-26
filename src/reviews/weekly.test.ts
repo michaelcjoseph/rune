@@ -8,7 +8,7 @@ vi.mock('../config.js', () => ({
     VAULT_DIR: '/test/vault',
     TIMEZONE: 'America/Chicago',
     TELEGRAM_USER_ID: 123,
-    LOGS_DIR: '/tmp/jarvis-test-logs',
+    LOGS_DIR: '/tmp/rune-test-logs',
   },
   PROJECT_ROOT: '/test/project',
 }));
