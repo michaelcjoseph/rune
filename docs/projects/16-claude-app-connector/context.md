@@ -1,14 +1,14 @@
-# Project Context: Move the Jarvis conversation surface to the Claude App via a remote MCP connector
+# Project Context: Move the Rune conversation surface to the Claude App via a remote MCP connector
 
-> Orchestration state for the `jarvis` project "Move the Jarvis conversation surface to the Claude App via a remote MCP connector".
-> Owned by Jarvis's context curator — roles read a bounded slice and emit handoff
+> Orchestration state for the `jarvis` project "Move the Rune conversation surface to the Claude App via a remote MCP connector".
+> Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 
 ## Current State
 
 - Tool count: I locked the App-exposed surface at exactly six (kb_query, vault_search, log_idea, crm_lookup, get_priorities, log_conversation) per the brief's '~6 is right' framing. Final count/signatures are to be confirmed in discussion topic A.
 - Bug capture: the brief names log_idea but routing is described for 'ideas/bugs'. I assumed bug capture is handled either by log_idea generalizing to ideas+bugs or by a thin sibling tool — without expanding the exposed count beyond the lean target. Tech lead to confirm whether bugs need a distinct tool.
-- Routing contract (R3): I assumed an optional explicit `product` param, with App-Claude inference + resolution against Jarvis's known product list when omitted, and an explicit unrouted/inbox fallback rather than a guess. This is a product call standing in for topic A's final decision.
+- Routing contract (R3): I assumed an optional explicit `product` param, with App-Claude inference + resolution against Rune's known product list when omitted, and an explicit unrouted/inbox fallback rather than a guess. This is a product call standing in for topic A's final decision.
 - kb_worthy determination: I assumed the kb-worthy judgment is made by the App Claude (via the ported heuristic) and passed to log_conversation as a boolean, rather than re-derived server-side.
 - Auth/hosting (R4): I deliberately did NOT specify transport, host, or auth mechanism — that is the tech lead's architectural fork (topic B). I only asserted the product constraints: single-user secure access for Michael, and live-vault read/write into the same git history the pipeline reads.
 - mode:full content: I assumed the App passes the reconstructed transcript text as the tool's `content` input (since no transcript file exists remotely), making the tool a pure vault-writer.
@@ -17,14 +17,14 @@
 
 - Tool count: I locked the App-exposed surface at exactly six (kb_query, vault_search, log_idea, crm_lookup, get_priorities, log_conversation) per the brief's '~6 is right' framing. Final count/signatures are to be confirmed in discussion topic A.
 - Bug capture: the brief names log_idea but routing is described for 'ideas/bugs'. I assumed bug capture is handled either by log_idea generalizing to ideas+bugs or by a thin sibling tool — without expanding the exposed count beyond the lean target. Tech lead to confirm whether bugs need a distinct tool.
-- Routing contract (R3): I assumed an optional explicit `product` param, with App-Claude inference + resolution against Jarvis's known product list when omitted, and an explicit unrouted/inbox fallback rather than a guess. This is a product call standing in for topic A's final decision.
+- Routing contract (R3): I assumed an optional explicit `product` param, with App-Claude inference + resolution against Rune's known product list when omitted, and an explicit unrouted/inbox fallback rather than a guess. This is a product call standing in for topic A's final decision.
 - kb_worthy determination: I assumed the kb-worthy judgment is made by the App Claude (via the ported heuristic) and passed to log_conversation as a boolean, rather than re-derived server-side.
 - Auth/hosting (R4): I deliberately did NOT specify transport, host, or auth mechanism — that is the tech lead's architectural fork (topic B). I only asserted the product constraints: single-user secure access for Michael, and live-vault read/write into the same git history the pipeline reads.
 - mode:full content: I assumed the App passes the reconstructed transcript text as the tool's `content` input (since no transcript file exists remotely), making the tool a pure vault-writer.
 
 ## Interfaces & Contracts
 
-# Tech Spec — Jarvis Conversation Surface on the Claude App
+# Tech Spec — Rune Conversation Surface on the Claude App
 
 ## Grounding (verified in repo)
 - MCP server today: `jarvis/src/mcp/server.ts` exports `createKBServer()` using `McpServer` (`@modelcontextprotocol/sdk@^1.29.0`) over **`StdioServerTransport`**; entry `jarvis/src/mcp/index.ts`. Registered tools: `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Only `kb_query` is in the App surface today.

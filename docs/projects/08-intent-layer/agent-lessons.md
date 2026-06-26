@@ -176,7 +176,7 @@ description named the command file, the dispatcher wiring, and the
 resolver metadata, but did not list the help-text update as a sub-task,
 so the omission survived all four C4 sub-task ticks and shipped invisibly.
 
-The user discovered the gap the obvious way: they asked Jarvis how to
+The user discovered the gap the obvious way: they asked Rune how to
 start a planning conversation and the answer was not in `/start`.
 Same class of failure as Cause #5 (multi-sub-task atomicity) but a
 different surface: the command works, the user just cannot find it.
@@ -483,6 +483,6 @@ lesson-propagation loop the same way.
 - `docs/projects/templates/planning-checklist.md` — `Applied at:`
   legal targets now include `~/.claude/CLAUDE.md`, the user-global
   surface that reaches every execution context (terminal sessions,
-  Jarvis-spawned sub-agents, /work spawns, every product repo).
+  Rune-spawned sub-agents, /work spawns, every product repo).
 
 Same patch series, separate commits.

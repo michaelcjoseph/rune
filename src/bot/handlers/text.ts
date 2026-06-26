@@ -453,10 +453,10 @@ const CONVERSATION_TOOLS = [
   'Grep',
   'WebSearch',
   'WebFetch',
-  'mcp__jarvis-kb__repo_search',
-  'mcp__jarvis-kb__kb_query',
-  'mcp__jarvis-kb__kb_search',
-  'mcp__jarvis-kb__kb_stats',
+  'mcp__rune-kb__repo_search',
+  'mcp__rune-kb__kb_query',
+  'mcp__rune-kb__kb_search',
+  'mcp__rune-kb__kb_stats',
 ];
 
 async function handleConversation(
@@ -597,9 +597,9 @@ async function handleModelSwitch(
 }
 
 async function handleStart(sender: MessageSender, userId: number): Promise<void> {
-  const text = `# Jarvis — Second Brain
+  const text = `# Rune — Second Brain
 
-Send any message to start a multi-turn chat with your vault. Jarvis leans Socratic — expect questions before answers on strategy/reflection. \`/fresh\` ends the thread; logging to journal also ends it.
+Send any message to start a multi-turn chat with your vault. Rune leans Socratic — expect questions before answers on strategy/reflection. \`/fresh\` ends the thread; logging to journal also ends it.
 
 **Conversation**
 
@@ -631,7 +631,7 @@ Send any message to start a multi-turn chat with your vault. Jarvis leans Socrat
 
 - \`/plan [product]\` — Socratic planning conversation scoped to a product; produces a spec for approval
 - \`/approve\` — approve the proposed spec and scaffold \`docs/projects/<NN-slug>/{spec,tasks,test-plan}.md\`
-- \`/new-project [topic]\` — product interview → spec/tasks/test-plan for a new Jarvis project
+- \`/new-project [topic]\` — product interview → spec/tasks/test-plan for a new Rune project
 
 **Reviews**
 

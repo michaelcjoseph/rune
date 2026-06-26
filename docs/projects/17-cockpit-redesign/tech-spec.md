@@ -255,7 +255,7 @@ place a stub is acceptable.
   parked-run release), restart-server button, op/mutation cancel, and planning
   panel keep working homes; deliberate drops (e.g. activity/session/queue/review
   status panels) are recorded, never silent.
-- **Phase 7 (Acceptance)** proves the five DoD scenarios stub-free on Jarvis as the
+- **Phase 7 (Acceptance)** proves the five DoD scenarios stub-free on Rune as the
   first real product, with the autorun hand-off as the only permitted seam.
 
 ## 6. Test strategy notes

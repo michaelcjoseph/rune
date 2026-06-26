@@ -447,8 +447,8 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
-          JARVIS_PROJECT_ROOT: PROJECT_ROOT,
-          ...(config.WORKSPACE_DIR ? { JARVIS_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
+          RUNE_PROJECT_ROOT: PROJECT_ROOT,
+          ...(config.WORKSPACE_DIR ? { RUNE_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
         },
       });
 

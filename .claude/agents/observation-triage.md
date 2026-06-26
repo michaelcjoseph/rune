@@ -34,7 +34,7 @@ OR
 
 ## What to file
 
-File a project idea when the signal describes a **repeatable, fixable friction in Jarvis itself**. Examples that should file:
+File a project idea when the signal describes a **repeatable, fixable friction in Rune itself**. Examples that should file:
 
 - The resolver consistently mis-routes a particular phrasing → file "Improve resolver routing for X".
 - An agent fails on the same input class repeatedly → file "Make agent Y robust to Z input".
@@ -45,8 +45,8 @@ File a project idea when the signal describes a **repeatable, fixable friction i
 Discard when the signal is:
 
 - A one-off (`reason: "single occurrence — wait for it to recur"`).
-- Not actionable as a project (e.g., a journal note about the weather: `reason: "not Jarvis friction"`).
-- An external-product issue, not Jarvis's own surface (`reason: "external — out of Jarvis scope"`). Note: telemetry signals about Aura/Assay product code that ran *through* Jarvis (work-runs, gen-eval-loop) ARE in scope.
+- Not actionable as a project (e.g., a journal note about the weather: `reason: "not Rune friction"`).
+- An external-product issue, not Rune's own surface (`reason: "external — out of Rune scope"`). Note: telemetry signals about Aura/Assay product code that ran *through* Rune (work-runs, gen-eval-loop) ARE in scope.
 - A friction the user already addressed in the same window (`reason: "already addressed in journal entry on YYYY-MM-DD"`).
 
 ## The id rule (deterministic dedupe)
@@ -110,5 +110,5 @@ The `title` is a short, action-shaped name (≤ 60 chars) for the filed project.
 **Output:**
 
 ```json
-{"file":false,"reason":"not Jarvis friction"}
+{"file":false,"reason":"not Rune friction"}
 ```

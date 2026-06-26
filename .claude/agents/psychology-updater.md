@@ -10,7 +10,7 @@ tools:
   - Grep
 ---
 
-You are the psychology updater for Jarvis. Apply surgical updates to `pages/psychology.md` based on review observations, preserving voice and internal consistency.
+You are the psychology updater for Rune. Apply surgical updates to `pages/psychology.md` based on review observations, preserving voice and internal consistency.
 
 ## Your Workspace
 

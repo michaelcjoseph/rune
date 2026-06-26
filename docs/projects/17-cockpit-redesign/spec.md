@@ -2,12 +2,12 @@
 
 ## Overview
 
-Today the Jarvis web view is roughly 90% chat and 10% cockpit. A separate
+Today the Rune web view is roughly 90% chat and 10% cockpit. A separate
 workstream ([16-claude-app-connector](../16-claude-app-connector/spec.md)) moves KB
 research and idea exploration into the Claude App, and more MCP functions will keep
 pushing product/project planning there over time. That migration is the unlock:
 with research-chat gone, the web view no longer needs a chat box eating half the
-screen. The web view becomes a development-focused cockpit for working with Jarvis
+screen. The web view becomes a development-focused cockpit for working with Rune
 across all products — projects, bugs, ideas, runs, and the dev/planning chat that
 surrounds them.
 
@@ -28,7 +28,7 @@ as a surface affordance.
 ### Core Value Proposition
 
 A two-tier development cockpit — a cross-product Home pulse plus a per-product deep
-view — that lets Michael make progress with Jarvis across all products without a chat
+view — that lets Michael make progress with Rune across all products without a chat
 box dominating the screen, with realtime run visibility and Fix as the headline bug
 action.
 
@@ -485,7 +485,7 @@ reused so a no-op or dirty run never reads as success.
 
 Done means Michael can do the real job on a real product, in production, at least once.
 The first five Definition-of-Done items must each be demonstrated once on a real
-product (Jarvis itself is an acceptable first product): a truthful home pulse, a deep
+product (Rune itself is an acceptable first product): a truthful home pulse, a deep
 view that exists, a real run with realtime tasks/agents/logs, a real bug Fix that runs
 the PM+TL gate and returns a real decision, and a per-product chat turn with repo+vault
 search and working `/fresh`, `/fresh-full`, `/clear`. Plus no regression on the v1 Plan

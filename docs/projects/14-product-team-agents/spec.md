@@ -23,20 +23,20 @@
 ## What's shipping (working-backwards)
 
 You work the way you do today: discuss an idea into a spec, then let it build. What changes
-is who owns the work after that discussion. Jarvis becomes a small engineering workflow
+is who owns the work after that discussion. Rune becomes a small engineering workflow
 engine backed by a simulated product team: PM, tech lead, QA, coder, reviewer, and designer.
 Each role has a repo-local `SOUL.md` charter plus a compounding `memory.md` of lessons.
 
 The PM writes the spec, interviewing only when the idea is underspecified. The tech lead
-breaks the spec into task-sized slices and sizes which roles need to convene. Jarvis then
+breaks the spec into task-sized slices and sizes which roles need to convene. Rune then
 owns the project loop: it selects the next unchecked task, assembles bounded context, invokes
-the team roles, performs a Jarvis-owned task closeout (`tasks.md` + `context.md` + commit),
+the team roles, performs a Rune-owned task closeout (`tasks.md` + `context.md` + commit),
 and advances until the project is ready for the Project 15 finalizer.
 
-This replaces the current shape where Jarvis starts one long `/work --auto` process and lets
+This replaces the current shape where Rune starts one long `/work --auto` process and lets
 that model own task selection, continuation, context management, implementation, review, and
 wrap-up inside one accumulating conversation. The larger point is not just avoiding context
-pressure. A large automated project should be coordinated by Jarvis, with explicit workflow
+pressure. A large automated project should be coordinated by Rune, with explicit workflow
 state and multi-model role separation, not delegated wholesale to one model process.
 
 v1 proves the loop closes mechanically, not that quality is already better. A deterministic
@@ -50,7 +50,7 @@ at least one non-fixture run that drives a real task to a real diff (see Phase 8
 
 ### Core value
 
-Jarvis coordinates a persistent product team across a whole project: explicit role gates,
+Rune coordinates a persistent product team across a whole project: explicit role gates,
 fresh per-task execution contexts, compact project memory, atomic task closeouts, truthful
 task/run records, gated finalization, and a feedback loop that lets the team compound from
 real usage.
@@ -60,7 +60,7 @@ real usage.
 1. **Primary:** create the product-team role substrate: `agents/<role>/{SOUL.md,
    memory.md}` (PROJECT_ROOT-relative, mirroring `agents/writer/` from Project 12) for PM,
    tech lead, QA, coder, reviewer, and designer.
-2. **Primary:** make Jarvis own project execution per task rather than handing an entire
+2. **Primary:** make Rune own project execution per task rather than handing an entire
    project to one long `/work --auto` process.
 3. **Primary:** maintain a bounded, durable `docs/projects/<project>/context.md` artifact
    that carries high-signal project continuity between fresh task executions.
@@ -69,7 +69,7 @@ real usage.
    work, and severity-aware objection-class gates.
 5. **Secondary:** route models through the existing model-policy resolver; coder/reviewer
    independence is required by construction.
-6. **Tertiary:** capture lessons from feedback through a neutral Jarvis-owned post-mortem
+6. **Tertiary:** capture lessons from feedback through a neutral Rune-owned post-mortem
    into the relevant role's `memory.md`.
 
 ### Non-Goals
@@ -127,7 +127,7 @@ comes from model/provider separation and role charter, not starving a role of re
 | Work-run finalizer | planned dependency | Project 15 owns terminal correctness and gated merge |
 | Writer role loader pattern | exists for writer | Project 12 |
 | Product-team role identities | net-new | this project |
-| Jarvis-owned per-task orchestration | net-new | this project |
+| Rune-owned per-task orchestration | net-new | this project |
 | `context.md` cross-task memory | net-new | this project |
 | QA-first + objection gates | net-new | this project |
 | Feedback -> role memory | net-new | this project |
@@ -147,7 +147,7 @@ brief -> PM judges "specified enough?"
         -> tech lead writes tech spec, task breakdown, role sizing, and test strategy
         -> PM reviews tech spec against product spec
         -> cross-model critique pass refines the assembled plan (Claude, then Codex)
-        -> Jarvis seeds context.md
+        -> Rune seeds context.md
 ```
 
 **Assumptions live in the spec.** When the PM judges a brief specified-enough and fills gaps,
@@ -156,7 +156,7 @@ assumptions section turns it into a cheap scan surface.
 
 **Human interview is explicit.** In production, an underspecified brief can block for a PM
 interview. Automated tests use fixtures: one specified-enough path for loop closure and one
-underspecified path that asserts Jarvis blocks rather than fabricating a spec.
+underspecified path that asserts Rune blocks rather than fabricating a spec.
 
 ### Planning critique pass
 
@@ -197,15 +197,15 @@ that yields no change returns the assembled plan unchanged (the no-op path is no
 and a critic reply that cannot be parsed falls back to the pre-critique plan rather than
 dropping content.
 
-This is a Jarvis-owned neutral step, not a seventh role — like the learning-loop post-mortem,
-Jarvis runs it over the role artifacts rather than assigning it to one role, because the
+This is a Rune-owned neutral step, not a seventh role — like the learning-loop post-mortem,
+Rune runs it over the role artifacts rather than assigning it to one role, because the
 question spans the whole plan (PM-owned spec and tech-lead-owned tasks together).
 
 ---
 
-## Project Execution: Jarvis-Owned Per-Task Loop
+## Project Execution: Rune-Owned Per-Task Loop
 
-Jarvis owns the project loop.
+Rune owns the project loop.
 
 ```text
 for each unchecked task in tasks.md:
@@ -213,14 +213,14 @@ for each unchecked task in tasks.md:
   assemble bounded context
   run the team-task workflow in a fresh execution context
   record task result, commit, role verdicts, and gates
-  update context.md through a Jarvis-owned context curator
+  update context.md through a Rune-owned context curator
   advance, retry, escalate, or block
 
 when no unchecked tasks remain:
   hand branch/run facts to the Project 15 finalizer
 ```
 
-The task executor does not choose arbitrary work. Jarvis selects the task before spawning the
+The task executor does not choose arbitrary work. Rune selects the task before spawning the
 workflow. Each task receives a fresh model/process context with bounded handoff input rather
 than the prior task's accumulated conversation.
 
@@ -241,11 +241,11 @@ QA writes or updates tests from the spec, or records a reviewed no-test rational
 The workflow returns structured task evidence: task id/text, attempt id, roles invoked,
 model/provider choices, transcript ids, changed files/diff summary, review verdicts,
 objection findings, handoff notes, and gate decisions. It does not mark the task complete,
-write `context.md`, or merge to main. Jarvis owns task closeout.
+write `context.md`, or merge to main. Rune owns task closeout.
 
 ### Task closeout
 
-When the workflow returns `ready-for-closeout`, Jarvis performs one closeout sequence:
+When the workflow returns `ready-for-closeout`, Rune performs one closeout sequence:
 
 ```text
 verify gates still pass
@@ -271,7 +271,7 @@ Retries are bounded by convergence, not by a human escalation cap. Each selected
 coder/reviewer severity loop with the findings ledger from prior rounds. The task exits when
 all open findings are `low` or resolved, when max severity stagnates for 3 consecutive rounds,
 or at the 4-round hard budget. Terminal handling logs unresolved `>low` findings and holds only
-for non-reversible high/critical residue. Jarvis must never spin indefinitely on one task, and
+for non-reversible high/critical residue. Rune must never spin indefinitely on one task, and
 no per-task path routes to PM wrap-up or `blocked-on-human`.
 
 ### Task test strategy
@@ -295,7 +295,7 @@ recorded; it must not silently masquerade as orchestrated execution.
 ### Finalizer handoff seam
 
 Project 15 owns the real finalizer. Project 14 defines the handoff contract and uses an
-injected finalizer adapter in tests. If the real finalizer is unavailable at runtime, Jarvis
+injected finalizer adapter in tests. If the real finalizer is unavailable at runtime, Rune
 must stop in a durable branch-complete/blocked state with the handoff payload recorded; it
 must not implement an independent merge path as a shortcut.
 
@@ -329,7 +329,7 @@ or an existing surface starts every run.
 
 ## Context Handoff
 
-Jarvis owns `docs/projects/<project>/context.md`. It is orchestration state, not a seventh
+Rune owns `docs/projects/<project>/context.md`. It is orchestration state, not a seventh
 role and not role memory. Roles may read a bounded slice of it as low-authority reference and
 may emit handoff notes. They do not directly author the file.
 
@@ -456,12 +456,12 @@ The build loop gets the work done. The learning loop makes the team better.
 
 ```text
 usage reveals an issue -> feedback record exists
-  -> nightly Jarvis-owned post-mortem
+  -> nightly Rune-owned post-mortem
   -> attribute the miss to a stage/role
   -> write one atomic, provenance-stamped lesson to that role's memory.md
 ```
 
-Jarvis runs the post-mortem, not a team role. It can interview roles as witnesses, but Jarvis
+Rune runs the post-mortem, not a team role. It can interview roles as witnesses, but Rune
 makes the attribution call. No feedback means no post-mortem. "No lesson warranted" is a valid
 outcome. Captured lessons are privacy-clean, low-authority, and revertable one commit at a
 time.
@@ -508,27 +508,27 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     the human approval surface, so every critique-introduced change is still human-gated before
     scaffold; a no-op critique returns the plan unchanged and an unparseable critic reply falls
     back to the pre-critique plan.
-9. WHEN planning completes THEN Jarvis seeds `context.md`.
+9. WHEN planning completes THEN Rune seeds `context.md`.
 
 ### Orchestration
 
-10. WHEN a project run starts THEN Jarvis selects the first unchecked task from `tasks.md`.
-11. WHEN a task starts THEN Jarvis creates a fresh execution context and passes only bounded
+10. WHEN a project run starts THEN Rune selects the first unchecked task from `tasks.md`.
+11. WHEN a task starts THEN Rune creates a fresh execution context and passes only bounded
     handoff input.
-12. WHEN a task workflow completes successfully THEN Jarvis performs task closeout: update
+12. WHEN a task workflow completes successfully THEN Rune performs task closeout: update
     `context.md`, mark exactly the selected task complete in `tasks.md`, create/record the
     closeout commit, run closeout checks, verify the worktree is clean, and then advance.
-13. WHEN task closeout cannot produce a clean checkpoint THEN Jarvis blocks durably and does
+13. WHEN task closeout cannot produce a clean checkpoint THEN Rune blocks durably and does
     not advance.
-14. WHEN a task workflow returns remaining findings above `low` THEN Jarvis continues the
+14. WHEN a task workflow returns remaining findings above `low` THEN Rune continues the
     severity loop until the all-low primary exit, the stagnation backstop, or the hard round
     budget; it does not skip the task.
-15. WHEN the severity loop reaches terminal handling THEN Jarvis resolves through reqs 81-82:
+15. WHEN the severity loop reaches terminal handling THEN Rune resolves through reqs 81-82:
     remaining findings are logged, non-reversible high/critical findings hold the branch, and no
     per-task path routes to PM wrap-up or `blocked-on-human`.
-16. WHEN no unchecked tasks remain THEN Jarvis hands branch/run facts to the Project 15
+16. WHEN no unchecked tasks remain THEN Rune hands branch/run facts to the Project 15
     finalizer.
-17. WHEN the real finalizer is unavailable THEN Jarvis records the handoff payload and stops
+17. WHEN the real finalizer is unavailable THEN Rune records the handoff payload and stops
     in a durable branch-complete/blocked state; it does not self-merge.
 18. WHEN orchestrated mode is disabled THEN the legacy `/work --auto` fallback remains
     available and is recorded as fallback.
@@ -558,15 +558,15 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 26. WHEN context is updated THEN all required sections remain present and bounded.
 27. WHEN role handoff notes are emitted THEN the context curator may use them, but roles do
     not write `context.md` directly.
-28. WHEN the server restarts THEN Jarvis can reconstruct a partial project run from durable
+28. WHEN the server restarts THEN Rune can reconstruct a partial project run from durable
     task records, commits, `tasks.md`, and `context.md`.
 
 ### Learning
 
 29. WHEN no valid feedback record exists THEN no post-mortem runs and no memory is written.
-30. WHEN a feedback record is malformed THEN Jarvis records a durable skip reason and does
+30. WHEN a feedback record is malformed THEN Rune records a durable skip reason and does
     not treat it as valid feedback.
-31. WHEN feedback identifies a catchable miss THEN Jarvis attributes it to a stage and writes
+31. WHEN feedback identifies a catchable miss THEN Rune attributes it to a stage and writes
     one atomic lesson into that role's `memory.md`.
 32. WHEN a later run invokes that role THEN the captured lesson appears in low-authority
     reference context.
@@ -604,7 +604,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     `transcript.jsonl`, `summary.json`, and a computed work-product classification — under the
     run's `WORK_RUNS_DIR` directory, the same artifacts a legacy `/work` run produces.
 43. WHEN an orchestrated run reaches a clean `branch-complete` outcome (commits exist,
-    `tasksRemaining == 0`) THEN Jarvis invokes the Project 15 finalizer in `gated-merge` mode
+    `tasksRemaining == 0`) THEN Rune invokes the Project 15 finalizer in `gated-merge` mode
     rather than holding for an operator.
 44. WHEN the finalizer gate passes THEN the branch merges `--no-ff` onto its base under the
     per-base merge lock and is pushed; WHEN the gate fails THEN the run holds branch-complete,
@@ -650,7 +650,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     failed, actionable notes) is produced — the same object threaded into the Phase 11A retry.
 57. WHEN a gate-rejection record exists THEN the rejecting role drafts a candidate lesson for the
     counterpart role.
-58. WHEN a candidate lesson is drafted THEN a neutral Jarvis validation pass privacy-filters,
+58. WHEN a candidate lesson is drafted THEN a neutral Rune validation pass privacy-filters,
     dedupes, attributes, and fails safe to no-lesson before any write; roles never write memory
     directly.
 59. WHEN validation passes THEN the lesson is written to the counterpart role's memory via the
@@ -659,7 +659,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     low-authority reference context (the Phase 6 compounding path).
 61. WHEN both the nightly loop and the gate-time path can write a lesson THEN they share one write
     path and do not double-write the same lesson.
-62. WHEN exemplar loading, lesson drafting, validation, or memory writing fails THEN Jarvis
+62. WHEN exemplar loading, lesson drafting, validation, or memory writing fails THEN Rune
     records a durable skip/error and continues the current corrective retry path.
 
 ### Outcome gating (Phase 13)
@@ -685,7 +685,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
 69. WHEN a human (or PM, for non-`block` outcomes) accepts a finding through the injected
     override seam THEN the acceptance and its rationale are recorded in the task/run record and
     the task proceeds as `pass-with-warnings`.
-70. WHEN severity-to-outcome mapping or warning/acceptance recording fails THEN Jarvis fails safe
+70. WHEN severity-to-outcome mapping or warning/acceptance recording fails THEN Rune fails safe
     to the stricter outcome (treat as an operational `block`), records a durable reason, and
     parks without consuming a coder corrective round.
 
@@ -729,7 +729,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
      into the same findings ledger with `sourceGate` attribution; Phase 14 must not bypass those
      gates merely because reviewer is the primary discovery gate.
 81. WHEN the loop reaches terminal handling THEN the orchestrator drains the ledger's remaining
-    findings above `low` and authors one detailed entry per finding in the Jarvis orchestrating
+    findings above `low` and authors one detailed entry per finding in the Rune orchestrating
     repo's `docs/projects/bugs.md` (NOT the product worktree, which may not carry that convention),
     written through the existing backlog safe-write substrate (`withFileLock` +
     `assertBacklogWriteAllowed` + `writeFileAtomic` from `backlog-write-lock.ts`) so the record is
@@ -749,7 +749,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     findings HOLD).
 84. WHEN an orchestrated run is classified `branch-complete` inside the gated finalizer (all tasks
     checked, finding/operational HOLDs already excluded, gate not yet run) AND the feature worktree
-    contains a `docs/projects/index.md` THEN Jarvis sets the matching project's status to `Done` in
+    contains a `docs/projects/index.md` THEN Rune sets the matching project's status to `Done` in
     BOTH the table Status cell AND the `## <slug> — <status>` section heading (preserving any
     parenthetical suffix on the heading) and records exactly one dedicated commit for that edit on
     the feature branch as a finalizer step, AFTER the eligibility classification and BEFORE the
@@ -760,13 +760,13 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     columns, table header/alignment row, section body, and row order byte-for-byte, and is idempotent
     when the project is already `Done` (no edit, no empty commit). A `docs/projects/index.md` that
     is ABSENT from the worktree is a graceful skip — the run still merges, because the project-index
-    convention is Jarvis-repo-specific and a product need not carry it. An index that is PRESENT but
+    convention is Rune-repo-specific and a product need not carry it. An index that is PRESENT but
     malformed, or has zero or multiple rows/headings matching the slug, is an operational HOLD: do
     not guess, do not edit the base branch, and leave no uncommitted index edit behind. A merge
     conflict on `docs/projects/index.md` when the finalizer merges to the base branch aborts the
     merge and HOLDs operationally (work preserved on the branch), never a half-merged base.
 85. WHEN the gated finalizer successfully merges and pushes a merge-bound orchestrated run to its
-    base branch THEN Jarvis emits exactly one best-effort operator success notification naming the
+    base branch THEN Rune emits exactly one best-effort operator success notification naming the
     project and base branch. The notification fires only after `pushBranch` succeeds and finalizer
     cleanup has been attempted (including crash-resume from an already-pushed phase), before
     run-end; it is deduped by run id + branch + pushed phase. Event publication failure records
@@ -774,7 +774,7 @@ path/source and format in `CLAUDE.md`; automated tests use temp/injected records
     delivery failure is logged by the sender and remains non-blocking. This success notification is
     the single operator claim that the run landed — the orchestrated terminal mutation message must
     not independently assert a merge, so the operator never sees a double "merged" alert.
-86. WHEN a per-task closeout commit succeeds THEN Jarvis emits one best-effort progress event bound
+86. WHEN a per-task closeout commit succeeds THEN Rune emits one best-effort progress event bound
     to that commit sha, carrying project slug, selected task label/text, short sha, commit subject,
     and live `tasks.md` remaining/total counts. The event is deduped by commit sha across replay,
     never emitted for a task without a closeout commit, and event-publication or transport-delivery
@@ -803,7 +803,7 @@ Phase 14 → Phase 15 — with gate rejections becoming corrective retries. Only
 ### Phase 1: Role substrate
 
 Generalize the Project 12 writer loader to PM, tech lead, QA, coder, reviewer, and designer.
-Create each role's `SOUL.md` and empty-or-seeded `memory.md`. Confirm Jarvis is registered as
+Create each role's `SOUL.md` and empty-or-seeded `memory.md`. Confirm Rune is registered as
 a targetable product if needed.
 
 ### Phase 2: Planner roles
@@ -816,7 +816,7 @@ Planning seeds the initial `context.md`.
 
 Define `context.md`, bounded context assembly, task-run records, task-closeout semantics,
 attempt caps, restart reconstruction, finalizer handoff payloads, and fallback configuration.
-Jarvis owns task selection and per-task execution state.
+Rune owns task selection and per-task execution state.
 
 ### Phase 4: Team-task workflow
 
@@ -828,13 +828,13 @@ tasks complete, write context, or merge to main.
 ### Phase 5: Multi-task orchestration and finalizer handoff
 
 Run deterministic fixture projects through at least two tasks with a closeout commit and
-context update that affect later input. Prove Jarvis advances, blocks/retries correctly,
+context update that affect later input. Prove Rune advances, blocks/retries correctly,
 reconstructs after restart, and hands completed project facts to Project 15 rather than
 self-merging.
 
 ### Phase 6: Learning loop
 
-Implement feedback-record source/reader validation, Jarvis-owned post-mortem attribution,
+Implement feedback-record source/reader validation, Rune-owned post-mortem attribution,
 atomic role-memory writes, "no lesson warranted", and compounding into the next role
 invocation.
 
@@ -1157,7 +1157,7 @@ that a re-run uses to pass.
    threads into the retry, reused not duplicated.
 5. **The rejecting role drafts a candidate lesson** for the counterpart from that record — it
    has the most context on what was wrong.
-6. **A neutral Jarvis validation pass writes it.** Run the existing post-mortem attribution model
+6. **A neutral Rune validation pass writes it.** Run the existing post-mortem attribution model
    (`runPostMortem`, `postmortem.ts:3` — "roles are witnesses, not the judge") synchronously at
    gate-time: privacy-filter, dedupe, attribute, fail safe to no-lesson, then write via
    `writeRoleLesson` (`memory-writer.ts:78`) into the counterpart's memory. Roles never write
@@ -1242,7 +1242,7 @@ branch HOLD covers.
    finding highest-severity-first, and reports which it addressed — making the critical→low descent
    hold by construction rather than by luck.
 6. **Terminal handling is orchestrator-owned and never human-gated.** At terminal, the orchestrator
-   drains the remaining `>low` findings into the Jarvis repo's `docs/projects/bugs.md` (one
+   drains the remaining `>low` findings into the Rune repo's `docs/projects/bugs.md` (one
    detailed, deduped entry each, via the backlog safe-write substrate — see req 81). If any
    remaining `critical`/`high` finding is `reversible: false`, it HOLDS the branch (no auto-merge,
    finalizer handoff). Otherwise the gated auto-merge proceeds and the run advances. No
@@ -1283,7 +1283,7 @@ that lands, and a long run must narrate closeout commits as they happen.
    so `summary.json`, the work-runs index row, and the terminal payload include the project-Done
    commit. Already-`Done` is a no-op with no empty commit, which also makes crash-resume safe (a
    resume re-reads the worktree and sees `Done`). An **absent** `docs/projects/index.md` is a
-   graceful skip — the run still merges, because the index convention is Jarvis-repo-specific and a
+   graceful skip — the run still merges, because the index convention is Rune-repo-specific and a
    target product need not carry it. A **present-but-ambiguous** index (malformed table, zero
    matching rows/headings, or multiple) is an operational HOLD: do not guess, write the base branch
    directly, or leave an uncommitted edit behind.
@@ -1354,7 +1354,7 @@ that lands, and a long run must narrate closeout commits as they happen.
 | Restart resumes | always | A restart mid-run resumes from durable state; no orphaned record, exactly one terminal per run id |
 | Roles have exemplars | always | Each role invocation includes reference exemplars of good output (baseline + per-project) |
 | Gate failures teach | always | Every gate rejection yields a neutral-validated lesson in the counterpart's memory at gate-time |
-| Neutral guard preserved | always | Roles never write memory directly; a neutral Jarvis pass attributes and filters every lesson |
+| Neutral guard preserved | always | Roles never write memory directly; a neutral Rune pass attributes and filters every lesson |
 | Learning failures are non-blocking | always | Exemplar/lesson failures record durable skip/error metadata and do not block the current corrective retry |
 | Loop never blocks on a human | always | No per-task path reaches `blocked-on-human`; `block` outcome, outer attempt cap, and PM-wrap-up terminal are removed |
 | Loop converges on severity | yes | A task exits when max open severity ≤ `low`, or on the stagnation backstop (no drop for 3 rounds), or at the 4-round hard budget |
@@ -1398,8 +1398,8 @@ does not become invisible.
 
 ## Provenance
 
-Originally captured as Project 14 (product-team role agents) from the 2026-06-05 Jarvis
+Originally captured as Project 14 (product-team role agents) from the 2026-06-05 Rune
 conversation extending Projects 08 and 12. Folded in the 2026-06-07 Project 16
-Jarvis-orchestrated-work idea after reframing: the useful product is not standalone role
-agents, but Jarvis coordinating a role-agent product team across an entire project with
+Rune-orchestrated-work idea after reframing: the useful product is not standalone role
+agents, but Rune coordinating a role-agent product team across an entire project with
 explicit context handoff.

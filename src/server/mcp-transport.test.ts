@@ -41,8 +41,8 @@ import type { IncomingMessage, ServerResponse, Server } from 'node:http';
 // ---------------------------------------------------------------------------
 // Config mock — vi.hoisted() ensures the value is available inside the
 // vi.mock() factory (which vitest hoists to the top of the file before any
-// imports are evaluated).  Mirrors http.test.ts; adds JARVIS_ALLOWED_HOSTS
-// (a Set) because isAllowedHost in auth.ts calls config.JARVIS_ALLOWED_HOSTS.has().
+// imports are evaluated). Mirrors http.test.ts; adds RUNE_ALLOWED_HOSTS
+// (a Set) because isAllowedHost in auth.ts calls config.RUNE_ALLOWED_HOSTS.has().
 // ---------------------------------------------------------------------------
 
 const mockConfig = vi.hoisted(() => ({
@@ -50,8 +50,8 @@ const mockConfig = vi.hoisted(() => ({
   HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  JARVIS_HTTP_SECRET: 'test-secret',
-  JARVIS_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_HTTP_SECRET: 'test-secret',
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   TELEGRAM_USER_ID: 0,
 }));
 
@@ -62,7 +62,7 @@ vi.mock('../config.js', () => ({
 // ---------------------------------------------------------------------------
 // Mocks for modules pulled in by http.ts import chain.
 // Mirrors http.test.ts exactly for the shared set; adds kb/engine + kb/search
-// which are pulled in by mcp/server.ts (via createJarvisMcpServer).
+// which are pulled in by mcp/server.ts (via createRuneMcpServer).
 // ---------------------------------------------------------------------------
 
 vi.mock('../vault/sessions.js', () => ({
@@ -75,7 +75,7 @@ vi.mock('../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
 vi.mock('../utils/time.js', () => ({ getTimestamp: vi.fn(() => '14:30') }));
 vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
 
-// Mirrors server.test.ts kb mocks so createJarvisMcpServer(APP_SURFACE_TOOLS)
+// Mirrors server.test.ts kb mocks so createRuneMcpServer(APP_SURFACE_TOOLS)
 // performs no vault I/O or Claude CLI spawn.
 vi.mock('../kb/engine.js', () => ({
   initKB: vi.fn(),

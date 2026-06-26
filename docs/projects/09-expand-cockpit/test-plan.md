@@ -58,7 +58,7 @@ Error handling and behavior coverage for the backlog → planning flow.
 - Missing block → fall back to repo diff; if exactly one new project dir → captured.
 - Block slug disagrees with repo diff → `scaffold-error`.
 - No new project dir → `scaffold-error` (this case is already covered by the directory-diff verification in `approve.ts` from commit `a5018e5`; this phase extends it with the JSON-block agreement check).
-- Approval resolves the target product's canonical `repoPath` from `policies/products.json`; scaffolding for `aura` writes under Aura's repo, scaffolding for `jarvis` writes under Jarvis, non-repo-backed products are rejected before the setup writer runs, and the setup-writer spawn gets real write access to the target repo rather than only receiving the path in prompt text.
+- Approval resolves the target product's canonical `repoPath` from `policies/products.json`; scaffolding for `aura` writes under Aura's repo, scaffolding for `jarvis` writes under Rune, non-repo-backed products are rejected before the setup writer runs, and the setup-writer spawn gets real write access to the target repo rather than only receiving the path in prompt text.
 - `filesCreated` entries are repo-relative; absolute paths or paths escaping the target repo fail the scaffold-result validation.
 
 ## §8 Mark-done

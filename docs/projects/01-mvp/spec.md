@@ -1,8 +1,8 @@
-# Jarvis MVP Specification
+# Rune MVP Specification
 
 ## Overview
 
-The Jarvis MVP is the first deployable version of the always-on second brain server. It combines the PKMS Agent Hub (Telegram bot, morning prep, health data, nightly processing) with Karpathy's LLM Knowledge Base pattern (raw sources compiled into a persistent, interlinked wiki) into a single TypeScript/Node.js server running on a Mac Mini.
+The Rune MVP is the first deployable version of the always-on second brain server. It combines the PKMS Agent Hub (Telegram bot, morning prep, health data, nightly processing) with Karpathy's LLM Knowledge Base pattern (raw sources compiled into a persistent, interlinked wiki) into a single TypeScript/Node.js server running on a Mac Mini.
 
 ### Core Value Proposition
 
@@ -11,7 +11,7 @@ A single always-available AI interface (Telegram) for your entire Obsidian vault
 ### Goals
 
 1. **Primary:** A working Telegram bot backed by Claude Code CLI that can chat, manage sessions, ingest sources into a knowledge base, and query across both the wiki and personal vault
-2. **Secondary:** Full vault awareness — review commands (/daily, /weekly, /monthly, /quarterly, /yearly), tag processing, health coaching, and thinking tools work through Telegram, consolidating the vault's Claude Code skills into Jarvis
+2. **Secondary:** Full vault awareness — review commands (/daily, /weekly, /monthly, /quarterly, /yearly), tag processing, health coaching, and thinking tools work through Telegram, consolidating the vault's Claude Code skills into Rune
 3. **Tertiary:** Automated daily workflows — morning journal prep, nightly processing, review nudges, Whoop health sync
 4. **Quaternary:** Mac Mini deployment with launchd for always-on operation with crash recovery
 
@@ -74,7 +74,7 @@ If conversation had KB-worthy insights → queued for ingestion
 ```
 User sends /weekly (or receives Friday nudge and sends /weekly)
         ↓
-Jarvis: "Starting weekly review. Scanning journals..."
+Rune: "Starting weekly review. Scanning journals..."
         ↓
 Prep phase: journal-scanner + system-scanner agents run in parallel
         ↓
@@ -235,7 +235,7 @@ knowledge/
 
 ### Agents
 
-**Jarvis agents** (in `jarvis/.claude/agents/`):
+**Rune agents** (in `jarvis/.claude/agents/`):
 
 | Agent | Purpose |
 |---|---|
@@ -272,7 +272,7 @@ ReviewSession { id, chatId, type, targetDate, phase, claudeSessionId, prepContex
 
 Phases: `prep → interview → outline → approval → writeup → updates → done`
 
-- **prep**: Jarvis spawns vault agents (journal-scanner, system-scanner) in parallel via `runAgent()`. Output stored as `prepContext`.
+- **prep**: Rune spawns vault agents (journal-scanner, system-scanner) in parallel via `runAgent()`. Output stored as `prepContext`.
 - **interview**: New Claude session created with `--append-system-prompt` containing the vault skill's interview instructions + prep context. Multi-turn conversation via Telegram.
 - **outline → approval**: Claude presents outline per skill instructions. User approves or edits.
 - **writeup**: Spawns review-writer + additional agents (json-updater, project-updater, etc.).

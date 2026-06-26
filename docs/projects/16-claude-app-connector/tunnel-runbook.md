@@ -54,7 +54,7 @@ ACLs do not protect these paths; the OAuth gate is the access control.
         entry if a `nodeAttrs` array already exists — never a second key):
         ```jsonc
         "nodeAttrs": [
-          // Allow the Mac mini (Jarvis daemon) to use Tailscale Funnel
+          // Allow the Mac mini (Rune daemon) to use Tailscale Funnel
           { "target": ["100.x.y.z"], "attr": ["funnel"] },
         ],
         ```
@@ -76,7 +76,7 @@ ACLs do not protect these paths; the OAuth gate is the access control.
    ```
    Check with `tailscale funnel status` — all three mounts should show as
    funnel (public), on port 443.
-4. Update Jarvis env (`.env.local`) and restart the daemon:
+4. Update Rune env (`.env.local`) and restart the daemon:
    - `MCP_ISSUER_URL=https://<machine>.<tailnet>.ts.net` — pins the OAuth
      issuer so the metadata never trusts the caller-controlled Host header.
    - `JARVIS_ALLOWED_HOSTS=localhost,127.0.0.1,<machine>.<tailnet>.ts.net` —
@@ -121,12 +121,12 @@ curl -s -o /dev/null -w '%{http_code}' $HOST/health       # → 404
 | Symptom | Action |
 | --- | --- |
 | App connector reports unreachable | `tailscale funnel status`; if empty, re-run the three mount commands. Check `tailscale status` for tailnet connectivity. Never open an inbound host port as a fallback. |
-| 403 on every funneled request | The ts.net hostname is missing from `JARVIS_ALLOWED_HOSTS` — fix env, restart Jarvis. |
-| 401 loop in the App after a Jarvis restart | Expected: tokens are in-memory. The App re-runs the OAuth handshake; approve via the consent form. |
-| Issuer in metadata shows the wrong host | `MCP_ISSUER_URL` unset or stale — fix env, restart Jarvis. |
+| 403 on every funneled request | The ts.net hostname is missing from `JARVIS_ALLOWED_HOSTS` — fix env, restart Rune. |
+| 401 loop in the App after a Rune restart | Expected: tokens are in-memory. The App re-runs the OAuth handshake; approve via the consent form. |
+| Issuer in metadata shows the wrong host | `MCP_ISSUER_URL` unset or stale — fix env, restart Rune. |
 | Funnel CLI syntax changed after a Tailscale upgrade (beta caveat) | `tailscale funnel status` / `tailscale serve status` to inspect; re-create the mounts per the current `tailscale funnel --help`. The surface definition above (three mounts, nothing else) is the contract. |
 | Revoke all App tokens | `rm logs/mcp-oauth-store.json` then restart the daemon — every issued token dies; the App re-runs the OAuth handshake on its next call. |
-| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), `rm logs/mcp-oauth-store.json`, rotate `JARVIS_HTTP_SECRET`, restart Jarvis (revokes all tokens). |
+| Suspected compromise | `tailscale serve reset` (drops all mounts — surface offline), `rm logs/mcp-oauth-store.json`, rotate `JARVIS_HTTP_SECRET`, restart Rune (revokes all tokens). |
 | Take the surface offline NOW | `tailscale serve reset` — kills all mounts immediately. The daemon keeps running locally; nothing else exposes it. |
 
 ---
@@ -161,7 +161,7 @@ plaintext, unlike Funnel.
      - service: http_status:404
    ```
 6. Env: `MCP_ISSUER_URL=https://jarvis-mcp.<your-domain>`, add the hostname
-   to `JARVIS_ALLOWED_HOSTS`, restart Jarvis.
+   to `JARVIS_ALLOWED_HOSTS`, restart Rune.
 7. `sudo cloudflared service install` to run as a LaunchDaemon; verify with
    the same three curls as above against the Cloudflare hostname.
 8. Recovery: `cloudflared tunnel info jarvis-mcp`; restart via

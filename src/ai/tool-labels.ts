@@ -95,8 +95,8 @@ export function formatToolUse(name: string, input: unknown): string {
     default: {
       // MCP tools follow the convention `mcp__<server>__<method>`. Surface
       // the method with a sensible prefix.
-      if (name.startsWith('mcp__jarvis-kb__')) {
-        const method = name.slice('mcp__jarvis-kb__'.length);
+      if (name.startsWith('mcp__rune-kb__')) {
+        const method = name.slice('mcp__rune-kb__'.length);
         const query = str(inp['query'] ?? inp['question']);
         const label = method === 'kb_query'  ? 'KB query'
                     : method === 'kb_search' ? 'KB search'

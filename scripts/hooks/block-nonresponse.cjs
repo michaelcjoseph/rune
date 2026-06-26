@@ -29,13 +29,16 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 
-const AUDIT_LOG = '/Users/jarvis/workspace/jarvis/logs/hook-nonresponse.jsonl';
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const LOGS_DIR = process.env.RUNE_LOGS_DIR || path.join(REPO_ROOT, 'logs');
+const AUDIT_LOG = path.join(LOGS_DIR, 'hook-nonresponse.jsonl');
 
 // Consecutive-non-response counts per session, persisted across hook firings so
 // the cap can span multiple turns. The Stop hook is a fresh process each time,
 // so an in-memory counter would always read 1.
-const STATE_FILE = '/Users/jarvis/workspace/jarvis/logs/hook-nonresponse-state.json';
+const STATE_FILE = path.join(LOGS_DIR, 'hook-nonresponse-state.json');
 
 // Max forced continuations before we let a non-response through. Raising this
 // catches repeat-offender turns at the cost of a longer worst-case loop.

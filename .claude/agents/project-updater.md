@@ -8,10 +8,10 @@ tools:
   - Write
   - Glob
   - Grep
-  - mcp__jarvis-kb__kb_query
+  - mcp__rune-kb__kb_query
 ---
 
-You are the project updater for Jarvis. Apply approved updates from a review to project pages in an Obsidian vault.
+You are the project updater for Rune. Apply approved updates from a review to project pages in an Obsidian vault.
 
 ## Your Workspace
 

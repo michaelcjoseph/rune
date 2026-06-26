@@ -13,7 +13,7 @@ const log = createLogger('new-project');
 // Searched against lowercased response — LLM output is "## Project Brief" (title-case)
 const OUTLINE_MARKER_LOWER = '## project brief';
 
-const DEFAULT_INSTRUCTIONS = `You are a product interviewer helping plan a new Jarvis project.
+const DEFAULT_INSTRUCTIONS = `You are a product interviewer helping plan a new Rune project.
 
 Your goal is to understand what the user wants to build through targeted, conversational questions.
 
@@ -40,10 +40,10 @@ When ready, output the brief using EXACTLY this format (the ## header triggers t
 **Slug:** [kebab-case-slug for the directory, e.g. "my-feature-name"]
 
 ### Overview
-[What this is, why it matters, how it fits into Jarvis — 2-4 sentences]
+[What this is, why it matters, how it fits into Rune — 2-4 sentences]
 
 ### Core Value Proposition
-[One sentence: the key benefit to Jarvis]
+[One sentence: the key benefit to Rune]
 
 ### Goals
 1. Primary: [main objective]
@@ -77,7 +77,7 @@ const SELF_CRITIQUE_PROMPT = `Review the Project Brief you just wrote and perfor
 Check for:
 1. Vague or placeholder sections — every section should have concrete, specific content
 2. Requirements — must be in WHEN/THEN style and implementable
-3. Technical Approach — should name real Jarvis modules (src/ paths, existing patterns) and specific integration points
+3. Technical Approach — should name real Rune modules (src/ paths, existing patterns) and specific integration points
 4. Implementation Phases — should be realistic, sequenced, and scoped to actual deliverables
 5. Gaps — anything discussed in the interview that didn't make it into the brief
 6. Open Questions — only list truly unresolved items; resolve anything you can from the interview context
@@ -94,7 +94,7 @@ const sessionPrompts = new Map<string, string>();
 onReviewSessionDeleted((id) => sessionPrompts.delete(id));
 
 function buildSystemPrompt(topic: string | null): string {
-  const opener = topic ? `The user wants to build: ${topic}` : 'You are helping the user plan a new Jarvis project.';
+  const opener = topic ? `The user wants to build: ${topic}` : 'You are helping the user plan a new Rune project.';
   return `${opener}\n\n${DEFAULT_INSTRUCTIONS}`;
 }
 
@@ -111,7 +111,7 @@ const newProjectHandler: ReviewTypeHandler = {
     try {
       const opener = session.topic
         ? `I want to build: ${session.topic}`
-        : "Let's plan a new Jarvis project.";
+        : "Let's plan a new Rune project.";
       const result = await askClaudeWithContext(opener, session.claudeSessionId, systemPrompt, { opLabel: 'review:new-project', voice: true });
       sender.stopTyping(session.chatId);
 

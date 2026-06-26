@@ -1,4 +1,4 @@
-# Tech Spec: Jarvis to Rune Rebrand
+# Tech Spec: Rune Rebrand
 
 All implementation work lands in the product repo under normal branch, review, and commit discipline. The name decision is final.
 

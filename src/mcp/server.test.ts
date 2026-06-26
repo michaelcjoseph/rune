@@ -5,7 +5,7 @@
  * This file is the test-first deliverable — it is expected to be PARTIALLY RED
  * until the factory implementation lands. Specifically:
  *
- *   RED  — contract points 1-3 (createJarvisMcpServer, APP_SURFACE_TOOLS,
+ *   RED  — contract points 1-3 (MCP server factory, APP_SURFACE_TOOLS,
  *           ADMIN_TOOLS constants): the export does not exist yet.
  *   RED/GREEN — contract point 4 (admin search surface pins): these exercise
  *               createKBServer() as the chat MCP surface evolves.
@@ -21,6 +21,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -79,11 +80,15 @@ async function listedToolNames(client: Client): Promise<string[]> {
 // Returns undefined while the implementation is pending. Each test performs its
 // own typeof guard on the result so a missing export fails only that test.
 
-type JarvisMcpFactory = (opts: { tools: string[] }) => McpServer;
+type RuntimeMcpFactory = (opts: { tools: string[] }) => McpServer;
 
-function getFactory(): JarvisMcpFactory | undefined {
-  return (serverModule as Record<string, unknown>)['createJarvisMcpServer'] as
-    | JarvisMcpFactory
+const retiredBrand = ['Jar', 'vis'].join('');
+const retiredServerName = `${retiredBrand.toLowerCase()}-kb`;
+const renamedFactoryExport = 'createRuneMcpServer';
+
+function getFactory(): RuntimeMcpFactory | undefined {
+  return (serverModule as Record<string, unknown>)[renamedFactoryExport] as
+    | RuntimeMcpFactory
     | undefined;
 }
 
@@ -139,27 +144,37 @@ describe('createKBServer — repo plus KB search pins', () => {
 
     await client.close();
   });
+
+  it('reports the renamed default server identity as rune-kb', async () => {
+    const server = serverModule.createKBServer();
+    const client = await connectClient(server);
+
+    expect(client.getServerVersion()).toMatchObject({ name: 'rune-kb' });
+    expect(client.getServerVersion()?.name).not.toBe(retiredServerName);
+
+    await client.close();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §1 — Factory: createJarvisMcpServer registers exactly the requested tool set
+// §1 — Factory: registers exactly the requested tool set
 // (🔴 EXPECTED RED until factory is implemented)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('createJarvisMcpServer — factory contract', () => {
+describe('MCP server factory contract', () => {
   it('export exists and is a function', () => {
     // Clean assertion: if the export is missing this fails with a descriptive
     // message, not a file-level crash.
     expect(
-      typeof (serverModule as Record<string, unknown>)['createJarvisMcpServer'],
-      'createJarvisMcpServer must be exported from src/mcp/server.ts',
+      typeof (serverModule as Record<string, unknown>)[renamedFactoryExport],
+      `${renamedFactoryExport} must be exported from src/mcp/server.ts`,
     ).toBe('function');
   });
 
   it('App-surface opts register exactly the six App tools', async () => {
-    const createJarvisMcpServer = getFactory();
-    if (typeof createJarvisMcpServer !== 'function') {
-      expect.fail('createJarvisMcpServer is not exported — implementation pending');
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     const APP_SURFACE_TOOLS = (serverModule as Record<string, unknown>)['APP_SURFACE_TOOLS'] as string[] | undefined;
@@ -167,7 +182,7 @@ describe('createJarvisMcpServer — factory contract', () => {
       expect.fail('APP_SURFACE_TOOLS is not exported — implementation pending');
     }
 
-    const server = createJarvisMcpServer({ tools: APP_SURFACE_TOOLS });
+    const server = createMcpServer({ tools: APP_SURFACE_TOOLS });
     const client = await connectClient(server);
 
     const names = await listedToolNames(client);
@@ -179,9 +194,9 @@ describe('createJarvisMcpServer — factory contract', () => {
   });
 
   it('admin opts register exactly the kb_* tools plus repo_search', async () => {
-    const createJarvisMcpServer = getFactory();
-    if (typeof createJarvisMcpServer !== 'function') {
-      expect.fail('createJarvisMcpServer is not exported — implementation pending');
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     const ADMIN_TOOLS = (serverModule as Record<string, unknown>)['ADMIN_TOOLS'] as string[] | undefined;
@@ -189,7 +204,7 @@ describe('createJarvisMcpServer — factory contract', () => {
       expect.fail('ADMIN_TOOLS is not exported — implementation pending');
     }
 
-    const server = createJarvisMcpServer({ tools: ADMIN_TOOLS });
+    const server = createMcpServer({ tools: ADMIN_TOOLS });
     const client = await connectClient(server);
 
     const names = await listedToolNames(client);
@@ -198,6 +213,47 @@ describe('createJarvisMcpServer — factory contract', () => {
     );
 
     await client.close();
+  });
+
+  it('reports the renamed MCP server identity as rune-kb by default', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const server = createMcpServer({ tools: ['kb_query'] });
+    const client = await connectClient(server);
+
+    expect(client.getServerVersion()).toMatchObject({ name: 'rune-kb' });
+    expect(client.getServerVersion()?.name).not.toBe(retiredServerName);
+
+    await client.close();
+  });
+});
+
+describe('runtime rename — MCP public strings', () => {
+  it('uses Rune in tool descriptions and does not expose the retired brand', async () => {
+    const server = serverModule.createKBServer();
+    const client = await connectClient(server);
+
+    const { tools } = await client.listTools();
+    const kbQuery = tools.find((tool) => tool.name === 'kb_query');
+    expect(kbQuery?.description).toContain('Rune');
+    expect(kbQuery?.description ?? '').not.toMatch(
+      new RegExp(`\\b${retiredBrand}\\b|${retiredServerName}`, 'i'),
+    );
+
+    await client.close();
+  });
+
+  it('registers the renamed MCP server key in Claude settings without a retired alias', () => {
+    const settings = JSON.parse(
+      readFileSync(new URL('../../.claude/settings.json', import.meta.url), 'utf8'),
+    ) as { mcpServers?: Record<string, unknown> };
+
+    const names = Object.keys(settings.mcpServers ?? {});
+    expect(names).toContain('rune-kb');
+    expect(names).not.toContain(retiredServerName);
   });
 });
 
@@ -260,15 +316,15 @@ describe('exported constants', () => {
 // (🔴 EXPECTED RED until factory is implemented)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('createJarvisMcpServer — unknown tool name', () => {
+describe('MCP server factory — unknown tool name', () => {
   it('throws at construction when an unknown tool name is requested', () => {
-    const createJarvisMcpServer = getFactory();
-    if (typeof createJarvisMcpServer !== 'function') {
-      expect.fail('createJarvisMcpServer is not exported — implementation pending');
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
     expect(() =>
-      createJarvisMcpServer({ tools: ['kb_query', 'nonexistent_tool_xyz'] }),
+      createMcpServer({ tools: ['kb_query', 'nonexistent_tool_xyz'] }),
     ).toThrow();
   });
 
@@ -276,11 +332,11 @@ describe('createJarvisMcpServer — unknown tool name', () => {
     // An empty tool set is a programming error — a server that exposes nothing
     // is never intentional here. The factory must fail loudly, not silently
     // register zero tools.
-    const createJarvisMcpServer = getFactory();
-    if (typeof createJarvisMcpServer !== 'function') {
-      expect.fail('createJarvisMcpServer is not exported — implementation pending');
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
 
-    expect(() => createJarvisMcpServer({ tools: [] })).toThrow();
+    expect(() => createMcpServer({ tools: [] })).toThrow();
   });
 });

@@ -167,7 +167,7 @@ async function handleStaticFile(req: IncomingMessage, res: ServerResponse, pathn
 }
 
 async function handleAuthBootstrap(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!config.JARVIS_HTTP_SECRET) {
+  if (!config.RUNE_HTTP_SECRET) {
     reject401(res);
     return;
   }
@@ -179,7 +179,7 @@ async function handleAuthBootstrap(req: IncomingMessage, res: ServerResponse): P
     res.end(JSON.stringify({ error: 'invalid JSON body' }));
     return;
   }
-  if (!body.token || !safeCompare(body.token, config.JARVIS_HTTP_SECRET)) {
+  if (!body.token || !safeCompare(body.token, config.RUNE_HTTP_SECRET)) {
     reject401(res);
     return;
   }
@@ -187,7 +187,7 @@ async function handleAuthBootstrap(req: IncomingMessage, res: ServerResponse): P
     req.headers['x-forwarded-proto'] === 'https' &&
     (req.socket.remoteAddress === '127.0.0.1' || req.socket.remoteAddress === '::1');
   const cookieParts = [
-    `jarvis-auth=${config.JARVIS_HTTP_SECRET}`,
+    `rune-auth=${config.RUNE_HTTP_SECRET}`,
     'HttpOnly',
     'SameSite=Strict',
     'Path=/',
@@ -231,9 +231,9 @@ function handleApiCockpit(res: ServerResponse): void {
   const runStatus = readCockpitRunStatus(config.SUPERVISED_RUNS_FILE);
   // Cross-product task progress (done / total) rides on each project's registry
   // entry, refreshed on registry rebuild — so every product's cards render a bar,
-  // not just jarvis's. On top of that, overlay a LIVE read of jarvis's own
-  // tasks.md so jarvis cards update in real time each poll (the daemon runs in
-  // the jarvis repo, so only it is cheap to read live). Scoped to the jarvis
+  // not just Rune's. On top of that, overlay a LIVE read of Rune's own
+  // tasks.md so Rune cards update in real time each poll (the daemon runs in
+  // the Rune repo, so only it is cheap to read live). Scoped to the rune
   // product so a slug shared with another product can't override its counts. A
   // failed read just leaves the registry-baked progress in place.
   if (registry) {
@@ -241,15 +241,15 @@ function handleApiCockpit(res: ServerResponse): void {
       const live = new Map(
         getProjectSummaries().map((s) => [s.slug, { done: s.progress.done, total: s.progress.total }]),
       );
-      const jarvis = registry.products.find((p) => p.name === 'jarvis');
-      if (jarvis) {
-        for (const project of jarvis.projects) {
+      const rune = registry.products.find((p) => p.name === 'rune');
+      if (rune) {
+        for (const project of rune.projects) {
           const lp = live.get(project.slug);
           if (lp && lp.total > 0) project.progress = lp;
         }
       }
     } catch (err) {
-      log.warn('handleApiCockpit: live jarvis task-progress overlay failed', { error: (err as Error).message });
+      log.warn('handleApiCockpit: live rune task-progress overlay failed', { error: (err as Error).message });
     }
   }
   // Enrich with the work-run projection (project 11 Phase 5) from the new
@@ -1478,7 +1478,7 @@ async function handleApiMutationsCreate(req: IncomingMessage, res: ServerRespons
   let dispatchKind = body.kind as MutationKind;
   let dispatchPayload: Record<string, unknown> = body.payload ?? {};
   if (dispatchKind === 'work-run') {
-    const product = typeof dispatchPayload['product'] === 'string' ? dispatchPayload['product'] : 'jarvis';
+    const product = typeof dispatchPayload['product'] === 'string' ? dispatchPayload['product'] : 'rune';
     const resolution = resolveWorkDispatch(
       readDispatchModeInput({
         product,
@@ -1757,7 +1757,7 @@ function collectApprovals(): ApprovalRow[] {
       id: `ask-twice:${i}`,
       type: 'ask-twice',
       source: 'ask-twice',
-      productProject: 'jarvis',
+      productProject: 'rune',
       summary: `${proposal.title} — ${proposal.rationale}`.slice(0, 200),
       age: ageSeconds(proposal.draftedAt, now),
     });

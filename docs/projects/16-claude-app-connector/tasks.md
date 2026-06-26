@@ -1,4 +1,4 @@
-# Jarvis Conversation Surface on the Claude App — Tasks
+# Rune Conversation Surface on the Claude App — Tasks
 
 In progress. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 

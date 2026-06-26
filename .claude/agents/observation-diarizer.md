@@ -45,7 +45,7 @@ Each compacted `content` must be a **short, structured description** of the fric
 
 1. **Group recurring friction across sources.** If three vault `#friction` lines all describe the resolver mis-routing and one interaction signal says `kind=agent-call 5 failures in last 24h` is also the resolver, emit one combined entry that names the resolver issue once.
 2. **Drop one-off noise.** A single isolated friction tag from a quiet week with no telemetry or interaction reinforcement is not compaction-worthy — omit it. The next pass will catch it if it recurs.
-3. **Keep cross-product signal separate from Jarvis-internal signal.** Aura friction and Jarvis friction are different problems; never merge them into one entry.
+3. **Keep cross-product signal separate from Rune-internal signal.** Aura friction and Rune friction are different problems; never merge them into one entry.
 4. **Never invent friction that wasn't in the input.** You compact and summarize; you do not extrapolate.
 5. **Output at most 12 entries.** The loop's triage agent runs once per entry, so a tight digest is the point. If the raw stream is heavily repetitive, fewer is better.
 

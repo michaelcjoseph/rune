@@ -26,7 +26,7 @@ See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for ver
 >
 > **Agent-runnable constraint:** required verification must use temp repos/worktrees, injected
 > work-run streams, fake sender/HTTP surfaces, test-scoped stores, and injected clocks. Do not make
-> any required task depend on a real Telegram chat, a production cockpit click, a live Jarvis
+> any required task depend on a real Telegram chat, a production cockpit click, a live Rune
 > restart, or Michael manually inspecting a parked worktree. A live smoke check may be added after
 > the automated suites pass, but it is not a blocking task.
 

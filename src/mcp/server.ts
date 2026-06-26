@@ -6,7 +6,7 @@ import { searchRepo, searchWithFilter } from '../kb/search.js';
 /**
  * Shared MCP server factory (project 16-claude-app-connector).
  *
- * One registry of tool registrations; `createJarvisMcpServer(opts)` builds an
+ * One registry of tool registrations; `createRuneMcpServer(opts)` builds an
  * `McpServer` exposing exactly the requested tool set. Two named sets:
  *
  * - {@link ADMIN_TOOLS} — the `kb_*` admin set the local stdio entry
@@ -56,7 +56,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
   kb_query: (server) => {
     server.tool(
       'kb_query',
-      'Query the Jarvis knowledge base. Returns a synthesized answer with wikilink citations.',
+      'Query the Rune knowledge base. Returns a synthesized answer with wikilink citations.',
       { question: z.string().describe('The question to answer using the knowledge base') },
       async ({ question }) => {
         const result = await queryKB(question);
@@ -265,20 +265,20 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
  * Does NOT initialize the KB — `initKB()` is a process-startup concern
  * (daemon: src/index.ts; standalone stdio: src/mcp/index.ts).
  */
-export function createJarvisMcpServer(opts: { tools: readonly ToolName[]; name?: string }): McpServer {
+export function createRuneMcpServer(opts: { tools: readonly ToolName[]; name?: string }): McpServer {
   if (opts.tools.length === 0) {
-    throw new Error('createJarvisMcpServer: empty tool list — a server exposing no tools is a configuration error');
+    throw new Error('createRuneMcpServer: empty tool list — a server exposing no tools is a configuration error');
   }
   // Defense-in-depth behind the ToolName type: callers that cast (or build
   // the list dynamically) still fail loudly. The known set is deliberately
   // not enumerated in the message — this error may surface remotely.
   const unknown = opts.tools.filter((name) => !(name in TOOL_REGISTRY));
   if (unknown.length > 0) {
-    throw new Error(`createJarvisMcpServer: unknown tool name(s): ${unknown.join(', ')}`);
+    throw new Error(`createRuneMcpServer: unknown tool name(s): ${unknown.join(', ')}`);
   }
 
   const server = new McpServer({
-    name: opts.name ?? 'jarvis-kb',
+    name: opts.name ?? 'rune-kb',
     version: '1.0.0',
   });
 
@@ -291,5 +291,5 @@ export function createJarvisMcpServer(opts: { tools: readonly ToolName[]; name?:
 
 /** The original stdio-entry server: the `kb_*` admin set, behavior unchanged. */
 export function createKBServer(): McpServer {
-  return createJarvisMcpServer({ tools: ADMIN_TOOLS });
+  return createRuneMcpServer({ tools: ADMIN_TOOLS });
 }

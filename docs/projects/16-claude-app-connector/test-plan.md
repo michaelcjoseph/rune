@@ -1,4 +1,4 @@
-# Jarvis Conversation Surface on the Claude App Test Plan
+# Rune Conversation Surface on the Claude App Test Plan
 
 Error handling checklist for the six-tool MCP connector, its remote transport/auth,
 and the vault → pipeline → KB funnel that must stay intact.
@@ -91,4 +91,4 @@ test-plan sections pass.
 - [ ] 🔴 From a Claude App thread: read tools run against the live vault, an idea is captured and routed to the correct product target, and `log_conversation` (summary + `kb_worthy`) writes to the journal and KB raw-source queue.
 - [ ] 🔴 The journal/KB write lands in the same git history the nightly pipeline reads and is picked up by the next nightly KB distillation with no new pipeline stage.
 - [ ] 🟡 The acceptance test is documented and repeatable.
-- [ ] 🟢 `/diet`, `/workout`, and Jarvis-pushed updates remain on Telegram and are not exposed to the App.
+- [ ] 🟢 `/diet`, `/workout`, and Rune-pushed updates remain on Telegram and are not exposed to the App.

@@ -2,9 +2,9 @@
 
 ## Overview
 
-The wiki under `knowledge/wiki/concepts/` is growing fast — every nightly ingestion pass compiles new pages, but nothing inside Jarvis nudges Michael back to concepts he learned a month ago. Foundational ideas (e.g., `processing-vs-extraction`, `critical-materials-prerequisite`, `ai-power-constraint`) get written down once and then drift out of working memory. The current `/study` command tracks a structured syllabus (books and reading plans) and does not reinforce wiki content.
+The wiki under `knowledge/wiki/concepts/` is growing fast — every nightly ingestion pass compiles new pages, but nothing inside Rune nudges Michael back to concepts he learned a month ago. Foundational ideas (e.g., `processing-vs-extraction`, `critical-materials-prerequisite`, `ai-power-constraint`) get written down once and then drift out of working memory. The current `/study` command tracks a structured syllabus (books and reading plans) and does not reinforce wiki content.
 
-This project adds a lightweight daily spaced-repetition (SR) loop on top of the wiki. Jarvis pings Michael at 12:00 CT with 5 open-ended questions drawn from non-stale wiki concepts, an `sr-question-generator` agent composes the questions, an `sr-grader` agent scores Michael's free-form answers against a rubric, and SR state advances on a fixed-interval ladder. The existing `/study` command is renamed `/syllabus` to free the name — `/syllabus` keeps the syllabus-tracking behavior, the `#study` tag continues to route there. The new `/study` is the SR session entry point.
+This project adds a lightweight daily spaced-repetition (SR) loop on top of the wiki. Rune pings Michael at 12:00 CT with 5 open-ended questions drawn from non-stale wiki concepts, an `sr-question-generator` agent composes the questions, an `sr-grader` agent scores Michael's free-form answers against a rubric, and SR state advances on a fixed-interval ladder. The existing `/study` command is renamed `/syllabus` to free the name — `/syllabus` keeps the syllabus-tracking behavior, the `#study` tag continues to route there. The new `/study` is the SR session entry point.
 
 The project also introduces a `status` field (`evergreen | active | stale`) on wiki concept frontmatter. `wiki-compiler` infers the status on new concepts and proposes (never directly applies) status changes on existing concepts via a `knowledge/status-proposals.json` queue, which `wiki-linter` surfaces for approval during `/weekly`. Other systems can consume the same field — the SR pool is the first consumer.
 
@@ -41,7 +41,7 @@ A small daily reinforcement loop (5 questions, ~5–10 minutes at lunch) that ma
 ### Happy Path — daily SR session at lunch
 
 ```
-12:00 CT — Jarvis cron fires.
+12:00 CT — Rune cron fires.
          ↓
 selectDueConcepts() reads study/spaced-repetition.json,
 filters to status ∈ {evergreen, active} AND next_due ≤ today,
@@ -116,7 +116,7 @@ preserved state — next_due may already be in the past, surfacing first.
 
 ### Entry Points
 
-- 12:00 CT daily Jarvis cron (primary).
+- 12:00 CT daily Rune cron (primary).
 - `/study` slash in TG (ad-hoc, default 5 questions).
 - `/study N` slash in TG (1 ≤ N ≤ 10).
 - `/study status` slash in TG (pool size, due today, lapse hotspots).
@@ -181,10 +181,10 @@ preserved state — next_due may already be in the past, surfacing first.
 
 ### Session semantics
 
-31. WHEN Jarvis sends a question AND Michael does not reply within 30 minutes, THEN the session lapses: unanswered concepts grade as `again`, already-graded concepts keep their grades.
-32. WHEN a session lapses, THEN Jarvis sends a one-line lapse summary and persists the partial state.
-33. WHEN a session is in progress, THEN Jarvis does not send nudges. One reply window per prompt.
-34. WHEN a session ends (complete or lapsed), THEN Jarvis sends a single summary line with grade counts and the concept count.
+31. WHEN Rune sends a question AND Michael does not reply within 30 minutes, THEN the session lapses: unanswered concepts grade as `again`, already-graded concepts keep their grades.
+32. WHEN a session lapses, THEN Rune sends a one-line lapse summary and persists the partial state.
+33. WHEN a session is in progress, THEN Rune does not send nudges. One reply window per prompt.
+34. WHEN a session ends (complete or lapsed), THEN Rune sends a single summary line with grade counts and the concept count.
 
 ### Command surface
 
@@ -243,7 +243,7 @@ knowledge/status-proposals.json       # pending wiki status changes queued by co
 }
 ```
 
-### Jarvis agents (new, generic — Jarvis's `.claude/agents/`)
+### Rune agents (new, generic — Rune's `.claude/agents/`)
 
 #### `sr-question-generator`
 
@@ -263,7 +263,7 @@ knowledge/status-proposals.json       # pending wiki status changes queued by co
 
 - Pure code module preferred for SR state writes (`src/study/sr-state.ts`). Use the existing `json-updater` agent only if rubric updates need natural-language editing — not the case here.
 
-### Jarvis code modules
+### Rune code modules
 
 ```
 src/study/sr-state.ts                 # read/write study/spaced-repetition.json,
@@ -303,7 +303,7 @@ src/jobs/sr-daily.ts                  # cron entry; invoked at 12:00 CT
 ### Phase 1 — End-to-end manual quiz
 
 - [ ] Rename current `/study` → `/syllabus`; update `CLAUDE.md`, `study/index.md`, handler + registry wiring, and `/daily` notes.
-- [ ] Add `sr-question-generator` agent (Jarvis `.claude/agents/`) with prompt, eval fixture, and the variation/skip rules.
+- [ ] Add `sr-question-generator` agent (Rune `.claude/agents/`) with prompt, eval fixture, and the variation/skip rules.
 - [ ] Add `sr-grader` agent with prompt, eval fixture, and the missed-points rubric.
 - [ ] Add `src/study/sr-state.ts` + `study/spaced-repetition.json` (empty initial file). Cover read/write/advance helpers with tests.
 - [ ] Add `src/bot/commands/study.ts` for ad-hoc sessions. Use a hand-seeded pool of ~20 non-stale concepts to start (curated from current `knowledge/wiki/concepts/`).
@@ -326,7 +326,7 @@ src/jobs/sr-daily.ts                  # cron entry; invoked at 12:00 CT
 - [ ] Add `status` to wiki concept frontmatter schema (document in `knowledge/wiki/` index/README).
 - [ ] Backfill `status` across all existing `knowledge/wiki/concepts/*.md` (one-time script; conservative defaults — playbook-derived → evergreen, articles/world-view-derived → active, the rest manually reviewed).
 - [ ] Update `wiki-compiler` to infer status on new concepts and to write proposals (never direct edits) for existing concepts. Respect manual overrides.
-- [ ] Add `knowledge/status-proposals.json` writer/reader helpers in Jarvis.
+- [ ] Add `knowledge/status-proposals.json` writer/reader helpers in Rune.
 - [ ] Update `wiki-linter` to surface pending proposals during `/weekly`.
 - [ ] Wire proposal approval into the `/weekly` outline → updater flow.
 - [ ] Confirm the SR pool now auto-expands to all non-stale concepts; remove the hand-seeded list from Phase 1.

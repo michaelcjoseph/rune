@@ -12,7 +12,7 @@ then sat `running` until a human killed the process tree at 13:12 — ~8.5 hours
 background tasks are alive. The keep-alive ticker kept the run looking "quiet, not stalled," the
 quiet nudge re-fired every 30s, and when the tree was finally killed the run mis-classified as
 `failed` (exit 143) despite a branch with all 13 commits and tasks complete. The completed work only
-reached `main` because a Jarvis assistant session, answering the operator, merged it by hand.
+reached `main` because a Rune assistant session, answering the operator, merged it by hand.
 
 This is the same symptom class as the wedge bug fixed on 2026-06-04 (teardown keyed off process
 `exit`), but a different trigger: that fix assumed the process eventually exits. When it never does,
@@ -66,7 +66,7 @@ hours for a human to notice and merge by hand.
 All required acceptance checks are automated. The implementation agent must use fixture-driven
 work-run streams, temp product repos/worktrees, injected clocks, injected notification sinks, and
 test-scoped supervision/mutation stores. No required verification depends on a real Telegram chat, a
-production cockpit click, an actual Jarvis restart, or a human killing a live process tree. A live
+production cockpit click, an actual Rune restart, or a human killing a live process tree. A live
 smoke check is optional after the automated suites pass.
 
 > **Self-reference sequencing guard.** This project's Phase 4 regression suite reproduces the exact
@@ -114,7 +114,7 @@ The single incident surfaced six distinct defects:
    never merges or pushes. Only `gen-eval-loop-runner.ts:254-302` (`realMergeBranch`) does merge →
    push → `branch -d`, behind review gates (`:618`). Docs confirm plain work-runs are intentionally
    "branch-complete, not yet on main" (`docs/projects/index.md:192-208`). The project-12 merge that
-   landed was done by a Jarvis assistant session (commit `5b8dec8`, 13:12:48), NOT by the autonomous
+   landed was done by a Rune assistant session (commit `5b8dec8`, 13:12:48), NOT by the autonomous
    system. Left alone, the run stays failed-on-a-branch forever.
 6. **Recovery/reconciliation relabel but don't finalize.** `recoverRun` only maps stale `running` →
    `unknown` (`supervision.ts:201-203`), persisted by `supervision-recovery.ts:36-55`;
@@ -224,7 +224,7 @@ classify → gate check (tests red OR dirty tree OR tasksRemaining>0 OR conflict
     mid-finalize is resumable by the P0.4 recovery path.
 16. WHEN the merge gate needs to run validation commands THEN it reads product-scoped
     `validationCommands` from `policies/products.json`; if absent, the gate fails closed with
-    `missing-validation-command` and stops at `branch-complete`. Jarvis starts with
+    `missing-validation-command` and stops at `branch-complete`. Rune starts with
     `["npm run build", "npm test"]`. Each command runs with `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`
     (default 10 minutes) in the integration worktree; timeout is a red gate result, not a wedge.
 
@@ -319,7 +319,7 @@ All timer tests use injected clocks; no test sleeps for these wall-clock duratio
   quiet→cancel actuator and the hard max-runtime ceiling.
 - **`src/jobs/gen-eval-loop-runner.ts`** — source of `realMergeBranch` to reuse/refactor (do not
   duplicate); honor its half-merged push-failure warning.
-- **`policies/products.json`** — add optional `validationCommands` per product; Jarvis gets
+- **`policies/products.json`** — add optional `validationCommands` per product; Rune gets
   `["npm run build", "npm test"]`. Products without validation commands fail the merge gate closed.
 - **`src/transport/`** (telegram-sender + cockpit bus) — truthful terminal notifications: `merged`,
   `branch-complete` (gate failed), backstop-cancelled.

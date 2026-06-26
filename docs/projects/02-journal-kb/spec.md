@@ -22,7 +22,7 @@ What you write in the journal flows into the KB automatically; what's in the KB 
 - **Citation back-fill in journals** (auto-creating wiki pages for new `[[wikilinks]]` written in journals) — out of scope; the wiki-compiler will create them on next ingest if warranted.
 - **Cross-project synthesis** (`/synthesize` command) — out of scope; defer until daily ingestion has run for a few weeks and we can see the connection density.
 - **KB-driven morning prep** — out of scope; morning prep stays as-is.
-- **Calendar / pre-meeting briefings** — out of scope (no calendar integration in Jarvis).
+- **Calendar / pre-meeting briefings** — out of scope (no calendar integration in Rune).
 - **External API for KB content** — out of scope; KB stays vault-internal.
 - **Backfill of past journals** — going forward only. The KB starts learning from the day Phase 1 ships. A one-time backfill script can be added later if needed.
 - **Action-item tracking** — meeting extraction in Phase 3 covers attendees and decisions, NOT action items. Action items live in the journal as plain text for now; if they grow into a real tracker, that's a future project.

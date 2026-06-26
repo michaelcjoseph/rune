@@ -1,8 +1,8 @@
-# Rebrand Jarvis to Rune Specification
+# Rune Rebrand Specification
 
 ## Overview
 
-The personal AI agent is publicly branded "Jarvis," a name that is not trademark-clean
+The personal AI agent currently carries a retired public brand that is not trademark-clean
 or distinctively ownable. This project cuts the public brand over to **Rune** across every
 identity surface: the GitHub repository, the runtime-visible identity, public metadata, the
 committed codebase, the env-var path layer, the local working checkout, and the launchd
@@ -17,7 +17,7 @@ identifiers, not brand surfaces.
 
 ### Core Value Proposition
 
-Cut the agent's public brand over from Jarvis to Rune across the repo, runtime identity, env
+Cut the agent's public brand over from the retired name to Rune across the repo, runtime identity, env
 vars, and the local checkout, with behavior unchanged and zero private paths left committed.
 
 ### Goals
@@ -109,7 +109,7 @@ Inventory + allowlist → path de-leak (verified) → brand + runtime sweep
 
 ### Brand and Identifier Sweep (Phase 2)
 
-9. WHEN "Jarvis" appears as the agent name in docs, README, CLAUDE.md files, public package
+9. WHEN the retired agent name appears in docs, README, CLAUDE.md files, public package
    and lockfile metadata, CI/workflow files, committed GitHub URLs/badges, user-facing
    strings, or prose/prompts inside agent-definition files THEN it is replaced with "Rune",
    preserving casing and voice.
@@ -126,7 +126,7 @@ Inventory + allowlist → path de-leak (verified) → brand + runtime sweep
 13. WHEN runtime identifiers are renamed THEN focused tests cover command routing, MCP/server
     metadata, config resolution, and representative user-facing output.
 
-### Repo, Remote, and Handle (Phase 4 and Phase 5)
+### Repo, Remote, and Handle (Phase 5)
 
 14. WHEN the GitHub repository is renamed to `rune` THEN the local remote URL is updated and
     remote operations are verified with `git fetch` plus an authenticated dry-run push or a
@@ -134,7 +134,7 @@ Inventory + allowlist → path de-leak (verified) → brand + runtime sweep
 15. WHEN the `@runeai` handle is unavailable THEN pause and escalate, because the
     brand-ownability premise has failed; do not silently proceed with a substitute handle.
 
-### Private On-Disk Cutover (Phase 6)
+### Private On-Disk Cutover (Phase 5)
 
 16. WHEN Phase 1 is landed and still verified THEN the local checkout is renamed from
     `~/workspace/jarvis/` to `~/workspace/rune/`, deployed `RUNE_*` env values are updated, the
@@ -187,7 +187,7 @@ const LOGS_DIR = process.env.RUNE_LOGS_DIR || computeDefaultFromRepoRoot();
 Two distinct passes, scoped by the Phase 0 inventory:
 
 - **Brand text:** README, docs, every `CLAUDE.md`, `package.json` / lockfile metadata where
-  applicable, CI/workflow files, committed `github.com/.../jarvis` URLs and badges, repository
+  applicable, CI/workflow files, committed retired-repo URLs and badges, repository
   descriptions, user-facing strings, and prose/prompts inside agent-definition file *bodies*
   (`.claude/agents/*.md`, `agents/`, `.agents/`, `.codex/agents/`, `src/intent/agent-def.ts`).
   Filenames and prompt logic are untouched.
@@ -244,7 +244,7 @@ inverse path and env edit.
 
 > Depends on: Phase 0.
 
-- [ ] Rewrite agent-name "Jarvis" to "Rune" across docs, README, CLAUDE.md files, package and
+- [ ] Rewrite retired agent-name references to "Rune" across docs, README, CLAUDE.md files, package and
       lockfile metadata, CI/workflow files, committed URLs/badges, and repository descriptions.
 - [ ] Rewrite brand text in agent-definition prose/prompt bodies without renaming files or
       altering prompt logic.
@@ -258,34 +258,38 @@ inverse path and env edit.
 - [ ] Add or update focused tests for command routing, MCP/server metadata, config
       resolution, and representative user-facing output.
 
-### Phase 4: Repo Rename
+### Phase 4: Exhaustive Per-Instance Rename
 
-> Independent of the disk move.
+> Depends on: Phases 0–3. Supersedes the prematurely-checked Phase 3 runtime rename.
 
-- [ ] Rename the GitHub repository to `rune` and update the local remote URL.
-- [ ] Verify remote operations (`git fetch` + authenticated dry-run/temporary-branch push).
+Phase 3 was marked complete while ~1,400 `jarvis` tokens remained in shipping source,
+tests, and docs (including user-facing CLI strings and the `jarvis-kb` MCP name). This
+phase tracks **every remaining occurrence as its own task** in [tasks.md](tasks.md) so no
+instance can be silently skipped. Each task renames one occurrence to `rune`, preserving
+casing (`Jarvis`→`Rune`, `JARVIS`→`RUNE`).
 
-### Phase 5: Handle Ownership
+- [ ] Rename all 1,427 enumerated `jarvis` occurrences to `rune` — one task per instance,
+      grouped by file in tasks.md.
+- [ ] Excluded from rename (must keep): the macOS username in `/Users/jarvis/…` and the
+      `com.jarvis.daemon` launchd label. This project's own docs are excluded as
+      self-referential. `workspace/jarvis` path references stay in scope (they become
+      `workspace/rune`).
 
-> Independent of the disk move.
+### Phase 5: Operational Cutover, Handle Ownership & Acceptance
 
-- [ ] Claim and secure `@runeai` under a controlled login and record ownership privately.
-- [ ] If unavailable, escalate and pause approval.
+> The final phase. Depends on: Phase 4 landed, plus Phase 1 verified for the disk move.
+> These are the existing operational tasks the orchestrated run could not perform; the first
+> three require a human operator.
 
-### Phase 6: On-Disk Cutover
-
-> Depends on: Phase 1 landed and verified.
-
-- [ ] Confirm worktree readiness and no in-flight daemon work; stop/unload the daemon.
-- [ ] Rename `~/workspace/jarvis/` to `~/workspace/rune/` and update deployed `RUNE_*` values.
-- [ ] Update the single path line in `com.jarvis.daemon.plist` (label unchanged) and reload
-      the daemon.
-
-### Phase 7: Acceptance
-
-> Depends on: all prior phases.
-
-- [ ] Run the full Definition of Done with no stubs on load-bearing components.
+- [ ] **Repo rename** (was Phase 4): rename the GitHub repo to `rune`, update the local
+      remote, verify `git fetch` plus an authenticated push.
+- [ ] **Handle ownership** (was Phase 5): claim and secure `@runeai` under a controlled
+      login, record ownership privately; escalate and pause if unavailable.
+- [ ] **On-disk cutover** (was Phase 6): stop the daemon, rename `~/workspace/jarvis/` to
+      `~/workspace/rune/`, update deployed `RUNE_*` values and the single `com.jarvis.daemon.plist`
+      path line (label unchanged), then reload.
+- [ ] **Acceptance** (was Phase 7): run the full Definition of Done with no stubs on
+      load-bearing components.
 
 ---
 
@@ -344,5 +348,5 @@ inverse path and env edit.
       before Phase 0 closes so the acceptance grep stays green.
 - [ ] Are there public identifiers beyond `jarvis-kb` (e.g. additional MCP/server names or
       command slugs) that the inventory surfaces and that need their own rename rationale?
-- [ ] Does any external consumer reference the old `github.com/.../jarvis` URL such that a
+- [ ] Does any external consumer reference the retired GitHub URL such that a
       redirect or note is warranted, or is GitHub's automatic redirect sufficient?

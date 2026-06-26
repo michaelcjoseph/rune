@@ -55,7 +55,7 @@ Error handling checklist for the generator, `/workout` command, `/done-workout` 
 ### Persistence
 
 - [ ] 🔴 Two successive `/workout` calls → second overwrites the first in `logs/last-workout.json`
-- [ ] 🔴 Jarvis restarts between `/workout` and `/done-workout` → `logs/last-workout.json` persists, `/done-workout` still works
+- [ ] 🔴 Rune restarts between `/workout` and `/done-workout` → `logs/last-workout.json` persists, `/done-workout` still works
 - [ ] 🟢 `logs/last-workout.json` is gitignored (`logs/` already is)
 
 ## 2. Exercise-preference handling (generator agent)
@@ -106,7 +106,7 @@ Error handling checklist for the generator, `/workout` command, `/done-workout` 
 
 - [ ] 🔴 `json-updater` successfully parses a `/done-workout`-authored journal block into `workouts.json` without changes to the agent
 - [ ] 🔴 `src/reviews/daily.ts` prompt (line 42) recognizes `#workout` in the appended block — existing behavior, confirm no regression
-- [ ] 🔴 All existing Jarvis tests pass after each phase ships
+- [ ] 🔴 All existing Rune tests pass after each phase ships
 - [ ] 🟡 Weekly review's health-related prep (if any) reads `workouts.json` correctly with generator-authored entries mixed in with hand-logged ones
 - [ ] 🟡 `health/plan.md` is no longer read by the command (retired from that role) — no stale reference in the codebase
 - [ ] 🔴 Morning prep no longer renders a `### Workout` section in its output

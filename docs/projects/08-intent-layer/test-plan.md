@@ -211,12 +211,12 @@ by the same scenario.
 - [ ] 🔴 A run that goes quiet past the heartbeat interval is flagged, not left silently stalled.
 - [ ] 🔴 `/work --auto` remains directly invokable by Michael with unchanged behavior.
 - [ ] 🟡 A crashed or killed run transitions to a terminal state in the visibility surface, never stuck "running" forever.
-- [ ] 🟡 The visibility surface survives a Jarvis restart — in-flight runs are recovered or marked unknown, not lost.
+- [ ] 🟡 The visibility surface survives a Rune restart — in-flight runs are recovered or marked unknown, not lost.
 - [ ] 🟢 Heartbeat checks are cheap and do not spam logs.
 
 **Integration verification:** triggering a `gen-eval-loop` mutation produces
 a `running` status on the cockpit's in-flight progress card (§19); killing
-the Jarvis process mid-run and restarting flips the entry to `unknown` in
+the Rune process mid-run and restarting flips the entry to `unknown` in
 the same card on the next page load; a stall produces a Telegram nudge
 within ~30s.
 
@@ -270,7 +270,7 @@ in-flight progress display.
 ## 14. Cross-model adjudication — Layer 2 upgrade (Phase 4)
 
 - [ ] 🔴 For an autonomous engine run, the Evaluator resolves to a different provider family than the Generator, on every run — cross-model review is mandatory before every merge.
-- [ ] 🔴 When cross-model review and the test suite pass and the escalation policy does not flag the change, Jarvis merges the result to the product repo's main line itself, with no human action.
+- [ ] 🔴 When cross-model review and the test suite pass and the escalation policy does not flag the change, Rune merges the result to the product repo's main line itself, with no human action.
 - [ ] 🔴 Manual `/review` stays single-model by default; `/review --cross-model` opts into adjudication.
 - [ ] 🔴 The single-model loop from Phase 3 still works — cross-model is an upgrade, not a replacement.
 - [ ] 🔴 If the second provider is unavailable, the run cannot satisfy the merge contract — it escalates to blocked-on-Michael, it does not degrade to single-model and merge unreviewed.
@@ -301,18 +301,18 @@ when a slot frees.
 ## 16. Operational self-improvement — observation loop (Phase 5)
 
 - [ ] 🔴 The observation loop extends the existing Ask-Twice telemetry — it does not duplicate or break it.
-- [ ] 🔴 The sensor layer ingests all three sources: vault signals, product telemetry, and logged Jarvis interactions.
-- [ ] 🔴 Every Jarvis interaction is logged, successful or not; failed, mis-routed, and rephrased interactions are captured as signal, not only repeated questions.
+- [ ] 🔴 The sensor layer ingests all three sources: vault signals, product telemetry, and logged Rune interactions.
+- [ ] 🔴 Every Rune interaction is logged, successful or not; failed, mis-routed, and rephrased interactions are captured as signal, not only repeated questions.
 - [ ] 🔴 The synthesis stage diarizes raw sensor signal into a compact, structured digest before the loop reasons over it — the loop never consumes raw logs directly.
 - [ ] 🔴 The loop has a discard half: a friction signal not worth a project is dropped, not filed.
 - [ ] 🔴 A friction signal worth acting on is filed as a project into `docs/projects/ideas.md`, and the loop dispatches the execution engine to run it, within the concurrency and escalation rules.
-- [ ] 🔴 Execution uses the existing project-execution engine pointed at the Jarvis product — no new execution subsystem.
+- [ ] 🔴 Execution uses the existing project-execution engine pointed at the Rune product — no new execution subsystem.
 - [ ] 🔴 A low-risk self-generated project is specced and run unattended; a self-generated spec the escalation policy flags waits for Michael.
 - [ ] 🟡 The loop de-dupes — the same friction observed repeatedly does not file a new project each time.
 - [ ] 🟡 The loop runs nightly, extending the existing nightly vault review rather than as a separate job.
 - [ ] 🟢 A quiet period with no friction files and runs nothing.
 
-**Integration verification:** a week of normal Jarvis use grows
+**Integration verification:** a week of normal Rune use grows
 `logs/observation-interactions.jsonl` to a visible size; `docs/projects/ideas.md`
 gains entries from real friction (inspectable via git diff); a low-risk
 filed project is dispatched autonomously and the user receives its terminal
@@ -333,7 +333,7 @@ running background process, not just as tested cores.
 ## 18. Resilience (cross-cutting)
 
 - [ ] 🔴 A failed execution run is discardable — it corrupts no vault state and no product-repo main line.
-- [ ] 🔴 A Jarvis restart mid-run does not lose the registry, the policies, or a project's worktree; in-flight runs recover or are clearly marked unknown.
+- [ ] 🔴 A Rune restart mid-run does not lose the registry, the policies, or a project's worktree; in-flight runs recover or are clearly marked unknown.
 - [ ] 🟡 A model timeout or CLI crash surfaces as a clear run error, not a silent hang.
 - [ ] 🟡 A corrupt registry, model policy, escalation policy, or manifest file fails fast with a clear error and does not overwrite the good file with empty state.
 - [ ] 🟡 A change that merged but proves wrong can be reverted cleanly — autonomous merge does not preclude rollback.
@@ -410,7 +410,7 @@ end-to-end from the cockpit.
 - [ ] 🔴 Subsequent messages from the same user route through
   `handlePlanningTurn` instead of the default conversation thread, until
   the session terminates.
-- [ ] 🔴 When the handler returns `spec-proposed`, Jarvis sends an
+- [ ] 🔴 When the handler returns `spec-proposed`, Rune sends an
   inline-keyboard approval message (see §"Approval inline-buttons" below).
 - [ ] 🟡 `/plan` with no product lists registered products and waits for
   the user's choice before starting the session.

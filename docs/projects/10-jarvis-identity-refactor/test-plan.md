@@ -1,4 +1,4 @@
-# Jarvis Identity Refactor Test Plan
+# Rune Identity Refactor Test Plan
 
 Verification for the rescoped project: symlink the model-specific instruction files and
 relocate orchestrator identity. See [spec.md](spec.md) for rationale, [tasks.md](tasks.md)
@@ -35,10 +35,10 @@ for steps.
 
 ## 2. Content move (pkms → jarvis)
 
-- [ ] 🔴 The `## Jarvis` section and the `### How Reviews Work` mechanics appear in
+- [ ] 🔴 The `## Rune` section and the `### How Reviews Work` mechanics appear in
       `jarvis/CLAUDE.md` after the move.
 - [ ] 🔴 Both sections are absent from `pkms/CLAUDE.md` after the move.
-- [ ] 🔴 The pointer line ("Jarvis orchestration … is documented in `jarvis/CLAUDE.md`")
+- [ ] 🔴 The pointer line ("Rune orchestration … is documented in `jarvis/CLAUDE.md`")
       is present in `pkms/CLAUDE.md`.
 - [ ] 🔴 The "staying" sections from spec.md remain intact in `pkms/CLAUDE.md`: repository
       overview, vault structure, journal format, reference system, tags, JSON schemas, the

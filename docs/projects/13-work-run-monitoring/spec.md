@@ -3,12 +3,12 @@
 ## Overview
 
 Make an automated `/work --auto` run reachable and testable by a human when it needs one —
-without asking Jarvis where the work lives, and without fighting the Project 15 finalizer.
+without asking Rune where the work lives, and without fighting the Project 15 finalizer.
 
 Today an automated work-run executes inside a worktree at a deterministic path, but that path is
 not consistently surfaced as an operator-actionable value. Project 15 now owns ordinary terminal
 classification, gated merge, and worktree teardown for plain work-runs. That makes Project 13
-narrower and still relevant: when a run needs a human before it can be finalized, Jarvis must park
+narrower and still relevant: when a run needs a human before it can be finalized, Rune must park
 the run, keep the live worktree protected from finalizer/GC cleanup, expose the pending check, and
 resume the Project 15 finalizer after the human releases it.
 
@@ -45,7 +45,7 @@ work disappearing or bypassing the normal merge gate.
   `.claude/skills/work/SKILL.md`). Same boundary project 11 held.
 - **Parking the orchestrated-work applier.** Parking is scoped to the **legacy `work-run`
   applier only** (the single `/work --auto` process). Project 14's `orchestrated-work` applier
-  runs Jarvis's own task-by-task loop — it never spawns a `/work --auto` process, so the sentinel
+  runs Rune's own task-by-task loop — it never spawns a `/work --auto` process, so the sentinel
   never appears, and its `apply()` already maps a human-block to `failed` and unconditionally
   destroys the worktree in `finally` (`orchestrated-work-runner.ts:351`). Project 13 does **not**
   make orchestrated runs parkable. This is acceptable for Phase 1 because orchestrated mode is OFF
@@ -65,7 +65,7 @@ work disappearing or bypassing the normal merge gate.
 All required acceptance checks for this project are automated. The implementation agent should use
 fixture-driven work-run streams, temp product repositories/worktrees, injected clocks, injected
 notification sinks, and the existing supervision/mutation stores under test paths. No required
-verification depends on a real Telegram chat, a production cockpit click, an actual Jarvis restart,
+verification depends on a real Telegram chat, a production cockpit click, an actual Rune restart,
 or Michael manually running commands in a live parked worktree. A live smoke check is optional after
 the automated suites pass.
 
@@ -184,7 +184,7 @@ run starts (notification: path + id) → commits accrue on the run branch
    `MutationStatus` value. The terminal mutation pipeline MUST detect that parked terminal metadata
    and preserve/reassert supervision as `blocked-on-human` instead of writing `completed`/`failed`.
    The finalizer writer is bypassed on park (Req 4), so it cannot clobber the record. The state
-   survives a Jarvis restart via the existing supervision store + recovery (`recoverRun` and
+   survives a Rune restart via the existing supervision store + recovery (`recoverRun` and
    `recoverAndFinalizeStaleRuns` both leave a `blocked-on-human` record untouched —
    `supervision-recovery.ts:135` only finalizes `running` runs).
 4. WHEN a run is parked THEN `work-runner` does NOT route it into the Project 15 finalizer (which
@@ -453,7 +453,7 @@ implicit reject.
 - **Crash while parked (record already durable):** startup recovery re-derives the held slot and
   does not reap the worktree — `recoverRun` leaves `blocked-on-human` unchanged, and
   `recoverAndFinalizeStaleRuns` only finalizes `running` runs (`supervision-recovery.ts:135`).
-- **Crash BETWEEN the sentinel and the parked write:** this is the dangerous window. If Jarvis dies
+- **Crash BETWEEN the sentinel and the parked write:** this is the dangerous window. If Rune dies
   after the run emits the sentinel but before the durable `blocked-on-human` write lands, the
   on-disk record is still `running` — and at next boot `recoverAndFinalizeStaleRuns` will finalize
   it in **hold mode, removing the worktree** (`recovery-finalize-runner.ts:291`), destroying exactly

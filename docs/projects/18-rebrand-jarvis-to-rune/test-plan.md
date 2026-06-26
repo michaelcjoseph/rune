@@ -1,6 +1,6 @@
-# Rebrand Jarvis to Rune Test Plan
+# Rune Rebrand Test Plan
 
-Error handling checklist for the brand/identity cutover from Jarvis to Rune: inventory and
+Error handling checklist for the brand/identity cutover to Rune: inventory and
 allowlist, env-var path de-leak, brand and runtime renames, repo/remote/handle ownership,
 on-disk cutover, and final acceptance.
 
@@ -48,9 +48,15 @@ verified by grep gates and a daemon liveness check.
 
 ## 3. Brand Sweep (docs/config — reviewed rationale)
 
+No executable red test is required for this phase. The two selected brand-sweep tasks only
+rewrite docs, metadata, and agent-definition prose/prompt bodies; they do not change runtime
+logic, filenames, command routing, or generated behavior. Correctness is reviewed from the
+text diff and later verified by the acceptance grep gates for retired-brand survivors and
+private path/env-var regressions.
+
 ### Brand text and metadata
 
-- [ ] 🔴 A user-facing string, README, or CLAUDE.md still says "Jarvis" as the agent name.
+- [ ] 🔴 A user-facing string, README, or CLAUDE.md still says "Rune" as the agent name.
       Grep confirms only allowlisted survivors remain.
 - [ ] 🟡 A casing or voice regression (e.g. "rune" mid-sentence where "Rune" is correct, or a
       mangled committed URL). Review the diff for casing and link integrity.
@@ -73,6 +79,18 @@ verified by grep gates and a daemon liveness check.
       unless explicitly approved.
 
 ## 5. Repo, Remote, and Handle (docs/config — reviewed rationale)
+
+No executable red test is required for `github-repo-remote-rename`. The task changes external
+GitHub repository state and local git remote configuration, not application behavior or
+committed TypeScript logic. A unit or integration test would only mock the remote operation, so
+correctness is verified operationally after the rename with `git remote -v`, `git fetch`, and
+an authenticated dry-run or temporary-branch push against the renamed `rune` repository.
+
+No executable red test is required for `secure-runeai-handle`. The task changes external
+account ownership and a private ownership record, not a repository code path, exported API,
+runtime behavior, or config parser. A unit or integration test would only fabricate a mock
+claim flow, so correctness is verified operationally with authenticated ownership of
+`@runeai` plus the private ownership record before proceeding.
 
 ### Remote operations and handle
 

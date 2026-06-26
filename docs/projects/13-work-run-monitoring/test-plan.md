@@ -10,7 +10,7 @@ phase's implementation tasks begin. A phase's implementation is done when its te
 
 Required verification is automated and fixture-driven. Use temp product repos/worktrees, injected
 work-run NDJSON streams, fake sender/HTTP/callback surfaces, test-scoped stores, and injected clocks.
-Do not require a real Telegram chat, a production cockpit click, a real Jarvis process restart, or a
+Do not require a real Telegram chat, a production cockpit click, a real Rune process restart, or a
 human manually inspecting a worktree. Live smoke testing is optional after these checks pass.
 
 > See also: [Cross-cutting test plan](../../tech/test-plan.md) for shared guidelines, monitoring, and security checks.
@@ -62,9 +62,9 @@ human manually inspecting a worktree. Live smoke testing is optional after these
       **not the `mutations.ts` pipeline terminal flip** — the supervised run remains
       `blocked-on-human` until release because the parked terminal event carries explicit metadata
       and the mutation terminal branch treats it as a supervision override (Background §7).
-- [ ] 🔴 The parked state and its worktree survive a Jarvis restart (`recoverRun` and
+- [ ] 🔴 The parked state and its worktree survive a Rune restart (`recoverRun` and
       `recoverAndFinalizeStaleRuns` both leave `blocked-on-human` untouched; tested by invoking
-      recovery/cleanup against test stores and temp repos, not by manually restarting Jarvis).
+      recovery/cleanup against test stores and temp repos, not by manually restarting Rune).
 - [ ] 🟡 **Crash window:** a run that emitted the sentinel but whose parked record was lost (still
       `running` on disk) is finalized by `recoverAndFinalizeStaleRuns` as an ordinary recovered
       terminal (worktree removed, no park) — no crash. Documents the window the first-write ordering

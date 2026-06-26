@@ -2,9 +2,9 @@
 
 ## Overview
 
-This project converts Jarvis from a command-driven tool into a **self-observing system that proposes its own upgrades**. Today, every Jarvis capability is reachable only via a hardcoded slash command, every cron job is a code change, and there is no telemetry that notices when the user asks for the same kind of thing twice. This project adds a **Resolver** that routes free-form Telegram messages to the right skill, an **Ask-Twice** loop that watches for repeated intents and proposes new skills/crons, **skill-frontmatter–driven cron** so new scheduled work doesn't require editing the scheduler, an **MVP eval framework** so agent regressions don't ship silently, deterministic **entity auto-linking** in KB ingest, **compilation checkpoints + source hierarchy** in wiki-compiler, and a **`/learn` institutional memory** that all agents auto-prepend.
+This project converts Rune from a command-driven tool into a **self-observing system that proposes its own upgrades**. Today, every Rune capability is reachable only via a hardcoded slash command, every cron job is a code change, and there is no telemetry that notices when the user asks for the same kind of thing twice. This project adds a **Resolver** that routes free-form Telegram messages to the right skill, an **Ask-Twice** loop that watches for repeated intents and proposes new skills/crons, **skill-frontmatter–driven cron** so new scheduled work doesn't require editing the scheduler, an **MVP eval framework** so agent regressions don't ship silently, deterministic **entity auto-linking** in KB ingest, **compilation checkpoints + source hierarchy** in wiki-compiler, and a **`/learn` institutional memory** that all agents auto-prepend.
 
-The patterns here are drawn from a corpus of personal-AI tooling (Garry Tan's gstack/gbrain, Nikunj Kothari's llm-wiki, the "thin harness, fat skills" ethos). Jarvis already nails the "fat skills" half — 20+ markdown agents in `.claude/agents/`. What's missing is the thin harness, the resolver, and the compounding loop.
+The patterns here are drawn from a corpus of personal-AI tooling (Garry Tan's gstack/gbrain, Nikunj Kothari's llm-wiki, the "thin harness, fat skills" ethos). Rune already nails the "fat skills" half — 20+ markdown agents in `.claude/agents/`. What's missing is the thin harness, the resolver, and the compounding loop.
 
 ### Core Value Proposition
 
@@ -22,11 +22,11 @@ Free-form Telegram messages route to the right skill automatically; recurring in
 ### Non-Goals
 
 - **General-purpose Postgres job queue (gbrain "Minions" equivalent).** The two file-based queues are sufficient at single-user scale; adding Postgres is pure overhead.
-- **gstack safety primitives (`/freeze`, `/careful`).** Those defend against an agent editing your code; Jarvis isn't a code-editing agent for itself.
-- **gstack full sprint workflow (`/office-hours` → `/plan-ceo-review` → ...).** Jarvis's review system is tuned to your life, not to shipping software. Not replacing it.
-- **Cross-model second-opinion loops (`/codex`-style).** Jarvis already gates everything on human approval; an adversarial second LLM is overkill.
+- **gstack safety primitives (`/freeze`, `/careful`).** Those defend against an agent editing your code; Rune isn't a code-editing agent for itself.
+- **gstack full sprint workflow (`/office-hours` → `/plan-ceo-review` → ...).** Rune's review system is tuned to your life, not to shipping software. Not replacing it.
+- **Cross-model second-opinion loops (`/codex`-style).** Rune already gates everything on human approval; an adversarial second LLM is overkill.
 - **Voice notes / Whisper integration.** Not currently used.
-- **Skill marketplace / dynamic skill loading at runtime.** Skills remain markdown files in `.claude/agents/` (Jarvis or vault) loaded at startup.
+- **Skill marketplace / dynamic skill loading at runtime.** Skills remain markdown files in `.claude/agents/` (Rune or vault) loaded at startup.
 - **Replacing slash commands.** Slash commands remain — they're the fast path. Resolver only handles non-slash messages.
 - **CI gate for evals.** MVP is manual `npm run evals` only.
 
@@ -89,7 +89,7 @@ User adds a new agent .claude/agents/sec-filings-watcher.md with:
   cron_chat: true        # post output to TG
   ---
 
-Jarvis restart (or /reload-agents) → scheduler scans agents dir → registers cron job
+Rune restart (or /reload-agents) → scheduler scans agents dir → registers cron job
          ↓
 Monday 7am → runAgent("sec-filings-watcher") fires; output posted to TG
 ```
@@ -160,10 +160,10 @@ Agent behavior shifts without code change
 
 ### Skill-frontmatter cron (Phase A)
 
-11. WHEN an agent file in `.claude/agents/` (Jarvis or vault) declares `cron: "<expression>"` THEN it is registered with the scheduler at startup.
+11. WHEN an agent file in `.claude/agents/` (Rune or vault) declares `cron: "<expression>"` THEN it is registered with the scheduler at startup.
 12. WHEN `cron_chat: true` is set THEN the agent's stdout is posted to TG; otherwise output is only logged.
 13. WHEN the cron schedule fires THEN `runAgent(name, cron_args ?? '')` is invoked; failures are logged but don't crash the scheduler.
-14. WHEN an agent file's cron field changes THEN a Jarvis restart re-registers the schedule (no hot-reload required for v1).
+14. WHEN an agent file's cron field changes THEN a Rune restart re-registers the schedule (no hot-reload required for v1).
 
 ### Skill evals — MVP (Phase A)
 
@@ -375,7 +375,7 @@ Note: After Project 02 ships, journals enter the queue alongside other sources. 
 
 - **Invalid cron expression**: log error at startup, skip registration, don't crash scheduler.
 - **Agent file removed but cron still running**: scheduler is rebuilt at restart, so removed agents get unregistered next boot. Within a session, a missing agent during invocation logs an error and skips.
-- **Two agents with the same name** (Jarvis + vault override): existing `loadAgentDef` precedence applies (project-first); cron uses whichever wins.
+- **Two agents with the same name** (Rune + vault override): existing `loadAgentDef` precedence applies (project-first); cron uses whichever wins.
 - **`cron_chat: true` but no TG bot wired**: log warning, fall back to log-only.
 
 ### Skill evals

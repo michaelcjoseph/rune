@@ -39,7 +39,7 @@ const config = {
   TELEGRAM_USER_ID: Number(required('TELEGRAM_USER_ID')),
 
   VAULT_DIR: required('VAULT_DIR'),
-  WORKSPACE_DIR: optional('WORKSPACE_DIR'),
+  WORKSPACE_DIR: optional('RUNE_WORKSPACE_DIR') ?? PROJECT_ROOT,
 
   READWISE_TOKEN: process.env['READWISE_TOKEN'] || '',
   LENNY_MCP_TOKEN: process.env['LENNY_MCP_TOKEN'] || '',
@@ -47,10 +47,10 @@ const config = {
   WHOOP_CLIENT_ID: process.env['WHOOP_CLIENT_ID'] || '',
   WHOOP_CLIENT_SECRET: process.env['WHOOP_CLIENT_SECRET'] || '',
 
-  JARVIS_HTTP_SECRET: process.env['JARVIS_HTTP_SECRET'] || '',
+  RUNE_HTTP_SECRET: process.env['RUNE_HTTP_SECRET'] || '',
 
   /** Pinned issuer base URL for the /mcp OAuth metadata (e.g. the public
-   *  tunnel hostname, https://jarvis-mcp.example.com). Empty = fall back to
+   *  tunnel hostname, https://rune-mcp.example.com). Empty = fall back to
    *  the request Host header (local use only — the header is caller-controlled). */
   MCP_ISSUER_URL: process.env['MCP_ISSUER_URL'] || '',
 
@@ -58,8 +58,8 @@ const config = {
     return process.env['OBSIDIAN_VAULT_NAME'] || basename(this.VAULT_DIR);
   },
 
-  JARVIS_ALLOWED_HOSTS: new Set(
-    (process.env['JARVIS_ALLOWED_HOSTS'] || 'localhost,127.0.0.1')
+  RUNE_ALLOWED_HOSTS: new Set(
+    (process.env['RUNE_ALLOWED_HOSTS'] || 'localhost,127.0.0.1')
       .split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
   ),
 
@@ -73,7 +73,7 @@ const config = {
   IMPLICIT_CRM_NAMES: (process.env['IMPLICIT_CRM_NAMES'] || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
-  LOGS_DIR: join(PROJECT_ROOT, 'logs'),
+  LOGS_DIR: optional('RUNE_LOGS_DIR') ?? join(PROJECT_ROOT, 'logs'),
 
   get SESSIONS_FILE() {
     return join(this.LOGS_DIR, 'tg-sessions.json');
@@ -179,7 +179,7 @@ const config = {
    *  per product (`<WORKTREE_ROOT>/<product>/<project>`). Defaults to
    *  `<PROJECT_ROOT>/.worktrees` (gitignored); override with the `WORKTREE_ROOT`
    *  env var to point at a host-level location (useful when running multiple
-   *  jarvis instances or when keeping worktrees off the indexed repo tree).
+   *  Rune instances or when keeping worktrees off the indexed repo tree).
    *  A getter (not an eager property) so a process that sets the env var after
    *  this module is first imported — e.g. the project-14 live-acceptance harness
    *  redirecting worktrees into a temp dir — still sees the override; matches
@@ -294,7 +294,7 @@ const config = {
   WORK_RUN_GLOBAL_CAP: parseNumericEnv('WORK_RUN_GLOBAL_CAP', 4, { min: 1, integer: true }),
 
   /** Global default for the orchestrated-work dispatch toggle (project 14,
-   *  Phase 5). When true, the cockpit Start action dispatches the Jarvis-owned
+   *  Phase 5). When true, the cockpit Start action dispatches the Rune-owned
    *  orchestrated loop (`orchestrated-work` applier); when false (the default),
    *  it dispatches the legacy `/work --auto` (`work-run`) applier. A per-product
    *  `orchestratedMode` in `policies/products.json` overrides this default for

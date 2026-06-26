@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
 
 describe('config', () => {
   const ORIGINAL_ENV = { ...process.env };
+  const retiredBrand = ['jar', 'vis'].join('');
 
   beforeEach(() => {
     vi.resetModules();
@@ -47,41 +49,112 @@ describe('config', () => {
     );
   });
 
-  it('sets LOGS_DIR to project-root/logs', async () => {
+  it('sets LOGS_DIR to project-root/logs when RUNE_LOGS_DIR is unset', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     process.env['TELEGRAM_USER_ID'] = '12345';
     process.env['VAULT_DIR'] = '/tmp/vault';
-    const { default: config } = await import('./config.js');
-    expect(config.LOGS_DIR).toMatch(/\/logs$/);
+    delete process.env['RUNE_LOGS_DIR'];
+    const { default: config, PROJECT_ROOT } = await import('./config.js');
+    expect(config.LOGS_DIR).toBe(join(PROJECT_ROOT, 'logs'));
   });
 
-  it('WORKSPACE_DIR is undefined when not set', async () => {
+  it('LOGS_DIR honors RUNE_LOGS_DIR over the computed default', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     process.env['TELEGRAM_USER_ID'] = '12345';
     process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_LOGS_DIR'] = '/tmp/rune-logs-override';
+    const { default: config } = await import('./config.js');
+    expect(config.LOGS_DIR).toBe('/tmp/rune-logs-override');
+  });
+
+  it('LOGS_DIR ignores the stale pre-rename logs env var', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    delete process.env['RUNE_LOGS_DIR'];
+    const oldLogsEnv = ['JAR', 'VIS_LOGS_DIR'].join('');
+    process.env[oldLogsEnv] = '/tmp/stale-logs-dir';
+    const { default: config, PROJECT_ROOT } = await import('./config.js');
+    expect(config.LOGS_DIR).not.toBe('/tmp/stale-logs-dir');
+    expect(config.LOGS_DIR).toBe(join(PROJECT_ROOT, 'logs'));
+  });
+
+  it('WORKSPACE_DIR defaults to the computed project root when RUNE_WORKSPACE_DIR is unset', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    delete process.env['RUNE_WORKSPACE_DIR'];
     delete process.env['WORKSPACE_DIR'];
-    const { default: config } = await import('./config.js');
-    expect(config.WORKSPACE_DIR).toBeUndefined();
+    const { default: config, PROJECT_ROOT } = await import('./config.js');
+    expect(config.WORKSPACE_DIR).toBeDefined();
+    expect(config.WORKSPACE_DIR).toBe(PROJECT_ROOT);
   });
 
-  it('WORKSPACE_DIR returns the value as-is for absolute paths', async () => {
+  it('WORKSPACE_DIR returns RUNE_WORKSPACE_DIR as-is for absolute paths', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     process.env['TELEGRAM_USER_ID'] = '12345';
     process.env['VAULT_DIR'] = '/tmp/vault';
-    process.env['WORKSPACE_DIR'] = '/home/user/workspace';
+    process.env['RUNE_WORKSPACE_DIR'] = '/home/user/workspace';
+    process.env['WORKSPACE_DIR'] = '/tmp/stale-workspace-dir';
     const { default: config } = await import('./config.js');
     expect(config.WORKSPACE_DIR).toBe('/home/user/workspace');
   });
 
-  it('WORKSPACE_DIR expands leading ~ to homedir', async () => {
+  it('WORKSPACE_DIR expands leading ~ in RUNE_WORKSPACE_DIR', async () => {
     process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
     process.env['TELEGRAM_USER_ID'] = '12345';
     process.env['VAULT_DIR'] = '/tmp/vault';
-    process.env['WORKSPACE_DIR'] = '~/workspace';
+    process.env['RUNE_WORKSPACE_DIR'] = '~/workspace';
     const { default: config } = await import('./config.js');
     const { homedir } = await import('node:os');
     expect(config.WORKSPACE_DIR).toBe(`${homedir()}/workspace`);
     expect(config.WORKSPACE_DIR).not.toMatch(/^~/);
+  });
+
+  it('resolves HTTP auth from RUNE_HTTP_SECRET and ignores the retired env name', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_HTTP_SECRET'] = 'rune-secret';
+    const oldHttpSecretEnv = ['JAR', 'VIS_HTTP_SECRET'].join('');
+    process.env[oldHttpSecretEnv] = 'retired-secret';
+
+    const { default: config } = await import('./config.js');
+    const cfg = config as unknown as Record<string, unknown>;
+    expect(cfg['RUNE_HTTP_SECRET']).toBe('rune-secret');
+    expect(cfg[oldHttpSecretEnv]).toBeUndefined();
+  });
+
+  it('resolves allowed hosts from RUNE_ALLOWED_HOSTS and ignores the retired env name', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    process.env['RUNE_ALLOWED_HOSTS'] = 'localhost,rune.local';
+    const oldAllowedHostsEnv = ['JAR', 'VIS_ALLOWED_HOSTS'].join('');
+    process.env[oldAllowedHostsEnv] = 'retired.local';
+
+    const { default: config } = await import('./config.js');
+    const cfg = config as unknown as Record<string, unknown>;
+    const hosts = cfg['RUNE_ALLOWED_HOSTS'];
+    expect(hosts).toBeInstanceOf(Set);
+    expect(hosts as Set<string>).toEqual(new Set(['localhost', 'rune.local']));
+    expect(cfg[oldAllowedHostsEnv]).toBeUndefined();
+  });
+
+  it('committed product config renames the runtime product identifier to rune without a retired alias', async () => {
+    process.env['TELEGRAM_BOT_TOKEN'] = 'test-token';
+    process.env['TELEGRAM_USER_ID'] = '12345';
+    process.env['VAULT_DIR'] = '/tmp/vault';
+    const { readFileSync } = await import('node:fs');
+    const { PROJECT_ROOT } = await import('./config.js');
+    const products = JSON.parse(
+      readFileSync(join(PROJECT_ROOT, 'policies', 'products.json'), 'utf8'),
+    ) as Record<string, { repoPath?: string; credentialsFile?: string }>;
+
+    expect(products).toHaveProperty('rune');
+    expect(products).not.toHaveProperty(retiredBrand);
+    expect(products['rune']?.repoPath).toBe('~/workspace/rune');
+    expect(products['rune']?.credentialsFile ?? '').not.toMatch(new RegExp(retiredBrand, 'i'));
   });
 
   describe('work-run concurrency cap defaults (project 17)', () => {

@@ -1,7 +1,7 @@
 /**
  * Model-agnostic agent definitions — a neutral representation of an agent (its role,
  * tools, constraints, and declared capabilities) that compiles down to a provider format.
- * Jarvis's agents today are `.claude/agents/*.md` (Claude Code's format); to dispatch the
+ * Rune's agents today are `.claude/agents/*.md` (Claude Code's format); to dispatch the
  * same agent to Codex or Gemini, the system needs this neutral representation and a
  * compiler per target.
  *
@@ -39,7 +39,7 @@ export interface NeutralAgentDef {
   /** The agent's system prompt / instructions — the markdown body. */
   instructions: string;
   /**
-   * Frontmatter keys outside the neutral format (e.g. Jarvis's `cron` / `cron_chat`
+   * Frontmatter keys outside the neutral format (e.g. Rune's `cron` / `cron_chat`
    * scheduling fields), carried opaquely so the Claude compiler round-trips an existing
    * agent with no behavior change. The `model` key is the deliberate exception — it is
    * dropped, never carried here.
@@ -152,8 +152,8 @@ export function compileToClaude(def: NeutralAgentDef): string {
  * Compile a neutral definition to the Codex target — a structured markdown agent document
  * Codex consumes. It carries the agent's role, declared capabilities, tools, constraints,
  * and instructions; like the Claude target it names no model (model resolution is the
- * policy's job). Claude-specific `extraFrontmatter` keys (e.g. Jarvis's cron fields) are
- * not emitted — those apply only to Jarvis-internal Claude agents, not a Codex executor.
+ * policy's job). Claude-specific `extraFrontmatter` keys (e.g. Rune's cron fields) are
+ * not emitted — those apply only to Rune-internal Claude agents, not a Codex executor.
  * Throws naming any missing required field, mirroring `compileToClaude`.
  */
 export function compileToCodex(def: NeutralAgentDef): string {

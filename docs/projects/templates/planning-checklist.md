@@ -64,7 +64,7 @@ into §1 below — the same commit demonstrates the loop closing.
   **On choosing the right `Applied at:` surface in this multi-agent
   system**: `~/.claude/CLAUDE.md` is the broadest — it loads in every
   Claude Code session regardless of `cwd` (terminal sessions,
-  Jarvis-spawned sub-agents, `/work` spawns into any product repo).
+  Rune-spawned sub-agents, `/work` spawns into any product repo).
   Repo-local `CLAUDE.md` only reaches sessions running in that repo.
   `.claude/skills/work/SKILL.md` only reaches `/work` invocations.
   Pick the broadest surface the lesson genuinely needs; duplicate to

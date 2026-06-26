@@ -29,7 +29,7 @@ Error handling checklist for the Resolver, Ask-Twice telemetry, skill-frontmatte
 - [ ] 🔴 New agent file with `triggers:` frontmatter is included in registry on next startup (no code change)
 - [ ] 🟡 Registry entries cover slash commands with their description metadata
 - [ ] 🟡 `kb_query` intent is present using the carried-forward matrix as few-shot examples
-- [ ] 🟢 Duplicate skill names (Jarvis + vault override) resolved per existing `loadAgentDef` precedence
+- [ ] 🟢 Duplicate skill names (Rune + vault override) resolved per existing `loadAgentDef` precedence
 
 ### Intent log
 
@@ -66,7 +66,7 @@ Error handling checklist for the Resolver, Ask-Twice telemetry, skill-frontmatte
 - [ ] 🔴 Invalid cron expression logs error and skips registration (does NOT crash scheduler)
 - [ ] 🟡 `cron_args` is passed to `runAgent`
 - [ ] 🟡 `cron_chat: true` posts output to TG; absent or false → log only
-- [ ] 🟡 Two agents with same name (Jarvis + vault) — cron registers using whichever wins per `loadAgentDef` precedence
+- [ ] 🟡 Two agents with same name (Rune + vault) — cron registers using whichever wins per `loadAgentDef` precedence
 - [ ] 🟢 Removed agent file → cron unregistered on next restart (no hot reload needed)
 
 ### Execution
@@ -162,7 +162,7 @@ Error handling checklist for the Resolver, Ask-Twice telemetry, skill-frontmatte
 
 ## 9. Cross-phase regression
 
-- [ ] 🔴 All existing Jarvis tests pass after Phase A ships (no regression in scheduler, agent loading, command dispatch)
+- [ ] 🔴 All existing Rune tests pass after Phase A ships (no regression in scheduler, agent loading, command dispatch)
 - [ ] 🔴 All Project 02 tests still pass after Phase B and Phase C ship (KB-activity scanner, project-updater KB-aware, etc.)
 - [ ] 🔴 Telegram message dispatch latency remains sub-second for the common path (slash commands, short messages, active sessions)
 - [ ] 🟡 No new dependencies break Mac Mini production deploy

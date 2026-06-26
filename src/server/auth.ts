@@ -23,20 +23,20 @@ function parseCookies(header: string | undefined): Record<string, string> {
 }
 
 /**
- * Validates the `jarvis-auth` cookie or `Authorization: Bearer` header against
- * `JARVIS_HTTP_SECRET`. Returns `{ ok: true, userId }` on success.
+ * Validates the `rune-auth` cookie or `Authorization: Bearer` header against
+ * `RUNE_HTTP_SECRET`. Returns `{ ok: true, userId }` on success.
  */
 export function verifyAuth(req: IncomingMessage): { ok: true; userId: number } | { ok: false } {
-  if (!config.JARVIS_HTTP_SECRET) return { ok: false };
+  if (!config.RUNE_HTTP_SECRET) return { ok: false };
 
   const bearer = req.headers['authorization'];
-  if (bearer !== undefined && safeCompare(bearer, `Bearer ${config.JARVIS_HTTP_SECRET}`)) {
+  if (bearer !== undefined && safeCompare(bearer, `Bearer ${config.RUNE_HTTP_SECRET}`)) {
     return { ok: true, userId: config.TELEGRAM_USER_ID };
   }
 
   const cookies = parseCookies(req.headers['cookie']);
-  const cookieVal = cookies['jarvis-auth'];
-  if (cookieVal !== undefined && safeCompare(cookieVal, config.JARVIS_HTTP_SECRET)) {
+  const cookieVal = cookies['rune-auth'];
+  if (cookieVal !== undefined && safeCompare(cookieVal, config.RUNE_HTTP_SECRET)) {
     return { ok: true, userId: config.TELEGRAM_USER_ID };
   }
 
@@ -45,10 +45,10 @@ export function verifyAuth(req: IncomingMessage): { ok: true; userId: number } |
 
 /**
  * Returns true when the request's Host header (port stripped, lower-cased) is
- * in the `JARVIS_ALLOWED_HOSTS` set. Used as defense-in-depth on top of the
+ * in the `RUNE_ALLOWED_HOSTS` set. Used as defense-in-depth on top of the
  * 127.0.0.1 listener binding.
  */
 export function isAllowedHost(req: IncomingMessage): boolean {
   const host = (req.headers['host'] ?? '').toLowerCase().split(':')[0] ?? '';
-  return config.JARVIS_ALLOWED_HOSTS.has(host);
+  return config.RUNE_ALLOWED_HOSTS.has(host);
 }

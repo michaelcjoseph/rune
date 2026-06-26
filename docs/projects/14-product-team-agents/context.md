@@ -1,7 +1,7 @@
 # Project Context: Product-Team Orchestrated Work — a simulated PM/tech-lead/QA/coder/reviewer/designer team that owns a project's per-task build loop end-to-end
 
 > Orchestration state for the `jarvis` project "Product-Team Orchestrated Work".
-> Owned by Jarvis's context curator — roles read a bounded slice and emit handoff
+> Owned by Rune's context curator — roles read a bounded slice and emit handoff
 > notes; they do not author this file directly.
 
 ## Current State
@@ -30,8 +30,8 @@ Phases 10-12 are all unstarted — every task is unchecked.
 
 ## Key Decisions
 
-- Jarvis owns the project loop (select next unchecked task → assemble bounded context →
-  invoke roles → Jarvis-owned closeout → advance), replacing the single long `/work --auto`
+- Rune owns the project loop (select next unchecked task → assemble bounded context →
+  invoke roles → Rune-owned closeout → advance), replacing the single long `/work --auto`
   process that delegated task selection, continuation, and wrap-up to one accumulating model.
 - Multi-model role separation: judgment roles run Opus 4.8; artifact roles run GPT-5.5/Codex.
   Reviewer independence is fail-closed — a same-provider-only review blocks (Gate 0).
@@ -43,7 +43,7 @@ Phases 10-12 are all unstarted — every task is unchecked.
 - Completion requires a non-fixture live run (the 2026-06-10 correction: a live real-task run
   is load-bearing, not an "optional smoke check" — that mislabel was the original defect, and
   it is exactly the task whose closeout `~~...~~ **PROMOTED**` rename blocked the recent run).
-- Task closeout is Jarvis-owned and atomic: tick exactly one `tasks.md` box, update
+- Task closeout is Rune-owned and atomic: tick exactly one `tasks.md` box, update
   `context.md`, commit — stale-refuse if state drifted.
 
 ## Interfaces & Contracts

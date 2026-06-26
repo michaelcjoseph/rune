@@ -155,7 +155,7 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
   },
   {
     name: 'new-project',
-    description: 'Start a product interview to plan a new Jarvis project and generate spec, tasks, and test plan.',
+    description: 'Start a product interview to plan a new Rune project and generate spec, tasks, and test plan.',
     triggers: [
       'plan a new project',
       'start a new feature',

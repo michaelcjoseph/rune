@@ -1,8 +1,8 @@
-# Jarvis — Docs
+# Rune — Docs
 
 ## Blueprint
 
-- [idea.md](idea.md) — Self-contained prompt to recreate Jarvis from scratch with an AI coding agent
+- [idea.md](idea.md) — Self-contained prompt to recreate Rune from scratch with an AI coding agent
 
 ## Projects
 

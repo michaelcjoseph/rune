@@ -55,7 +55,7 @@ in the loop.
    the wrong shape.
 
 4. **A human start is a cheap, strong safety net.** The whole point of v1 is to move
-   ownership of the *post-spec* work to Jarvis while keeping a person on the *start*
+   ownership of the *post-spec* work to Rune while keeping a person on the *start*
    gate. That gate costs one click and removes an entire class of runaway-automation
    risk during the prove-out window.
 

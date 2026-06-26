@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "jarvis-kb": {
+    "rune-kb": {
       "command": "npx",
       "args": ["tsx", "--env-file-if-exists=.env.local", "src/mcp/index.ts"]
     }

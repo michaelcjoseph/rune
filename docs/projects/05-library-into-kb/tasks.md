@@ -44,7 +44,7 @@ Not started. See [spec.md](spec.md) for details and [test-plan.md](test-plan.md)
 ### Settings + agent
 
 - [x] Update `.claude/settings.json` to register `mcpServers.lenny` with HTTP transport pointing at `https://mcp.lennysdata.com/mcp`. (Confirm the Claude CLI's HTTP-MCP config schema during impl — fields may include `transport: "http"`, `url`, optional `headers`.) — Note: used Bash+curl approach instead; MCP tools inaccessible from vault cwd, token added to .env.local and config.ts instead
-- [x] Author `.claude/agents/lenny-sync.md` (Jarvis-resident, NOT vault-resident):
+- [x] Author `.claude/agents/lenny-sync.md` (Rune-resident, NOT vault-resident):
   - `tools:` frontmatter allow-lists the inspected MCP tools plus `Read`, `Write`, `Bash`
   - Body instructs: read `logs/lenny-sync-state.json` for `last_sync_at`; list posts + transcripts since that timestamp; for each new item, fetch body and write to `library/lenny/{posts,podcasts}/<slug>.md` with the prescribed frontmatter (`source`, `source-url`, `published-at`, `fetched-at`, `kind`); on completion write the new state file
   - Failure semantics: raise (non-zero) without advancing `last_sync_at`
