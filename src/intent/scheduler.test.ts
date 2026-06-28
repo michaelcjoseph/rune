@@ -113,9 +113,10 @@ describe('concurrency scheduler — configured WORK_RUN_GLOBAL_CAP (project 17)'
 
   function queueWithDuplicateFirstProduct(distinctProductCount: number): ScheduledProject[] {
     const products = Array.from({ length: distinctProductCount }, (_, i) => `product-${i + 1}`);
+    const firstProduct = products[0]!;
     return [
-      proj(products[0], '01'),
-      proj(products[0], '02'),
+      proj(firstProduct, '01'),
+      proj(firstProduct, '02'),
       ...products.slice(1).map((product) => proj(product, '01')),
     ];
   }

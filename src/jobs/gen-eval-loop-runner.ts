@@ -516,7 +516,7 @@ export async function* runGenEvalLoop(
   // policy so the loop and the policy never disagree on the bound.
   const cap = opts.payload.maxEvaluatorRounds
     ?? readEvaluatorRoundCapFromPolicy(opts.escalationPolicyPath);
-  const baseEvent = (kind: MutationEvent['kind'], data?: Record<string, unknown>): MutationEvent => ({
+  const baseEvent = (kind: MutationEvent['kind'], data?: object): MutationEvent => ({
     mutationId: opts.mutationId,
     ts: new Date().toISOString(),
     kind,

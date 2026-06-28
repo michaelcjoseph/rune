@@ -34,6 +34,7 @@ vi.mock('../utils/logger.js', () => ({
 
 // The pure planner exists today.
 import { planJournalIntent, type JournalNote, type IntentProposal } from './journal-intent.js';
+import type { ConsumerDeps } from './journal-intent-consumer.js';
 
 // ---------------------------------------------------------------------------
 // §21. Journal scanner (C7)
@@ -220,21 +221,25 @@ describe('actionApprovedIntentProposal (C8)', () => {
   // Mirror the real ConsumerDeps signature but with vi.fn typings so the
   // test can assert call shape. Casting at the call boundary (where the
   // consumer receives a ConsumerDeps) preserves the structural contract.
-  interface MockDeps {
-    invokeVaultUpdater: ReturnType<typeof vi.fn>;
-    appendRoadmap: ReturnType<typeof vi.fn>;
-    registerProduct: ReturnType<typeof vi.fn>;
+  type InvokeVaultUpdaterMock = ReturnType<typeof vi.fn<ConsumerDeps['invokeVaultUpdater']>>;
+  type AppendRoadmapMock = ReturnType<typeof vi.fn<ConsumerDeps['appendRoadmap']>>;
+  type RegisterProductMock = ReturnType<typeof vi.fn<ConsumerDeps['registerProduct']>>;
+
+  interface MockDeps extends ConsumerDeps {
+    invokeVaultUpdater: InvokeVaultUpdaterMock;
+    appendRoadmap: AppendRoadmapMock;
+    registerProduct: RegisterProductMock;
   }
 
   function deps(): MockDeps {
     return {
-      invokeVaultUpdater: vi.fn(async () => ({ ok: true })),
-      appendRoadmap: vi.fn(async () => ({ ok: true })),
-      registerProduct: vi.fn(async () => ({ ok: true })),
+      invokeVaultUpdater: vi.fn<ConsumerDeps['invokeVaultUpdater']>(async () => ({ ok: true })),
+      appendRoadmap: vi.fn<ConsumerDeps['appendRoadmap']>(async () => ({ ok: true })),
+      registerProduct: vi.fn<ConsumerDeps['registerProduct']>(async () => ({ ok: true })),
     };
   }
 
-  async function load(): Promise<undefined | ((proposal: IntentProposal, d: MockDeps) => Promise<unknown>)> {
+  async function load(): Promise<undefined | ((proposal: IntentProposal, d: ConsumerDeps) => Promise<unknown>)> {
     try {
       return (await import('./journal-intent-consumer.js')).actionApprovedIntentProposal;
     } catch {

@@ -49,8 +49,8 @@ const probeCodexProviderMock = probeCodexProvider as unknown as ReturnType<typeo
 const { dispatchToExecutor } = await import('./dispatch-runtime.js');
 
 // Types imported from existing stable modules (these already exist).
-import type { DispatchHandoff } from './dispatch.js';
-import type { NeutralAgentDef } from './agent-def.js';
+import type { DispatchHandoff } from '../intent/dispatch.js';
+import type { NeutralAgentDef } from '../intent/agent-def.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures

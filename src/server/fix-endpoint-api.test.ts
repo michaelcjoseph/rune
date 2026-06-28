@@ -4,6 +4,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { BugScopingFacts } from '../jobs/bug-fix-gate.js';
 
 vi.mock('../transport/mutations.js', () => ({ createMutation: vi.fn(), cancelMutation: vi.fn(), activeRuns: new Map() }));
 vi.mock('../transport/in-flight.js', () => ({ cancelOp: vi.fn(), listOps: vi.fn(() => []) }));
@@ -94,7 +95,7 @@ const { mockBacklogs } = vi.hoisted(() => {
   };
 });
 
-const mockRunPmTechLeadBugScoping = vi.fn(async () => ({
+const mockRunPmTechLeadBugScoping = vi.fn<() => Promise<BugScopingFacts>>(async () => ({
   itemEligible: true,
   fieldsComplete: true,
   pmAssessed: true,

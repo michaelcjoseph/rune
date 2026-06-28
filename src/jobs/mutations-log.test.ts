@@ -280,7 +280,7 @@ describe('mutations-log', () => {
 
       expect(writeFileSync).toHaveBeenCalledOnce();
       const [, writtenContent] = (writeFileSync as ReturnType<typeof vi.fn>).mock.calls[0]!;
-      const lines = writtenContent.split('\n').filter(Boolean).map(line => JSON.parse(line));
+      const lines = writtenContent.split('\n').filter(Boolean).map((line: string) => JSON.parse(line));
 
       expect(lines[0]).toMatchObject({ id: 'eventually-completed', status: 'running' });
       expect(lines[0].error).toBeUndefined();

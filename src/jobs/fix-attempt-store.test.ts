@@ -6,7 +6,8 @@ import { join } from 'node:path';
 async function loadStore(): Promise<any> {
   try {
     const mod = await import('./fix-attempt-store.js');
-    for (const name of ['appendFixAttempt', 'readLatestFixAttempts', 'getLatestFixAttempt', 'reconcileInterruptedFixAttempts']) {
+    const exportNames = ['appendFixAttempt', 'readLatestFixAttempts', 'getLatestFixAttempt', 'reconcileInterruptedFixAttempts'] as const;
+    for (const name of exportNames) {
       expect(mod[name], `expected fix-attempt-store.ts to export ${name}`).toBeTypeOf('function');
     }
     return mod;

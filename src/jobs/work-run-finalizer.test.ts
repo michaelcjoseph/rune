@@ -54,6 +54,7 @@ import {
   type FinalizerPhase,
   type GateFailReason,
   type GateResult,
+  type MarkProjectDoneResult,
 } from './work-run-finalizer.js';
 
 // ---------------------------------------------------------------------------
@@ -1292,7 +1293,7 @@ describe('runFinalizer — gated-merge mode (P1.5)', () => {
         label: 'ambiguous-index HOLD',
         event: branchCompleteEvent(),
         effects: {
-          markProjectDone: vi.fn(async () => ({
+          markProjectDone: vi.fn(async (): Promise<MarkProjectDoneResult> => ({
             kind: 'ambiguous',
             reason: 'multiple-matches',
             commitSha: null,

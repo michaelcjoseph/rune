@@ -35,6 +35,7 @@ import {
   readInteractionSignals,
 } from '../intent/observation-sensor-readers.js';
 import { diarize, triage } from '../intent/observation-callbacks.js';
+import type { SensorSignal, TriageVerdict } from '../intent/observation-loop.js';
 import { readFiledIdeas, appendFiledIdeas } from '../intent/observation-ideas-io.js';
 import { createMutation } from '../transport/mutations.js';
 import { runLearningLoop } from '../intent/learning-loop.js';
@@ -491,14 +492,24 @@ async function stepObservation(bus?: NotificationBus): Promise<NightlyStepResult
     // Missing file → null → decideFailClosed escalates with a clear reason.
   }
 
+  const vaultSignals = readVaultSignals({});
+  const telemetrySignals = readTelemetrySignals({});
+  const interactionSignals = readInteractionSignals({});
+  const rawSignals = [...vaultSignals, ...telemetrySignals, ...interactionSignals];
+  const diarizedSignals = await diarize(rawSignals);
+  const triageResults = new WeakMap<SensorSignal, TriageVerdict>();
+  for (const signal of diarizedSignals) {
+    triageResults.set(signal, await triage(signal));
+  }
+
   const result = await runNightlyObservation({
     readers: {
-      vault: () => readVaultSignals({}),
-      telemetry: () => readTelemetrySignals({}),
-      interaction: () => readInteractionSignals({}),
+      vault: () => vaultSignals,
+      telemetry: () => telemetrySignals,
+      interactions: () => interactionSignals,
     },
-    diarize,
-    triage,
+    diarize: () => diarizedSignals,
+    triage: (signal) => triageResults.get(signal) ?? { file: false, reason: 'missing triage result' },
     decideEscalation: (idea) =>
       decideFailClosed({ specOrigin: 'self-generated' }, rawEscalationPolicy).verdict === 'escalate'
         ? 'escalate'

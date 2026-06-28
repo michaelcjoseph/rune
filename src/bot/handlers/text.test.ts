@@ -362,7 +362,13 @@ describe('text handler routing', () => {
     askMock.mockResolvedValue({ text: 'reply to other user', error: null });
 
     // Message from chatId 999 (a different user) — override chat.id
-    const msgFrom999 = { chat: { id: 999 }, from: { id: 42 }, text: 'hello from other user' };
+    const msgFrom999 = {
+      message_id: 1,
+      date: 1,
+      chat: { id: 999, type: 'private' as const },
+      from: { id: 42, is_bot: false, first_name: 'Test' },
+      text: 'hello from other user',
+    };
     await handleTextMessage(mockSender(), msgFrom999);
 
     // Planning turn must NOT have been invoked for the other user's message

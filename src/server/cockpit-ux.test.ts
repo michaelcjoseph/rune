@@ -25,6 +25,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
+import type { StoredPlanningSession } from '../reviews/planning.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — mirror webview.test.ts so the same fixture surface works.
@@ -110,7 +111,7 @@ vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry
 // will reach into createPlanningSession / handlePlanningTurn / approve /
 // abandon; tests inject controlled returns.
 const mockCreatePlanningSession = vi.fn();
-const mockGetActivePlanningSession = vi.fn(() => null);
+const mockGetActivePlanningSession = vi.fn<() => StoredPlanningSession | null>(() => null);
 const mockDeletePlanningSession = vi.fn();
 const mockApproveActivePlanningSession = vi.fn();
 const mockAbandonActivePlanningSession = vi.fn();

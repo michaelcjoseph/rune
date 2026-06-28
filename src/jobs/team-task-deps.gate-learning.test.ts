@@ -7,6 +7,8 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GateLearningDeps, GateLearningResult, GateLessonCandidate } from '../intent/gate-learning.js';
+import type { GateRejectionFeedback } from '../intent/team-task-workflow.js';
 
 const h = vi.hoisted(() => {
   const lesson =
@@ -14,7 +16,9 @@ const h = vi.hoisted(() => {
   const qaExemplar =
     'QA exemplar: use rawSecret = "sk-liveRawToken0123456789", then expect(output).not.toContain(rawSecret).';
   const roleMemory = new Map<string, string>();
-  const gateLearning = vi.fn(async (rejection: { counterpartRole: string }) => {
+  const gateLearning = vi.fn<
+    (rejection: GateRejectionFeedback, deps: GateLearningDeps) => Promise<GateLearningResult>
+  >(async (rejection) => {
     roleMemory.set(rejection.counterpartRole, `- [2026-06-17 source: gate-test] ${lesson}`);
     return { kind: 'written', role: rejection.counterpartRole, lesson };
   });
@@ -120,7 +124,6 @@ import {
 import { askClaudeWithContext } from '../ai/claude.js';
 import { composeRoleContext } from '../roles/loader.js';
 import { runTeamTaskWorkflow } from '../intent/team-task-workflow.js';
-import type { GateRejectionFeedback } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 
@@ -362,7 +365,7 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
         draftedBy: 'tech-lead',
         targetRole: 'qa',
       });
-      const validation = await deps.validateLesson({ rejection, candidate });
+      const validation = await deps.validateLesson({ rejection, candidate: candidate as GateLessonCandidate });
       expect(validation).toEqual({
         kind: 'lesson',
         stage: 'test',

@@ -342,7 +342,7 @@ let _bus: NotificationBus | null = null;
 // No-op bus used when real bus isn't available yet (pre-startup calls)
 const noopBus = new NotificationBus();
 
-export function setMutationBus(bus: NotificationBus): void {
+export function setMutationBus(bus: NotificationBus | null): void {
   _bus = bus;
 }
 

@@ -23,20 +23,24 @@ import { tmpdir } from 'node:os';
 import { writeRoleLesson } from './memory-writer.js';
 import { composeRoleContext } from './loader.js';
 import { PROVENANCE_RE } from '../writer/seed.js';
+import type { CommitRoleMemoryResult } from './commit.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+type AppendLineMock = ReturnType<typeof vi.fn<(line: string) => void>>;
+type CommitMock = ReturnType<typeof vi.fn<(message: string) => Promise<CommitRoleMemoryResult>>>;
+
 function makeInjectedDeps(existingMemory = ''): {
   readMemory: () => string;
-  appendLine: ReturnType<typeof vi.fn>;
-  commit: ReturnType<typeof vi.fn>;
+  appendLine: AppendLineMock;
+  commit: CommitMock;
 } {
   return {
     readMemory: () => existingMemory,
-    appendLine: vi.fn(),
-    commit: vi.fn().mockResolvedValue({ committed: true, sha: 'abc1234' }),
+    appendLine: vi.fn<(line: string) => void>(),
+    commit: vi.fn<(message: string) => Promise<CommitRoleMemoryResult>>().mockResolvedValue({ committed: true, sha: 'abc1234' }),
   };
 }
 
@@ -239,7 +243,7 @@ describe('memory-writer — writeRoleLesson (concurrency)', () => {
     const appendLine = (line: string) => {
       buf += line + '\n';
     };
-    const commit = vi.fn().mockResolvedValue({ committed: true, sha: 'abc1234' });
+    const commit = vi.fn<(message: string) => Promise<CommitRoleMemoryResult>>().mockResolvedValue({ committed: true, sha: 'abc1234' });
 
     const lesson = 'Serialize the read-modify-commit so it never races.';
     const fire = () =>
