@@ -1,6 +1,14 @@
 {
   "aura": {
     "class": "external",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "stubbed"
+    },
     "repoPath": "~/workspace/aura",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/aura/.env",
@@ -14,6 +22,14 @@
   },
   "assay": {
     "class": "external",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "stubbed"
+    },
     "repoPath": "~/workspace/assay",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/assay/.env",
@@ -27,6 +43,14 @@
   },
   "rune": {
     "class": "internal",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "enabled"
+    },
     "repoPath": "~/workspace/rune",
     "baseBranch": "main",
     "orchestratedMode": true,
@@ -45,6 +69,14 @@
   },
   "rune-mcp": {
     "class": "internal",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "enabled"
+    },
     "repoPath": "~/workspace/rune",
     "baseBranch": "main",
     "orchestratedMode": true,
@@ -63,6 +95,14 @@
   },
   "relay": {
     "class": "external",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "stubbed"
+    },
     "repoPath": "~/workspace/relay",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/relay/.env",
@@ -76,9 +116,25 @@
   },
   "writing": {
     "class": "external",
+    "containerCapabilities": {
+      "projects": false,
+      "bugs": false,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "stubbed"
+    },
     "scopePath": "docs/rune"
   },
   "brand": {
-    "class": "external"
+    "class": "external",
+    "containerCapabilities": {
+      "projects": true,
+      "bugs": true,
+      "ideas": true,
+      "runs": true,
+      "chat": true,
+      "monitoring": "stubbed"
+    }
   }
 }

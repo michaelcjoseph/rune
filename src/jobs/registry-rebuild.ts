@@ -95,6 +95,7 @@ export function scanRegistrySources(
       name,
       ...(cfg.class ? { class: cfg.class } : {}),
       ...(cfg.scopePath ? { scopePath: cfg.scopePath } : {}),
+      ...(cfg.containerCapabilities ? { containerCapabilities: cfg.containerCapabilities } : {}),
       repoBacked,
       projectsIndex,
       taskProgress,

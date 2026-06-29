@@ -129,6 +129,63 @@ describe('product/project cockpit — view contents (test-plan §7)', () => {
     expect((byName['writing'] as any).scopePath).toBe('docs/rune');
     expect((byName['brand'] as any).scopePath).toBeUndefined();
   });
+
+  it('copies product container capabilities into the cockpit projection so clients do not infer behavior from names', () => {
+    const registry = {
+      version: 1,
+      builtAt: '2026-06-29T00:00:00.000Z',
+      products: [
+        {
+          name: 'rune',
+          class: 'internal',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: true,
+            bugs: true,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'enabled',
+          },
+          projects: [],
+        },
+        {
+          name: 'essay-lab',
+          class: 'external',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          projects: [],
+        },
+      ],
+    } as unknown as Registry;
+
+    const view = buildCockpitView(registry, {});
+    const byName = Object.fromEntries(view.products.map((product) => [product.name, product as any]));
+
+    expect(byName['rune'].containerCapabilities).toEqual({
+      projects: true,
+      bugs: true,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'enabled',
+    });
+    expect(byName['essay-lab'].containerCapabilities).toEqual({
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    });
+  });
 });
 
 describe('product/project cockpit — per-action controls (test-plan §7)', () => {

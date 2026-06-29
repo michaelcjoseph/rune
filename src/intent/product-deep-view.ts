@@ -1,5 +1,5 @@
 import type { BacklogItem, FileWarning } from './backlog-parser.js';
-import type { Registry, RegistryProduct } from './registry.js';
+import type { ProductClass, ProductContainerCapabilities, Registry, RegistryProduct } from './registry.js';
 import type { SupervisedRun } from './supervision.js';
 import {
   computeFixAction,
@@ -63,6 +63,9 @@ export interface BacklogItemWithActions extends BacklogItem {
 
 export interface ProductDeepView {
   name: string;
+  class?: ProductClass;
+  scopePath?: string;
+  containerCapabilities?: ProductContainerCapabilities;
   repoBacked: boolean;
   limitedReason?: string;
   projects: DeepProject[];
@@ -194,6 +197,30 @@ function compareEndedDesc(a: ProductDeepViewWorkRun, b: ProductDeepViewWorkRun):
 
 function projectLifecycle(status: RegistryProduct['projects'][number]['status']): 'active' | 'done' {
   return status === 'done' ? 'done' : 'active';
+}
+
+function resolveProductContainerCapabilities(
+  product: Pick<RegistryProduct, 'name' | 'class' | 'containerCapabilities'>,
+): ProductContainerCapabilities {
+  if (product.containerCapabilities) return product.containerCapabilities;
+  if (product.name === 'writing') {
+    return {
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    };
+  }
+  return {
+    projects: true,
+    bugs: true,
+    ideas: true,
+    runs: true,
+    chat: true,
+    monitoring: product.class === 'internal' ? 'enabled' : 'stubbed',
+  };
 }
 
 function isCancellableProjectMutation(mutation: ProductDeepViewActiveMutation, product: string, projectSlug: string): boolean {
@@ -344,6 +371,9 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
   if (!product.repoBacked) {
     return {
       name: product.name,
+      ...(product.class ? { class: product.class } : {}),
+      ...(product.scopePath ? { scopePath: product.scopePath } : {}),
+      containerCapabilities: resolveProductContainerCapabilities(product),
       repoBacked: false,
       limitedReason: 'product is not backed by a repo',
       projects: [],
@@ -367,12 +397,15 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       return compareStartedDesc(a, b);
     });
   const activeMutations = deps.readActiveMutations ? readOrEmpty(deps.readActiveMutations) : [];
-  const ideasOnly = product.name === 'writing';
+  const containerCapabilities = resolveProductContainerCapabilities(product);
 
   const view: ProductDeepView = {
     name: product.name,
+    ...(product.class ? { class: product.class } : {}),
+    ...(product.scopePath ? { scopePath: product.scopePath } : {}),
+    containerCapabilities,
     repoBacked: true,
-    projects: ideasOnly
+    projects: !containerCapabilities.projects
       ? []
       : product.projects
         .filter((project) => project.status !== 'done')
@@ -383,19 +416,21 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
           runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
         })),
     backlog: {
-      bugs: ideasOnly
+      bugs: !containerCapabilities.bugs
         ? []
         : (backlog?.bugs ?? [])
           .filter((item) => item.status !== 'done')
           .map((item) =>
             withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
           ),
-      ideas: (backlog?.ideas ?? []).map((item) =>
-        withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
-      ),
+      ideas: containerCapabilities.ideas
+        ? (backlog?.ideas ?? []).map((item) =>
+          withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+        )
+        : [],
       warnings: backlog?.fileWarnings ?? [],
     },
-    runs: recentRuns.map((run) => {
+    runs: containerCapabilities.runs ? recentRuns.map((run) => {
       const id = runId(run);
       const row: RunSummaryRow = {
         runId: id,
@@ -406,11 +441,11 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       const transcriptUrl = transcriptUrlForRun(run, id);
       if (transcriptUrl) row.transcriptUrl = transcriptUrl;
       return row;
-    }),
+    }) : [],
   };
 
   const active = liveRuns[0];
-  if (active) {
+  if (active && containerCapabilities.runs) {
     view.activeRun = activeRunDetail(active, deps, now);
   }
 

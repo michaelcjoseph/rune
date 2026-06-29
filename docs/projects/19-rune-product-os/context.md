@@ -64,10 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- d not add extra changes.
-
-Verified:
-- `npx vitest run src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts --reporter=verbose` → 22 passed
+-  src/server/webview.test.ts --reporter=verbose` → 108 passed
+- `npx vitest --configLoader runner run src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts --reporter=verbose` → 80 passed
+- `npm run build` → passed
 - `git diff --check` → clean
 
-Note: the first `npm test -- ...` attempt hung silently and was interrupted; the direct Vitest command passed immediately.
+No commit made.

@@ -63,7 +63,16 @@ const { mockRegistry, mockBacklogs, mockRuns, mockIndexRows, mockSummariesById }
     products: [
       {
         name: 'aura',
+        class: 'external',
         repoBacked: true,
+        containerCapabilities: {
+          projects: true,
+          bugs: true,
+          ideas: true,
+          runs: true,
+          chat: true,
+          monitoring: 'stubbed',
+        },
         projects: [{ slug: '01-mvp', status: 'active', progress: { done: 2, total: 5 } }],
       },
       { name: 'relay', repoBacked: false, projects: [{ slug: '01-relay-core', status: 'active' }] },
@@ -307,7 +316,16 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       name: 'aura',
+      class: 'external',
       repoBacked: true,
+      containerCapabilities: {
+        projects: true,
+        bugs: true,
+        ideas: true,
+        runs: true,
+        chat: true,
+        monitoring: 'stubbed',
+      },
       projects: [{ slug: '01-mvp', lifecycle: 'active', taskProgress: { done: 2, total: 5 } }],
       activeRun: {
         runId: 'run-parked',

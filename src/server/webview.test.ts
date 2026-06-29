@@ -123,7 +123,22 @@ const { mockRegistry } = vi.hoisted(() => ({
   mockRegistry: {
     version: 1,
     builtAt: '2026-01-15T00:00:00.000Z',
-    products: [{ name: 'aura', repoBacked: true, projects: [{ slug: '01-mvp', status: 'active' }] }],
+    products: [
+      {
+        name: 'aura',
+        class: 'external',
+        repoBacked: true,
+        containerCapabilities: {
+          projects: true,
+          bugs: true,
+          ideas: true,
+          runs: true,
+          chat: true,
+          monitoring: 'stubbed',
+        },
+        projects: [{ slug: '01-mvp', status: 'active' }],
+      },
+    ],
   },
 }));
 vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry) }));
@@ -545,6 +560,26 @@ describe('server/webview', () => {
       expect(project.actions).toEqual(
         expect.arrayContaining(['start', 'continue', 'enter-planning-mode']),
       );
+    });
+
+    it('returns product class and container capabilities on /api/cockpit product payloads', async () => {
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.products[0]).toMatchObject({
+        name: 'aura',
+        class: 'external',
+        containerCapabilities: {
+          projects: true,
+          bugs: true,
+          ideas: true,
+          runs: true,
+          chat: true,
+          monitoring: 'stubbed',
+        },
+      });
     });
 
     it('returns a 200 unavailable view when the registry cannot be read', async () => {

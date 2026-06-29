@@ -538,6 +538,77 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
     });
   });
 
+  it('applies container capabilities from product metadata instead of hardcoded product names', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const registryWithCapabilities = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        {
+          name: 'essay-lab',
+          class: 'external',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          projects: [
+            { slug: 'legacy-project-that-must-not-render', status: 'active', progress: { done: 0, total: 3 } },
+          ],
+        },
+      ],
+    } as unknown as Registry;
+    const idea = item({
+      id: 'idea-essay-lab-1',
+      kind: 'ideas',
+      text: 'draft a product essay',
+      status: 'open',
+      section: 'user-authored',
+      source: { file: 'docs/rune/writing-ideas.md', lineNumber: 8, raw: '- [ ] draft a product essay' },
+    });
+    const bug = item({
+      id: 'bug-essay-lab-1',
+      kind: 'bugs',
+      text: 'this bug should not render when bug capability is disabled',
+      status: 'open',
+    });
+
+    const view = buildProductDeepView({
+      product: 'essay-lab',
+      ...deps({
+        readRegistry: vi.fn(() => registryWithCapabilities),
+        readBacklogs: vi.fn((): ProductBacklogFixture[] => [
+          {
+            product: 'essay-lab',
+            notRepoBacked: false,
+            bugs: [bug],
+            ideas: [idea],
+            fileWarnings: [],
+          },
+        ]),
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn(() => []),
+      }),
+    });
+
+    expect((view as any).class).toBe('external');
+    expect((view as any).containerCapabilities).toEqual({
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    });
+    expect(view.projects).toEqual([]);
+    expect(view.backlog.bugs).toEqual([]);
+    expect(view.backlog.ideas.map((row: any) => row.id)).toEqual(['idea-essay-lab-1']);
+  });
+
   it('filters run history to the selected product, sorts most-recent first, maps outcomes, and preserves bug targets', async () => {
     const { buildProductDeepView } = await import('./product-deep-view.js');
     const view = buildProductDeepView({
