@@ -53,6 +53,8 @@ const mockConfig = {
   RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   IS_PRODUCTION: false as boolean,
   LAUNCHD_LABEL: 'com.jarvis.daemon',
+  RUNE_MCP_HOST: '127.0.0.1',
+  RUNE_MCP_PORT: 65534,
   // Project 14 Phase 5 dispatch seam. PRODUCTS_CONFIG_FILE points at a path that
   // doesn't exist so readDispatchModeInput's per-product read fails and falls
   // back to the global toggle — which the dispatch tests below flip per-case.
@@ -192,6 +194,14 @@ function openWebSocket(port: number): Promise<WebSocket> {
   });
 }
 
+async function getReleasedLocalPort(): Promise<number> {
+  const s = http.createServer();
+  await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', resolve));
+  const releasedPort = (s.address() as any).port;
+  await new Promise<void>((resolve) => s.close(() => resolve()));
+  return releasedPort;
+}
+
 function waitForMockCall(mock: ReturnType<typeof vi.fn>, timeoutMs = 1000): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
@@ -252,6 +262,8 @@ describe('server/webview', () => {
     vi.clearAllMocks();
     mockActiveRunsMap.clear();
     mockConfig.RUNE_HTTP_SECRET = 'test-secret';
+    mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+    mockConfig.RUNE_MCP_PORT = 65534;
     // Reset mocks to sensible defaults after clearAllMocks
     (getSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (handleWebviewMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -591,6 +603,39 @@ describe('server/webview', () => {
       expect(res.status).toBe(200);
       expect(res.body.available).toBe(true);
       expect(res.body.products[0].projects[0].taskProgress).toBeUndefined();
+    });
+
+    it('web-starts-with-mcp-degraded: marks Rune MCP monitoring degraded when the daemon health endpoint is unreachable', async () => {
+      const unreachablePort = await getReleasedLocalPort();
+      mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+      mockConfig.RUNE_MCP_PORT = unreachablePort;
+      (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        version: 1,
+        builtAt: '2026-06-28T00:00:00.000Z',
+        products: [
+          {
+            name: 'rune-mcp',
+            class: 'internal',
+            repoBacked: true,
+            projects: [{ slug: '19-rune-product-os', status: 'active' }],
+          },
+        ],
+      });
+
+      const res = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(true);
+      const runeMcp = res.body.products.find((p: any) => p.name === 'rune-mcp');
+      expect(runeMcp).toBeDefined();
+      expect(runeMcp.monitoring?.mcp).toMatchObject({
+        status: 'degraded',
+        endpoint: `http://127.0.0.1:${unreachablePort}/health`,
+        error: expect.stringMatching(/ECONNREFUSED|unreachable|down/i),
+        checkedAt: expect.any(String),
+      });
     });
   });
 

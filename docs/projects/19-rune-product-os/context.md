@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- logs/rune-mcp-oauth-store.json`.
+- ing.mcp` as degraded.
 
 Verified with:
 
-`npm test -- src/config.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
+`npm test -- src/server/webview.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
 
-Result: red as expected for this tests-first task. The four new failures are all missing `RUNE_MCP_*` production config keys. No production files were changed.
+Result: red as expected for this tests-first task. `57` passed, `1` failed because `runeMcp.monitoring.mcp` is currently `undefined`. No production files changed.
