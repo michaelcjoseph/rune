@@ -291,6 +291,13 @@ describe('vault_search App schema — full-vault markdown coverage', () => {
     expect(enumValues).not.toEqual(expect.arrayContaining(['journals', 'pages', 'projects']));
     expect(enumValues).toEqual([]);
 
+    const schemaText = JSON.stringify(inputSchema);
+    expect(schemaText).toMatch(/top[- ]level/i);
+    expect(schemaText).toMatch(/folder/i);
+    expect(schemaText).toMatch(/prefix/i);
+    expect(schemaText).toMatch(/unknown/i);
+    expect(schemaText).toMatch(/ignored?/i);
+
     await client.close();
   });
 });

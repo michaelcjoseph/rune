@@ -43,13 +43,20 @@ export const ADMIN_TOOLS = [
   'kb_lint',
 ] as const;
 
+const UTILITY_TOOLS = ['refresh_vault_index'] as const;
+
 /** Union of every tool name the factory can register. */
-export type ToolName = (typeof APP_SURFACE_TOOLS)[number] | (typeof ADMIN_TOOLS)[number];
+export type ToolName =
+  | (typeof APP_SURFACE_TOOLS)[number]
+  | (typeof ADMIN_TOOLS)[number]
+  | (typeof UTILITY_TOOLS)[number];
 
 /** Lazy loader for the read-tools trio handler + deps modules (shared by
  *  three registrations; Node's module cache makes repeat calls free). */
 const lazyReadTools = () =>
   Promise.all([import('./tools/read-tools.js'), import('./tools/read-tools-deps.js')]);
+
+const lazyVaultIndexTools = () => import('./tools/vault-index-tools.js');
 
 /** Every tool the factory knows how to register, keyed by tool name. */
 const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
@@ -166,14 +173,27 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
     );
   },
 
+  refresh_vault_index: (server) => {
+    server.tool(
+      'refresh_vault_index',
+      'Refresh the warm vault index and report readiness plus build statistics.',
+      {},
+      async () => {
+        const { refreshVaultIndexTool, buildProductionRefreshVaultIndexDeps } =
+          await lazyVaultIndexTools();
+        return refreshVaultIndexTool(buildProductionRefreshVaultIndexDeps());
+      },
+    );
+  },
+
   vault_search: (server) => {
     server.tool(
       'vault_search',
-      'Search vault content (journals, pages, projects). Returns matching snippets with paths.',
+      'Search whole-vault markdown content. Returns matching snippets with paths.',
       {
         query: z.string().describe('Search query text'),
-        types: z.array(z.enum(['journals', 'pages', 'projects'])).optional()
-          .describe('Restrict search to these vault areas (default: all three)'),
+        types: z.array(z.string()).optional()
+          .describe('Optional top-level folder prefixes to narrow search; unknown or unsafe values are ignored. Default: whole vault.'),
         maxResults: z.number().optional().describe('Max results to return'),
       },
       // Lazy import: the deps module pulls config.ts (env-var-required at

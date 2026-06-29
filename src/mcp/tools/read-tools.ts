@@ -2,7 +2,7 @@
  * Read-tools trio for the Claude App connector — project 16, Phase 1
  * (spec R2, tech-spec tool table, test-plan §5):
  *
- * - `vault_search` — search vault content across journals/pages/projects.
+ * - `vault_search` — search markdown content across the whole vault.
  * - `crm_lookup`   — look up a person/company from pages/crm.json.
  * - `get_priorities` — today's (falling back to yesterday's) `#priorities`
  *   block, reusing the parseTag parsing the /priorities command uses. The
@@ -20,11 +20,7 @@ import { errText, ok, err, type McpTextResult } from './types.js';
 // vault_search
 // ---------------------------------------------------------------------------
 
-/** The three vault areas the tool searches. Deliberately a closed union
- *  (tech-spec sketches `string[]`): an unknown type has no directory. */
-export type VaultSearchType = 'journals' | 'pages' | 'projects';
-
-const ALL_SEARCH_TYPES: readonly VaultSearchType[] = ['journals', 'pages', 'projects'];
+export type VaultSearchType = string;
 
 export interface VaultSearchInput {
   query: string;
@@ -42,6 +38,14 @@ export interface VaultSearchDeps {
   sanitizeError?: (message: string) => string;
 }
 
+function cleanTopLevelPrefix(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('/') || trimmed === '.' || trimmed === '..') return null;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return null;
+  return trimmed;
+}
+
 export async function vaultSearch(
   input: VaultSearchInput,
   deps: VaultSearchDeps,
@@ -53,21 +57,26 @@ export async function vaultSearch(
   }
 
   try {
-    // Unknown type strings are silently dropped here — the Zod enum on the
-    // server registration is the real guard; this filter just normalizes.
-    const types =
-      input.types && input.types.length > 0
-        ? ALL_SEARCH_TYPES.filter((t) => input.types!.includes(t))
-        : ALL_SEARCH_TYPES;
-
     const lines: string[] = [];
-    for (const directory of types) {
+    if (!input.types || input.types.length === 0) {
       const results = deps.searchVault(query, {
-        directory,
         maxResults: input.maxResults,
       });
       for (const r of results) {
         lines.push(`${r.file}:${r.line} — ${r.content}`);
+      }
+    } else {
+      const directories = Array.from(
+        new Set(input.types.map(cleanTopLevelPrefix).filter((t): t is string => t !== null)),
+      );
+      for (const directory of directories) {
+        const results = deps.searchVault(query, {
+          directory,
+          maxResults: input.maxResults,
+        });
+        for (const r of results) {
+          lines.push(`${r.file}:${r.line} — ${r.content}`);
+        }
       }
     }
 

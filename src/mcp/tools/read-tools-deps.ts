@@ -7,13 +7,20 @@
  */
 
 import { searchVault } from '../../kb/search.js';
+import { getVaultIndexStatus, queryVaultIndex } from '../../kb/vault-index.js';
 import { readVaultFile } from '../../vault/files.js';
 import { getTodayFilename, getYesterdayFilename } from '../../utils/time.js';
 import { sanitizeMcpError } from './sanitize.js';
 import type { VaultSearchDeps, CrmLookupDeps, GetPrioritiesDeps } from './read-tools.js';
 
 export function buildProductionVaultSearchDeps(): VaultSearchDeps {
-  return { searchVault, sanitizeError: sanitizeMcpError };
+  return {
+    searchVault: (query, options) => {
+      const { ready } = getVaultIndexStatus();
+      return ready ? queryVaultIndex(query, options) : searchVault(query, options);
+    },
+    sanitizeError: sanitizeMcpError,
+  };
 }
 
 export function buildProductionCrmLookupDeps(): CrmLookupDeps {

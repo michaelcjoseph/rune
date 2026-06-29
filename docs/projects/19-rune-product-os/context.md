@@ -64,11 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- B caps and within the harness’s sane-margin checks.
+- d:
+- `npx vitest run src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts`
+- `npx vitest run src/mcp/tools/vault-index-tools.test.ts`
+- `npm run build`
 
-Verified:
-- `npx tsx --env-file-if-exists=.env.local src/kb/__acceptance__/vault-index-realscale.acceptance.ts` passed
-- `npx vitest run src/kb/vault-index.test.ts src/kb/vault-index-parity.test.ts` passed
-- `npm run build` passed
-
-No commit made.
+No commit made. Note: `src/mcp/server.test.ts` and `src/mcp/tools/read-tools.test.ts` were already dirty before my edits; I left them untouched.

@@ -231,9 +231,9 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test 3 🟡 — arbitrary type strings are treated as folder prefixes
+  // Test 3 🔴 — valid type strings narrow by folder prefix; unsafe strings are ignored
   // -------------------------------------------------------------------------
-  it('3: mixed existing and non-existent types → searches each supplied prefix and existing folder hits survive', async () => {
+  it('3: mixed folder prefixes and unsafe values → searches only clean top-level folder prefixes', async () => {
     const { vaultSearch } = await requireReadToolsModule();
 
     const deps = makeVaultSearchDeps({
@@ -254,7 +254,10 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
     });
 
     const result = await vaultSearch(
-      { query: 'UNKNOWN_TYPE_MARKER', types: ['world-view', 'not-a-real-folder'] },
+      {
+        query: 'UNKNOWN_TYPE_MARKER',
+        types: ['world-view', 'not-a-real-folder', '../escape', '/absolute'],
+      },
       deps,
     );
 
@@ -269,24 +272,36 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
       'UNKNOWN_TYPE_MARKER',
       expect.objectContaining({ directory: 'not-a-real-folder' }),
     );
+    expect(vi.mocked(deps.searchVault).mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.any(String),
+          expect.objectContaining({ directory: '../escape' }),
+        ]),
+      ]),
+    );
+    expect(vi.mocked(deps.searchVault).mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.any(String),
+          expect.objectContaining({ directory: '/absolute' }),
+        ]),
+      ]),
+    );
     expect(result.isError).toBeFalsy();
     expect(result.content[0]!.text).toContain('world-view/beliefs.md:2');
   });
 
-  it('3b: only non-existent types → searches that prefix and does not fall back to default whole-vault search', async () => {
+  it('3b: only unsafe type values → ignores them and does not fall back to default whole-vault search', async () => {
     const { vaultSearch } = await requireReadToolsModule();
     const deps = makeVaultSearchDeps();
 
     const result = await vaultSearch(
-      { query: 'UNKNOWN_ONLY_MARKER', types: ['not-a-real-folder'] },
+      { query: 'UNKNOWN_ONLY_MARKER', types: ['../escape', '/absolute', ''] },
       deps,
     );
 
-    expect(deps.searchVault).toHaveBeenCalledTimes(1);
-    expect(deps.searchVault).toHaveBeenCalledWith(
-      'UNKNOWN_ONLY_MARKER',
-      expect.objectContaining({ directory: 'not-a-real-folder' }),
-    );
+    expect(deps.searchVault).not.toHaveBeenCalled();
     expect(result.isError).toBeFalsy();
     expect(result.content[0]!.text).toBe('No results found.');
   });
