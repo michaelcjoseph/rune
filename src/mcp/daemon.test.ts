@@ -85,7 +85,7 @@ vi.mock('../kb/engine.js', () => ({
     concepts: 0,
     topics: 0,
     comparisons: 0,
-    recentLog: [],
+    recentLog: ['PKMS_HEALTH_MUST_NOT_LEAK_FROM_KB_STATS'],
   }),
 }));
 
@@ -93,6 +93,8 @@ vi.mock('../kb/search.js', () => ({
   searchWithFilter: vi.fn().mockReturnValue([]),
   searchRepo: vi.fn().mockReturnValue([]),
 }));
+
+import { APP_SURFACE_TOOLS } from './server.js';
 
 interface StartMcpDaemonOptions {
   host: string;
@@ -317,6 +319,24 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(source).not.toMatch(/from ['"]\.\.\/integrations\/whoop\/client\.js['"]/);
   });
 
+  it('defines the MCP health payload as daemon status, not pkms or product data', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    const source = readFileSync(daemonPath, 'utf8');
+    const healthType = source.match(/export interface McpDaemonStatus \{[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(healthType).toContain("service: 'rune-mcp'");
+    expect(healthType).toContain("status: 'ok' | 'starting' | 'degraded'");
+    expect(healthType).toContain('activeSessions: number');
+    expect(healthType).toMatch(/oauth:\s*\{\s*configured:\s*boolean\s*\}/);
+    expect(healthType).toMatch(/warmIndex:\s*\{[\s\S]*ready:\s*boolean/);
+    expect(healthType).toMatch(/warmIndex:\s*\{[\s\S]*status:/);
+    expect(healthType).toMatch(/warmIndex:\s*\{[\s\S]*lastRebuild:/);
+    expect(healthType).toMatch(/recentLogs|logPointers/);
+
+    const buildStatusSource = source.match(/function buildStatus[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(buildStatusSource).not.toMatch(/queryKB|getKBStats|searchWithFilter|searchRepo|APP_SURFACE_TOOLS/);
+  });
+
   it('serves daemon status at /health and only MCP/OAuth routes besides that', async () => {
     const startMcpDaemon = await requireStartMcpDaemon();
     const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-daemon-'));
@@ -411,6 +431,127 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(sideEffects.startScheduler).not.toHaveBeenCalled();
     expect(sideEffects.startStallCheck).not.toHaveBeenCalled();
     expect(sideEffects.startWatcher).not.toHaveBeenCalled();
+  });
+
+  it('reports bounded process-only health shape and never vault or product payloads', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-health-status-'));
+    tempDirs.push(dir);
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    const res = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/health',
+      method: 'GET',
+    });
+    expect(res.status).toBe(200);
+
+    const body = JSON.parse(res.body) as {
+      service?: unknown;
+      status?: unknown;
+      uptime?: unknown;
+      oauth?: { configured?: unknown };
+      activeSessions?: unknown;
+      warmIndex?: {
+        ready?: unknown;
+        status?: unknown;
+        lastRebuild?: unknown;
+      };
+      recentLogs?: unknown;
+      logPointers?: unknown;
+    };
+
+    expect(body.service).toBe('rune-mcp');
+    expect(body.status).toMatch(/^(ok|starting|degraded)$/);
+    expect(body.uptime).toEqual(expect.any(Number));
+    expect(body.oauth).toEqual({ configured: true });
+    expect(body.activeSessions).toBe(0);
+    expect(body.warmIndex?.ready).toEqual(expect.any(Boolean));
+    expect(body.warmIndex?.status).toMatch(/^(starting|ready|stale|degraded|failed)$/);
+    expect(body.warmIndex).toHaveProperty('lastRebuild');
+
+    expect(Boolean(body.recentLogs) || Boolean(body.logPointers)).toBe(true);
+    if (Array.isArray(body.recentLogs)) {
+      expect(body.recentLogs.length).toBeLessThanOrEqual(50);
+      for (const line of body.recentLogs) {
+        expect(typeof line).toBe('string');
+        expect(line.length).toBeLessThanOrEqual(2_000);
+      }
+    }
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('PKMS_HEALTH_MUST_NOT_LEAK_FROM_KB_STATS');
+    for (const toolName of APP_SURFACE_TOOLS) {
+      expect(serialized).not.toContain(toolName);
+    }
+    for (const productName of ['aura', 'assay', 'relay', 'writing', 'brand']) {
+      expect(serialized).not.toContain(productName);
+    }
+  });
+
+  it('counts active MCP sessions in /health after an authenticated initialize', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-health-sessions-'));
+    tempDirs.push(dir);
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    const accessToken = await issueDaemonBearerToken(daemon.port, 'mcp-gate');
+    const initializeBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'health-status-test', version: '1.0.0' },
+      },
+    });
+
+    const initialized = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(initializeBody).toString(),
+      },
+      body: initializeBody,
+    });
+    expect(initialized.status).toBe(200);
+
+    const health = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/health',
+      method: 'GET',
+    });
+    expect(health.status).toBe(200);
+    expect((JSON.parse(health.body) as { activeSessions?: number }).activeSessions).toBe(1);
   });
 
   it('uses the daemon OAuth secret, issuer, and store independently of web auth cookies', async () => {

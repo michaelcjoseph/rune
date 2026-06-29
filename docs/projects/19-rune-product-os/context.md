@@ -64,7 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- r runner src/server/http.test.ts src/server/mcp-transport.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
-- `npm run build`
+- t.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 -t ".*"`: 7 passed
+- `npm run build`: passed
+- `git diff --check`: passed
 
-Note: `src/server/http.test.ts` and `src/server/mcp-transport.test.ts` were already modified before my implementation; I left those handed QA changes intact.
+Note: running the same daemon test file without `-t ".*"` hung before Vitest printed its run header twice; the `-t ".*"` run executed all seven tests successfully.

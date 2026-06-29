@@ -29,9 +29,11 @@ export interface McpDaemonStatus {
   activeSessions: number;
   warmIndex: {
     ready: boolean;
+    status: 'starting' | 'ready' | 'stale' | 'degraded' | 'failed';
     lastRebuild: null;
   };
   recentLogs: string[];
+  logPointers: Array<{ path: string; description: string }>;
 }
 
 export interface McpDaemonHandle {
@@ -81,9 +83,16 @@ function buildStatus(opts: StartMcpDaemonOptions, mcpHandler: McpRouteHandler): 
     activeSessions: mcpHandler.getActiveSessionCount(),
     warmIndex: {
       ready: false,
+      status: 'starting',
       lastRebuild: null,
     },
     recentLogs: [],
+    logPointers: [
+      {
+        path: 'logs/rune.log',
+        description: 'MCP daemon process log',
+      },
+    ],
   };
 }
 
