@@ -64,10 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ing.mcp` as degraded.
+- build`
+- `npm test -- src/mcp/daemon.test.ts src/config.test.ts src/server/webview.test.ts src/server/mcp-transport.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
 
-Verified with:
-
-`npm test -- src/server/webview.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
-
-Result: red as expected for this tests-first task. `57` passed, `1` failed because `runeMcp.monitoring.mcp` is currently `undefined`. No production files changed.
+Note: `src/mcp/daemon.test.ts` was already modified/staged before my implementation; I left that test file untouched.

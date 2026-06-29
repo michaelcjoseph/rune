@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { join, extname, resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { IncomingMessage, ServerResponse, Server } from 'node:http';
+import { request as httpRequest, type IncomingMessage, type ServerResponse, type Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { readBody } from './read-body.js';
 import config from '../config.js';
@@ -211,7 +211,75 @@ function handleApiState(res: ServerResponse, isReady: () => boolean): void {
   res.end(JSON.stringify(snapshot));
 }
 
-function handleApiCockpit(res: ServerResponse): void {
+type McpMonitoring = {
+  mcp?: {
+    status: 'ok' | 'degraded';
+    endpoint: string;
+    checkedAt: string;
+    error?: string;
+  };
+};
+
+type CockpitProductWithMonitoring = ReturnType<typeof buildCockpitView>['products'][number] & {
+  monitoring?: McpMonitoring;
+};
+
+type CockpitViewWithMonitoring = Omit<ReturnType<typeof buildCockpitView>, 'products'> & {
+  products: CockpitProductWithMonitoring[];
+};
+
+function probeMcpDaemonHealth(): Promise<{
+  status: 'ok' | 'degraded';
+  endpoint: string;
+  checkedAt: string;
+  error?: string;
+}> {
+  const endpoint = `http://${config.RUNE_MCP_HOST}:${config.RUNE_MCP_PORT}/health`;
+  const checkedAt = new Date().toISOString();
+  return new Promise((resolve) => {
+    const req = httpRequest(endpoint, { method: 'GET', timeout: 500 }, (mcpRes) => {
+      mcpRes.resume();
+      mcpRes.on('end', () => {
+        if (mcpRes.statusCode === 200) {
+          resolve({ status: 'ok', endpoint, checkedAt });
+          return;
+        }
+        resolve({
+          status: 'degraded',
+          endpoint,
+          checkedAt,
+          error: `MCP daemon health returned HTTP ${mcpRes.statusCode ?? 'unknown'}`,
+        });
+      });
+    });
+    req.on('timeout', () => {
+      req.destroy(new Error('MCP daemon health check timed out'));
+    });
+    req.on('error', (err: NodeJS.ErrnoException) => {
+      resolve({
+        status: 'degraded',
+        endpoint,
+        checkedAt,
+        error: err.code ? `${err.code}: ${err.message}` : `MCP daemon unreachable: ${err.message}`,
+      });
+    });
+    req.end();
+  });
+}
+
+async function attachMcpMonitoring(view: ReturnType<typeof buildCockpitView>): Promise<CockpitViewWithMonitoring> {
+  const out = view as CockpitViewWithMonitoring;
+  if (!out.available) return out;
+  const runeMcp = out.products.find((product): product is CockpitProductWithMonitoring => product.name === 'rune-mcp');
+  if (!runeMcp) return out;
+  runeMcp.monitoring = {
+    ...(runeMcp.monitoring ?? {}),
+    mcp: await probeMcpDaemonHealth(),
+  };
+  return out;
+}
+
+async function handleApiCockpit(res: ServerResponse): Promise<void> {
   // No bot-ready guard: this endpoint only reads a file and runs a pure projection, so it
   // works during startup too. A registry not yet built (or corrupt) is a clear cockpit
   // state, not a server error — buildCockpitView turns a null registry into a clean
@@ -327,7 +395,9 @@ function handleApiCockpit(res: ServerResponse): void {
     }
   }
 
-  const view = buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts, dispatchModes);
+  const view = await attachMcpMonitoring(
+    buildCockpitView(registry, runStatus, undefined, workRuns, backlogCounts, dispatchModes),
+  );
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(view));
 }
@@ -1982,7 +2052,7 @@ export function mountWebviewRoutes(
       }
 
       if (req.method === 'GET' && pathname === '/api/cockpit') {
-        handleApiCockpit(res);
+        await handleApiCockpit(res);
         return true;
       }
 

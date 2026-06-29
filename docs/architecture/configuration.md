@@ -20,12 +20,20 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`READWISE_TOKEN`** — Readwise Reader API.
 - **`LENNY_MCP_TOKEN`** — JWT Bearer token for the Lenny MCP server (`https://mcp.lennysdata.com/mcp`). Required for `/library-sync` and the nightly Library sync step.
 
-## HTTP / webview / MCP connector
+## HTTP / webview
 
-- **`RUNE_HTTP_SECRET`** — shared secret for authenticated HTTP endpoints; also the human-approval gate for the `/mcp` OAuth consent flow (project 16). **When unset, the `/mcp` Claude App connector is not mounted at all.**
-- **`MCP_ISSUER_URL`** — pinned issuer base URL for the `/mcp` OAuth metadata (the public tunnel hostname, e.g. `https://rune-mcp.example.com`). Empty = metadata falls back to the request Host header (local use only — the header is caller-controlled).
+- **`RUNE_HTTP_SECRET`** — shared secret for authenticated HTTP endpoints.
+- **`MCP_ISSUER_URL`** — legacy pinned issuer base URL for the old web-process `/mcp` OAuth metadata. The standalone MCP daemon uses `RUNE_MCP_ISSUER_URL`.
 - **`OBSIDIAN_VAULT_NAME`** — optional, defaults to basename of `VAULT_DIR`; injected into webview `<meta>` tag for Obsidian wikilink resolution.
 - **`RUNE_ALLOWED_HOSTS`** — optional, defaults to `localhost,127.0.0.1`; host-guard allowlist for webview endpoints (`isAllowedHost`).
+
+## Standalone MCP daemon
+
+- **`RUNE_MCP_SECRET`** — human-approval gate secret for the standalone MCP daemon OAuth consent flow.
+- **`RUNE_MCP_ISSUER_URL`** — pinned public issuer base URL for standalone MCP OAuth metadata (the Tailscale Funnel/Serve HTTPS hostname). Empty = metadata falls back to the request Host header for local use.
+- **`RUNE_MCP_OAUTH_STORE_FILE`** — OAuth client/token store for the standalone MCP daemon; defaults to `logs/rune-mcp-oauth-store.json`.
+- **`RUNE_MCP_HOST`** — bind host for the standalone MCP daemon; defaults to `127.0.0.1`.
+- **`RUNE_MCP_PORT`** — bind port for the standalone MCP daemon; defaults to `3848`.
 
 ## Resolver
 
@@ -72,7 +80,8 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`logs/promotions.jsonl`** — append-only durable promotion-job log (09-expand-cockpit), exposed via `config.PROMOTIONS_FILE`. **Unlike the best-effort audit logs it is the restart-replay source of truth** (a scaffolded-but-not-marked promotion is re-driven from it), so `appendPromotion` throws on a disk failure rather than swallowing it.
 - **`logs/feedback.jsonl`** — machine-readable product-team feedback records (project 14 Phase 6), consumed nightly by `stepLearningLoop`; exposed via `config.FEEDBACK_FILE`.
 - **`logs/feedback-processed.json`** — JSON Set of content-hash ids the learning loop has already post-mortemed (exactly-once); exposed via `config.FEEDBACK_PROCESSED_FILE`.
-- **`logs/mcp-oauth-store.json`** — `/mcp` OAuth state (clients + bearer tokens), 0600, atomic; exposed via `config.MCP_OAUTH_STORE_FILE`. Revoke all = delete the file + restart.
+- **`logs/mcp-oauth-store.json`** — legacy web-process `/mcp` OAuth state, 0600, atomic; exposed via `config.MCP_OAUTH_STORE_FILE`.
+- **`logs/rune-mcp-oauth-store.json`** — standalone MCP daemon OAuth state (clients + bearer tokens), 0600, atomic; exposed via `config.RUNE_MCP_OAUTH_STORE_FILE`. Revoke all = delete the file + restart the MCP daemon.
 
 ---
 

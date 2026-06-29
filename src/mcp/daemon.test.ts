@@ -1,54 +1,75 @@
 /**
  * Test-first suite for project 19 / W1 Phase 1 task
- * "mcp-standalone-lifecycle".
+ * "mcp-daemon-entrypoint".
  *
  * Contract under test:
- * - `src/mcp/daemon.ts` exports `startMcpDaemon(opts)` for testable lifecycle
- *   wiring and is also the `npm run mcp:start` entrypoint.
- * - The daemon owns `/mcp`, OAuth, `/health`, active MCP sessions, and graceful
- *   teardown independently of the Rune cockpit/web process.
- * - The Rune web entrypoint must not own MCP OAuth state or close MCP sessions
- *   during a cockpit restart.
+ * - package.json exposes `npm run mcp:start` and points it at
+ *   `src/mcp/daemon.ts`.
+ * - `src/mcp/daemon.ts` exports `startMcpDaemon(opts)` so the daemon can be
+ *   exercised without shelling out.
+ * - The daemon starts only the standalone MCP HTTP service: `/health` for
+ *   daemon status and Streamable HTTP MCP at `/mcp`.
+ * - It does not boot Telegram, the cockpit/webview routes, the scheduler, or
+ *   Whoop OAuth routes in this process.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
-import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Server } from 'node:http';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const sideEffects = vi.hoisted(() => ({
+  createBot: vi.fn(() => {
+    throw new Error('Telegram bot must not boot in the MCP daemon');
+  }),
+  wireHandlers: vi.fn(),
+  startScheduler: vi.fn(() => {
+    throw new Error('scheduler must not boot in the MCP daemon');
+  }),
+  startStallCheck: vi.fn(() => {
+    throw new Error('stall check must not boot in the MCP daemon');
+  }),
+  startWatcher: vi.fn(() => {
+    throw new Error('vault watcher must not boot in the MCP daemon');
+  }),
+}));
 
 const mockConfig = vi.hoisted(() => ({
-  HTTP_PORT: 0,
-  HTTP_HOST: '127.0.0.1',
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
-  RUNE_HTTP_SECRET: 'web-secret',
-  MCP_ISSUER_URL: 'https://web.example.invalid',
-  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
-  TELEGRAM_USER_ID: 0,
   LOGS_DIR: '/tmp/rune-test-logs',
-  get MCP_OAUTH_STORE_FILE() {
-    return join(this.LOGS_DIR, 'web-mcp-oauth-store.json');
-  },
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
+  RUNE_MCP_SECRET: 'mcp-gate',
+  RUNE_MCP_ISSUER_URL: 'https://mcp.example.invalid',
+  RUNE_MCP_HOST: '127.0.0.1',
+  RUNE_MCP_PORT: 0,
+  RUNE_MCP_OAUTH_STORE_FILE: '/tmp/rune-test-logs/rune-mcp-oauth-store.json',
 }));
 
 vi.mock('../config.js', () => ({
   default: mockConfig,
 }));
 
-vi.mock('../vault/sessions.js', () => ({
-  getAllSessions: vi.fn(() => []),
-  deleteSession: vi.fn(),
-  transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
+vi.mock('../bot/telegram.js', () => ({
+  createBot: sideEffects.createBot,
+  wireHandlers: sideEffects.wireHandlers,
 }));
-vi.mock('../ai/claude.js', () => ({ summarizeSession: vi.fn(), cleanupSession: vi.fn() }));
-vi.mock('../vault/journal.js', () => ({ appendToJournal: vi.fn() }));
-vi.mock('../utils/time.js', () => ({ getTimestamp: vi.fn(() => '14:30') }));
-vi.mock('../vault/git.js', () => ({ gitCommitAndPush: vi.fn() }));
+
+vi.mock('../jobs/scheduler.js', () => ({
+  startScheduler: sideEffects.startScheduler,
+  stopScheduler: vi.fn(),
+}));
+
+vi.mock('../jobs/stall-check-runner.js', () => ({
+  startStallCheck: sideEffects.startStallCheck,
+  stopStallCheck: vi.fn(),
+}));
+
+vi.mock('../vault/watcher.js', () => ({
+  startWatcher: sideEffects.startWatcher,
+  stopWatcher: vi.fn(),
+}));
 
 vi.mock('../kb/engine.js', () => ({
   initKB: vi.fn(),
@@ -67,9 +88,8 @@ vi.mock('../kb/engine.js', () => ({
 
 vi.mock('../kb/search.js', () => ({
   searchWithFilter: vi.fn().mockReturnValue([]),
+  searchRepo: vi.fn().mockReturnValue([]),
 }));
-
-import { startHttpServer } from '../server/http.js';
 
 interface StartMcpDaemonOptions {
   host: string;
@@ -87,27 +107,13 @@ interface McpDaemonHandle {
   url: string;
   stop(): Promise<void>;
   getStatus(): {
+    service: string;
     status: string;
     activeSessions: number;
   };
 }
 
 type StartMcpDaemon = (opts: StartMcpDaemonOptions) => Promise<McpDaemonHandle>;
-
-const IMPL_PENDING = 'src/mcp/daemon.ts not implemented yet — implementation pending';
-
-async function requireStartMcpDaemon(): Promise<StartMcpDaemon> {
-  const specifier = './daemon' + '.js';
-  try {
-    const mod = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>;
-    if (typeof mod.startMcpDaemon === 'function') {
-      return mod.startMcpDaemon as StartMcpDaemon;
-    }
-  } catch {
-    // fall through to the clean red failure
-  }
-  expect.fail(IMPL_PENDING);
-}
 
 interface RawResponse {
   status: number;
@@ -117,165 +123,84 @@ interface RawResponse {
 
 function rawReq(opts: http.RequestOptions & { body?: string }): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
-    const r = http.request(opts, (res) => {
+    const req = http.request(opts, (res) => {
       let body = '';
-      res.on('data', (c: Buffer) => (body += c));
-      res.on('end', () =>
+      res.on('data', (chunk: Buffer) => {
+        body += chunk;
+      });
+      res.on('end', () => {
         resolve({
-          status: res.statusCode!,
+          status: res.statusCode ?? 0,
           headers: res.headers as Record<string, string | string[] | undefined>,
           body,
-        }),
-      );
+        });
+      });
     });
-    r.on('error', reject);
-    if (opts.body) r.write(opts.body);
-    r.end();
+    req.on('error', reject);
+    if (opts.body) req.write(opts.body);
+    req.end();
   });
 }
 
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+async function requireStartMcpDaemon(): Promise<StartMcpDaemon> {
+  const specifier = './daemon' + '.js';
+  try {
+    const mod = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>;
+    if (typeof mod.startMcpDaemon === 'function') {
+      return mod.startMcpDaemon as StartMcpDaemon;
+    }
+    expect.fail('src/mcp/daemon.ts must export startMcpDaemon(opts)');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    expect.fail(`src/mcp/daemon.ts must exist and export startMcpDaemon(opts): ${message}`);
+  }
 }
 
-async function startWebOnce(): Promise<Server> {
-  const server = startHttpServer();
-  await new Promise<void>((resolve) => server.on('listening', resolve));
-  return server;
-}
-
-function base64url(buf: Buffer): string {
-  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function pkceChallenge(verifier: string): string {
-  return base64url(createHash('sha256').update(verifier).digest());
-}
-
-function randomVerifier(): string {
-  return base64url(randomBytes(32));
-}
-
-async function registerClient(baseUrl: string): Promise<string> {
-  const body = JSON.stringify({
-    redirect_uris: ['http://localhost:9999/cb'],
-    client_name: 'claude-app-test',
-  });
-  const res = await rawReq({
-    host: '127.0.0.1',
-    port: Number(new URL(baseUrl).port),
-    path: '/mcp/oauth/register',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body).toString(),
-    },
-    body,
-  });
-  expect(res.status).toBe(201);
-  return (JSON.parse(res.body) as { client_id: string }).client_id;
-}
-
-async function issueAccessToken(baseUrl: string, gateSecret: string): Promise<string> {
-  const port = Number(new URL(baseUrl).port);
-  const clientId = await registerClient(baseUrl);
-  const verifier = randomVerifier();
-  const state = 'daemon-lifecycle-state';
-  const authBody = new URLSearchParams({
-    response_type: 'code',
-    client_id: clientId,
-    redirect_uri: 'http://localhost:9999/cb',
-    state,
-    code_challenge: pkceChallenge(verifier),
-    code_challenge_method: 'S256',
-    secret: gateSecret,
-  }).toString();
-  const authRes = await rawReq({
-    host: '127.0.0.1',
-    port,
-    path: '/mcp/oauth/authorize',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(authBody).toString(),
-    },
-    body: authBody,
-  });
-  expect(authRes.status).toBe(302);
-  const location = authRes.headers['location'] as string;
-  const redirect = new URL(location);
-  expect(redirect.searchParams.get('state')).toBe(state);
-  const code = redirect.searchParams.get('code');
-  expect(code).toBeTruthy();
-
-  const tokenBody = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: code!,
-    code_verifier: verifier,
-    client_id: clientId,
-    redirect_uri: 'http://localhost:9999/cb',
-  }).toString();
-  const tokenRes = await rawReq({
-    host: '127.0.0.1',
-    port,
-    path: '/mcp/oauth/token',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(tokenBody).toString(),
-    },
-    body: tokenBody,
-  });
-  expect(tokenRes.status).toBe(200);
-  return (JSON.parse(tokenRes.body) as { access_token: string }).access_token;
-}
-
-async function connectClient(baseUrl: string, accessToken: string): Promise<Client> {
-  const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), {
-    requestInit: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
-  });
-  const client = new Client({ name: 'daemon-lifecycle-test', version: '1.0.0' });
-  await client.connect(transport);
-  return client;
-}
-
-describe('mcp-standalone-lifecycle (project 19 / W1 Phase 1)', () => {
+describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
   const daemons: McpDaemonHandle[] = [];
-  const clients: Client[] = [];
   const tempDirs: string[] = [];
 
   afterEach(async () => {
-    for (const client of clients.splice(0)) {
-      try { await client.close(); } catch { /* ignore */ }
-    }
     for (const daemon of daemons.splice(0)) {
-      try { await daemon.stop(); } catch { /* ignore */ }
+      try {
+        await daemon.stop();
+      } catch {
+        // Tests should report their assertion failure, not cleanup noise.
+      }
     }
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    vi.clearAllMocks();
   });
 
-  it('declares a separate mcp:start process and removes MCP ownership from the web entrypoint', () => {
+  it('declares npm run mcp:start as the standalone daemon command', () => {
     const packageJson = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
     ) as { scripts?: Record<string, string> };
-    const mcpStart = packageJson.scripts?.['mcp:start'];
-    expect(mcpStart, 'package.json must define an mcp:start script').toBeDefined();
-    expect(mcpStart).toMatch(/src\/mcp\/daemon\.ts/);
 
-    const indexSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-    expect(indexSource).not.toMatch(/createMcpOAuth|readOAuthStore|writeOAuthStore/);
-    expect(indexSource).not.toContain('MCP_OAUTH_STORE_FILE');
-    expect(indexSource).not.toContain('closeMcpSessions');
-    expect(indexSource).not.toMatch(/startHttpServer\([^)]*mcpOauth/s);
+    const command = packageJson.scripts?.['mcp:start'];
+    expect(command, 'package.json must define scripts["mcp:start"]').toBeDefined();
+    expect(command).toMatch(/tsx\b/);
+    expect(command).toContain('--env-file-if-exists=.env.local');
+    expect(command).toMatch(/\bsrc\/mcp\/daemon\.ts\b/);
+    expect(command).not.toMatch(/\bsrc\/index\.ts\b/);
   });
 
-  it('starts a daemon with a service-only /health endpoint and no cockpit routes', async () => {
+  it('provides a standalone daemon module without importing the Rune web entrypoint', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    expect(existsSync(daemonPath), 'src/mcp/daemon.ts must exist').toBe(true);
+
+    const source = readFileSync(daemonPath, 'utf8');
+    expect(source).toMatch(/startMcpDaemon/);
+    expect(source).not.toMatch(/from ['"]\.\.\/index\.js['"]/);
+    expect(source).not.toMatch(/from ['"]\.\.\/bot\/telegram\.js['"]/);
+    expect(source).not.toMatch(/from ['"]\.\.\/jobs\/scheduler\.js['"]/);
+    expect(source).not.toMatch(/from ['"]\.\.\/server\/webview\.js['"]/);
+    expect(source).not.toMatch(/from ['"]\.\.\/integrations\/whoop\/client\.js['"]/);
+  });
+
+  it('serves daemon status at /health and only MCP/OAuth routes besides that', async () => {
     const startMcpDaemon = await requireStartMcpDaemon();
     const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-daemon-'));
     tempDirs.push(dir);
@@ -285,6 +210,7 @@ describe('mcp-standalone-lifecycle (project 19 / W1 Phase 1)', () => {
       port: 0,
       gateSecret: 'mcp-gate',
       userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
       oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
       tokenTtlMs: null,
     });
@@ -292,6 +218,11 @@ describe('mcp-standalone-lifecycle (project 19 / W1 Phase 1)', () => {
 
     expect(daemon.host).toBe('127.0.0.1');
     expect(daemon.port).toBeGreaterThan(0);
+    expect(daemon.url).toBe(`http://127.0.0.1:${daemon.port}`);
+    expect(daemon.getStatus()).toMatchObject({
+      service: 'rune-mcp',
+      activeSessions: 0,
+    });
 
     const health = await rawReq({
       host: '127.0.0.1',
@@ -300,15 +231,14 @@ describe('mcp-standalone-lifecycle (project 19 / W1 Phase 1)', () => {
       method: 'GET',
     });
     expect(health.status).toBe(200);
+    expect(health.headers['content-type']).toContain('application/json');
     const body = JSON.parse(health.body) as {
-      status?: string;
       service?: string;
+      status?: string;
       uptime?: number;
       oauth?: { configured?: boolean };
       activeSessions?: number;
       warmIndex?: { ready?: boolean; lastRebuild?: unknown };
-      recentLogs?: unknown[];
-      logPointers?: unknown;
     };
     expect(body.service).toBe('rune-mcp');
     expect(body.status).toMatch(/^(ok|starting|degraded)$/);
@@ -317,103 +247,52 @@ describe('mcp-standalone-lifecycle (project 19 / W1 Phase 1)', () => {
     expect(body.activeSessions).toBe(0);
     expect(typeof body.warmIndex?.ready).toBe('boolean');
     expect('lastRebuild' in (body.warmIndex ?? {})).toBe(true);
-    expect(Array.isArray(body.recentLogs) || body.logPointers !== undefined).toBe(true);
 
-    expect(health.body).not.toContain('PRIVATE_HEALTH_MARKER_ZZ');
-    expect(health.body).not.toContain('capture-sessions');
+    const mcpUnauthorized = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    });
+    expect(mcpUnauthorized.status).toBe(401);
+    expect(mcpUnauthorized.headers['www-authenticate']).toContain('Bearer');
 
-    for (const path of ['/capture-sessions', '/oauth/whoop', '/api/products']) {
+    const oauthMetadata = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/.well-known/oauth-authorization-server',
+      method: 'GET',
+    });
+    expect(oauthMetadata.status).toBe(200);
+    expect(JSON.parse(oauthMetadata.body)).toMatchObject({
+      issuer: 'https://mcp.example.invalid',
+      authorization_endpoint: 'https://mcp.example.invalid/mcp/oauth/authorize',
+      token_endpoint: 'https://mcp.example.invalid/mcp/oauth/token',
+    });
+
+    for (const route of [
+      { path: '/', method: 'GET' },
+      { path: '/api/products', method: 'GET' },
+      { path: '/capture-sessions', method: 'POST' },
+      { path: '/oauth/whoop', method: 'GET' },
+    ]) {
       const res = await rawReq({
         host: '127.0.0.1',
         port: daemon.port,
-        path,
-        method: path === '/capture-sessions' ? 'POST' : 'GET',
+        path: route.path,
+        method: route.method,
       });
-      expect(res.status).toBe(404);
+      expect(res.status, `${route.method} ${route.path} must not be mounted by MCP daemon`).toBe(404);
     }
-  });
 
-  it('keeps MCP OAuth store and session alive across a cockpit web restart', async () => {
-    const startMcpDaemon = await requireStartMcpDaemon();
-    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-daemon-'));
-    tempDirs.push(dir);
-    const oauthStoreFile = join(dir, 'rune-mcp-oauth-store.json');
-
-    const daemon = await startMcpDaemon({
-      host: '127.0.0.1',
-      port: 0,
-      gateSecret: 'mcp-gate',
-      userId: 'alice',
-      oauthStoreFile,
-      tokenTtlMs: null,
-    });
-    daemons.push(daemon);
-
-    const token = await issueAccessToken(daemon.url, 'mcp-gate');
-    const client = await connectClient(daemon.url, token);
-    clients.push(client);
-    await expect(client.listTools()).resolves.toHaveProperty('tools');
-
-    expect(existsSync(oauthStoreFile)).toBe(true);
-    const beforeContent = readFileSync(oauthStoreFile, 'utf8');
-    const beforeMtime = statSync(oauthStoreFile).mtimeMs;
-    const beforeSessions = daemon.getStatus().activeSessions;
-    expect(beforeSessions).toBeGreaterThan(0);
-
-    const webA = await startWebOnce();
-    await closeServer(webA);
-    const webB = await startWebOnce();
-    await closeServer(webB);
-
-    expect(readFileSync(oauthStoreFile, 'utf8')).toBe(beforeContent);
-    expect(statSync(oauthStoreFile).mtimeMs).toBe(beforeMtime);
-    expect(daemon.getStatus().activeSessions).toBe(beforeSessions);
-    await expect(client.listTools()).resolves.toHaveProperty('tools');
-
-    const healthAfter = await rawReq({
-      host: '127.0.0.1',
-      port: daemon.port,
-      path: '/health',
-      method: 'GET',
-    });
-    expect(healthAfter.status).toBe(200);
-    expect(healthAfter.body).not.toContain(token);
-  });
-
-  it('gracefully tears down MCP sessions and closes the health listener', async () => {
-    const startMcpDaemon = await requireStartMcpDaemon();
-    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-daemon-'));
-    tempDirs.push(dir);
-
-    const daemon = await startMcpDaemon({
-      host: '127.0.0.1',
-      port: 0,
-      gateSecret: 'mcp-gate',
-      userId: 'alice',
-      oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
-      tokenTtlMs: null,
-    });
-    daemons.push(daemon);
-
-    const token = await issueAccessToken(daemon.url, 'mcp-gate');
-    const client = await connectClient(daemon.url, token);
-    clients.push(client);
-    expect(daemon.getStatus().activeSessions).toBeGreaterThan(0);
-
-    await daemon.stop();
-    daemons.splice(daemons.indexOf(daemon), 1);
-    expect(daemon.getStatus().activeSessions).toBe(0);
-
-    await expect(
-      rawReq({
-        host: '127.0.0.1',
-        port: daemon.port,
-        path: '/health',
-        method: 'GET',
-      }),
-    ).rejects.toBeTruthy();
-
-    await expect(client.listTools()).rejects.toBeTruthy();
-    await expect(daemon.stop()).resolves.toBeUndefined();
+    expect(sideEffects.createBot).not.toHaveBeenCalled();
+    expect(sideEffects.wireHandlers).not.toHaveBeenCalled();
+    expect(sideEffects.startScheduler).not.toHaveBeenCalled();
+    expect(sideEffects.startStallCheck).not.toHaveBeenCalled();
+    expect(sideEffects.startWatcher).not.toHaveBeenCalled();
   });
 });

@@ -53,6 +53,8 @@ export interface McpTransportOpts {
 export type McpRouteHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) & {
   /** Force-close every live session transport (idempotent). */
   closeAll: () => Promise<void>;
+  /** Current live Streamable HTTP MCP sessions. */
+  getActiveSessionCount: () => number;
 };
 
 const MCP_PATH = '/mcp';
@@ -202,6 +204,7 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
     idleTimers.clear();
     await Promise.all(live.map((t) => t.close().catch(() => undefined)));
   };
+  handler.getActiveSessionCount = () => transports.size;
 
   return handler;
 }
