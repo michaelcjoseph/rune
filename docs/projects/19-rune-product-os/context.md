@@ -64,9 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ree-sweep.ts](rune/.worktrees/rune/19-rune-product-os/src/jobs/worktree-sweep.ts:158).
+- ils/protected-service-outage-detection.test.ts:72).
 
 Verified:
-- `npm test -- src/utils/process-cleanup-guard.test.ts src/jobs/worktree-sweep.test.ts --reporter=verbose`
-- `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose`
+- `npm test -- src/utils/protected-service-outage-detection.test.ts src/utils/protected-local-services.test.ts src/utils/process-cleanup-guard.test.ts src/jobs/worktree-sweep.test.ts --reporter=verbose`
 - `npm run build`
+
+No commit made.

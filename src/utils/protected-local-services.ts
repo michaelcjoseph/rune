@@ -37,6 +37,35 @@ export type ProcessCleanupKillDecision =
       protectedService?: ProtectedLocalService;
     };
 
+export type ProtectedServiceEvent =
+  | { kind: 'work-run-finished'; runId: string; product: string; project: string; at: string }
+  | { kind: 'cleanup-attempted'; cleanupId: string; source: string; at: string };
+
+export interface ProtectedServiceObservation {
+  serviceId: ProtectedLocalService['id'];
+  reachable: boolean;
+  error?: string;
+}
+
+export interface ProtectedServiceStatus {
+  id: ProtectedLocalService['id'];
+  name: string;
+  host: string;
+  port: number;
+  launchdLabel: string;
+  status: 'ok' | 'down';
+  severity?: 'degraded' | 'outage';
+  error?: string;
+}
+
+export interface ProtectedServiceOutageReport {
+  state: 'ok' | 'degraded' | 'outage';
+  event: ProtectedServiceEvent;
+  services: ProtectedServiceStatus[];
+  recoveryActions: Array<{ type: string; serviceId?: string; port?: number }>;
+  message: string;
+}
+
 export const PROTECTED_LOCAL_SERVICES: readonly ProtectedLocalService[] = [
   {
     id: 'rune-web',
@@ -133,6 +162,47 @@ export function evaluateProcessCleanupKill(
   return { allowed: true };
 }
 
+export function classifyProtectedServiceOutages(input: {
+  event: ProtectedServiceEvent;
+  observations: ProtectedServiceObservation[];
+}): ProtectedServiceOutageReport {
+  const observationsByService = new Map(input.observations.map((observation) => [
+    observation.serviceId,
+    observation,
+  ]));
+  const downCount = PROTECTED_LOCAL_SERVICES.reduce((count, service) => {
+    const observation = observationsByService.get(service.id);
+    return count + (observation?.reachable === false ? 1 : 0);
+  }, 0);
+  const state = downCount === 0
+    ? 'ok'
+    : downCount === PROTECTED_LOCAL_SERVICES.length
+      ? 'outage'
+      : 'degraded';
+
+  const services: ProtectedServiceStatus[] = PROTECTED_LOCAL_SERVICES.map((service) => {
+    const observation = observationsByService.get(service.id);
+    const down = observation?.reachable === false;
+    const status: ProtectedServiceStatus = {
+      ...service,
+      status: down ? 'down' : 'ok',
+    };
+    if (down) {
+      status.severity = state === 'outage' ? 'outage' : 'degraded';
+      if (observation.error) status.error = observation.error;
+    }
+    return status;
+  });
+
+  return {
+    state,
+    event: input.event,
+    services,
+    recoveryActions: [],
+    message: formatProtectedServiceOutageMessage(state, services),
+  };
+}
+
 function getProcessCleanupProtectedService(
   candidate: ProcessCleanupKillCandidate,
 ): ProtectedLocalService | undefined {
@@ -147,4 +217,23 @@ function getProcessCleanupProtectedService(
   }
 
   return undefined;
+}
+
+function formatProtectedServiceOutageMessage(
+  state: ProtectedServiceOutageReport['state'],
+  services: ProtectedServiceStatus[],
+): string {
+  if (state === 'ok') {
+    return 'Protected Rune services are reachable.';
+  }
+
+  const downServices = services
+    .filter((service) => service.status === 'down')
+    .map((service) => `${service.name} at ${service.host}:${service.port}`)
+    .join(', ');
+  const label = state === 'outage' ? 'outage' : 'degraded';
+  return (
+    `Protected Rune service ${label}: ${downServices}. ` +
+    'Manual intervention and explicit approval are required before any kill, listener reuse, or restart action.'
+  );
 }
