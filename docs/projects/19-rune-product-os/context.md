@@ -64,7 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- d as expected for tests-first: 64 tests ran, 34 passed, 30 failed. Failures are the intended missing implementation contracts: no `src/kb/vault-index.ts`, no `src/mcp/tools/vault-index-tools.ts`, daemon warm-index ownership not wired yet, and read-tool/server cutover not implemented. No commit made.
--  --configLoader runner src/kb/vault-index.test.ts src/mcp/daemon.test.ts src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts src/mcp/tools/vault-index-tools.test.ts`. It remains red as expected for this tests-first suite because the warm-index implementation modules and wiring are still pending.
-- t-index.test.ts src/mcp/daemon.test.ts src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts src/mcp/tools/vault-index-tools.test.ts --configLoader runner`
-  remains red as expected for tests-first: `35 passed`, `30 failed`, with failures pointing at implementation-pending warm-index/cutover work.
+-  work: missing `vault-index` modules, old `read-tools` behavior, server registration/schema gaps, and daemon warm-index/health wiring. Some daemon HTTP tests also hit `listen EPERM` in this sandbox, but the suite is still confirmed red.
+
+`git status --short` is empty after the run. No files changed.

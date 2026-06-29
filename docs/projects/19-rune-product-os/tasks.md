@@ -47,7 +47,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] Write the suite for **vault-search-fullcoverage-cutover** — test-plan.md §2: default query returns hits from `knowledge/` and a peripheral folder; `types` narrows; unknown types do not act as hidden exclusions; no include/exclude config exists; the tool description advertises whole-vault markdown coverage.
 - [x] Write the tests/docs for **kb-query-path-decision** — test-plan.md §2, asserting the **resolved** admin-stdio boundary (spec "Resolved `kb_query`/admin-stdio boundary"): per-session local admin stdio stays on cold ripgrep and does not build the warm index; only the long-lived daemon holds warm state. Assert no warm-index build is triggered by an admin-stdio spawn.
 - [x] Write the suite for **warm-index-fallback-and-cadence** — test-plan.md §2: startup builds in background; `vault_search` and daemon-internal broad `kb_query` fall back to cold ripgrep until ready; refresh runs every 15 minutes; symlinks are followed and a symlink cycle terminates via the visited real-path guard; large markdown files are indexed fully; `refresh_vault_index` reports readiness/build stats.
-- [ ] Confirm every suite above fails (red) before implementation.
+- [x] Confirm every suite above fails (red) before implementation.
 
 ### Implementation
 
