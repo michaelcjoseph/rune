@@ -709,6 +709,7 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
 
     for (const route of [
       { path: '/', method: 'GET' },
+      { path: '/metrics', method: 'GET' },
       { path: '/api/products', method: 'GET' },
       { path: '/capture-sessions', method: 'POST' },
       { path: '/oauth/whoop', method: 'GET' },

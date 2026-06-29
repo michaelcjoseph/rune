@@ -64,8 +64,12 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- npx vitest run src/mcp/daemon.test.ts --reporter verbose`
-- `npx vitest run src/mcp/mcp-metrics-snapshot.test.ts --reporter verbose`
-- `npx vitest run src/mcp/server.test.ts --reporter verbose`
+- ng staged QA edit in `src/mcp/daemon.test.ts` was left as-is.
 
-Note: the staged QA test files were already staged in the worktree; I left them as-is and did not commit.
+Verified:
+- `npx vitest run src/mcp/mcp-metrics-snapshot.test.ts --reporter verbose`
+- `npx vitest run src/mcp/daemon.test.ts --reporter verbose`
+- `npx vitest run src/mcp/server.test.ts --reporter verbose`
+- `npm run build`
+
+All passed.
