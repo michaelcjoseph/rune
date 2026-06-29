@@ -132,4 +132,15 @@ describe('michaelcjoseph-two-product-repo (project 19 Phase 6)', () => {
       expect(migratedTitleList, `historical blog content should stay in pkms: ${historicalTitle}`).not.toContain(historicalTitle);
     }
   });
+
+  it('copies the current voice guidelines into the writing product as an owned pipeline input', () => {
+    const sourceVoice = readPkmsWritingFile('voice.md');
+    expect(sourceVoice, 'pkms writing/voice.md must contain the source voice guidelines').toContain('# Writing Voice');
+    expect(sourceVoice).toContain('## Tone');
+    expect(sourceVoice).toContain('## Editing Checklist');
+
+    const productVoice = readRepoFile('docs/rune/writing-voice.md');
+
+    expect(productVoice.trim()).toBe(sourceVoice.trim());
+  });
 });

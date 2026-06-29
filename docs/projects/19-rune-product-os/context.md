@@ -64,8 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- x`
-- `src/app/rune/_content/index.ts`
-- `docs/rune/writing-ideas.md`
+-  were left in the worktree. Verification:
 
-No new changes were left in either repo. The Rune worktree still shows the pre-existing modified `src/jobs/michaelcjoseph-two-product-repo.test.ts`. The task needs to be rerun with `michaelcjoseph.com` included as a writable root.
+```bash
+npm test -- src/jobs/michaelcjoseph-two-product-repo.test.ts
+```
+
+failed because `michaelcjoseph.com` is missing the Phase 6 `/rune` files and `docs/rune/writing-voice.md`. The task needs to run with `michaelcjoseph.com` included as a writable root.
