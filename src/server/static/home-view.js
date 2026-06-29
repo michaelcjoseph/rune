@@ -96,6 +96,40 @@ function renderProductCard(product) {
   `</article>`;
 }
 
+function productClass(product) {
+  return product?.class === 'internal' ? 'internal' : 'external';
+}
+
+function renderProductGroup(productGroup, label) {
+  const products = productGroup.products.map(renderProductCard).join('');
+  return `<section class="home-product-class home-product-class--${attr(productGroup.class)}" ` +
+    `data-home-product-class="${attr(productGroup.class)}">` +
+      `<div class="home-product-class-head">` +
+        `<h3>${escHtml(label)}</h3>` +
+        `<span>${escHtml(fmtCount(productGroup.products.length, 'product', 'products'))}</span>` +
+      `</div>` +
+      `<div class="home-product-class-grid">${products}</div>` +
+    `</section>`;
+}
+
+function renderProductRoster(products) {
+  const groups = {
+    internal: [],
+    external: [],
+  };
+  for (const product of products) {
+    groups[productClass(product)].push(product);
+  }
+  return [
+    groups.internal.length > 0
+      ? renderProductGroup({ class: 'internal', products: groups.internal }, 'Internal')
+      : '',
+    groups.external.length > 0
+      ? renderProductGroup({ class: 'external', products: groups.external }, 'External')
+      : '',
+  ].join('');
+}
+
 function renderStatus(status) {
   if (!status) return '<p class="muted">Global status unavailable</p>';
   const pending = status.pendingApprovals || {};
@@ -182,7 +216,7 @@ function renderHomeViewWithOptions(pulse, options = {}) {
   return `<section class="home-view">` +
     `<div class="home-header"><h2>Home</h2><span>${escHtml(fmtCount(products.length, 'product', 'products'))}</span></div>` +
     `<div class="home-layout">` +
-      `<div class="home-products">${products.map(renderProductCard).join('')}</div>` +
+      `<div class="home-products">${renderProductRoster(products)}</div>` +
       `${renderOperationalRail(options.operations)}` +
     `</div>` +
   `</section>`;

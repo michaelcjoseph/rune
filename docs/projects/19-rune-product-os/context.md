@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- s/rune/19-rune-product-os/src/server/static/app.css:578): Rune MCP heavy profile gives the operations/runs panel more vertical room.
+- rune-product-os/src/server/static/home-view.js): renders products in `Internal` and `External` roster sections, with missing class treated as external.
 
-Verification passed:
-- `npm test -- src/intent/home-pulse-deep-view.test.ts src/server/static/product-deep-view-client.test.ts`
+Verified:
+- `npm test -- src/intent/home-pulse-deep-view.test.ts src/server/static/home-view-client.test.ts`
 - `npm run build`
 - `git diff --check`

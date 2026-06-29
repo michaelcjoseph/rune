@@ -1,5 +1,5 @@
 import type { BacklogItem, FileWarning } from './backlog-parser.js';
-import type { Registry } from './registry.js';
+import type { ProductClass, Registry } from './registry.js';
 import type { SupervisedRun } from './supervision.js';
 
 export type HomePulseOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
@@ -30,6 +30,7 @@ export type AttentionSignal =
 
 export interface HomeProductPulse {
   name: string;
+  class?: ProductClass;
   repoBacked: boolean;
   activeRun?: HomeActiveRun;
   counts: {
@@ -200,6 +201,7 @@ export function buildHomePulse(deps: HomePulseDeps): HomePulse {
 
     const pulse: HomeProductPulse = {
       name: product.name,
+      ...(product.class ? { class: product.class } : {}),
       repoBacked: product.repoBacked,
       counts: {
         activeProjects: product.projects.filter((project) => project.status === 'active').length,

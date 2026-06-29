@@ -216,6 +216,43 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
     ]);
   });
 
+  it('carries product class into HomePulse so the roster can render internal and external groups', async () => {
+    const { buildHomePulse } = await import('./home-pulse.js');
+    const classifiedRegistry = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        { name: 'rune', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'rune-mcp', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'aura', class: 'external', repoBacked: true, projects: [] },
+        { name: 'assay', class: 'external', repoBacked: true, projects: [] },
+        { name: 'relay', class: 'external', repoBacked: true, projects: [] },
+        { name: 'writing', class: 'external', repoBacked: true, projects: [] },
+        { name: 'brand', class: 'external', repoBacked: true, projects: [] },
+      ],
+    } as unknown as Registry;
+
+    const pulse = buildHomePulse(deps({
+      readRegistry: vi.fn(() => classifiedRegistry),
+      readSupervisedRuns: vi.fn(() => []),
+      readRecentWorkRuns: vi.fn(() => []),
+      readBacklogs: vi.fn(() => []),
+    }));
+
+    const classesByProduct = Object.fromEntries(
+      pulse.products.map((product: any) => [product.name, product.class]),
+    );
+    expect(classesByProduct).toEqual({
+      rune: 'internal',
+      'rune-mcp': 'internal',
+      aura: 'external',
+      assay: 'external',
+      relay: 'external',
+      writing: 'external',
+      brand: 'external',
+    });
+  });
+
   it('degrades backlog-derived fields when the backlog store read fails instead of failing the pulse', async () => {
     const { buildHomePulse } = await import('./home-pulse.js');
     const pulse = buildHomePulse(

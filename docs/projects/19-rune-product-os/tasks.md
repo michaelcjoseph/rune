@@ -85,7 +85,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 ### Tests (write first)
 
 - [x] Write the suite for **product-os-containers** — test-plan.md §4: each product renders the three containers with product-aware contents; Rune MCP weights operations/runs heavier; writing shows ideas only (no projects/bugs).
-- [ ] Write the suite for **internal-external-distinction** — test-plan.md §4: the roster renders as two classes; Rune and Rune MCP are internal; aura/assay/relay/writing/brand are external.
+- [x] Write the suite for **internal-external-distinction** — test-plan.md §4: the roster renders as two classes; Rune and Rune MCP are internal; aura/assay/relay/writing/brand are external.
 - [ ] Write the suite for **product-policy-schema** — test-plan.md §4: `policies/products.json` accepts `class`, optional `scopePath`, and executable entries for `rune-mcp`, `writing`, and `brand`; registry copies product class into cockpit projections.
 - [ ] Confirm red before implementation.
 

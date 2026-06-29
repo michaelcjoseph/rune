@@ -338,6 +338,55 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/data-home-open-product[\s\S]{0,120}Open project|Open project[\s\S]{0,120}data-home-open-product/i);
   });
 
+  it('renders the product roster as internal and external classes with exact Phase 4 membership', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+    const product = (name: string, productClass: 'internal' | 'external') => ({
+      name,
+      class: productClass,
+      repoBacked: true,
+      counts: { activeProjects: 0, openBugs: 0, openIdeas: 0, backlogWarnings: 0 },
+      attention: [],
+    });
+
+    const html = renderHomeView({
+      available: true,
+      products: [
+        product('rune', 'internal'),
+        product('rune-mcp', 'internal'),
+        product('aura', 'external'),
+        product('assay', 'external'),
+        product('relay', 'external'),
+        product('writing', 'external'),
+        product('brand', 'external'),
+      ],
+    });
+
+    const group = (productClass: 'internal' | 'external') => {
+      const match = new RegExp(
+        `<section[^>]*data-home-product-class=["']${productClass}["'][\\s\\S]*?</section>`,
+        'i',
+      ).exec(html);
+      expect(match?.[0], `${productClass} roster group`).toBeDefined();
+      return match![0];
+    };
+    const internal = group('internal');
+    const external = group('external');
+
+    expect(internal).toMatch(/>\s*Internal\s*</i);
+    expect(external).toMatch(/>\s*External\s*</i);
+    expect(html.indexOf(internal)).toBeLessThan(html.indexOf(external));
+    expect((html.match(/data-home-product=/g) || []).length).toBe(7);
+
+    for (const name of ['rune', 'rune-mcp']) {
+      expect(internal).toMatch(new RegExp(`data-home-product=["']${name}["']`, 'i'));
+      expect(external).not.toMatch(new RegExp(`data-home-product=["']${name}["']`, 'i'));
+    }
+    for (const name of ['aura', 'assay', 'relay', 'writing', 'brand']) {
+      expect(external).toMatch(new RegExp(`data-home-product=["']${name}["']`, 'i'));
+      expect(internal).not.toMatch(new RegExp(`data-home-product=["']${name}["']`, 'i'));
+    }
+  });
+
   it('renders a running active-run indicator with a state-specific pulse affordance', async () => {
     const { renderHomeView } = await import('./home-view.js');
 
