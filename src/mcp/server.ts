@@ -1,7 +1,22 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ingestSource, queryKB, lintKB, getKBStats } from '../kb/engine.js';
-import { searchRepo, searchWithFilter } from '../kb/search.js';
+import { searchRepo, searchVault as coldVaultSearch, searchWithFilter } from '../kb/search.js';
+import {
+  getVaultIndexStatus as daemonIndexStatus,
+  queryVaultIndex as daemonIndexSearch,
+} from '../kb/./vault-index.js';
+
+type BroadVaultSearch = (
+  query: string,
+  options?: { directory?: string; maxResults?: number },
+) => Array<{ file: string; line: number; content: string }> | Promise<Array<{ file: string; line: number; content: string }>>;
+
+export interface CreateRuneMcpServerOptions {
+  tools: readonly ToolName[];
+  name?: string;
+  kbQueryBroadSearch?: BroadVaultSearch;
+}
 
 /**
  * Shared MCP server factory (project 16-claude-app-connector).
@@ -58,15 +73,27 @@ const lazyReadTools = () =>
 
 const lazyVaultIndexTools = () => import('./tools/vault-index-tools.js');
 
+function daemonBroadSearch(
+  query: string,
+  options?: { directory?: string; maxResults?: number },
+): Array<{ file: string; line: number; content: string }> {
+  const { ready } = daemonIndexStatus();
+  return ready ? daemonIndexSearch(query, options) : coldVaultSearch(query, options);
+}
+
 /** Every tool the factory knows how to register, keyed by tool name. */
-const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
-  kb_query: (server) => {
+const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpServerOptions) => void> = {
+  kb_query: (server, opts) => {
     server.tool(
       'kb_query',
       'Query the Rune knowledge base. Returns a synthesized answer with wikilink citations.',
       { question: z.string().describe('The question to answer using the knowledge base') },
       async ({ question }) => {
-        const result = await queryKB(question);
+        const broadSearch = opts.kbQueryBroadSearch
+          ?? (opts.name === 'rune-mcp' ? daemonBroadSearch : undefined);
+        const result = broadSearch
+          ? await queryKB(question, { searchVault: broadSearch })
+          : await queryKB(question);
         return {
           content: [{ type: 'text' as const, text: result.answer }],
           isError: !result.success,
@@ -285,7 +312,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
  * Does NOT initialize the KB — `initKB()` is a process-startup concern
  * (daemon: src/index.ts; standalone stdio: src/mcp/index.ts).
  */
-export function createRuneMcpServer(opts: { tools: readonly ToolName[]; name?: string }): McpServer {
+export function createRuneMcpServer(opts: CreateRuneMcpServerOptions): McpServer {
   if (opts.tools.length === 0) {
     throw new Error('createRuneMcpServer: empty tool list — a server exposing no tools is a configuration error');
   }
@@ -303,7 +330,7 @@ export function createRuneMcpServer(opts: { tools: readonly ToolName[]; name?: s
   });
 
   for (const name of opts.tools) {
-    TOOL_REGISTRY[name](server);
+    TOOL_REGISTRY[name](server, opts);
   }
 
   return server;

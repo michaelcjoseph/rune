@@ -20,7 +20,7 @@
  *     back), not white-box (peeking at internal _registeredTools).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -43,8 +43,25 @@ vi.mock('../kb/engine.js', () => ({
 }));
 
 vi.mock('../kb/search.js', () => ({
+  searchVault: vi.fn().mockReturnValue([]),
   searchWithFilter: vi.fn().mockReturnValue([]),
   searchRepo: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('../kb/vault-index.js', () => ({
+  refreshVaultIndex: vi.fn(),
+  getVaultIndexStatus: vi.fn().mockReturnValue({
+    ready: true,
+    status: 'ready',
+    lastRebuild: {
+      files: 1,
+      lines: 2,
+      bytes: 3,
+      heapUsed: 4,
+      buildMs: 5,
+    },
+  }),
+  queryVaultIndex: vi.fn().mockReturnValue([]),
 }));
 
 // ─── Lazy module import (after mocks are hoisted) ────────────────────────────
@@ -90,7 +107,7 @@ function collectEnumValues(schema: unknown): string[] {
 // Returns undefined while the implementation is pending. Each test performs its
 // own typeof guard on the result so a missing export fails only that test.
 
-type RuntimeMcpFactory = (opts: { tools: string[] }) => McpServer;
+type RuntimeMcpFactory = (opts: { tools: string[]; name?: string }) => McpServer;
 
 const retiredBrand = ['Jar', 'vis'].join('');
 const retiredServerName = `${retiredBrand.toLowerCase()}-kb`;
@@ -101,6 +118,10 @@ function getFactory(): RuntimeMcpFactory | undefined {
     | RuntimeMcpFactory
     | undefined;
 }
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §4 — Admin search surface pins
@@ -161,6 +182,137 @@ describe('createKBServer — repo plus KB search pins', () => {
 
     expect(client.getServerVersion()).toMatchObject({ name: 'rune-kb' });
     expect(client.getServerVersion()?.name).not.toBe(retiredServerName);
+
+    await client.close();
+  });
+});
+
+describe('kb_query daemon warm-route boundary', () => {
+  it('keeps admin stdio kb_query on the legacy cold queryKB path', async () => {
+    const { queryKB } = await import('../kb/engine.js');
+    const queryKBMock = queryKB as unknown as ReturnType<typeof vi.fn>;
+    queryKBMock.mockResolvedValueOnce({ answer: 'admin cold answer', success: true });
+
+    const server = serverModule.createKBServer();
+    const client = await connectClient(server);
+
+    await client.callTool({
+      name: 'kb_query',
+      arguments: { question: 'admin stdio question' },
+    });
+
+    expect(queryKBMock).toHaveBeenCalledTimes(1);
+    expect(queryKBMock.mock.calls[0]).toEqual(['admin stdio question']);
+
+    await client.close();
+  });
+
+  it('daemon kb_query falls back to cold ripgrep while the warm index is not ready', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const { queryKB } = await import('../kb/engine.js');
+    const { searchVault } = await import('../kb/search.js');
+    const { getVaultIndexStatus, queryVaultIndex } = await import('../kb/vault-index.js');
+    const queryKBMock = queryKB as unknown as ReturnType<typeof vi.fn>;
+    const searchVaultMock = searchVault as unknown as ReturnType<typeof vi.fn>;
+    const getStatusMock = getVaultIndexStatus as unknown as ReturnType<typeof vi.fn>;
+    const queryVaultIndexMock = queryVaultIndex as unknown as ReturnType<typeof vi.fn>;
+    const coldHit = [{ file: 'journals/cold.md', line: 4, content: 'COLD_FALLBACK_CONTEXT' }];
+
+    getStatusMock.mockReturnValueOnce({ ready: false, status: 'starting', lastRebuild: null });
+    searchVaultMock.mockReturnValueOnce(coldHit);
+    let capturedDeps: {
+      searchVault?: (
+        query: string,
+        options?: { directory?: string; maxResults?: number },
+      ) => Array<{ file: string; line: number; content: string }>;
+    } | undefined;
+    let routedHits: Array<{ file: string; line: number; content: string }> | undefined;
+    queryKBMock.mockImplementationOnce(async (...args: unknown[]) => {
+      capturedDeps = args[1] as typeof capturedDeps;
+      if (capturedDeps?.searchVault) {
+        routedHits = capturedDeps.searchVault('fallback marker', { maxResults: 3 });
+      }
+      return { answer: 'cold fallback answer', success: true };
+    });
+
+    const server = createMcpServer({ tools: ['kb_query'], name: 'rune-mcp' });
+    const client = await connectClient(server);
+
+    const result = await client.callTool({
+      name: 'kb_query',
+      arguments: { question: 'daemon not ready question' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(queryKBMock.mock.calls[0]?.[0]).toBe('daemon not ready question');
+    expect(capturedDeps?.searchVault).toEqual(expect.any(Function));
+    expect(routedHits).toEqual(coldHit);
+    expect(searchVaultMock).toHaveBeenCalledWith('fallback marker', { maxResults: 3 });
+    expect(queryVaultIndexMock).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  it('daemon kb_query uses queryVaultIndex for broad retrieval after readiness', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const { queryKB } = await import('../kb/engine.js');
+    const { searchVault } = await import('../kb/search.js');
+    const { getVaultIndexStatus, queryVaultIndex } = await import('../kb/vault-index.js');
+    const queryKBMock = queryKB as unknown as ReturnType<typeof vi.fn>;
+    const searchVaultMock = searchVault as unknown as ReturnType<typeof vi.fn>;
+    const getStatusMock = getVaultIndexStatus as unknown as ReturnType<typeof vi.fn>;
+    const queryVaultIndexMock = queryVaultIndex as unknown as ReturnType<typeof vi.fn>;
+    const warmHit = [{ file: 'knowledge/warm.md', line: 8, content: 'WARM_READY_CONTEXT' }];
+
+    getStatusMock.mockReturnValueOnce({
+      ready: true,
+      status: 'ready',
+      lastRebuild: {
+        files: 1,
+        lines: 1,
+        bytes: 64,
+        heapUsed: 128,
+        buildMs: 9,
+      },
+    });
+    queryVaultIndexMock.mockReturnValueOnce(warmHit);
+    let capturedDeps: {
+      searchVault?: (
+        query: string,
+        options?: { directory?: string; maxResults?: number },
+      ) => Array<{ file: string; line: number; content: string }>;
+    } | undefined;
+    let routedHits: Array<{ file: string; line: number; content: string }> | undefined;
+    queryKBMock.mockImplementationOnce(async (...args: unknown[]) => {
+      capturedDeps = args[1] as typeof capturedDeps;
+      if (capturedDeps?.searchVault) {
+        routedHits = capturedDeps.searchVault('warm marker', { maxResults: 5 });
+      }
+      return { answer: 'warm answer', success: true };
+    });
+
+    const server = createMcpServer({ tools: ['kb_query'], name: 'rune-mcp' });
+    const client = await connectClient(server);
+
+    const result = await client.callTool({
+      name: 'kb_query',
+      arguments: { question: 'daemon ready question' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(queryKBMock.mock.calls[0]?.[0]).toBe('daemon ready question');
+    expect(capturedDeps?.searchVault).toEqual(expect.any(Function));
+    expect(routedHits).toEqual(warmHit);
+    expect(queryVaultIndexMock).toHaveBeenCalledWith('warm marker', { maxResults: 5 });
+    expect(searchVaultMock).not.toHaveBeenCalled();
 
     await client.close();
   });

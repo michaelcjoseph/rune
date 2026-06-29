@@ -3,6 +3,14 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import config from '../config.js';
 import { initKB } from '../kb/engine.js';
+import { searchVault } from '../kb/search.js';
+import {
+  buildVaultIndex,
+  getVaultIndexStatus,
+  queryVaultIndex,
+  refreshVaultIndex,
+  type VaultIndexStatus,
+} from '../kb/vault-index.js';
 import { APP_SURFACE_TOOLS, createRuneMcpServer } from './server.js';
 import { createMcpOAuth } from '../server/mcp-oauth.js';
 import { readOAuthStore, writeOAuthStore } from '../server/mcp-oauth-store.js';
@@ -29,8 +37,8 @@ export interface McpDaemonStatus {
   activeSessions: number;
   warmIndex: {
     ready: boolean;
-    status: 'starting' | 'ready' | 'stale' | 'degraded' | 'failed';
-    lastRebuild: null;
+    status: VaultIndexStatus['status'];
+    lastRebuild: VaultIndexStatus['lastRebuild'];
   };
   recentLogs: string[];
   logPointers: Array<{ path: string; description: string }>;
@@ -75,16 +83,17 @@ function closeServer(server: Server): Promise<void> {
 }
 
 function buildStatus(opts: StartMcpDaemonOptions, mcpHandler: McpRouteHandler): McpDaemonStatus {
+  const warmIndex = getVaultIndexStatus();
   return {
     service: 'rune-mcp',
-    status: opts.gateSecret ? 'ok' : 'degraded',
+    status: opts.gateSecret && warmIndex.status !== 'failed' ? 'ok' : 'degraded',
     uptime: process.uptime(),
     oauth: { configured: Boolean(opts.gateSecret) },
     activeSessions: mcpHandler.getActiveSessionCount(),
     warmIndex: {
-      ready: false,
-      status: 'starting',
-      lastRebuild: null,
+      ready: warmIndex.ready,
+      status: warmIndex.status,
+      lastRebuild: warmIndex.lastRebuild,
     },
     recentLogs: [],
     logPointers: [
@@ -96,9 +105,29 @@ function buildStatus(opts: StartMcpDaemonOptions, mcpHandler: McpRouteHandler): 
   };
 }
 
+function daemonBroadSearch(
+  query: string,
+  options?: { directory?: string; maxResults?: number },
+): Array<{ file: string; line: number; content: string }> {
+  // Daemon kb_query broad retrieval uses warm state after readiness.
+  const { ready } = getVaultIndexStatus();
+  return ready ? queryVaultIndex(query, options) : searchVault(query, options);
+}
+
 export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDaemonHandle> {
   mkdirSync(dirname(opts.oauthStoreFile), { recursive: true });
   initKB();
+  void Promise.resolve().then(() => buildVaultIndex()).catch((err: unknown) => {
+    log.error('Initial vault index build failed', { error: (err as Error).message });
+  });
+  const refreshTimer = setInterval(() => {
+    try {
+      refreshVaultIndex();
+    } catch (err) {
+      log.error('Scheduled vault index refresh failed', { error: (err as Error).message });
+    }
+  }, 15 * 60 * 1000);
+  refreshTimer.unref();
 
   const oauth = createMcpOAuth({
     gateSecret: opts.gateSecret,
@@ -112,7 +141,11 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
 
   const mcpHandler = mountMcpRoute({
     verifyBearer: oauth.verifyBearer,
-    getServer: () => createRuneMcpServer({ tools: APP_SURFACE_TOOLS, name: 'rune-mcp' }),
+    getServer: () => createRuneMcpServer({
+      tools: APP_SURFACE_TOOLS,
+      name: 'rune-mcp',
+      kbQueryBroadSearch: daemonBroadSearch,
+    }),
   });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -146,6 +179,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
     url: `http://${opts.host}:${actualPort}`,
     getStatus: () => buildStatus(opts, mcpHandler),
     async stop() {
+      clearInterval(refreshTimer);
       await mcpHandler.closeAll();
       await closeServer(server);
     },
