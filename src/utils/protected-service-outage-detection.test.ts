@@ -19,7 +19,8 @@ import {
 
 type ProtectedServiceEvent =
   | { kind: 'work-run-finished'; runId: string; product: string; project: string; at: string }
-  | { kind: 'cleanup-attempted'; cleanupId: string; source: string; at: string };
+  | { kind: 'cleanup-attempted'; cleanupId: string; source: string; at: string }
+  | { kind: 'monitoring-check'; product: string; surface: 'cockpit-monitoring'; at: string };
 
 type ServiceObservation = {
   serviceId: ProtectedLocalService['id'];
@@ -47,6 +48,24 @@ type OutageReport = {
     error?: string;
   }>;
   recoveryActions: RecoveryAction[];
+  telemetry?: {
+    kind: 'protected-service-outage';
+    severity: 'degraded' | 'outage';
+    trigger: ProtectedServiceEvent['kind'];
+    affectedServices: Array<{
+      id: ProtectedLocalService['id'];
+      launchdLabel: string;
+      host: string;
+      port: number;
+      error?: string;
+    }>;
+    safeRecovery: {
+      autoKill: false;
+      autoRestart: false;
+      reuseListener: false;
+      requiresHumanApproval: true;
+    };
+  };
   message: string;
 };
 
@@ -165,6 +184,56 @@ describe('protected-service-outage-detection (project 19 / test-plan §5A)', () 
       expect.objectContaining({ id: 'rune-mcp', severity: 'outage' }),
     ]);
     expect(report.message).toMatch(/outage|manual|approval/i);
+    expect(unsafeRecoveryActions(report)).toEqual([]);
+  });
+
+  it('emits structured outage telemetry when a monitoring check finds both protected launchd services down', async () => {
+    const { classifyProtectedServiceOutages } = await loadClassifier();
+    expect(classifyProtectedServiceOutages, 'missing protected-service outage classifier').toBeTypeOf('function');
+
+    const report = classifyProtectedServiceOutages!({
+      event: {
+        kind: 'monitoring-check',
+        product: 'rune',
+        surface: 'cockpit-monitoring',
+        at: '2026-06-29T12:12:00.000Z',
+      },
+      observations: [
+        { serviceId: 'rune-web', reachable: false, error: 'launchd service com.jarvis.daemon not running' },
+        { serviceId: 'rune-mcp', reachable: false, error: 'launchd service com.jarvis.rune-mcp not running' },
+      ],
+    });
+
+    expect(report.state).toBe('outage');
+    expect(report.telemetry, 'monitoring checks must surface protected-service outages as telemetry').toEqual(
+      expect.objectContaining({
+        kind: 'protected-service-outage',
+        severity: 'outage',
+        trigger: 'monitoring-check',
+        affectedServices: [
+          expect.objectContaining({
+            id: 'rune-web',
+            launchdLabel: 'com.jarvis.daemon',
+            host: '127.0.0.1',
+            port: 3847,
+            error: expect.stringMatching(/not running|com\.jarvis\.daemon/i),
+          }),
+          expect.objectContaining({
+            id: 'rune-mcp',
+            launchdLabel: 'com.jarvis.rune-mcp',
+            host: '127.0.0.1',
+            port: 3848,
+            error: expect.stringMatching(/not running|com\.jarvis\.rune-mcp/i),
+          }),
+        ],
+        safeRecovery: {
+          autoKill: false,
+          autoRestart: false,
+          reuseListener: false,
+          requiresHumanApproval: true,
+        },
+      }),
+    );
     expect(unsafeRecoveryActions(report)).toEqual([]);
   });
 

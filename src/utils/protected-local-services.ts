@@ -47,7 +47,8 @@ export type ProcessCleanupKillDecision =
 
 export type ProtectedServiceEvent =
   | { kind: 'work-run-finished'; runId: string; product: string; project: string; at: string }
-  | { kind: 'cleanup-attempted'; cleanupId: string; source: string; at: string };
+  | { kind: 'cleanup-attempted'; cleanupId: string; source: string; at: string }
+  | { kind: 'monitoring-check'; product: string; surface: 'cockpit-monitoring'; at: string };
 
 export interface ProtectedServiceObservation {
   serviceId: ProtectedLocalService['id'];
@@ -71,7 +72,27 @@ export interface ProtectedServiceOutageReport {
   event: ProtectedServiceEvent;
   services: ProtectedServiceStatus[];
   recoveryActions: Array<{ type: string; serviceId?: string; port?: number }>;
+  telemetry?: ProtectedServiceOutageTelemetry;
   message: string;
+}
+
+export interface ProtectedServiceOutageTelemetry {
+  kind: 'protected-service-outage';
+  severity: 'degraded' | 'outage';
+  trigger: ProtectedServiceEvent['kind'];
+  affectedServices: Array<{
+    id: ProtectedLocalService['id'];
+    launchdLabel: string;
+    host: string;
+    port: number;
+    error?: string;
+  }>;
+  safeRecovery: {
+    autoKill: false;
+    autoRestart: false;
+    reuseListener: false;
+    requiresHumanApproval: true;
+  };
 }
 
 export const PROTECTED_LOCAL_SERVICES = [
@@ -245,12 +266,48 @@ export function classifyProtectedServiceOutages(input: {
     return status;
   });
 
-  return {
+  const report: ProtectedServiceOutageReport = {
     state,
     event: input.event,
     services,
     recoveryActions: [],
     message: formatProtectedServiceOutageMessage(state, services),
+  };
+
+  if (state !== 'ok') {
+    report.telemetry = buildProtectedServiceOutageTelemetry(input.event, state, services);
+  }
+
+  return report;
+}
+
+function buildProtectedServiceOutageTelemetry(
+  event: ProtectedServiceEvent,
+  severity: ProtectedServiceOutageTelemetry['severity'],
+  services: ProtectedServiceStatus[],
+): ProtectedServiceOutageTelemetry {
+  return {
+    kind: 'protected-service-outage',
+    severity,
+    trigger: event.kind,
+    affectedServices: services
+      .filter((service) => service.status === 'down')
+      .map((service) => {
+        const affectedService: ProtectedServiceOutageTelemetry['affectedServices'][number] = {
+          id: service.id,
+          launchdLabel: service.launchdLabel,
+          host: service.host,
+          port: service.port,
+        };
+        if (service.error) affectedService.error = service.error;
+        return affectedService;
+      }),
+    safeRecovery: {
+      autoKill: false,
+      autoRestart: false,
+      reuseListener: false,
+      requiresHumanApproval: true,
+    },
   };
 }
 
