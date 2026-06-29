@@ -66,7 +66,7 @@ export interface ProtectedServiceOutageReport {
   message: string;
 }
 
-export const PROTECTED_LOCAL_SERVICES: readonly ProtectedLocalService[] = [
+export const PROTECTED_LOCAL_SERVICES = [
   {
     id: 'rune-web',
     name: 'Rune web / cockpit',
@@ -81,7 +81,7 @@ export const PROTECTED_LOCAL_SERVICES: readonly ProtectedLocalService[] = [
     port: 3848,
     launchdLabel: 'com.jarvis.rune-mcp',
   },
-] as const;
+] as const satisfies readonly ProtectedLocalService[];
 
 export function isProtectedLocalServiceAddress(host: string, port: number): boolean {
   return getProtectedLocalServiceByAddress(host, port) !== null;
@@ -105,17 +105,21 @@ export function getProtectedLocalServiceByLaunchdLabel(
   return PROTECTED_LOCAL_SERVICES.find((service) => service.launchdLabel === label) ?? null;
 }
 
+export function formatProtectedLocalServiceAddress(service: ProtectedLocalService): string {
+  return `${service.host}:${service.port}`;
+}
+
+export function formatProtectedLocalServiceSummary(service: ProtectedLocalService): string {
+  return `${service.name} at ${formatProtectedLocalServiceAddress(service)} (launchd label ${service.launchdLabel})`;
+}
+
 export function formatProtectedLocalServicesWarning(): string {
   return [
     '## Protected Localhost Services',
     '',
     'These long-lived Rune services are not disposable test listeners:',
     '',
-    ...PROTECTED_LOCAL_SERVICES.map(
-      (service) =>
-        `- ${service.name}: ${service.host}:${service.port} (` +
-        `launchd label ${service.launchdLabel})`,
-    ),
+    ...PROTECTED_LOCAL_SERVICES.map((service) => `- ${formatProtectedLocalServiceSummary(service)}`),
     '',
     'Never kill, never stop, never interrupt, and never reuse either protected listener without explicit human approval.',
     'If a test collides with one of these ports, use a dynamic port (`0`) or a task-local injected port.',

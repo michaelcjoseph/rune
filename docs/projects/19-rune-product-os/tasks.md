@@ -133,7 +133,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 
 ### Implementation
 
-- [ ] **protected-local-services-contract** — Add the canonical protected-service list (Rune web `127.0.0.1:3847` / `com.jarvis.daemon`; Rune MCP `127.0.0.1:3848` / `com.jarvis.rune-mcp`) and helper predicates/formatters in a shared module so prompts, guards, docs, and tests do not drift.
+- [x] **protected-local-services-contract** — Add the canonical protected-service list (Rune web `127.0.0.1:3847` / `com.jarvis.daemon`; Rune MCP `127.0.0.1:3848` / `com.jarvis.rune-mcp`) and helper predicates/formatters in a shared module so prompts, guards, docs, and tests do not drift.
 - [ ] **agent-protected-service-invariant** — Patch `agents/coder/SOUL.md`, `agents/qa/SOUL.md`, `agents/tech-lead/SOUL.md`, and `agents/reviewer/SOUL.md`, plus the relevant role memories, with the hard rule: never kill, stop, interrupt, or reuse `127.0.0.1:3847` or `127.0.0.1:3848` without explicit human approval; if a test collides, use a dynamic/task-local port; before killing any process, verify it was spawned by the current task/worktree/test command.
 - [ ] **orchestration-protected-service-prompt** — Inject the protected-service invariant into the runtime prompt assembled for product-team roles so the rule is present for both Claude and Codex executors independent of static role-file content.
 - [ ] **test-port-hygiene-regression** — Update any remaining automated test listener setup to use port `0` or injected task-local ports, and add a regression check that fails on new test code binding `3847` or `3848` except for explicit allowlisted config/default/manual-acceptance references.

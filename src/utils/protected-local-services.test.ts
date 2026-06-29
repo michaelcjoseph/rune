@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import * as protectedLocalServices from './protected-local-services.js';
 import {
   PROTECTED_LOCAL_SERVICES,
   formatProtectedLocalServicesWarning,
@@ -8,6 +9,15 @@ import {
   isProtectedLocalServiceAddress,
   isProtectedLocalServiceLaunchdLabel,
 } from './protected-local-services.js';
+
+type ProtectedLocalServiceRecord = (typeof PROTECTED_LOCAL_SERVICES)[number];
+type ProtectedLocalServiceFormatter = (service: ProtectedLocalServiceRecord) => string;
+
+function expectExportedFormatter(name: string): ProtectedLocalServiceFormatter {
+  const value = (protectedLocalServices as Record<string, unknown>)[name];
+  expect(value, `missing ${name} formatter export`).toBeTypeOf('function');
+  return value as ProtectedLocalServiceFormatter;
+}
 
 describe('protected-local-services-contract (project 19 / Phase 5A)', () => {
   it('exposes Rune web and Rune MCP as the canonical protected localhost services', () => {
@@ -82,5 +92,29 @@ describe('protected-local-services-contract (project 19 / Phase 5A)', () => {
     }
     expect(warning).toMatch(/never kill|never stop|never interrupt|never reuse/i);
     expect(warning).toMatch(/explicit human approval/i);
+  });
+
+  it('formats protected service identities from canonical records instead of ad hoc strings', () => {
+    const formatProtectedLocalServiceAddress = expectExportedFormatter(
+      'formatProtectedLocalServiceAddress',
+    );
+    const formatProtectedLocalServiceSummary = expectExportedFormatter(
+      'formatProtectedLocalServiceSummary',
+    );
+    const [web, mcp] = PROTECTED_LOCAL_SERVICES;
+
+    expect(formatProtectedLocalServiceAddress(web)).toBe('127.0.0.1:3847');
+    expect(formatProtectedLocalServiceAddress(mcp)).toBe('127.0.0.1:3848');
+    expect(formatProtectedLocalServiceSummary(web)).toBe(
+      'Rune web / cockpit at 127.0.0.1:3847 (launchd label com.jarvis.daemon)',
+    );
+    expect(formatProtectedLocalServiceSummary(mcp)).toBe(
+      'Rune MCP daemon at 127.0.0.1:3848 (launchd label com.jarvis.rune-mcp)',
+    );
+
+    const warning = formatProtectedLocalServicesWarning();
+    for (const service of PROTECTED_LOCAL_SERVICES) {
+      expect(warning).toContain(formatProtectedLocalServiceSummary(service));
+    }
   });
 });

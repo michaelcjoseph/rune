@@ -64,10 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ils/protected-service-outage-detection.test.ts:72).
-
-Verified:
-- `npm test -- src/utils/protected-service-outage-detection.test.ts src/utils/protected-local-services.test.ts src/utils/process-cleanup-guard.test.ts src/jobs/worktree-sweep.test.ts --reporter=verbose`
+- bin/vitest run src/utils/protected-local-services.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
 - `npm run build`
 
-No commit made.
+No commit made. Note: the QA test file is already staged in the worktree; my implementation diff is only `src/utils/protected-local-services.ts`.
