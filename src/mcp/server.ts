@@ -58,7 +58,7 @@ export const ADMIN_TOOLS = [
   'kb_lint',
 ] as const;
 
-export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks'] as const;
+export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks', 'tag_date_query'] as const;
 
 const UTILITY_TOOLS = ['refresh_vault_index'] as const;
 
@@ -81,6 +81,9 @@ const lazyJournalRangeTool = () =>
 
 const lazyFollowWikilinksTool = () =>
   Promise.all([import('./tools/follow-wikilinks.js'), import('./tools/follow-wikilinks-deps.js')]);
+
+const lazyTagDateQueryTool = () =>
+  Promise.all([import('./tools/tag-date-query.js'), import('./tools/tag-date-query-deps.js')]);
 
 function daemonBroadSearch(
   query: string,
@@ -252,6 +255,24 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         const [{ followWikilinks }, { buildProductionFollowWikilinksDeps }] =
           await lazyFollowWikilinksTool();
         return followWikilinks(input, buildProductionFollowWikilinksDeps());
+      },
+    );
+  },
+
+  tag_date_query: (server) => {
+    server.tool(
+      'tag_date_query',
+      'Query warm-index markdown content by tag and/or date range, with stable result shape and bounded results.',
+      {
+        tag: z.string().optional().describe('Tag or hashtag to match, with or without #'),
+        startDate: z.string().optional().describe('Inclusive start date in YYYY-MM-DD format'),
+        endDate: z.string().optional().describe('Inclusive end date in YYYY-MM-DD format'),
+        maxResults: z.number().optional().describe('Maximum results to return, 1-50 (default 20)'),
+      },
+      async (input) => {
+        const [{ tagDateQuery }, { buildProductionTagDateQueryDeps }] =
+          await lazyTagDateQueryTool();
+        return tagDateQuery(input, buildProductionTagDateQueryDeps());
       },
     );
   },

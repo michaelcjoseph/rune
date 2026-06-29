@@ -127,7 +127,7 @@ vi.mock('../server/webview.js', () => ({
   mountWebviewRoutes: vi.fn(() => vi.fn(async () => false)),
 }));
 
-import { APP_SURFACE_TOOLS } from './server.js';
+import { APP_SURFACE_TOOLS, CONTENT_TOOLS } from './server.js';
 
 interface StartMcpDaemonOptions {
   host: string;
@@ -595,7 +595,7 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     };
     const toolNames = (payload.result?.tools ?? []).map((tool) => tool.name).sort();
 
-    expect(toolNames).toEqual([...APP_SURFACE_TOOLS, 'refresh_vault_index'].sort());
+    expect(toolNames).toEqual([...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index'].sort());
     expect(toolNames).not.toContain('kb_search');
     expect(toolNames).not.toContain('kb_ingest');
     expect(toolNames).not.toContain('kb_stats');

@@ -64,8 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- vitest run src/mcp/tools/follow-wikilinks.test.ts` passes.
-- `npx vitest run src/mcp/content-functions.test.ts -t follow_wikilinks` passes.
-- `npm run build` passes.
+- orter verbose`
+- `npm run build`
 
-Full `src/mcp/content-functions.test.ts` still fails only on `tag_date_query` being unregistered, which is the separate pending task.
+I also tried `npx vitest run src/server/mcp-transport.test.ts --reporter verbose`, but it produced no output for 30s in this environment, so I interrupted it. Note: `src/mcp/content-functions.test.ts` was already modified/staged before my edits; I left it untouched.

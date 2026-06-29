@@ -52,6 +52,10 @@ function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
   return content[0]!.text;
 }
 
+function jsonOf<T>(result: Awaited<ReturnType<Client['callTool']>>): T {
+  return JSON.parse(textOf(result)) as T;
+}
+
 function requireServerWithTools(tools: string[]): McpServer {
   if (typeof createRuneMcpServer !== 'function') {
     expect.fail('createRuneMcpServer is not exported - implementation pending');
@@ -128,6 +132,45 @@ function seedFixtureVault(): void {
       '# Unlinked',
       '',
       'UNLINKED_TARGET_SHOULD_NOT_APPEAR',
+      '',
+    ].join('\n'),
+  );
+  writeVaultFile(
+    'knowledge/frontmatter-writing.md',
+    [
+      '---',
+      'tags: [writing, product-os]',
+      'date: 2026-06-11',
+      '---',
+      '# Frontmatter Writing',
+      '',
+      'FRONTMATTER_METADATA_MARKER should be returned because file metadata matches.',
+      '',
+    ].join('\n'),
+  );
+  writeVaultFile(
+    'knowledge/frontmatter-family.md',
+    [
+      '---',
+      'tags: [family]',
+      'date: 2026-06-11',
+      '---',
+      '# Frontmatter Family',
+      '',
+      'FRONTMATTER_WRONG_TAG_MARKER should not be returned for writing queries.',
+      '',
+    ].join('\n'),
+  );
+  writeVaultFile(
+    'knowledge/frontmatter-old-writing.md',
+    [
+      '---',
+      'tags: [writing]',
+      'date: 2026-06-09',
+      '---',
+      '# Old Writing',
+      '',
+      'FRONTMATTER_OUTSIDE_RANGE_MARKER should not be returned for later date ranges.',
       '',
     ].join('\n'),
   );
@@ -288,6 +331,38 @@ describe('expanded MCP content functions', () => {
     }
   });
 
+  it('tag_date_query is registered with tag, date range, and result cap inputs', async () => {
+    const server = requireServerWithTools(['tag_date_query']);
+    const client = await connectClient(server);
+
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === 'tag_date_query');
+      expect(tool).toBeDefined();
+      expect(tool?.description).toMatch(/tag/i);
+      expect(tool?.description).toMatch(/date/i);
+
+      const schema = tool?.inputSchema as {
+        type?: string;
+        required?: string[];
+        properties?: Record<string, { type?: string; description?: string }>;
+      };
+      expect(schema.type).toBe('object');
+      expect(schema.required ?? []).not.toEqual(expect.arrayContaining(['tag']));
+      expect(schema.required ?? []).not.toEqual(expect.arrayContaining(['startDate']));
+      expect(schema.required ?? []).not.toEqual(expect.arrayContaining(['endDate']));
+      expect(schema.properties?.tag).toMatchObject({ type: 'string' });
+      expect(schema.properties?.tag?.description).toMatch(/without #|hashtag|tag/i);
+      expect(schema.properties?.startDate).toMatchObject({ type: 'string' });
+      expect(schema.properties?.startDate?.description).toMatch(/YYYY-MM-DD/i);
+      expect(schema.properties?.endDate).toMatchObject({ type: 'string' });
+      expect(schema.properties?.endDate?.description).toMatch(/YYYY-MM-DD/i);
+      expect(schema.properties?.maxResults).toMatchObject({ type: 'number' });
+    } finally {
+      await client.close();
+    }
+  });
+
   it('tag_date_query returns only entries matching both tag and date-range filters', async () => {
     const server = requireServerWithTools(['tag_date_query']);
     const client = await connectClient(server);
@@ -303,14 +378,101 @@ describe('expanded MCP content functions', () => {
         },
       });
 
-      const text = textOf(result);
+      const payload = jsonOf<{
+        source: string;
+        filters: { tag?: string; startDate?: string; endDate?: string };
+        maxResults: number;
+        truncated: boolean;
+        results: Array<{
+          file: string;
+          date: string;
+          tags: string[];
+          content: string;
+        }>;
+      }>(result);
+
+      expect(payload).toMatchObject({
+        source: 'warm',
+        filters: { tag: 'writing', startDate: '2026-06-10', endDate: '2026-06-11' },
+        maxResults: 10,
+        truncated: false,
+      });
+      expect(payload.results.length).toBeGreaterThanOrEqual(3);
+      for (const entry of payload.results) {
+        expect(Object.keys(entry).sort()).toEqual(['content', 'date', 'file', 'tags']);
+        expect(entry.tags).toContain('writing');
+        expect(entry.date >= '2026-06-10').toBe(true);
+        expect(entry.date <= '2026-06-11').toBe(true);
+      }
+
+      const text = JSON.stringify(payload);
       expect(text).toContain('journals/2026_06_10.md');
       expect(text).toContain('RANGE_START_MARKER');
       expect(text).toContain('journals/2026_06_11.md');
       expect(text).toContain('RANGE_END_MARKER');
+      expect(text).toContain('knowledge/frontmatter-writing.md');
+      expect(text).toContain('FRONTMATTER_METADATA_MARKER');
       expect(text).not.toContain('DIFFERENT_TAG_MARKER');
       expect(text).not.toContain('OUTSIDE_RANGE_JOURNAL_MARKER');
       expect(text).not.toContain('OUTSIDE_RANGE_END_MARKER');
+      expect(text).not.toContain('FRONTMATTER_WRONG_TAG_MARKER');
+      expect(text).not.toContain('FRONTMATTER_OUTSIDE_RANGE_MARKER');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('tag_date_query supports tag-only filtering, date-only filtering, and a hard result cap', async () => {
+    const server = requireServerWithTools(['tag_date_query']);
+    const client = await connectClient(server);
+
+    try {
+      const tagOnly = jsonOf<{
+        filters: { tag?: string; startDate?: string; endDate?: string };
+        maxResults: number;
+        truncated: boolean;
+        results: Array<{ file: string; date: string; tags: string[]; content: string }>;
+      }>(await client.callTool({
+        name: 'tag_date_query',
+        arguments: {
+          tag: 'product-os',
+          maxResults: 1,
+        },
+      }));
+
+      expect(tagOnly.filters).toEqual({ tag: 'product-os' });
+      expect(tagOnly.maxResults).toBe(1);
+      expect(tagOnly.truncated).toBe(false);
+      expect(tagOnly.results).toHaveLength(1);
+      expect(tagOnly.results[0]).toMatchObject({
+        file: 'knowledge/frontmatter-writing.md',
+        date: '2026-06-11',
+      });
+      expect(tagOnly.results[0]?.tags).toEqual(expect.arrayContaining(['writing', 'product-os']));
+      expect(tagOnly.results[0]?.content).toContain('FRONTMATTER_METADATA_MARKER');
+
+      const dateOnly = jsonOf<{
+        filters: { tag?: string; startDate?: string; endDate?: string };
+        maxResults: number;
+        truncated: boolean;
+        results: Array<{ file: string; date: string; tags: string[]; content: string }>;
+      }>(await client.callTool({
+        name: 'tag_date_query',
+        arguments: {
+          startDate: '2026-06-11',
+          endDate: '2026-06-11',
+          maxResults: 2,
+        },
+      }));
+
+      expect(dateOnly.filters).toEqual({ startDate: '2026-06-11', endDate: '2026-06-11' });
+      expect(dateOnly.maxResults).toBe(2);
+      expect(dateOnly.results).toHaveLength(2);
+      expect(dateOnly.truncated).toBe(true);
+      for (const entry of dateOnly.results) {
+        expect(entry.date).toBe('2026-06-11');
+      }
+      expect(JSON.stringify(dateOnly)).not.toContain('OUTSIDE_RANGE_END_MARKER');
     } finally {
       await client.close();
     }
