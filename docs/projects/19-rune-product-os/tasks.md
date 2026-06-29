@@ -67,7 +67,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 
 - [x] Write the suite for **mcp-content-functions** — test-plan.md §3: journal-range pulls return entries for a date range; link-following resolves `[[wikilinks]]`; tag/date queries filter correctly.
 - [x] Write the suite for **mcp-metrics-snapshot-tool** — test-plan.md §3: the MCP metrics snapshot tool reports total calls, calls/errors/timeouts by tool, p50/p95/p99 latency, active sessions, warm-index readiness/age, and last rebuild result; shape is stable and queryable; counters reset on process restart.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
