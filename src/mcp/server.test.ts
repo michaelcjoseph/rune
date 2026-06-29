@@ -75,6 +75,16 @@ async function listedToolNames(client: Client): Promise<string[]> {
   return tools.map((t) => t.name).sort();
 }
 
+function collectEnumValues(schema: unknown): string[] {
+  if (schema === null || typeof schema !== 'object') return [];
+  const node = schema as Record<string, unknown>;
+  const own = Array.isArray(node.enum) ? node.enum.filter((v): v is string => typeof v === 'string') : [];
+  return [
+    ...own,
+    ...Object.values(node).flatMap((value) => collectEnumValues(value)),
+  ];
+}
+
 // ─── Helper: look up the not-yet-existing factory export ─────────────────────
 //
 // Returns undefined while the implementation is pending. Each test performs its
@@ -254,6 +264,34 @@ describe('runtime rename — MCP public strings', () => {
     const names = Object.keys(settings.mcpServers ?? {});
     expect(names).toContain('rune-kb');
     expect(names).not.toContain(retiredServerName);
+  });
+});
+
+describe('vault_search App schema — full-vault markdown coverage', () => {
+  it('advertises whole-vault markdown search and does not lock types to journals/pages/projects', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const server = createMcpServer({ tools: ['vault_search'] });
+    const client = await connectClient(server);
+
+    const { tools } = await client.listTools();
+    const vaultSearch = tools.find((tool) => tool.name === 'vault_search');
+    expect(vaultSearch, 'vault_search tool must be registered').toBeDefined();
+
+    const description = vaultSearch?.description ?? '';
+    expect(description).toMatch(/whole[- ]vault/i);
+    expect(description).toMatch(/markdown/i);
+    expect(description).not.toMatch(/journals,\s*pages,\s*projects/i);
+
+    const inputSchema = vaultSearch?.inputSchema as unknown;
+    const enumValues = collectEnumValues(inputSchema);
+    expect(enumValues).not.toEqual(expect.arrayContaining(['journals', 'pages', 'projects']));
+    expect(enumValues).toEqual([]);
+
+    await client.close();
   });
 });
 

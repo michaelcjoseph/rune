@@ -19,6 +19,7 @@
  *   - deps use plain vi.fn() fakes — no real fs, no vault.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -32,15 +33,10 @@ interface McpTextResult {
   isError?: boolean;
 }
 
-/** Settled contract: tech-spec.md sketches `types?: string[]`; this suite
- *  deliberately narrows it to the closed union of the three searched vault
- *  areas. The implementation is expected to adopt the closed union (an
- *  unknown type string has no directory to search). */
-type VaultSearchType = 'journals' | 'pages' | 'projects';
-
 interface VaultSearchInput {
   query: string;
-  types?: VaultSearchType[];
+  /** Project 19 cutover: optional top-level vault folder prefixes. */
+  types?: string[];
   maxResults?: number;
 }
 
@@ -175,91 +171,136 @@ const NO_CRM_RESULT_RE = /no\s.*(crm|match|result|data|entr|record)|not found/i;
 
 describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
   // -------------------------------------------------------------------------
-  // Test 1 🔴 — default (no types): three directory calls, results rendered
+  // Test 1 🔴 — default (no types): whole-vault warm-index call
   // -------------------------------------------------------------------------
-  it('1: no types → searchVault called once each for journals/pages/projects; result text contains "file:line — content" snippets from each directory, isError falsy', async () => {
+  it('1: no types → searchVault called once without a directory filter; result text includes knowledge and a peripheral folder', async () => {
     const { vaultSearch } = await requireReadToolsModule();
 
-    const journalsResult: SearchResult[] = [
-      { file: 'journals/2026_06_09.md', line: 3, content: 'foo match' },
+    const fullVaultResults: SearchResult[] = [
+      { file: 'knowledge/semantic-layer.md', line: 3, content: 'FULLCOVERAGE_MARKER in knowledge' },
+      { file: 'world-view/beliefs.md', line: 7, content: 'FULLCOVERAGE_MARKER in peripheral folder' },
     ];
-    const pagesResult: SearchResult[] = [
-      { file: 'pages/playbook.md', line: 7, content: 'bar match' },
-    ];
-    const projectsResult: SearchResult[] = [];
 
     const deps = makeVaultSearchDeps({
       searchVault: vi.fn().mockImplementation(
         (_q: string, opts?: { directory?: string; maxResults?: number }) => {
-          if (opts?.directory === 'journals') return journalsResult;
-          if (opts?.directory === 'pages') return pagesResult;
-          if (opts?.directory === 'projects') return projectsResult;
+          if (opts?.directory === undefined) return fullVaultResults;
           return [];
         },
       ),
     });
 
-    const result = await vaultSearch({ query: 'foo' }, deps);
+    const result = await vaultSearch({ query: 'FULLCOVERAGE_MARKER' }, deps);
 
-    // Three distinct directory calls
-    expect(deps.searchVault).toHaveBeenCalledTimes(3);
-    expect(deps.searchVault).toHaveBeenCalledWith(
-      'foo',
-      expect.objectContaining({ directory: 'journals' }),
-    );
-    expect(deps.searchVault).toHaveBeenCalledWith(
-      'foo',
-      expect.objectContaining({ directory: 'pages' }),
-    );
-    expect(deps.searchVault).toHaveBeenCalledWith(
-      'foo',
-      expect.objectContaining({ directory: 'projects' }),
-    );
+    expect(deps.searchVault).toHaveBeenCalledTimes(1);
+    const [calledQuery, calledOptions] = vi.mocked(deps.searchVault).mock.calls[0]!;
+    expect(calledQuery).toBe('FULLCOVERAGE_MARKER');
+    expect(calledOptions?.directory).toBeUndefined();
 
     expect(result.isError).toBeFalsy();
 
     const text = result.content[0]!.text;
-    // Result text contains file:line and content snippet from journals
-    expect(text).toContain('journals/2026_06_09.md:3');
-    expect(text).toContain('foo match');
-    // Result text contains file:line from pages
-    expect(text).toContain('pages/playbook.md:7');
-    expect(text).toContain('bar match');
+    expect(text).toContain('knowledge/semantic-layer.md:3');
+    expect(text).toContain('FULLCOVERAGE_MARKER in knowledge');
+    expect(text).toContain('world-view/beliefs.md:7');
+    expect(text).toContain('FULLCOVERAGE_MARKER in peripheral folder');
     // em-dash separator used (mirrors kb_search in server.ts)
     expect(text).toMatch(/—/);
   });
 
   // -------------------------------------------------------------------------
-  // Test 2 🔴 — types:['journals'] restricts to one directory call
+  // Test 2 🔴 — types:['knowledge'] restricts by top-level folder prefix
   // -------------------------------------------------------------------------
-  it('2: types:[\'journals\'] → searchVault called exactly once with directory \'journals\'; pages and projects never searched', async () => {
+  it('2: types:[\'knowledge\'] → searchVault called exactly once with directory \'knowledge\'; peripheral folders are not searched', async () => {
     const { vaultSearch } = await requireReadToolsModule();
 
     const deps = makeVaultSearchDeps({
       searchVault: vi.fn().mockReturnValue([
-        { file: 'journals/2026_06_10.md', line: 1, content: 'just journals' },
+        { file: 'knowledge/topic.md', line: 1, content: 'just knowledge' },
       ]),
     });
 
-    const result = await vaultSearch({ query: 'test', types: ['journals'] }, deps);
+    const result = await vaultSearch({ query: 'test', types: ['knowledge'] }, deps);
 
     expect(deps.searchVault).toHaveBeenCalledTimes(1);
     expect(deps.searchVault).toHaveBeenCalledWith(
       'test',
-      expect.objectContaining({ directory: 'journals' }),
+      expect.objectContaining({ directory: 'knowledge' }),
     );
     expect(result.isError).toBeFalsy();
   });
 
   // -------------------------------------------------------------------------
-  // Test 3 🔴 — maxResults forwarded to searchVault options
+  // Test 3 🟡 — arbitrary type strings are treated as folder prefixes
   // -------------------------------------------------------------------------
-  it('3: maxResults:5 is forwarded to each searchVault call in options', async () => {
+  it('3: mixed existing and non-existent types → searches each supplied prefix and existing folder hits survive', async () => {
+    const { vaultSearch } = await requireReadToolsModule();
+
+    const deps = makeVaultSearchDeps({
+      searchVault: vi.fn().mockImplementation(
+        (_q: string, opts?: { directory?: string; maxResults?: number }) => {
+          if (opts?.directory === 'world-view') {
+            return [
+              {
+                file: 'world-view/beliefs.md',
+                line: 2,
+                content: 'UNKNOWN_TYPE_MARKER still visible',
+              },
+            ];
+          }
+          return [];
+        },
+      ),
+    });
+
+    const result = await vaultSearch(
+      { query: 'UNKNOWN_TYPE_MARKER', types: ['world-view', 'not-a-real-folder'] },
+      deps,
+    );
+
+    expect(deps.searchVault).toHaveBeenCalledTimes(2);
+    expect(deps.searchVault).toHaveBeenNthCalledWith(
+      1,
+      'UNKNOWN_TYPE_MARKER',
+      expect.objectContaining({ directory: 'world-view' }),
+    );
+    expect(deps.searchVault).toHaveBeenNthCalledWith(
+      2,
+      'UNKNOWN_TYPE_MARKER',
+      expect.objectContaining({ directory: 'not-a-real-folder' }),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).toContain('world-view/beliefs.md:2');
+  });
+
+  it('3b: only non-existent types → searches that prefix and does not fall back to default whole-vault search', async () => {
+    const { vaultSearch } = await requireReadToolsModule();
+    const deps = makeVaultSearchDeps();
+
+    const result = await vaultSearch(
+      { query: 'UNKNOWN_ONLY_MARKER', types: ['not-a-real-folder'] },
+      deps,
+    );
+
+    expect(deps.searchVault).toHaveBeenCalledTimes(1);
+    expect(deps.searchVault).toHaveBeenCalledWith(
+      'UNKNOWN_ONLY_MARKER',
+      expect.objectContaining({ directory: 'not-a-real-folder' }),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0]!.text).toBe('No results found.');
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 4 🔴 — maxResults forwarded to searchVault options
+  // -------------------------------------------------------------------------
+  it('4: maxResults:5 is forwarded to the warm-index search call in options', async () => {
     const { vaultSearch } = await requireReadToolsModule();
     const deps = makeVaultSearchDeps();
 
     await vaultSearch({ query: 'x', maxResults: 5 }, deps);
 
+    expect(deps.searchVault).toHaveBeenCalledTimes(1);
     for (const call of vi.mocked(deps.searchVault).mock.calls) {
       const opts = call[1];
       expect(opts).toMatchObject({ maxResults: 5 });
@@ -267,9 +308,9 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test 4 🔴 — zero matches across all dirs → 'No results found.'
+  // Test 5 🔴 — zero matches across the vault → 'No results found.'
   // -------------------------------------------------------------------------
-  it('4: zero matches across all directories → text is exactly \'No results found.\', isError falsy', async () => {
+  it('5: zero matches across the vault → text is exactly \'No results found.\', isError falsy', async () => {
     const { vaultSearch } = await requireReadToolsModule();
     const deps = makeVaultSearchDeps({
       searchVault: vi.fn().mockReturnValue([]),
@@ -282,9 +323,9 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test 5 🟡 — empty/missing query → isError true, searchVault not called
+  // Test 6 🟡 — empty/missing query → isError true, searchVault not called
   // -------------------------------------------------------------------------
-  it('5: empty query → isError true, searchVault never called', async () => {
+  it('6: empty query → isError true, searchVault never called', async () => {
     const { vaultSearch } = await requireReadToolsModule();
     const deps = makeVaultSearchDeps();
 
@@ -292,6 +333,26 @@ describe('vaultSearch — §5 vault_search tool (read-tools.ts)', () => {
 
     expect(result.isError).toBe(true);
     expect(deps.searchVault).not.toHaveBeenCalled();
+  });
+});
+
+describe('vaultSearch — project 19 fullcoverage cutover source pins', () => {
+  it('does not keep a closed default search-type allowlist or folder include/exclude config in read-tools.ts', () => {
+    const source = readFileSync(new URL('./read-tools.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toMatch(/\bALL_SEARCH_TYPES\b/);
+    expect(source).not.toMatch(/['"]journals['"]\s*,\s*['"]pages['"]\s*,\s*['"]projects['"]/);
+    expect(source).not.toMatch(
+      /\b(?:SEARCH|VAULT_SEARCH)_(?:INCLUDE|EXCLUDE|ALLOW|DENY)(?:ED)?_(?:TYPES|FOLDERS|DIRECTORIES)\b/,
+    );
+  });
+
+  it('binds production vault_search dependencies to queryVaultIndex instead of cold searchVault', () => {
+    const source = readFileSync(new URL('./read-tools-deps.ts', import.meta.url), 'utf8');
+
+    expect(source).toMatch(/\bqueryVaultIndex\b/);
+    expect(source).toMatch(/from ['"]\.\.\/\.\.\/kb\/vault-index\.js['"]/);
+    expect(source).not.toMatch(/import\s+\{\s*searchVault\s*\}\s+from ['"]\.\.\/\.\.\/kb\/search\.js['"]/);
   });
 });
 

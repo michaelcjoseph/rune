@@ -64,6 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- vault-index.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks`
+- th:
 
-Result: red as expected for this tests-first task. The suite fails at import because `src/kb/vault-index.ts` does not exist yet; that is the separate `warm-vault-index-core` implementation task in `tasks.md`.
+```bash
+npm test -- src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks
+```
+
+Result: red as expected for this tests-first task. `27` passed, `7` failed, all against the current old implementation contract. No commit made.
+- s expected for this tests-first task, with failures against the current pre-cutover implementation: old three-folder default, closed source allowlist, cold `searchVault` production binding, and MCP schema/description still advertising journals/pages/projects instead of whole-vault markdown coverage.
