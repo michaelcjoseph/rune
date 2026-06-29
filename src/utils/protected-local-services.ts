@@ -33,6 +33,12 @@ export interface ProcessCleanupPortKillCandidate {
   humanApproval?: ProcessCleanupHumanApproval;
 }
 
+export interface ProcessCleanupOccupiedPortReportCandidate {
+  source: string;
+  report: string;
+  humanApproval?: ProcessCleanupHumanApproval;
+}
+
 export type ProcessCleanupKillDecision =
   | {
       allowed: true;
@@ -234,6 +240,29 @@ export function evaluateProcessCleanupPortKill(
   return { allowed: true };
 }
 
+export function evaluateProcessCleanupOccupiedPortReport(
+  candidate: ProcessCleanupOccupiedPortReportCandidate,
+): ProcessCleanupKillDecision {
+  const protectedService = getProtectedLocalServiceFromOccupiedPortReport(candidate.report);
+
+  if (protectedService) {
+    return evaluateProcessCleanupPortKill({
+      source: candidate.source,
+      host: protectedService.host,
+      port: protectedService.port,
+      ownedByCurrentTask: false,
+      humanApproval: candidate.humanApproval,
+    });
+  }
+
+  return {
+    allowed: false,
+    reason:
+      `Refusing cleanup from ${candidate.source}: the occupied-port report does not identify a ` +
+      'protected Rune service and does not verify ownership by the current task/worktree/test command.',
+  };
+}
+
 export function classifyProtectedServiceOutages(input: {
   event: ProtectedServiceEvent;
   observations: ProtectedServiceObservation[];
@@ -336,6 +365,14 @@ function getProcessCleanupPortProtectedService(
   }
 
   return PROTECTED_LOCAL_SERVICES.find((service) => service.port === candidate.port);
+}
+
+function getProtectedLocalServiceFromOccupiedPortReport(
+  report: string,
+): ProtectedLocalService | undefined {
+  return PROTECTED_LOCAL_SERVICES.find((service) =>
+    report.includes(formatProtectedLocalServiceAddress(service)),
+  );
 }
 
 function hasExplicitHumanApproval(

@@ -139,7 +139,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] **test-port-hygiene-regression** — Update any remaining automated test listener setup to use port `0` or injected task-local ports, and add a regression check that fails on new test code binding `3847` or `3848` except for explicit allowlisted config/default/manual-acceptance references.
 - [x] **process-cleanup-protected-port-guard** — Add a hard guard around Rune-owned cleanup helpers that terminate processes (including any "kill process by port" helper added now or later): refuse protected ports/launchd services by default and route any exception through the explicit human approval path.
 - [x] **protected-service-outage-detection** — Surface `com.jarvis.daemon` / `com.jarvis.rune-mcp` not-running states after work-run cleanup or monitoring checks as degraded/outage telemetry. Do not silently restart or kill; a launchd restart policy change is a separate decision.
-- [ ] **user-reachability-check** — Reproduce the incident shape safely: simulate a stuck test that reports `127.0.0.1:3847` occupied, verify the system classifies it as protected Rune web and refuses to kill it without approval; repeat for `127.0.0.1:3848`.
+- [x] **user-reachability-check** — Reproduce the incident shape safely: simulate a stuck test that reports `127.0.0.1:3847` occupied, verify the system classifies it as protected Rune web and refuses to kill it without approval; repeat for `127.0.0.1:3848`.
 
 ## Phase 5B — Monitoring reachability closeout (W2)
 

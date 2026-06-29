@@ -28,6 +28,11 @@ type ProcessCleanupGuardModule = {
   evaluateProcessCleanupPortKill?: (
     candidate: ProcessCleanupPortKillCandidate,
   ) => ProcessCleanupKillDecision;
+  evaluateProcessCleanupOccupiedPortReport?: (candidate: {
+    source: string;
+    report: string;
+    humanApproval?: { approved: boolean; approvalId: string };
+  }) => ProcessCleanupKillDecision;
 };
 
 async function loadPortKillGuard(): Promise<
@@ -39,6 +44,17 @@ async function loadPortKillGuard(): Promise<
     'missing evaluateProcessCleanupPortKill guard for kill-by-port cleanup helpers',
   ).toBeTypeOf('function');
   return mod.evaluateProcessCleanupPortKill!;
+}
+
+async function loadOccupiedPortReportGuard(): Promise<
+  NonNullable<ProcessCleanupGuardModule['evaluateProcessCleanupOccupiedPortReport']>
+> {
+  const mod = (await import('./protected-local-services.js')) as ProcessCleanupGuardModule;
+  expect(
+    mod.evaluateProcessCleanupOccupiedPortReport,
+    'missing evaluateProcessCleanupOccupiedPortReport guard for stuck-test occupied-port reports',
+  ).toBeTypeOf('function');
+  return mod.evaluateProcessCleanupOccupiedPortReport!;
 }
 
 describe('process-cleanup-protected-port-guard (project 19 / test-plan §5A)', () => {
@@ -210,5 +226,53 @@ describe('process-cleanup-protected-port-guard (project 19 / test-plan §5A)', (
         ownedByCurrentTask: true,
       }),
     ).toMatchObject({ allowed: true });
+  });
+
+  it('classifies a stuck test report for occupied 127.0.0.1:3847 as protected Rune web and refuses cleanup without approval', async () => {
+    const evaluateProcessCleanupOccupiedPortReport = await loadOccupiedPortReportGuard();
+
+    const decision = evaluateProcessCleanupOccupiedPortReport({
+      source: 'vitest-stuck-test-cleanup',
+      report: [
+        'Error: listen EADDRINUSE: address already in use 127.0.0.1:3847',
+        'test helper reported the previous listener as stuck and requested cleanup',
+      ].join('\n'),
+    });
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/Rune web|127\.0\.0\.1:3847|protected|approval/i),
+      protectedService: {
+        id: 'rune-web',
+        name: 'Rune web / cockpit',
+        host: '127.0.0.1',
+        port: 3847,
+        launchdLabel: 'com.jarvis.daemon',
+      },
+    });
+  });
+
+  it('classifies a stuck test report for occupied 127.0.0.1:3848 as protected Rune MCP and refuses cleanup without approval', async () => {
+    const evaluateProcessCleanupOccupiedPortReport = await loadOccupiedPortReportGuard();
+
+    const decision = evaluateProcessCleanupOccupiedPortReport({
+      source: 'vitest-stuck-test-cleanup',
+      report: [
+        'Error: listen EADDRINUSE: address already in use 127.0.0.1:3848',
+        'cleanup would normally kill the process that owns the stuck listener',
+      ].join('\n'),
+    });
+
+    expect(decision).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/Rune MCP|127\.0\.0\.1:3848|protected|approval/i),
+      protectedService: {
+        id: 'rune-mcp',
+        name: 'Rune MCP daemon',
+        host: '127.0.0.1',
+        port: 3848,
+        launchdLabel: 'com.jarvis.rune-mcp',
+      },
+    });
   });
 });

@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- sHumanApproval: true`.
+- -task ownership proof.
 
 Verified:
-- `npx vitest run src/utils/protected-service-outage-detection.test.ts src/utils/protected-local-services.test.ts src/utils/process-cleanup-guard.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
+- `npx vitest run src/utils/process-cleanup-guard.test.ts src/utils/protected-local-services.test.ts src/utils/protected-service-outage-detection.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
 - `npm run build`
 
 No commit made.
