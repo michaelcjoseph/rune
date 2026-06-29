@@ -879,6 +879,62 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }
   });
 
+  it('shows a last-updated time for each internal Monitoring poll, including degraded MCP failures', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstPollAt = new Date('2026-06-29T15:20:05.000Z');
+      const secondPollAt = new Date('2026-06-29T15:20:06.000Z');
+      const fmtExpectedTime = (date: Date) =>
+        date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      vi.setSystemTime(firstPollAt);
+
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      let metricsCalls = 0;
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/rune-mcp') {
+          return productView({
+            name: 'rune-mcp',
+            class: 'internal',
+            containerCapabilities: monitoringCapabilities,
+            activeRun: undefined,
+          });
+        }
+        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+          metricsCalls += 1;
+          if (metricsCalls === 1) return mcpMetricsSnapshot;
+          throw new Error('MCP daemon unavailable');
+        }
+        if (url === '/api/state') {
+          return {
+            inFlight: [],
+            mutations: { active: [] },
+          };
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const view = createProductDeepView({ root, product: 'rune-mcp', fetchJson });
+      await view.load();
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
+
+      expect(root.innerHTML).toMatch(/last updated/i);
+      expect(root.innerHTML).toContain(fmtExpectedTime(firstPollAt));
+
+      vi.setSystemTime(secondPollAt);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(root.innerHTML).toMatch(/data-monitoring-state=["']degraded["']|>\s*degraded\s*</i);
+      expect(root.innerHTML).toMatch(/last updated/i);
+      expect(root.innerHTML).toContain(fmtExpectedTime(secondPollAt));
+      expect(root.innerHTML).toMatch(/MCP daemon unavailable/i);
+
+      view.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stops MCP metrics snapshot polling when Monitoring is hidden or the view is unmounted', async () => {
     vi.useFakeTimers();
     try {

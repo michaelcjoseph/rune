@@ -469,6 +469,16 @@ function renderRecentFailures(failures) {
     `</div>`;
 }
 
+function renderMonitoringMeta(monitoring) {
+  const rows = [];
+  const checkedAt = monitoring?.checkedAt || monitoring?.lastUpdatedAt;
+  if (checkedAt) rows.push(`Last updated ${fmtClock(checkedAt)}`);
+  if (monitoring?.error) rows.push(monitoring.error);
+  return rows.length
+    ? `<div class="deep-monitoring-source">${rows.map(escHtml).join(' - ')}</div>`
+    : '';
+}
+
 function renderMonitoring(view, monitoring = {}) {
   const mode = monitoringMode(view);
   if (mode !== 'live') {
@@ -500,6 +510,7 @@ function renderMonitoring(view, monitoring = {}) {
   return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="live" data-monitoring-state="${attr(status)}">` +
     `<div class="deep-panel-head"><h3>Monitoring</h3><span>${escHtml(status)}</span></div>` +
     `<div class="deep-monitoring-source">MCP call metrics via ${escHtml(monitoring.sourceTool || 'mcp_metrics_snapshot')}</div>` +
+    `${renderMonitoringMeta(monitoring)}` +
     `<div class="deep-monitoring-grid">` +
       `${renderMetricRow('total calls', fmtNumber(mcp.totals?.calls))}` +
       `${renderMetricRow('timeouts', fmtNumber(mcp.totals?.timeouts))}` +
@@ -1007,12 +1018,12 @@ export function createProductDeepView({
 
   function stopMonitoringPoll() {
     if (monitoringPoller) {
-      clearInterval(monitoringPoller);
+      clearTimeout(monitoringPoller);
       monitoringPoller = null;
     }
   }
 
-  async function refreshMonitoring() {
+  async function refreshMonitoring(checkedAt = new Date().toISOString()) {
     if (!current || activeSidePanel !== 'monitoring' || monitoringMode(current) !== 'live') return;
     const [mcpMetricsResult, state] = await Promise.all([
       loadJson('/api/mcp/tools/mcp_metrics_snapshot')
@@ -1027,6 +1038,7 @@ export function createProductDeepView({
     monitoring = {
       sourceTool: typeof metricsState.sourceTool === 'string' ? metricsState.sourceTool : 'mcp_metrics_snapshot',
       status: mcpMetricsResult.ok ? (metricsState.status || 'ok') : 'degraded',
+      checkedAt: typeof metricsState.checkedAt === 'string' ? metricsState.checkedAt : checkedAt,
       ...(mcpMetricsResult.ok
         ? { mcpMetrics: wrappedMcpMetrics ? metricsState.mcpMetrics : mcpMetricsResult.value }
         : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
@@ -1036,21 +1048,33 @@ export function createProductDeepView({
     render();
   }
 
+  function scheduleMonitoringPoll() {
+    if (monitoringPoller || activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') return;
+    const scheduledAt = new Date(Date.now() + 1000).toISOString();
+    monitoringPoller = setTimeout(async () => {
+      monitoringPoller = null;
+      await refreshMonitoring(scheduledAt);
+      scheduleMonitoringPoll();
+    }, 1000);
+  }
+
   function syncMonitoringPoll() {
     if (activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') {
       stopMonitoringPoll();
       return;
     }
-    if (!monitoringPoller) {
-      monitoringPoller = setInterval(() => { void refreshMonitoring(); }, 1000);
-    }
+    scheduleMonitoringPoll();
   }
 
   async function openSidePanel(next) {
     activeSidePanel = next;
     render();
-    syncMonitoringPoll();
-    if (next === 'monitoring') await refreshMonitoring();
+    if (next === 'monitoring') {
+      await refreshMonitoring();
+      syncMonitoringPoll();
+    } else {
+      syncMonitoringPoll();
+    }
   }
 
   function syncOpTicker() {

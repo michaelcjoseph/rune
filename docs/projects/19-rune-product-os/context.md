@@ -64,11 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- e wrapped `/api/mcp/tools/mcp_metrics_snapshot` response shape.
-- External products still render the stubbed monitoring container without polling metrics.
+-  is visible, stops on hidden/unmounted, and now uses a one-shot timeout loop to avoid interval catch-up bursts while preserving one-second polling.
 
 Verified:
-- `npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` passed
+- `npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` passed, 64/64
 - `npm run build` passed
 
 No commit made.
