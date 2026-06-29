@@ -60,7 +60,7 @@ test-plan sections pass.
 - [ ] 🟡 `types` narrows by top-level folder-name prefix; an unknown value is ignored or returns no matches consistently, never a hidden exclusion.
 - [ ] 🟢 The `vault_search` schema is broadened off the closed 3-value enum and the tool description advertises whole-vault markdown search.
 - [ ] 🔴 Production `vault_search` is bound to `queryVaultIndex` (`read-tools-deps.ts`); result shape and `maxResults` preserved.
-- [ ] 🔴 The resolved `kb_query`/admin-stdio boundary is enforced: a per-session local admin stdio spawn does **not** build or hold the warm index (assert no warm-index build is triggered) and stays on cold ripgrep; only the long-lived daemon routes daemon-internal broad `kb_query` through `queryVaultIndex` after readiness.
+- [ ] 🔴 The resolved `kb_query`/admin-stdio boundary is enforced: a per-session local admin stdio spawn does **not** build or hold the warm index (assert no warm-index build is triggered across the stdio entry/factory/admin `kb_query` load graph) and stays on cold ripgrep; only the long-lived daemon routes daemon-internal broad `kb_query` through `queryVaultIndex` after readiness. Automated pin: `src/mcp/admin-stdio-boundary.test.ts`.
 - [ ] 🔴 Startup begins building the index without blocking tools; during initial warmup, daemon `vault_search` and daemon-internal broad `kb_query` fall back to cold ripgrep; after readiness, both use the warm index.
 - [ ] 🔴 The background rebuild interval schedules at the configured 15-minute cadence, is unref'd, and tears down cleanly; a failed refresh logs and retains the prior complete index; rebuild cadence default is documented.
 - [ ] 🟡 The warm index follows symlinks under the vault root and indexes large markdown files fully.
