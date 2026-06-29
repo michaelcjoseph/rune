@@ -5,7 +5,7 @@ import type { SupervisedRun } from './supervision.js';
 export type HomePulseOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
 
 export interface HomeRunTarget {
-  kind: 'project' | 'bug';
+  kind: 'project' | 'bug' | 'writing-page';
   slug: string;
 }
 

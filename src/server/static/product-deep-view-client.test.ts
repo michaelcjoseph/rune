@@ -609,6 +609,104 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(writing).not.toMatch(/No projects|No bugs/i);
   });
 
+  it('renders the writing surface with ideas, draft/publish run stages, route targets, and scoped chat', async () => {
+    const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
+    const writingView = productView({
+      name: 'writing',
+      class: 'external',
+      scopePath: 'docs/rune',
+      projects: [],
+      containerCapabilities: {
+        projects: false,
+        bugs: false,
+        ideas: true,
+        runs: true,
+        chat: true,
+        monitoring: 'stubbed',
+      },
+      backlog: {
+        bugs: [],
+        ideas: [
+          {
+            id: 'writing-idea-memory',
+            title: 'Operating from memory',
+            status: 'open',
+            plan: { kind: 'plan', state: 'available' },
+          },
+        ],
+        warnings: [],
+      },
+      activeRun: {
+        runId: 'run-writing-draft',
+        target: { kind: 'writing-page', slug: 'operating-from-memory' },
+        state: 'running',
+        writingStage: 'drafting',
+        routePath: '/rune/operating-from-memory',
+        branch: 'rune-writing/operating-from-memory',
+        startedAt: '2026-06-23T12:00:00.000Z',
+        elapsedMs: 70_000,
+        worktreePath: LIVE_WORKTREE_PATH,
+        agents: [{ role: 'coder', active: true }],
+        transcriptUrl: '/api/work-runs/run-writing-draft/transcript',
+      },
+      runs: [
+        {
+          runId: 'run-writing-research',
+          target: { kind: 'writing-page', slug: 'operating-from-memory' },
+          outcome: 'completed',
+          writingStage: 'researching',
+          routePath: '/rune/operating-from-memory',
+          branch: 'rune-writing/operating-from-memory',
+          endedAt: '2026-06-23T12:10:00.000Z',
+          transcriptUrl: '/api/work-runs/run-writing-research/transcript',
+        },
+        {
+          runId: 'run-writing-publish',
+          target: { kind: 'writing-page', slug: 'operating-from-memory' },
+          outcome: 'completed',
+          writingStage: 'committed',
+          routePath: '/rune/operating-from-memory',
+          branch: 'rune-writing/operating-from-memory',
+          endedAt: '2026-06-23T12:30:00.000Z',
+          transcriptUrl: '/api/work-runs/run-writing-publish/transcript',
+        },
+      ],
+    });
+    const html = renderProductDeepView(writingView, { activeTab: 'ideas', activeSidePanel: 'runs' });
+
+    expect(html).toMatch(/data-product=["']writing["']/i);
+    expect(html).toMatch(/data-work-tab=["']ideas["']/i);
+    expect(html).toContain('Operating from memory');
+    expect(html).toContain('run-writing-draft');
+    expect(html).toContain('run-writing-publish');
+    expect(html).toContain('/rune/operating-from-memory');
+    expect(html).toContain('rune-writing/operating-from-memory');
+    for (const state of ['researching', 'drafting', 'committed']) {
+      expect(html).toContain(state);
+    }
+    expect(html).not.toMatch(/data-work-tab=["']projects["']|data-work-tab=["']bugs["']/i);
+
+    const root = makeRoot();
+    const sendChat = vi.fn(async () => ({ text: 'writing scoped reply' }));
+    const view = createProductDeepView({
+      root,
+      product: 'writing',
+      fetchJson: vi.fn(async () => writingView),
+      sendChat,
+    });
+    await view.load();
+    await root.submitClosest('[data-product-chat-form]', {
+      product: 'writing',
+      message: 'What should this essay become?',
+    });
+
+    expect(sendChat).toHaveBeenLastCalledWith({
+      product: 'writing',
+      text: 'What should this essay become?',
+    });
+    view.close();
+  });
+
   it('renders explicit product-aware empty states for products with no projects or ideas', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

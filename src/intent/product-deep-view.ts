@@ -12,7 +12,7 @@ import {
 export type ProductDeepViewOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
 
 export interface ProductDeepViewTarget {
-  kind: 'project' | 'bug';
+  kind: 'project' | 'bug' | 'writing-page';
   slug: string;
 }
 
@@ -37,6 +37,9 @@ export interface RunSummaryRow {
   outcome: ProductDeepViewOutcome;
   endedAt: string;
   transcriptUrl?: string;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface AgentOnRun {
@@ -54,6 +57,9 @@ export interface ActiveRunDetail {
   worktreePath: string;
   agents: AgentOnRun[];
   transcriptUrl: string;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface BacklogItemWithActions extends BacklogItem {
@@ -103,6 +109,9 @@ export interface ProductDeepViewWorkRun {
   endedAt: string;
   transcriptExists?: boolean;
   transcriptUrl?: string | null;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface ProductDeepViewTaskRunRecord {
@@ -167,6 +176,15 @@ function targetFromWorkRun(run: ProductDeepViewWorkRun): ProductDeepViewTarget {
 function targetFromSupervisedRun(run: SupervisedRun): ProductDeepViewTarget {
   const maybeTarget = (run as SupervisedRun & { target?: ProductDeepViewTarget }).target;
   return maybeTarget ?? { kind: 'project', slug: run.project };
+}
+
+function writingRunMetadata(run: unknown): { branch?: string; routePath?: string; writingStage?: string } {
+  const record = run as Record<string, unknown>;
+  return {
+    ...(typeof record['branch'] === 'string' ? { branch: record['branch'] } : {}),
+    ...(typeof record['routePath'] === 'string' ? { routePath: record['routePath'] } : {}),
+    ...(typeof record['writingStage'] === 'string' ? { writingStage: record['writingStage'] } : {}),
+  };
 }
 
 function elapsedMs(startedAt: string, now: number): number {
@@ -354,6 +372,7 @@ function activeRunDetail(
     worktreePath: resolveWorktreePath(deps, run, target),
     agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
     transcriptUrl: `/api/work-runs/${run.id}/transcript`,
+    ...writingRunMetadata(run),
   };
 }
 
@@ -440,6 +459,7 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       };
       const transcriptUrl = transcriptUrlForRun(run, id);
       if (transcriptUrl) row.transcriptUrl = transcriptUrl;
+      Object.assign(row, writingRunMetadata(run));
       return row;
     }) : [],
   };

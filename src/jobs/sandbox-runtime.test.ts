@@ -370,6 +370,37 @@ describe('readProductsConfig — product-policy-schema (project 19)', () => {
     expect(result['writing']!.scopePath).toBe('docs/rune');
     expect(result['brand']!.scopePath).toBeUndefined();
   });
+
+  it('the REAL products policy declares Phase 6 execution metadata for writing and brand', () => {
+    const realConfigPath = fileURLToPath(
+      new URL('../../policies/products.json', import.meta.url),
+    );
+    const result = readProductsConfig(realConfigPath);
+    const expectedRepo = join(homedir(), 'workspace/michaelcjoseph.com');
+
+    expect(result['writing']).toMatchObject({
+      class: 'external',
+      repoPath: expectedRepo,
+      scopePath: 'docs/rune',
+      baseBranch: 'main',
+      orchestratedMode: true,
+    });
+    expect(result['brand']).toMatchObject({
+      class: 'external',
+      repoPath: expectedRepo,
+      baseBranch: 'main',
+    });
+    expect(result['writing']!.credentialsFile).toMatch(/\/\.config\/rune\/credentials\/writing\/\.env$/);
+    expect(result['brand']!.credentialsFile).toMatch(/\/\.config\/rune\/credentials\/brand\/\.env$/);
+    expect(result['writing']!.egressAllowlist).toEqual(
+      expect.arrayContaining(['github.com', 'api.github.com', 'registry.npmjs.org']),
+    );
+    const writingValidationCommands = result['writing']!.validationCommands ?? [];
+    expect(writingValidationCommands.length).toBeGreaterThan(0);
+    expect(writingValidationCommands).toEqual(
+      expect.arrayContaining([expect.stringMatching(/\b(build|lint|test)\b/)]),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

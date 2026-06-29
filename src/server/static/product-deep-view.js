@@ -29,6 +29,14 @@ function fmtTarget(target) {
   return `${target.kind || 'target'} ${target.slug}`;
 }
 
+function renderWritingRunMeta(run) {
+  const bits = [];
+  if (run?.routePath) bits.push(run.routePath);
+  if (run?.branch) bits.push(run.branch);
+  if (run?.writingStage) bits.push(run.writingStage);
+  return bits.map(bit => `<span>${escHtml(bit)}</span>`).join('');
+}
+
 function fmtProgress(progress) {
   const done = Number.isFinite(progress?.done) ? progress.done : 0;
   const total = Number.isFinite(progress?.total) ? progress.total : 0;
@@ -354,6 +362,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
     `</div>` +
     `<div class="deep-run-meta">` +
       `<span>${escHtml(fmtTarget(target))}</span>` +
+      renderWritingRunMeta({ ...activeRun, ...live }) +
       `<span>${escHtml(fmtProgress(tasks))} tasks</span>` +
       `<span>${escHtml(fmtRemaining(tasks))}</span>` +
       `<span>${escHtml(fmtElapsed(elapsedMs))}</span>` +
@@ -377,6 +386,7 @@ function renderRuns(view, liveRuns = {}) {
       `</div>` +
       `<div class="deep-run-meta">` +
         `<span>${escHtml(fmtTarget(run.target))}</span>` +
+        renderWritingRunMeta(run) +
         `<time>${escHtml(run.endedAt)}</time>` +
       `</div>` +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +

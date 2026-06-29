@@ -64,10 +64,12 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- dy passes against the current tree, including the Rune MCP monitoring counter update and degraded MCP behavior.
+-  writing run `branch`, `routePath`, and `writingStage` through Product Deep View and rendered them in Runs.
+- Widened Home run targets to include `writing-page`.
 
 Verified:
-`npx vitest run src/server/static/product-deep-view-client.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
-`npm run build`
+- `npm run build`
+- Focused QA suite: 147 tests passed
+- Nearby registry/API regression suite: 32 tests passed
 
 No commit made.

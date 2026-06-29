@@ -124,7 +124,21 @@
       "chat": true,
       "monitoring": "stubbed"
     },
-    "scopePath": "docs/rune"
+    "repoPath": "~/workspace/michaelcjoseph.com",
+    "scopePath": "docs/rune",
+    "baseBranch": "main",
+    "orchestratedMode": true,
+    "credentialsFile": "~/.config/rune/credentials/writing/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build"
+    ]
   },
   "brand": {
     "class": "external",
@@ -135,6 +149,19 @@
       "runs": true,
       "chat": true,
       "monitoring": "stubbed"
-    }
+    },
+    "repoPath": "~/workspace/michaelcjoseph.com",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/rune/credentials/brand/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build"
+    ]
   }
 }

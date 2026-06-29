@@ -538,6 +538,114 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
     });
   });
 
+  it('projects writing run route, branch, and draft/publish stage metadata for the cockpit surface', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const writingRegistry = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          projects: [],
+        },
+      ],
+    } as unknown as Registry;
+
+    const view = buildProductDeepView({
+      product: 'writing',
+      ...deps({
+        readRegistry: vi.fn(() => writingRegistry),
+        readBacklogs: vi.fn((): ProductBacklogFixture[] => [
+          {
+            product: 'writing',
+            notRepoBacked: false,
+            bugs: [],
+            ideas: [
+              item({
+                id: 'idea-writing-memory',
+                kind: 'ideas',
+                text: 'Operating from memory',
+                status: 'open',
+                section: 'user-authored',
+                source: {
+                  file: 'docs/rune/writing-ideas.md',
+                  lineNumber: 3,
+                  raw: '- [ ] Operating from memory',
+                },
+              }),
+            ],
+            fileWarnings: [],
+          },
+        ]),
+        readSupervisedRuns: vi.fn(() => [
+          {
+            ...run({
+              id: 'run-writing-draft',
+              product: 'writing',
+              project: 'operating-from-memory',
+              status: 'running',
+              startedAt: '2026-06-23T12:00:00.000Z',
+            }),
+            target: { kind: 'writing-page', slug: 'operating-from-memory' },
+            branch: 'rune-writing/operating-from-memory',
+            routePath: '/rune/operating-from-memory',
+            writingStage: 'drafting',
+          } as unknown as SupervisedRun,
+        ]),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [
+          {
+            runId: 'run-writing-publish',
+            product: 'writing',
+            target: { kind: 'writing-page', slug: 'operating-from-memory' } as unknown as WorkRunFixture['target'],
+            outcome: 'branch-complete',
+            endedAt: '2026-06-23T11:45:00.000Z',
+            transcriptExists: true,
+            branch: 'rune-writing/operating-from-memory',
+            routePath: '/rune/operating-from-memory',
+            writingStage: 'committed',
+          } as WorkRunFixture,
+        ]),
+      }),
+    });
+
+    expect(view).toMatchObject({
+      name: 'writing',
+      scopePath: 'docs/rune',
+      projects: [],
+      backlog: {
+        bugs: [],
+        ideas: [expect.objectContaining({ id: 'idea-writing-memory' })],
+      },
+      activeRun: expect.objectContaining({
+        runId: 'run-writing-draft',
+        target: { kind: 'writing-page', slug: 'operating-from-memory' },
+        branch: 'rune-writing/operating-from-memory',
+        routePath: '/rune/operating-from-memory',
+        writingStage: 'drafting',
+      }),
+      runs: [
+        expect.objectContaining({
+          runId: 'run-writing-publish',
+          target: { kind: 'writing-page', slug: 'operating-from-memory' },
+          branch: 'rune-writing/operating-from-memory',
+          routePath: '/rune/operating-from-memory',
+          writingStage: 'committed',
+        }),
+      ],
+    });
+  });
+
   it('applies container capabilities from product metadata instead of hardcoded product names', async () => {
     const { buildProductDeepView } = await import('./product-deep-view.js');
     const registryWithCapabilities = {
