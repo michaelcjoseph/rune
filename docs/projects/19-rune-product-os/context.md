@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- -task ownership proof.
+- dy passes against the current tree, including the Rune MCP monitoring counter update and degraded MCP behavior.
 
 Verified:
-- `npx vitest run src/utils/process-cleanup-guard.test.ts src/utils/protected-local-services.test.ts src/utils/protected-service-outage-detection.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
-- `npm run build`
+`npx vitest run src/server/static/product-deep-view-client.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
+`npm run build`
 
 No commit made.

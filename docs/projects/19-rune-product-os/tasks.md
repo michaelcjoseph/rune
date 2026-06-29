@@ -147,7 +147,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 
 ### Implementation
 
-- [ ] **user-reachability-check** — With MCP running, open `rune-mcp` monitoring and watch counters change after an MCP tool call; stop MCP and verify cockpit remains usable with degraded monitoring.
+- [x] **user-reachability-check** — With MCP running, open `rune-mcp` monitoring and watch counters change after an MCP tool call; stop MCP and verify cockpit remains usable with degraded monitoring.
 
 ## Phase 6 — Writing & Brand surfaces + migration (W4)
 

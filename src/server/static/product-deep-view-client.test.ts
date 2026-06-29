@@ -879,6 +879,79 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }
   });
 
+  it('updates visible Rune MCP monitoring counters after a later MCP tool-call snapshot', async () => {
+    vi.useFakeTimers();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const snapshotFor = (totalCalls: number, kbQueryCalls: number) => ({
+        ...mcpMetricsSnapshot,
+        totals: { calls: totalCalls, errors: 0, timeouts: 0 },
+        tools: {
+          kb_query: {
+            ...mcpMetricsSnapshot.tools.kb_query,
+            calls: kbQueryCalls,
+            errors: 0,
+            timeouts: 0,
+          },
+          mcp_metrics_snapshot: {
+            ...mcpMetricsSnapshot.tools.mcp_metrics_snapshot,
+            calls: totalCalls - kbQueryCalls,
+            errors: 0,
+            timeouts: 0,
+          },
+        },
+      });
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/rune-mcp') {
+          return productView({
+            name: 'rune-mcp',
+            class: 'internal',
+            containerCapabilities: monitoringCapabilities,
+            activeRun: undefined,
+          });
+        }
+        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+          const callIndex = fetchJson.mock.calls
+            .filter(([calledUrl]) => calledUrl === '/api/mcp/tools/mcp_metrics_snapshot').length;
+          return {
+            status: 'ok',
+            sourceTool: 'mcp_metrics_snapshot',
+            checkedAt: `2026-06-29T15:20:0${callIndex}.000Z`,
+            mcpMetrics: callIndex === 1
+              ? snapshotFor(10, 2)
+              : snapshotFor(11, 3),
+          };
+        }
+        if (url === '/api/state') {
+          return {
+            inFlight: [],
+            mutations: { active: [] },
+          };
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const view = createProductDeepView({ root, product: 'rune-mcp', fetchJson });
+      await view.load();
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
+
+      expect(root.innerHTML).toMatch(/data-active-side-panel=["']monitoring["']/i);
+      expect(root.innerHTML).toMatch(/data-monitoring-state=["']ok["']/i);
+      expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}10|10[\s\S]{0,120}total calls/i);
+      expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,120}2 calls/i);
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}11|11[\s\S]{0,120}total calls/i);
+      expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,120}3 calls/i);
+
+      view.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a last-updated time for each internal Monitoring poll, including degraded MCP failures', async () => {
     vi.useFakeTimers();
     try {
