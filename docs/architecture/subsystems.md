@@ -97,6 +97,30 @@ Nightly composer `runNightlyObservation(deps)` (`observation-nightly.ts`) wires 
 
 **Remote (`/mcp` Claude App connector):** `src/mcp/daemon.ts` runs the standalone MCP daemon (`npm run mcp:start`) on `RUNE_MCP_HOST:RUNE_MCP_PORT`, serving daemon `/health`, OAuth routes, and Streamable HTTP MCP at `/mcp` without booting Telegram, the cockpit/webview, scheduler, or Whoop OAuth. `mountMcpRoute` (`mcp-transport.ts`) handles the `/mcp` endpoint gated by single-user OAuth 2.1 (`mcp-oauth.ts`). Gate order: host-allowlist 403 → FAIL-CLOSED bearer 401 → SDK transport. Per-session `McpServer` instances default to `createRuneMcpServer(APP_SURFACE_TOOLS)` (the six App-surface tools — kb_* admin tools are never remotely reachable). OAuth: DCR (http/https redirect_uris, MAX_CLIENTS=20), consent-form gate (POST with `RUNE_MCP_SECRET` in the BODY), PKCE S256-only, codes single-use, tokens userId-bound + expiry-checked. Production wires `tokenTtlMs:null` (never-expire) + `RUNE_MCP_OAUTH_STORE_FILE` (default `logs/rune-mcp-oauth-store.json`, 0600, atomic) so the App authenticates once to the daemon and survives cockpit restarts. Serves RFC 8414 AS metadata + RFC 9728 protected-resource metadata (issuer pinned via `RUNE_MCP_ISSUER_URL`). Revoke all = delete the daemon store file + restart the MCP daemon.
 
+**MCP daemon launchd runbook:** the committed LaunchAgent is `launchd/com.jarvis.rune-mcp.plist`, installed as `~/Library/LaunchAgents/com.jarvis.rune-mcp.plist` by `scripts/install-rune-mcp-launchd.sh`. It runs with `Label=com.jarvis.rune-mcp`, `WorkingDirectory=/Users/jarvis/workspace/rune`, and `ProgramArguments=/usr/bin/env npm run mcp:start`; the package script expands to `NODE_ENV=production tsx --env-file-if-exists=.env.local src/mcp/daemon.ts`, so daemon env comes from that working directory's `.env.local` when present. Required live-use expectation: set `RUNE_MCP_SECRET`; set `RUNE_MCP_ISSUER_URL` to the final public Funnel HTTPS origin; optionally override `RUNE_MCP_OAUTH_STORE_FILE`, `RUNE_MCP_HOST`, and `RUNE_MCP_PORT` (defaults: `logs/rune-mcp-oauth-store.json`, `127.0.0.1`, `3848`). The plist sets only `PATH`; it does not inline secrets. Stdout/stderr go to `~/Library/Logs/rune/rune-mcp.out.log` and `~/Library/Logs/rune/rune-mcp.err.log`; the daemon `/health` response also points at the in-repo process log.
+
+```bash
+scripts/install-rune-mcp-launchd.sh lint
+scripts/install-rune-mcp-launchd.sh install
+scripts/install-rune-mcp-launchd.sh restart
+scripts/install-rune-mcp-launchd.sh uninstall
+
+launchctl print gui/$(id -u)/com.jarvis.rune-mcp
+launchctl kickstart -k gui/$(id -u)/com.jarvis.rune-mcp
+launchctl bootout gui/$(id -u)/com.jarvis.rune-mcp
+```
+
+The install script creates `~/Library/LaunchAgents` and `~/Library/Logs/rune`, lints the source and installed plist, bootouts any existing `com.jarvis.rune-mcp` job, bootstraps the installed plist into `gui/$(id -u)`, then kickstarts it. `restart` is a kickstart only; `uninstall` bootouts the job and removes the installed plist.
+
+Tailscale Funnel is the public Claude App ingress. Keep the daemon bound to loopback and map the Funnel HTTPS listener to the daemon:
+
+```bash
+tailscale funnel --bg --https=443 http://127.0.0.1:3848
+tailscale funnel status
+```
+
+The resulting `https://<machine>.<tailnet>.ts.net` hostname is a human provisioning prerequisite, not a build artifact. Put that exact origin, with no trailing path, in `RUNE_MCP_ISSUER_URL`; Claude App then reaches `https://<machine>.<tailnet>.ts.net/mcp` while the daemon still listens locally on `127.0.0.1:3848`.
+
 ## Cockpit view
 
 `buildCockpitView(registry, runStatus, taskProgress?, workRuns?, backlogCounts?, dispatchModes?)` (`src/intent/cockpit.ts`) is a pure projection. `CockpitProject` carries `lifecycleStatus`, `runStatus`, `actions`, and optional `progress` (gen-eval-loop block), `taskProgress` (done/total), `workRun` (id, outcome, reason, last-N output, startedAt, transcriptUrl), `dispatchMode`+`fallbackReason`. `CockpitProduct` carries optional `backlogCounts` (product-name-keyed, repo-backed only). The cockpit filters out lifecycle-`done` projects per product (keeping every product header). `handleApiCockpit` (`webview.ts`) feeds live `RunStatusByProject` from `readCockpitRunStatus(SUPERVISED_RUNS_FILE)` + `readWorkRunProjections` (passing the supervision store's running/blocked-on-human runs as the 4th `activeRuns` arg so a live run's card renders immediately).

@@ -64,16 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- build` is currently blocked by the staged QA test itself at [src/mcp/launchd-artifacts.test.ts](rune/.worktrees/rune/19-rune-product-os/src/mcp/launchd-artifacts.test.ts:41): TypeScript sees `match[1]` as `string | undefined` in a function declared to return `string[]`. I did not modify the QA test.
--  an absolute WorkingDirectory and reject `/.worktrees/`.
+- aunchd.sh`
+- `scripts/install-rune-mcp-launchd.sh lint`
+- `npx vitest run src/mcp/launchd-artifacts.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks` passed 5/5
 
-Verified:
-- `npm test -- src/mcp/launchd-artifacts.test.ts --reporter verbose` passed, 5/5
-- `scripts/install-rune-mcp-launchd.sh lint` passed; it noted `.env.local` is absent in this task worktree, which is expected for lint-only validation.
-- led job gets the corrected path.
-
-Verified:
-- `npx vitest run src/mcp/launchd-artifacts.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks` passed: 5/5
-- `plutil -lint launchd/com.jarvis.rune-mcp.plist && bash -n scripts/install-rune-mcp-launchd.sh` passed
-
-No commit made.
+No commit made. Tailscale command shape checked against the Funnel docs: https://tailscale.com/kb/1223/funnel
