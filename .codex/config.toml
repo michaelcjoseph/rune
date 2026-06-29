@@ -1,5 +1,15 @@
-[mcp_servers.lennysdata]
-url = "https://mcp.lennysdata.com/mcp"
-
-[mcp_servers.lennysdata.http_headers]
-Authorization = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzY29wZSI6Im1jcDpyZWFkIGFyY2hpdmU6ZnVsbCIsInRpZXIiOiJlbGlnaWJsZSIsImNsaWVudF9pZCI6Imxlbm55c2RhdGEtcGVyc29uYWwiLCJraW5kIjoicGVyc29uYWwiLCJyZXNvdXJjZSI6Imh0dHBzOi8vbWNwLmxlbm55c2RhdGEuY29tL21jcCIsInZlciI6MSwiaXNzIjoiaHR0cHM6Ly93d3cubGVubnlzZGF0YS5jb20vIiwic3ViIjoibWljaGFlbGNqb3NlcGhAZmVlZC5yZWFkd2lzZS5pbyIsImF1ZCI6Imh0dHBzOi8vbWNwLmxlbm55c2RhdGEuY29tL21jcCIsImlhdCI6MTc3NzY3MzA4MiwiZXhwIjoxNzgwMjY1MDgyfQ.qE1-gdk6E31hndZeMSG_1QRGFfOG0J1nNC2nDetxRh0"
+# Project-level Codex config. Intentionally registers NO MCP servers.
+#
+# Every `codex exec` (QA + coder roles) runs with cwd set to a rune worktree
+# and auto-loads this file. Any MCP server declared here is booted on startup
+# for ALL codex-driven execution. A remote server with an expired credential
+# crashes the rmcp transport worker, desyncs codex's tool-calling, and fails
+# the run — even when the server is unrelated to the task being executed.
+#
+# The lenny-sync agent is the only consumer of Lenny's data; it calls the API
+# directly via curl with $LENNY_MCP_TOKEN (see .codex/agents/lenny-sync.toml),
+# not through a codex MCP registration. So do NOT add [mcp_servers.lennysdata]
+# (or any remote MCP server with a hardcoded token) back here.
+#
+# Removed 2026-06-29: an expired lennysdata Bearer JWT (issued 2026-05-01,
+# 30-day lifetime, expired 2026-05-31) blocked the project 19 orchestrated run.
