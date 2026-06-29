@@ -64,12 +64,13 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  writing run `branch`, `routePath`, and `writingStage` through Product Deep View and rendered them in Runs.
-- Widened Home run targets to include `writing-page`.
+-  ideas/voice/historical migration facts and MCP-only pkms source access.
 
 Verified:
-- `npm run build`
-- Focused QA suite: 147 tests passed
-- Nearby registry/API regression suite: 32 tests passed
 
-No commit made.
+```bash
+npm test -- src/bot/commands/blog.test.ts src/bot/commands/writing-critique.test.ts src/bot/skill-registry.test.ts src/jobs/writing-product-orchestration.test.ts
+npm run build
+```
+
+Both pass. No commit made.

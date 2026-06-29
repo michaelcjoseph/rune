@@ -135,8 +135,13 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
   },
   {
     name: 'blog',
-    description: 'Blog writing session.',
+    description: 'Start a writing-product blog draft or publish run.',
     triggers: ['draft a blog post', 'write an essay'],
+  },
+  {
+    name: 'writing-critique',
+    description: 'Start a writing-product critique run for a draft or target.',
+    triggers: ['critique this writing', 'review this draft', 'writing critique'],
   },
   {
     name: 'library-sync',

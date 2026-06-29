@@ -69,4 +69,51 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       'failed',
     ]);
   });
+
+  it('declares that only forward-looking ideas migrate into the writing repo', async () => {
+    const { planWritingProductRun } = await requireWritingOrchestration();
+
+    const plan = planWritingProductRun({ topic: 'Operating from memory' }) as WritingRunPlan & {
+      migration?: unknown;
+    };
+
+    expect(plan.migration).toMatchObject({
+      ideas: {
+        sourceVaultPath: 'writing/topics.md',
+        destinationRepoPath: 'docs/rune/writing-ideas.md',
+      },
+      voice: {
+        sourceVaultPath: 'writing/voice.md',
+        access: 'mcp',
+      },
+      historicalContent: {
+        staysInPkms: true,
+        migrates: false,
+      },
+    });
+  });
+
+  it('requires writing work runs to read pkms source material only through MCP tools', async () => {
+    const { planWritingProductRun } = await requireWritingOrchestration();
+
+    const plan = planWritingProductRun({ topic: 'Operating from memory' }) as WritingRunPlan & {
+      sourceAccess?: unknown;
+    };
+
+    expect(plan.sourceAccess).toMatchObject({
+      pkms: {
+        mode: 'mcp-only',
+        disallowDirectVaultReads: true,
+        requiredTools: expect.arrayContaining([
+          'vault_search',
+          'journal_range',
+          'follow_wikilinks',
+        ]),
+      },
+    });
+    const serialized = JSON.stringify(plan);
+    expect(serialized).not.toContain('VAULT_DIR');
+    expect(serialized).not.toContain('readVaultFile');
+    expect(serialized).not.toContain('writeVaultFile');
+  });
 });
