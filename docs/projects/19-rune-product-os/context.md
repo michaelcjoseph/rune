@@ -64,6 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- It also covers address/launchd lookup helpers and warning text generated from the same shared contract.
+- icit human approval, and require process ownership verification before killing.
 
-Verification: `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose` fails red as expected because `src/utils/protected-local-services.ts` does not exist yet. No commit made.
+Verification: `npm test -- src/intent/agent-protected-service-invariant.test.ts --reporter=verbose` fails red as expected, because the role artifacts do not yet carry the invariant. No implementation files were changed.
