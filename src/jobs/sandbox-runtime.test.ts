@@ -336,9 +336,11 @@ describe('readProductsConfig — product-policy-schema (project 19)', () => {
       new URL('../../policies/products.json', import.meta.url),
     );
     const result = readProductsConfig(realConfigPath);
+    const expectedRoster = ['rune', 'rune-mcp', 'aura', 'assay', 'relay', 'writing', 'brand'];
 
+    expect(Object.keys(result).sort()).toEqual([...expectedRoster].sort());
     expect(Object.fromEntries(
-      ['rune', 'rune-mcp', 'aura', 'assay', 'relay', 'writing', 'brand'].map(
+      expectedRoster.map(
         (name) => [name, result[name]?.class],
       ),
     )).toEqual({

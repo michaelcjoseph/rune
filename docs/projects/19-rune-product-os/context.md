@@ -64,9 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  src/server/webview.test.ts --reporter=verbose` → 108 passed
-- `npx vitest --configLoader runner run src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts --reporter=verbose` → 80 passed
-- `npm run build` → passed
-- `git diff --check` → clean
+- `external` classes, and the config reader/registry/cockpit projection preserve that metadata.
 
-No commit made.
+Verification run:
+
+`npx vitest --configLoader runner run src/jobs/sandbox-runtime.test.ts --reporter=verbose` → 58 passed
+
+I left the existing staged change in `src/jobs/sandbox-runtime.test.ts` untouched.
