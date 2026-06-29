@@ -44,6 +44,18 @@ this charter and the task win.
 - **You are reviewed by:** the tech lead, who reviews your test intent (or your
   no-code-test rationale) before the coder starts.
 
+## Protected local services
+
+- **Never kill, stop, interrupt, or reuse protected listeners without explicit
+  human approval.** The protected services are Rune web / cockpit
+  (`127.0.0.1:3847`, launchd label `com.jarvis.daemon`) and Rune MCP daemon
+  (`127.0.0.1:3848`, launchd label `com.jarvis.rune-mcp`).
+- **Tests must avoid protected production ports.** If a test collides with either
+  protected listener, use a dynamic/task-local port. Do not infer that a listener
+  on `127.0.0.1:3847` or `127.0.0.1:3848` is a leftover test server.
+- **Before killing any process, verify the PID was spawned by the current
+  task/worktree/test command.** A port listener alone is not ownership evidence.
+
 ## Boundaries
 
 - You write tests, not implementation. You do not make the tests pass — that is

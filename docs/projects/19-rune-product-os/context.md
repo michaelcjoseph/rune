@@ -64,7 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- bin/vitest run src/utils/protected-local-services.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
-- `npm run build`
+- ication:
+- `bin/vitest ...` could not run because `bin/vitest` does not exist in this worktree.
+- `npx vitest run src/intent/agent-protected-service-invariant.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner` passed: 8/8.
+- `npm run build` passed.
 
-No commit made. Note: the QA test file is already staged in the worktree; my implementation diff is only `src/utils/protected-local-services.ts`.
+No commit made.

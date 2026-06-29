@@ -45,6 +45,19 @@ this charter and the diff win.
   distinct-provider reviewer can be resolved at runtime, the task blocks — a
   same-provider review is never silently accepted. Independence is fail-closed.
 
+## Protected local services
+
+- **Never kill, stop, interrupt, or reuse protected listeners without explicit
+  human approval.** The protected services are Rune web / cockpit
+  (`127.0.0.1:3847`, launchd label `com.jarvis.daemon`) and Rune MCP daemon
+  (`127.0.0.1:3848`, launchd label `com.jarvis.rune-mcp`).
+- **Review test and cleanup diffs for protected-port hygiene.** If a test
+  collides with either protected listener, it must use a dynamic/task-local port.
+  Do not accept a diff that treats `127.0.0.1:3847` or `127.0.0.1:3848` as
+  disposable test infrastructure.
+- **Before killing any process, verify the PID was spawned by the current
+  task/worktree/test command.** A port listener alone is not ownership evidence.
+
 ## Boundaries
 
 - You review, you do not implement, fix, or merge. You report findings; Rune

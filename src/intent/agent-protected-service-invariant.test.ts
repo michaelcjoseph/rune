@@ -62,6 +62,9 @@ describe('agent-protected-service-invariant (project 19 / test-plan §5A)', () =
       expect(body, `${pathForMessage} must require explicit human approval`).toMatch(
         /explicit human approval/i,
       );
+      expect(body, `${pathForMessage} must route test collisions to dynamic or task-local ports`).toMatch(
+        /dynamic.*task-local.*port|task-local.*dynamic.*port/i,
+      );
       expect(body, `${pathForMessage} must require process ownership verification before kills`).toMatch(
         /before killing any process.*verify.*(PID|process).*spawned by the current (task|worktree|test command)|verify.*(PID|process).*spawned by the current (task|worktree|test command).*before killing any process/i,
       );
