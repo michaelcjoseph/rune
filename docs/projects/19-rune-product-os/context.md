@@ -64,13 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  ideas/voice/historical migration facts and MCP-only pkms source access.
-
-Verified:
-
-```bash
-npm test -- src/bot/commands/blog.test.ts src/bot/commands/writing-critique.test.ts src/bot/skill-registry.test.ts src/jobs/writing-product-orchestration.test.ts
-npm run build
-```
-
-Both pass. No commit made.
+- t -- src/bot/handlers/text.test.ts src/jobs/writing-product-orchestration.test.ts` passes: 119 tests.
+- `npm run build` passes.
+- I also tried a broader targeted writing-command test run, but it hung without output after about two minutes, so I interrupted the test process I spawned. No commit made.

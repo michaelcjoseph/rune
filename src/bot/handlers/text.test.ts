@@ -71,6 +71,7 @@ vi.mock('../commands/syllabus.js', () => ({ handleSyllabus: vi.fn() }));
 vi.mock('../commands/study.js', () => ({ handleStudy: vi.fn() }));
 vi.mock('../commands/health.js', () => ({ handleHealth: vi.fn() }));
 vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
+vi.mock('../commands/writing-critique.js', () => ({ handleWritingCritique: vi.fn() }));
 vi.mock('../commands/seed.js', () => ({ handleSeed: vi.fn() }));
 vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
 vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
@@ -123,6 +124,8 @@ const { getActivePlanningSession } = await import('../../reviews/planning.js');
 const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
 const { handleStudy } = await import('../commands/study.js');
+const { handleBlog } = await import('../commands/blog.js');
+const { handleWritingCritique } = await import('../commands/writing-critique.js');
 const {
   getSession,
   createSession,
@@ -498,6 +501,45 @@ describe('text handler routing', () => {
     await handleTextMessage(mockSender(), msg('/study'));
     expect(handleStudy).toHaveBeenCalledTimes(1);
     expect(handleSyllabus).not.toHaveBeenCalled();
+  });
+
+  it('routes /blog to the writing command handler with the topic args', async () => {
+    await handleTextMessage(mockSender(), msg('/blog operating from memory'));
+
+    expect(handleBlog).toHaveBeenCalledWith(expect.anything(), 100, 'operating from memory');
+  });
+
+  it('routes /writing-critique to the writing critique command handler with the target args', async () => {
+    await handleTextMessage(mockSender(), msg('/writing-critique draft about memory'));
+
+    expect(handleWritingCritique).toHaveBeenCalledWith(expect.anything(), 100, 'draft about memory');
+  });
+
+  it.each(['/topics', '/voice'])('%s is not a standalone slash command', async command => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'unknown-slash-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: command,
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'conversation fallback', error: null });
+
+    await handleTextMessage(mockSender(), msg(command));
+
+    expect(handleBlog).not.toHaveBeenCalled();
+    expect(handleWritingCritique).not.toHaveBeenCalled();
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(askMock).toHaveBeenCalledWith(command, 'unknown-slash-sess', expect.any(String), {
+      model: 'haiku',
+      allowedTools: expect.any(Array),
+      opLabel: 'chat',
+      voice: true,
+    });
   });
 
   it('routes /start and sends help listing the canonical command catalog', async () => {

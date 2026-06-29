@@ -93,6 +93,39 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
     });
   });
 
+  it('copies voice guidelines into the writing product and uses them as a required pipeline input', async () => {
+    const { planWritingProductRun } = await requireWritingOrchestration();
+
+    const plan = planWritingProductRun({ topic: 'Operating from memory' }) as WritingRunPlan & {
+      migration?: {
+        voice?: {
+          sourceVaultPath?: string;
+          destinationRepoPath?: string;
+          access?: string;
+          copiedIntoProduct?: boolean;
+        };
+      };
+      pipelineInputs?: {
+        voiceGuidelines?: {
+          repoPath?: string;
+          required?: boolean;
+        };
+      };
+    };
+
+    const voice = plan.migration?.voice;
+    expect(voice).toMatchObject({
+      sourceVaultPath: 'writing/voice.md',
+      access: 'mcp',
+      copiedIntoProduct: true,
+    });
+    expect(voice?.destinationRepoPath).toMatch(/^docs\/rune\/.*voice.*\.md$/);
+    expect(plan.pipelineInputs?.voiceGuidelines).toMatchObject({
+      repoPath: voice?.destinationRepoPath,
+      required: true,
+    });
+  });
+
   it('requires writing work runs to read pkms source material only through MCP tools', async () => {
     const { planWritingProductRun } = await requireWritingOrchestration();
 

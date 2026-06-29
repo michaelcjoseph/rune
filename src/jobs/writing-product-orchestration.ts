@@ -21,10 +21,18 @@ export interface WritingProductRunPlan {
     voice: {
       sourceVaultPath: 'writing/voice.md';
       access: 'mcp';
+      destinationRepoPath: string;
+      copiedIntoProduct: true;
     };
     historicalContent: {
       staysInPkms: true;
       migrates: false;
+    };
+  };
+  pipelineInputs: {
+    voiceGuidelines: {
+      repoPath: string;
+      required: true;
     };
   };
   sourceAccess: {
@@ -51,6 +59,8 @@ export const WRITING_PRODUCT_SURFACE_STATES: WritingProductSurfaceState[] = [
   'committed',
   'failed',
 ];
+
+const WRITING_VOICE_GUIDELINES_REPO_PATH = 'docs/rune/writing-voice.md';
 
 export type StartWritingProductRunInput =
   | {
@@ -96,10 +106,18 @@ export function planWritingProductRun(input: { topic: string }): WritingProductR
       voice: {
         sourceVaultPath: 'writing/voice.md',
         access: 'mcp',
+        destinationRepoPath: WRITING_VOICE_GUIDELINES_REPO_PATH,
+        copiedIntoProduct: true,
       },
       historicalContent: {
         staysInPkms: true,
         migrates: false,
+      },
+    },
+    pipelineInputs: {
+      voiceGuidelines: {
+        repoPath: WRITING_VOICE_GUIDELINES_REPO_PATH,
+        required: true,
       },
     },
     sourceAccess: {
