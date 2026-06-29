@@ -64,9 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ed:
-- `npx vitest run src/kb/query.test.ts src/mcp/server.test.ts`
-- `npx vitest run src/mcp/admin-stdio-boundary.test.ts src/mcp/daemon.test.ts`
+- re the synchronous index build runs. `stop()` also clears a pending startup build and the refresh timer.
+
+Verified:
+- `npx vitest run src/mcp/daemon.test.ts`
+- `npx vitest run src/kb/vault-index.test.ts`
 - `npm run build`
 
-No commit made. The QA test files `src/kb/query.test.ts` and `src/mcp/server.test.ts` were already staged/dirty; I left them untouched.
+Note: `src/mcp/daemon.test.ts` was already staged/dirty; I left it untouched.

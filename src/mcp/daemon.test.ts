@@ -409,6 +409,79 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     }
   });
 
+  it('serves daemon health before the synchronous startup index build runs', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-startup-index-nonblocking-'));
+    tempDirs.push(dir);
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    expect(
+      warmIndex.buildVaultIndex,
+      'the daemon must bind its HTTP surface before starting the synchronous full-vault build',
+    ).not.toHaveBeenCalled();
+
+    const health = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/health',
+      method: 'GET',
+    });
+    expect(health.status).toBe(200);
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(warmIndex.buildVaultIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the scheduled warm-index refresh timer when the daemon stops', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-refresh-teardown-'));
+    tempDirs.push(dir);
+    let daemon: McpDaemonHandle | undefined;
+
+    try {
+      daemon = await startMcpDaemon({
+        host: '127.0.0.1',
+        port: 0,
+        gateSecret: 'mcp-gate',
+        userId: 'alice',
+        issuerBaseUrl: 'https://mcp.example.invalid',
+        oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+        tokenTtlMs: null,
+      });
+
+      const cadenceCallIndex = setIntervalSpy.mock.calls.findIndex(([, delay]) => (
+        delay === 15 * 60 * 1000
+      ));
+      expect(cadenceCallIndex, 'daemon must schedule a 15-minute warm-index refresh').toBeGreaterThanOrEqual(0);
+      const refreshTimer = setIntervalSpy.mock.results[cadenceCallIndex]?.value;
+
+      await daemon.stop();
+      daemon = undefined;
+
+      expect(clearIntervalSpy).toHaveBeenCalledWith(refreshTimer);
+    } finally {
+      if (daemon) {
+        await daemon.stop();
+      }
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
   it('starts the warm-index build in the background instead of blocking daemon startup', () => {
     const daemonPath = new URL('./daemon.ts', import.meta.url);
     const source = readFileSync(daemonPath, 'utf8');

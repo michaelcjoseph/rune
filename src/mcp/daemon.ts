@@ -117,9 +117,6 @@ function daemonBroadSearch(
 export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDaemonHandle> {
   mkdirSync(dirname(opts.oauthStoreFile), { recursive: true });
   initKB();
-  void Promise.resolve().then(() => buildVaultIndex()).catch((err: unknown) => {
-    log.error('Initial vault index build failed', { error: (err as Error).message });
-  });
   const refreshTimer = setInterval(() => {
     try {
       refreshVaultIndex();
@@ -171,6 +168,14 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
   });
 
   await listen(server, opts.host, opts.port);
+  let initialBuild: ReturnType<typeof setImmediate> | null = setImmediate(() => {
+    initialBuild = null;
+    try {
+      buildVaultIndex();
+    } catch (err) {
+      log.error('Initial vault index build failed', { error: (err as Error).message });
+    }
+  });
   const address = server.address();
   const actualPort = typeof address === 'object' && address ? address.port : opts.port;
   const handle: McpDaemonHandle = {
@@ -179,6 +184,10 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
     url: `http://${opts.host}:${actualPort}`,
     getStatus: () => buildStatus(opts, mcpHandler),
     async stop() {
+      if (initialBuild) {
+        clearImmediate(initialBuild);
+        initialBuild = null;
+      }
       clearInterval(refreshTimer);
       await mcpHandler.closeAll();
       await closeServer(server);
