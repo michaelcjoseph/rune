@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- orld-view/`, including mixed case, escaped regex metacharacters, and invalid-regex literal fallback.
+- B caps and within the harness’s sane-margin checks.
 
 Verified:
-- `npx vitest run src/kb/vault-index-parity.test.ts` passed
+- `npx tsx --env-file-if-exists=.env.local src/kb/__acceptance__/vault-index-realscale.acceptance.ts` passed
 - `npx vitest run src/kb/vault-index.test.ts src/kb/vault-index-parity.test.ts` passed
 - `npm run build` passed
 
