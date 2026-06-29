@@ -3,7 +3,9 @@
  * Phase 1).
  *
  * `readBacklogs` walks every product in the registry and, for each repo-backed product, reads
- * `<repoPath>/docs/projects/{bugs,ideas}.md`, parses them, and rolls the result up per product.
+ * that product's enabled backlog containers, parses them, and rolls the result up per product.
+ * Most products use `<repoPath>/docs/projects/{bugs,ideas}.md`; shared-repo products can narrow
+ * the surface (writing reads only `docs/rune/writing-ideas.md`).
  * It enforces the spec's "Security / repo safety" contract:
  *   - canonicalize each `repoPath` (realpath) and require it under `$WORKSPACE_ROOT`;
  *   - realpath each backlog file so a symlink escaping `repoPath` is rejected, not followed;
@@ -63,9 +65,10 @@ export interface ReadBacklogsOpts {
   workspaceRoot?: string;
 }
 
-/** Repo-relative paths of the two backlog files. */
+/** Repo-relative paths of the standard backlog files. */
 const BUGS_REL = 'docs/projects/bugs.md';
 const IDEAS_REL = 'docs/projects/ideas.md';
+const WRITING_IDEAS_REL = 'docs/rune/writing-ideas.md';
 
 /** Reject a single backlog file larger than this — a defense against a crafted repo whose
  *  huge single file would block the event loop in the synchronous read + parse. */
@@ -80,9 +83,21 @@ function shouldSurfaceFileWarning(warning: FileWarning): boolean {
   // unsupported detail for item extraction, but surfacing every detail bullet as a cockpit warning
   // drowns out genuinely actionable file issues.
   return !(
-    (warning.file === BUGS_REL || warning.file === IDEAS_REL) &&
+    (warning.file === BUGS_REL || warning.file === IDEAS_REL || warning.file === WRITING_IDEAS_REL) &&
     warning.code === 'over-indented'
   );
+}
+
+function backlogReadPlan(product: Registry['products'][number]): {
+  bugs?: string;
+  ideas?: string;
+} {
+  const bugsEnabled = product.containerCapabilities?.bugs ?? (product.name === 'writing' ? false : true);
+  const ideasEnabled = product.containerCapabilities?.ideas ?? true;
+  return {
+    ...(bugsEnabled ? { bugs: BUGS_REL } : {}),
+    ...(ideasEnabled ? { ideas: product.name === 'writing' ? WRITING_IDEAS_REL : IDEAS_REL } : {}),
+  };
 }
 
 /**
@@ -211,8 +226,9 @@ export function readBacklogs(
       return result;
     }
 
-    result.bugs = readOne(canonicalRepo, BUGS_REL, parseBugs, result.fileWarnings);
-    result.ideas = readOne(canonicalRepo, IDEAS_REL, parseIdeas, result.fileWarnings);
+    const plan = backlogReadPlan(product);
+    result.bugs = plan.bugs ? readOne(canonicalRepo, plan.bugs, parseBugs, result.fileWarnings) : [];
+    result.ideas = plan.ideas ? readOne(canonicalRepo, plan.ideas, parseIdeas, result.fileWarnings) : [];
     return result;
   });
 }

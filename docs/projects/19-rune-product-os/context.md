@@ -64,10 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- `external` classes, and the config reader/registry/cockpit projection preserve that metadata.
+- er.test.ts src/intent/home-pulse-deep-view.test.ts src/intent/cockpit.test.ts --reporter=verbose` → 49 passed  
+`npm run build` → passed
 
-Verification run:
-
-`npx vitest --configLoader runner run src/jobs/sandbox-runtime.test.ts --reporter=verbose` → 58 passed
-
-I left the existing staged change in `src/jobs/sandbox-runtime.test.ts` untouched.
+I left the pre-existing staged QA change in `src/intent/backlog-reader.test.ts` untouched; my implementation change is unstaged in `src/intent/backlog-reader.ts`.
