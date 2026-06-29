@@ -220,6 +220,46 @@ function waitForMockCall(mock: ReturnType<typeof vi.fn>, timeoutMs = 1000): Prom
   });
 }
 
+function useRuneMcpRegistry(): void {
+  (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+    version: 1,
+    builtAt: '2026-06-28T00:00:00.000Z',
+    products: [
+      {
+        name: 'rune-mcp',
+        class: 'internal',
+        repoBacked: true,
+        projects: [{ slug: '19-rune-product-os', status: 'active' }],
+      },
+    ],
+  });
+}
+
+function findRuneMcpMonitoring(body: any): any {
+  const runeMcp = body.products.find((p: any) => p.name === 'rune-mcp');
+  expect(runeMcp).toBeDefined();
+  return runeMcp.monitoring?.mcp;
+}
+
+async function startMcpHealthServer(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+): Promise<{ port: number; close: () => Promise<void> }> {
+  const mcpServer = http.createServer(handler);
+  const sockets = new Set<{ destroy: () => void }>();
+  mcpServer.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => mcpServer.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (mcpServer.address() as any).port,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => mcpServer.close(() => resolve()));
+    },
+  };
+}
+
 // ---- mock WebviewSender ----
 
 const mockWebviewSender = {
@@ -609,18 +649,7 @@ describe('server/webview', () => {
       const unreachablePort = await getReleasedLocalPort();
       mockConfig.RUNE_MCP_HOST = '127.0.0.1';
       mockConfig.RUNE_MCP_PORT = unreachablePort;
-      (readRegistry as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-        version: 1,
-        builtAt: '2026-06-28T00:00:00.000Z',
-        products: [
-          {
-            name: 'rune-mcp',
-            class: 'internal',
-            repoBacked: true,
-            projects: [{ slug: '19-rune-product-os', status: 'active' }],
-          },
-        ],
-      });
+      useRuneMcpRegistry();
 
       const res = await makeRequest(port, '/api/cockpit', {
         headers: { authorization: 'Bearer test-secret' },
@@ -628,14 +657,68 @@ describe('server/webview', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.available).toBe(true);
-      const runeMcp = res.body.products.find((p: any) => p.name === 'rune-mcp');
-      expect(runeMcp).toBeDefined();
-      expect(runeMcp.monitoring?.mcp).toMatchObject({
+      expect(findRuneMcpMonitoring(res.body)).toMatchObject({
         status: 'degraded',
         endpoint: `http://127.0.0.1:${unreachablePort}/health`,
         error: expect.stringMatching(/ECONNREFUSED|unreachable|down/i),
         checkedAt: expect.any(String),
       });
+    });
+
+    it('web-starts-with-mcp-degraded: treats unauthenticated MCP health as degraded without failing cockpit state', async () => {
+      const mcpServer = await startMcpHealthServer((_req, res) => {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      });
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+        useRuneMcpRegistry();
+
+        const res = await makeRequest(port, '/api/cockpit', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.available).toBe(true);
+        expect(findRuneMcpMonitoring(res.body)).toMatchObject({
+          status: 'degraded',
+          endpoint: `http://127.0.0.1:${mcpServer.port}/health`,
+          error: expect.stringMatching(/401|unauth|HTTP/i),
+          checkedAt: expect.any(String),
+        });
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('web-starts-with-mcp-degraded: times out a hung MCP health check and still returns cockpit state promptly', async () => {
+      const mcpServer = await startMcpHealthServer(() => {
+        // Accept the connection but never send headers or a body.
+      });
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+        useRuneMcpRegistry();
+
+        const startedAt = Date.now();
+        const res = await makeRequest(port, '/api/cockpit', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(res.status).toBe(200);
+        expect(res.body.available).toBe(true);
+        expect(elapsedMs).toBeLessThan(1000);
+        expect(findRuneMcpMonitoring(res.body)).toMatchObject({
+          status: 'degraded',
+          endpoint: `http://127.0.0.1:${mcpServer.port}/health`,
+          error: expect.stringMatching(/timed out|timeout/i),
+          checkedAt: expect.any(String),
+        });
+      } finally {
+        await mcpServer.close();
+      }
     });
   });
 

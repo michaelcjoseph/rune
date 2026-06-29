@@ -64,8 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- t.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 -t ".*"`: 7 passed
-- `npm run build`: passed
-- `git diff --check`: passed
+- -200 responses.
 
-Note: running the same daemon test file without `-t ".*"` hung before Vitest printed its run header twice; the `-t ".*"` run executed all seven tests successfully.
+Verified:
+- `npm test -- src/server/webview.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000` passed: 60/60
+- `npm run build` passed
+
+I did not add extra edits; the only current worktree delta is the pre-existing staged QA test change in `src/server/webview.test.ts`.
