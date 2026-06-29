@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- 
-- `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose`
-- `npm test -- src/jobs/team-task-deps.test.ts --reporter=verbose`
-- `npm run build`
+- t-os/scripts/run-rune-rebrand-acceptance.ts) while preserving the real default `http://127.0.0.1:3847/health`.
 
-One combined two-file vitest invocation hung before reporting and was interrupted; the same suites passed individually. No commit made.
+Verified:
+- `npm test -- src/utils/test-port-hygiene-regression.test.ts --reporter=verbose`
+- `npm test -- scripts/run-rune-rebrand-acceptance.test.ts --reporter=verbose`
+- `npm run build`
