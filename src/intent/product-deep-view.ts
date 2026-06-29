@@ -367,24 +367,29 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       return compareStartedDesc(a, b);
     });
   const activeMutations = deps.readActiveMutations ? readOrEmpty(deps.readActiveMutations) : [];
+  const ideasOnly = product.name === 'writing';
 
   const view: ProductDeepView = {
     name: product.name,
     repoBacked: true,
-    projects: product.projects
-      .filter((project) => project.status !== 'done')
-      .map((project) => ({
-        slug: project.slug,
-        lifecycle: projectLifecycle(project.status),
-        taskProgress: project.progress ?? { done: 0, total: 0 },
-        runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
-      })),
+    projects: ideasOnly
+      ? []
+      : product.projects
+        .filter((project) => project.status !== 'done')
+        .map((project) => ({
+          slug: project.slug,
+          lifecycle: projectLifecycle(project.status),
+          taskProgress: project.progress ?? { done: 0, total: 0 },
+          runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
+        })),
     backlog: {
-      bugs: (backlog?.bugs ?? [])
-        .filter((item) => item.status !== 'done')
-        .map((item) =>
-          withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
-        ),
+      bugs: ideasOnly
+        ? []
+        : (backlog?.bugs ?? [])
+          .filter((item) => item.status !== 'done')
+          .map((item) =>
+            withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+          ),
       ideas: (backlog?.ideas ?? []).map((item) =>
         withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
       ),

@@ -211,30 +211,64 @@ function renderBacklogKind(backlog, kind) {
   `</section>`;
 }
 
-function renderWorkTabs(view, activeTab = 'projects') {
-  const tabs = [
+function isWritingProduct(view) {
+  return view?.name === 'writing';
+}
+
+function containerProfileFor(view) {
+  return view?.name === 'rune-mcp' ? 'operations-runs-heavy' : 'standard';
+}
+
+function workTabsFor(view) {
+  if (isWritingProduct(view)) {
+    return [{ id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length }];
+  }
+  return [
     { id: 'projects', label: 'Projects', count: list(view.projects).length },
     { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length },
     { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length },
   ];
+}
+
+function normalizeWorkTab(view, activeTab) {
+  const tabs = workTabsFor(view).map(tab => tab.id);
+  return tabs.includes(activeTab) ? activeTab : tabs[0] || 'ideas';
+}
+
+function renderWorkTabPanel(view, id) {
+  if (id === 'projects') return renderProjects(view.projects);
+  if (id === 'bugs') return renderBacklogKind(view.backlog, 'bugs');
+  return renderBacklogKind(view.backlog, 'ideas');
+}
+
+function workSummary(view) {
+  return [
+    ...list(view.projects).map(project => project.slug),
+    ...list(view.backlog?.bugs).map(itemTitle),
+    ...list(view.backlog?.ideas).map(itemTitle),
+  ].filter(Boolean).slice(0, 8).join(' ');
+}
+
+function renderWorkTabs(view, activeTab = 'projects') {
+  const tabs = workTabsFor(view);
+  const active = normalizeWorkTab(view, activeTab);
   const warnings = list(view.backlog?.warnings).map(renderWarning).join('');
   const panel = (id, html) =>
-    `<div class="deep-tab-panel ${activeTab === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
-      `${activeTab === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
+    `<div class="deep-tab-panel ${active === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
+      `${active === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
 
-  return `<section class="deep-work-tabs-panel" data-surface="work" data-active-work-tab="${attr(activeTab)}">` +
+  return `<section class="deep-work-tabs-panel" data-surface="work" data-active-work-tab="${attr(active)}" ` +
+    `data-work-summary="${attr(workSummary(view))}">` +
     `<div class="deep-work-tabs" role="tablist" aria-label="Product work">` +
       tabs.map(tab =>
-        `<button type="button" class="${activeTab === tab.id ? 'is-active' : ''}" ` +
-          `data-work-tab="${attr(tab.id)}" role="tab" aria-selected="${activeTab === tab.id ? 'true' : 'false'}">` +
+        `<button type="button" class="${active === tab.id ? 'is-active' : ''}" ` +
+          `data-work-tab="${attr(tab.id)}" role="tab" aria-selected="${active === tab.id ? 'true' : 'false'}">` +
           `${escHtml(tab.label)} <span>${escHtml(tab.count)}</span>` +
         `</button>`
       ).join('') +
     `</div>` +
     (warnings ? `<div class="deep-warnings"><strong>Warnings</strong><ul>${warnings}</ul></div>` : '') +
-    panel('projects', renderProjects(view.projects)) +
-    panel('bugs', renderBacklogKind(view.backlog, 'bugs')) +
-    panel('ideas', renderBacklogKind(view.backlog, 'ideas')) +
+    tabs.map(tab => panel(tab.id, renderWorkTabPanel(view, tab.id))).join('') +
   `</section>`;
 }
 
@@ -342,7 +376,10 @@ function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'oper
     { id: 'operations', label: 'Operations' },
     { id: 'runs', label: 'Runs' },
   ];
-  return `<section class="deep-side-tab-panel" data-surface="side-panel" data-active-side-panel="${attr(active)}">` +
+  const profile = containerProfileFor(view);
+  const weight = profile === 'operations-runs-heavy' ? 'heavy' : 'standard';
+  return `<section class="deep-side-tab-panel${weight === 'heavy' ? ' deep-side-tab-panel--heavy' : ''}" ` +
+    `data-surface="side-panel" data-active-side-panel="${attr(active)}" data-container-weight="${attr(weight)}">` +
     `<div class="deep-side-tabs" role="tablist" aria-label="Product operations panels">` +
       tabs.map(tab =>
         `<button type="button" role="tab" data-side-panel-tab="${attr(tab.id)}" ` +
@@ -482,7 +519,7 @@ function isSpecArtifact(value) {
 }
 
 export function renderProductDeepView(view, options = {}) {
-  const activeTab = options.activeTab || 'projects';
+  const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
   const activeSidePanel = options.activeSidePanel === 'runs' ? 'runs' : 'operations';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
@@ -498,15 +535,29 @@ export function renderProductDeepView(view, options = {}) {
     `</section>`;
   }
 
-  return `<section class="product-deep-view" data-product="${attr(view.name)}">` +
+  const profile = containerProfileFor(view);
+  const profileClass = profile === 'operations-runs-heavy' ? ' product-deep-view--operations-runs-heavy' : '';
+  const navSurfaces = isWritingProduct(view)
+    ? [
+      { id: 'ideas', label: 'Ideas' },
+      { id: 'runs', label: 'Runs' },
+      { id: 'chat', label: 'Chat' },
+    ]
+    : [
+      { id: 'projects', label: 'Projects' },
+      { id: 'bugs', label: 'Bugs' },
+      { id: 'ideas', label: 'Ideas' },
+      { id: 'runs', label: 'Runs' },
+      { id: 'chat', label: 'Chat' },
+    ];
+
+  return `<section class="product-deep-view${profileClass}" data-product="${attr(view.name)}" data-container-profile="${attr(profile)}">` +
     `<header class="deep-header">` +
       `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2></div>` +
       `<nav aria-label="Product surfaces">` +
-        `<button type="button" data-surface-jump="projects">Projects</button>` +
-        `<button type="button" data-surface-jump="bugs">Bugs</button>` +
-        `<button type="button" data-surface-jump="ideas">Ideas</button>` +
-        `<button type="button" data-surface-jump="runs">Runs</button>` +
-        `<button type="button" data-surface-jump="chat">Chat</button>` +
+        navSurfaces.map(surface =>
+          `<button type="button" data-surface-jump="${attr(surface.id)}">${escHtml(surface.label)}</button>`
+        ).join('') +
       `</nav>` +
     `</header>` +
     `<div class="deep-two-column">` +

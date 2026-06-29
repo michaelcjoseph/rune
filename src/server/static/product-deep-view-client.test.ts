@@ -362,6 +362,116 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
   });
 
+  it('renders the shared three-container spine with product-aware work contents', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const standard = renderProductDeepView(productView(), { operations: productOperations });
+    expect(standard).toMatch(/data-surface=["']work["']/i);
+    expect(standard).toMatch(/data-surface=["']side-panel["']/i);
+    expect(standard).toMatch(/data-surface=["']chat["']/i);
+    for (const tab of ['projects', 'bugs', 'ideas']) {
+      expect(standard).toMatch(new RegExp(`data-work-tab=["']${tab}["']`, 'i'));
+    }
+    expect(standard).toContain('17-cockpit-redesign');
+    expect(standard).toContain('Crash when saving');
+    expect(standard).toContain('Add a release dashboard');
+
+    const writing = renderProductDeepView(productView({
+      name: 'writing',
+      projects: [],
+      backlog: {
+        bugs: [],
+        ideas: [
+          {
+            id: 'writing-idea-1',
+            title: 'Draft a Rune essay',
+            status: 'open',
+            plan: { kind: 'plan', state: 'available' },
+          },
+        ],
+        warnings: [],
+      },
+      activeRun: {
+        runId: 'run-writing-draft',
+        target: { kind: 'project', slug: 'draft-a-rune-essay' },
+        state: 'running',
+        startedAt: '2026-06-23T12:00:00.000Z',
+        elapsedMs: 70_000,
+        worktreePath: LIVE_WORKTREE_PATH,
+        agents: [{ role: 'coder', active: true }],
+        transcriptUrl: '/api/work-runs/run-writing-draft/transcript',
+      },
+      runs: [
+        {
+          runId: 'run-writing-publish',
+          target: { kind: 'project', slug: 'draft-a-rune-essay' },
+          outcome: 'completed',
+          endedAt: '2026-06-23T12:30:00.000Z',
+          transcriptUrl: '/api/work-runs/run-writing-publish/transcript',
+        },
+      ],
+    }), { operations: productOperations, activeTab: 'ideas', activeSidePanel: 'runs' });
+
+    expect(writing).toMatch(/data-product=["']writing["']/i);
+    expect(writing).toMatch(/data-surface=["']work["']/i);
+    expect(writing).toMatch(/data-surface=["']runs["']/i);
+    expect(writing).toMatch(/data-surface=["']chat["']/i);
+    expect(writing).toMatch(/data-work-tab=["']ideas["']/i);
+    expect(writing).toContain('Draft a Rune essay');
+    expect(writing).toContain('run-writing-draft');
+    expect(writing).not.toMatch(/data-work-tab=["']projects["']|data-work-tab-panel=["']projects["']|>Projects</i);
+    expect(writing).not.toMatch(/data-work-tab=["']bugs["']|data-work-tab-panel=["']bugs["']|>Bugs</i);
+    expect(writing).not.toMatch(/No projects|No bugs/i);
+  });
+
+  it('marks Rune MCP as operations/runs-heavy so that container gets more room than the work backlog', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView({
+      name: 'rune-mcp',
+      projects: [
+        { slug: 'mcp-daemon', lifecycle: 'active', taskProgress: { done: 3, total: 6 } },
+      ],
+      backlog: {
+        bugs: [],
+        ideas: [
+          {
+            id: 'mcp-idea-1',
+            title: 'Add a metrics panel',
+            status: 'open',
+            plan: { kind: 'plan', state: 'available' },
+          },
+        ],
+        warnings: [],
+      },
+      activeRun: {
+        runId: 'run-mcp-refresh',
+        target: { kind: 'project', slug: 'mcp-daemon' },
+        state: 'running',
+        startedAt: '2026-06-23T12:00:00.000Z',
+        elapsedMs: 90_000,
+        worktreePath: LIVE_WORKTREE_PATH,
+        agents: [{ role: 'qa', active: true }],
+        transcriptUrl: '/api/work-runs/run-mcp-refresh/transcript',
+      },
+      runs: [
+        {
+          runId: 'run-mcp-recent',
+          target: { kind: 'project', slug: 'mcp-daemon' },
+          outcome: 'no-op',
+          endedAt: '2026-06-23T11:30:00.000Z',
+          transcriptUrl: '/api/work-runs/run-mcp-recent/transcript',
+        },
+      ],
+    }), { operations: productOperations, activeSidePanel: 'runs' });
+
+    expect(html).toMatch(/data-product=["']rune-mcp["']/i);
+    expect(html).toMatch(/data-container-profile=["']operations-runs-heavy["']|product-deep-view--operations-runs-heavy/i);
+    expect(html).toMatch(/data-surface=["']side-panel["'][^>]*(data-container-weight=["']heavy["']|deep-side-tab-panel--heavy)/i);
+    expect(html).toMatch(/data-surface=["']runs["'][\s\S]{0,500}run-mcp-refresh/i);
+    expect(html).toMatch(/data-surface=["']work["'][\s\S]{0,500}mcp-daemon/i);
+  });
+
   it('switches the lower-left panel between Operations and Runs without resetting chat state', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();

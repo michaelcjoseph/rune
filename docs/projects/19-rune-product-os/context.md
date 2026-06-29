@@ -64,7 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- module-reference.md:220) with the new MCP tool/module map.
-- [CLAUDE.md](rune/.worktrees/rune/19-rune-product-os/CLAUDE.md:174) to remove the stale “six tools only” remote-MCP summary.
+- s/rune/19-rune-product-os/src/server/static/app.css:578): Rune MCP heavy profile gives the operations/runs panel more vertical room.
 
-Verification: `git diff --check` passed. I did not run runtime tests because this task changed documentation only.
+Verification passed:
+- `npm test -- src/intent/home-pulse-deep-view.test.ts src/server/static/product-deep-view-client.test.ts`
+- `npm run build`
+- `git diff --check`
