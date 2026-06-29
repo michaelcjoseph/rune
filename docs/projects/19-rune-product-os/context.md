@@ -64,7 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- chd-artifacts.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks
-```
+- vault-index.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks`
 
-Results: build passed; 75/75 tests passed. I did not edit the staged QA files `src/mcp/daemon.test.ts` or `src/server/webview.test.ts`. The live Claude App/Tailscale reauth check remains the manual gate.
+Result: red as expected for this tests-first task. The suite fails at import because `src/kb/vault-index.ts` does not exist yet; that is the separate `warm-vault-index-core` implementation task in `tasks.md`.
