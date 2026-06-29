@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- t-os/scripts/run-rune-rebrand-acceptance.ts) while preserving the real default `http://127.0.0.1:3847/health`.
+- ree-sweep.ts](rune/.worktrees/rune/19-rune-product-os/src/jobs/worktree-sweep.ts:158).
 
 Verified:
-- `npm test -- src/utils/test-port-hygiene-regression.test.ts --reporter=verbose`
-- `npm test -- scripts/run-rune-rebrand-acceptance.test.ts --reporter=verbose`
+- `npm test -- src/utils/process-cleanup-guard.test.ts src/jobs/worktree-sweep.test.ts --reporter=verbose`
+- `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose`
 - `npm run build`

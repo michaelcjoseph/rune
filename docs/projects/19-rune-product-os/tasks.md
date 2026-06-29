@@ -127,7 +127,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] Write the suite for **agent-protected-service-invariant** — test-plan.md §5A: coder, QA, tech-lead, and reviewer role instructions/memories all forbid killing, interrupting, or reusing protected service listeners without explicit human approval, and require process ownership verification before killing any process.
 - [x] Write the suite for **orchestration-protected-service-prompt** — test-plan.md §5A: runtime team-task prompts include the protected-service invariant even if a static role file changes.
 - [x] Write the suite for **test-port-hygiene-regression** — test-plan.md §5A: automated tests and test helpers bind dynamic ports (`0`) for web/MCP listeners; production ports `3847`/`3848` are allowed only in config/default assertions, docs, or non-listening acceptance references.
-- [ ] Write the suite for **process-cleanup-protected-port-guard** — test-plan.md §5A: Rune-owned cleanup/recovery helpers refuse to kill a PID owning `3847` or `3848`, or a process matching the protected launchd services, unless an explicit human approval path is present.
+- [x] Write the suite for **process-cleanup-protected-port-guard** — test-plan.md §5A: Rune-owned cleanup/recovery helpers refuse to kill a PID owning `3847` or `3848`, or a process matching the protected launchd services, unless an explicit human approval path is present.
 - [ ] Write the suite for **protected-service-outage-detection** — test-plan.md §5A: after a work run or cleanup attempt, a down protected service is surfaced as degraded/outage state instead of being "cleaned up" by killing/reusing the listener; no unsafe auto-kill is attempted.
 - [ ] Confirm red before implementation.
 
