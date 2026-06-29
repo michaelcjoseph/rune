@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 
 const mockConfig = {
   HTTP_PORT: 0,
@@ -8,6 +8,7 @@ const mockConfig = {
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
   RUNE_HTTP_SECRET: 'test-secret',
+  RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
 };
 
 vi.mock('../config.js', () => ({
@@ -40,9 +41,17 @@ function req(
   path: string,
   opts: { method?: string; headers?: Record<string, string> } = {},
 ): Promise<{ status: number; body: any }> {
+  return reqOnPort(port, path, opts);
+}
+
+function reqOnPort(
+  targetPort: number,
+  path: string,
+  opts: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
     const r = http.request(
-      { host: '127.0.0.1', port, path, method: opts.method || 'GET', headers: opts.headers },
+      { host: '127.0.0.1', port: targetPort, path, method: opts.method || 'GET', headers: opts.headers },
       (res) => {
         let body = '';
         res.on('data', (c: Buffer) => (body += c));
@@ -53,6 +62,7 @@ function req(
       },
     );
     r.on('error', reject);
+    if (opts.body) r.write(opts.body);
     r.end();
   });
 }
@@ -125,5 +135,45 @@ describe('server/http', () => {
   it('unknown route returns 404', async () => {
     const res = await req('/unknown');
     expect(res.status).toBe(404);
+  });
+
+  it('does not mount MCP transport or OAuth routes on the Rune web server', async () => {
+    const verifyBearer = vi.fn(() => true);
+    const handleOAuthRoute = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      const path = req.url?.split('?')[0] ?? '';
+      const isOAuthRoute = path.startsWith('/mcp/oauth/')
+        || path === '/.well-known/oauth-authorization-server/mcp'
+        || path === '/.well-known/oauth-protected-resource/mcp';
+      if (!isOAuthRoute) return false;
+
+      res.writeHead(418, { 'Content-Type': 'text/plain' });
+      res.end('legacy web MCP OAuth route handled');
+      return true;
+    });
+    const legacyMcpOpts = { verifyBearer, handleOAuthRoute };
+
+    const webServer = (startHttpServer as (...args: any[]) => Server)(undefined, legacyMcpOpts);
+    await new Promise<void>((resolve) => webServer.on('listening', resolve));
+    const webPort = (webServer.address() as { port: number }).port;
+
+    try {
+      const mcp = await reqOnPort(webPort, '/mcp');
+      expect(mcp.status).toBe(404);
+      expect(verifyBearer).not.toHaveBeenCalled();
+
+      const oauth = await reqOnPort(webPort, '/mcp/oauth/register', { method: 'POST' });
+      expect(oauth.status).toBe(404);
+      expect(handleOAuthRoute).not.toHaveBeenCalled();
+
+      const metadata = await reqOnPort(webPort, '/.well-known/oauth-authorization-server/mcp');
+      expect(metadata.status).toBe(404);
+      expect(handleOAuthRoute).not.toHaveBeenCalled();
+
+      const health = await reqOnPort(webPort, '/health');
+      expect(health.status).toBe(200);
+      expect(health.body.status).toBe('ok');
+    } finally {
+      await new Promise<void>((resolve) => webServer.close(() => resolve()));
+    }
   });
 });

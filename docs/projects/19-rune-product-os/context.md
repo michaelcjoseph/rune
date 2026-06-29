@@ -64,7 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- out 5000 --hookTimeout 5000`
-- `npm test -- --configLoader runner src/config.test.ts src/server/webview.test.ts src/server/mcp-transport.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
+- r runner src/server/http.test.ts src/server/mcp-transport.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
+- `npm run build`
 
-Note: `src/mcp/daemon.test.ts` was already staged/modified in the worktree; I left it untouched.
+Note: `src/server/http.test.ts` and `src/server/mcp-transport.test.ts` were already modified before my implementation; I left those handed QA changes intact.

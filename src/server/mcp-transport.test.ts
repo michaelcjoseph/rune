@@ -15,19 +15,17 @@
  *     opts?: McpTransportOpts,
  *   ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
  *
- * And src/server/http.ts gains an optional second param:
- *   startHttpServer(webviewDeps?, mcpOpts?: McpTransportOpts)
- *   (cast through `as any` below so this file is tsc-clean before the param exists)
- *
  * Mechanics:
  *   - Dynamic import via a computed specifier defeats tsc static resolution so
  *     this file is tsc-clean before the module exists.
  *   - Every test calls loadMcpTransport() and asserts the module is present;
  *     when the module is absent each test fails with a clean "implementation pending"
  *     message — never an import crash.
- *   - The integration tests (1, 2, 4, 5) start startHttpServer() with mcpOpts
- *     and connect a real SDK Client over StreamableHTTPClientTransport to the
- *     ephemeral port, mirroring the http.test.ts pattern.
+ *   - The integration tests start a tiny local HTTP harness around
+ *     mountMcpRoute() and connect a real SDK Client over
+ *     StreamableHTTPClientTransport to the ephemeral port. The Rune web server
+ *     does not own this mount anymore; src/server/http.test.ts pins that
+ *     cutover boundary.
  *   - verifyBearer is stubbed to `() => true` for the §6 happy-path transport
  *     tests so the suite stays green when the OAuth gate (§7) lands separately;
  *     test 6 pins the CLOSED direction (`() => false` → 401) so the gate can
@@ -101,7 +99,6 @@ vi.mock('../kb/search.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { APP_SURFACE_TOOLS } from '../mcp/server.js';
-import { startHttpServer } from './http.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -115,6 +112,14 @@ interface McpTransportOpts {
   getServer?: () => import('@modelcontextprotocol/sdk/server/mcp.js').McpServer;
   verifyBearer?: (req: IncomingMessage) => boolean | Promise<boolean>;
 }
+
+type McpRouteHandler = ((
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<boolean>) & {
+  closeAll: () => Promise<void>;
+  getActiveSessionCount: () => number;
+};
 
 // ---------------------------------------------------------------------------
 // Dynamic import guard — computed specifier bypasses tsc static resolution.
@@ -145,14 +150,28 @@ async function requireMcpTransport(): Promise<void> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Cast startHttpServer so the test file is tsc-clean before the optional
-// second mcpOpts param exists on startHttpServer's signature.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const startHttpServerAny = startHttpServer as (...args: any[]) => Server;
-
-/** Start an HTTP server with the /mcp route mounted and return the port. */
+/** Start a local transport-only HTTP harness and return the port. */
 async function startWithMcp(mcpOpts: McpTransportOpts): Promise<{ server: Server; port: number }> {
-  const server = startHttpServerAny(undefined, mcpOpts);
+  const mod = await loadMcpTransport();
+  if (!mod || typeof mod.mountMcpRoute !== 'function') {
+    expect.fail(IMPL_PENDING);
+  }
+
+  const mcpHandler = mod.mountMcpRoute(mcpOpts) as McpRouteHandler;
+  const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    if (await mcpHandler(req, res)) return;
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+    res.writeHead(404);
+    res.end('Not found');
+  });
+  server.on('close', () => {
+    void mcpHandler.closeAll();
+  });
+  server.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.on('listening', resolve));
   const port = (server.address() as { port: number }).port;
   return { server, port };
@@ -340,41 +359,22 @@ describe('server/mcp-transport (§6 Streamable HTTP transport)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Test 5 🟡 — /mcp returns 404 when no mcpOpts are provided (opt-in)
+  // Test 5 🟡 — non-MCP paths fall through to the owning HTTP surface.
   //
-  // startHttpServer() with NO mcpOpts arg → /mcp is not mounted; a POST to
-  // /mcp returns 404 (the same as any other unknown route).
+  // mountMcpRoute handles only /mcp. The standalone daemon or any test harness
+  // remains responsible for routing /health, OAuth metadata, and unknown paths.
   // -------------------------------------------------------------------------
-  it('5: /mcp returns 404 when mcpOpts not provided — the route is opt-in', async () => {
+  it('5: non-/mcp paths fall through to the owning HTTP server', async () => {
     await requireMcpTransport(); // red guard
 
-    // Start without mcpOpts — the second param is intentionally omitted.
-    const server = startHttpServer();
-    await new Promise<void>((resolve) => server.on('listening', resolve));
-    const port = (server.address() as { port: number }).port;
+    const { server, port } = await startWithMcp({ verifyBearer: () => true });
     openServers.push(server);
-
-    const body = JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: {
-        protocolVersion: '2024-11-05',
-        capabilities: {},
-        clientInfo: { name: 'test', version: '0.0.0' },
-      },
-    });
 
     const result = await rawReq({
       host: '127.0.0.1',
       port,
-      path: '/mcp',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body).toString(),
-      },
-      body,
+      path: '/not-mcp',
+      method: 'GET',
     });
 
     expect(result.status).toBe(404);

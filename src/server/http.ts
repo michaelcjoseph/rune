@@ -6,26 +6,6 @@ import { captureSessions } from '../jobs/capture.js';
 import { isConfigured, exchangeCode, verifyOAuthState } from '../integrations/whoop/client.js';
 import { createLogger } from '../utils/logger.js';
 import { mountWebviewRoutes, type WebviewDeps } from './webview.js';
-import { mountMcpRoute, type McpTransportOpts, type McpRouteHandler } from './mcp-transport.js';
-
-/** Mount options for the /mcp surface: the transport opts plus the OAuth
- *  endpoint handler (DCR / authorize / token / metadata) that runs ahead of
- *  the transport in the chain. */
-export interface McpMountOpts extends McpTransportOpts {
-  handleOAuthRoute?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-}
-
-/** Live MCP route handlers per server — lets the daemon tear down /mcp
- *  sessions BEFORE server.close() on SIGTERM (open SSE streams otherwise
- *  keep connections from draining). */
-const mcpHandlers = new WeakMap<Server, McpRouteHandler>();
-
-/** Force-close all live /mcp session transports for `server` (no-op when the
- *  route is not mounted). Call before server.close() in the shutdown path. */
-export async function closeMcpSessions(server: Server): Promise<void> {
-  const handler = mcpHandlers.get(server);
-  if (handler) await handler.closeAll();
-}
 
 const log = createLogger('http');
 
@@ -101,13 +81,8 @@ async function handleWhoopOAuth(req: IncomingMessage, res: ServerResponse): Prom
 
 export { WHOOP_REDIRECT_URI };
 
-export function startHttpServer(webviewDeps?: WebviewDeps, mcpOpts?: McpMountOpts): Server {
+export function startHttpServer(webviewDeps?: WebviewDeps): Server {
   let webviewHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) | null = null;
-  // /mcp is opt-in: without mcpOpts the route is not mounted and /mcp 404s.
-  // It must run BEFORE the webview handler: /mcp is not under /api/, so the
-  // webview host-guard never pre-screens it — the MCP handler gates itself.
-  const mcpHandler = mcpOpts ? mountMcpRoute(mcpOpts) : null;
-  const mcpOauthHandler = mcpOpts?.handleOAuthRoute ?? null;
 
   const server = createServer(async (req, res) => {
     try {
@@ -120,8 +95,6 @@ export function startHttpServer(webviewDeps?: WebviewDeps, mcpOpts?: McpMountOpt
       if (req.method === 'GET' && req.url?.startsWith('/oauth/whoop')) {
         return await handleWhoopOAuth(req, res);
       }
-      if (mcpOauthHandler && await mcpOauthHandler(req, res)) return;
-      if (mcpHandler && await mcpHandler(req, res)) return;
       if (webviewHandler && await webviewHandler(req, res)) return;
       res.writeHead(404);
       res.end('Not found');
@@ -134,16 +107,6 @@ export function startHttpServer(webviewDeps?: WebviewDeps, mcpOpts?: McpMountOpt
 
   if (webviewDeps) {
     webviewHandler = mountWebviewRoutes(server, webviewDeps);
-  }
-
-  if (mcpHandler) {
-    mcpHandlers.set(server, mcpHandler);
-    // Best-effort session teardown when the server closes; the daemon's
-    // SIGTERM path additionally calls closeMcpSessions(server) BEFORE
-    // server.close() so open SSE streams can't keep connections alive.
-    server.on('close', () => {
-      void mcpHandler.closeAll();
-    });
   }
 
   server.listen(config.HTTP_PORT, config.HTTP_HOST, () => {
