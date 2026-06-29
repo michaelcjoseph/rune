@@ -34,6 +34,7 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`RUNE_MCP_OAUTH_STORE_FILE`** — OAuth client/token store for the standalone MCP daemon; defaults to `logs/rune-mcp-oauth-store.json`.
 - **`RUNE_MCP_HOST`** — bind host for the standalone MCP daemon; defaults to `127.0.0.1`.
 - **`RUNE_MCP_PORT`** — bind port for the standalone MCP daemon; defaults to `3848`.
+- **`RUNE_MCP_TOOL_TIMEOUT_MS`** — per-MCP-tool wall-clock timeout used by in-process metrics/instrumentation; defaults to `30000`, min `1`. A timeout is counted as both an error and timeout.
 
 ## Resolver
 

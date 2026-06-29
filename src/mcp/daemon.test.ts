@@ -521,7 +521,7 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     );
   });
 
-  it('exposes refresh_vault_index on the authenticated daemon MCP surface without broad kb admin tools', async () => {
+  it('exposes utility tools on the authenticated daemon MCP surface without broad kb admin tools', async () => {
     const startMcpDaemon = await requireStartMcpDaemon();
     const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-refresh-tool-surface-'));
     tempDirs.push(dir);
@@ -595,7 +595,9 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     };
     const toolNames = (payload.result?.tools ?? []).map((tool) => tool.name).sort();
 
-    expect(toolNames).toEqual([...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index'].sort());
+    expect(toolNames).toEqual(
+      [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index', 'mcp_metrics_snapshot'].sort(),
+    );
     expect(toolNames).not.toContain('kb_search');
     expect(toolNames).not.toContain('kb_ingest');
     expect(toolNames).not.toContain('kb_stats');

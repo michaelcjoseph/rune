@@ -269,6 +269,7 @@ const config = {
 
   RUNE_MCP_HOST: process.env['RUNE_MCP_HOST'] || '127.0.0.1',
   RUNE_MCP_PORT: parseNumericEnv('RUNE_MCP_PORT', 3848, { min: 0, max: 65535, integer: true }),
+  RUNE_MCP_TOOL_TIMEOUT_MS: parseNumericEnv('RUNE_MCP_TOOL_TIMEOUT_MS', 30_000, { min: 1, integer: true }),
 
   CLAUDE_TIMEOUT_MS: 1_800_000,
   CLAUDE_LINT_TIMEOUT_MS: 300_000,

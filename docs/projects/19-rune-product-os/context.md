@@ -64,7 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- orter verbose`
-- `npm run build`
+- npx vitest run src/mcp/daemon.test.ts --reporter verbose`
+- `npx vitest run src/mcp/mcp-metrics-snapshot.test.ts --reporter verbose`
+- `npx vitest run src/mcp/server.test.ts --reporter verbose`
 
-I also tried `npx vitest run src/server/mcp-transport.test.ts --reporter verbose`, but it produced no output for 30s in this environment, so I interrupted it. Note: `src/mcp/content-functions.test.ts` was already modified/staged before my edits; I left it untouched.
+Note: the staged QA test files were already staged in the worktree; I left them as-is and did not commit.

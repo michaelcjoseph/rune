@@ -6,6 +6,7 @@ import {
   getVaultIndexStatus as daemonIndexStatus,
   queryVaultIndex as daemonIndexSearch,
 } from '../kb/./vault-index.js';
+import { getMcpMetricsSnapshot, instrumentMcpTool, type McpToolCallback } from './metrics.js';
 
 type BroadVaultSearch = (
   query: string,
@@ -16,6 +17,7 @@ export interface CreateRuneMcpServerOptions {
   tools: readonly ToolName[];
   name?: string;
   kbQueryBroadSearch?: BroadVaultSearch;
+  getActiveSessionCount?: () => number;
 }
 
 /**
@@ -60,7 +62,7 @@ export const ADMIN_TOOLS = [
 
 export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks', 'tag_date_query'] as const;
 
-const UTILITY_TOOLS = ['refresh_vault_index'] as const;
+const UTILITY_TOOLS = ['refresh_vault_index', 'mcp_metrics_snapshot'] as const;
 
 /** Union of every tool name the factory can register. */
 export type ToolName =
@@ -91,6 +93,31 @@ function daemonBroadSearch(
 ): Array<{ file: string; line: number; content: string }> {
   const { ready } = daemonIndexStatus();
   return ready ? daemonIndexSearch(query, options) : coldVaultSearch(query, options);
+}
+
+type ServerWithMutableTool = {
+  tool: (name: string, ...rest: unknown[]) => unknown;
+};
+
+function instrumentServerTools(server: McpServer): McpServer {
+  const mutableServer = server as unknown as ServerWithMutableTool;
+  const originalTool = mutableServer.tool.bind(server);
+  mutableServer.tool = (name: string, ...rest: unknown[]): unknown => {
+    const callback = rest.at(-1);
+    if (typeof callback === 'function') {
+      rest[rest.length - 1] = instrumentMcpTool(name, callback as McpToolCallback);
+    }
+    return originalTool(name, ...rest);
+  };
+  return server;
+}
+
+function warmIndexAgeMs(status: ReturnType<typeof daemonIndexStatus>): number | null {
+  const lastRebuildAt = (status as { lastRebuildAt?: unknown }).lastRebuildAt;
+  if (typeof lastRebuildAt !== 'string') return null;
+  const timestamp = Date.parse(lastRebuildAt);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Date.now() - timestamp);
 }
 
 /** Every tool the factory knows how to register, keyed by tool name. */
@@ -221,6 +248,33 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         const { refreshVaultIndexTool, buildProductionRefreshVaultIndexDeps } =
           await lazyVaultIndexTools();
         return refreshVaultIndexTool(buildProductionRefreshVaultIndexDeps());
+      },
+    );
+  },
+
+  mcp_metrics_snapshot: (server, opts) => {
+    server.tool(
+      'mcp_metrics_snapshot',
+      'Return live in-memory MCP call metrics plus session and warm-index status.',
+      {},
+      async () => {
+        const metrics = getMcpMetricsSnapshot();
+        const warmIndex = daemonIndexStatus();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              ...metrics,
+              activeSessions: opts.getActiveSessionCount?.() ?? 0,
+              warmIndex: {
+                ready: warmIndex.ready,
+                status: warmIndex.status,
+                ageMs: warmIndexAgeMs(warmIndex),
+                lastRebuild: warmIndex.lastRebuild,
+              },
+            }),
+          }],
+        };
       },
     );
   },
@@ -388,10 +442,10 @@ export function createRuneMcpServer(opts: CreateRuneMcpServerOptions): McpServer
     throw new Error(`createRuneMcpServer: unknown tool name(s): ${unknown.join(', ')}`);
   }
 
-  const server = new McpServer({
+  const server = instrumentServerTools(new McpServer({
     name: opts.name ?? 'rune-kb',
     version: '1.0.0',
-  });
+  }));
 
   for (const name of opts.tools) {
     TOOL_REGISTRY[name](server, opts);

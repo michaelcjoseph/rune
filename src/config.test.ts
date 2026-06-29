@@ -335,6 +335,7 @@ describe('config', () => {
         'RUNE_MCP_OAUTH_STORE_FILE',
         'RUNE_MCP_HOST',
         'RUNE_MCP_PORT',
+        'RUNE_MCP_TOOL_TIMEOUT_MS',
         'RUNE_LOGS_DIR',
       ]) {
         delete process.env[key];
@@ -356,6 +357,7 @@ describe('config', () => {
       expect(config['RUNE_MCP_HOST']).toBe('127.0.0.1');
       expect(config['RUNE_MCP_PORT']).toBe(3848);
       expect(config['RUNE_MCP_OAUTH_STORE_FILE']).toMatch(/\/logs\/rune-mcp-oauth-store\.json$/);
+      expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(30_000);
       expect(config['RUNE_MCP_SECRET']).toBe('');
       expect(config['RUNE_MCP_ISSUER_URL']).toBe('');
     });
@@ -388,6 +390,17 @@ describe('config', () => {
       expect(config['RUNE_MCP_OAUTH_STORE_FILE']).toBe('/tmp/rune-mcp/oauth-store.json');
       expect(config['RUNE_HTTP_SECRET']).toBe('web-secret');
       expect(config['MCP_ISSUER_URL']).toBe('https://web.example.invalid');
+    });
+
+    it('honors the MCP per-tool timeout override and rejects unsafe values', async () => {
+      let config = await loadConfig({ RUNE_MCP_TOOL_TIMEOUT_MS: '1250' });
+      expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(1_250);
+
+      for (const badTimeout of ['not-a-number', '0', '-1']) {
+        vi.resetModules();
+        config = await loadConfig({ RUNE_MCP_TOOL_TIMEOUT_MS: badTimeout });
+        expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(30_000);
+      }
     });
 
     it('falls back to the default daemon port when RUNE_MCP_PORT is not a valid TCP port', async () => {

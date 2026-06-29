@@ -232,6 +232,32 @@ describe('mcp_metrics_snapshot MCP tool', () => {
     }
   });
 
+  it('instruments the metrics snapshot tool itself without touching vault or KB dependencies', async () => {
+    const factory = await loadFactory();
+    const server = requireServerWithTools(factory, ['mcp_metrics_snapshot']);
+    const client = await connectClient(server);
+
+    try {
+      await readMetrics(client);
+      const secondSnapshot = await readMetrics(client);
+
+      const metricsTool = requireToolMetrics(secondSnapshot, 'mcp_metrics_snapshot');
+      expect(metricsTool).toMatchObject({
+        calls: expect.any(Number),
+        errors: 0,
+        timeouts: 0,
+      });
+      expect(metricsTool.calls).toBeGreaterThanOrEqual(1);
+      expectLatencyShape(metricsTool);
+      expect(secondSnapshot.totals.calls).toBeGreaterThanOrEqual(metricsTool.calls);
+      expect(queryKBMock).not.toHaveBeenCalled();
+      expect(searchVaultMock).not.toHaveBeenCalled();
+      expect(queryVaultIndexMock).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
+  });
+
   it('reports calls, tool-error results, and latency percentiles by tool', async () => {
     const factory = await loadFactory();
     const server = requireServerWithTools(factory, ['kb_query', 'mcp_metrics_snapshot']);
@@ -257,6 +283,37 @@ describe('mcp_metrics_snapshot MCP tool', () => {
       const kbQueryMetrics = requireToolMetrics(snapshot, 'kb_query');
       expect(kbQueryMetrics).toMatchObject({
         calls: 2,
+        errors: 1,
+        timeouts: 0,
+      });
+      expectLatencyShape(kbQueryMetrics);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('counts a thrown tool handler failure as an error for that tool', async () => {
+    const factory = await loadFactory();
+    const server = requireServerWithTools(factory, ['kb_query', 'mcp_metrics_snapshot']);
+    const client = await connectClient(server);
+
+    try {
+      queryKBMock.mockRejectedValueOnce(new Error('upstream KB failed'));
+
+      try {
+        const result = await client.callTool({
+          name: 'kb_query',
+          arguments: { question: 'throwing call' },
+        });
+        expect(result.isError).toBe(true);
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+      }
+
+      const snapshot = await readMetrics(client);
+      const kbQueryMetrics = requireToolMetrics(snapshot, 'kb_query');
+      expect(kbQueryMetrics).toMatchObject({
+        calls: 1,
         errors: 1,
         timeouts: 0,
       });

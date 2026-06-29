@@ -146,7 +146,7 @@ Loaded from `.env.local` via `--env-file-if-exists`. Defaults in `src/config.ts`
 | `FAMILY_NAMES`, `IMPLICIT_CRM_NAMES` | Enable `/family` / implicit-CRM journal mentions |
 | `WHOOP_CLIENT_ID`/`_SECRET`, `READWISE_TOKEN`, `LENNY_MCP_TOKEN` | Integration credentials |
 | `RUNE_HTTP_SECRET` | Webview auth |
-| `RUNE_MCP_SECRET`, `RUNE_MCP_ISSUER_URL`, `RUNE_MCP_OAUTH_STORE_FILE`, `RUNE_MCP_HOST`, `RUNE_MCP_PORT` | Standalone MCP daemon auth/store/bind config |
+| `RUNE_MCP_SECRET`, `RUNE_MCP_ISSUER_URL`, `RUNE_MCP_OAUTH_STORE_FILE`, `RUNE_MCP_HOST`, `RUNE_MCP_PORT`, `RUNE_MCP_TOOL_TIMEOUT_MS` | Standalone MCP daemon auth/store/bind/metrics config |
 | `MCP_ISSUER_URL` | Legacy web-process MCP issuer setting; standalone daemon uses `RUNE_MCP_ISSUER_URL` |
 | `OBSIDIAN_VAULT_NAME`, `RUNE_ALLOWED_HOSTS` | Webview vault display name / host-guard allowlist |
 | `RESOLVER_CONFIDENCE_THRESHOLD`, `RESOLVER_MIN_WORDS` | Resolver dispatch threshold / min word count |
