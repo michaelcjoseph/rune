@@ -64,10 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  already preserved; the failures are the missing Writing files:
-
-- `src/app/rune/page.tsx`
-- `src/app/rune/[slug]/page.tsx`
+- x`
 - `src/app/rune/_content/index.ts`
+- `docs/rune/writing-ideas.md`
 
-No changes were left in the Rune worktree. The next run needs cross-repo write access to `michaelcjoseph.com` to complete this task cleanly.
+No new changes were left in either repo. The Rune worktree still shows the pre-existing modified `src/jobs/michaelcjoseph-two-product-repo.test.ts`. The task needs to be rerun with `michaelcjoseph.com` included as a writable root.
