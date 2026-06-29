@@ -64,11 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- x`
-- `/rune/{slug}` -> `src/app/rune/[slug]/page.tsx`
-- writing content modules -> `src/app/rune/_content/`
-- Brand remains at `src/app/page.tsx`
-- no `pages/` router
-- slugs are lowercase ASCII kebab-case and match `rune-writing/{slug}`
+- npm test -- src/jobs/michaelcjoseph-product-config.test.ts
+```
 
-No tests run; this was the QA-declared docs-only survey task.
+Result: 1 test file passed, 2 tests passed. The credential isolation behavior is covered by the same test via `buildSandboxEnv`, confirming writing only receives its own credentials plus allowed base env keys, not Rune or brand secrets.

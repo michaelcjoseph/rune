@@ -152,6 +152,7 @@
     },
     "repoPath": "~/workspace/michaelcjoseph.com",
     "baseBranch": "main",
+    "orchestratedMode": true,
     "credentialsFile": "~/.config/rune/credentials/brand/.env",
     "egressAllowlist": [
       "github.com",
