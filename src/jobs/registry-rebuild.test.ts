@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { scanRegistrySources } from './registry-rebuild.js';
+import { buildRegistry } from '../intent/registry.js';
 
 /**
  * Build a fake multi-repo workspace on disk: a `products.json` plus per-product
@@ -107,8 +108,46 @@ describe('scanRegistrySources', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
 
     const byName = Object.fromEntries(sources.products.map((p) => [p.name, p]));
-    expect((byName['writing'] as any).scopePath).toBe('docs/rune');
-    expect((byName['brand'] as any).scopePath).toBeUndefined();
+    expect(byName['writing']!.scopePath).toBe('docs/rune');
+    expect(byName['brand']!.scopePath).toBeUndefined();
+  });
+
+  it('builds a registry projection with product class and scopePath from products.json', () => {
+    const sharedRepo = join(root, 'michaelcjoseph.com');
+    mkdirSync(sharedRepo, { recursive: true });
+    writeFileSync(
+      join(root, 'products.json'),
+      JSON.stringify({
+        'rune-mcp': {
+          class: 'internal',
+          repoPath: join(root, 'rune'),
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+        writing: {
+          class: 'external',
+          repoPath: sharedRepo,
+          scopePath: 'docs/rune',
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+      }),
+      'utf8',
+    );
+
+    const registry = buildRegistry(scanRegistrySources(join(root, 'products.json')));
+
+    expect(registry.products).toEqual([
+      expect.objectContaining({ name: 'rune-mcp', class: 'internal' }),
+      expect.objectContaining({
+        name: 'writing',
+        class: 'external',
+        scopePath: 'docs/rune',
+        projects: [],
+      }),
+    ]);
   });
 
   it('reads each repo index and per-project task progress', () => {

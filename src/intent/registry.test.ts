@@ -135,7 +135,7 @@ describe('registry — aggregation (test-plan §1)', () => {
           scopePath: 'docs/rune',
           repoBacked: true,
           projectsIndex: null,
-        } as any,
+        },
         {
           name: 'brand',
           class: 'external',
@@ -146,8 +146,38 @@ describe('registry — aggregation (test-plan §1)', () => {
     });
 
     const byName = Object.fromEntries(registry.products.map((product) => [product.name, product]));
-    expect((byName['writing'] as any).scopePath).toBe('docs/rune');
-    expect((byName['brand'] as any).scopePath).toBeUndefined();
+    expect(byName['writing']!.scopePath).toBe('docs/rune');
+    expect(byName['brand']!.scopePath).toBeUndefined();
+  });
+
+  it('copies product class into the registry model while keeping zero-project products rebuildable', () => {
+    const registry = buildRegistry({
+      products: [
+        {
+          name: 'rune',
+          class: 'internal',
+          repoBacked: true,
+          projectsIndex: RUNE_INDEX,
+        },
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: false,
+          projectsIndex: null,
+        },
+      ],
+    });
+
+    const byName = Object.fromEntries(registry.products.map((product) => [product.name, product]));
+    expect(byName['rune']).toMatchObject({ name: 'rune', class: 'internal', repoBacked: true });
+    expect(byName['writing']).toMatchObject({
+      name: 'writing',
+      class: 'external',
+      scopePath: 'docs/rune',
+      repoBacked: false,
+      projects: [],
+    });
   });
 
   it('parses an index whose table has a leading column before the project link', () => {
@@ -261,6 +291,35 @@ describe('registry — writes and corruption (test-plan §1)', () => {
     expect(mockWriteFileSync.mock.invocationCallOrder[0]!).toBeLessThan(
       mockRenameSync.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it('persists product class and scopePath in the registry JSON projection', () => {
+    const registry = buildRegistry({
+      products: [
+        {
+          name: 'rune-mcp',
+          class: 'internal',
+          repoBacked: true,
+          projectsIndex: null,
+        },
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: false,
+          projectsIndex: null,
+        },
+      ],
+    });
+
+    writeRegistry(registry);
+
+    const serialized = String(mockWriteFileSync.mock.calls[0]![1]);
+    const parsed = JSON.parse(serialized) as Registry;
+    expect(parsed.products).toEqual([
+      { name: 'rune-mcp', class: 'internal', repoBacked: true, projects: [] },
+      { name: 'writing', class: 'external', scopePath: 'docs/rune', repoBacked: false, projects: [] },
+    ]);
   });
 
   it('fails fast with a clear error on a malformed registry file — never a silent empty model', () => {

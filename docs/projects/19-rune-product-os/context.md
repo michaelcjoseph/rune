@@ -64,11 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- on`; kept `writing.scopePath = "docs/rune"` and classes for `rune-mcp`, `writing`, and `brand`.
+- d not add extra changes.
 
 Verified:
-- `npm test -- src/intent/cockpit.test.ts src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts`
-- `npm run build`
-- `git diff --check`
+- `npx vitest run src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts --reporter=verbose` → 22 passed
+- `git diff --check` → clean
 
-No commit made.
+Note: the first `npm test -- ...` attempt hung silently and was interrupted; the direct Vitest command passed immediately.
