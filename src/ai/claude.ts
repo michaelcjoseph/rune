@@ -641,7 +641,11 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
     log.error(message, { agentName });
     return { text: null, error: message };
   }
-  const agentsJson = JSON.stringify({ [agentName]: { prompt: def.prompt } });
+  // The CLI's `--agents` parser silently drops any entry missing `description`,
+  // which makes `--agent <name>` fall through to filesystem discovery and fail
+  // ("Available agents: ..."). Always send a description (frontmatter value, or
+  // the agent name as a stub) so the inline definition actually registers.
+  const agentsJson = JSON.stringify({ [agentName]: { description: def.description ?? agentName, prompt: def.prompt } });
   // Both builders go through readVaultFile, which swallows read errors and
   // returns null — they each return '' on missing/empty. No try/catch needed.
   const learningsBlock = buildLearningsPrompt();

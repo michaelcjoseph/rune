@@ -588,6 +588,9 @@ Body.`);
       expect(args).toContain('--agents');
       const agentsJson = JSON.parse(args[args.indexOf('--agents') + 1]!);
       expect(agentsJson['wiki-compiler'].prompt).toContain('wiki compiler');
+      // `description` is required: the CLI silently drops inline agents without
+      // it, breaking `--agent <name>` lookup. Must always be present.
+      expect(agentsJson['wiki-compiler'].description).toBeTruthy();
 
       // Passes --allowedTools from frontmatter
       expect(args).toContain('--allowedTools');
