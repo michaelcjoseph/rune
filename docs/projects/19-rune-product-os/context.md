@@ -64,10 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ds, atomic index swaps, status reporting, and regex/literal fallback querying.
+- orld-view/`, including mixed case, escaped regex metacharacters, and invalid-regex literal fallback.
 
 Verified:
-- `npx vitest run src/kb/vault-index.test.ts` passed: 14/14
+- `npx vitest run src/kb/vault-index-parity.test.ts` passed
+- `npx vitest run src/kb/vault-index.test.ts src/kb/vault-index-parity.test.ts` passed
 - `npm run build` passed
 
-No commit made. Note: `src/kb/vault-index.test.ts` was already staged/modified in the worktree; I did not edit or revert it.
+No commit made.
