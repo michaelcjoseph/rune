@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import http from 'node:http';
-import type { Server, IncomingMessage, ServerResponse } from 'node:http';
+import type { Server, IncomingMessage, ServerResponse, IncomingHttpHeaders } from 'node:http';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
 // --- Mocks must be declared before any imports that pull in the mocked modules ---
@@ -53,6 +56,7 @@ const mockConfig = {
   RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   IS_PRODUCTION: false as boolean,
   LAUNCHD_LABEL: 'com.jarvis.daemon',
+  RUNE_MCP_OAUTH_STORE_FILE: '/test/missing-rune-mcp-oauth-store.json',
   RUNE_MCP_HOST: '127.0.0.1',
   RUNE_MCP_PORT: 65534,
   // Project 14 Phase 5 dispatch seam. PRODUCTS_CONFIG_FILE points at a path that
@@ -256,6 +260,30 @@ function findRuneMcpMonitoring(body: any): any {
   return runeMcp.monitoring?.mcp;
 }
 
+const mcpMetricsSnapshotFixture = {
+  totals: { calls: 42, errors: 3, timeouts: 1 },
+  tools: {
+    kb_query: {
+      calls: 21,
+      errors: 2,
+      timeouts: 1,
+      latencyMs: { p50: 24, p95: 88, p99: 144, sampleCount: 21, windowSize: 1024 },
+    },
+    mcp_metrics_snapshot: {
+      calls: 4,
+      errors: 0,
+      timeouts: 0,
+      latencyMs: { p50: 2, p95: 3, p99: 5, sampleCount: 4, windowSize: 1024 },
+    },
+  },
+  activeSessions: 2,
+  warmIndex: {
+    ready: true,
+    ageMs: 15_000,
+    lastRebuild: { status: 'ok', files: 120, lines: 7_500 },
+  },
+};
+
 async function startMcpHealthServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
 ): Promise<{ port: number; close: () => Promise<void> }> {
@@ -268,6 +296,110 @@ async function startMcpHealthServer(
   await new Promise<void>((resolve) => mcpServer.listen(0, '127.0.0.1', resolve));
   return {
     port: (mcpServer.address() as any).port,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => mcpServer.close(() => resolve()));
+    },
+  };
+}
+
+type FakeMcpRequest = {
+  method: string | undefined;
+  path: string;
+  headers: IncomingHttpHeaders;
+  body: any;
+};
+
+async function startMcpMetricsToolServer(opts: {
+  toolResult?: 'ok' | 'tool-error';
+  requiredBearerToken?: string;
+} = {}): Promise<{ port: number; requests: FakeMcpRequest[]; close: () => Promise<void> }> {
+  const requests: FakeMcpRequest[] = [];
+  const mcpServer = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
+    req.on('end', () => {
+      const path = req.url?.split('?')[0] ?? '';
+      let body: any = null;
+      try {
+        body = raw ? JSON.parse(raw) : null;
+      } catch {
+        body = raw;
+      }
+      requests.push({ method: req.method, path, headers: req.headers, body });
+
+      if (req.method !== 'POST' || path !== '/mcp') {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'expected MCP Streamable HTTP /mcp call' }));
+        return;
+      }
+      if (opts.requiredBearerToken && req.headers.authorization !== `Bearer ${opts.requiredBearerToken}`) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          id: body?.id ?? null,
+          error: { code: -32001, message: 'Unauthorized: valid bearer token required' },
+        }));
+        return;
+      }
+
+      if (body?.method === 'initialize') {
+        res.writeHead(200, {
+          'Content-Type': 'application/json',
+          'mcp-session-id': 'test-mcp-session',
+        });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            protocolVersion: body.params?.protocolVersion ?? '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'fake-rune-mcp', version: '1.0.0' },
+          },
+        }));
+        return;
+      }
+
+      if (body?.method === 'notifications/initialized') {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+
+      if (body?.method === 'tools/call' && body?.params?.name === 'mcp_metrics_snapshot') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: opts.toolResult === 'tool-error'
+            ? {
+                isError: true,
+                content: [{ type: 'text', text: 'metrics unavailable from daemon' }],
+              }
+            : {
+                content: [{ type: 'text', text: JSON.stringify(mcpMetricsSnapshotFixture) }],
+              },
+        }));
+        return;
+      }
+
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: body?.id ?? null,
+        error: { code: -32601, message: `unexpected MCP method ${body?.method ?? 'unknown'}` },
+      }));
+    });
+  });
+  const sockets = new Set<{ destroy: () => void }>();
+  mcpServer.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => mcpServer.listen(0, '127.0.0.1', resolve));
+  return {
+    port: (mcpServer.address() as any).port,
+    requests,
     close: async () => {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => mcpServer.close(() => resolve()));
@@ -317,6 +449,7 @@ describe('server/webview', () => {
     vi.clearAllMocks();
     mockActiveRunsMap.clear();
     mockConfig.RUNE_HTTP_SECRET = 'test-secret';
+    mockConfig.RUNE_MCP_OAUTH_STORE_FILE = '/test/missing-rune-mcp-oauth-store.json';
     mockConfig.RUNE_MCP_HOST = '127.0.0.1';
     mockConfig.RUNE_MCP_PORT = 65534;
     // Reset mocks to sensible defaults after clearAllMocks
@@ -793,6 +926,130 @@ describe('server/webview', () => {
         endpoint: `http://127.0.0.1:${mcpServer.port}/health`,
         error: expect.stringMatching(/ECONNREFUSED|ECONNRESET|unreachable|down|socket hang up/i),
         checkedAt: expect.any(String),
+      });
+    });
+  });
+
+  describe('GET /api/mcp/tools/mcp_metrics_snapshot', () => {
+    it('calls the MCP daemon tool and returns a live monitoring state, not a health or shared metrics read', async () => {
+      const mcpServer = await startMcpMetricsToolServer();
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+          status: 'ok',
+          sourceTool: 'mcp_metrics_snapshot',
+          mcpMetrics: mcpMetricsSnapshotFixture,
+        });
+        expect(mcpServer.requests.some((request) => (
+          request.path === '/mcp' &&
+          request.body?.method === 'tools/call' &&
+          request.body?.params?.name === 'mcp_metrics_snapshot'
+        ))).toBe(true);
+        expect(mcpServer.requests.map((request) => request.path)).not.toContain('/health');
+        expect(mcpServer.requests.map((request) => request.path)).not.toContain('/metrics');
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('reuses one MCP session across repeated metrics polls', async () => {
+      const mcpServer = await startMcpMetricsToolServer();
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const first = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+        const second = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(first.body.status).toBe('ok');
+        expect(second.body.status).toBe('ok');
+        expect(mcpServer.requests.filter((request) => request.body?.method === 'initialize')).toHaveLength(1);
+        expect(mcpServer.requests.filter((request) => (
+          request.body?.method === 'tools/call' &&
+          request.body?.params?.name === 'mcp_metrics_snapshot'
+        ))).toHaveLength(2);
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('sends a daemon OAuth bearer from the standalone MCP OAuth store', async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'rune-webview-mcp-oauth-'));
+      const token = 'daemon-oauth-token';
+      const storeFile = join(tempDir, 'rune-mcp-oauth-store.json');
+      writeFileSync(storeFile, JSON.stringify({
+        clients: [{ clientId: 'client', redirectUris: ['http://127.0.0.1/callback'] }],
+        tokens: [{ token, userId: '42', expiresAt: null }],
+      }));
+      const mcpServer = await startMcpMetricsToolServer({ requiredBearerToken: token });
+      try {
+        mockConfig.RUNE_MCP_OAUTH_STORE_FILE = storeFile;
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.body.status).toBe('ok');
+        expect(mcpServer.requests.every((request) => request.headers.authorization === `Bearer ${token}`)).toBe(true);
+      } finally {
+        await mcpServer.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('maps MCP tool-error results to a degraded monitoring state without failing the web API', async () => {
+      const mcpServer = await startMcpMetricsToolServer({ toolResult: 'tool-error' });
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+          status: 'degraded',
+          sourceTool: 'mcp_metrics_snapshot',
+          error: expect.stringMatching(/metrics unavailable/i),
+        });
+        expect(mcpServer.requests.some((request) => (
+          request.path === '/mcp' &&
+          request.body?.method === 'tools/call' &&
+          request.body?.params?.name === 'mcp_metrics_snapshot'
+        ))).toBe(true);
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('maps an unreachable MCP daemon to degraded monitoring instead of surfacing a route failure', async () => {
+      const unreachablePort = await getReleasedLocalPort();
+      mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+      mockConfig.RUNE_MCP_PORT = unreachablePort;
+
+      const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        status: 'degraded',
+        sourceTool: 'mcp_metrics_snapshot',
+        error: expect.stringMatching(/ECONNREFUSED|unreachable|MCP daemon|connect/i),
       });
     });
   });

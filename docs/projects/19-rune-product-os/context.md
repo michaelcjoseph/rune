@@ -64,9 +64,19 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ndering when `mcp_metrics_snapshot` is unavailable, and no MCP polling for external stub monitoring.
-
-I made no additional edits because the staged test diff already matches the selected task.
+- trics_snapshot` tool over `/mcp`, returns live metrics on success, and maps transport/tool failures to `{ status: "degraded" }` without reading any shared metrics store.
 
 Verified:
-`npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 62 passed.
+- `npm test -- src/server/webview.test.ts --reporter=verbose` → 65 passed
+- `npm run build` → passed
+
+I did not commit.
+- toring state.
+
+Added coverage in [webview.test.ts](rune/.worktrees/rune/19-rune-product-os/src/server/webview.test.ts) for session reuse and OAuth Bearer <redacted-a5900f>
+
+Verified:
+- `npm test -- src/server/webview.test.ts --reporter=verbose` → 67 passed
+- `npm run build` → passed
+
+No commit made.

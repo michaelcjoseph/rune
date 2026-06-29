@@ -74,6 +74,7 @@ import {
   type FixAttempt,
 } from '../jobs/fix-attempt-store.js';
 import { startFixRun } from '../jobs/fix-run-handoff.js';
+import { readOAuthStore } from './mcp-oauth-store.js';
 
 const log = createLogger('webview');
 
@@ -227,6 +228,251 @@ type CockpitProductWithMonitoring = ReturnType<typeof buildCockpitView>['product
 type CockpitViewWithMonitoring = Omit<ReturnType<typeof buildCockpitView>, 'products'> & {
   products: CockpitProductWithMonitoring[];
 };
+
+type McpToolCallResult = {
+  content?: Array<{ type?: string; text?: string }>;
+  isError?: boolean;
+};
+
+type McpMetricsMonitoringState = {
+  status: 'ok' | 'degraded';
+  sourceTool: 'mcp_metrics_snapshot';
+  checkedAt: string;
+  mcpMetrics?: unknown;
+  error?: string;
+};
+
+type McpJsonRpcResponse = {
+  id?: unknown;
+  result?: unknown;
+  error?: { message?: string };
+};
+
+type McpMetricsSession = {
+  endpointKey: string;
+  sessionId: string;
+  bearerToken?: string;
+  nextId: number;
+};
+
+let mcpMetricsSession: McpMetricsSession | null = null;
+let mcpMetricsSessionInit: Promise<McpMetricsSession> | null = null;
+
+function readJsonResponse(res: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => { body += chunk; });
+    res.on('end', () => {
+      if (!body.trim()) {
+        resolve(null);
+        return;
+      }
+      try {
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    res.on('error', reject);
+  });
+}
+
+function mcpEndpointKey(): string {
+  return `${config.RUNE_MCP_HOST}:${config.RUNE_MCP_PORT}`;
+}
+
+function readMcpDaemonBearerToken(now = Date.now()): string | undefined {
+  try {
+    const state = readOAuthStore(config.RUNE_MCP_OAUTH_STORE_FILE);
+    const userId = String(config.TELEGRAM_USER_ID);
+    const token = state?.tokens.find((record) => (
+      record.userId === userId &&
+      (record.expiresAt === null || record.expiresAt > now)
+    ));
+    return token?.token;
+  } catch {
+    return undefined;
+  }
+}
+
+function postMcpJsonRpc(body: Record<string, unknown>, opts: {
+  sessionId?: string;
+  bearerToken?: string;
+} = {}): Promise<{
+  statusCode: number;
+  sessionId?: string;
+  body: unknown;
+}> {
+  const payload = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: config.RUNE_MCP_HOST,
+      port: config.RUNE_MCP_PORT,
+      path: '/mcp',
+      method: 'POST',
+      timeout: 1_000,
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        ...(opts.bearerToken ? { Authorization: `Bearer ${opts.bearerToken}` } : {}),
+        ...(opts.sessionId ? { 'mcp-session-id': opts.sessionId } : {}),
+      },
+    }, async (mcpRes) => {
+      try {
+        resolve({
+          statusCode: mcpRes.statusCode ?? 0,
+          sessionId: typeof mcpRes.headers['mcp-session-id'] === 'string'
+            ? mcpRes.headers['mcp-session-id']
+            : undefined,
+          body: await readJsonResponse(mcpRes),
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('timeout', () => {
+      req.destroy(new Error('MCP daemon metrics tool call timed out'));
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+async function createMcpMetricsSession(): Promise<McpMetricsSession> {
+  const bearerToken = readMcpDaemonBearerToken();
+  const init = await postMcpJsonRpc({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'rune-webview', version: '1.0.0' },
+    },
+  }, { bearerToken });
+  const initError = rpcErrorMessage(init, 'MCP initialize');
+  if (initError) throw new Error(initError);
+  if (!init.sessionId) throw new Error('MCP daemon did not return a session id');
+
+  const session: McpMetricsSession = {
+    endpointKey: mcpEndpointKey(),
+    sessionId: init.sessionId,
+    ...(bearerToken ? { bearerToken } : {}),
+    nextId: 2,
+  };
+
+  await postMcpJsonRpc({
+    jsonrpc: '2.0',
+    method: 'notifications/initialized',
+    params: {},
+  }, {
+    sessionId: session.sessionId,
+    bearerToken: session.bearerToken,
+  });
+
+  return session;
+}
+
+async function getMcpMetricsSession(): Promise<McpMetricsSession> {
+  if (mcpMetricsSession?.endpointKey === mcpEndpointKey()) return mcpMetricsSession;
+  mcpMetricsSession = null;
+  if (!mcpMetricsSessionInit) {
+    mcpMetricsSessionInit = createMcpMetricsSession().finally(() => {
+      mcpMetricsSessionInit = null;
+    });
+  }
+  mcpMetricsSession = await mcpMetricsSessionInit;
+  return mcpMetricsSession;
+}
+
+function dropMcpMetricsSession(session?: McpMetricsSession): void {
+  if (!session || mcpMetricsSession?.sessionId === session.sessionId) {
+    mcpMetricsSession = null;
+  }
+}
+
+function rpcErrorMessage(response: { statusCode: number; body: unknown }, fallback: string): string | null {
+  if (response.statusCode >= 200 && response.statusCode < 300) {
+    const body = response.body as McpJsonRpcResponse | null;
+    if (body?.error?.message) return body.error.message;
+    return null;
+  }
+  const body = response.body as McpJsonRpcResponse | null;
+  return body?.error?.message ?? `${fallback} returned HTTP ${response.statusCode || 'unknown'}`;
+}
+
+function mcpTextContent(result: McpToolCallResult): string {
+  return (result.content ?? [])
+    .map((part) => (part.type === 'text' && typeof part.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function callMcpMetricsSnapshotTool(): Promise<McpMetricsMonitoringState> {
+  const checkedAt = new Date().toISOString();
+  try {
+    let session = await getMcpMetricsSession();
+    let tool = await postMcpJsonRpc({
+      jsonrpc: '2.0',
+      id: session.nextId++,
+      method: 'tools/call',
+      params: {
+        name: 'mcp_metrics_snapshot',
+        arguments: {},
+      },
+    }, {
+      sessionId: session.sessionId,
+      bearerToken: session.bearerToken,
+    });
+    let toolError = rpcErrorMessage(tool, 'mcp_metrics_snapshot');
+    if (toolError && (tool.statusCode === 401 || tool.statusCode === 404)) {
+      dropMcpMetricsSession(session);
+      session = await getMcpMetricsSession();
+      tool = await postMcpJsonRpc({
+        jsonrpc: '2.0',
+        id: session.nextId++,
+        method: 'tools/call',
+        params: {
+          name: 'mcp_metrics_snapshot',
+          arguments: {},
+        },
+      }, {
+        sessionId: session.sessionId,
+        bearerToken: session.bearerToken,
+      });
+      toolError = rpcErrorMessage(tool, 'mcp_metrics_snapshot');
+    }
+    if (toolError) throw new Error(toolError);
+    const result = (tool.body as McpJsonRpcResponse | null)?.result as McpToolCallResult | undefined;
+    if (!result || typeof result !== 'object') throw new Error('mcp_metrics_snapshot returned an invalid result');
+    const text = mcpTextContent(result);
+    if (result.isError) {
+      throw new Error(text || 'mcp_metrics_snapshot returned an MCP tool error');
+    }
+    if (!text) throw new Error('mcp_metrics_snapshot returned no metrics payload');
+    return {
+      status: 'ok',
+      sourceTool: 'mcp_metrics_snapshot',
+      checkedAt,
+      mcpMetrics: JSON.parse(text),
+    };
+  } catch (err) {
+    return {
+      status: 'degraded',
+      sourceTool: 'mcp_metrics_snapshot',
+      checkedAt,
+      error: scrubAbsolutePaths((err as Error).message || 'MCP daemon metrics unavailable'),
+    };
+  }
+}
+
+async function handleApiMcpMetricsSnapshot(res: ServerResponse): Promise<void> {
+  const state = await callMcpMetricsSnapshotTool();
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(state));
+}
 
 function probeMcpDaemonHealth(): Promise<{
   status: 'ok' | 'degraded';
@@ -2058,6 +2304,11 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/home') {
         handleApiHome(res);
+        return true;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/mcp/tools/mcp_metrics_snapshot') {
+        await handleApiMcpMetricsSnapshot(res);
         return true;
       }
 
