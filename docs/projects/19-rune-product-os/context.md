@@ -64,12 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ch the daemon store or live sessions.
-
-Verified with:
-
-```bash
-npx vitest run src/mcp/daemon.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks
+- chd-artifacts.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks
 ```
 
-Result: 9/9 passed. I did not commit. Note: `src/mcp/daemon.test.ts` was already staged before my change; I did not edit it.
+Results: build passed; 75/75 tests passed. I did not edit the staged QA files `src/mcp/daemon.test.ts` or `src/server/webview.test.ts`. The live Claude App/Tailscale reauth check remains the manual gate.

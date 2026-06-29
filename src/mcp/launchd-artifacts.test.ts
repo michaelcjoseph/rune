@@ -38,7 +38,9 @@ function plistBoolean(source: string, key: string): boolean | undefined {
 function plistArray(source: string, key: string): string[] {
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const body = source.match(new RegExp(`<key>${escapedKey}</key>\\s*<array>([\\s\\S]*?)</array>`))?.[1] ?? '';
-  return [...body.matchAll(/<string>([^<]+)<\/string>/g)].map((match) => match[1]);
+  return [...body.matchAll(/<string>([^<]+)<\/string>/g)].flatMap((match) =>
+    match[1] === undefined ? [] : [match[1]],
+  );
 }
 
 function plistDict(source: string, key: string): Record<string, string> {

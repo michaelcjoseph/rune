@@ -728,6 +728,17 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(activeBefore).toBe(1);
     const storeBefore = readFileSync(oauthStoreFile, 'utf8');
     const statBefore = statSync(oauthStoreFile);
+    const healthBefore = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/health',
+      method: 'GET',
+    });
+    expect(healthBefore.status).toBe(200);
+    expect((JSON.parse(healthBefore.body) as { service?: string; activeSessions?: number })).toMatchObject({
+      service: 'rune-mcp',
+      activeSessions: activeBefore,
+    });
 
     const firstWeb = startHttpServer();
     await new Promise<void>((resolve) => firstWeb.on('listening', resolve));
@@ -741,6 +752,30 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(statAfter.size).toBe(statBefore.size);
     expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
     expect(daemon.getStatus().activeSessions).toBe(activeBefore);
+
+    const healthAfter = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/health',
+      method: 'GET',
+    });
+    expect(healthAfter.status).toBe(200);
+    expect((JSON.parse(healthAfter.body) as { service?: string; activeSessions?: number })).toMatchObject({
+      service: 'rune-mcp',
+      activeSessions: activeBefore,
+    });
+
+    const tokenStillAccepted = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'GET',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+    expect(tokenStillAccepted.status).not.toBe(401);
   });
 
   it('documents the one-time cutover reauth and non-migration of legacy web-store tokens', () => {

@@ -720,6 +720,46 @@ describe('server/webview', () => {
         await mcpServer.close();
       }
     });
+
+    it('user-reachability-check: cockpit stays reachable and flips Rune MCP monitoring to degraded after the daemon stops', async () => {
+      const mcpServer = await startMcpHealthServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ service: 'rune-mcp', status: 'ok' }));
+      });
+      mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+      mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+      try {
+        useRuneMcpRegistry();
+        const healthy = await makeRequest(port, '/api/cockpit', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(healthy.status).toBe(200);
+        expect(healthy.body.available).toBe(true);
+        expect(findRuneMcpMonitoring(healthy.body)).toMatchObject({
+          status: 'ok',
+          endpoint: `http://127.0.0.1:${mcpServer.port}/health`,
+          checkedAt: expect.any(String),
+        });
+      } finally {
+        await mcpServer.close();
+      }
+
+      useRuneMcpRegistry();
+      const degraded = await makeRequest(port, '/api/cockpit', {
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(degraded.status).toBe(200);
+      expect(degraded.body.available).toBe(true);
+      expect(findRuneMcpMonitoring(degraded.body)).toMatchObject({
+        status: 'degraded',
+        endpoint: `http://127.0.0.1:${mcpServer.port}/health`,
+        error: expect.stringMatching(/ECONNREFUSED|ECONNRESET|unreachable|down|socket hang up/i),
+        checkedAt: expect.any(String),
+      });
+    });
   });
 
   // ---- POST /api/chat ----
