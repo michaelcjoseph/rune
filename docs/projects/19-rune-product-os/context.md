@@ -64,19 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- trics_snapshot` tool over `/mcp`, returns live metrics on success, and maps transport/tool failures to `{ status: "degraded" }` without reading any shared metrics store.
+- x stores, reports active/parked counts, terminal outcome totals, recent failed/dirty rows, and p95 runtime with corrupt/missing stores degrading to an empty ok snapshot.
 
 Verified:
-- `npm test -- src/server/webview.test.ts --reporter=verbose` → 65 passed
-- `npm run build` → passed
-
-I did not commit.
-- toring state.
-
-Added coverage in [webview.test.ts](rune/.worktrees/rune/19-rune-product-os/src/server/webview.test.ts) for session reuse and OAuth Bearer <redacted-a5900f>
-
-Verified:
-- `npm test -- src/server/webview.test.ts --reporter=verbose` → 67 passed
-- `npm run build` → passed
+- `npm test -- src/server/rune-run-metrics.test.ts --reporter=verbose` passed
+- `npm run build` passed
 
 No commit made.
