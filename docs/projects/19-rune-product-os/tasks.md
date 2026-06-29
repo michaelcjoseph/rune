@@ -114,7 +114,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 
 - [x] **monitoring-api-adapter** — Add a Rune web adapter that calls the MCP daemon's `mcp_metrics_snapshot` tool and maps failures to a degraded monitoring state. Do not read a shared metrics store.
 - [x] **rune-run-metrics-adapter** — Define and implement Rune orchestration-run metrics from existing work-run/supervision stores (for example running count, parked count, terminal outcomes, recent failures, p95 runtime where available).
-- [ ] **monitoring-tab** — Add the monitoring surface. Internal products render MCP call metrics and Rune orchestration-run metrics. External products render a stubbed/empty monitoring container with consistent shape.
+- [x] **monitoring-tab** — Add the monitoring surface. Internal products render MCP call metrics and Rune orchestration-run metrics. External products render a stubbed/empty monitoring container with consistent shape.
 - [ ] **monitoring-polling-lifecycle** — Poll once per second while the monitoring view is visible; stop polling when hidden/unmounted; show last-updated time and degraded state when MCP is unreachable.
 - [ ] **user-reachability-check** — With MCP running, open `rune-mcp` monitoring and watch counters change after an MCP tool call; stop MCP and verify cockpit remains usable with degraded monitoring.
 

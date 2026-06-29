@@ -45,6 +45,15 @@ function fmtNumber(value) {
   return Number.isFinite(value) ? String(value) : '0';
 }
 
+function fmtDurationMs(ms) {
+  if (!Number.isFinite(ms)) return '0ms';
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 function itemTitle(item) {
   return item?.title || item?.text || item?.raw || item?.id || '';
 }
@@ -434,6 +443,32 @@ function renderMetricRow(label, value) {
   return `<div class="deep-monitoring-metric"><span>${escHtml(label)}</span><strong>${escHtml(value)}</strong></div>`;
 }
 
+function renderTerminalOutcomes(outcomes) {
+  const entries = Object.entries(outcomes && typeof outcomes === 'object' ? outcomes : {});
+  if (entries.length === 0) return '';
+  return `<h4>Terminal outcomes</h4>` +
+    `<div class="deep-monitoring-grid deep-monitoring-grid--outcomes">` +
+      entries.map(([outcome, count]) => renderMetricRow(outcome, fmtNumber(count))).join('') +
+    `</div>`;
+}
+
+function renderRecentFailures(failures) {
+  const rows = list(failures).map(row =>
+    `<article class="deep-monitoring-failure" data-monitoring-run-id="${attr(row.id || '')}">` +
+      `<div class="deep-row-head"><strong>${escHtml(row.id || 'run')}</strong><span>${escHtml(row.outcome || 'failed')}</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span>${escHtml(row.project || 'project')}</span>` +
+        `<span>${escHtml(fmtDurationMs(row.durationMs))}</span>` +
+        `<time>${escHtml(row.endedAt || '')}</time>` +
+      `</div>` +
+    `</article>`
+  ).join('');
+  return `<h4>Recent failed runs</h4>` +
+    `<div class="deep-monitoring-failures">` +
+      (rows || '<p class="muted">No recent failed or dirty runs</p>') +
+    `</div>`;
+}
+
 function renderMonitoring(view, monitoring = {}) {
   const mode = monitoringMode(view);
   if (mode !== 'live') {
@@ -476,9 +511,12 @@ function renderMonitoring(view, monitoring = {}) {
     `<div class="deep-monitoring-grid">` +
       `${renderMetricRow('active runs', fmtNumber(runMetrics.activeRuns))}` +
       `${renderMetricRow('parked', fmtNumber(runMetrics.parkedRuns))}` +
-      `${renderMetricRow('recent failures', fmtNumber(runMetrics.recentFailures))}` +
-      `${renderMetricRow('recent completed', fmtNumber(runMetrics.recentCompleted))}` +
+      `${renderMetricRow('recent failures', Array.isArray(runMetrics.recentFailures) ? String(runMetrics.recentFailures.length) : fmtNumber(runMetrics.recentFailures))}` +
+      `${renderMetricRow('p95 runtime', Number.isFinite(runMetrics.runtimeMs?.p95) ? fmtDurationMs(runMetrics.runtimeMs.p95) : 'n/a')}` +
+      `${renderMetricRow('sample count', fmtNumber(runMetrics.runtimeMs?.sampleCount))}` +
     `</div>` +
+    `${renderTerminalOutcomes(runMetrics.terminalOutcomes)}` +
+    `${renderRecentFailures(runMetrics.recentFailures)}` +
   `</section>`;
 }
 
@@ -982,11 +1020,18 @@ export function createProductDeepView({
         .catch(error => ({ ok: false, error })),
       loadJson('/api/state').catch(() => null),
     ]);
+    const metricsState = mcpMetricsResult.ok && mcpMetricsResult.value && typeof mcpMetricsResult.value === 'object'
+      ? mcpMetricsResult.value
+      : {};
+    const wrappedMcpMetrics = metricsState && Object.prototype.hasOwnProperty.call(metricsState, 'mcpMetrics');
     monitoring = {
-      sourceTool: 'mcp_metrics_snapshot',
-      status: mcpMetricsResult.ok ? 'ok' : 'degraded',
-      ...(mcpMetricsResult.ok ? { mcpMetrics: mcpMetricsResult.value } : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
-      runMetrics: runMetricsFromState(state),
+      sourceTool: typeof metricsState.sourceTool === 'string' ? metricsState.sourceTool : 'mcp_metrics_snapshot',
+      status: mcpMetricsResult.ok ? (metricsState.status || 'ok') : 'degraded',
+      ...(mcpMetricsResult.ok
+        ? { mcpMetrics: wrappedMcpMetrics ? metricsState.mcpMetrics : mcpMetricsResult.value }
+        : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
+      ...(mcpMetricsResult.ok && metricsState.error ? { error: metricsState.error } : {}),
+      runMetrics: metricsState.runMetrics || runMetricsFromState(state),
     };
     render();
   }

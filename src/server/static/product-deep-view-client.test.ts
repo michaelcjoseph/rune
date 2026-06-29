@@ -309,10 +309,38 @@ const mcpMetricsSnapshot = {
 };
 
 const runeRunMetrics = {
+  status: 'ok',
   activeRuns: 2,
   parkedRuns: 1,
-  recentFailures: 1,
-  recentCompleted: 6,
+  terminalOutcomes: {
+    'branch-complete': 6,
+    partial: 2,
+    noop: 1,
+    'dirty-uncommitted': 1,
+    failed: 3,
+  },
+  recentFailures: [
+    {
+      id: 'run-failed-recent',
+      project: '19-rune-product-os',
+      outcome: 'failed',
+      durationMs: 124_000,
+      startedAt: '2026-06-29T10:00:00.000Z',
+      endedAt: '2026-06-29T10:02:04.000Z',
+    },
+    {
+      id: 'run-dirty-recent',
+      project: '13-work-run-monitoring',
+      outcome: 'dirty-uncommitted',
+      durationMs: 88_000,
+      startedAt: '2026-06-29T10:10:00.000Z',
+      endedAt: '2026-06-29T10:11:28.000Z',
+    },
+  ],
+  runtimeMs: {
+    p95: 225_000,
+    sampleCount: 13,
+  },
 };
 
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
@@ -751,6 +779,40 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(html).toMatch(/data-monitoring-mode=["']stubbed["']|data-monitoring-state=["']stubbed["']|monitoring[^<]{0,160}(empty|not available|later)/i);
       expect(html).not.toMatch(/kb_query|mcp_metrics_snapshot|active sessions?|p95/i);
     }
+  });
+
+  it('renders Rune run metrics from the adapter, including terminal outcomes, recent failures, and p95 runtime', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(
+      productView({
+        name: 'rune-mcp',
+        class: 'internal',
+        containerCapabilities: monitoringCapabilities,
+        activeRun: undefined,
+      }),
+      {
+        activeSidePanel: 'monitoring',
+        monitoring: {
+          mcpMetrics: mcpMetricsSnapshot,
+          runMetrics: runeRunMetrics,
+          sourceTool: 'mcp_metrics_snapshot',
+          status: 'ok',
+        },
+      },
+    );
+
+    expect(html).toMatch(/data-surface=["']monitoring["']/i);
+    expect(html).toMatch(/Rune run|orchestration|work runs/i);
+    expect(html).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
+    expect(html).toMatch(/parked[\s\S]{0,120}1|1[\s\S]{0,120}parked/i);
+    expect(html).toMatch(/branch-complete[\s\S]{0,120}6|6[\s\S]{0,120}branch-complete/i);
+    expect(html).toMatch(/failed[\s\S]{0,120}3|3[\s\S]{0,120}failed/i);
+    expect(html).toMatch(/dirty-uncommitted[\s\S]{0,120}1|1[\s\S]{0,120}dirty-uncommitted/i);
+    expect(html).toMatch(/run-failed-recent/i);
+    expect(html).toMatch(/19-rune-product-os/i);
+    expect(html).toMatch(/p95[\s\S]{0,120}(225000|225,000|225s|3m 45s)/i);
+    expect(html).toMatch(/sample count[\s\S]{0,120}13|13[\s\S]{0,120}samples?/i);
   });
 
   it('polls the MCP metrics snapshot tool exactly once per second while internal Monitoring is visible', async () => {

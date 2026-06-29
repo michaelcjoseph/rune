@@ -64,10 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- x stores, reports active/parked counts, terminal outcome totals, recent failed/dirty rows, and p95 runtime with corrupt/missing stores degrading to an empty ok snapshot.
+- e wrapped `/api/mcp/tools/mcp_metrics_snapshot` response shape.
+- External products still render the stubbed monitoring container without polling metrics.
 
 Verified:
-- `npm test -- src/server/rune-run-metrics.test.ts --reporter=verbose` passed
+- `npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` passed
 - `npm run build` passed
 
 No commit made.
