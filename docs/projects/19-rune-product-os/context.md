@@ -64,7 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- npm test -- src/jobs/michaelcjoseph-product-config.test.ts
-```
+-  already preserved; the failures are the missing Writing files:
 
-Result: 1 test file passed, 2 tests passed. The credential isolation behavior is covered by the same test via `buildSandboxEnv`, confirming writing only receives its own credentials plus allowed base env keys, not Rune or brand secrets.
+- `src/app/rune/page.tsx`
+- `src/app/rune/[slug]/page.tsx`
+- `src/app/rune/_content/index.ts`
+
+No changes were left in the Rune worktree. The next run needs cross-repo write access to `michaelcjoseph.com` to complete this task cleanly.
