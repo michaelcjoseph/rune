@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- e.
+- ndering when `mcp_metrics_snapshot` is unavailable, and no MCP polling for external stub monitoring.
 
-The staged test suite in [product-deep-view-client.test.ts](rune/.worktrees/rune/19-rune-product-os/src/server/static/product-deep-view-client.test.ts) was already present and left staged.
+I made no additional edits because the staged test diff already matches the selected task.
 
 Verified:
-`npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 60 passed.
+`npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 62 passed.

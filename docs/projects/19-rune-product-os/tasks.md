@@ -107,7 +107,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 ### Tests (write first)
 
 - [x] Write the suite for **monitoring-internal-only** — test-plan.md §5: internal products show a real monitoring tab fed by live data; external products show a stubbed/empty monitoring container; the cockpit reads MCP metrics from the MCP metrics snapshot tool.
-- [ ] Write the suite for **monitoring-polling-lifecycle** — test-plan.md §5: cockpit polls `mcp_metrics_snapshot` once per second only while the monitoring view is visible; polling stops on hidden/unmounted views; unavailable MCP renders degraded state.
+- [x] Write the suite for **monitoring-polling-lifecycle** — test-plan.md §5: cockpit polls `mcp_metrics_snapshot` once per second only while the monitoring view is visible; polling stops on hidden/unmounted views; unavailable MCP renders degraded state.
 - [ ] Confirm red before implementation.
 
 ### Implementation
