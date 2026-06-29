@@ -158,7 +158,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] Write the suite/checks for **writing-product-orchestration** — test-plan.md §6: Rune produces a `/rune/{topic}` page in `michaelcjoseph.com` as a work run; the writing surface shows ideas, draft/publish runs, and scoped chat.
 - [x] Write the checks for **writing-migration-boundary** — test-plan.md §6: ideas migrate; historical content stays in pkms; `/blog` and `/writing-critique` are the writing commands; `/topics` and `/voice` are retired as standalone commands; writing reads pkms only via the MCP.
 - [x] Write the suite for **writing-commands** — test-plan.md §6: `/blog` and `/writing-critique` route to the writing product pipeline; `/topics` and `/voice` are not separate Rune commands; voice guidelines are copied into the writing product and used by the pipeline.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
