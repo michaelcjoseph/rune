@@ -64,6 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- icit human approval, and require process ownership verification before killing.
+- 
+- `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose`
+- `npm test -- src/jobs/team-task-deps.test.ts --reporter=verbose`
+- `npm run build`
 
-Verification: `npm test -- src/intent/agent-protected-service-invariant.test.ts --reporter=verbose` fails red as expected, because the role artifacts do not yet carry the invariant. No implementation files were changed.
+One combined two-file vitest invocation hung before reporting and was interrupted; the same suites passed individually. No commit made.
