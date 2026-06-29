@@ -139,7 +139,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
   const mcpHandler = mountMcpRoute({
     verifyBearer: oauth.verifyBearer,
     getServer: () => createRuneMcpServer({
-      tools: APP_SURFACE_TOOLS,
+      tools: [...APP_SURFACE_TOOLS, 'refresh_vault_index'],
       name: 'rune-mcp',
       kbQueryBroadSearch: daemonBroadSearch,
     }),

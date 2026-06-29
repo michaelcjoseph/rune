@@ -517,6 +517,9 @@ describe('refresh_vault_index tool registration — warm-index readiness and sta
     if (typeof createMcpServer !== 'function') {
       expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
     }
+    const { refreshVaultIndex, getVaultIndexStatus } = await import('../kb/vault-index.js');
+    const refreshVaultIndexMock = refreshVaultIndex as unknown as ReturnType<typeof vi.fn>;
+    const getVaultIndexStatusMock = getVaultIndexStatus as unknown as ReturnType<typeof vi.fn>;
 
     const server = createMcpServer({ tools: ['refresh_vault_index'] });
     const client = await connectClient(server);
@@ -527,6 +530,8 @@ describe('refresh_vault_index tool registration — warm-index readiness and sta
     const result = await client.callTool({ name: 'refresh_vault_index', arguments: {} });
     const content = result.content as Array<{ type: string; text: string }>;
     expect(result.isError).toBeFalsy();
+    expect(refreshVaultIndexMock).toHaveBeenCalledTimes(1);
+    expect(getVaultIndexStatusMock).toHaveBeenCalledTimes(1);
     expect(content).toHaveLength(1);
     expect(content[0]?.type).toBe('text');
 
@@ -543,12 +548,16 @@ describe('refresh_vault_index tool registration — warm-index readiness and sta
     };
     expect(parsed.ready).toEqual(expect.any(Boolean));
     expect(parsed.status).toEqual(expect.any(String));
-    expect(parsed.lastRebuild).toMatchObject({
-      files: expect.any(Number),
-      lines: expect.any(Number),
-      bytes: expect.any(Number),
-      heapUsed: expect.any(Number),
-      buildMs: expect.any(Number),
+    expect(parsed).toMatchObject({
+      ready: true,
+      status: 'ready',
+      lastRebuild: {
+        files: 1,
+        lines: 2,
+        bytes: 3,
+        heapUsed: 4,
+        buildMs: 5,
+      },
     });
 
     const serialized = JSON.stringify(parsed);

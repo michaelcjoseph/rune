@@ -64,11 +64,12 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- re the synchronous index build runs. `stop()` also clears a pending startup build and the refresh timer.
+- osed remotely.
 
 Verified:
 - `npx vitest run src/mcp/daemon.test.ts`
-- `npx vitest run src/kb/vault-index.test.ts`
+- `npx vitest run src/mcp/server.test.ts`
+- `npx vitest run src/mcp/tools/vault-index-tools.test.ts`
 - `npm run build`
 
-Note: `src/mcp/daemon.test.ts` was already staged/dirty; I left it untouched.
+Note: `src/mcp/daemon.test.ts` and `src/mcp/server.test.ts` were already modified/staged; I left them untouched.

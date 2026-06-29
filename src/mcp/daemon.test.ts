@@ -200,6 +200,18 @@ function parseLocation(location: string): URL {
   return new URL(location.startsWith('http') ? location : `http://127.0.0.1${location}`);
 }
 
+function parseJsonRpcBody(body: string): Record<string, unknown> {
+  const trimmed = body.trim();
+  if (trimmed.startsWith('{')) {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  }
+  const dataLine = trimmed.split('\n').find((line) => line.startsWith('data:'));
+  if (dataLine) {
+    return JSON.parse(dataLine.slice('data:'.length).trim()) as Record<string, unknown>;
+  }
+  expect.fail(`Expected a JSON-RPC response body, got: ${trimmed.slice(0, 120)}`);
+}
+
 function closeWebServer(server: http.Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((err) => {
@@ -507,6 +519,87 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(source).toMatch(
       /ready[\s\S]*\?[\s\S]*queryVaultIndex[\s\S]*:[\s\S]*searchVault|if\s*\([^)]*ready[^)]*\)[\s\S]*queryVaultIndex[\s\S]*searchVault/,
     );
+  });
+
+  it('exposes refresh_vault_index on the authenticated daemon MCP surface without broad kb admin tools', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-refresh-tool-surface-'));
+    tempDirs.push(dir);
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    const accessToken = await issueDaemonBearerToken(daemon.port, 'mcp-gate');
+    const initializeBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'refresh-vault-index-surface-test', version: '1.0.0' },
+      },
+    });
+
+    const initialized = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(initializeBody).toString(),
+      },
+      body: initializeBody,
+    });
+    expect(initialized.status).toBe(200);
+    const sessionId = initialized.headers['mcp-session-id'];
+    expect(sessionId).toEqual(expect.any(String));
+
+    const listBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    });
+    const listed = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(listBody).toString(),
+        'mcp-session-id': sessionId as string,
+      },
+      body: listBody,
+    });
+    expect(listed.status).toBe(200);
+
+    const payload = parseJsonRpcBody(listed.body) as {
+      result?: { tools?: Array<{ name?: string }> };
+    };
+    const toolNames = (payload.result?.tools ?? []).map((tool) => tool.name).sort();
+
+    expect(toolNames).toEqual([...APP_SURFACE_TOOLS, 'refresh_vault_index'].sort());
+    expect(toolNames).not.toContain('kb_search');
+    expect(toolNames).not.toContain('kb_ingest');
+    expect(toolNames).not.toContain('kb_stats');
+    expect(toolNames).not.toContain('kb_lint');
   });
 
   it('does not hard-code warm-index health as permanently starting or empty', () => {
