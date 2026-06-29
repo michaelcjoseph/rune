@@ -64,10 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  is visible, stops on hidden/unmounted, and now uses a one-shot timeout loop to avoid interval catch-up bursts while preserving one-second polling.
+- It also covers address/launchd lookup helpers and warning text generated from the same shared contract.
 
-Verified:
-- `npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` passed, 64/64
-- `npm run build` passed
-
-No commit made.
+Verification: `npm test -- src/utils/protected-local-services.test.ts --reporter=verbose` fails red as expected because `src/utils/protected-local-services.ts` does not exist yet. No commit made.
