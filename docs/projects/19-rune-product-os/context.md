@@ -64,12 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- osed remotely.
+- uct-os/src/mcp/content-functions.test.ts:1).
 
 Verified:
-- `npx vitest run src/mcp/daemon.test.ts`
-- `npx vitest run src/mcp/server.test.ts`
-- `npx vitest run src/mcp/tools/vault-index-tools.test.ts`
-- `npm run build`
+- `npm run build` passes.
+- `npx vitest run src/mcp/content-functions.test.ts` is red as expected for this Tests-first task, failing only because `journal_range`, `follow_wikilinks`, and `tag_date_query` are not registered yet.
 
-Note: `src/mcp/daemon.test.ts` and `src/mcp/server.test.ts` were already modified/staged; I left them untouched.
+No commit made.
