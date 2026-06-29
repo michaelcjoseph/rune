@@ -93,6 +93,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
 
   const oauth = createMcpOAuth({
     gateSecret: opts.gateSecret,
+    gateSecretLabel: 'RUNE_MCP_SECRET',
     userId: opts.userId,
     issuerBaseUrl: opts.issuerBaseUrl,
     tokenTtlMs: opts.tokenTtlMs,

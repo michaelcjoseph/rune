@@ -15,6 +15,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +40,8 @@ const mockConfig = vi.hoisted(() => ({
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
   LOGS_DIR: '/tmp/rune-test-logs',
+  RUNE_HTTP_SECRET: 'web-secret',
+  TELEGRAM_USER_ID: 42,
   RUNE_ALLOWED_HOSTS: new Set(['localhost', '127.0.0.1']),
   RUNE_MCP_SECRET: 'mcp-gate',
   RUNE_MCP_ISSUER_URL: 'https://mcp.example.invalid',
@@ -123,7 +126,7 @@ interface RawResponse {
 
 function rawReq(opts: http.RequestOptions & { body?: string }): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
-    const req = http.request(opts, (res) => {
+    const req = http.request({ ...opts, agent: false }, (res) => {
       let body = '';
       res.on('data', (chunk: Buffer) => {
         body += chunk;
@@ -140,6 +143,120 @@ function rawReq(opts: http.RequestOptions & { body?: string }): Promise<RawRespo
     if (opts.body) req.write(opts.body);
     req.end();
   });
+}
+
+function base64url(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function pkceChallenge(verifier: string): string {
+  return base64url(createHash('sha256').update(verifier).digest());
+}
+
+function randomVerifier(): string {
+  return base64url(randomBytes(32));
+}
+
+function formBody(params: Record<string, string>): string {
+  return new URLSearchParams(params).toString();
+}
+
+function parseLocation(location: string): URL {
+  return new URL(location.startsWith('http') ? location : `http://127.0.0.1${location}`);
+}
+
+async function registerOAuthClient(port: number): Promise<string> {
+  const body = JSON.stringify({
+    redirect_uris: ['http://localhost:9999/callback'],
+    client_name: 'claude-app',
+  });
+  const res = await rawReq({
+    host: '127.0.0.1',
+    port,
+    path: '/mcp/oauth/register',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body).toString(),
+    },
+    body,
+  });
+  expect(res.status).toBe(201);
+  return (JSON.parse(res.body) as { client_id: string }).client_id;
+}
+
+async function postAuthorize(
+  port: number,
+  params: Record<string, string>,
+  secret: string,
+): Promise<RawResponse> {
+  const body = formBody({ ...params, secret });
+  return rawReq({
+    host: '127.0.0.1',
+    port,
+    path: '/mcp/oauth/authorize',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(body).toString(),
+    },
+    body,
+  });
+}
+
+async function exchangeCodeForToken(
+  port: number,
+  params: Record<string, string> & { client_id: string; redirect_uri: string },
+  code: string,
+  verifier: string,
+): Promise<string> {
+  const body = formBody({
+    grant_type: 'authorization_code',
+    client_id: params.client_id,
+    redirect_uri: params.redirect_uri,
+    code,
+    code_verifier: verifier,
+  });
+  const res = await rawReq({
+    host: '127.0.0.1',
+    port,
+    path: '/mcp/oauth/token',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(body).toString(),
+    },
+    body,
+  });
+  expect(res.status).toBe(200);
+  const parsed = JSON.parse(res.body) as { access_token: string; token_type: string };
+  expect(parsed.token_type).toBe('Bearer');
+  expect(parsed.access_token).toEqual(expect.any(String));
+  return parsed.access_token;
+}
+
+async function issueDaemonBearerToken(port: number, gateSecret: string): Promise<string> {
+  const clientId = await registerOAuthClient(port);
+  const verifier = randomVerifier();
+  const state = 'state-for-daemon-store-split';
+  const authorizeParams = {
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: 'http://localhost:9999/callback',
+    code_challenge: pkceChallenge(verifier),
+    code_challenge_method: 'S256',
+    state,
+  };
+
+  const authorize = await postAuthorize(port, authorizeParams, gateSecret);
+  expect(authorize.status).toBe(302);
+  const location = authorize.headers['location'];
+  expect(typeof location).toBe('string');
+  const locationUrl = parseLocation(location as string);
+  expect(locationUrl.searchParams.get('state')).toBe(state);
+  const code = locationUrl.searchParams.get('code');
+  expect(code).toEqual(expect.any(String));
+  return exchangeCodeForToken(port, authorizeParams, code as string, verifier);
 }
 
 async function requireStartMcpDaemon(): Promise<StartMcpDaemon> {
@@ -294,5 +411,100 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(sideEffects.startScheduler).not.toHaveBeenCalled();
     expect(sideEffects.startStallCheck).not.toHaveBeenCalled();
     expect(sideEffects.startWatcher).not.toHaveBeenCalled();
+  });
+
+  it('uses the daemon OAuth secret, issuer, and store independently of web auth cookies', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const { verifyAuth } = await import('../server/auth.js');
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-oauth-split-'));
+    tempDirs.push(dir);
+    const oauthStoreFile = join(dir, 'rune-mcp-oauth-store.json');
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile,
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    const metadata = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/.well-known/oauth-authorization-server',
+      method: 'GET',
+    });
+    expect(metadata.status).toBe(200);
+    expect(JSON.parse(metadata.body)).toMatchObject({
+      issuer: 'https://mcp.example.invalid',
+      authorization_endpoint: 'https://mcp.example.invalid/mcp/oauth/authorize',
+      token_endpoint: 'https://mcp.example.invalid/mcp/oauth/token',
+    });
+
+    const clientId = await registerOAuthClient(daemon.port);
+    const verifier = randomVerifier();
+    const authorizeParams = {
+      response_type: 'code',
+      client_id: clientId,
+      redirect_uri: 'http://localhost:9999/callback',
+      code_challenge: pkceChallenge(verifier),
+      code_challenge_method: 'S256',
+      state: 'wrong-secret-attempt',
+    };
+    const webSecretAttempt = await postAuthorize(daemon.port, authorizeParams, 'web-secret');
+    expect(webSecretAttempt.status).toBe(401);
+
+    const accessToken = await issueDaemonBearerToken(daemon.port, 'mcp-gate');
+    expect(existsSync(oauthStoreFile), 'daemon OAuth must persist to RUNE_MCP_OAUTH_STORE_FILE').toBe(true);
+
+    const beforeRevoke = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'GET',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+    expect(beforeRevoke.status).not.toBe(401);
+
+    expect(verifyAuth({
+      headers: { cookie: 'rune-auth=web-secret' },
+    } as any)).toEqual({ ok: true, userId: 42 });
+
+    await daemon.stop();
+    rmSync(oauthStoreFile, { force: true });
+
+    const afterRestart = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: daemon.port,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile,
+      tokenTtlMs: null,
+    });
+    daemons.push(afterRestart);
+
+    const afterRevoke = await rawReq({
+      host: '127.0.0.1',
+      port: afterRestart.port,
+      path: '/mcp',
+      method: 'GET',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+    expect(afterRevoke.status).toBe(401);
+    expect(afterRevoke.headers['www-authenticate']).toContain('Bearer');
+
+    expect(verifyAuth({
+      headers: { cookie: 'rune-auth=web-secret' },
+    } as any)).toEqual({ ok: true, userId: 42 });
   });
 });
