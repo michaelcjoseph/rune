@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- dy satisfied by the current branch implementation.
+- e.
+
+The staged test suite in [product-deep-view-client.test.ts](rune/.worktrees/rune/19-rune-product-os/src/server/static/product-deep-view-client.test.ts) was already present and left staged.
 
 Verified:
-`npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 56 passed
-
-Tree state: only the pre-existing staged QA test change remains in `src/server/static/product-deep-view-client.test.ts`; I left it untouched.
+`npm test -- src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 60 passed.

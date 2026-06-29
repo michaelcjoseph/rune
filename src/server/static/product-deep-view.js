@@ -41,6 +41,10 @@ function fmtRemaining(progress) {
   return `${Math.max(0, total - done)} remaining`;
 }
 
+function fmtNumber(value) {
+  return Number.isFinite(value) ? String(value) : '0';
+}
+
 function itemTitle(item) {
   return item?.title || item?.text || item?.raw || item?.id || '';
 }
@@ -406,14 +410,92 @@ function renderOperations(operations) {
   `</section>`;
 }
 
-function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'operations') {
-  const active = activeSidePanel === 'runs' ? 'runs' : 'operations';
+function monitoringMode(view) {
+  const capability = view?.containerCapabilities?.monitoring;
+  if (capability === 'enabled') return 'live';
+  if (capability === 'stubbed') return 'stubbed';
+  return view?.class === 'internal' ? 'live' : 'stubbed';
+}
+
+function runMetricsFromState(state) {
+  const active = list(state?.mutations?.active).filter(mutation =>
+    WORK_RUN_MUTATION_KINDS.has(mutation?.kind) &&
+    !isTerminalMutation(mutation)
+  );
+  return {
+    activeRuns: active.length,
+    parkedRuns: active.filter(mutation => mutation?.status === 'blocked-on-human').length,
+    recentFailures: 0,
+    recentCompleted: 0,
+  };
+}
+
+function renderMetricRow(label, value) {
+  return `<div class="deep-monitoring-metric"><span>${escHtml(label)}</span><strong>${escHtml(value)}</strong></div>`;
+}
+
+function renderMonitoring(view, monitoring = {}) {
+  const mode = monitoringMode(view);
+  if (mode !== 'live') {
+    return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="stubbed" data-monitoring-state="stubbed">` +
+      `<div class="deep-panel-head"><h3>Monitoring</h3><span>stubbed</span></div>` +
+      `<div class="deep-empty-state" data-empty-state="monitoring">` +
+        `<strong>Monitoring not available yet</strong>` +
+        `<p>External product monitoring lands later; the container shape is reserved.</p>` +
+      `</div>` +
+    `</section>`;
+  }
+
+  const mcp = monitoring.mcpMetrics || {};
+  const runMetrics = monitoring.runMetrics || {};
+  const status = monitoring.status || 'ok';
+  const tools = mcp.tools && typeof mcp.tools === 'object' ? mcp.tools : {};
+  const toolRows = Object.entries(tools).map(([name, metrics]) => {
+    const latency = metrics?.latencyMs || {};
+    return `<article class="deep-monitoring-tool" data-monitoring-tool="${attr(name)}">` +
+      `<div class="deep-row-head"><strong>${escHtml(name)}</strong><span>${escHtml(fmtNumber(metrics?.calls))} calls</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span>${escHtml(fmtNumber(metrics?.errors))} errors</span>` +
+        `<span>${escHtml(fmtNumber(metrics?.timeouts))} timeouts</span>` +
+        `<span>p95 ${escHtml(fmtNumber(latency.p95))}ms</span>` +
+      `</div>` +
+    `</article>`;
+  }).join('');
+  const warmReady = mcp.warmIndex?.ready ? 'ready' : 'warming';
+  return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="live" data-monitoring-state="${attr(status)}">` +
+    `<div class="deep-panel-head"><h3>Monitoring</h3><span>${escHtml(status)}</span></div>` +
+    `<div class="deep-monitoring-source">MCP call metrics via ${escHtml(monitoring.sourceTool || 'mcp_metrics_snapshot')}</div>` +
+    `<div class="deep-monitoring-grid">` +
+      `${renderMetricRow('total calls', fmtNumber(mcp.totals?.calls))}` +
+      `${renderMetricRow('timeouts', fmtNumber(mcp.totals?.timeouts))}` +
+      `${renderMetricRow('active sessions', fmtNumber(mcp.activeSessions))}` +
+      `${renderMetricRow('warm index', warmReady)}` +
+    `</div>` +
+    `<div class="deep-monitoring-tools">${toolRows || '<p class="muted">No MCP tool calls yet</p>'}</div>` +
+    `<h4>Rune run metrics</h4>` +
+    `<div class="deep-monitoring-grid">` +
+      `${renderMetricRow('active runs', fmtNumber(runMetrics.activeRuns))}` +
+      `${renderMetricRow('parked', fmtNumber(runMetrics.parkedRuns))}` +
+      `${renderMetricRow('recent failures', fmtNumber(runMetrics.recentFailures))}` +
+      `${renderMetricRow('recent completed', fmtNumber(runMetrics.recentCompleted))}` +
+    `</div>` +
+  `</section>`;
+}
+
+function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'operations', monitoring = {}) {
+  const active = activeSidePanel === 'runs' || activeSidePanel === 'monitoring' ? activeSidePanel : 'operations';
   const tabs = [
     { id: 'operations', label: 'Operations' },
     { id: 'runs', label: 'Runs' },
+    { id: 'monitoring', label: 'Monitoring' },
   ];
   const profile = containerProfileFor(view);
   const weight = profile === 'operations-runs-heavy' ? 'heavy' : 'standard';
+  const body = active === 'runs'
+    ? renderRuns(view, liveRuns)
+    : active === 'monitoring'
+      ? renderMonitoring(view, monitoring)
+      : renderOperations(operations);
   return `<section class="deep-side-tab-panel${weight === 'heavy' ? ' deep-side-tab-panel--heavy' : ''}" ` +
     `data-surface="side-panel" data-active-side-panel="${attr(active)}" data-container-weight="${attr(weight)}">` +
     `<div class="deep-side-tabs" role="tablist" aria-label="Product operations panels">` +
@@ -424,7 +506,7 @@ function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'oper
       ).join('') +
     `</div>` +
     `<div class="deep-side-tab-body">` +
-      (active === 'runs' ? renderRuns(view, liveRuns) : renderOperations(operations)) +
+      body +
     `</div>` +
   `</section>`;
 }
@@ -557,7 +639,10 @@ function isSpecArtifact(value) {
 export function renderProductDeepView(view, options = {}) {
   const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
   const defaultSidePanel = view?.repoBacked === false ? 'runs' : 'operations';
-  const activeSidePanel = (options.activeSidePanel || defaultSidePanel) === 'runs' ? 'runs' : 'operations';
+  const requestedSidePanel = options.activeSidePanel || defaultSidePanel;
+  const activeSidePanel = requestedSidePanel === 'runs' || requestedSidePanel === 'monitoring'
+    ? requestedSidePanel
+    : 'operations';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
@@ -597,7 +682,7 @@ export function renderProductDeepView(view, options = {}) {
     `<div class="deep-two-column">` +
       `<div class="deep-work-column">` +
         `${renderWorkTabs(view, activeTab)}` +
-        `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel)}` +
+        `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel, options.monitoring || {})}` +
       `</div>` +
       `<aside class="deep-chat-column">` +
         `${renderChat(view, chatMessages, planning, activeOp)}` +
@@ -781,6 +866,7 @@ export function createProductDeepView({
   let current = null;
   let currentOperations = operations || null;
   let liveRuns = {};
+  let monitoring = {};
   let subscription = null;
   let activeTab = 'projects';
   let activeSidePanel = 'operations';
@@ -791,6 +877,7 @@ export function createProductDeepView({
   let opActivity = list(session.opActivity);
   let streamingMessageIndex = -1;
   let opTicker = null;
+  let monitoringPoller = null;
 
   function persistSession() {
     session.chatMessages = chatMessages;
@@ -874,9 +961,51 @@ export function createProductDeepView({
       chatMessages,
       planning,
       activeOp,
+      monitoring,
     });
     restoreChatScroll(chatScroll, options);
     restoreChatInput(chatInput);
+  }
+
+  function stopMonitoringPoll() {
+    if (monitoringPoller) {
+      clearInterval(monitoringPoller);
+      monitoringPoller = null;
+    }
+  }
+
+  async function refreshMonitoring() {
+    if (!current || activeSidePanel !== 'monitoring' || monitoringMode(current) !== 'live') return;
+    const [mcpMetricsResult, state] = await Promise.all([
+      loadJson('/api/mcp/tools/mcp_metrics_snapshot')
+        .then(value => ({ ok: true, value }))
+        .catch(error => ({ ok: false, error })),
+      loadJson('/api/state').catch(() => null),
+    ]);
+    monitoring = {
+      sourceTool: 'mcp_metrics_snapshot',
+      status: mcpMetricsResult.ok ? 'ok' : 'degraded',
+      ...(mcpMetricsResult.ok ? { mcpMetrics: mcpMetricsResult.value } : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
+      runMetrics: runMetricsFromState(state),
+    };
+    render();
+  }
+
+  function syncMonitoringPoll() {
+    if (activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') {
+      stopMonitoringPoll();
+      return;
+    }
+    if (!monitoringPoller) {
+      monitoringPoller = setInterval(() => { void refreshMonitoring(); }, 1000);
+    }
+  }
+
+  async function openSidePanel(next) {
+    activeSidePanel = next;
+    render();
+    syncMonitoringPoll();
+    if (next === 'monitoring') await refreshMonitoring();
   }
 
   function syncOpTicker() {
@@ -1249,9 +1378,8 @@ export function createProductDeepView({
     if (sidePanelTab) {
       event.preventDefault?.();
       const next = sidePanelTab.dataset?.sidePanelTab;
-      if (next === 'operations' || next === 'runs') {
-        activeSidePanel = next;
-        render();
+      if (next === 'operations' || next === 'runs' || next === 'monitoring') {
+        await openSidePanel(next);
       }
       return;
     }
@@ -1264,8 +1392,9 @@ export function createProductDeepView({
         activeTab = surface;
         render();
       } else if (surface === 'runs') {
-        activeSidePanel = 'runs';
-        render();
+        await openSidePanel('runs');
+      } else if (surface === 'monitoring') {
+        await openSidePanel('monitoring');
       } else if (surface === 'chat') {
         render();
       }
@@ -1484,6 +1613,7 @@ export function createProductDeepView({
       render();
       if (focusRunId) {
         activeSidePanel = 'runs';
+        syncMonitoringPoll();
         await focusRun(focusRunId);
         render();
       } else if (current?.activeRun?.runId) {
@@ -1496,15 +1626,18 @@ export function createProductDeepView({
       current = view;
       if (opts.liveRuns) liveRuns = opts.liveRuns;
       if (opts.activeTab) activeTab = opts.activeTab;
-      if (opts.activeSidePanel === 'operations' || opts.activeSidePanel === 'runs') activeSidePanel = opts.activeSidePanel;
+      if (opts.activeSidePanel === 'operations' || opts.activeSidePanel === 'runs' || opts.activeSidePanel === 'monitoring') activeSidePanel = opts.activeSidePanel;
       if (opts.chatMessages) chatMessages = opts.chatMessages;
       if ('activeOp' in opts) activeOp = opts.activeOp;
+      if (opts.monitoring) monitoring = opts.monitoring;
       currentOperations = opts.operations || currentOperations;
       render();
+      syncMonitoringPoll();
     },
     close() {
       subscription?.close?.();
       subscription = null;
+      stopMonitoringPoll();
       if (opTicker) {
         clearInterval(opTicker);
         opTicker = null;

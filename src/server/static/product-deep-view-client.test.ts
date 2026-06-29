@@ -48,6 +48,7 @@ function makeRoot() {
       if (selector === '[data-surface="projects"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="bugs"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="ideas"]') return { scrollIntoView: vi.fn() };
+      if (selector === '[data-surface="monitoring"]') return { scrollIntoView: vi.fn() };
       return null;
     }),
     addEventListener: vi.fn((type: string, listener: Listener) => {
@@ -267,6 +268,51 @@ const productOperations = {
   inFlightOps: [{ opId: 'op-live-1', label: 'agent', product: 'aura' }],
   mutations: [{ id: 'mut-live-1', kind: 'work-run', status: 'running', product: 'aura' }],
   planning: { product: 'aura', status: 'scoping' },
+};
+
+const monitoringCapabilities = {
+  projects: true,
+  bugs: true,
+  ideas: true,
+  runs: true,
+  chat: true,
+  monitoring: 'enabled',
+};
+
+const stubbedMonitoringCapabilities = {
+  ...monitoringCapabilities,
+  monitoring: 'stubbed',
+};
+
+const mcpMetricsSnapshot = {
+  totals: { calls: 42, errors: 3, timeouts: 1 },
+  tools: {
+    kb_query: {
+      calls: 21,
+      errors: 2,
+      timeouts: 1,
+      latencyMs: { p50: 24, p95: 88, p99: 144, sampleCount: 21, windowSize: 1024 },
+    },
+    mcp_metrics_snapshot: {
+      calls: 4,
+      errors: 0,
+      timeouts: 0,
+      latencyMs: { p50: 2, p95: 3, p99: 5, sampleCount: 4, windowSize: 1024 },
+    },
+  },
+  activeSessions: 2,
+  warmIndex: {
+    ready: true,
+    ageMs: 15_000,
+    lastRebuild: { status: 'ok', files: 120, lines: 7_500 },
+  },
+};
+
+const runeRunMetrics = {
+  activeRuns: 2,
+  parkedRuns: 1,
+  recentFailures: 1,
+  recentCompleted: 6,
 };
 
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
@@ -644,6 +690,167 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/data-surface=["']side-panel["'][^>]*(data-container-weight=["']heavy["']|deep-side-tab-panel--heavy)/i);
     expect(html).toMatch(/data-surface=["']runs["'][\s\S]{0,500}run-mcp-refresh/i);
     expect(html).toMatch(/data-surface=["']work["'][\s\S]{0,500}mcp-daemon/i);
+  });
+
+  it('renders Monitoring as a live internal-product tab with MCP and Rune run metrics', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    for (const product of ['rune', 'rune-mcp']) {
+      const html = renderProductDeepView(
+        productView({
+          name: product,
+          class: 'internal',
+          containerCapabilities: monitoringCapabilities,
+          activeRun: undefined,
+        }),
+        {
+          activeSidePanel: 'monitoring',
+          monitoring: {
+            mcpMetrics: mcpMetricsSnapshot,
+            runMetrics: runeRunMetrics,
+            sourceTool: 'mcp_metrics_snapshot',
+            status: 'ok',
+          },
+        },
+      );
+
+      expect(html).toMatch(new RegExp(`data-product=["']${product}["']`, 'i'));
+      expect(html).toMatch(/data-side-panel-tab=["']monitoring["']|data-surface-jump=["']monitoring["']/i);
+      expect(html).toMatch(/data-surface=["']monitoring["']/i);
+      expect(html).toMatch(/data-monitoring-mode=["']live["']|data-monitoring-state=["']live["']/i);
+      expect(html).toMatch(/mcp_metrics_snapshot/i);
+      expect(html).toMatch(/MCP|kb_query|call metrics/i);
+      expect(html).toMatch(/42|21/);
+      expect(html).toMatch(/timeouts?[\s\S]{0,120}1|1[\s\S]{0,120}timeouts?/i);
+      expect(html).toMatch(/p95[\s\S]{0,120}88|88[\s\S]{0,120}p95/i);
+      expect(html).toMatch(/active sessions?[\s\S]{0,120}2|2[\s\S]{0,120}active sessions?/i);
+      expect(html).toMatch(/warm index[\s\S]{0,160}ready|ready[\s\S]{0,160}warm index/i);
+      expect(html).toMatch(/Rune run|orchestration|work runs/i);
+      expect(html).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
+      expect(html).toMatch(/parked[\s\S]{0,120}1|1[\s\S]{0,120}parked/i);
+    }
+  });
+
+  it('renders external-product Monitoring as a stubbed empty container with the same surface shape', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    for (const product of ['aura', 'assay', 'relay', 'writing', 'brand']) {
+      const html = renderProductDeepView(
+        productView({
+          name: product,
+          class: 'external',
+          containerCapabilities: stubbedMonitoringCapabilities,
+          activeRun: undefined,
+        }),
+        { activeSidePanel: 'monitoring' },
+      );
+
+      expect(html).toMatch(new RegExp(`data-product=["']${product}["']`, 'i'));
+      expect(html).toMatch(/data-side-panel-tab=["']monitoring["']|data-surface-jump=["']monitoring["']/i);
+      expect(html).toMatch(/data-surface=["']monitoring["']/i);
+      expect(html).toMatch(/data-monitoring-mode=["']stubbed["']|data-monitoring-state=["']stubbed["']|monitoring[^<]{0,160}(empty|not available|later)/i);
+      expect(html).not.toMatch(/kb_query|mcp_metrics_snapshot|active sessions?|p95/i);
+    }
+  });
+
+  it('polls the MCP metrics snapshot tool once per second only while internal Monitoring is visible', async () => {
+    vi.useFakeTimers();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/rune-mcp') {
+          return productView({
+            name: 'rune-mcp',
+            class: 'internal',
+            containerCapabilities: monitoringCapabilities,
+            activeRun: undefined,
+          });
+        }
+        if (url === '/api/mcp/tools/mcp_metrics_snapshot') return mcpMetricsSnapshot;
+        if (url === '/api/state') {
+          return {
+            inFlight: [],
+            mutations: {
+              active: [
+                { id: 'mut-run-1', kind: 'orchestrated-work', status: 'running', payload: { product: 'rune-mcp' } },
+                { id: 'mut-run-2', kind: 'work-run', status: 'blocked-on-human', payload: { product: 'rune' } },
+              ],
+            },
+          };
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const view = createProductDeepView({ root, product: 'rune-mcp', fetchJson });
+      await view.load();
+
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/metrics');
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/metrics');
+      expect(fetchJson).not.toHaveBeenCalledWith('/logs/mcp-metrics.json');
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
+      await Promise.resolve();
+
+      expect(fetchJson).toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+      expect(root.innerHTML).toMatch(/data-active-side-panel=["']monitoring["']/i);
+      expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,180}21|21[\s\S]{0,180}kb_query/i);
+      expect(root.innerHTML).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
+
+      const snapshotCallsAfterOpen = fetchJson.mock.calls
+        .filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetchJson.mock.calls.filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length)
+        .toBe(snapshotCallsAfterOpen + 1);
+
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'runs' });
+      const snapshotCallsAfterHide = fetchJson.mock.calls
+        .filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length;
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(fetchJson.mock.calls.filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length)
+        .toBe(snapshotCallsAfterHide);
+
+      view.close();
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(fetchJson.mock.calls.filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length)
+        .toBe(snapshotCallsAfterHide);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps external-product Monitoring from polling MCP metrics while still showing the stub container', async () => {
+    vi.useFakeTimers();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/aura') {
+          return productView({
+            name: 'aura',
+            class: 'external',
+            containerCapabilities: stubbedMonitoringCapabilities,
+            activeRun: undefined,
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const view = createProductDeepView({ root, product: 'aura', fetchJson });
+      await view.load();
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
+      await vi.advanceTimersByTimeAsync(2500);
+
+      expect(root.innerHTML).toMatch(/data-active-side-panel=["']monitoring["']/i);
+      expect(root.innerHTML).toMatch(/data-surface=["']monitoring["']/i);
+      expect(root.innerHTML).toMatch(/data-monitoring-mode=["']stubbed["']|data-monitoring-state=["']stubbed["']|monitoring[^<]{0,160}(empty|not available|later)/i);
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+
+      view.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('switches the lower-left panel between Operations and Runs without resetting chat state', async () => {
