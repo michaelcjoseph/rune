@@ -171,7 +171,7 @@ Runtime agents are spawned by Rune via `runAgent()`; dev-tooling agents are used
 ## MCP Server
 
 - **Local (`rune-kb`)** — the KB is exposed as a stdio MCP server registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
-- **Remote (`/mcp` Claude App connector)** — standalone daemon serving the six App-surface tools (kb_* admin tools never remotely reachable) over Streamable HTTP with single-user OAuth 2.1. → `docs/architecture/subsystems.md`.
+- **Remote (`/mcp` Claude App connector)** — standalone daemon serving App-surface plus W1 content/utility tools (kb_* admin tools never remotely reachable) over Streamable HTTP with single-user OAuth 2.1. → `docs/architecture/subsystems.md`.
 
 ## Reference
 

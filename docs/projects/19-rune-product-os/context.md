@@ -64,12 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ng staged QA edit in `src/mcp/daemon.test.ts` was left as-is.
+- module-reference.md:220) with the new MCP tool/module map.
+- [CLAUDE.md](rune/.worktrees/rune/19-rune-product-os/CLAUDE.md:174) to remove the stale “six tools only” remote-MCP summary.
 
-Verified:
-- `npx vitest run src/mcp/mcp-metrics-snapshot.test.ts --reporter verbose`
-- `npx vitest run src/mcp/daemon.test.ts --reporter verbose`
-- `npx vitest run src/mcp/server.test.ts --reporter verbose`
-- `npm run build`
-
-All passed.
+Verification: `git diff --check` passed. I did not run runtime tests because this task changed documentation only.

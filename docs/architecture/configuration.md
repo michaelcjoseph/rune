@@ -34,7 +34,9 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`RUNE_MCP_OAUTH_STORE_FILE`** — OAuth client/token store for the standalone MCP daemon; defaults to `logs/rune-mcp-oauth-store.json`.
 - **`RUNE_MCP_HOST`** — bind host for the standalone MCP daemon; defaults to `127.0.0.1`.
 - **`RUNE_MCP_PORT`** — bind port for the standalone MCP daemon; defaults to `3848`.
-- **`RUNE_MCP_TOOL_TIMEOUT_MS`** — per-MCP-tool wall-clock timeout used by in-process metrics/instrumentation; defaults to `30000`, min `1`. A timeout is counted as both an error and timeout.
+- **`RUNE_MCP_TOOL_TIMEOUT_MS`** — per-MCP-tool wall-clock timeout used by in-process metrics/instrumentation; defaults to `30000`, min `1`. Missing, malformed, or `<1` values fall back to the default. A timeout returns an MCP `isError:true` text result and is counted as both an error and timeout.
+
+Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journal_range`, `follow_wikilinks`, `tag_date_query`, `refresh_vault_index`, and `mcp_metrics_snapshot`. Their runtime caps are not env-configurable in this phase: journal ranges are capped at 31 days, wikilink traversal at depth 5 and 50 returned files, tag/date query output at 50 results, warm-corpus scans at 250,000 indexed lines, and metrics latency windows at 1,024 samples per tool.
 
 ## Resolver
 
