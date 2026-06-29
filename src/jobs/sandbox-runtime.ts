@@ -48,7 +48,11 @@ export type ProductClass = 'internal' | 'external';
 export interface ProductConfig {
   /** Product-OS class used by the cockpit roster. Absent only for legacy fixtures/config. */
   class?: ProductClass;
-  /** Absolute path of the product's repo (the one `git worktree add` targets). */
+  /**
+   * Absolute path of the product's repo (the one `git worktree add` targets).
+   * Empty for projection-only product entries whose execution metadata lands in
+   * a later phase.
+   */
   repoPath: string;
   /** Optional repo-relative scope for products sharing a repository. */
   scopePath?: string;
@@ -167,7 +171,7 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       productClass = entry['class'];
     }
     const repoPath = expandTilde(String(entry['repoPath'] ?? ''));
-    if (!repoPath) {
+    if (!repoPath && !productClass) {
       throw new Error(
         `readProductsConfig: product '${slug}' is missing required field 'repoPath' in ${path}`,
       );
@@ -211,6 +215,11 @@ export function getProductConfig(product: string, configPath: string): ProductCo
   if (!entry) {
     throw new Error(
       `getProductConfig: product '${product}' not found in ${configPath}`,
+    );
+  }
+  if (!entry.repoPath) {
+    throw new Error(
+      `getProductConfig: product '${product}' has no configured repoPath in ${configPath}`,
     );
   }
   return entry;

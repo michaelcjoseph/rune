@@ -280,7 +280,8 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
 // Product-OS metadata lives in policies/products.json, not in frontend grouping
 // code. These tests pin the policy-reader contract only: class is constrained to
 // internal/external, scopePath is optional and preserved for shared-repo products,
-// and the real policy file contains executable entries for the W2 roster.
+// and the real policy file contains the Phase 4 roster metadata. Phase 6 pins
+// writing/brand execution fields; this phase must not require them.
 // ---------------------------------------------------------------------------
 
 describe('readProductsConfig — product-policy-schema (project 19)', () => {
@@ -351,7 +352,7 @@ describe('readProductsConfig — product-policy-schema (project 19)', () => {
     });
   });
 
-  it('the REAL products policy makes rune-mcp, writing, and brand executable products', () => {
+  it('the REAL products policy declares Phase 4 metadata for rune-mcp, writing, and brand', () => {
     const realConfigPath = fileURLToPath(
       new URL('../../policies/products.json', import.meta.url),
     );
@@ -359,19 +360,12 @@ describe('readProductsConfig — product-policy-schema (project 19)', () => {
 
     for (const product of ['rune-mcp', 'writing', 'brand']) {
       expect(result[product], `${product} entry`).toBeDefined();
-      expect(result[product]!.repoPath, `${product} repoPath`).not.toBe('');
-      expect(result[product]!.baseBranch, `${product} baseBranch`).not.toBe('');
-      expect(result[product]!.credentialsFile, `${product} credentialsFile`).not.toBe('');
-      expect(result[product]!.egressAllowlist, `${product} egressAllowlist`).toEqual(
-        expect.arrayContaining(['github.com']),
-      );
-      expect(result[product]!.validationCommands, `${product} validationCommands`).toEqual(
-        expect.arrayContaining([expect.stringMatching(/^npm /)]),
-      );
     }
 
-    expect(result['writing']!.repoPath).toBe(result['brand']!.repoPath);
-    expect(result['writing']!.scopePath).toMatch(/writing|rune/i);
+    expect(result['rune-mcp']!.class).toBe('internal');
+    expect(result['writing']!.class).toBe('external');
+    expect(result['brand']!.class).toBe('external');
+    expect(result['writing']!.scopePath).toBe('docs/rune');
     expect(result['brand']!.scopePath).toBeUndefined();
   });
 });

@@ -76,37 +76,9 @@
   },
   "writing": {
     "class": "external",
-    "repoPath": "~/workspace/michaelcjoseph.com",
-    "scopePath": "docs/rune",
-    "baseBranch": "main",
-    "credentialsFile": "~/.config/rune/credentials/writing/.env",
-    "egressAllowlist": [
-      "github.com",
-      "api.github.com",
-      "codeload.github.com",
-      "objects.githubusercontent.com",
-      "registry.npmjs.org"
-    ],
-    "validationCommands": [
-      "npm run build",
-      "npm test"
-    ]
+    "scopePath": "docs/rune"
   },
   "brand": {
-    "class": "external",
-    "repoPath": "~/workspace/michaelcjoseph.com",
-    "baseBranch": "main",
-    "credentialsFile": "~/.config/rune/credentials/brand/.env",
-    "egressAllowlist": [
-      "github.com",
-      "api.github.com",
-      "codeload.github.com",
-      "objects.githubusercontent.com",
-      "registry.npmjs.org"
-    ],
-    "validationCommands": [
-      "npm run build",
-      "npm test"
-    ]
+    "class": "external"
   }
 }

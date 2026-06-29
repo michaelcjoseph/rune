@@ -151,6 +151,8 @@ export interface CockpitProduct {
   name: string;
   /** Product-OS class copied from the registry for internal/external roster grouping. */
   class?: ProductClass;
+  /** Optional repo-relative product scope for shared-repo product containers. */
+  scopePath?: string;
   repoBacked: boolean;
   projects: CockpitProject[];
   /** Backlog open/done + warning counts (09-expand-cockpit). Absent unless the caller passes
@@ -276,6 +278,7 @@ export function buildCockpitView(
     const prod: CockpitProduct = {
       name: product.name,
       ...(product.class ? { class: product.class } : {}),
+      ...(product.scopePath ? { scopePath: product.scopePath } : {}),
       repoBacked: product.repoBacked,
       projects,
     };

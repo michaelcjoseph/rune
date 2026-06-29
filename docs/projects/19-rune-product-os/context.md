@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- s classes for the roster and executable `rune-mcp`, `writing`, and `brand` entries, with `writing.scopePath = "docs/rune"`.
+- on`; kept `writing.scopePath = "docs/rune"` and classes for `rune-mcp`, `writing`, and `brand`.
 
 Verified:
-- `npm test -- src/intent/cockpit.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts`
+- `npm test -- src/intent/cockpit.test.ts src/intent/registry.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts`
 - `npm run build`
 - `git diff --check`
 

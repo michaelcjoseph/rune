@@ -101,6 +101,34 @@ describe('product/project cockpit — view contents (test-plan §7)', () => {
       brand: 'external',
     });
   });
+
+  it('copies product scopePath from the registry into the cockpit projection for scoped containers', () => {
+    const registry: Registry = {
+      version: 1,
+      builtAt: '2026-06-29T00:00:00.000Z',
+      products: [
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: true,
+          projects: [],
+        } as any,
+        {
+          name: 'brand',
+          class: 'external',
+          repoBacked: true,
+          projects: [],
+        },
+      ],
+    };
+
+    const view = buildCockpitView(registry, {});
+
+    const byName = Object.fromEntries(view.products.map((product) => [product.name, product]));
+    expect((byName['writing'] as any).scopePath).toBe('docs/rune');
+    expect((byName['brand'] as any).scopePath).toBeUndefined();
+  });
 });
 
 describe('product/project cockpit — per-action controls (test-plan §7)', () => {

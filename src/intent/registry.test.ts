@@ -126,6 +126,30 @@ describe('registry — aggregation (test-plan §1)', () => {
     expect(bySlug['08-intent-layer']).toBeUndefined();
   });
 
+  it('copies product scopePath into the registry model for shared-repo products', () => {
+    const registry = buildRegistry({
+      products: [
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: true,
+          projectsIndex: null,
+        } as any,
+        {
+          name: 'brand',
+          class: 'external',
+          repoBacked: true,
+          projectsIndex: null,
+        },
+      ],
+    });
+
+    const byName = Object.fromEntries(registry.products.map((product) => [product.name, product]));
+    expect((byName['writing'] as any).scopePath).toBe('docs/rune');
+    expect((byName['brand'] as any).scopePath).toBeUndefined();
+  });
+
   it('parses an index whose table has a leading column before the project link', () => {
     // Some repos format docs/projects/index.md as `| # | [Name](slug/) | Status | … |` —
     // the project link is not the first cell, and the status column sits further right.

@@ -79,6 +79,38 @@ describe('scanRegistrySources', () => {
     });
   });
 
+  it('copies scopePath from products.json into registry sources for shared-repo products', () => {
+    const sharedRepo = join(root, 'michaelcjoseph.com');
+    mkdirSync(sharedRepo, { recursive: true });
+    writeFileSync(
+      join(root, 'products.json'),
+      JSON.stringify({
+        writing: {
+          class: 'external',
+          repoPath: sharedRepo,
+          scopePath: 'docs/rune',
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+        brand: {
+          class: 'external',
+          repoPath: sharedRepo,
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+      }),
+      'utf8',
+    );
+
+    const sources = scanRegistrySources(join(root, 'products.json'));
+
+    const byName = Object.fromEntries(sources.products.map((p) => [p.name, p]));
+    expect((byName['writing'] as any).scopePath).toBe('docs/rune');
+    expect((byName['brand'] as any).scopePath).toBeUndefined();
+  });
+
   it('reads each repo index and per-project task progress', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
     const rune = sources.products.find((p) => p.name === 'rune')!;
