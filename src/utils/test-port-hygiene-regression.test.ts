@@ -107,16 +107,15 @@ function objectNumberProperty(
   return null;
 }
 
-function findPortHygieneViolations(absPath: string): Violation[] {
-  const source = readFileSync(absPath, 'utf8');
-  const sourceFile = ts.createSourceFile(absPath, source, ts.ScriptTarget.Latest, true);
+function findPortHygieneViolationsInSource(source: string, file: string): Violation[] {
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const bindings = collectConstNumbers(sourceFile);
   const violations: Violation[] = [];
   const configPortAssignments: Array<{ property: 'HTTP_PORT' | 'RUNE_MCP_PORT'; node: ts.Node; value: number }> = [];
   const listenerBootCalls = new Set<'startHttpServer' | 'startMcpDaemon'>();
 
   function add(node: ts.Node, detail: string): void {
-    violations.push({ file: rel(absPath), line: lineOf(sourceFile, node), detail });
+    violations.push({ file, line: lineOf(sourceFile, node), detail });
   }
 
   function visit(node: ts.Node): void {
@@ -137,6 +136,15 @@ function findPortHygieneViolations(absPath: string): Violation[] {
         const port = portArg ? numericValue(portArg, bindings) : null;
         if (port !== null && PROTECTED_PORTS.has(port)) {
           add(node, `test listener binds protected production port ${port}; use port 0 or a task-local injected port`);
+        }
+        if (portArg && ts.isObjectLiteralExpression(portArg)) {
+          const optionsPort = objectNumberProperty(portArg, 'port', bindings);
+          if (optionsPort && PROTECTED_PORTS.has(optionsPort.value)) {
+            add(
+              node,
+              `test listener binds protected production port ${optionsPort.value}; use port 0 or a task-local injected port`,
+            );
+          }
         }
       }
 
@@ -178,7 +186,28 @@ function findPortHygieneViolations(absPath: string): Violation[] {
   return violations;
 }
 
+function findPortHygieneViolations(absPath: string): Violation[] {
+  return findPortHygieneViolationsInSource(readFileSync(absPath, 'utf8'), rel(absPath));
+}
+
 describe('test-port-hygiene-regression (project 19 / test-plan §5A)', () => {
+  it('flags protected ports passed through listener options objects', () => {
+    const source = `
+      import http from 'node:http';
+
+      const RUNE_WEB_PORT = 3847;
+      const server = http.createServer();
+
+      server.listen({ host: '127.0.0.1', port: RUNE_WEB_PORT });
+    `;
+
+    expect(
+      findPortHygieneViolationsInSource(source, 'src/example/listener-options.test.ts').map(
+        (violation) => violation.detail,
+      ),
+    ).toContain('test listener binds protected production port 3847; use port 0 or a task-local injected port');
+  });
+
   it('keeps automated test listeners off protected Rune web/MCP production ports', () => {
     const files = collectAutomatedTestFiles();
     expect(files.length).toBeGreaterThan(0);
