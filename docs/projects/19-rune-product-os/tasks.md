@@ -129,7 +129,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] Write the suite for **test-port-hygiene-regression** — test-plan.md §5A: automated tests and test helpers bind dynamic ports (`0`) for web/MCP listeners; production ports `3847`/`3848` are allowed only in config/default assertions, docs, or non-listening acceptance references.
 - [x] Write the suite for **process-cleanup-protected-port-guard** — test-plan.md §5A: Rune-owned cleanup/recovery helpers refuse to kill a PID owning `3847` or `3848`, or a process matching the protected launchd services, unless an explicit human approval path is present.
 - [x] Write the suite for **protected-service-outage-detection** — test-plan.md §5A: after a work run or cleanup attempt, a down protected service is surfaced as degraded/outage state instead of being "cleaned up" by killing/reusing the listener; no unsafe auto-kill is attempted.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
