@@ -25,6 +25,7 @@ its `spec.md`.
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
 | [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 | [19-rune-product-os](19-rune-product-os/spec.md) | Not Started | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, writer-as-product, knowledge freshness. |
+| [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Not Started | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 ---
 
 ## 01-mvp — Done
@@ -392,3 +393,18 @@ The cockpit becomes a product operating system: every product Rune touches — e
 - **W3 — Knowledge freshness:** a Rune-nightly reconciliation step that supersedes curated facts contradicted by newer journal entries; the in-flight Jarvis→Rune drift is the canonical proof case (Phase 7, parallelizable).
 - **Non-goals:** no vector DB, no external-product monitoring (stubs only), no migration of historical writing content.
 - **Task breakdown & test plan:** see [tasks.md](19-rune-product-os/tasks.md) and [test-plan.md](19-rune-product-os/test-plan.md). Test-first per phase.
+
+## 20-pm-scoping-self-review — Not Started
+
+[Spec](20-pm-scoping-self-review/spec.md)
+
+The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder.
+
+Removes the lossy Planner→PM brief handoff and the block-for-interview bounce: the PM conducts the full multi-turn scoping interview and writes the spec from first-hand context. Each artifact-producing role re-reads its own output cold and fixes issues before any downstream role sees it. A per-stage progress stream removes the dead air the moved approval boundary would otherwise create.
+
+- **Merge the interview into the PM:** `defaultScopingTurn` composes the PM charter and runs the interview on the persistent planning-session id (the one intentional fresh-context exception), emitting the spec directly via a `pm-spec` fence; the planning-brief handoff is retired.
+- **Retire the specified-enough gate** from `/plan` so no run can bounce the user into a second interview, with a regression test.
+- **One durable approval gate:** the pending approval stores the revised PM spec plus enough state for `/approve` to resume the downstream pipeline (tech-lead breakdown → `pmReviewMatch` → Claude critique → Codex critique → context seed → scaffold) after a restart.
+- **Progress streaming:** every downstream stage emits one informational line; terminal failures and final scaffold success (with the created identifier) are surfaced, human-gate count stays one.
+- **Fix-it self-review:** a reusable `runSelfReview<A>` primitive gives PM (spec), Tech Lead (tech-spec + tasks), and Coder (code diff) one cold fix-pass each — corrected-or-confirmed artifact, no loop, no new gate.
+- **Task breakdown & test plan:** see [tasks.md](20-pm-scoping-self-review/tasks.md) and [test-plan.md](20-pm-scoping-self-review/test-plan.md). Test-first per phase.
