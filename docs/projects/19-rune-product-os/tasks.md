@@ -116,6 +116,37 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] **rune-run-metrics-adapter** — Define and implement Rune orchestration-run metrics from existing work-run/supervision stores (for example running count, parked count, terminal outcomes, recent failures, p95 runtime where available).
 - [x] **monitoring-tab** — Add the monitoring surface. Internal products render MCP call metrics and Rune orchestration-run metrics. External products render a stubbed/empty monitoring container with consistent shape.
 - [x] **monitoring-polling-lifecycle** — Poll once per second while the monitoring view is visible; stop polling when hidden/unmounted; show last-updated time and degraded state when MCP is unreachable.
+
+## Phase 5A — Protected localhost services (W2 safety hardening)
+
+> Depends on: Phase 1 (web/MCP service topology), Phase 5 (monitoring surfaced the incident class). This block intentionally precedes the remaining Phase 5 live reachability check so autonomous runs cannot repeat the `127.0.0.1:3847` kill incident while validating monitoring.
+
+### Tests (write first)
+
+- [ ] Write the suite for **protected-local-services-contract** — test-plan.md §5A: Rune web (`127.0.0.1:3847`, launchd `com.jarvis.daemon`) and Rune MCP (`127.0.0.1:3848`, launchd `com.jarvis.rune-mcp`) are canonical protected services exposed from one shared module/contract.
+- [ ] Write the suite for **agent-protected-service-invariant** — test-plan.md §5A: coder, QA, tech-lead, and reviewer role instructions/memories all forbid killing, interrupting, or reusing protected service listeners without explicit human approval, and require process ownership verification before killing any process.
+- [ ] Write the suite for **orchestration-protected-service-prompt** — test-plan.md §5A: runtime team-task prompts include the protected-service invariant even if a static role file changes.
+- [ ] Write the suite for **test-port-hygiene-regression** — test-plan.md §5A: automated tests and test helpers bind dynamic ports (`0`) for web/MCP listeners; production ports `3847`/`3848` are allowed only in config/default assertions, docs, or non-listening acceptance references.
+- [ ] Write the suite for **process-cleanup-protected-port-guard** — test-plan.md §5A: Rune-owned cleanup/recovery helpers refuse to kill a PID owning `3847` or `3848`, or a process matching the protected launchd services, unless an explicit human approval path is present.
+- [ ] Write the suite for **protected-service-outage-detection** — test-plan.md §5A: after a work run or cleanup attempt, a down protected service is surfaced as degraded/outage state instead of being "cleaned up" by killing/reusing the listener; no unsafe auto-kill is attempted.
+- [ ] Confirm red before implementation.
+
+### Implementation
+
+- [ ] **protected-local-services-contract** — Add the canonical protected-service list (Rune web `127.0.0.1:3847` / `com.jarvis.daemon`; Rune MCP `127.0.0.1:3848` / `com.jarvis.rune-mcp`) and helper predicates/formatters in a shared module so prompts, guards, docs, and tests do not drift.
+- [ ] **agent-protected-service-invariant** — Patch `agents/coder/SOUL.md`, `agents/qa/SOUL.md`, `agents/tech-lead/SOUL.md`, and `agents/reviewer/SOUL.md`, plus the relevant role memories, with the hard rule: never kill, stop, interrupt, or reuse `127.0.0.1:3847` or `127.0.0.1:3848` without explicit human approval; if a test collides, use a dynamic/task-local port; before killing any process, verify it was spawned by the current task/worktree/test command.
+- [ ] **orchestration-protected-service-prompt** — Inject the protected-service invariant into the runtime prompt assembled for product-team roles so the rule is present for both Claude and Codex executors independent of static role-file content.
+- [ ] **test-port-hygiene-regression** — Update any remaining automated test listener setup to use port `0` or injected task-local ports, and add a regression check that fails on new test code binding `3847` or `3848` except for explicit allowlisted config/default/manual-acceptance references.
+- [ ] **process-cleanup-protected-port-guard** — Add a hard guard around Rune-owned cleanup helpers that terminate processes (including any "kill process by port" helper added now or later): refuse protected ports/launchd services by default and route any exception through the explicit human approval path.
+- [ ] **protected-service-outage-detection** — Surface `com.jarvis.daemon` / `com.jarvis.rune-mcp` not-running states after work-run cleanup or monitoring checks as degraded/outage telemetry. Do not silently restart or kill; a launchd restart policy change is a separate decision.
+- [ ] **user-reachability-check** — Reproduce the incident shape safely: simulate a stuck test that reports `127.0.0.1:3847` occupied, verify the system classifies it as protected Rune web and refuses to kill it without approval; repeat for `127.0.0.1:3848`.
+
+## Phase 5B — Monitoring reachability closeout (W2)
+
+> Depends on: Phase 5A. The live monitoring check can resume only after protected-port cleanup guards and agent invariants are in place.
+
+### Implementation
+
 - [ ] **user-reachability-check** — With MCP running, open `rune-mcp` monitoring and watch counters change after an MCP tool call; stop MCP and verify cockpit remains usable with degraded monitoring.
 
 ## Phase 6 — Writing & Brand surfaces + migration (W4)

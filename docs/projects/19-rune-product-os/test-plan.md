@@ -100,6 +100,19 @@ test-plan sections pass.
 - [ ] 🟡 Polling runs once per second only while the monitoring view is visible and stops when hidden/unmounted.
 - [ ] 🔴 Integration verification: open `rune-mcp` monitoring, call a MCP tool, see counters update within roughly one second, stop the MCP daemon, and verify cockpit remains usable with degraded monitoring.
 
+## 5A. Protected Localhost Services (W2 Safety Hardening)
+
+- [ ] 🔴 A single shared contract/module defines the protected services: Rune web at `127.0.0.1:3847` with launchd label `com.jarvis.daemon`, and Rune MCP at `127.0.0.1:3848` with launchd label `com.jarvis.rune-mcp`.
+- [ ] 🔴 Coder, QA, tech-lead, and reviewer role instructions/memories include the protected-service invariant: never kill, stop, interrupt, or reuse either protected listener without explicit human approval.
+- [ ] 🔴 Runtime product-team prompts include the same protected-service invariant for both Claude and Codex executors, independent of static role-file content.
+- [ ] 🔴 Automated tests and test helpers do not bind listeners on `3847` or `3848`; they use port `0` or injected task-local ports. Production-port references are allowed only in config/default assertions, docs, or manual/live acceptance text.
+- [ ] 🔴 Rune-owned cleanup helpers refuse to kill a process that owns `3847` or `3848`, or that matches the protected launchd service identity, unless an explicit human approval path is present.
+- [ ] 🔴 Regression for the exact outage shape: when a stuck test or cleanup path reports `127.0.0.1:3847` occupied, the system classifies it as protected Rune web and refuses to kill it without approval.
+- [ ] 🔴 Equivalent MCP regression: when `127.0.0.1:3848` is occupied, the system classifies it as protected Rune MCP and refuses to kill it without approval.
+- [ ] 🟡 Before killing any non-protected process, cleanup logic verifies that the PID was spawned by the current task/worktree/test command; "something is listening on the port" is not enough evidence.
+- [ ] 🟡 If Rune web or Rune MCP is down after a work run or monitoring check, cockpit/run telemetry surfaces a degraded/outage state rather than silently killing, reusing, or restarting the service.
+- [ ] 🟢 The protected-service warning text is generated from the shared contract so docs, prompts, and guard error messages do not drift.
+
 ## 6. Writing & Brand (W4 Phase 6)
 
 - [ ] 🔴 Rune produces both `/rune` and `/rune/{topic}` pages in `michaelcjoseph.com` as a writing-product work run (drafting/publishing shows in the operations/runs container).

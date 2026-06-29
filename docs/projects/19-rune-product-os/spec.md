@@ -67,6 +67,7 @@ The cockpit gains a top-level internal/external distinction so the roster reads 
 4. **Secondary — MCP observability.** The cockpit shows MCP call volume, timeouts, and latency, and Rune orchestration-run metrics, read live from the MCP service.
 5. **Secondary — knowledge freshness.** Rune's nightly curation detects when a new journal entry supersedes a previously curated fact, so retrieval stops returning confidently-stale truth.
 6. **Tertiary — expanded MCP functions.** New functions pull content from journal ranges, follow `[[wikilinks]]`, and query by tag/date.
+7. **Safety — protected localhost services.** Autonomous work runs, tests, and cleanup helpers must never treat Rune web or Rune MCP as disposable test listeners.
 
 ### Original motivating goals, mapped
 
@@ -89,6 +90,7 @@ The cockpit gains a top-level internal/external distinction so the roster reads 
 - **No new external products beyond writing and brand** in this project.
 - **No macOS account changes and no change to the existing Rune web launchd label.** This project does add a second launchd job for the MCP service (`com.jarvis.rune-mcp`).
 - **No vector/semantic retrieval respec** beyond the in-memory index and the new functions named above.
+- **No silent auto-kill or auto-reuse of protected service ports.** Rune web and Rune MCP are long-lived local services, not test infrastructure. Recovery may report degraded/outage state, but killing or reusing their listeners requires explicit human approval.
 
 ---
 
@@ -119,6 +121,23 @@ Split the MCP server out of the cockpit process into a standalone, long-lived se
   - `RUNE_MCP_PORT` — default `3848`.
 - Revoke Claude App MCP access by deleting the MCP OAuth store and restarting the MCP service.
 - **One-time cutover reauth.** Existing Claude App tokens live in the *web server's* OAuth store. The standalone daemon uses a **separate** `RUNE_MCP_OAUTH_STORE_FILE`; tokens are not migrated. The cutover therefore forces **exactly one** reauth when the Claude App first connects to the new daemon. This is a known, accepted one-time exception to the "zero reauth" goal — the goal is zero reauth on *cockpit restarts* thereafter, which the standalone lifecycle makes structural. Migrating the old store is explicitly not in scope.
+
+**Protected localhost services contract:** Project 19 introduces a second long-lived local service, so the system needs a hard boundary between "test listener" and "Rune infrastructure." The protected services are:
+
+| Service | Address | launchd label | Owner |
+|---|---|---|---|
+| Rune web / cockpit | `127.0.0.1:3847` | `com.jarvis.daemon` | Existing web process |
+| Rune MCP daemon | `127.0.0.1:3848` | `com.jarvis.rune-mcp` | New standalone MCP process |
+
+Autonomous agents, product-team roles, work-run cleanup, and tests must preserve these invariants:
+
+- Never kill, stop, interrupt, or reuse a listener on `127.0.0.1:3847` or `127.0.0.1:3848` without explicit human approval.
+- Never infer that a listener on those ports is a leftover test server. A port collision with either protected address is a protected-service event, not a cleanup target.
+- Automated tests bind dynamic ports (`0`) or task-local injected ports. The production ports may appear in config/default assertions, docs, and manual/live acceptance references, but not as test listener bindings.
+- Before killing any process, a role or cleanup helper must verify that the PID was spawned by the current task/worktree/test command. "Something is listening on the port" is insufficient evidence.
+- If a protected service is down, cockpit/monitoring reports degraded or outage state. It does not kill an unknown process, reuse the protected port, or silently restart the service unless a separately approved restart path is invoked.
+
+This contract is intentionally implemented in depth: canonical constants, agent instructions, runtime prompt injection, test-port hygiene checks, and process-cleanup guards. Agent lessons alone are not sufficient for this class of outage.
 
 **Health/status contract:** `GET /health` on the MCP daemon returns process/service readiness only: daemon up, OAuth configured, active MCP sessions count, warm-index status, last index rebuild result, uptime, and a bounded recent-log tail or log pointers. It must not expose pkms content or any product function, and it must not be confused with Rune's pkms `/health` review command.
 
@@ -209,6 +228,8 @@ Phases are ordered by dependency. W1's standalone split is the unblocker for mon
 | 3 | W1 | Expanded MCP functions + MCP metrics snapshot tool | 2 |
 | 4 | W2 | Cockpit product-aware containers + internal/external line | 1 |
 | 5 | W2 | Monitoring tab (internal-only, MCP metrics snapshot + Rune run metrics; external stubs) | 3, 4 |
+| 5A | W2 safety | Protected localhost service invariants for Rune web and Rune MCP | 1, 5 |
+| 5B | W2 | Monitoring reachability closeout after protected-service hardening | 5A |
 | 6 | W4 | Writing & Brand surfaces + writing migration into `michaelcjoseph.com` | 3, 4 |
 | 7 | W3 | Knowledge-freshness reconciliation in Rune nightly | — (parallelizable) |
 
@@ -224,6 +245,7 @@ The per-phase task breakdown lives in [tasks.md](tasks.md) and the verification 
 | Deep `vault_search` latency | No timeouts; warm-state answers | W1 Phase 2 budget validation + acceptance |
 | Markdown folder coverage | 100% of `*.md` under vault root | Ripgrep-parity harness (Phase 2) |
 | MCP metrics visible | Call volume, timeouts, latency live in cockpit | Monitoring acceptance (Phase 5) |
+| Protected service safety | No autonomous run kills or reuses Rune web/MCP localhost listeners without approval | Phase 5A regression tests |
 | Writing publishes | A `/rune/{topic}` page produced by a Rune work run | W4 acceptance |
 | Stale-fact supersession | A superseded fact is flagged/replaced in nightly | W3 acceptance (Jarvis→Rune drift case) |
 
