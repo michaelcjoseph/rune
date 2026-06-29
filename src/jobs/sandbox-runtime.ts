@@ -306,9 +306,16 @@ export async function createWorktree(opts: CreateWorktreeOpts): Promise<SandboxS
     if (existingTip) {
       resumed = true;
       baseSha = existingTip;
-      // No -b: check out the existing branch. The per-project run cap is 1 and
-      // the worktree path is per-project, so the branch is never already
-      // checked out in another live worktree at this point.
+      // The per-project run cap is 1 and the worktree path is per-project, so no
+      // other live RUN worktree holds the branch — but the product's MAIN
+      // checkout can be sitting on it (e.g. a human checked it out to make a
+      // manual fix). Git forbids the branch in two trees at once, so release it
+      // from the main checkout before the add (2026-06-29 project-19 collision).
+      await freeBranchFromMainCheckout(
+        runGit, product.repoPath, opts.branch, product.baseBranch,
+      );
+      // No -b: check out the existing branch so the project's prior commits are
+      // present in the worktree.
       args = ['worktree', 'add', worktree, opts.branch];
     } else {
       baseSha = opts.startPoint?.trim() || undefined;
@@ -560,6 +567,56 @@ async function resolveBranchTip(
   } catch {
     return null;
   }
+}
+
+/**
+ * RESUME pre-flight: release the run's branch from the product's MAIN checkout.
+ *
+ * A resumed run checks the existing branch out into a fresh worktree with no
+ * `-b`. Git forbids one branch being checked out in two working trees at once,
+ * so if the product's main checkout (`repoPath` itself) is sitting on that
+ * branch, `git worktree add` fails with "already used by worktree at '<repo>'".
+ * This happens whenever a human checks the run's branch out in the main repo to
+ * make a manual fix (the 2026-06-29 project-19 collision).
+ *
+ * When the main checkout is on the run's branch, switch it back to `baseBranch`
+ * to free the branch — but only when that tree is clean. A dirty tree means
+ * uncommitted human work; silently switching could strand or carry it across, so
+ * fail loudly and tell the caller to commit or stash. A clean switch loses
+ * nothing: the branch keeps every commit and the worktree picks them up.
+ *
+ * No-op when the main checkout is on any other branch (detached HEAD included),
+ * so this never disturbs unrelated manual work. A failure to read the current
+ * branch is non-fatal — the `git worktree add` that follows surfaces any real
+ * problem with its own clear, path-bearing error.
+ */
+async function freeBranchFromMainCheckout(
+  runGit: GitRunner,
+  repoPath: string,
+  branch: string,
+  baseBranch: string,
+): Promise<void> {
+  let currentBranch: string;
+  try {
+    const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath });
+    currentBranch = stdout.trim();
+  } catch {
+    return;
+  }
+  if (currentBranch !== branch) return;
+
+  const { stdout: status } = await runGit(['status', '--porcelain'], { cwd: repoPath });
+  if (status.trim()) {
+    throw new Error(
+      `createWorktree: cannot resume ${branch}: the product's main checkout at ` +
+        `${repoPath} is on that branch with uncommitted changes. Commit or stash ` +
+        `them, then retry — the run must check the branch out in its own worktree.`,
+    );
+  }
+  await runGit(['checkout', baseBranch], { cwd: repoPath });
+  log.info(
+    `freed ${branch} from main checkout at ${repoPath} (switched to ${baseBranch}) for resume`,
+  );
 }
 
 export interface DestroyWorktreeOpts {

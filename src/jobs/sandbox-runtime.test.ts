@@ -522,6 +522,93 @@ describe('createWorktree', () => {
     expect(spec.resumed).toBe(true);
   });
 
+  it('RESUME: frees the branch from the main checkout (clean tree) before worktree add', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const tip = 'resumetip0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const branch = 'rune-work/01-growth';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
+      // The product's main checkout is sitting on the run's branch.
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: `${branch}\n`, stderr: '' };
+      if (args[0] === 'status') return { stdout: '', stderr: '' }; // clean
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${baseTip}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // The branch is freed by switching the main checkout to baseBranch, and that
+    // happens BEFORE the worktree add so the add no longer collides.
+    const checkoutIndex = runGit.mock.calls.findIndex(c => c[0][0] === 'checkout' && c[0][1] === 'main');
+    const addIndex = runGit.mock.calls.findIndex(c => c[0][0] === 'worktree' && c[0][1] === 'add');
+    expect(checkoutIndex).toBeGreaterThanOrEqual(0);
+    expect(addIndex).toBeGreaterThan(checkoutIndex);
+    expect(spec.resumed).toBe(true);
+  });
+
+  it('RESUME: refuses to free the branch when the main checkout has uncommitted changes', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const tip = 'resumetip0987654321fedcba0987654321fedcba';
+    const branch = 'rune-work/01-growth';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: `${branch}\n`, stderr: '' };
+      if (args[0] === 'status') return { stdout: ' M src/foo.ts\n', stderr: '' }; // dirty
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        branch,
+        worktreeRoot: WORKTREE_ROOT,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(/uncommitted changes/);
+    // Never reached the worktree add — failed closed.
+    expect(runGit.mock.calls.some(c => c[0][0] === 'worktree' && c[0][1] === 'add')).toBe(false);
+  });
+
+  it('RESUME: leaves the main checkout alone when it is on a different branch', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const tip = 'resumetip0987654321fedcba0987654321fedcba';
+    const baseTip = 'basetip0987654321fedcba0987654321fedcba00';
+    const branch = 'rune-work/01-growth';
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'show-ref') return { stdout: `${tip} refs/heads/${branch}\n`, stderr: '' };
+      // Main checkout is on some unrelated branch — must not be disturbed.
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: 'main\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { stdout: `${baseTip}\n`, stderr: '' };
+      if (args[0] === 'merge-base') return { stdout: `${baseTip}\n`, stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      branch,
+      worktreeRoot: WORKTREE_ROOT,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    // No status probe and no checkout when the branch isn't held by the main tree.
+    expect(runGit.mock.calls.some(c => c[0][0] === 'status')).toBe(false);
+    expect(runGit.mock.calls.some(c => c[0][0] === 'checkout')).toBe(false);
+    expect(spec.resumed).toBe(true);
+  });
+
   it('RESUMES an existing branch behind base: rebases and returns post-rebase HEAD as baseSha', async () => {
     const configPath = writeProductsJson(tmpDir);
     const previousTip = 'previous0987654321fedcba0987654321fedcba';
