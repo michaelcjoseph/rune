@@ -64,6 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  work: missing `vault-index` modules, old `read-tools` behavior, server registration/schema gaps, and daemon warm-index/health wiring. Some daemon HTTP tests also hit `listen EPERM` in this sandbox, but the suite is still confirmed red.
+- ds, atomic index swaps, status reporting, and regex/literal fallback querying.
 
-`git status --short` is empty after the run. No files changed.
+Verified:
+- `npx vitest run src/kb/vault-index.test.ts` passed: 14/14
+- `npm run build` passed
+
+No commit made. Note: `src/kb/vault-index.test.ts` was already staged/modified in the worktree; I did not edit or revert it.

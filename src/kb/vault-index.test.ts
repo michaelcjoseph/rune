@@ -1,10 +1,21 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const vaultRoot = mkdtempSync(join(tmpdir(), 'rune-vault-index-'));
 process.env['VAULT_DIR'] = vaultRoot;
+
+const loggerMock = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: vi.fn(() => loggerMock),
+}));
 
 interface IndexedLine {
   file: string;
@@ -59,6 +70,7 @@ function writeVaultFile(relativePath: string, content: string): void {
 
 describe('kb/vault-index warm retrieval core', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     rmSync(vaultRoot, { recursive: true, force: true });
     mkdirSync(vaultRoot, { recursive: true });
   });
@@ -125,6 +137,16 @@ describe('kb/vault-index warm retrieval core', () => {
         { file: 'knowledge/readable.md', line: 1, content: 'VISIBLE_READABLE_MARKER survives' },
       ]);
       expect(queryVaultIndex('HIDDEN_UNREADABLE_MARKER')).toEqual([]);
+      const skipLogCalls = [...loggerMock.warn.mock.calls, ...loggerMock.error.mock.calls];
+      expect(skipLogCalls).toEqual(expect.arrayContaining([
+        expect.arrayContaining([
+          expect.stringMatching(/skip|unreadable|read/i),
+          expect.objectContaining({
+            file: 'knowledge/unreadable.md',
+            reason: expect.any(String),
+          }),
+        ]),
+      ]));
     } finally {
       chmodSync(unreadablePath, 0o600);
     }
@@ -228,6 +250,41 @@ describe('kb/vault-index warm retrieval core', () => {
     expect(stats?.bytes).toBeGreaterThan(0);
     expect(stats?.heapUsed).toBeGreaterThan(0);
     expect(stats?.buildMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('logs build stats at each complete build', async () => {
+    const { buildVaultIndex } = await requireVaultIndexModule();
+    writeVaultFile('knowledge/first.md', 'FIRST_LOG_STATS_MARKER\n');
+
+    buildVaultIndex();
+
+    writeVaultFile('world-view/second.md', 'SECOND_LOG_STATS_MARKER\n');
+    buildVaultIndex();
+
+    const buildStatCalls = loggerMock.info.mock.calls.filter(([, data]) => (
+      data &&
+      typeof data === 'object' &&
+      'files' in data &&
+      'lines' in data &&
+      'bytes' in data &&
+      'heapUsed' in data &&
+      'buildMs' in data
+    ));
+    expect(buildStatCalls).toHaveLength(2);
+    expect(buildStatCalls[0]?.[1]).toMatchObject({
+      files: 1,
+      lines: 1,
+      bytes: expect.any(Number),
+      heapUsed: expect.any(Number),
+      buildMs: expect.any(Number),
+    });
+    expect(buildStatCalls[1]?.[1]).toMatchObject({
+      files: 2,
+      lines: 2,
+      bytes: expect.any(Number),
+      heapUsed: expect.any(Number),
+      buildMs: expect.any(Number),
+    });
   });
 
   it('follows symlinks under the vault root and reports the vault-relative symlink path', async () => {
