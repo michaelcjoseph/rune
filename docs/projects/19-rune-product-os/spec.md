@@ -188,6 +188,7 @@ A separable curation-pipeline workstream. When a new journal entry contradicts a
 Writing becomes a product Rune orchestrates, publishing to the personal site. This is **only viable because of W1**: writing leans hard on the KB (journals, worldview, playbook, Lenny, PG), and once the MCP is a standalone service reachable from any repo, writing content can live in `michaelcjoseph.com` while Rune still reaches back into pkms for source material.
 
 - **Two-product repo.** `michaelcjoseph.com` expands to host two products: **Brand** (the existing root single-page Next.js app, active today) and **Writing** (a new `/rune` subtree where each content piece is a page at `/rune/{topic}`).
+- **Resolved route convention.** `michaelcjoseph.com` is a Next.js 15 App Router app under `src/app` (`src/app/page.tsx`, `src/app/layout.tsx`) with no `pages/` router. Writing uses the App Router only: `/rune` lives at `src/app/rune/page.tsx`, topic pages route through `src/app/rune/[slug]/page.tsx`, and writing-owned content modules live under the private route folder `src/app/rune/_content/` (for example `src/app/rune/_content/<slug>.tsx` plus an index/registry). The existing Brand root remains `src/app/page.tsx`; do not introduce a `pages/` directory or move the root brand page. Slugs are deterministic lowercase ASCII kebab-case: trim, lowercase, replace each run of non-`[a-z0-9]` characters with `-`, strip leading/trailing `-`, and reject an empty result. The public route is `/rune/{slug}` and the writing branch is `rune-writing/{slug}`.
 - **Rune orchestrates writing as true work runs** — drafting and publishing a `/rune/{topic}` page is a work run, the same way Rune executes on aura or relay.
 - **Migration boundary:**
   - Historical content (existing blog posts in pkms) does **not** move — it is historical, stays in pkms.
@@ -254,7 +255,7 @@ The per-phase task breakdown lives in [tasks.md](tasks.md) and the verification 
 ## Open Questions
 
 - [ ] **Final Tailscale Funnel hostname for `RUNE_MCP_ISSUER_URL`.** Human prerequisite (provision Funnel, supply hostname). Tracked as a manual gate; the build consumes it as a config input and does not block on it.
-- [x] **Route/page conventions inside `michaelcjoseph.com` for the `/rune` subtree.** Resolved into work, not deferred: Phase 6 opens with an agent-run task (`michaelcjoseph-route-survey`) that reads the repo's Next.js structure and settles the `/rune` and `/rune/{topic}` route/page convention before any artifact task. No human decision required.
+- [x] **Route/page conventions inside `michaelcjoseph.com` for the `/rune` subtree.** Resolved by `michaelcjoseph-route-survey`: the repo uses Next.js 15 App Router under `src/app`, so Writing adds `src/app/rune/page.tsx`, `src/app/rune/[slug]/page.tsx`, and private content modules under `src/app/rune/_content/`; Brand stays at `src/app/page.tsx`; no `pages/` router is introduced. Slugs use deterministic lowercase ASCII kebab-case and match both `/rune/{slug}` and `rune-writing/{slug}`.
 
 ## Manual Acceptance Gates
 

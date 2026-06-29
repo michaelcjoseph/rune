@@ -64,6 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- t -- src/bot/handlers/text.test.ts src/jobs/writing-product-orchestration.test.ts` passes: 119 tests.
-- `npm run build` passes.
-- I also tried a broader targeted writing-command test run, but it hung without output after about two minutes, so I interrupted the test process I spawned. No commit made.
+- x`
+- `/rune/{slug}` -> `src/app/rune/[slug]/page.tsx`
+- writing content modules -> `src/app/rune/_content/`
+- Brand remains at `src/app/page.tsx`
+- no `pages/` router
+- slugs are lowercase ASCII kebab-case and match `rune-writing/{slug}`
+
+No tests run; this was the QA-declared docs-only survey task.
