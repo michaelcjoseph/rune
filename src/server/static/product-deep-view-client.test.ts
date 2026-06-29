@@ -277,6 +277,117 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     mod.__resetProductSessions?.();
   });
 
+  it('lets a user open every Phase 4 product from Home, see its expected containers, and send product-scoped chat', async () => {
+    const { createHomeView, renderHomeView } = await import('./home-view.js');
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const roster = [
+      { name: 'rune', class: 'internal', workTabs: ['projects', 'bugs', 'ideas'], profile: 'standard' },
+      { name: 'rune-mcp', class: 'internal', workTabs: ['projects', 'bugs', 'ideas'], profile: 'operations-runs-heavy' },
+      { name: 'aura', class: 'external', workTabs: ['projects', 'bugs', 'ideas'], profile: 'standard' },
+      { name: 'assay', class: 'external', workTabs: ['projects', 'bugs', 'ideas'], profile: 'standard' },
+      { name: 'relay', class: 'external', workTabs: ['projects', 'bugs', 'ideas'], profile: 'standard' },
+      { name: 'writing', class: 'external', workTabs: ['ideas'], profile: 'standard' },
+      { name: 'brand', class: 'external', workTabs: ['projects', 'bugs', 'ideas'], profile: 'standard' },
+    ];
+    const homePulseForRoster = {
+      available: true,
+      products: roster.map(product => ({
+        name: product.name,
+        class: product.class,
+        repoBacked: true,
+        counts: { activeProjects: 0, openBugs: 0, openIdeas: product.name === 'writing' ? 1 : 0, backlogWarnings: 0 },
+        attention: [],
+      })),
+    };
+    const homeHtml = renderHomeView(homePulseForRoster);
+    const groupHtml = (productClass: string) => {
+      const match = new RegExp(
+        `<section[^>]*data-home-product-class=["']${productClass}["'][\\s\\S]*?</section>`,
+        'i',
+      ).exec(homeHtml);
+      expect(match?.[0], `${productClass} group should be visible on Home`).toBeDefined();
+      return match![0];
+    };
+    const internalHtml = groupHtml('internal');
+    const externalHtml = groupHtml('external');
+    expect(internalHtml).toMatch(/>\s*Internal\s*</i);
+    expect(externalHtml).toMatch(/>\s*External\s*</i);
+
+    const homeRoot = makeRoot();
+    const router = { goProduct: vi.fn() };
+    const home = createHomeView({
+      root: homeRoot,
+      fetchJson: vi.fn(async (url: string) => {
+        if (url === '/api/home') return homePulseForRoster;
+        if (url === '/api/state') return { ready: true };
+        if (url === '/api/approvals') return [];
+        throw new Error(`unexpected fetch ${url}`);
+      }),
+      router,
+    });
+    await home.load();
+
+    for (const product of roster) {
+      const expectedGroup = product.class === 'internal' ? internalHtml : externalHtml;
+      expect(expectedGroup).toMatch(new RegExp(`data-home-product=["']${product.name}["']`, 'i'));
+
+      await homeRoot.clickClosest('[data-home-open-product]', { product: product.name });
+      expect(router.goProduct).toHaveBeenLastCalledWith(product.name);
+
+      const root = makeRoot();
+      const sendChat = vi.fn(async () => ({ text: `${product.name} scoped reply` }));
+      const view = createProductDeepView({
+        root,
+        product: product.name,
+        fetchJson: vi.fn(async (url: string) => {
+          expect(url).toBe(`/api/products/${product.name}`);
+          return productView({
+            name: product.name,
+            projects: product.workTabs.includes('projects')
+              ? [{ slug: `${product.name}-project`, lifecycle: 'active', taskProgress: { done: 0, total: 1 } }]
+              : [],
+            backlog: {
+              bugs: product.workTabs.includes('bugs')
+                ? [{ id: `${product.name}-bug`, title: `${product.name} bug`, status: 'open', plan: { kind: 'plan', state: 'available' } }]
+                : [],
+              ideas: [{ id: `${product.name}-idea`, title: `${product.name} idea`, status: 'open', plan: { kind: 'plan', state: 'available' } }],
+              warnings: [],
+            },
+            runs: [],
+            activeRun: undefined,
+          });
+        }),
+        sendChat,
+      });
+      await view.load();
+
+      expect(root.innerHTML).toMatch(new RegExp(`data-product=["']${product.name}["']`, 'i'));
+      expect(root.innerHTML).toMatch(new RegExp(`data-container-profile=["']${product.profile}["']`, 'i'));
+      for (const surface of ['work', 'side-panel', 'chat']) {
+        expect(root.innerHTML).toMatch(new RegExp(`data-surface=["']${surface}["']`, 'i'));
+      }
+      for (const tab of product.workTabs) {
+        expect(root.innerHTML).toMatch(new RegExp(`data-work-tab=["']${tab}["']`, 'i'));
+      }
+      if (product.name === 'writing') {
+        expect(root.innerHTML).not.toMatch(/data-work-tab=["']projects["']|data-work-tab=["']bugs["']/i);
+      }
+
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'runs' });
+      expect(root.innerHTML).toMatch(/data-surface=["']runs["']/i);
+
+      await root.submitClosest('[data-product-chat-form]', {
+        product: product.name,
+        message: `What is next for ${product.name}?`,
+      });
+      expect(sendChat).toHaveBeenLastCalledWith({
+        product: product.name,
+        text: `What is next for ${product.name}?`,
+      });
+      view.close();
+    }
+  });
+
   it('loads the per-product projection and renders Projects, Bugs, Ideas, Runs, and Chat without depending on /api/cockpit', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
