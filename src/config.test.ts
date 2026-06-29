@@ -390,6 +390,17 @@ describe('config', () => {
       expect(config['MCP_ISSUER_URL']).toBe('https://web.example.invalid');
     });
 
+    it('falls back to the default daemon port when RUNE_MCP_PORT is not a valid TCP port', async () => {
+      for (const badPort of ['not-a-number', '-1', '65536']) {
+        vi.resetModules();
+        const config = await loadConfig({
+          RUNE_MCP_PORT: badPort,
+        });
+
+        expect(config['RUNE_MCP_PORT']).toBe(3848);
+      }
+    });
+
     it('places the default daemon OAuth store under an overridden LOGS_DIR', async () => {
       const config = await loadConfig({
         RUNE_LOGS_DIR: '/tmp/rune-config-test-logs',
