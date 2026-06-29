@@ -1,12 +1,55 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const vaultRoot = mkdtempSync(join(tmpdir(), 'rune-vault-index-'));
 process.env['VAULT_DIR'] = vaultRoot;
 
-const { buildVaultIndex, refreshVaultIndex, queryVaultIndex } = await import('./vault-index.js');
+interface IndexedLine {
+  file: string;
+  line: number;
+  content: string;
+}
+
+interface VaultIndexModule {
+  buildVaultIndex: () => void;
+  refreshVaultIndex: () => void;
+  getVaultIndexStatus: () => {
+    ready: boolean;
+    status: string;
+    lastRebuild: {
+      files: number;
+      lines: number;
+      bytes: number;
+      heapUsed: number;
+      buildMs: number;
+    } | null;
+  };
+  queryVaultIndex: (
+    query: string,
+    options?: { directory?: string; maxResults?: number },
+  ) => IndexedLine[];
+}
+
+async function requireVaultIndexModule(): Promise<VaultIndexModule> {
+  const specifier = './vault-index' + '.js';
+  try {
+    const mod = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>;
+    if (
+      typeof mod.buildVaultIndex === 'function' &&
+      typeof mod.refreshVaultIndex === 'function' &&
+      typeof mod.getVaultIndexStatus === 'function' &&
+      typeof mod.queryVaultIndex === 'function'
+    ) {
+      return mod as unknown as VaultIndexModule;
+    }
+    expect.fail('src/kb/vault-index.ts must export buildVaultIndex, refreshVaultIndex, getVaultIndexStatus, and queryVaultIndex');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    expect.fail(`src/kb/vault-index.ts implementation pending: ${message}`);
+  }
+}
 
 function writeVaultFile(relativePath: string, content: string): void {
   const fullPath = join(vaultRoot, relativePath);
@@ -18,14 +61,14 @@ describe('kb/vault-index warm retrieval core', () => {
   beforeEach(() => {
     rmSync(vaultRoot, { recursive: true, force: true });
     mkdirSync(vaultRoot, { recursive: true });
-    buildVaultIndex();
   });
 
   afterAll(() => {
     rmSync(vaultRoot, { recursive: true, force: true });
   });
 
-  it('indexes markdown from every vault folder, including knowledge and peripheral folders', () => {
+  it('indexes markdown from every vault folder, including knowledge and peripheral folders', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/semantic.md', 'shared marker: WARM_FULL_VAULT_MARKER\n');
     writeVaultFile('world-view/beliefs.md', 'peripheral marker: WARM_FULL_VAULT_MARKER\n');
     writeVaultFile('journals/2026_06_29.md', 'journal marker: WARM_FULL_VAULT_MARKER\n');
@@ -44,14 +87,33 @@ describe('kb/vault-index warm retrieval core', () => {
     expect(files).not.toContain('.git/config.md');
   });
 
-  it('treats empty folders as a no-op instead of an index failure', () => {
+  it('covers a newly-created folder on the next build without code or config changes', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
+    writeVaultFile('knowledge/existing.md', 'NEW_FOLDER_MARKER old coverage\n');
+    buildVaultIndex();
+    expect(queryVaultIndex('NEW_FOLDER_MARKER').map((hit) => hit.file)).toEqual([
+      'knowledge/existing.md',
+    ]);
+
+    writeVaultFile('career/applications.md', 'NEW_FOLDER_MARKER new folder coverage\n');
+    buildVaultIndex();
+
+    expect(queryVaultIndex('NEW_FOLDER_MARKER').map((hit) => hit.file)).toEqual(expect.arrayContaining([
+      'knowledge/existing.md',
+      'career/applications.md',
+    ]));
+  });
+
+  it('treats empty folders as a no-op instead of an index failure', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     mkdirSync(join(vaultRoot, 'library'), { recursive: true });
 
     expect(() => buildVaultIndex()).not.toThrow();
     expect(queryVaultIndex('anything')).toEqual([]);
   });
 
-  it('skips unreadable markdown files but keeps indexing readable files', () => {
+  it('skips unreadable markdown files but keeps indexing readable files', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/readable.md', 'VISIBLE_READABLE_MARKER survives\n');
     writeVaultFile('knowledge/unreadable.md', 'HIDDEN_UNREADABLE_MARKER should be skipped\n');
     const unreadablePath = join(vaultRoot, 'knowledge/unreadable.md');
@@ -68,7 +130,8 @@ describe('kb/vault-index warm retrieval core', () => {
     }
   });
 
-  it('keeps the previous complete index when refresh cannot build a replacement', () => {
+  it('keeps the previous complete index when refresh cannot build a replacement', async () => {
+    const { buildVaultIndex, refreshVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/existing.md', 'ATOMIC_OLD_MARKER stays available\n');
     buildVaultIndex();
 
@@ -80,7 +143,8 @@ describe('kb/vault-index warm retrieval core', () => {
     ]);
   });
 
-  it('matches case-insensitive regex queries and falls back to literal substring matching for invalid regex', () => {
+  it('matches case-insensitive regex queries and falls back to literal substring matching for invalid regex', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/search.md', [
       'Alpha    Beta matches a regex query',
       'literal[bracket falls back when the query is not valid regex',
@@ -99,7 +163,8 @@ describe('kb/vault-index warm retrieval core', () => {
     ]);
   });
 
-  it('filters results by vault-relative directory prefix without narrowing indexed coverage', () => {
+  it('filters results by vault-relative directory prefix without narrowing indexed coverage', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/topic.md', 'PREFIX_FILTER_MARKER from knowledge\n');
     writeVaultFile('world-view/topic.md', 'PREFIX_FILTER_MARKER from world-view\n');
     buildVaultIndex();
@@ -113,7 +178,8 @@ describe('kb/vault-index warm retrieval core', () => {
     ]));
   });
 
-  it('applies maxResults as an output cap only', () => {
+  it('applies maxResults as an output cap only', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/a.md', 'MAX_RESULTS_MARKER a\n');
     writeVaultFile('world-view/b.md', 'MAX_RESULTS_MARKER b\n');
     writeVaultFile('journals/c.md', 'MAX_RESULTS_MARKER c\n');
@@ -126,7 +192,8 @@ describe('kb/vault-index warm retrieval core', () => {
     ]);
   });
 
-  it('returns vault-relative file, one-based line, and line content for each hit', () => {
+  it('returns vault-relative file, one-based line, and line content for each hit', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
     writeVaultFile('knowledge/shape.md', [
       '# Shape',
       'SHAPE_MARKER appears on the second line',
@@ -136,6 +203,81 @@ describe('kb/vault-index warm retrieval core', () => {
 
     expect(queryVaultIndex('shape_marker')).toEqual([
       { file: 'knowledge/shape.md', line: 2, content: 'SHAPE_MARKER appears on the second line' },
+    ]);
+  });
+
+  it('reports readiness and build stats after a complete build', async () => {
+    const { buildVaultIndex, getVaultIndexStatus } = await requireVaultIndexModule();
+    writeVaultFile('knowledge/stats.md', ['one', 'two'].join('\n'));
+
+    buildVaultIndex();
+
+    const status = getVaultIndexStatus();
+    expect(status).toMatchObject({
+      ready: true,
+      lastRebuild: {
+        files: 1,
+        lines: 2,
+        bytes: expect.any(Number),
+        heapUsed: expect.any(Number),
+        buildMs: expect.any(Number),
+      },
+    });
+    expect(status.status).toEqual(expect.any(String));
+    const stats = status.lastRebuild;
+    expect(stats?.bytes).toBeGreaterThan(0);
+    expect(stats?.heapUsed).toBeGreaterThan(0);
+    expect(stats?.buildMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('follows symlinks under the vault root and reports the vault-relative symlink path', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
+    const externalRoot = mkdtempSync(join(tmpdir(), 'rune-vault-index-external-'));
+    writeFileSync(join(externalRoot, 'linked.md'), 'SYMLINK_FOLLOW_MARKER from linked markdown\n');
+    mkdirSync(join(vaultRoot, 'knowledge'), { recursive: true });
+    symlinkSync(externalRoot, join(vaultRoot, 'knowledge/linked-source'), 'dir');
+
+    try {
+      buildVaultIndex();
+
+      expect(queryVaultIndex('SYMLINK_FOLLOW_MARKER')).toEqual([
+        {
+          file: 'knowledge/linked-source/linked.md',
+          line: 1,
+          content: 'SYMLINK_FOLLOW_MARKER from linked markdown',
+        },
+      ]);
+    } finally {
+      rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('terminates a symlink cycle via the visited real-path guard and indexes each real file once', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
+    writeVaultFile('knowledge/root.md', 'CYCLE_GUARD_MARKER root\n');
+    mkdirSync(join(vaultRoot, 'knowledge/nested'), { recursive: true });
+    symlinkSync('..', join(vaultRoot, 'knowledge/nested/back-to-knowledge'), 'dir');
+
+    expect(() => buildVaultIndex()).not.toThrow();
+    expect(queryVaultIndex('CYCLE_GUARD_MARKER')).toEqual([
+      { file: 'knowledge/root.md', line: 1, content: 'CYCLE_GUARD_MARKER root' },
+    ]);
+  });
+
+  it('indexes large markdown files fully, including matches far past the first search buffer', async () => {
+    const { buildVaultIndex, queryVaultIndex } = await requireVaultIndexModule();
+    const lines = Array.from({ length: 5_000 }, (_, i) => `line ${i + 1}`);
+    lines[4_998] = 'LARGE_FILE_TAIL_MARKER appears near the end';
+    writeVaultFile('knowledge/large.md', lines.join('\n'));
+
+    buildVaultIndex();
+
+    expect(queryVaultIndex('LARGE_FILE_TAIL_MARKER')).toEqual([
+      {
+        file: 'knowledge/large.md',
+        line: 4_999,
+        content: 'LARGE_FILE_TAIL_MARKER appears near the end',
+      },
     ]);
   });
 });

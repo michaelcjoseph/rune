@@ -301,19 +301,22 @@ describe('vault_search App schema — full-vault markdown coverage', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('exported constants', () => {
-  it('APP_SURFACE_TOOLS is exported and contains exactly the six App tools', () => {
+  it('APP_SURFACE_TOOLS is exported and is exactly the six App tools', () => {
     const APP_SURFACE_TOOLS = (serverModule as Record<string, unknown>)['APP_SURFACE_TOOLS'];
     expect(APP_SURFACE_TOOLS, 'APP_SURFACE_TOOLS must be exported').toBeDefined();
     expect(Array.isArray(APP_SURFACE_TOOLS)).toBe(true);
 
     const names = APP_SURFACE_TOOLS as string[];
     expect(names).toHaveLength(6);
-    expect(names).toContain('kb_query');
-    expect(names).toContain('vault_search');
-    expect(names).toContain('log_idea');
-    expect(names).toContain('crm_lookup');
-    expect(names).toContain('get_priorities');
-    expect(names).toContain('log_conversation');
+    expect([...names].sort()).toEqual([
+      'crm_lookup',
+      'get_priorities',
+      'kb_query',
+      'log_conversation',
+      'log_idea',
+      'vault_search',
+    ]);
+    expect(names).not.toContain('refresh_vault_index');
   });
 
   it('ADMIN_TOOLS is exported and contains the kb_* tools plus repo_search', () => {
@@ -346,6 +349,61 @@ describe('exported constants', () => {
     const adminSet = new Set(ADMIN_TOOLS);
     const identical = appSet.size === adminSet.size && [...appSet].every((t) => adminSet.has(t));
     expect(identical, 'APP_SURFACE_TOOLS and ADMIN_TOOLS must not be identical sets').toBe(false);
+  });
+});
+
+describe('refresh_vault_index tool registration — warm-index readiness and stats', () => {
+  it('can be registered explicitly and reports readiness/build stats, not vault content', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const server = createMcpServer({ tools: ['refresh_vault_index'] });
+    const client = await connectClient(server);
+
+    const names = await listedToolNames(client);
+    expect(names).toEqual(['refresh_vault_index']);
+
+    const result = await client.callTool({ name: 'refresh_vault_index', arguments: {} });
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(result.isError).toBeFalsy();
+    expect(content).toHaveLength(1);
+    expect(content[0]?.type).toBe('text');
+
+    const parsed = JSON.parse(content[0]!.text) as {
+      ready?: unknown;
+      status?: unknown;
+      lastRebuild?: {
+        files?: unknown;
+        lines?: unknown;
+        bytes?: unknown;
+        heapUsed?: unknown;
+        buildMs?: unknown;
+      };
+    };
+    expect(parsed.ready).toEqual(expect.any(Boolean));
+    expect(parsed.status).toEqual(expect.any(String));
+    expect(parsed.lastRebuild).toMatchObject({
+      files: expect.any(Number),
+      lines: expect.any(Number),
+      bytes: expect.any(Number),
+      heapUsed: expect.any(Number),
+      buildMs: expect.any(Number),
+    });
+
+    const serialized = JSON.stringify(parsed);
+    expect(serialized).not.toMatch(/PRIVATE|journal|world-view|knowledge\/.+\.md/i);
+
+    await client.close();
+  });
+
+  it('server.ts registers refresh_vault_index through a lazy tool module so admin stdio does not import the warm index', () => {
+    const source = readFileSync(new URL('./server.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('refresh_vault_index');
+    expect(source).toMatch(/import\s*\([\s\S]*['"]\.\/tools\/vault-index-tools\.js['"][\s\S]*\)/);
+    expect(source).not.toMatch(/from ['"]\.\.\/kb\/vault-index\.js['"]/);
   });
 });
 

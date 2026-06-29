@@ -347,12 +347,15 @@ describe('vaultSearch — project 19 fullcoverage cutover source pins', () => {
     );
   });
 
-  it('binds production vault_search dependencies to queryVaultIndex instead of cold searchVault', () => {
+  it('binds production vault_search to queryVaultIndex with cold ripgrep only as the not-ready fallback', () => {
     const source = readFileSync(new URL('./read-tools-deps.ts', import.meta.url), 'utf8');
 
     expect(source).toMatch(/\bqueryVaultIndex\b/);
+    expect(source).toMatch(/\bgetVaultIndexStatus\b/);
+    expect(source).toMatch(/\bsearchVault\b/);
     expect(source).toMatch(/from ['"]\.\.\/\.\.\/kb\/vault-index\.js['"]/);
-    expect(source).not.toMatch(/import\s+\{\s*searchVault\s*\}\s+from ['"]\.\.\/\.\.\/kb\/search\.js['"]/);
+    expect(source).toMatch(/from ['"]\.\.\/\.\.\/kb\/search\.js['"]/);
+    expect(source).toMatch(/ready[\s\S]*\?[\s\S]*queryVaultIndex[\s\S]*:[\s\S]*searchVault|if\s*\([^)]*ready[^)]*\)[\s\S]*queryVaultIndex[\s\S]*searchVault/);
   });
 });
 

@@ -64,6 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- oader runner`
-
-Result: red as expected for tests-first: 2 passed, 1 failed because `src/mcp/daemon.ts` does not yet import/own the warm index. The default bundled config loader was blocked by sandbox permissions writing to `node_modules/.vite-temp`, so I used `--configLoader runner`. No commit made.
+- d as expected for tests-first: 64 tests ran, 34 passed, 30 failed. Failures are the intended missing implementation contracts: no `src/kb/vault-index.ts`, no `src/mcp/tools/vault-index-tools.ts`, daemon warm-index ownership not wired yet, and read-tool/server cutover not implemented. No commit made.
+-  --configLoader runner src/kb/vault-index.test.ts src/mcp/daemon.test.ts src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts src/mcp/tools/vault-index-tools.test.ts`. It remains red as expected for this tests-first suite because the warm-index implementation modules and wiring are still pending.
+- t-index.test.ts src/mcp/daemon.test.ts src/mcp/server.test.ts src/mcp/tools/read-tools.test.ts src/mcp/tools/vault-index-tools.test.ts --configLoader runner`
+  remains red as expected for tests-first: `35 passed`, `30 failed`, with failures pointing at implementation-pending warm-index/cutover work.

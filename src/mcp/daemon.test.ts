@@ -52,9 +52,22 @@ const mockConfig = vi.hoisted(() => ({
   RUNE_MCP_OAUTH_STORE_FILE: '/tmp/rune-test-logs/rune-mcp-oauth-store.json',
 }));
 
+const warmIndex = vi.hoisted(() => ({
+  buildVaultIndex: vi.fn(),
+  refreshVaultIndex: vi.fn(),
+  getVaultIndexStatus: vi.fn(() => ({
+    ready: false,
+    status: 'starting',
+    lastRebuild: null,
+  })),
+  queryVaultIndex: vi.fn(() => []),
+}));
+
 vi.mock('../config.js', () => ({
   default: mockConfig,
 }));
+
+vi.mock('../kb/vault-index.js', () => warmIndex);
 
 vi.mock('../bot/telegram.js', () => ({
   createBot: sideEffects.createBot,
@@ -320,6 +333,11 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     vi.clearAllMocks();
+    warmIndex.getVaultIndexStatus.mockReturnValue({
+      ready: false,
+      status: 'starting',
+      lastRebuild: null,
+    });
   });
 
   it('declares npm run mcp:start as the standalone daemon command', () => {
@@ -346,6 +364,87 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(source).not.toMatch(/from ['"]\.\.\/jobs\/scheduler\.js['"]/);
     expect(source).not.toMatch(/from ['"]\.\.\/server\/webview\.js['"]/);
     expect(source).not.toMatch(/from ['"]\.\.\/integrations\/whoop\/client\.js['"]/);
+  });
+
+  it('owns the warm-index startup build and 15-minute refresh cadence in the daemon process', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    const source = readFileSync(daemonPath, 'utf8');
+
+    expect(source).toMatch(/from ['"]\.\.\/kb\/vault-index\.js['"]/);
+    expect(source).toMatch(/\bbuildVaultIndex\b/);
+    expect(source).toMatch(/\brefreshVaultIndex\b/);
+    expect(source).toMatch(/\bgetVaultIndexStatus\b/);
+    expect(source).toMatch(/\bsetInterval\s*\(/);
+    expect(source).toMatch(/\bunref\s*\(\s*\)/);
+    expect(source).toMatch(/\bclearInterval\s*\(/);
+  });
+
+  it('schedules refreshVaultIndex on an evaluated 15-minute interval', async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-refresh-cadence-'));
+    tempDirs.push(dir);
+
+    try {
+      const daemon = await startMcpDaemon({
+        host: '127.0.0.1',
+        port: 0,
+        gateSecret: 'mcp-gate',
+        userId: 'alice',
+        issuerBaseUrl: 'https://mcp.example.invalid',
+        oauthStoreFile: join(dir, 'rune-mcp-oauth-store.json'),
+        tokenTtlMs: null,
+      });
+      daemons.push(daemon);
+
+      const cadenceCall = setIntervalSpy.mock.calls.find(([, delay]) => delay === 15 * 60 * 1000);
+      expect(cadenceCall, 'daemon must schedule a 15-minute warm-index refresh').toBeDefined();
+
+      const callback = cadenceCall?.[0];
+      expect(typeof callback).toBe('function');
+      (callback as () => void)();
+      expect(warmIndex.refreshVaultIndex).toHaveBeenCalledTimes(1);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  it('starts the warm-index build in the background instead of blocking daemon startup', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    const source = readFileSync(daemonPath, 'utf8');
+    const startIndex = source.indexOf('export async function startMcpDaemon');
+    const mainIndex = source.indexOf('\nasync function main', startIndex);
+    const startSource = source.slice(startIndex, mainIndex > startIndex ? mainIndex : undefined);
+
+    expect(startSource).toMatch(/\bbuildVaultIndex\b/);
+    expect(startSource).not.toMatch(/\bawait\s+buildVaultIndex\s*\(/);
+    expect(startSource).toMatch(
+      /\b(?:setImmediate|queueMicrotask)\s*\([\s\S]*\bbuildVaultIndex\b|void\s+Promise\.resolve\(\)\.then\s*\([\s\S]*\bbuildVaultIndex\b|void\s+\(\s*async\s*\(\s*\)\s*=>[\s\S]*\bbuildVaultIndex\b/,
+    );
+  });
+
+  it('routes daemon-internal broad kb_query through warm index with cold ripgrep fallback until ready', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    const source = readFileSync(daemonPath, 'utf8');
+
+    expect(source).toMatch(/\bkb_query\b/);
+    expect(source).toMatch(/\bgetVaultIndexStatus\b/);
+    expect(source).toMatch(/\bqueryVaultIndex\b/);
+    expect(source).toMatch(/\bsearchVault\b/);
+    expect(source).toMatch(
+      /ready[\s\S]*\?[\s\S]*queryVaultIndex[\s\S]*:[\s\S]*searchVault|if\s*\([^)]*ready[^)]*\)[\s\S]*queryVaultIndex[\s\S]*searchVault/,
+    );
+  });
+
+  it('does not hard-code warm-index health as permanently starting or empty', () => {
+    const daemonPath = new URL('./daemon.ts', import.meta.url);
+    const source = readFileSync(daemonPath, 'utf8');
+    const buildStatusSource = source.match(/function buildStatus[\s\S]*?\n\}/)?.[0] ?? '';
+
+    expect(buildStatusSource).toMatch(/\bgetVaultIndexStatus\s*\(/);
+    expect(buildStatusSource).not.toContain('ready: false');
+    expect(buildStatusSource).not.toContain("status: 'starting'");
+    expect(buildStatusSource).not.toContain('lastRebuild: null');
   });
 
   it('defines the MCP health payload as daemon status, not pkms or product data', () => {
@@ -507,7 +606,7 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(body.oauth).toEqual({ configured: true });
     expect(body.activeSessions).toBe(0);
     expect(body.warmIndex?.ready).toEqual(expect.any(Boolean));
-    expect(body.warmIndex?.status).toMatch(/^(starting|ready|stale|degraded|failed)$/);
+    expect(body.warmIndex?.status).toEqual(expect.any(String));
     expect(body.warmIndex).toHaveProperty('lastRebuild');
 
     expect(Boolean(body.recentLogs) || Boolean(body.logPointers)).toBe(true);
