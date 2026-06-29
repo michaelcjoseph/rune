@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- in object-form listener calls like `server.listen({ port: 3847 })`, including const-bound values.
+- -empty approval check.
 
 Verified:
-- `npx vitest run src/utils/test-port-hygiene-regression.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner` passed
-- `npm run build` passed
+- `npx vitest run src/utils/process-cleanup-guard.test.ts src/utils/protected-local-services.test.ts src/utils/protected-service-outage-detection.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner`
+- `npm run build`
 
 No commit made.

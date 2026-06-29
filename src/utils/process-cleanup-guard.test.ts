@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateProcessCleanupKill,
   type ProcessCleanupKillCandidate,
+  type ProcessCleanupKillDecision,
 } from './protected-local-services.js';
 
 function candidate(overrides: Partial<ProcessCleanupKillCandidate>): ProcessCleanupKillCandidate {
@@ -13,6 +14,31 @@ function candidate(overrides: Partial<ProcessCleanupKillCandidate>): ProcessClea
     listeningOn: [],
     ...overrides,
   };
+}
+
+type ProcessCleanupPortKillCandidate = {
+  source: string;
+  port: number;
+  host?: string;
+  ownedByCurrentTask: boolean;
+  humanApproval?: { approved: boolean; approvalId: string };
+};
+
+type ProcessCleanupGuardModule = {
+  evaluateProcessCleanupPortKill?: (
+    candidate: ProcessCleanupPortKillCandidate,
+  ) => ProcessCleanupKillDecision;
+};
+
+async function loadPortKillGuard(): Promise<
+  NonNullable<ProcessCleanupGuardModule['evaluateProcessCleanupPortKill']>
+> {
+  const mod = (await import('./protected-local-services.js')) as ProcessCleanupGuardModule;
+  expect(
+    mod.evaluateProcessCleanupPortKill,
+    'missing evaluateProcessCleanupPortKill guard for kill-by-port cleanup helpers',
+  ).toBeTypeOf('function');
+  return mod.evaluateProcessCleanupPortKill!;
 }
 
 describe('process-cleanup-protected-port-guard (project 19 / test-plan §5A)', () => {
@@ -106,5 +132,83 @@ describe('process-cleanup-protected-port-guard (project 19 / test-plan §5A)', (
 
     expect(decision).toMatchObject({ allowed: true });
     expect(decision.protectedService).toBeUndefined();
+  });
+
+  it('refuses port-only cleanup of protected Rune service ports without human approval', async () => {
+    const evaluateProcessCleanupPortKill = await loadPortKillGuard();
+
+    const runeWeb = evaluateProcessCleanupPortKill({
+      source: 'kill-process-by-port',
+      port: 3847,
+      ownedByCurrentTask: true,
+    });
+    const runeMcp = evaluateProcessCleanupPortKill({
+      source: 'kill-process-by-port',
+      port: 3848,
+      ownedByCurrentTask: true,
+    });
+
+    expect(runeWeb).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/Rune web|3847|protected|approval/i),
+      protectedService: { id: 'rune-web', launchdLabel: 'com.jarvis.daemon' },
+    });
+    expect(runeMcp).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/Rune MCP|3848|protected|approval/i),
+      protectedService: { id: 'rune-mcp', launchdLabel: 'com.jarvis.rune-mcp' },
+    });
+  });
+
+  it('requires a real approval id before a protected port cleanup can proceed', async () => {
+    const evaluateProcessCleanupPortKill = await loadPortKillGuard();
+
+    const missingApprovalId = evaluateProcessCleanupPortKill({
+      source: 'kill-process-by-port',
+      host: '127.0.0.1',
+      port: 3847,
+      ownedByCurrentTask: true,
+      humanApproval: { approved: true, approvalId: '' },
+    });
+    const approved = evaluateProcessCleanupPortKill({
+      source: 'kill-process-by-port',
+      host: '127.0.0.1',
+      port: 3847,
+      ownedByCurrentTask: true,
+      humanApproval: { approved: true, approvalId: 'protected-service-kill:port-3847' },
+    });
+
+    expect(missingApprovalId).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/Rune web|3847|protected|approval/i),
+      protectedService: { id: 'rune-web', port: 3847 },
+    });
+    expect(approved).toMatchObject({
+      allowed: true,
+      approvalId: 'protected-service-kill:port-3847',
+      protectedService: { id: 'rune-web', port: 3847 },
+    });
+  });
+
+  it('still applies current-task ownership checks for non-protected port cleanup', async () => {
+    const evaluateProcessCleanupPortKill = await loadPortKillGuard();
+
+    expect(
+      evaluateProcessCleanupPortKill({
+        source: 'kill-process-by-port',
+        port: 49152,
+        ownedByCurrentTask: false,
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/spawned by the current task|ownership/i),
+    });
+    expect(
+      evaluateProcessCleanupPortKill({
+        source: 'kill-process-by-port',
+        port: 49152,
+        ownedByCurrentTask: true,
+      }),
+    ).toMatchObject({ allowed: true });
   });
 });

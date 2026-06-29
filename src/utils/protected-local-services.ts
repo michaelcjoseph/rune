@@ -25,6 +25,14 @@ export interface ProcessCleanupKillCandidate {
   humanApproval?: ProcessCleanupHumanApproval;
 }
 
+export interface ProcessCleanupPortKillCandidate {
+  source: string;
+  port: number;
+  host?: string;
+  ownedByCurrentTask: boolean;
+  humanApproval?: ProcessCleanupHumanApproval;
+}
+
 export type ProcessCleanupKillDecision =
   | {
       allowed: true;
@@ -132,7 +140,7 @@ export function evaluateProcessCleanupKill(
 ): ProcessCleanupKillDecision {
   const protectedService = getProcessCleanupProtectedService(candidate);
   const approval = candidate.humanApproval;
-  const hasHumanApproval = approval?.approved === true && approval.approvalId.length > 0;
+  const hasHumanApproval = hasExplicitHumanApproval(approval);
 
   if (protectedService && !hasHumanApproval) {
     return {
@@ -159,6 +167,45 @@ export function evaluateProcessCleanupKill(
       protectedService,
       reason:
         `Refusing to kill pid ${candidate.pid} from ${candidate.source}: ` +
+        'the process was not verified as spawned by the current task/worktree/test command.',
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function evaluateProcessCleanupPortKill(
+  candidate: ProcessCleanupPortKillCandidate,
+): ProcessCleanupKillDecision {
+  const protectedService = getProcessCleanupPortProtectedService(candidate);
+  const approval = candidate.humanApproval;
+  const hasHumanApproval = hasExplicitHumanApproval(approval);
+
+  if (protectedService && !hasHumanApproval) {
+    return {
+      allowed: false,
+      protectedService,
+      reason:
+        `${protectedService.name} (${protectedService.host}:${protectedService.port}, ` +
+        `${protectedService.launchdLabel}) is a protected Rune service; ` +
+        `refusing to kill processes on port ${candidate.port} from ${candidate.source} ` +
+        'without explicit human approval.',
+    };
+  }
+
+  if (protectedService && hasHumanApproval) {
+    return {
+      allowed: true,
+      approvalId: approval.approvalId,
+      protectedService,
+    };
+  }
+
+  if (!candidate.ownedByCurrentTask) {
+    return {
+      allowed: false,
+      reason:
+        `Refusing to kill processes on port ${candidate.port} from ${candidate.source}: ` +
         'the process was not verified as spawned by the current task/worktree/test command.',
     };
   }
@@ -221,6 +268,23 @@ function getProcessCleanupProtectedService(
   }
 
   return undefined;
+}
+
+function getProcessCleanupPortProtectedService(
+  candidate: ProcessCleanupPortKillCandidate,
+): ProtectedLocalService | undefined {
+  if (candidate.host) {
+    const service = getProtectedLocalServiceByAddress(candidate.host, candidate.port);
+    if (service) return service;
+  }
+
+  return PROTECTED_LOCAL_SERVICES.find((service) => service.port === candidate.port);
+}
+
+function hasExplicitHumanApproval(
+  approval: ProcessCleanupHumanApproval | undefined,
+): approval is ProcessCleanupHumanApproval {
+  return approval?.approved === true && approval.approvalId.trim().length > 0;
 }
 
 function formatProtectedServiceOutageMessage(
