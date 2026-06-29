@@ -109,6 +109,16 @@ function seedFixtureVault(): void {
       '# Velocity Note',
       '',
       'RESOLVED_WIKILINK_TARGET content from the target note.',
+      'It points onward to [[Nested Note]].',
+      '',
+    ].join('\n'),
+  );
+  writeVaultFile(
+    'knowledge/nested-note.md',
+    [
+      '# Nested Note',
+      '',
+      'NESTED_WIKILINK_TARGET content from the second-hop note.',
       '',
     ].join('\n'),
   );
@@ -218,6 +228,60 @@ describe('expanded MCP content functions', () => {
       expect(text).toContain('[[Velocity Note]]');
       expect(text).toContain('knowledge/velocity-note.md');
       expect(text).toContain('RESOLVED_WIKILINK_TARGET');
+      expect(text).not.toContain('NESTED_WIKILINK_TARGET');
+      expect(text).not.toContain('UNLINKED_TARGET_SHOULD_NOT_APPEAR');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('follow_wikilinks is registered with source file, text snippet, depth, and result limit inputs', async () => {
+    const server = requireServerWithTools(['follow_wikilinks']);
+    const client = await connectClient(server);
+
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === 'follow_wikilinks');
+      expect(tool).toBeDefined();
+      expect(tool?.description).toMatch(/wikilink/i);
+
+      const schema = tool?.inputSchema as {
+        type?: string;
+        properties?: Record<string, { type?: string; description?: string }>;
+      };
+      expect(schema.type).toBe('object');
+      expect(schema.properties?.sourceFile).toMatchObject({ type: 'string' });
+      expect(schema.properties?.sourceFile?.description).toMatch(/vault-relative/i);
+      expect(schema.properties?.text).toMatchObject({ type: 'string' });
+      expect(schema.properties?.text?.description).toMatch(/snippet/i);
+      expect(schema.properties?.maxDepth).toMatchObject({ type: 'number' });
+      expect(schema.properties?.maxResults).toMatchObject({ type: 'number' });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('follow_wikilinks resolves wikilinks from a text snippet and follows nested links within maxDepth', async () => {
+    const server = requireServerWithTools(['follow_wikilinks']);
+    const client = await connectClient(server);
+
+    try {
+      const result = await client.callTool({
+        name: 'follow_wikilinks',
+        arguments: {
+          text: 'Please expand [[Velocity Note]] from this scratch snippet.',
+          maxDepth: 2,
+          maxResults: 5,
+        },
+      });
+
+      const text = textOf(result);
+      expect(text).toContain('[[Velocity Note]]');
+      expect(text).toContain('knowledge/velocity-note.md');
+      expect(text).toContain('RESOLVED_WIKILINK_TARGET');
+      expect(text).toContain('[[Nested Note]]');
+      expect(text).toContain('knowledge/nested-note.md');
+      expect(text).toContain('NESTED_WIKILINK_TARGET');
       expect(text).not.toContain('UNLINKED_TARGET_SHOULD_NOT_APPEAR');
     } finally {
       await client.close();

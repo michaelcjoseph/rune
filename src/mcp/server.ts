@@ -58,7 +58,7 @@ export const ADMIN_TOOLS = [
   'kb_lint',
 ] as const;
 
-export const CONTENT_TOOLS = ['journal_range'] as const;
+export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks'] as const;
 
 const UTILITY_TOOLS = ['refresh_vault_index'] as const;
 
@@ -78,6 +78,9 @@ const lazyVaultIndexTools = () => import('./tools/vault-index-tools.js');
 
 const lazyJournalRangeTool = () =>
   Promise.all([import('./tools/journal-range.js'), import('./tools/journal-range-deps.js')]);
+
+const lazyFollowWikilinksTool = () =>
+  Promise.all([import('./tools/follow-wikilinks.js'), import('./tools/follow-wikilinks-deps.js')]);
 
 function daemonBroadSearch(
   query: string,
@@ -231,6 +234,24 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         const [{ journalRange }, { buildProductionJournalRangeDeps }] =
           await lazyJournalRangeTool();
         return journalRange(input, buildProductionJournalRangeDeps());
+      },
+    );
+  },
+
+  follow_wikilinks: (server) => {
+    server.tool(
+      'follow_wikilinks',
+      'Resolve Obsidian wikilinks from a source file or text snippet to target vault content using the warm vault index.',
+      {
+        sourceFile: z.string().optional().describe('Vault-relative source markdown file to scan for wikilinks'),
+        text: z.string().optional().describe('Text snippet to scan for wikilinks'),
+        maxDepth: z.number().optional().describe('Maximum wikilink traversal depth, 1-5 (default 1)'),
+        maxResults: z.number().optional().describe('Maximum resolved target files to return, 1-50 (default 10)'),
+      },
+      async (input) => {
+        const [{ followWikilinks }, { buildProductionFollowWikilinksDeps }] =
+          await lazyFollowWikilinksTool();
+        return followWikilinks(input, buildProductionFollowWikilinksDeps());
       },
     );
   },

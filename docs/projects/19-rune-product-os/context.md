@@ -64,6 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  `npx vitest run src/mcp/content-functions.test.ts -t journal_range` passes.
+- vitest run src/mcp/tools/follow-wikilinks.test.ts` passes.
+- `npx vitest run src/mcp/content-functions.test.ts -t follow_wikilinks` passes.
 - `npm run build` passes.
-- Full `src/mcp/content-functions.test.ts` still fails on `follow_wikilinks` and `tag_date_query`, which are separate pending tasks in `tasks.md`; I did not implement them under this selected task.
+
+Full `src/mcp/content-functions.test.ts` still fails only on `tag_date_query` being unregistered, which is the separate pending task.
