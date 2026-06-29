@@ -64,9 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ication:
-- `bin/vitest ...` could not run because `bin/vitest` does not exist in this worktree.
-- `npx vitest run src/intent/agent-protected-service-invariant.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner` passed: 8/8.
+- cution-agent.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner` passed, 15/15.
+- `npx vitest run src/jobs/team-task-protected-service-prompt.test.ts --reporter=verbose --maxWorkers=1 --no-fileParallelism --configLoader=runner` passed, 1/1.
 - `npm run build` passed.
-
-No commit made.
