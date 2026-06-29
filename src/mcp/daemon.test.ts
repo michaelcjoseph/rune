@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -37,6 +37,8 @@ const sideEffects = vi.hoisted(() => ({
 }));
 
 const mockConfig = vi.hoisted(() => ({
+  HTTP_HOST: '127.0.0.1',
+  HTTP_PORT: 0,
   TIMEZONE: 'America/Chicago',
   VAULT_DIR: '/test/vault',
   LOGS_DIR: '/tmp/rune-test-logs',
@@ -92,6 +94,24 @@ vi.mock('../kb/engine.js', () => ({
 vi.mock('../kb/search.js', () => ({
   searchWithFilter: vi.fn().mockReturnValue([]),
   searchRepo: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('../vault/sessions.js', () => ({
+  getAllSessions: vi.fn(() => []),
+}));
+
+vi.mock('../jobs/capture.js', () => ({
+  captureSessions: vi.fn().mockResolvedValue({ captured: 0 }),
+}));
+
+vi.mock('../integrations/whoop/client.js', () => ({
+  isConfigured: vi.fn(() => false),
+  exchangeCode: vi.fn(),
+  verifyOAuthState: vi.fn(() => false),
+}));
+
+vi.mock('../server/webview.js', () => ({
+  mountWebviewRoutes: vi.fn(() => vi.fn(async () => false)),
 }));
 
 import { APP_SURFACE_TOOLS } from './server.js';
@@ -165,6 +185,15 @@ function formBody(params: Record<string, string>): string {
 
 function parseLocation(location: string): URL {
   return new URL(location.startsWith('http') ? location : `http://127.0.0.1${location}`);
+}
+
+function closeWebServer(server: http.Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
 async function registerOAuthClient(port: number): Promise<string> {
@@ -647,5 +676,80 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     expect(verifyAuth({
       headers: { cookie: 'rune-auth=web-secret' },
     } as any)).toEqual({ ok: true, userId: 42 });
+  });
+
+  it('keeps the daemon OAuth store and live sessions untouched across a cockpit web restart', async () => {
+    const startMcpDaemon = await requireStartMcpDaemon();
+    const { startHttpServer } = await import('../server/http.js');
+    const dir = mkdtempSync(join(tmpdir(), 'rune-mcp-reauth-owner-'));
+    tempDirs.push(dir);
+    const oauthStoreFile = join(dir, 'rune-mcp-oauth-store.json');
+
+    const daemon = await startMcpDaemon({
+      host: '127.0.0.1',
+      port: 0,
+      gateSecret: 'mcp-gate',
+      userId: 'alice',
+      issuerBaseUrl: 'https://mcp.example.invalid',
+      oauthStoreFile,
+      tokenTtlMs: null,
+    });
+    daemons.push(daemon);
+
+    const accessToken = await issueDaemonBearerToken(daemon.port, 'mcp-gate');
+    const initializeBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'reauth-store-ownership-test', version: '1.0.0' },
+      },
+    });
+
+    const initialized = await rawReq({
+      host: '127.0.0.1',
+      port: daemon.port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        host: 'localhost',
+        authorization: `Bearer ${accessToken}`,
+        accept: 'application/json, text/event-stream',
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(initializeBody).toString(),
+      },
+      body: initializeBody,
+    });
+    expect(initialized.status).toBe(200);
+
+    const activeBefore = daemon.getStatus().activeSessions;
+    expect(activeBefore).toBe(1);
+    const storeBefore = readFileSync(oauthStoreFile, 'utf8');
+    const statBefore = statSync(oauthStoreFile);
+
+    const firstWeb = startHttpServer();
+    await new Promise<void>((resolve) => firstWeb.on('listening', resolve));
+    await closeWebServer(firstWeb);
+    const restartedWeb = startHttpServer();
+    await new Promise<void>((resolve) => restartedWeb.on('listening', resolve));
+    await closeWebServer(restartedWeb);
+
+    expect(readFileSync(oauthStoreFile, 'utf8')).toBe(storeBefore);
+    const statAfter = statSync(oauthStoreFile);
+    expect(statAfter.size).toBe(statBefore.size);
+    expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
+    expect(daemon.getStatus().activeSessions).toBe(activeBefore);
+  });
+
+  it('documents the one-time cutover reauth and non-migration of legacy web-store tokens', () => {
+    const subsystemDocs = readFileSync(
+      new URL('../../docs/architecture/subsystems.md', import.meta.url),
+      'utf8',
+    );
+
+    expect(subsystemDocs).toMatch(/one-time cutover reauth/i);
+    expect(subsystemDocs).toMatch(/old web(?: server)? store tokens? (?:are )?not migrated/i);
   });
 });

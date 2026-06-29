@@ -64,8 +64,12 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- aunchd.sh`
-- `scripts/install-rune-mcp-launchd.sh lint`
-- `npx vitest run src/mcp/launchd-artifacts.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks` passed 5/5
+- ch the daemon store or live sessions.
 
-No commit made. Tailscale command shape checked against the Funnel docs: https://tailscale.com/kb/1223/funnel
+Verified with:
+
+```bash
+npx vitest run src/mcp/daemon.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000 --pool forks
+```
+
+Result: 9/9 passed. I did not commit. Note: `src/mcp/daemon.test.ts` was already staged before my change; I did not edit it.
