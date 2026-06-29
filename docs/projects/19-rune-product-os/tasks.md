@@ -22,7 +22,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] Write the suite for **mcp-standalone-lifecycle** — test-plan.md §1: the MCP runs as a process independent of the cockpit; a cockpit restart does not tear down the MCP or its OAuth session; the MCP has its own startup, `/health` status endpoint, and graceful teardown.
 - [x] Write the suite for **mcp-daemon-config** — test-plan.md §1: `RUNE_MCP_SECRET`, `RUNE_MCP_ISSUER_URL`, `RUNE_MCP_OAUTH_STORE_FILE`, `RUNE_MCP_HOST`, and `RUNE_MCP_PORT` are read separately from the web server's `RUNE_HTTP_SECRET` / `MCP_ISSUER_URL`; defaults are `127.0.0.1`, `3848`, and `logs/rune-mcp-oauth-store.json`.
 - [x] Write the suite for **web-starts-with-mcp-degraded** — test-plan.md §1: Rune web startup succeeds when the MCP daemon is unreachable and cockpit state marks MCP monitoring degraded.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
