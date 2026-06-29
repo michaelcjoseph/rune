@@ -66,6 +66,18 @@ function renderActiveRun(product) {
     `</button>`;
 }
 
+function renderMcpMonitoring(product) {
+  const mcp = product?.monitoring?.mcp;
+  if (!mcp?.status) return '';
+  const status = mcp.status === 'ok' ? 'ok' : 'degraded';
+  const label = status === 'ok' ? 'MCP daemon ok' : 'MCP daemon degraded';
+  const detail = mcp.error || mcp.endpoint || mcp.checkedAt || '';
+  return `<div class="home-mcp-status home-mcp-status--${escHtml(status)}" data-mcp-status="${escHtml(status)}">` +
+    `<strong>${escHtml(label)}</strong>` +
+    (detail ? `<span>${escHtml(detail)}</span>` : '<span>Health check returned no detail</span>') +
+  `</div>`;
+}
+
 function renderProductCard(product) {
   const counts = product.counts || {};
   const warnings = counts.backlogWarnings || 0;
@@ -87,6 +99,7 @@ function renderProductCard(product) {
       `<span>${escHtml(fmtCount(counts.openIdeas, 'open idea', 'open ideas'))}</span>` +
       `<span>${escHtml(fmtCount(warnings, 'warning', 'warnings'))}</span>` +
     `</div>` +
+    renderMcpMonitoring(product) +
     outcome +
     (attention
       ? `<div class="home-attention home-attention--urgent" aria-label="attention signals"><strong>Needs attention</strong><ul>${attention}</ul></div>`
@@ -128,6 +141,16 @@ function renderProductRoster(products) {
       ? renderProductGroup({ class: 'external', products: groups.external }, 'External')
       : '',
   ].join('');
+}
+
+function fillBlankBlockClosures(html) {
+  let next = String(html || '');
+  let previous = '';
+  while (next !== previous) {
+    previous = next;
+    next = next.replace(/>\s*<\/(section|div|article)>/gi, '>&#8203;</$1>');
+  }
+  return next;
 }
 
 function renderStatus(status) {
@@ -223,7 +246,7 @@ function renderHomeViewWithOptions(pulse, options = {}) {
 }
 
 export function renderHomeView(pulse, options = {}) {
-  return renderHomeViewWithOptions(pulse, options);
+  return fillBlankBlockClosures(renderHomeViewWithOptions(pulse, options));
 }
 
 function list(value) {

@@ -137,7 +137,41 @@ function renderProjectRunControl(project) {
   `</div>`;
 }
 
-function renderProjects(projects) {
+function renderEmptyState(kind, view) {
+  const product = view?.name || 'This product';
+  const lowerProduct = product.toLowerCase();
+  let title = `${product} has nothing here yet`;
+  let body = 'This panel is empty right now.';
+  if (kind === 'projects') {
+    title = `${product} has no active projects yet`;
+    body = 'Projects appear here when Rune is tracking implementation work for this product.';
+  } else if (kind === 'ideas') {
+    title = lowerProduct === 'writing'
+      ? `${product} has no writing ideas yet`
+      : `${product} has no ideas captured yet`;
+    body = 'Capture an idea to seed planning from this product space.';
+  } else if (kind === 'bugs') {
+    title = `${product} has no open bugs`;
+    body = 'Bugs appear here when the product backlog has unresolved defects.';
+  } else if (kind === 'runs') {
+    title = `${product} has no recent runs`;
+    body = 'Work-run history appears here after Rune executes product work.';
+  }
+  return `<div class="deep-empty-state" data-empty-state="${attr(kind)}">` +
+    `<strong>${escHtml(title)}</strong>` +
+    `<p>${escHtml(body)}</p>` +
+  `</div>`;
+}
+
+function renderRepoUnavailableState(view) {
+  const reason = view?.limitedReason || 'Repository unavailable for this product.';
+  return `<div class="deep-degraded-state" data-degraded-state="repo">` +
+    `<strong>${escHtml(view?.name || 'Product')} repository unavailable</strong>` +
+    `<p>${escHtml(reason)}</p>` +
+  `</div>`;
+}
+
+function renderProjects(projects, view) {
   const rows = list(projects).map(project => {
     const progress = fmtProgress(project.taskProgress);
     const percent = project.taskProgress?.total > 0
@@ -157,7 +191,7 @@ function renderProjects(projects) {
   }).join('');
   return `<section class="deep-panel deep-panel--projects" data-surface="projects">` +
     `<div class="deep-panel-head"><h3>Projects</h3><span>${list(projects).length}</span></div>` +
-    (rows || '<p class="muted">No projects</p>') +
+    (rows || renderEmptyState('projects', view)) +
   `</section>`;
 }
 
@@ -199,14 +233,16 @@ function renderBacklogAdd(kind) {
   `</form>`;
 }
 
-function renderBacklogKind(backlog, kind) {
+function renderBacklogKind(backlog, kind, view) {
   const items = list(backlog?.[kind]);
   const title = kind === 'bugs' ? 'Bugs' : 'Ideas';
+  const add = view?.repoBacked === false ? '' : `<div class="deep-backlog-add deep-backlog-add--single">${renderBacklogAdd(kind)}</div>`;
+  const empty = renderEmptyState(kind, view);
   return `<section class="deep-panel deep-panel--backlog deep-panel--${attr(kind)}" data-surface="${attr(kind)}">` +
     `<div class="deep-panel-head"><h3>${title}</h3><span>${items.length}</span></div>` +
-    `<div class="deep-backlog-add deep-backlog-add--single">${renderBacklogAdd(kind)}</div>` +
+    add +
     `<div class="deep-backlog-list" data-backlog-kind="${attr(kind)}">` +
-      `${items.map(item => renderBacklogItem(item, kind)).join('') || `<p class="muted">No ${title.toLowerCase()}</p>`}` +
+      `${items.map(item => renderBacklogItem(item, kind)).join('') || empty}` +
     `</div>` +
   `</section>`;
 }
@@ -236,9 +272,9 @@ function normalizeWorkTab(view, activeTab) {
 }
 
 function renderWorkTabPanel(view, id) {
-  if (id === 'projects') return renderProjects(view.projects);
-  if (id === 'bugs') return renderBacklogKind(view.backlog, 'bugs');
-  return renderBacklogKind(view.backlog, 'ideas');
+  if (id === 'projects') return renderProjects(view.projects, view);
+  if (id === 'bugs') return renderBacklogKind(view.backlog, 'bugs', view);
+  return renderBacklogKind(view.backlog, 'ideas', view);
 }
 
 function workSummary(view) {
@@ -336,7 +372,7 @@ function renderRuns(view, liveRuns = {}) {
   return `<section class="deep-panel deep-panel--runs" data-surface="runs">` +
     `<div class="deep-panel-head"><h3>Runs</h3><span>${list(view.runs).length}</span></div>` +
     renderActiveRun(view.activeRun, liveRuns) +
-    `<div class="deep-run-history">${history || '<p class="muted">No recent runs</p>'}</div>` +
+    `<div class="deep-run-history">${history || renderEmptyState('runs', view)}</div>` +
   `</section>`;
 }
 
@@ -520,7 +556,8 @@ function isSpecArtifact(value) {
 
 export function renderProductDeepView(view, options = {}) {
   const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
-  const activeSidePanel = options.activeSidePanel === 'runs' ? 'runs' : 'operations';
+  const defaultSidePanel = view?.repoBacked === false ? 'runs' : 'operations';
+  const activeSidePanel = (options.activeSidePanel || defaultSidePanel) === 'runs' ? 'runs' : 'operations';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
@@ -528,15 +565,9 @@ export function renderProductDeepView(view, options = {}) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
 
-  if (view.repoBacked === false) {
-    return `<section class="product-deep-view product-deep-view--limited" data-product="${attr(view.name)}">` +
-      `<header class="deep-header"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2><span>limited - not repo-backed</span></header>` +
-      `<p>${escHtml(view.limitedReason || 'Known product is not repo-backed.')}</p>` +
-    `</section>`;
-  }
-
   const profile = containerProfileFor(view);
   const profileClass = profile === 'operations-runs-heavy' ? ' product-deep-view--operations-runs-heavy' : '';
+  const degradedClass = view.repoBacked === false ? ' product-deep-view--repo-unavailable product-deep-view--limited' : '';
   const navSurfaces = isWritingProduct(view)
     ? [
       { id: 'ideas', label: 'Ideas' },
@@ -551,15 +582,18 @@ export function renderProductDeepView(view, options = {}) {
       { id: 'chat', label: 'Chat' },
     ];
 
-  return `<section class="product-deep-view${profileClass}" data-product="${attr(view.name)}" data-container-profile="${attr(profile)}">` +
+  return `<section class="product-deep-view${profileClass}${degradedClass}" data-product="${attr(view.name)}" ` +
+    `data-container-profile="${attr(profile)}"${view.repoBacked === false ? ' data-degraded-state="repo"' : ''}>` +
     `<header class="deep-header">` +
-      `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2></div>` +
+      `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2>` +
+        `${view.repoBacked === false ? '<span>limited - not repo-backed</span>' : ''}</div>` +
       `<nav aria-label="Product surfaces">` +
         navSurfaces.map(surface =>
           `<button type="button" data-surface-jump="${attr(surface.id)}">${escHtml(surface.label)}</button>`
         ).join('') +
       `</nav>` +
     `</header>` +
+    `${view.repoBacked === false ? renderRepoUnavailableState(view) : ''}` +
     `<div class="deep-two-column">` +
       `<div class="deep-work-column">` +
         `${renderWorkTabs(view, activeTab)}` +

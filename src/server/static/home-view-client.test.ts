@@ -338,6 +338,37 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/data-home-open-product[\s\S]{0,120}Open project|Open project[\s\S]{0,120}data-home-open-product/i);
   });
 
+  it('renders Rune MCP service degradation explicitly on the product card instead of leaving monitoring blank', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView({
+      available: true,
+      products: [
+        {
+          name: 'rune-mcp',
+          class: 'internal',
+          repoBacked: true,
+          counts: { activeProjects: 0, openBugs: 0, openIdeas: 0, backlogWarnings: 0 },
+          attention: [],
+          monitoring: {
+            mcp: {
+              status: 'degraded',
+              endpoint: 'http://127.0.0.1:3848/health',
+              checkedAt: '2026-06-23T12:00:00.000Z',
+              error: 'ECONNREFUSED: MCP daemon unreachable',
+            },
+          },
+        },
+      ],
+    });
+
+    expect(html).toMatch(/data-home-product=["']rune-mcp["']/i);
+    expect(html).toMatch(/data-mcp-status=["']degraded["']|home-mcp-status--degraded/i);
+    expect(html).toMatch(/MCP (service|daemon).*(degraded|unavailable)|(degraded|unavailable).*MCP (service|daemon)/i);
+    expect(html).toContain('ECONNREFUSED: MCP daemon unreachable');
+    expect(html).not.toMatch(/>\s*<\/(?:section|div|article)>/i);
+  });
+
   it('renders the product roster as internal and external classes with exact Phase 4 membership', async () => {
     const { renderHomeView } = await import('./home-view.js');
     const product = (name: string, productClass: 'internal' | 'external') => ({

@@ -424,6 +424,69 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(writing).not.toMatch(/No projects|No bugs/i);
   });
 
+  it('renders explicit product-aware empty states for products with no projects or ideas', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const emptyBrand = productView({
+      name: 'brand',
+      projects: [],
+      backlog: { bugs: [], ideas: [], warnings: [] },
+      runs: [],
+      activeRun: undefined,
+    });
+
+    const projectsHtml = renderProductDeepView(emptyBrand, { activeTab: 'projects' });
+    expect(projectsHtml).toMatch(/data-empty-state=["']projects["']/i);
+    expect(projectsHtml).toMatch(/brand[\s\S]{0,220}(no active projects|no projects yet)|(no active projects|no projects yet)[\s\S]{0,220}brand/i);
+    expect(projectsHtml).not.toMatch(/>\s*No projects\s*</i);
+
+    const ideasHtml = renderProductDeepView(emptyBrand, { activeTab: 'ideas' });
+    expect(ideasHtml).toMatch(/data-empty-state=["']ideas["']/i);
+    expect(ideasHtml).toMatch(/brand[\s\S]{0,220}(no ideas captured|no ideas yet)|(no ideas captured|no ideas yet)[\s\S]{0,220}brand/i);
+    expect(ideasHtml).not.toMatch(/>\s*No ideas\s*</i);
+  });
+
+  it('keeps writing ideas-only while showing an explicit no-ideas state instead of a blank panel', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView({
+      name: 'writing',
+      projects: [],
+      backlog: { bugs: [], ideas: [], warnings: [] },
+      runs: [],
+      activeRun: undefined,
+    }), { activeTab: 'ideas' });
+
+    expect(html).toMatch(/data-product=["']writing["']/i);
+    expect(html).toMatch(/data-work-tab=["']ideas["']/i);
+    expect(html).toMatch(/data-empty-state=["']ideas["']/i);
+    expect(html).toMatch(/writing[\s\S]{0,220}(no ideas captured|no writing ideas yet)|(no ideas captured|no writing ideas yet)[\s\S]{0,220}writing/i);
+    expect(html).not.toMatch(/data-work-tab=["']projects["']|data-work-tab=["']bugs["']/i);
+    expect(html).not.toMatch(/>\s*No ideas\s*</i);
+  });
+
+  it('renders an unavailable repo as a degraded product view with nonblank work, runs, and chat containers', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView({
+      name: 'relay',
+      repoBacked: false,
+      limitedReason: 'Repo path is unavailable or unreadable.',
+      projects: [],
+      backlog: { bugs: [], ideas: [], warnings: [] },
+      runs: [],
+      activeRun: undefined,
+    }));
+
+    expect(html).toMatch(/data-degraded-state=["']repo["']|product-deep-view--repo-unavailable/i);
+    expect(html).toMatch(/repo(?:sitory)? unavailable|repo path is unavailable/i);
+    expect(html).toContain('Repo path is unavailable or unreadable.');
+    for (const surface of ['work', 'runs', 'chat']) {
+      expect(html).toMatch(new RegExp(`data-surface=["']${surface}["']`, 'i'));
+    }
+    expect(html).not.toMatch(/data-fix-item-id|data-plan-item-id|data-project-run-action=["']start["']/i);
+  });
+
   it('marks Rune MCP as operations/runs-heavy so that container gets more room than the work backlog', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

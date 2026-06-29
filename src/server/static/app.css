@@ -715,6 +715,34 @@ body[data-view="product"] #product-root {
   color: var(--text2);
   font-size: .82rem;
 }
+.deep-empty-state,
+.deep-degraded-state,
+.home-mcp-status {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg3);
+  padding: .75rem;
+  color: var(--text2);
+  font-size: .82rem;
+}
+.deep-empty-state strong,
+.deep-degraded-state strong,
+.home-mcp-status strong {
+  color: var(--text);
+  font-size: .86rem;
+}
+.deep-empty-state p,
+.deep-degraded-state p {
+  margin: 0;
+}
+.deep-degraded-state,
+.home-mcp-status--degraded {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
 .deep-action,
 .deep-panel button {
   font: inherit;

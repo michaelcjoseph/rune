@@ -64,10 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- names the repo scope when one is active.
-
-Verified:
-- `npm test -- src/vault/sessions.test.ts --reporter=verbose` → 37 passed
+- 
+- `npm test -- src/server/static/home-view-client.test.ts src/server/static/product-deep-view-client.test.ts --reporter=verbose` → 72 passed
 - `npm run build` → passed
 
-Left the pre-existing staged QA change in `src/vault/sessions.test.ts` untouched; my implementation change is unstaged in `src/vault/sessions.ts`.
+Left the pre-existing staged QA test changes untouched; my implementation changes are unstaged in the three static frontend files.
