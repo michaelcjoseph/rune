@@ -43,9 +43,15 @@ const execFile = promisify(execFileCb);
 /** One product's entry in `policies/products.json`. Tilde-bearing paths are
  *  expanded to absolute paths by `readProductsConfig` before this is returned
  *  to a caller. */
+export type ProductClass = 'internal' | 'external';
+
 export interface ProductConfig {
+  /** Product-OS class used by the cockpit roster. Absent only for legacy fixtures/config. */
+  class?: ProductClass;
   /** Absolute path of the product's repo (the one `git worktree add` targets). */
   repoPath: string;
+  /** Optional repo-relative scope for products sharing a repository. */
+  scopePath?: string;
   /** Branch a fresh worktree is based on when no explicit branch is given. */
   baseBranch: string;
   /** Absolute path of the product's scoped credentials file (A1.2 wires this). */
@@ -150,6 +156,16 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       );
     }
     const entry = entryRaw as Record<string, unknown>;
+    let productClass: ProductClass | undefined;
+    if (entry['class'] !== undefined) {
+      if (entry['class'] !== 'internal' && entry['class'] !== 'external') {
+        throw new Error(
+          `readProductsConfig: product '${slug}' has invalid class '${String(entry['class'])}' in ${path} — ` +
+            "expected 'internal' or 'external'",
+        );
+      }
+      productClass = entry['class'];
+    }
     const repoPath = expandTilde(String(entry['repoPath'] ?? ''));
     if (!repoPath) {
       throw new Error(
@@ -157,7 +173,11 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       );
     }
     out[slug] = {
+      ...(productClass ? { class: productClass } : {}),
       repoPath,
+      ...(typeof entry['scopePath'] === 'string' && entry['scopePath']
+        ? { scopePath: entry['scopePath'] }
+        : {}),
       baseBranch: String(entry['baseBranch'] ?? 'main'),
       credentialsFile: expandTilde(String(entry['credentialsFile'] ?? '')),
       egressAllowlist: Array.isArray(entry['egressAllowlist'])

@@ -77,6 +77,30 @@ describe('product/project cockpit — view contents (test-plan §7)', () => {
     expect(family.projects).toEqual([]);
     expect(family.repoBacked).toBe(false); // repoBacked threads through from the registry
   });
+
+  it('copies product class from the registry into the cockpit projection for roster grouping', () => {
+    const registry: Registry = {
+      version: 1,
+      builtAt: '2026-06-29T00:00:00.000Z',
+      products: [
+        { name: 'rune', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'rune-mcp', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'aura', class: 'external', repoBacked: true, projects: [] },
+        { name: 'writing', class: 'external', repoBacked: true, projects: [] },
+        { name: 'brand', class: 'external', repoBacked: true, projects: [] },
+      ],
+    };
+
+    const view = buildCockpitView(registry, {});
+
+    expect(Object.fromEntries(view.products.map((product) => [product.name, product.class]))).toEqual({
+      rune: 'internal',
+      'rune-mcp': 'internal',
+      aura: 'external',
+      writing: 'external',
+      brand: 'external',
+    });
+  });
 });
 
 describe('product/project cockpit — per-action controls (test-plan §7)', () => {

@@ -64,9 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- rune-product-os/src/server/static/home-view.js): renders products in `Internal` and `External` roster sections, with missing class treated as external.
+- s classes for the roster and executable `rune-mcp`, `writing`, and `brand` entries, with `writing.scopePath = "docs/rune"`.
 
 Verified:
-- `npm test -- src/intent/home-pulse-deep-view.test.ts src/server/static/home-view-client.test.ts`
+- `npm test -- src/intent/cockpit.test.ts src/jobs/registry-rebuild.test.ts src/jobs/sandbox-runtime.test.ts`
 - `npm run build`
 - `git diff --check`
+
+No commit made.

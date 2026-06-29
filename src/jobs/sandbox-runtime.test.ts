@@ -275,6 +275,108 @@ describe('readProductsConfig — validationCommands (P1.5)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// readProductsConfig — product policy schema (project 19, W2 Phase 4)
+//
+// Product-OS metadata lives in policies/products.json, not in frontend grouping
+// code. These tests pin the policy-reader contract only: class is constrained to
+// internal/external, scopePath is optional and preserved for shared-repo products,
+// and the real policy file contains executable entries for the W2 roster.
+// ---------------------------------------------------------------------------
+
+describe('readProductsConfig — product-policy-schema (project 19)', () => {
+  it('parses class and optional scopePath from products.json entries', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      'rune-mcp': {
+        class: 'internal',
+        repoPath: '~/workspace/rune',
+        baseBranch: 'main',
+        credentialsFile: '~/.config/rune/credentials/rune/.env',
+        egressAllowlist: ['github.com'],
+      },
+      writing: {
+        class: 'external',
+        repoPath: '~/workspace/michaelcjoseph.com',
+        scopePath: 'docs/rune',
+        baseBranch: 'main',
+        credentialsFile: '~/.config/rune/credentials/writing/.env',
+        egressAllowlist: ['github.com', 'registry.npmjs.org'],
+      },
+    });
+
+    const result = readProductsConfig(configPath);
+
+    expect(result['rune-mcp']).toMatchObject({
+      class: 'internal',
+      repoPath: join(homedir(), 'workspace/rune'),
+    });
+    expect(result['writing']).toMatchObject({
+      class: 'external',
+      repoPath: join(homedir(), 'workspace/michaelcjoseph.com'),
+      scopePath: 'docs/rune',
+    });
+  });
+
+  it('rejects a product class outside internal/external', () => {
+    const configPath = writeProductsJson(tmpDir, {
+      aura: {
+        class: 'partner',
+        repoPath: '/fake/workspace/aura',
+        baseBranch: 'main',
+        credentialsFile: '/fake/.env',
+        egressAllowlist: [],
+      },
+    });
+
+    expect(() => readProductsConfig(configPath)).toThrow(/class|internal|external/i);
+  });
+
+  it('the REAL products policy defines the Product-OS roster classes', () => {
+    const realConfigPath = fileURLToPath(
+      new URL('../../policies/products.json', import.meta.url),
+    );
+    const result = readProductsConfig(realConfigPath);
+
+    expect(Object.fromEntries(
+      ['rune', 'rune-mcp', 'aura', 'assay', 'relay', 'writing', 'brand'].map(
+        (name) => [name, result[name]?.class],
+      ),
+    )).toEqual({
+      rune: 'internal',
+      'rune-mcp': 'internal',
+      aura: 'external',
+      assay: 'external',
+      relay: 'external',
+      writing: 'external',
+      brand: 'external',
+    });
+  });
+
+  it('the REAL products policy makes rune-mcp, writing, and brand executable products', () => {
+    const realConfigPath = fileURLToPath(
+      new URL('../../policies/products.json', import.meta.url),
+    );
+    const result = readProductsConfig(realConfigPath);
+
+    for (const product of ['rune-mcp', 'writing', 'brand']) {
+      expect(result[product], `${product} entry`).toBeDefined();
+      expect(result[product]!.repoPath, `${product} repoPath`).not.toBe('');
+      expect(result[product]!.baseBranch, `${product} baseBranch`).not.toBe('');
+      expect(result[product]!.credentialsFile, `${product} credentialsFile`).not.toBe('');
+      expect(result[product]!.egressAllowlist, `${product} egressAllowlist`).toEqual(
+        expect.arrayContaining(['github.com']),
+      );
+      expect(result[product]!.validationCommands, `${product} validationCommands`).toEqual(
+        expect.arrayContaining([expect.stringMatching(/^npm /)]),
+      );
+    }
+
+    expect(result['writing']!.repoPath).toBe(result['brand']!.repoPath);
+    expect(result['writing']!.scopePath).toMatch(/writing|rune/i);
+    expect(result['brand']!.scopePath).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getProductConfig
 // ---------------------------------------------------------------------------
 

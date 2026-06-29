@@ -90,7 +90,7 @@ export function scanRegistrySources(
       projectsIndex = null;
     }
     const taskProgress = scanProductTaskProgress(projectsDir);
-    sources.push({ name, repoBacked, projectsIndex, taskProgress });
+    sources.push({ name, class: cfg.class, repoBacked, projectsIndex, taskProgress });
   }
   return { products: sources };
 }

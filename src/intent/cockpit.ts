@@ -15,7 +15,7 @@
  * See docs/projects/08-intent-layer/{spec.md (§"Cockpit"), test-plan.md (§7)}.
  */
 
-import type { LifecycleStatus, Registry } from './registry.js';
+import type { LifecycleStatus, ProductClass, Registry } from './registry.js';
 
 /** Live run-status of a project — held by supervision (Layer 3), never by the registry. */
 export type CockpitRunStatus = 'idle' | 'running' | 'blocked-on-human';
@@ -149,6 +149,8 @@ export interface BacklogCounts {
 /** A product and the projects under it, as the cockpit presents them. */
 export interface CockpitProduct {
   name: string;
+  /** Product-OS class copied from the registry for internal/external roster grouping. */
+  class?: ProductClass;
   repoBacked: boolean;
   projects: CockpitProject[];
   /** Backlog open/done + warning counts (09-expand-cockpit). Absent unless the caller passes
@@ -273,6 +275,7 @@ export function buildCockpitView(
     });
     const prod: CockpitProduct = {
       name: product.name,
+      ...(product.class ? { class: product.class } : {}),
       repoBacked: product.repoBacked,
       projects,
     };

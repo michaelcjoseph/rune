@@ -50,11 +50,11 @@ beforeEach(() => {
   mkdirSync(join(root, 'relay'), { recursive: true });
 
   const productsJson = {
-    rune: { repoPath: rune, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
-    aura: { repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
-    relay: { repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    rune: { class: 'internal', repoPath: rune, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    aura: { class: 'external', repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    relay: { class: 'external', repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     // a product whose repo is absent on disk entirely
-    ghost: { repoPath: join(root, 'does-not-exist'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    ghost: { class: 'external', repoPath: join(root, 'does-not-exist'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   };
   writeFileSync(join(root, 'products.json'), JSON.stringify(productsJson), 'utf8');
 });
@@ -67,6 +67,16 @@ describe('scanRegistrySources', () => {
   it('scans every product in products.json', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
     expect(sources.products.map((p) => p.name).sort()).toEqual(['aura', 'ghost', 'relay', 'rune']);
+  });
+
+  it('copies product class from products.json into registry sources', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    expect(Object.fromEntries(sources.products.map((p) => [p.name, p.class]))).toEqual({
+      rune: 'internal',
+      aura: 'external',
+      relay: 'external',
+      ghost: 'external',
+    });
   });
 
   it('reads each repo index and per-project task progress', () => {

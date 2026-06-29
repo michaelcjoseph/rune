@@ -1,5 +1,6 @@
 {
   "aura": {
+    "class": "external",
     "repoPath": "~/workspace/aura",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/aura/.env",
@@ -12,6 +13,7 @@
     ]
   },
   "assay": {
+    "class": "external",
     "repoPath": "~/workspace/assay",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/assay/.env",
@@ -24,6 +26,7 @@
     ]
   },
   "rune": {
+    "class": "internal",
     "repoPath": "~/workspace/rune",
     "baseBranch": "main",
     "orchestratedMode": true,
@@ -40,7 +43,26 @@
       "npm test"
     ]
   },
+  "rune-mcp": {
+    "class": "internal",
+    "repoPath": "~/workspace/rune",
+    "baseBranch": "main",
+    "orchestratedMode": true,
+    "credentialsFile": "~/.config/rune/credentials/rune-mcp/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build",
+      "npm test"
+    ]
+  },
   "relay": {
+    "class": "external",
     "repoPath": "~/workspace/relay",
     "baseBranch": "main",
     "credentialsFile": "~/.config/rune/credentials/relay/.env",
@@ -50,6 +72,41 @@
       "codeload.github.com",
       "objects.githubusercontent.com",
       "registry.npmjs.org"
+    ]
+  },
+  "writing": {
+    "class": "external",
+    "repoPath": "~/workspace/michaelcjoseph.com",
+    "scopePath": "docs/rune",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/rune/credentials/writing/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build",
+      "npm test"
+    ]
+  },
+  "brand": {
+    "class": "external",
+    "repoPath": "~/workspace/michaelcjoseph.com",
+    "baseBranch": "main",
+    "credentialsFile": "~/.config/rune/credentials/brand/.env",
+    "egressAllowlist": [
+      "github.com",
+      "api.github.com",
+      "codeload.github.com",
+      "objects.githubusercontent.com",
+      "registry.npmjs.org"
+    ],
+    "validationCommands": [
+      "npm run build",
+      "npm test"
     ]
   }
 }
