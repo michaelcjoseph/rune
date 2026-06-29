@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 import config from '../config.js';
 import { cleanupSession } from '../ai/claude.js';
 import { createLogger } from '../utils/logger.js';
@@ -45,6 +45,7 @@ export interface ProductPromptWorldview {
 export interface ProductPromptContext {
   product: string;
   repoPath: string;
+  scopePath?: string;
   repoDocs: ProductPromptDoc[];
   projects: ProductPromptProject[];
   worldview: ProductPromptWorldview[];
@@ -141,8 +142,9 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
   return [
     `PRODUCT CHAT: Active product: ${scope.product}.`,
     `Product repo: ${context.repoPath}`,
+    ...(context.scopePath ? [`Product repo scope: ${context.scopePath}`] : []),
     'Ground this conversation in the loaded product context below. Search the active product repo and the vault before answering product-specific development questions.',
-    `REPO + KB ROUTING: code/project questions route to the active product repo (${context.repoPath}) with repo_search/Read/Grep. Concept/people questions route to the KB with kb_query first, then kb_search for source pages. Mixed questions should use both.`,
+    `REPO + KB ROUTING: code/project questions route to the active product repo (${context.repoPath}${context.scopePath ? `, scoped to ${context.scopePath}` : ''}) with repo_search/Read/Grep. Concept/people questions route to the KB with kb_query first, then kb_search for source pages. Mixed questions should use both.`,
     '',
     '## Loaded Repo Docs',
     formatDocs(context.repoDocs),
@@ -182,7 +184,19 @@ function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null
   }
 }
 
-function loadRepoDocs(repoPath: string): ProductPromptDoc[] {
+function normalizeScopePath(scopePath: string | undefined): string | undefined {
+  if (!scopePath) return undefined;
+  const normalized = normalize(scopePath);
+  if (isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')) return undefined;
+  return normalized === '.' ? undefined : normalized;
+}
+
+function pathInProductScope(relPath: string, scopePath: string | undefined): string {
+  return scopePath ? join(scopePath, relPath) : relPath;
+}
+
+function loadRepoDocs(repoPath: string, scopePath?: string): ProductPromptDoc[] {
+  const root = scopePath ? join(repoPath, scopePath) : repoPath;
   const candidates = [
     'CLAUDE.md',
     'AGENTS.md',
@@ -191,12 +205,14 @@ function loadRepoDocs(repoPath: string): ProductPromptDoc[] {
     join('docs', 'operations.md'),
   ];
   return candidates
-    .map(rel => readIfExists(join(repoPath, rel), rel))
+    .map(rel => readIfExists(join(root, rel), pathInProductScope(rel, scopePath)))
     .filter((doc): doc is ProductPromptDoc => Boolean(doc));
 }
 
-function loadProjectContexts(repoPath: string): ProductPromptProject[] {
-  const projectsDir = join(repoPath, 'docs', 'projects');
+function loadProjectContexts(repoPath: string, scopePath?: string): ProductPromptProject[] {
+  const root = scopePath ? join(repoPath, scopePath) : repoPath;
+  const projectsRel = scopePath ? 'projects' : join('docs', 'projects');
+  const projectsDir = join(root, projectsRel);
   try {
     if (!existsSync(projectsDir) || !statSync(projectsDir).isDirectory()) return [];
     return readdirSync(projectsDir)
@@ -211,8 +227,14 @@ function loadProjectContexts(repoPath: string): ProductPromptProject[] {
       .slice(0, MAX_PROJECT_CONTEXTS)
       .map(slug => ({
         slug,
-        spec: readIfExists(join(projectsDir, slug, 'spec.md'), join('docs', 'projects', slug, 'spec.md'))?.content ?? '',
-        tasks: readIfExists(join(projectsDir, slug, 'tasks.md'), join('docs', 'projects', slug, 'tasks.md'))?.content ?? '',
+        spec: readIfExists(
+          join(projectsDir, slug, 'spec.md'),
+          pathInProductScope(join(projectsRel, slug, 'spec.md'), scopePath),
+        )?.content ?? '',
+        tasks: readIfExists(
+          join(projectsDir, slug, 'tasks.md'),
+          pathInProductScope(join(projectsRel, slug, 'tasks.md'), scopePath),
+        )?.content ?? '',
       }))
       .filter(project => project.spec || project.tasks);
   } catch {
@@ -243,11 +265,13 @@ function loadProductPromptContext(product: string): ProductPromptContext | null 
   try {
     const productConfig = readProductsConfig(config.PRODUCTS_CONFIG_FILE)[product];
     if (!productConfig) return null;
+    const scopePath = normalizeScopePath(productConfig.scopePath);
     return {
       product,
       repoPath: productConfig.repoPath,
-      repoDocs: loadRepoDocs(productConfig.repoPath),
-      projects: loadProjectContexts(productConfig.repoPath),
+      ...(scopePath ? { scopePath } : {}),
+      repoDocs: loadRepoDocs(productConfig.repoPath, scopePath),
+      projects: loadProjectContexts(productConfig.repoPath, scopePath),
       worldview: loadWorldviewContext(),
     };
   } catch (err) {

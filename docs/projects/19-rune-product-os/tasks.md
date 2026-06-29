@@ -96,7 +96,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [x] **product-os-api-projection** — Extend cockpit/product-deep-view API payloads with product class and container capabilities so the frontend does not infer behavior from hardcoded product names except for intentional layout weighting.
 - [x] **internal-external-distinction** — Add the top-level internal/external distinction to the cockpit and register the full product roster (internal: `rune`, `rune-mcp`; external: `aura`, `assay`, `relay`, `writing`, `brand`).
 - [x] **product-os-containers** — Make the existing three containers fill from each product's context. `rune-mcp` shows projects/ideas/bugs but emphasizes operations/runs; `writing` reads ideas from `docs/rune/writing-ideas.md` and does not render bugs as a primary workflow; `brand` uses the standard containers over the site root.
-- [ ] **product-scoped-chat** — Ensure cockpit chat scope works for `rune-mcp`, `writing`, and `brand`, including shared-repo products where `scopePath` constrains repo context.
+- [x] **product-scoped-chat** — Ensure cockpit chat scope works for `rune-mcp`, `writing`, and `brand`, including shared-repo products where `scopePath` constrains repo context.
 - [ ] **frontend-empty-states** — Add explicit empty/degraded states for products with no projects, no ideas, unavailable repo, or unavailable MCP service; no blank panels.
 - [ ] **user-reachability-check** — Open cockpit, see Internal and External groups, open each new product, verify the expected containers and scoped chat payload.
 

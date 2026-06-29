@@ -64,7 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- er.test.ts src/intent/home-pulse-deep-view.test.ts src/intent/cockpit.test.ts --reporter=verbose` → 49 passed  
-`npm run build` → passed
+- names the repo scope when one is active.
 
-I left the pre-existing staged QA change in `src/intent/backlog-reader.test.ts` untouched; my implementation change is unstaged in `src/intent/backlog-reader.ts`.
+Verified:
+- `npm test -- src/vault/sessions.test.ts --reporter=verbose` → 37 passed
+- `npm run build` → passed
+
+Left the pre-existing staged QA change in `src/vault/sessions.test.ts` untouched; my implementation change is unstaged in `src/vault/sessions.ts`.
