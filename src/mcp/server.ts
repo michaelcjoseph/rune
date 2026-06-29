@@ -58,12 +58,15 @@ export const ADMIN_TOOLS = [
   'kb_lint',
 ] as const;
 
+export const CONTENT_TOOLS = ['journal_range'] as const;
+
 const UTILITY_TOOLS = ['refresh_vault_index'] as const;
 
 /** Union of every tool name the factory can register. */
 export type ToolName =
   | (typeof APP_SURFACE_TOOLS)[number]
   | (typeof ADMIN_TOOLS)[number]
+  | (typeof CONTENT_TOOLS)[number]
   | (typeof UTILITY_TOOLS)[number];
 
 /** Lazy loader for the read-tools trio handler + deps modules (shared by
@@ -72,6 +75,9 @@ const lazyReadTools = () =>
   Promise.all([import('./tools/read-tools.js'), import('./tools/read-tools-deps.js')]);
 
 const lazyVaultIndexTools = () => import('./tools/vault-index-tools.js');
+
+const lazyJournalRangeTool = () =>
+  Promise.all([import('./tools/journal-range.js'), import('./tools/journal-range-deps.js')]);
 
 function daemonBroadSearch(
   query: string,
@@ -209,6 +215,22 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         const { refreshVaultIndexTool, buildProductionRefreshVaultIndexDeps } =
           await lazyVaultIndexTools();
         return refreshVaultIndexTool(buildProductionRefreshVaultIndexDeps());
+      },
+    );
+  },
+
+  journal_range: (server) => {
+    server.tool(
+      'journal_range',
+      'Return journal entries for an inclusive date range from the warm vault index, with cold fallback while the index is building.',
+      {
+        startDate: z.string().describe('Inclusive start date in YYYY-MM-DD format'),
+        endDate: z.string().describe('Inclusive end date in YYYY-MM-DD format'),
+      },
+      async (input) => {
+        const [{ journalRange }, { buildProductionJournalRangeDeps }] =
+          await lazyJournalRangeTool();
+        return journalRange(input, buildProductionJournalRangeDeps());
       },
     );
   },

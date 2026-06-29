@@ -64,10 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ounded latency sample storage, and reset across a fresh module graph.
-
-Verification:
+-  `npx vitest run src/mcp/content-functions.test.ts -t journal_range` passes.
 - `npm run build` passes.
-- `npx vitest run src/mcp/mcp-metrics-snapshot.test.ts` is red as expected for this tests-first task: all failures are because `mcp_metrics_snapshot` is not registered yet.
-
-No commit made.
+- Full `src/mcp/content-functions.test.ts` still fails on `follow_wikilinks` and `tag_date_query`, which are separate pending tasks in `tasks.md`; I did not implement them under this selected task.

@@ -11,7 +11,7 @@ import {
   refreshVaultIndex,
   type VaultIndexStatus,
 } from '../kb/vault-index.js';
-import { APP_SURFACE_TOOLS, createRuneMcpServer } from './server.js';
+import { APP_SURFACE_TOOLS, CONTENT_TOOLS, createRuneMcpServer } from './server.js';
 import { createMcpOAuth } from '../server/mcp-oauth.js';
 import { readOAuthStore, writeOAuthStore } from '../server/mcp-oauth-store.js';
 import { mountMcpRoute, type McpRouteHandler } from '../server/mcp-transport.js';
@@ -139,7 +139,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
   const mcpHandler = mountMcpRoute({
     verifyBearer: oauth.verifyBearer,
     getServer: () => createRuneMcpServer({
-      tools: [...APP_SURFACE_TOOLS, 'refresh_vault_index'],
+      tools: [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index'],
       name: 'rune-mcp',
       kbQueryBroadSearch: daemonBroadSearch,
     }),

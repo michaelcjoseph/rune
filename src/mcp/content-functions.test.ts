@@ -149,6 +149,32 @@ afterEach(() => {
 });
 
 describe('expanded MCP content functions', () => {
+  it('journal_range is registered with required ISO start/end date inputs', async () => {
+    const server = requireServerWithTools(['journal_range']);
+    const client = await connectClient(server);
+
+    try {
+      const { tools } = await client.listTools();
+      const tool = tools.find((entry) => entry.name === 'journal_range');
+      expect(tool).toBeDefined();
+      expect(tool?.description).toMatch(/journal/i);
+
+      const schema = tool?.inputSchema as {
+        type?: string;
+        required?: string[];
+        properties?: Record<string, { type?: string; description?: string }>;
+      };
+      expect(schema.type).toBe('object');
+      expect(schema.required).toEqual(expect.arrayContaining(['startDate', 'endDate']));
+      expect(schema.properties?.startDate).toMatchObject({ type: 'string' });
+      expect(schema.properties?.startDate?.description).toMatch(/YYYY-MM-DD/i);
+      expect(schema.properties?.endDate).toMatchObject({ type: 'string' });
+      expect(schema.properties?.endDate?.description).toMatch(/YYYY-MM-DD/i);
+    } finally {
+      await client.close();
+    }
+  });
+
   it('journal_range returns journal entries for an inclusive date range from the warm index', async () => {
     const server = requireServerWithTools(['journal_range']);
     const client = await connectClient(server);
