@@ -353,6 +353,74 @@ describe('HomePulse and ProductDeepView API routes (cockpit redesign Phase 1)', 
     ]);
   });
 
+  it('surfaces terminal writing pipeline state metadata in the writing product operations/runs view', async () => {
+    const writingProduct = {
+      name: 'writing',
+      class: 'external',
+      scopePath: 'docs/rune',
+      repoBacked: true,
+      containerCapabilities: {
+        projects: false,
+        bugs: false,
+        ideas: true,
+        runs: true,
+        chat: true,
+        monitoring: 'stubbed',
+      },
+      projects: [],
+    };
+    const writingRow = {
+      id: 'run-writing-committed',
+      project: 'operating-from-memory',
+      outcome: 'branch-complete',
+      durationMs: 600000,
+      startedAt: '2026-06-23T12:00:00.000Z',
+      endedAt: '2026-06-23T12:10:00.000Z',
+    };
+    const writingSummary = {
+      id: 'run-writing-committed',
+      product: 'writing',
+      project: 'operating-from-memory',
+      target: { kind: 'writing-page', slug: 'operating-from-memory' },
+      outcome: 'branch-complete',
+      reason: 'committed writing artifact',
+      exit: { code: 0, signal: null },
+      workProduct: {},
+      baseSha: 'abc',
+      branch: 'rune-writing/operating-from-memory',
+      routePath: '/rune/operating-from-memory',
+      writingStage: 'committed',
+      startedAt: '2026-06-23T12:00:00.000Z',
+      endedAt: '2026-06-23T12:10:00.000Z',
+      transcriptPath: '/test/logs/work-runs/run-writing-committed/transcript.jsonl',
+      forensicsPath: '/test/logs/work-runs/run-writing-committed/forensics.json',
+    };
+
+    mockRegistry.products.push(writingProduct as any);
+    mockIndexRows.unshift(writingRow as any);
+    (mockSummariesById as Record<string, any>)['run-writing-committed'] = writingSummary;
+    try {
+      const res = await makeRequest('/api/products/writing', AUTH);
+
+      expect(res.status).toBe(200);
+      expect(res.body.runs).toEqual([
+        expect.objectContaining({
+          runId: 'run-writing-committed',
+          target: { kind: 'writing-page', slug: 'operating-from-memory' },
+          outcome: 'completed',
+          branch: 'rune-writing/operating-from-memory',
+          routePath: '/rune/operating-from-memory',
+          writingStage: 'committed',
+          transcriptUrl: '/api/work-runs/run-writing-committed/transcript',
+        }),
+      ]);
+    } finally {
+      mockRegistry.products.pop();
+      mockIndexRows.shift();
+      delete (mockSummariesById as Record<string, any>)['run-writing-committed'];
+    }
+  });
+
   it('returns a 200 limited ProductDeepView, not a 409, for a known non-repo-backed product', async () => {
     const res = await makeRequest('/api/products/relay', AUTH);
 

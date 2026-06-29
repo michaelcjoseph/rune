@@ -64,10 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
--  were left in the worktree. Verification:
+- ): writing work-run summaries now surface `writing-page` target metadata plus branch, route path, and writing stage in operations/runs without changing ordinary project run shape.
 
-```bash
-npm test -- src/jobs/michaelcjoseph-two-product-repo.test.ts
-```
-
-failed because `michaelcjoseph.com` is missing the Phase 6 `/rune` files and `docs/rune/writing-voice.md`. The task needs to run with `michaelcjoseph.com` included as a writable root.
+Verified:
+- `npm test -- src/jobs/writing-pipeline-core.test.ts src/server/home-products-api.test.ts`
+- `npm run build`

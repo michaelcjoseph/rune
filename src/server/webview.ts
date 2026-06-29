@@ -668,14 +668,25 @@ function readNewCockpitRecentWorkRuns(): ProductDeepViewWorkRun[] {
     const product = summary?.product;
     const project = summary?.project ?? row.project;
     if (!product || !project) continue;
+    const summaryMetadata = summary as (typeof summary & {
+      target?: ProductDeepViewWorkRun['target'];
+      routePath?: string;
+      writingStage?: string;
+    });
+    const isWritingRun = product === 'writing';
     runs.push({
       runId: row.id,
       product,
       project,
-      target: { kind: 'project', slug: project },
+      target: isWritingRun && summaryMetadata?.target
+        ? summaryMetadata.target
+        : { kind: 'project', slug: project },
       outcome: summary?.outcome ?? row.outcome,
       endedAt: summary?.endedAt ?? row.endedAt,
       transcriptExists: Boolean(summary?.transcriptPath),
+      ...(isWritingRun && summary?.branch ? { branch: summary.branch } : {}),
+      ...(isWritingRun && summaryMetadata?.routePath ? { routePath: summaryMetadata.routePath } : {}),
+      ...(isWritingRun && summaryMetadata?.writingStage ? { writingStage: summaryMetadata.writingStage } : {}),
     });
   }
   return runs;
