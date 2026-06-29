@@ -64,6 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- pm test -- src/mcp/daemon.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
+- logs/rune-mcp-oauth-store.json`.
 
-Result: red as expected for this tests-first task. Failures point to missing `mcp:start`, missing `src/mcp/daemon.ts`, and current web ownership of MCP state. No production implementation files were changed.
+Verified with:
+
+`npm test -- src/config.test.ts --reporter verbose --testTimeout 5000 --hookTimeout 5000`
+
+Result: red as expected for this tests-first task. The four new failures are all missing `RUNE_MCP_*` production config keys. No production files were changed.
