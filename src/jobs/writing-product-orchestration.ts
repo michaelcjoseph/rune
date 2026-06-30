@@ -50,6 +50,15 @@ export interface WritingProductRunPlan {
   surfaceStates: WritingProductSurfaceState[];
 }
 
+export interface StartedWritingProductRun extends WritingProductRunPlan {
+  branchStatus: 'created' | 'resumed';
+  publish: {
+    mode: 'branch-commit';
+    externalDeployment: false;
+    commitSha: string;
+  };
+}
+
 export const WRITING_PRODUCT_SURFACE_STATES: WritingProductSurfaceState[] = [
   'researching',
   'drafting',
@@ -76,6 +85,26 @@ export type StartWritingProductRunInput =
     outputPath: string;
     sender: unknown;
   };
+
+export interface StartWritingProductRunDeps {
+  createWritingWorktree: (input: {
+    product: 'writing';
+    project: string;
+    branch: string;
+  }) => Promise<{ worktree: string; resumed?: boolean }>;
+  runWritingPipeline: (input: {
+    topic: string;
+    requestedBy: 'blog' | 'writing-critique';
+    branch: string;
+    worktree: string;
+  }) => Promise<{
+    state: string;
+    committed?: boolean;
+    commitSha?: string;
+    branch: string;
+  }>;
+  deployExternal?: (input: { branch: string; routePath: string }) => Promise<void>;
+}
 
 export function slugifyWritingIdentifier(value: string): string {
   const slug = value
@@ -140,7 +169,52 @@ export function planWritingProductRun(input: { topic: string }): WritingProductR
   };
 }
 
-export async function startWritingProductRun(input: StartWritingProductRunInput): Promise<WritingProductRunPlan> {
+export async function startWritingProductRun(input: StartWritingProductRunInput): Promise<WritingProductRunPlan>;
+export async function startWritingProductRun(
+  input: StartWritingProductRunInput,
+  deps: StartWritingProductRunDeps,
+): Promise<StartedWritingProductRun>;
+export async function startWritingProductRun(
+  input: StartWritingProductRunInput,
+  deps?: StartWritingProductRunDeps,
+): Promise<WritingProductRunPlan | StartedWritingProductRun> {
   const topic = input.command === 'blog' ? input.topic : input.target;
-  return planWritingProductRun({ topic });
+  const plan = planWritingProductRun({ topic });
+  if (!deps) {
+    return plan;
+  }
+
+  const worktree = await deps.createWritingWorktree({
+    product: 'writing',
+    project: plan.slug,
+    branch: plan.branch,
+  });
+  const pipelineResult = await deps.runWritingPipeline({
+    topic: plan.topic,
+    requestedBy: input.command,
+    branch: plan.branch,
+    worktree: worktree.worktree,
+  });
+
+  if (pipelineResult.branch !== plan.branch) {
+    throw new Error(
+      `startWritingProductRun: pipeline returned branch ${pipelineResult.branch}, expected ${plan.branch}`,
+    );
+  }
+  if (pipelineResult.state !== 'committed' && pipelineResult.committed !== true) {
+    throw new Error(`startWritingProductRun: writing pipeline did not commit ${plan.branch}`);
+  }
+  if (!pipelineResult.commitSha) {
+    throw new Error(`startWritingProductRun: writing pipeline committed ${plan.branch} without a commit sha`);
+  }
+
+  return {
+    ...plan,
+    branchStatus: worktree.resumed ? 'resumed' : 'created',
+    publish: {
+      mode: 'branch-commit',
+      externalDeployment: false,
+      commitSha: pipelineResult.commitSha,
+    },
+  };
 }

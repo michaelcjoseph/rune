@@ -64,13 +64,11 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- itting the published artifact. This keeps pkms as source material while preventing verbatim journal lines, planted markers, private identifiers, and labeled health/psychology details from reaching the committed page.
+- 
 
 Verified:
-- `npm test -- src/jobs/writing-pipeline-core.test.ts`
+- `npm test -- src/jobs/writing-product-orchestration.test.ts --reporter=verbose`
+- `npm test -- src/jobs/writing-pipeline-core.test.ts --reporter=verbose`
 - `npm run build`
-- jobs/writing-pipeline-core.test.ts](rune/.worktrees/rune/19-rune-product-os/src/jobs/writing-pipeline-core.test.ts) so planted private material from vault search and wikilinks cannot appear in the committed artifact.
 
-Verified:
-- `npm test -- src/jobs/writing-pipeline-core.test.ts`
-- `npm run build`
+Note: `src/jobs/writing-product-orchestration.test.ts` was already modified in the worktree; I left it untouched.

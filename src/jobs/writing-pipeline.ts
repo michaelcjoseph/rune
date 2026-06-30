@@ -24,6 +24,7 @@ export interface WritingPipelineResult {
   routePath: string;
   state: WritingPipelineState;
   committed?: boolean;
+  commitSha?: string;
   failed?: boolean;
 }
 
@@ -265,14 +266,14 @@ export async function runWritingPipeline(
     await deps.writeArtifact(target.artifactPath, publicMarkdown);
 
     emit('ready-for-review');
-    await deps.commitArtifact({
+    const commit = await deps.commitArtifact({
       branch: target.branch,
       paths: [target.artifactPath],
       message: `Publish writing page: ${input.topic.trim()}`,
     });
 
     emit('committed');
-    return { ...resultBase, state: 'committed', committed: true };
+    return { ...resultBase, state: 'committed', committed: true, commitSha: commit.sha };
   } catch {
     emit('failed');
     return { ...resultBase, state: 'failed', failed: true };
