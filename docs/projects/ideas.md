@@ -25,22 +25,17 @@ below it.
       - *Layer C — self-generated ideas carry no product (the design question).* `ProjectIdea` is `{ title, friction, id }`. Nothing attributes a detected friction to "this belongs in aura's repo." Auto-dispatch cross-repo needs product attribution — the sensor tagging its source product, a `product` field set at triage, or a registry lookup for friction that already maps to a known project (the registry maps slug→product; a brand-new self-generated project does not). A new project also needs scaffolding **in the target repo** (the scaffold-approval/promotion machinery), its own surface.
     - The hard parts are (1) the dispatch path + product attribution (Layer B/C) and (2) the cross-repo concurrency/branch/security model: per-product run caps, the stable `rune-work/<slug>` branch convention applied per repo, and whether a run in someone else's repo may push / what its egress allowlist permits. The egress + sandbox primitives exist (`sandbox-runtime.ts`, `egress-policy.ts`, per-product `egressAllowlist`); the policy decisions per product don't.
     - **Recommended first step:** a throwaway validation run in aura (trivial change) to prove credentials + worktree + egress + push actually work cross-repo before building the dispatch/UX on top. Treat the full thing as its own `/plan`, not an inline edit.
-- Easily add new products to Rune
-- quarterly and annual SEC reports ingestion of companies I'm following (Claude Cowork?)
-- Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc) (Claude Cowork?)
-- Monitor and ingest X posts for relevant topics and report them to me daily (Claude Cowork?)
-- Integrate Granola MCP for Rune to better manage meeting transcription notes (Claude Cowork?)
+- Research agent
+  - Coud potentially be done via Claude Cowork writing to the pkms
+  - quarterly and annual SEC reports ingestion of companies I'm following
+  - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
+  - Monitor and ingest X posts for relevant topics and report them to me daily
+- Socratic method interview agent to pair with writer
+  - Interviews me as part of the writing process for any topic
+  - Finished interviews lead to new writing content for the writing agent
+  - Interviews can be multiple sessions. We can decide when a topic is done and ready to be written about
+  - One session can also spin up new research tasks that feed into the next interview
 - set up child developmental agent support to help with monitoring progress and planning weekly
-- Treat the writer as its own product space within Rune
-  - **Premise:** Today the writer agent runs only via the `/blog` skill (Telegram, interview-style) and `src/writer/`. It should be a first-class product space inside Rune, not just a skill — its own surface with its own interactions, the way products/projects are.
-  - **Desired interactions:**
-      - Kick off the writer on a topic and watch it run live, like a work run.
-      - A dedicated chat window scoped to the writer to discuss things with it directly.
-      - Maintain the writer's own backlog/list of topics and ideas to write up.
-      - Discuss past posts and their performance/engagement.
-      - Share other people's writing as input to sharpen the writer's own craft.
-  - **Connects to:** project 17 (cockpit product spaces + per-product chat scoping) and project 12 (writer memory / engagement-driven writing lessons).
-  - **Note:** needs its own planning session; this is a scoping seed, not a spec.
 - Default to an ELI5 / first-principles posture when I talk to Rune
   - **Premise:** When I talk to Rune it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
   - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)
@@ -49,10 +44,6 @@ below it.
       - Always-on vs default-with-an-escape-hatch — a way to ask for the dense/expert version when wanted, since the user is often an expert who sometimes wants depth, not ELI5.
       - Whether it applies across all modes (tactical lookups vs strategic/reflective) or only when explaining/reasoning.
   - **Note:** seed for a working session on the system prompt itself; not a spec.
-- Improve scalability and performance of MCP server
-  - Want multiple Claude Cowork chats / systems to be able to use it in parallel
-  - Want KB queries to happen significantly faster
-  - Monitor MCP usage and performance in cockpit
 
 ## Loop-filed
 
