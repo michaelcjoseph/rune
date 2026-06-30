@@ -7,6 +7,11 @@ import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
+import {
+  runKnowledgeSupersessionReconciliation,
+  type SupersessionCandidate,
+  type SupersessionDecision,
+} from '../kb/knowledge-supersession.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import {
@@ -85,6 +90,30 @@ async function stepKBQueue(): Promise<NightlyStepResult> {
     step: 'KB queue',
     status: 'success',
     detail: `${processed} source(s) ingested, ${created} created, ${updated} updated`,
+  };
+}
+
+async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepResult> {
+  const result = await runKnowledgeSupersessionReconciliation({
+    vaultDir: config.VAULT_DIR,
+    now: date,
+    supersessions: [{ from: 'Jarvis', to: 'Rune', aliases: ['jarvis'] }],
+    adjudicateCandidate: conservativeSupersessionAdjudicator,
+  });
+
+  const status = result.candidates === 0 ? 'skipped' : 'success';
+  const detail =
+    `${result.candidates} candidate(s), ${result.accepted} accepted, ` +
+    `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}`;
+  return { step: 'Knowledge reconciliation', status, detail };
+}
+
+async function conservativeSupersessionAdjudicator(
+  candidate: SupersessionCandidate,
+): Promise<SupersessionDecision> {
+  return {
+    status: 'ambiguous',
+    rationale: `Nightly wiring surfaced ${candidate.file}:${candidate.line}; adjudication is intentionally conservative.`,
   };
 }
 
@@ -771,6 +800,7 @@ export async function executeNightly(
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('Library sync', stepLibrarySync);
   await run('KB queue', stepKBQueue);
+  await run('Knowledge reconciliation', () => stepKnowledgeReconciliation(todayDate));
   await run('Whoop activity', stepWhoopActivity);
   await run('Observation loop', () => stepObservation(options?.bus));
   await run('Learning loop', stepLearningLoop);

@@ -64,16 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ied:
-- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner` → 3 passed
-- `npm run build` → passed
-
-Note: plain `npm test -- src/kb/knowledge-supersession.test.ts` hit the sandbox EPERM writing Vite temp config under shared `node_modules`; the runner config loader avoids that.
-- epted candidates without an explicit replacement now use alias-aware, case-insensitive fallback replacement.
-- Added regressions for older/future evidence and alias fallback edits.
+- immediately after `KB queue`, before Whoop/observation/learning and `KB lint`, using the canonical Jarvis to Rune supersession config.
 
 Verified:
-- `npm test -- src/kb/knowledge-supersession.test.ts` → 5 passed
+- `npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner` → 83 passed
 - `npm run build` → passed
 
 No commit made.

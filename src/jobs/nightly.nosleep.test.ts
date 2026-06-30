@@ -49,6 +49,18 @@ vi.mock('../kb/engine.js', () => ({
   lintKB: vi.fn(),
   enqueue: vi.fn(),
 }));
+vi.mock('../kb/knowledge-supersession.js', () => ({
+  runKnowledgeSupersessionReconciliation: vi.fn(async () => ({
+    scannedFiles: 0,
+    candidates: 0,
+    accepted: 0,
+    rejected: 0,
+    ambiguous: 0,
+    editedFiles: [],
+    unchangedFiles: [],
+    detail: 'No supersession candidates found',
+  })),
+}));
 vi.mock('../ai/claude.js', () => ({
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
