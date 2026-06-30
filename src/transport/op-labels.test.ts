@@ -30,6 +30,10 @@ describe('formatOpLabel', () => {
     expect(formatOpLabel('one-shot', 'foobar')).toBe('Foobar');
   });
 
+  it('does not keep a curated legacy blog-review operation label', () => {
+    expect(formatOpLabel('chat', 'review:blog')).toBe('Review Blog');
+  });
+
   it('falls back to call-label mapping when opKind is agent but agentName is absent', () => {
     // Defensive: in practice runAgent always sets both, but if it didn't,
     // the raw label still goes through the call-label path.

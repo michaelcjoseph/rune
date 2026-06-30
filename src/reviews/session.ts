@@ -7,8 +7,18 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('review-session');
 
-export type ReviewType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'health' | 'blog' | 'new-project';
+export type ReviewType = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'health' | 'new-project';
 export type ReviewPhase = 'prep' | 'interview' | 'outline' | 'approval' | 'writeup' | 'updates' | 'done';
+
+const SUPPORTED_REVIEW_TYPES = new Set<ReviewType>([
+  'daily',
+  'weekly',
+  'monthly',
+  'quarterly',
+  'yearly',
+  'health',
+  'new-project',
+]);
 
 export interface ReviewSession {
   id: string;
@@ -96,6 +106,10 @@ export function restoreReviewSessions(): void {
     const data = readFileSync(config.REVIEW_SESSIONS_FILE, 'utf8');
     const entries = JSON.parse(data) as [number, ReviewSession][];
     for (const [chatId, session] of entries) {
+      if (!SUPPORTED_REVIEW_TYPES.has(session.type)) {
+        log.info('Skipping unsupported persisted review session', { chatId, type: session.type });
+        continue;
+      }
       sessions.set(Number(chatId), session);
     }
     log.info(`Restored ${sessions.size} review session(s) from disk`);

@@ -54,7 +54,6 @@ const CALL_LABELS: Record<string, string> = {
   'review:quarterly':           'Quarterly review',
   'review:yearly':              'Yearly review',
   'review:health':              'Health session',
-  'review:blog':                'Blog session',
   'review:new-project':         'New project planning',
   'review:daily-routing':       'Choosing daily review updates',
   'review:weekly-routing':      'Choosing weekly review updates',

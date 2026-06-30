@@ -64,11 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- 
-
-Verified:
-- `npm test -- src/jobs/writing-product-orchestration.test.ts --reporter=verbose`
-- `npm test -- src/jobs/writing-pipeline-core.test.ts --reporter=verbose`
+- /reviews/blog.test.ts src/transport/op-labels.test.ts src/bot/commands/blog.test.ts src/bot/skill-registry.test.ts src/reviews/session.test.ts src/reviews/orchestrator.test.ts --reporter=verbose`
 - `npm run build`
 
-Note: `src/jobs/writing-product-orchestration.test.ts` was already modified in the worktree; I left it untouched.
+Note: the QA test files were already modified in the worktree; I left them untouched.

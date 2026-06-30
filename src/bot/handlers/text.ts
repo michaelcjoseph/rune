@@ -648,7 +648,8 @@ Send any message to start a multi-turn chat with your vault. Rune leans Socratic
 **Coaching sessions**
 
 - \`/health [focus]\` — health coaching session
-- \`/blog <topic>\` — blog writing session
+- \`/blog <topic>\` — writing-product run for a \`/rune/{topic}\` artifact
+- \`/writing-critique <target>\` — writing-product critique run
 
 **Fitness**
 
