@@ -64,10 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- immediately after `KB queue`, before Whoop/observation/learning and `KB lint`, using the canonical Jarvis to Rune supersession config.
+- didates assert audit logging without edits, and raw journals are checked byte-for-byte unchanged.
 
-Verified:
-- `npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner` → 83 passed
-- `npm run build` → passed
-
-No commit made.
+Verification: `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner` is red as expected for this test-first task: 5 passed, 2 failed on the missing audit/changelog implementation.

@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -74,6 +74,14 @@ function writeVaultFile(relativePath: string, content: string): void {
 
 function readVaultFile(relativePath: string): string {
   return readFileSync(join(vaultRoot, relativePath), 'utf8');
+}
+
+function readSupersessionAuditRecords(): Array<Record<string, unknown>> {
+  const auditPath = join(vaultRoot, 'knowledge/supersessions.jsonl');
+  expect(existsSync(auditPath)).toBe(true);
+  const raw = readFileSync(auditPath, 'utf8').trim();
+  expect(raw.length).toBeGreaterThan(0);
+  return raw.split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 async function runJarvisRuneReconciliation(
@@ -302,5 +310,139 @@ describe('kb/knowledge-supersession', () => {
     expect(result.accepted).toBe(0);
     expect(result.editedFiles).not.toContain('knowledge/agent-lineage.md');
     expect(result.unchangedFiles).toContain('knowledge/agent-lineage.md');
+  });
+
+  it('adds an inline changelog entry and JSONL audit record for every accepted auto-edit', async () => {
+    writeVaultFile('knowledge/runtime-identity.md', [
+      '---',
+      'last-verified: 2026-05-15',
+      '---',
+      '# Runtime identity',
+      '',
+      'Jarvis owns the product-team orchestration loop.',
+      '',
+    ].join('\n'));
+    writeVaultFile('knowledge/cockpit-agent.md', [
+      '# Cockpit agent',
+      '',
+      'Jarvis reports work-run state in the cockpit.',
+      '',
+    ].join('\n'));
+    writeVaultFile('journals/2026_06_23.md', [
+      '# 2026-06-23',
+      '',
+      'The current assistant identity is Rune, not Jarvis.',
+      '',
+    ].join('\n'));
+    const rawJournalBefore = readVaultFile('journals/2026_06_23.md');
+
+    const adjudicator = vi.fn(async (candidate: SupersessionCandidate): Promise<SupersessionDecision> => ({
+      status: 'accepted',
+      replacement: candidate.text.replace(/\bJarvis\b/g, 'Rune'),
+      rationale: `accepted current-state drift in ${candidate.file}`,
+    }));
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(result.accepted).toBe(2);
+    expect(result.editedFiles).toEqual(['knowledge/cockpit-agent.md', 'knowledge/runtime-identity.md']);
+    expect(readVaultFile('journals/2026_06_23.md')).toBe(rawJournalBefore);
+
+    for (const file of result.editedFiles) {
+      const updated = readVaultFile(file);
+      expect(updated).toMatch(/2026-06-30/);
+      expect(updated).toMatch(/changelog|supersession|audit/i);
+      expect(updated).toMatch(/Jarvis\s*(?:->|to)\s*Rune/i);
+    }
+
+    const records = readSupersessionAuditRecords();
+    expect(records).toHaveLength(2);
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        timestamp: '2026-06-30T05:00:00.000Z',
+        status: 'accepted',
+        file: 'knowledge/runtime-identity.md',
+        line: 6,
+        supersession: { from: 'Jarvis', to: 'Rune' },
+        before: 'Jarvis owns the product-team orchestration loop.',
+        after: 'Rune owns the product-team orchestration loop.',
+        rationale: 'accepted current-state drift in knowledge/runtime-identity.md',
+        evidence: expect.arrayContaining([
+          expect.objectContaining({
+            file: 'journals/2026_06_23.md',
+            content: expect.stringContaining('Rune, not Jarvis'),
+          }),
+        ]),
+      }),
+      expect.objectContaining({
+        timestamp: '2026-06-30T05:00:00.000Z',
+        status: 'accepted',
+        file: 'knowledge/cockpit-agent.md',
+        line: 3,
+        supersession: { from: 'Jarvis', to: 'Rune' },
+        before: 'Jarvis reports work-run state in the cockpit.',
+        after: 'Rune reports work-run state in the cockpit.',
+        rationale: 'accepted current-state drift in knowledge/cockpit-agent.md',
+        evidence: expect.arrayContaining([
+          expect.objectContaining({
+            file: 'journals/2026_06_23.md',
+            content: expect.stringContaining('Rune, not Jarvis'),
+          }),
+        ]),
+      }),
+    ]));
+  });
+
+  it('logs ambiguous supersession candidates without editing the curated page or raw journal evidence', async () => {
+    const ambiguousPage = [
+      '# Runtime nickname',
+      '',
+      'Jarvis remains a visible nickname in some operator-facing copy.',
+      '',
+    ].join('\n');
+    const rawJournal = [
+      '# 2026-06-24',
+      '',
+      'Rune replaced Jarvis as the current system name, but some copy may still mention Jarvis historically.',
+      '',
+    ].join('\n');
+    writeVaultFile('knowledge/runtime-nickname.md', ambiguousPage);
+    writeVaultFile('journals/2026_06_24.md', rawJournal);
+
+    const adjudicator = vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'ambiguous',
+      rationale: 'could be current drift or intentionally historical copy',
+    }));
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(result).toMatchObject({
+      candidates: 1,
+      accepted: 0,
+      ambiguous: 1,
+      editedFiles: [],
+      unchangedFiles: ['knowledge/runtime-nickname.md'],
+    });
+    expect(readVaultFile('knowledge/runtime-nickname.md')).toBe(ambiguousPage);
+    expect(readVaultFile('journals/2026_06_24.md')).toBe(rawJournal);
+
+    const records = readSupersessionAuditRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual(expect.objectContaining({
+      timestamp: '2026-06-30T05:00:00.000Z',
+      status: 'ambiguous',
+      file: 'knowledge/runtime-nickname.md',
+      line: 3,
+      supersession: { from: 'Jarvis', to: 'Rune' },
+      text: 'Jarvis remains a visible nickname in some operator-facing copy.',
+      rationale: 'could be current drift or intentionally historical copy',
+      evidence: expect.arrayContaining([
+        expect.objectContaining({
+          file: 'journals/2026_06_24.md',
+          content: expect.stringContaining('Rune replaced Jarvis'),
+        }),
+      ]),
+    }));
+    expect(readVaultFile('knowledge/runtime-nickname.md')).not.toMatch(/2026-06-30|changelog|supersession audit/i);
   });
 });
