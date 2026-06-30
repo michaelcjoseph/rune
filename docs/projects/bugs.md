@@ -39,6 +39,23 @@
 - [ ] `src/ai/claude.test.ts > WORKSPACE_DIR env passthrough > does not set RUNE_WORKSPACE_DIR when WORKSPACE_DIR is empty` fails on `main`, independent of any feature work.
   - The branch `rune-work/19-rune-product-os` never touched this file (byte-identical to `main`), yet the test fails with `WORKSPACE_DIR` empty in the shell — so it fails on `main` too. Pre-existing/environmental (likely test-ordering or an env leak setting `RUNE_WORKSPACE_DIR`), but it reddens any gate run from a clean tree. Fix independently of project 19.
 
+- [ ] No targeted operator lever to recover a running-but-idle orchestrated run — the only recovery is a full daemon restart. _(Latent: surfaced in the 2026-06-29 recovery analysis; did NOT manifest in run 977f0f40, which finished on its own and held on the gate. Files if a run ever wedges mid-loop.)_
+  - **Issue**
+    - If `runProjectOrchestration` (`src/intent/project-orchestrator.ts`) ever parks inside an `await` (e.g. a held base-branch lock or a hung gate inside the finalize adapter, `orchestrated-work-runner.ts:1093-1106`), the run stays `running` with a fresh `lastChildAliveAt` (the 30s keep-alive ticker, `orchestrated-work-runner.ts:1211-1219`). `isStalled` keys on liveness, so supervision never flags it; only the `WORK_RUN_MAX_RUNTIME_MS` ceiling would eventually reap it — and that reap is itself a no-op (see the `cancelMutation` bug above).
+    - There is no `resume` / `nudge` / re-enter-orchestration endpoint. The mutation surface exposes only create (`POST /api/mutations`) and cancel (`POST /api/mutations/:id/cancel`); cancel returns 200 but the loop never observes the flag, so it does nothing. The supported un-stick is `POST /api/server/restart` (or killing the process): startup `recoverOrchestratedWorkRuns` (`src/index.ts:190-228`) re-dispatches the same mutation id against the existing branch from its durable cursor, which then hits `all-complete` → finalize.
+    - Restart-recovery only re-dispatches runs whose status is still `running` and whose cursor `resumeMarker === 'resumable'` (`orchestrated-work-runner.ts:737`). A run already flipped terminal (e.g. held at branch-complete) is NOT re-picked, and a missing/drifted cursor is force-failed as orphaned (`:738,750-758`) rather than resumed.
+  - **Fix options**
+    - A. Add an operator action that re-enters `runProjectOrchestration` for a stuck run without a full daemon restart (a scoped "resume" mutation), reusing the recovery re-dispatch path.
+    - B. Expose a standalone cold gated-merge finalize for an already-terminal `branch-complete` run, so landing a gate-held branch doesn't require either a restart or a hand merge. The finalizer is already idempotent + phase-resumable (`work-run-finalizer.ts:859-1001`); it just isn't reachable as an operator command.
+    - C. Pairs with the `cancelMutation` cooperative-cancel fix above — a loop that checks the flag between iterations plus a real process-group reap makes cancel a working recovery lever on its own.
+- [ ] The terminal work-run reconciler only terminalizes a `running` supervised run if a `summary.json` already exists — a run wedged *before* finalize never self-heals. _(Latent: same recovery analysis; not observed in run 977f0f40.)_
+  - **Issue**
+    - `startTerminalWorkRunReconciler` (`src/jobs/work-run-reconciler.ts`, 60s tick) flips a stale `running` supervised row to terminal only when `readTerminalSummary` finds a written `summary.json` (`:81,112`). It closes the gap where the finalizer ran but the mutation status didn't flip — not the gap where the loop never reached finalize at all.
+    - So a run that wedges before writing its summary is invisible to the reconciler: no summary, no terminalization, and it sits `running` until the max-runtime ceiling (whose reap is a no-op). The reconciler can't be the backstop for a pre-finalize wedge.
+  - **Fix options**
+    - A. Give the reconciler (or a sibling watchdog) a path to drive a long-idle `running` run with no summary toward a real terminal state via the finalizer's recovery path, rather than waiting on a summary that will never appear.
+    - B. Have the reconciler treat "running + liveness stale beyond a hard threshold + no summary" as a distinct alert/park so the operator is told, even if it can't auto-finalize.
+
 - [ ] Nightly processing error. Observation loop — TypeError: readers.interactions is not a function or its return value is not iterable
 - [ ] Rune MCP server times out on complex `kb_query` requests, and serves `/mcp` from the same process + event loop as the webview — a heavy query degrades both. _(moved from ideas.md, 2026-06-22)_
   - **Issue** (two distinct roots — latency and isolation)
