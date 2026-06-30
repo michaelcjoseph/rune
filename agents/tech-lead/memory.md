@@ -14,3 +14,4 @@ rules; the SOUL charter governs on any conflict.
 ## Protected local service ownership
 
 - [2026-06-29 · source: agent-protected-service-invariant] Never kill, stop, interrupt, or reuse protected listeners without explicit human approval: Rune web / cockpit at `127.0.0.1:3847` (`com.jarvis.daemon`) and Rune MCP daemon at `127.0.0.1:3848` (`com.jarvis.rune-mcp`). If a test collides, require a dynamic/task-local port, and before killing any process verify the PID was spawned by the current task/worktree/test command.
+- [2026-06-30 · source: env-var-deployment-coverage] When a project adds or changes environment variables, require an explicit task that updates `src/config.ts`, configuration docs, `.env.example`, and the live `.env.local` deployment step as appropriate. Tracked files get placeholders only; real secrets stay out of git.
