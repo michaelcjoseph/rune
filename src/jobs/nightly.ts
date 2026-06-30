@@ -99,9 +99,17 @@ async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepRes
   });
 
   const status = result.candidates === 0 ? 'skipped' : 'success';
+  const artifactParts: string[] = [];
+  if (result.editedFiles.length > 0) {
+    artifactParts.push(`inline changelog: ${result.editedFiles.join(', ')}`);
+  }
+  if (result.candidates > 0) {
+    artifactParts.push('supersession audit: knowledge/supersessions.jsonl');
+  }
+  const artifactDetail = artifactParts.length > 0 ? `; ${artifactParts.join('; ')}` : '';
   const detail =
     `${result.candidates} candidate(s), ${result.accepted} accepted, ` +
-    `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}`;
+    `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}${artifactDetail}`;
   return { step: 'Knowledge reconciliation', status, detail };
 }
 

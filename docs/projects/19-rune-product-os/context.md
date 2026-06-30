@@ -64,12 +64,14 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- at psychology pages are eligible only for current-state facts, and historical psychology references must stay unchanged.
-
+- 
 Verified with:
 
 ```bash
+npx vitest run src/jobs/nightly-knowledge-reachability.test.ts
+npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts
 npx vitest run src/kb/knowledge-supersession.test.ts src/kb/supersession-adjudicator.test.ts
+npm run build
 ```
 
-Result: 2 files passed, 17 tests passed. No commit made.
+All passed. No commit made.
