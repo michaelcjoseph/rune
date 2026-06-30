@@ -7,11 +7,8 @@ import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
-import {
-  runKnowledgeSupersessionReconciliation,
-  type SupersessionCandidate,
-  type SupersessionDecision,
-} from '../kb/knowledge-supersession.js';
+import { runKnowledgeSupersessionReconciliation } from '../kb/knowledge-supersession.js';
+import { conservativeSupersessionAdjudicator } from '../kb/supersession-adjudicator.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import {
@@ -106,15 +103,6 @@ async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepRes
     `${result.candidates} candidate(s), ${result.accepted} accepted, ` +
     `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}`;
   return { step: 'Knowledge reconciliation', status, detail };
-}
-
-async function conservativeSupersessionAdjudicator(
-  candidate: SupersessionCandidate,
-): Promise<SupersessionDecision> {
-  return {
-    status: 'ambiguous',
-    rationale: `Nightly wiring surfaced ${candidate.file}:${candidate.line}; adjudication is intentionally conservative.`,
-  };
 }
 
 async function stepDailyTags(date: string, content: string | null): Promise<NightlyStepResult> {

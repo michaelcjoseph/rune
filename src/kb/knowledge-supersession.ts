@@ -1,6 +1,6 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 
 export interface SupersessionEvidence {
   file: string;
@@ -112,8 +112,20 @@ export async function runKnowledgeSupersessionReconciliation(
       if (decision.status === 'accepted') {
         result.accepted++;
         const replacement = decision.replacement ?? (supersession ? replaceToken(text, supersession) : text);
+        appendSupersessionAudit(opts.vaultDir, {
+          timestamp: opts.now,
+          status: 'accepted',
+          file,
+          line: candidate.line,
+          supersession: candidate.supersession,
+          before: text,
+          after: replacement,
+          rationale: decision.rationale,
+          evidence: candidate.newerSources,
+        });
         if (replacement !== text) {
           lines[index] = replacement;
+          appendChangelogEntry(lines, opts.now, candidate);
           fileChanged = true;
         } else {
           unchangedFiles.add(file);
@@ -121,10 +133,30 @@ export async function runKnowledgeSupersessionReconciliation(
         detailParts.push(`accepted ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
       } else if (decision.status === 'rejected') {
         result.rejected++;
+        appendSupersessionAudit(opts.vaultDir, {
+          timestamp: opts.now,
+          status: 'rejected',
+          file,
+          line: candidate.line,
+          supersession: candidate.supersession,
+          text,
+          rationale: decision.rationale,
+          evidence: candidate.newerSources,
+        });
         unchangedFiles.add(file);
         detailParts.push(`rejected ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
       } else {
         result.ambiguous++;
+        appendSupersessionAudit(opts.vaultDir, {
+          timestamp: opts.now,
+          status: 'ambiguous',
+          file,
+          line: candidate.line,
+          supersession: candidate.supersession,
+          text,
+          rationale: decision.rationale,
+          evidence: candidate.newerSources,
+        });
         unchangedFiles.add(file);
         detailParts.push(`ambiguous ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
       }
@@ -285,6 +317,29 @@ function replaceToken(text: string, supersession: SupersessionTerm): string {
     .filter((token, index, tokens) => tokens.indexOf(token) === index)
     .map(escapeRegExp);
   return text.replace(new RegExp(`\\b(?:${alternatives.join('|')})\\b`, 'gi'), supersession.to);
+}
+
+function appendSupersessionAudit(root: string, record: Record<string, unknown>): void {
+  const auditPath = join(root, 'knowledge', 'supersessions.jsonl');
+  mkdirSync(dirname(auditPath), { recursive: true });
+  appendFileSync(auditPath, `${JSON.stringify(record)}\n`);
+}
+
+function appendChangelogEntry(lines: string[], now: string, candidate: SupersessionCandidate): void {
+  const date = parseDateOnly(now) ?? now;
+  const entry = `- ${date}: Supersession audit: ${candidate.supersession.from} -> ${candidate.supersession.to} at ${candidate.file}:${candidate.line}.`;
+  const headingIndex = lines.findIndex((line) => /^##\s+Supersession audit\s*$/i.test(line));
+
+  if (headingIndex >= 0) {
+    let insertAt = headingIndex + 1;
+    while (insertAt < lines.length && lines[insertAt] === '') insertAt++;
+    lines.splice(insertAt, 0, entry);
+    return;
+  }
+
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  if (lines.length > 0) lines.push('');
+  lines.push('## Supersession audit', '', entry);
 }
 
 function escapeRegExp(value: string): string {

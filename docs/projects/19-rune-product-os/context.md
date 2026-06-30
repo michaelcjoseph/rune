@@ -64,7 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- :
-- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner -t "deterministic candidate finder"`: passed
-- `npm run build`: passed
-- Full `src/kb/knowledge-supersession.test.ts`: 8 passed, 2 failed on audit/changelog behavior, which is outside this selected candidate-finder task.
+- us function.
+
+Verified:
+- `npx vitest run src/kb/supersession-adjudicator.test.ts --configLoader runner`
+- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner`
+- `npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner`
+- `npm run build`
