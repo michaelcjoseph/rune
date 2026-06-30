@@ -138,7 +138,7 @@ function buildProductIdentityPreamble(
     ? `Your editable product workspace is ${workRoot}.`
     : `Your editable product workspace is this product's configured workspace.`;
   const capability = writeEnabled
-    ? `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Edit/Write are confined to that product workspace; Bash starts at the repo root so you can run builds/tests/git. Bash is intentionally powerful and operator-approved, not OS-confined: do NOT use Bash to write the vault or unrelated product paths. The vault is a separately-managed store reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If the user asks you to save something to the vault/journal/notes/KB, do NOT do it by hand — tell them which slash command or flow owns that write. For larger multi-step or risky work, propose using the existing cockpit work-run/Fix flow and ask the user to start it there.`
+    ? `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Keep edits inside that product workspace; Bash starts at the repo root so you can run builds/tests/git. CRITICAL — your tools are NOT OS-confined (they run with the operator's full filesystem access), so these boundaries are yours to honor, not the harness's to enforce: (1) Write ONLY inside this product's repo — never the vault, never another product's repo, never anywhere else. (2) The vault is a separately-managed store, reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If asked to save to the vault/journal/notes/KB, do NOT do it by hand — name the slash command or flow that owns that write. (3) Do NOT read or print Rune's own secrets — its .env / .env.local, credentials directories, logs, or MCP token stores — even though the filesystem would allow it; you have no task that needs them. For larger multi-step or risky work, propose the existing cockpit work-run/Fix flow and ask the user to start it there.`
     : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
   const actLine = writeEnabled
     ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make scoped edits, run the check.`
@@ -238,10 +238,17 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
   return `${preamble}\n\n${boundedProductPrompt}`;
 }
 
-/** Resolve the repo root and editable workspace for a product chat, or null
- *  when the product is unknown or has no repo configured. Bash runs from
- *  repoRoot; Edit/Write are confined to workRoot. For scoped shared-repo
- *  products (e.g. writing), workRoot is repoPath/scopePath. */
+/** Resolve the repo root and the INTENDED editable workspace for a product
+ *  chat, or null when the product is unknown or has no repo configured. Bash
+ *  runs from repoRoot; workRoot is the subtree the system prompt asks Rune to
+ *  keep edits within (repoPath/scopePath for scoped shared-repo products like
+ *  writing, else repoPath).
+ *
+ *  IMPORTANT — workRoot is a PROMPT-LEVEL intent, not an enforced boundary. The
+ *  chat spawns with `--dangerously-skip-permissions`, under which the spawn cwd
+ *  (repoRoot) is itself writable and `--add-dir` does not restrict writes, so
+ *  neither workRoot nor repoRoot is OS-confined. Containment is the prompt +
+ *  the vault's git recoverability. See buildProductIdentityPreamble. */
 export function resolveProductChatWorkspace(product: string): ProductChatWorkspace | null {
   const context = loadProductPromptContext(product);
   if (!context || !context.repoPath) return null;
@@ -250,12 +257,6 @@ export function resolveProductChatWorkspace(product: string): ProductChatWorkspa
     workRoot: context.scopePath ? join(context.repoPath, context.scopePath) : context.repoPath,
     ...(context.scopePath ? { scopePath: context.scopePath } : {}),
   };
-}
-
-/** Back-compat helper for callers that only need the repo root. Prefer
- *  resolveProductChatWorkspace for product-chat execution. */
-export function resolveProductRepoCwd(product: string): string | null {
-  return resolveProductChatWorkspace(product)?.repoRoot ?? null;
 }
 
 function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {

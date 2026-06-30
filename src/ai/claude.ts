@@ -117,7 +117,18 @@ function buildProjectMcpConfigArg(): string {
   }
 }
 
+// Product-chat env scrub is DEFENSE-IN-DEPTH, not containment: a Bash-enabled
+// chat under --dangerously-skip-permissions can still read secret FILES from
+// disk (.env.local, credentials, logs). Scrubbing only narrows the env-variable
+// exfil channel and reduces accidental secret echo in build output. We scrub
+// SECRETS and personal identifiers, NOT non-secret paths (VAULT_DIR,
+// RUNE_WORKSPACE_DIR, RUNE_LOGS_DIR): those are read directly by tools the chat
+// relies on (e.g. kb/vault-index.ts reads process.env.VAULT_DIR), and removing
+// them risks breaking the rune-kb MCP for setups that configure paths via the
+// shell rather than .env.local — with no real security gain (the paths are not
+// secret and are discoverable anyway).
 const PRODUCT_CHAT_ENV_DENY_EXACT = new Set([
+  // Rune's own service secrets
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_USER_ID',
   'RUNE_HTTP_SECRET',
@@ -125,22 +136,25 @@ const PRODUCT_CHAT_ENV_DENY_EXACT = new Set([
   'RUNE_MCP_ISSUER_URL',
   'RUNE_MCP_OAUTH_STORE_FILE',
   'MCP_ISSUER_URL',
+  // Integration credentials
   'WHOOP_CLIENT_ID',
   'WHOOP_CLIENT_SECRET',
   'READWISE_TOKEN',
   'LENNY_MCP_TOKEN',
-  'VAULT_DIR',
-  'RUNE_WORKSPACE_DIR',
-  'RUNE_LOGS_DIR',
+  // Personal identifiers (not secrets, but no build needs them)
+  'FAMILY_NAMES',
+  'IMPLICIT_CRM_NAMES',
+  'OBSIDIAN_VAULT_NAME',
+  // Credential-bearing helpers / common third-party secrets that dodge the
+  // patterns below (e.g. STRIPE_SECRET_KEY ends in _KEY, caught by the pattern).
+  'GIT_ASKPASS',
 ]);
 
 const PRODUCT_CHAT_ENV_DENY_PATTERNS = [
   /(?:^|_)TOKEN$/,
   /(?:^|_)SECRET$/,
   /(?:^|_)PASSWORD$/,
-  /(?:^|_)API_KEY$/,
-  /(?:^|_)ACCESS_KEY$/,
-  /(?:^|_)PRIVATE_KEY$/,
+  /(?:^|_)KEY$/, // *_API_KEY, *_ACCESS_KEY, *_PRIVATE_KEY, STRIPE_SECRET_KEY, *_KEY
   /(?:^|_)CREDENTIALS?$/,
   /(?:^|_)COOKIE$/,
   /(?:^|_)AUTH$/,
@@ -153,26 +167,36 @@ function scrubProductChatEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if (PRODUCT_CHAT_ENV_DENY_PATTERNS.some(pattern => pattern.test(key))) continue;
     out[key] = value;
   }
+  // SSH_AUTH_SOCK / SSH_AGENT_PID intentionally survive: a product chat needs
+  // the agent for `git` over SSH on the product repo. This grants broader key
+  // access than the product repo alone — an accepted trade-off for `git push`.
   return out;
 }
 
 export type ClaudeChildEnvMode = 'default' | 'product-chat';
 
 function buildClaudeChildEnv(mode: ClaudeChildEnvMode): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    RUNE_PROJECT_ROOT: PROJECT_ROOT,
-  };
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // RUNE_WORKSPACE_DIR is governed solely by config.WORKSPACE_DIR (bugs.md #5):
+  // set it when configured, strip any inherited value otherwise, so a child
+  // never silently inherits the parent daemon's value. Applies to every mode.
   if (config.WORKSPACE_DIR) {
     env.RUNE_WORKSPACE_DIR = config.WORKSPACE_DIR;
   } else {
     delete env.RUNE_WORKSPACE_DIR;
   }
   if (mode === 'product-chat') {
-    const scrubbed = scrubProductChatEnv(env);
-    scrubbed.RUNE_PROJECT_ROOT = PROJECT_ROOT;
-    return scrubbed;
+    // Drop Rune secrets + personal env. RUNE_PROJECT_ROOT is deliberately NOT
+    // added: the chat operates on the product repo, and the rune-kb MCP loads
+    // its own config from .env.local — so the chat has no need for Rune's repo
+    // path, and omitting it avoids handing a Bash shell a pointer to
+    // PROJECT_ROOT/.env.local (defense-in-depth; the path is still discoverable).
+    return scrubProductChatEnv(env);
   }
+  // Default (agents / one-shot / global chat): expose RUNE_PROJECT_ROOT so
+  // agents that shell out (e.g. the intent-scan cron dogfood) can locate the
+  // Rune repo from the vault cwd.
+  env.RUNE_PROJECT_ROOT = PROJECT_ROOT;
   return env;
 }
 
@@ -384,9 +408,11 @@ function execClaude(
     '--dangerously-skip-permissions',
     ...getProjectMcpArgs(),
     // Default spawns add the whole WORKSPACE_DIR (read access to every repo +
-    // the vault). A confined spawn (write-enabled product chat) passes
-    // `writableRoots` to REPLACE that blanket with exactly its product workspace,
-    // so Edit/Write stay scoped while Bash still starts from the configured cwd.
+    // the vault). A product chat passes `writableRoots` to narrow this to its
+    // own repo. NOTE: under --dangerously-skip-permissions this `--add-dir` set
+    // does NOT enforce write boundaries (the cwd is writable and Bash has full
+    // fs access) — it is a defense-in-depth / forward-compat signal only. Real
+    // containment is the system prompt + git recoverability.
     ...(writableRoots !== undefined
       ? writableRoots.flatMap((d) => ['--add-dir', d])
       : (config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : [])),
@@ -579,14 +605,15 @@ export interface AskClaudeWithContextOpts {
    *  so Rune operates from (and reports) the product repo, not the vault. When
    *  omitted, the spawn defaults to the vault. */
   cwd?: string;
-  /** Replace the default WORKSPACE_DIR read add-dir with exactly these roots.
-   *  Set by a write-enabled product chat to `[productWorkspace]` so Edit/Write
-   *  are confined to that product workspace. Omit to keep the default
-   *  workspace-wide read access. */
+  /** Narrow the default WORKSPACE_DIR read add-dir to exactly these roots. Set
+   *  by a product chat to its repo. NOTE: under --dangerously-skip-permissions
+   *  --add-dir does NOT enforce write boundaries — this is a defense-in-depth /
+   *  forward-compat hint, not containment. Omit to keep workspace-wide access. */
   writableRoots?: string[];
-  /** Product chat spawns use a scrubbed environment so raw Bash keeps its
-   *  operator-approved power without inheriting Rune's bot/web/MCP/integration
-   *  secrets. */
+  /** `product-chat` scrubs Rune secrets + personal identifiers from the child
+   *  env (defense-in-depth for the chat's Bash) and omits RUNE_PROJECT_ROOT.
+   *  Non-secret paths (VAULT_DIR, RUNE_WORKSPACE_DIR) are kept so the rune-kb
+   *  MCP/KB still resolve. Omit (`default`) for agents/one-shot/global chat. */
   envMode?: ClaudeChildEnvMode;
 }
 

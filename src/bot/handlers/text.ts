@@ -464,11 +464,13 @@ const CONVERSATION_TOOLS = [
 ];
 
 // A write-enabled PRODUCT chat: Rune is a development agent for the active
-// product. Edit/Write are confined to the product workspace by the spawn
-// (writableRoots = repoPath/scopePath when scoped, else repoPath). Bash runs
-// from the repo root for builds/tests/git; it is intentionally not OS-confined,
-// so it runs with a scrubbed env and an explicit prompt boundary around vault
-// and unrelated-product writes.
+// product (Edit/Write/Bash). NOTE: none of these are OS-confined — the spawn
+// uses --dangerously-skip-permissions, so `writableRoots`/`--add-dir` do not
+// restrict Edit/Write and Bash has full filesystem access. The narrowed
+// writableRoots and the scrubbed product-chat env are defense-in-depth; the
+// actual vault-write / unrelated-path / Rune-secret boundaries are enforced by
+// the system prompt (buildProductIdentityPreamble) + the vault's git
+// recoverability. This chat is effectively a full-trust local agent.
 const PRODUCT_CHAT_TOOLS = [
   'Read',
   'Glob',

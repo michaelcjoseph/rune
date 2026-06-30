@@ -1446,13 +1446,14 @@ describe('dispatchText — product-scoped webview sessions', () => {
     // The spawn runs from the product repo (not the vault) — the fix for Rune
     // reporting /pkms as its working repo in product chats.
     expect(options.cwd).toBe('/workspace/rune');
-    // Writes are hard-confined to the product repo: the blanket workspace
-    // add-dir is replaced with exactly the repo, keeping the vault unwritable.
+    // writableRoots narrows the (non-enforcing under --dangerously-skip-permissions)
+    // --add-dir hint to the product repo; it is NOT an OS write boundary. The
+    // vault-write boundary is the system prompt + git recoverability.
     expect(options.writableRoots).toEqual(['/workspace/rune']);
-    // Raw Bash is operator-approved, so product chat gets a scrubbed child env.
+    // Product chat gets the scrubbed child env (Rune secrets removed).
     expect((options as any).envMode).toBe('product-chat');
-    // Write-enabled: Edit/Write/Bash available. Edit/Write are hard-confined to
-    // the repo via writableRoots; Bash's vault boundary is a prompt instruction.
+    // Write-enabled: Edit/Write/Bash available (containment is prompt-based, see
+    // buildProductIdentityPreamble — not OS-enforced).
     expect(options.allowedTools).toEqual(expect.arrayContaining([
       'Read',
       'Glob',
@@ -1476,7 +1477,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     }));
   });
 
-  it('runs scoped product Bash from repo root while confining Edit/Write to the product scope', async () => {
+  it('runs a scoped product (writing) from repo-root cwd with workRoot as the writableRoots hint', async () => {
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
@@ -1541,8 +1542,11 @@ describe('dispatchText — product-scoped webview sessions', () => {
 
     await (dispatchText as any)(webviewSender(), 100, 'hello');
 
-    const options = askMock.mock.calls[0]![3] as { cwd?: string };
+    const options = askMock.mock.calls[0]![3] as { cwd?: string; envMode?: string };
     expect(options.cwd).toBeUndefined();
+    // Global chat must never get the product-chat env mode (which would scrub
+    // the vault-reading env) — it stays on the default (unscrubbed) env.
+    expect(options.envMode).toBeUndefined();
   });
 
   it('passes the product-tailored system prompt built for the active product scope to Claude', async () => {

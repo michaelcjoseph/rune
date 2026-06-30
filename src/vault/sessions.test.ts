@@ -509,10 +509,13 @@ describe('vault/sessions', () => {
       expect(prompt).toContain('Write');
       expect(prompt).toContain('Bash');
       expect(prompt).toMatch(/run|build|test/i);
-      // Bash is intentionally raw/operator-approved, so the prompt must not
-      // claim it is OS-confined. The boundary is an explicit instruction.
-      expect(prompt).toMatch(/Bash[^\n]*(operator-approved|not OS-confined|not.*confined)/i);
-      expect(prompt).toMatch(/do NOT use Bash to write/i);
+      // The prompt must state honestly that tools are NOT OS-confined — the
+      // boundary is an explicit instruction, not harness enforcement.
+      expect(prompt).toMatch(/not OS-confined|not.*confined/i);
+      // Must forbid writing the vault / outside the repo via ANY tool (incl. Bash).
+      expect(prompt).toMatch(/write only inside this product's repo|never[^\n]*vault/i);
+      // Must forbid reading/printing Rune's own secrets (new boundary).
+      expect(prompt).toMatch(/secrets/i);
       // Vault remains read-only even when the repo is writable.
       expect(prompt).toMatch(/read-only/i);
     });
