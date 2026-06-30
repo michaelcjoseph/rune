@@ -268,8 +268,24 @@ function renderBacklogKind(backlog, kind, view) {
   `</section>`;
 }
 
-function isWritingProduct(view) {
-  return view?.name === 'writing';
+function containerCapabilitiesFor(view) {
+  const capabilities = view?.containerCapabilities || {};
+  if (!view?.containerCapabilities && view?.name === 'writing') {
+    return {
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+    };
+  }
+  return {
+    projects: capabilities.projects !== false,
+    bugs: capabilities.bugs !== false,
+    ideas: capabilities.ideas !== false,
+    runs: capabilities.runs !== false,
+    chat: capabilities.chat !== false,
+  };
 }
 
 function containerProfileFor(view) {
@@ -277,14 +293,12 @@ function containerProfileFor(view) {
 }
 
 function workTabsFor(view) {
-  if (isWritingProduct(view)) {
-    return [{ id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length }];
-  }
+  const capabilities = containerCapabilitiesFor(view);
   return [
-    { id: 'projects', label: 'Projects', count: list(view.projects).length },
-    { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length },
-    { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length },
-  ];
+    capabilities.projects ? { id: 'projects', label: 'Projects', count: list(view.projects).length } : null,
+    capabilities.bugs ? { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length } : null,
+    capabilities.ideas ? { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length } : null,
+  ].filter(Boolean);
 }
 
 function normalizeWorkTab(view, activeTab) {
@@ -299,10 +313,11 @@ function renderWorkTabPanel(view, id) {
 }
 
 function workSummary(view) {
+  const capabilities = containerCapabilitiesFor(view);
   return [
-    ...list(view.projects).map(project => project.slug),
-    ...list(view.backlog?.bugs).map(itemTitle),
-    ...list(view.backlog?.ideas).map(itemTitle),
+    ...(capabilities.projects ? list(view.projects).map(project => project.slug) : []),
+    ...(capabilities.bugs ? list(view.backlog?.bugs).map(itemTitle) : []),
+    ...(capabilities.ideas ? list(view.backlog?.ideas).map(itemTitle) : []),
   ].filter(Boolean).slice(0, 8).join(' ');
 }
 
@@ -712,19 +727,14 @@ export function renderProductDeepView(view, options = {}) {
   const profile = containerProfileFor(view);
   const profileClass = profile === 'operations-runs-heavy' ? ' product-deep-view--operations-runs-heavy' : '';
   const degradedClass = view.repoBacked === false ? ' product-deep-view--repo-unavailable product-deep-view--limited' : '';
-  const navSurfaces = isWritingProduct(view)
-    ? [
-      { id: 'ideas', label: 'Ideas' },
-      { id: 'runs', label: 'Runs' },
-      { id: 'chat', label: 'Chat' },
-    ]
-    : [
-      { id: 'projects', label: 'Projects' },
-      { id: 'bugs', label: 'Bugs' },
-      { id: 'ideas', label: 'Ideas' },
-      { id: 'runs', label: 'Runs' },
-      { id: 'chat', label: 'Chat' },
-    ];
+  const capabilities = containerCapabilitiesFor(view);
+  const navSurfaces = [
+    capabilities.projects ? { id: 'projects', label: 'Projects' } : null,
+    capabilities.bugs ? { id: 'bugs', label: 'Bugs' } : null,
+    capabilities.ideas ? { id: 'ideas', label: 'Ideas' } : null,
+    capabilities.runs ? { id: 'runs', label: 'Runs' } : null,
+    capabilities.chat ? { id: 'chat', label: 'Chat' } : null,
+  ].filter(Boolean);
 
   return `<section class="product-deep-view${profileClass}${degradedClass}" data-product="${attr(view.name)}" ` +
     `data-container-profile="${attr(profile)}"${view.repoBacked === false ? ' data-degraded-state="repo"' : ''}>` +

@@ -609,6 +609,82 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(writing).not.toMatch(/No projects|No bugs/i);
   });
 
+  it('derives visible work containers from containerCapabilities, not from the product slug', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const ideaOnlyProduct = renderProductDeepView(productView({
+      name: 'essay-lab',
+      class: 'external',
+      containerCapabilities: {
+        projects: false,
+        bugs: false,
+        ideas: true,
+        runs: true,
+        chat: true,
+        monitoring: 'stubbed',
+      },
+      projects: [
+        { slug: 'should-not-render', lifecycle: 'active', taskProgress: { done: 0, total: 1 } },
+      ],
+      backlog: {
+        bugs: [
+          { id: 'BUG-hidden', title: 'Hidden bug queue', status: 'open', plan: { kind: 'plan', state: 'available' } },
+        ],
+        ideas: [
+          { id: 'IDEA-visible', title: 'Visible essay idea', status: 'open', plan: { kind: 'plan', state: 'available' } },
+        ],
+        warnings: [],
+      },
+      runs: [],
+      activeRun: undefined,
+    }), { activeTab: 'projects', activeSidePanel: 'runs' });
+
+    expect(ideaOnlyProduct).toMatch(/data-product=["']essay-lab["']/i);
+    expect(ideaOnlyProduct).toMatch(/data-surface=["']work["']/i);
+    expect(ideaOnlyProduct).toMatch(/data-surface=["']runs["']/i);
+    expect(ideaOnlyProduct).toMatch(/data-surface=["']chat["']/i);
+    expect(ideaOnlyProduct).toMatch(/data-work-tab=["']ideas["']/i);
+    expect(ideaOnlyProduct).toContain('Visible essay idea');
+    expect(ideaOnlyProduct).not.toMatch(/data-work-tab=["']projects["']|data-work-tab-panel=["']projects["']/i);
+    expect(ideaOnlyProduct).not.toMatch(/data-work-tab=["']bugs["']|data-work-tab-panel=["']bugs["']/i);
+    expect(ideaOnlyProduct).not.toContain('should-not-render');
+    expect(ideaOnlyProduct).not.toContain('Hidden bug queue');
+
+    const standardBrand = renderProductDeepView(productView({
+      name: 'brand',
+      class: 'external',
+      containerCapabilities: {
+        projects: true,
+        bugs: true,
+        ideas: true,
+        runs: true,
+        chat: true,
+        monitoring: 'stubbed',
+      },
+      projects: [
+        { slug: 'site-homepage', lifecycle: 'active', taskProgress: { done: 1, total: 3 } },
+      ],
+      backlog: {
+        bugs: [
+          { id: 'BUG-brand', title: 'Homepage copy bug', status: 'open', plan: { kind: 'plan', state: 'available' } },
+        ],
+        ideas: [
+          { id: 'IDEA-brand', title: 'Refresh root positioning', status: 'open', plan: { kind: 'plan', state: 'available' } },
+        ],
+        warnings: [],
+      },
+      runs: [],
+      activeRun: undefined,
+    }), { activeTab: 'projects', activeSidePanel: 'runs' });
+
+    for (const tab of ['projects', 'bugs', 'ideas']) {
+      expect(standardBrand).toMatch(new RegExp(`data-work-tab=["']${tab}["']`, 'i'));
+    }
+    expect(standardBrand).toContain('site-homepage');
+    expect(standardBrand).toContain('Homepage copy bug');
+    expect(standardBrand).toContain('Refresh root positioning');
+  });
+
   it('renders the writing surface with ideas, draft/publish run stages, route targets, and scoped chat', async () => {
     const { createProductDeepView, renderProductDeepView } = await import('./product-deep-view.js');
     const writingView = productView({
