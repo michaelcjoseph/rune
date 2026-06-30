@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { appendFile, appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDateContext } from '../utils/time.js';
@@ -49,13 +49,71 @@ export const CLAUDE_BIN = resolveClaudePath();
  *  global `~/.claude/settings.json`. */
 const PROJECT_SETTINGS_PATH = join(PROJECT_ROOT, '.claude', 'settings.json');
 
+/** Rewrite one MCP-server command arg to be cwd-independent. Relative file
+ *  refs (the rune-kb entrypoint `src/mcp/index.ts`, the `.env.local` passed via
+ *  `--env-file-if-exists=`) are resolved against PROJECT_ROOT; flags and
+ *  already-absolute paths pass through untouched. */
+function absolutizeMcpArg(arg: string): string {
+  const ENV_FLAG = '--env-file-if-exists=';
+  if (arg.startsWith(ENV_FLAG)) {
+    const p = arg.slice(ENV_FLAG.length);
+    return isAbsolute(p) ? arg : `${ENV_FLAG}${join(PROJECT_ROOT, p)}`;
+  }
+  // A path-like positional arg (contains a separator, not a flag, not absolute).
+  if (!arg.startsWith('-') && !isAbsolute(arg) && /[\\/]/.test(arg)) {
+    return join(PROJECT_ROOT, arg);
+  }
+  return arg;
+}
+
+/** Fallback rune-kb registration used when the committed settings.json can't be
+ *  read (e.g. under unit-test fs mocks). Mirrors `.claude/settings.json` with
+ *  PROJECT_ROOT-absolute paths. */
+const FALLBACK_MCP_SERVERS = {
+  'rune-kb': {
+    command: 'npx',
+    args: ['tsx', `--env-file-if-exists=${join(PROJECT_ROOT, '.env.local')}`, join(PROJECT_ROOT, 'src', 'mcp', 'index.ts')],
+    cwd: PROJECT_ROOT,
+  },
+};
+
+let cachedMcpConfigArg: string | null = null;
+
+/** Build the inline `--mcp-config` JSON, pinning every server to PROJECT_ROOT.
+ *  We pass the config INLINE (Claude CLI accepts a JSON string here) and pin
+ *  cwd + absolutize paths because every Rune spawn runs from a non-repo cwd
+ *  (the vault for agents, the product repo for product chats); the committed
+ *  config's relative `src/mcp/index.ts` only resolves from the repo root, so
+ *  without this the rune-kb server fails to start with ERR_MODULE_NOT_FOUND. */
+function buildProjectMcpConfigArg(): string {
+  try {
+    const raw = JSON.parse(readFileSync(PROJECT_SETTINGS_PATH, 'utf8')) as {
+      mcpServers?: Record<string, { args?: unknown[]; [k: string]: unknown }>;
+    };
+    const servers = raw.mcpServers ?? {};
+    if (Object.keys(servers).length === 0) throw new Error('no mcpServers in settings.json');
+    for (const server of Object.values(servers)) {
+      server['cwd'] = PROJECT_ROOT;
+      if (Array.isArray(server.args)) {
+        server.args = server.args.map((a) => (typeof a === 'string' ? absolutizeMcpArg(a) : a));
+      }
+    }
+    return JSON.stringify({ mcpServers: servers });
+  } catch {
+    return JSON.stringify({ mcpServers: FALLBACK_MCP_SERVERS });
+  }
+}
+
 /** Args that pin a Claude CLI spawn to Rune's project-local MCP config.
  *  Exported so external spawners (work-runner) can apply the same isolation
  *  — without this the spawn would inherit every MCP server the user has
  *  globally registered (claude.ai Knowledge Base, Linear, Gmail, …), each
- *  adding ~7s of ToolSearch latency and remote round-trips. */
+ *  adding ~7s of ToolSearch latency and remote round-trips. The config is
+ *  passed inline (cwd-pinned to PROJECT_ROOT) so rune-kb resolves regardless
+ *  of the spawned process's cwd. */
 export function getProjectMcpArgs(): string[] {
-  return ['--strict-mcp-config', '--mcp-config', PROJECT_SETTINGS_PATH];
+  if (cachedMcpConfigArg === null) cachedMcpConfigArg = buildProjectMcpConfigArg();
+  return ['--strict-mcp-config', '--mcp-config', cachedMcpConfigArg];
 }
 
 /** Fail-fast assertion that the project-local Claude settings file is on

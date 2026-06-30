@@ -75,12 +75,17 @@ vi.mock('node:fs', async () => {
 });
 
 const { spawn } = await import('node:child_process');
-const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef } =
+const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef, getProjectMcpArgs } =
   await import('./claude.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+
+// The MCP isolation args (now an inline, PROJECT_ROOT-pinned config). Computed
+// once so the exact-args assertions track getProjectMcpArgs() rather than a
+// brittle hardcoded path.
+const MCP_CFG_ARGS = getProjectMcpArgs();
 
 /** Stream-json `result` event line. Use as the `stdout` for createChild() in
  *  runAgent tests — runAgent passes opMeta so execClaude runs in streaming
@@ -103,6 +108,36 @@ function createChild(opts: { stdout?: string; stderr?: string; code?: number; si
   return child;
 }
 
+describe('getProjectMcpArgs — cwd-independent rune-kb config', () => {
+  // Regression: every Rune spawn runs from a non-repo cwd (the vault for
+  // agents/chat, the product repo for product chats). The committed
+  // .claude/settings.json registers rune-kb with a RELATIVE entrypoint
+  // (`src/mcp/index.ts`), which only resolves when cwd is the repo root — so
+  // the MCP server failed to start (ERR_MODULE_NOT_FOUND) for all spawns. The
+  // args must carry an inline config whose paths are absolute and pinned to
+  // PROJECT_ROOT so rune-kb resolves regardless of the spawned claude's cwd.
+  it('passes inline --mcp-config JSON with PROJECT_ROOT-absolute paths and cwd', () => {
+    const args = getProjectMcpArgs();
+    expect(args[0]).toBe('--strict-mcp-config');
+    expect(args[1]).toBe('--mcp-config');
+
+    const inline = args[2]!;
+    const cfg = JSON.parse(inline) as {
+      mcpServers: Record<string, { cwd?: string; args?: string[] }>;
+    };
+    const server = cfg.mcpServers['rune-kb'];
+    expect(server).toBeDefined();
+    expect(server!.cwd).toBe('/tmp/test-project');
+
+    const joinedArgs = (server!.args ?? []).join(' ');
+    expect(joinedArgs).toContain('/tmp/test-project/src/mcp/index.ts');
+    expect(joinedArgs).toContain('--env-file-if-exists=/tmp/test-project/.env.local');
+    // No relative entrypoint survives (the bug that broke MCP from a foreign cwd).
+    expect((server!.args ?? [])).not.toContain('src/mcp/index.ts');
+    expect((server!.args ?? [])).not.toContain('--env-file-if-exists=.env.local');
+  });
+});
+
 describe('ai/claude', () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -120,7 +155,7 @@ describe('ai/claude', () => {
       await askClaudeOneShot('test prompt');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'opus'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', expect.stringContaining('test prompt'), '--no-session-persistence', '--model', 'opus'],
         expect.objectContaining({ cwd: '/tmp/test-vault' }),
       );
       // Find the prompt by index of '-p' rather than a hard-coded position,
@@ -160,7 +195,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'new-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', 'hello', '--session-id', 'new-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', 'hello', '--session-id', 'new-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -174,7 +209,7 @@ describe('ai/claude', () => {
       expect(result.text).toBe('second');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', 'msg2', '--resume', 'resume-test', '--model', 'opus'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', 'msg2', '--resume', 'resume-test', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -185,7 +220,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'restored-sess');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', 'hello', '--resume', 'restored-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', 'hello', '--resume', 'restored-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
@@ -195,7 +230,7 @@ describe('ai/claude', () => {
       await askClaude('hello', 'haiku-sess', 'haiku');
       expect(spawnMock).toHaveBeenCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', 'hello', '--session-id', 'haiku-sess', '--model', 'haiku'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', 'hello', '--session-id', 'haiku-sess', '--model', 'haiku'],
         expect.any(Object),
       );
     });
@@ -208,7 +243,7 @@ describe('ai/claude', () => {
       await askClaude('retry', 'fail-sess');
       expect(spawnMock).toHaveBeenLastCalledWith(
         '/usr/local/bin/claude',
-        ['--dangerously-skip-permissions', '--strict-mcp-config', '--mcp-config', '/tmp/test-project/.claude/settings.json', '-p', 'retry', '--session-id', 'fail-sess', '--model', 'opus'],
+        ['--dangerously-skip-permissions', ...MCP_CFG_ARGS, '-p', 'retry', '--session-id', 'fail-sess', '--model', 'opus'],
         expect.any(Object),
       );
     });
