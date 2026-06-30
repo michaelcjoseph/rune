@@ -64,8 +64,16 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- writing-user-reachability.test.ts](rune/.worktrees/rune/19-rune-product-os/src/jobs/writing-user-reachability.test.ts) so `npm run build` does not widen the mocked terminal status to `string`.
+- ied:
+- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner` → 3 passed
+- `npm run build` → passed
+
+Note: plain `npm test -- src/kb/knowledge-supersession.test.ts` hit the sandbox EPERM writing Vite temp config under shared `node_modules`; the runner config loader avoids that.
+- epted candidates without an explicit replacement now use alias-aware, case-insensitive fallback replacement.
+- Added regressions for older/future evidence and alias fallback edits.
 
 Verified:
-- `npm test -- src/jobs/writing-user-reachability.test.ts` → 4 passed
+- `npm test -- src/kb/knowledge-supersession.test.ts` → 5 passed
 - `npm run build` → passed
+
+No commit made.

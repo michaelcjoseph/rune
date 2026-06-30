@@ -185,7 +185,7 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 
 ### Tests (write first)
 
-- [ ] Write the suite for **knowledge-supersession** — test-plan.md §7: a newer journal entry that contradicts a curated fact triggers the nightly to flag/supersede the stale fact; the Jarvis→Rune drift case is reconciled; and a **near-miss negative case** (a still-valid curated fact that superficially resembles a supersession candidate — e.g., a legitimate historical reference to the prior identity) is left unchanged.
+- [x] Write the suite for **knowledge-supersession** — test-plan.md §7: a newer journal entry that contradicts a curated fact triggers the nightly to flag/supersede the stale fact; the Jarvis→Rune drift case is reconciled; and a **near-miss negative case** (a still-valid curated fact that superficially resembles a supersession candidate — e.g., a legitimate historical reference to the prior identity) is left unchanged.
 - [ ] Write the suite for **nightly-reconciliation-wiring** — test-plan.md §7: reconciliation runs **immediately after the `KB queue` step** (step index right after KB queue, currently step 11, ahead of the unrelated Whoop/observation/learning steps and before `KB lint`); nightly step count and ordered step-name snapshots are updated for the new fixed position; narrow child-process mocks still import the module.
 - [ ] Write the suite for **supersession-audit** — test-plan.md §7: each auto-edit writes an inline changelog entry and appends a `knowledge/supersessions.jsonl` record; ambiguous candidates are logged but not edited; raw journals are never modified.
 - [ ] Confirm red before implementation.
