@@ -83,6 +83,7 @@ export type StartWritingProductRunInput =
     chatId: number;
     target: string;
     outputPath: string;
+    revisionRequested?: boolean;
     sender: unknown;
   };
 
@@ -97,6 +98,8 @@ export interface StartWritingProductRunDeps {
     requestedBy: 'blog' | 'writing-critique';
     branch: string;
     worktree: string;
+    critiqueOutputPath?: string;
+    revisionRequested?: boolean;
   }) => Promise<{
     state: string;
     committed?: boolean;
@@ -116,6 +119,13 @@ export function slugifyWritingIdentifier(value: string): string {
     throw new Error('planWritingProductRun: topic must include at least one alphanumeric character');
   }
   return slug;
+}
+
+export function writingTargetSlugSource(target: string): string {
+  const trimmed = target.trim();
+  const basename = trimmed.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? trimmed;
+  const withoutExtension = basename.replace(/\.[a-z0-9]+$/i, '');
+  return withoutExtension.trim() || trimmed;
 }
 
 export function planWritingProductRun(input: { topic: string }): WritingProductRunPlan {
@@ -178,8 +188,9 @@ export async function startWritingProductRun(
   input: StartWritingProductRunInput,
   deps?: StartWritingProductRunDeps,
 ): Promise<WritingProductRunPlan | StartedWritingProductRun> {
-  const topic = input.command === 'blog' ? input.topic : input.target;
-  const plan = planWritingProductRun({ topic });
+  const planTopic = input.command === 'blog' ? input.topic : writingTargetSlugSource(input.target);
+  const pipelineTopic = input.command === 'blog' ? input.topic : input.target;
+  const plan = planWritingProductRun({ topic: planTopic });
   if (!deps) {
     return plan;
   }
@@ -190,10 +201,16 @@ export async function startWritingProductRun(
     branch: plan.branch,
   });
   const pipelineResult = await deps.runWritingPipeline({
-    topic: plan.topic,
+    topic: pipelineTopic,
     requestedBy: input.command,
     branch: plan.branch,
     worktree: worktree.worktree,
+    ...(input.command === 'writing-critique'
+      ? {
+        critiqueOutputPath: input.outputPath,
+        revisionRequested: input.revisionRequested ?? false,
+      }
+      : {}),
   });
 
   if (pipelineResult.branch !== plan.branch) {

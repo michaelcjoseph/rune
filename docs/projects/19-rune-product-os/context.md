@@ -64,7 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- /reviews/blog.test.ts src/transport/op-labels.test.ts src/bot/commands/blog.test.ts src/bot/skill-registry.test.ts src/reviews/session.test.ts src/reviews/orchestrator.test.ts --reporter=verbose`
-- `npm run build`
+- _modules/.bin/vitest run src/bot/commands/writing-critique.test.ts src/jobs/writing-product-orchestration.test.ts --reporter=verbose --configLoader runner
+npm run build
+git diff --check -- src/bot/commands/writing-critique.ts src/jobs/writing-product-orchestration.ts
+```
 
-Note: the QA test files were already modified in the worktree; I left them untouched.
+All passed. No commit made.

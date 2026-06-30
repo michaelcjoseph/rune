@@ -74,8 +74,43 @@ describe('handleWritingCritique', () => {
       chatId: CHAT_ID,
       target: 'draft about memory',
       outputPath: 'docs/rune/critiques/draft-about-memory.md',
+      revisionRequested: false,
       sender,
     });
     expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('derives the critique artifact slug from a target path basename', async () => {
+    const { handleWritingCritique } = await requireWritingCritiqueCommand();
+    mockStartWritingProductRun.mockResolvedValue(undefined);
+    const sender = makeSender();
+
+    await handleWritingCritique(sender, CHAT_ID, 'docs/rune/Operating From Memory.md');
+
+    expect(mockStartWritingProductRun).toHaveBeenCalledWith({
+      command: 'writing-critique',
+      chatId: CHAT_ID,
+      target: 'docs/rune/Operating From Memory.md',
+      outputPath: 'docs/rune/critiques/operating-from-memory.md',
+      revisionRequested: false,
+      sender,
+    });
+  });
+
+  it('propagates an explicit revision request without folding the flag into the target slug', async () => {
+    const { handleWritingCritique } = await requireWritingCritiqueCommand();
+    mockStartWritingProductRun.mockResolvedValue(undefined);
+    const sender = makeSender();
+
+    await handleWritingCritique(sender, CHAT_ID, '--revise docs/rune/Operating From Memory.md');
+
+    expect(mockStartWritingProductRun).toHaveBeenCalledWith({
+      command: 'writing-critique',
+      chatId: CHAT_ID,
+      target: 'docs/rune/Operating From Memory.md',
+      outputPath: 'docs/rune/critiques/operating-from-memory.md',
+      revisionRequested: true,
+      sender,
+    });
   });
 });

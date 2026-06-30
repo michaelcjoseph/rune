@@ -46,7 +46,16 @@ type WritingStartDeps = {
 async function requireWritingOrchestration(): Promise<{
   planWritingProductRun: (input: { topic: string }) => WritingRunPlan;
   startWritingProductRun: (
-    input: { command: 'blog'; chatId: number; topic: string; sender: unknown },
+    input:
+      | { command: 'blog'; chatId: number; topic: string; sender: unknown }
+      | {
+        command: 'writing-critique';
+        chatId: number;
+        target: string;
+        outputPath: string;
+        revisionRequested?: boolean;
+        sender: unknown;
+      },
     deps: WritingStartDeps,
   ) => Promise<StartedWritingRun>;
 }> {
@@ -57,7 +66,16 @@ async function requireWritingOrchestration(): Promise<{
       return {
         planWritingProductRun: mod.planWritingProductRun as (input: { topic: string }) => WritingRunPlan,
         startWritingProductRun: mod.startWritingProductRun as (
-          input: { command: 'blog'; chatId: number; topic: string; sender: unknown },
+          input:
+            | { command: 'blog'; chatId: number; topic: string; sender: unknown }
+            | {
+              command: 'writing-critique';
+              chatId: number;
+              target: string;
+              outputPath: string;
+              revisionRequested?: boolean;
+              sender: unknown;
+            },
           deps: WritingStartDeps,
         ) => Promise<StartedWritingRun>,
       };
@@ -294,5 +312,50 @@ describe('writing-product-orchestration (project 19 Phase 6)', () => {
       externalDeployment: false,
       commitSha: 'abc1234',
     });
+  });
+
+  it('/writing-critique revision requests run on the same deterministic rune-writing/{slug} branch', async () => {
+    const { startWritingProductRun } = await requireWritingOrchestration();
+    const deps = makeStartDeps({
+      createWritingWorktree: vi.fn(async () => ({
+        worktree: '/tmp/rune-writing-operating-from-memory-resume',
+        resumed: true,
+      })),
+    });
+
+    const result = await startWritingProductRun({
+      command: 'writing-critique',
+      chatId: 100,
+      target: 'docs/rune/Operating From Memory.md',
+      outputPath: 'docs/rune/critiques/operating-from-memory.md',
+      revisionRequested: true,
+      sender: {},
+    }, deps);
+
+    expect(deps.createWritingWorktree).toHaveBeenCalledWith(expect.objectContaining({
+      product: 'writing',
+      project: 'operating-from-memory',
+      branch: 'rune-writing/operating-from-memory',
+    }));
+    expect(deps.runWritingPipeline).toHaveBeenCalledWith(expect.objectContaining({
+      topic: 'docs/rune/Operating From Memory.md',
+      requestedBy: 'writing-critique',
+      branch: 'rune-writing/operating-from-memory',
+      worktree: '/tmp/rune-writing-operating-from-memory-resume',
+      critiqueOutputPath: 'docs/rune/critiques/operating-from-memory.md',
+      revisionRequested: true,
+    }));
+    expect(result).toMatchObject({
+      product: 'writing',
+      slug: 'operating-from-memory',
+      branch: 'rune-writing/operating-from-memory',
+      branchStatus: 'resumed',
+      publish: {
+        mode: 'branch-commit',
+        externalDeployment: false,
+        commitSha: 'abc1234',
+      },
+    });
+    expect(deps.deployExternal).not.toHaveBeenCalled();
   });
 });
