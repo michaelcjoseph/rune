@@ -64,10 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- generic supersession audit section.
+- 19-rune-product-os/src/jobs/nightly.ts:790) runs `Knowledge reconciliation` immediately after `KB queue` and before `KB lint`.
 
 Verified:
-- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner`
-- `npm run build`
+`npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner`
 
-No commit made. Note: `src/kb/knowledge-supersession.test.ts` was already modified/staged in the branch; I only changed `src/kb/knowledge-supersession.ts`.
+Result: 2 files passed, 83 tests passed. Worktree remains clean.
