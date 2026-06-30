@@ -51,10 +51,22 @@ export interface ProductPromptContext {
   worldview: ProductPromptWorldview[];
 }
 
+export interface ProductChatWorkspace {
+  repoRoot: string;
+  workRoot: string;
+  scopePath?: string;
+}
+
 export interface BuildSessionSystemPromptInput {
   scope?: SessionScope;
   productContext?: ProductPromptContext;
   workspaceDir?: string;
+  /** When true, the product preamble describes Rune as able to edit/run code in
+   *  the product repo (Phase 2 write-enabled chat). When false/omitted, it
+   *  describes a read-and-reason posture. The actual tool allowlist + writable
+   *  dirs are enforced at the spawn (src/bot/handlers/text.ts, src/ai/claude.ts);
+   *  this flag only keeps the prompt's stated capability honest. */
+  writeEnabled?: boolean;
 }
 
 interface Session {
@@ -106,6 +118,50 @@ function buildGenericSystemPrompt(workspaceDir: string | undefined): string {
   return `${VAULT_SYSTEM_PROMPT_BASE}${workspacePrompt}`;
 }
 
+/** Identity preamble for a PRODUCT-scoped chat. Unlike the global vault persona,
+ *  Rune here is the development agent for one product, working IN that product's
+ *  repo; the second brain is reached read-only through the rune-kb MCP, never as
+ *  the working directory. `writeEnabled` flips the stated capability between
+ *  read-and-reason and edit-and-run (kept in sync with the spawn's tool
+ *  allowlist + writable dirs — see src/bot/handlers/text.ts). */
+function buildProductIdentityPreamble(
+  product: string,
+  repoPath: string | undefined,
+  scopePath: string | undefined,
+  writeEnabled: boolean,
+): string {
+  const workRoot = repoPath && scopePath ? join(repoPath, scopePath) : repoPath;
+  const repoSentence = repoPath
+    ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
+    : `Your working repo is this product's repository.`;
+  const workspaceSentence = workRoot
+    ? `Your editable product workspace is ${workRoot}.`
+    : `Your editable product workspace is this product's configured workspace.`;
+  const capability = writeEnabled
+    ? `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Keep edits inside that product workspace; Bash starts at the repo root so you can run builds/tests/git. CRITICAL — your tools are NOT OS-confined (they run with the operator's full filesystem access), so these boundaries are yours to honor, not the harness's to enforce: (1) Write ONLY inside this product's repo — never the vault, never another product's repo, never anywhere else. (2) The vault is a separately-managed store, reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If asked to save to the vault/journal/notes/KB, do NOT do it by hand — name the slash command or flow that owns that write. (3) Do NOT read or print Rune's own secrets — its .env / .env.local, credentials directories, logs, or MCP token stores — even though the filesystem would allow it; you have no task that needs them. For larger multi-step or risky work, propose the existing cockpit work-run/Fix flow and ask the user to start it there.`
+    : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
+  const actLine = writeEnabled
+    ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make scoped edits, run the check.`
+    : `For development and factual questions, answer directly from the repo.`;
+  return `You are Rune, the development agent for the ${product} product. ${repoSentence} ${actLine}
+
+${capability}
+
+SECOND BRAIN (read-only by policy): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it from product chat — it is maintained by dedicated agents and scheduled jobs.
+
+DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly and act. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in something specific you found in the repo or the second brain, then give your view.
+
+KNOWLEDGE BASE (rune-kb MCP) is your first move for any question about the user's world (people, companies, concepts, frameworks, prior decisions). Don't grep the vault — ask the synthesizer.
+
+WEB SEARCH (WebSearch, WebFetch): use actively for anything outside the repo and the second brain — library/API docs, third-party behavior, current events. Cite sources inline.
+
+HOW TO ANSWER:
+- Pick mode by shape: development/lookup → act directly; strategy/reflection → probe first.
+- Route by subject: code/this-repo → repo tools; the user's domain (concepts, people, prior thinking) → kb_query first; the outside world → web.
+- Responses may render on mobile — be concise; structure over length.
+- The user can end the thread with /fresh.`;
+}
+
 function limitText(text: string, limit = PROMPT_FILE_CHAR_LIMIT): string {
   const trimmed = text.trim();
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}\n...[truncated]` : trimmed;
@@ -143,7 +199,7 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
     `PRODUCT CHAT: Active product: ${scope.product}.`,
     `Product repo: ${context.repoPath}`,
     ...(context.scopePath ? [`Product repo scope: ${context.scopePath}`] : []),
-    'Ground this conversation in the loaded product context below. Search the active product repo and the vault before answering product-specific development questions.',
+    'Ground this conversation in the loaded product context below. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.',
     `REPO + KB ROUTING: code/project questions route to the active product repo (${context.repoPath}${context.scopePath ? `, scoped to ${context.scopePath}` : ''}) with repo_search/Read/Grep. Concept/people questions route to the KB with kb_query first, then kb_search for source pages. Mixed questions should use both.`,
     '',
     '## Loaded Repo Docs',
@@ -159,20 +215,48 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
 
 export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = {}): string {
   const scope = input.scope ?? { kind: 'global' };
-  const base = buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
-  if (scope.kind !== 'product') return base;
-
-  const context = input.productContext ?? loadProductPromptContext(scope.product);
-  if (!context) {
-    return `${base}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search both the product repo and the vault before answering product-specific development questions. REPO + KB ROUTING: code/project questions route to the active product repo when the repo path is known; concept/people questions route to the KB with kb_query first.`;
+  // Global (Telegram / cockpit Home) chat keeps the vault thinking-partner
+  // persona. Product chats get a product-development identity instead (working
+  // repo = the product repo; second brain read-only via the rune-kb MCP).
+  if (scope.kind !== 'product') {
+    return buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
   }
 
+  const writeEnabled = input.writeEnabled ?? false;
+  const context = input.productContext ?? loadProductPromptContext(scope.product);
+  if (!context) {
+    const preamble = buildProductIdentityPreamble(scope.product, undefined, undefined, writeEnabled);
+    return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.`;
+  }
+
+  const preamble = buildProductIdentityPreamble(scope.product, context.repoPath, context.scopePath, writeEnabled);
   const productPrompt = buildProductContextPrompt(scope, context);
-  const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - base.length - 2);
+  const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - preamble.length - 2);
   const boundedProductPrompt = productPrompt.length > available
     ? `${productPrompt.slice(0, available)}\n...[truncated product context]`
     : productPrompt;
-  return `${base}\n\n${boundedProductPrompt}`;
+  return `${preamble}\n\n${boundedProductPrompt}`;
+}
+
+/** Resolve the repo root and the INTENDED editable workspace for a product
+ *  chat, or null when the product is unknown or has no repo configured. Bash
+ *  runs from repoRoot; workRoot is the subtree the system prompt asks Rune to
+ *  keep edits within (repoPath/scopePath for scoped shared-repo products like
+ *  writing, else repoPath).
+ *
+ *  IMPORTANT — workRoot is a PROMPT-LEVEL intent, not an enforced boundary. The
+ *  chat spawns with `--dangerously-skip-permissions`, under which the spawn cwd
+ *  (repoRoot) is itself writable and `--add-dir` does not restrict writes, so
+ *  neither workRoot nor repoRoot is OS-confined. Containment is the prompt +
+ *  the vault's git recoverability. See buildProductIdentityPreamble. */
+export function resolveProductChatWorkspace(product: string): ProductChatWorkspace | null {
+  const context = loadProductPromptContext(product);
+  if (!context || !context.repoPath) return null;
+  return {
+    repoRoot: context.repoPath,
+    workRoot: context.scopePath ? join(context.repoPath, context.scopePath) : context.repoPath,
+    ...(context.scopePath ? { scopePath: context.scopePath } : {}),
+  };
 }
 
 function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {

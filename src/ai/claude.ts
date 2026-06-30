@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { appendFile, appendFileSync, existsSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import config, { PROJECT_ROOT } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { getDateContext } from '../utils/time.js';
@@ -49,13 +49,174 @@ export const CLAUDE_BIN = resolveClaudePath();
  *  global `~/.claude/settings.json`. */
 const PROJECT_SETTINGS_PATH = join(PROJECT_ROOT, '.claude', 'settings.json');
 
+/** Rewrite one MCP-server command arg to be cwd-independent. Relative file
+ *  refs (the rune-kb entrypoint `src/mcp/index.ts`, the `.env.local` passed via
+ *  `--env-file-if-exists=`) are resolved against PROJECT_ROOT; flags and
+ *  already-absolute paths pass through untouched. */
+function absolutizeMcpArg(arg: string): string {
+  const ENV_FLAG = '--env-file-if-exists=';
+  if (arg.startsWith(ENV_FLAG)) {
+    const p = arg.slice(ENV_FLAG.length);
+    return isAbsolute(p) ? arg : `${ENV_FLAG}${join(PROJECT_ROOT, p)}`;
+  }
+  // A path-like positional arg (contains a separator, not a flag, not absolute).
+  if (!arg.startsWith('-') && !isAbsolute(arg) && /[\\/]/.test(arg)) {
+    return join(PROJECT_ROOT, arg);
+  }
+  return arg;
+}
+
+/** Fallback rune-kb registration used when the committed settings.json can't be
+ *  read (e.g. under unit-test fs mocks). Mirrors `.claude/settings.json` with
+ *  PROJECT_ROOT-absolute paths. */
+const FALLBACK_MCP_SERVERS = {
+  'rune-kb': {
+    command: 'npx',
+    args: ['tsx', `--env-file-if-exists=${join(PROJECT_ROOT, '.env.local')}`, join(PROJECT_ROOT, 'src', 'mcp', 'index.ts')],
+    cwd: PROJECT_ROOT,
+  },
+};
+
+let cachedMcpConfigArg: string | null = null;
+
+function isMissingProjectSettingsError(err: unknown): boolean {
+  const e = err as NodeJS.ErrnoException;
+  return e.code === 'ENOENT' || /\bENOENT\b|no such file/i.test(String(e.message ?? err));
+}
+
+/** Build the inline `--mcp-config` JSON, pinning every server to PROJECT_ROOT.
+ *  We pass the config INLINE (Claude CLI accepts a JSON string here) and pin
+ *  cwd + absolutize paths because every Rune spawn runs from a non-repo cwd
+ *  (the vault for agents, the product repo for product chats); the committed
+ *  config's relative `src/mcp/index.ts` only resolves from the repo root, so
+ *  without this the rune-kb server fails to start with ERR_MODULE_NOT_FOUND. */
+function buildProjectMcpConfigArg(): string {
+  try {
+    const raw = JSON.parse(readFileSync(PROJECT_SETTINGS_PATH, 'utf8')) as {
+      mcpServers?: Record<string, { args?: unknown[]; [k: string]: unknown }>;
+    };
+    const servers = raw.mcpServers ?? {};
+    if (Object.keys(servers).length === 0) throw new Error('no mcpServers in settings.json');
+    for (const server of Object.values(servers)) {
+      server['cwd'] = PROJECT_ROOT;
+      if (Array.isArray(server.args)) {
+        server.args = server.args.map((a) => (typeof a === 'string' ? absolutizeMcpArg(a) : a));
+      }
+    }
+    return JSON.stringify({ mcpServers: servers });
+  } catch (err) {
+    // Unit tests mock fs broadly and often omit .claude/settings.json. Keep the
+    // old fallback only for that mocked missing-file case. In production, and
+    // for malformed settings, fail loudly instead of silently dropping config.
+    if (process.env['VITEST'] === 'true' && isMissingProjectSettingsError(err)) {
+      return JSON.stringify({ mcpServers: FALLBACK_MCP_SERVERS });
+    }
+    throw new Error(
+      `Could not build Claude MCP config from ${PROJECT_SETTINGS_PATH}: ${(err as Error).message}`,
+    );
+  }
+}
+
+// Product-chat env scrub is DEFENSE-IN-DEPTH, not containment: a Bash-enabled
+// chat under --dangerously-skip-permissions can still read secret FILES from
+// disk (.env.local, credentials, logs). Scrubbing only narrows the env-variable
+// exfil channel and reduces accidental secret echo in build output. We scrub
+// SECRETS and personal identifiers, NOT non-secret paths (VAULT_DIR,
+// RUNE_WORKSPACE_DIR, RUNE_LOGS_DIR): those are read directly by tools the chat
+// relies on (e.g. kb/vault-index.ts reads process.env.VAULT_DIR), and removing
+// them risks breaking the rune-kb MCP for setups that configure paths via the
+// shell rather than .env.local — with no real security gain (the paths are not
+// secret and are discoverable anyway).
+const PRODUCT_CHAT_ENV_DENY_EXACT = new Set([
+  // Rune's own service secrets
+  'TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_USER_ID',
+  'RUNE_HTTP_SECRET',
+  'RUNE_MCP_SECRET',
+  'RUNE_MCP_ISSUER_URL',
+  'RUNE_MCP_OAUTH_STORE_FILE',
+  'MCP_ISSUER_URL',
+  // Integration credentials
+  'WHOOP_CLIENT_ID',
+  'WHOOP_CLIENT_SECRET',
+  'READWISE_TOKEN',
+  'LENNY_MCP_TOKEN',
+  // Personal identifiers (not secrets, but no build needs them)
+  'FAMILY_NAMES',
+  'IMPLICIT_CRM_NAMES',
+  'OBSIDIAN_VAULT_NAME',
+  // Credential-bearing helpers / common third-party secrets that dodge the
+  // patterns below (e.g. STRIPE_SECRET_KEY ends in _KEY, caught by the pattern).
+  'GIT_ASKPASS',
+]);
+
+const PRODUCT_CHAT_ENV_DENY_PATTERNS = [
+  /(?:^|_)TOKEN$/,
+  /(?:^|_)SECRET$/,
+  /(?:^|_)PASSWORD$/,
+  /(?:^|_)KEY$/, // *_API_KEY, *_ACCESS_KEY, *_PRIVATE_KEY, STRIPE_SECRET_KEY, *_KEY
+  /(?:^|_)CREDENTIALS?$/,
+  /(?:^|_)COOKIE$/,
+  /(?:^|_)AUTH$/,
+];
+
+function scrubProductChatEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (PRODUCT_CHAT_ENV_DENY_EXACT.has(key)) continue;
+    if (PRODUCT_CHAT_ENV_DENY_PATTERNS.some(pattern => pattern.test(key))) continue;
+    out[key] = value;
+  }
+  // SSH_AUTH_SOCK / SSH_AGENT_PID intentionally survive: a product chat needs
+  // the agent for `git` over SSH on the product repo. This grants broader key
+  // access than the product repo alone — an accepted trade-off for `git push`.
+  return out;
+}
+
+export type ClaudeChildEnvMode = 'default' | 'product-chat';
+
+function buildClaudeChildEnv(mode: ClaudeChildEnvMode): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // RUNE_WORKSPACE_DIR is governed solely by config.WORKSPACE_DIR (bugs.md #5):
+  // set it when configured, strip any inherited value otherwise, so a child
+  // never silently inherits the parent daemon's value. Applies to every mode.
+  if (config.WORKSPACE_DIR) {
+    env.RUNE_WORKSPACE_DIR = config.WORKSPACE_DIR;
+  } else {
+    delete env.RUNE_WORKSPACE_DIR;
+  }
+  if (mode === 'product-chat') {
+    // Drop Rune secrets + personal env. RUNE_PROJECT_ROOT is deliberately NOT
+    // added: the chat operates on the product repo, and the rune-kb MCP loads
+    // its own config from .env.local — so the chat has no need for Rune's repo
+    // path, and omitting it avoids handing a Bash shell a pointer to
+    // PROJECT_ROOT/.env.local (defense-in-depth; the path is still discoverable).
+    return scrubProductChatEnv(env);
+  }
+  // Default (agents / one-shot / global chat): expose RUNE_PROJECT_ROOT so
+  // agents that shell out (e.g. the intent-scan cron dogfood) can locate the
+  // Rune repo from the vault cwd.
+  env.RUNE_PROJECT_ROOT = PROJECT_ROOT;
+  return env;
+}
+
 /** Args that pin a Claude CLI spawn to Rune's project-local MCP config.
  *  Exported so external spawners (work-runner) can apply the same isolation
  *  — without this the spawn would inherit every MCP server the user has
  *  globally registered (claude.ai Knowledge Base, Linear, Gmail, …), each
- *  adding ~7s of ToolSearch latency and remote round-trips. */
+ *  adding ~7s of ToolSearch latency and remote round-trips. The config is
+ *  passed inline (cwd-pinned to PROJECT_ROOT) so rune-kb resolves regardless
+ *  of the spawned process's cwd. */
 export function getProjectMcpArgs(): string[] {
-  return ['--strict-mcp-config', '--mcp-config', PROJECT_SETTINGS_PATH];
+  if (cachedMcpConfigArg === null) cachedMcpConfigArg = buildProjectMcpConfigArg();
+  return ['--strict-mcp-config', '--mcp-config', cachedMcpConfigArg];
+}
+
+export function clearProjectMcpArgsCacheForTest(): void {
+  if (process.env['VITEST'] !== 'true') {
+    throw new Error('clearProjectMcpArgsCacheForTest is test-only');
+  }
+  cachedMcpConfigArg = null;
 }
 
 /** Fail-fast assertion that the project-local Claude settings file is on
@@ -226,7 +387,15 @@ function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | un
   }
 }
 
-function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope): Promise<ClaudeResult> {
+function execClaude(
+  args: string[],
+  timeoutMs?: number,
+  opMeta?: OpMeta,
+  writeScope?: AgentWriteScope,
+  cwd?: string,
+  writableRoots?: string[],
+  envMode: ClaudeChildEnvMode = 'default',
+): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
   // Haiku calls) bypass it because their callers expect a single JSON blob on
@@ -238,7 +407,15 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
   const baseArgs = [
     '--dangerously-skip-permissions',
     ...getProjectMcpArgs(),
-    ...(config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : []),
+    // Default spawns add the whole WORKSPACE_DIR (read access to every repo +
+    // the vault). A product chat passes `writableRoots` to narrow this to its
+    // own repo. NOTE: under --dangerously-skip-permissions this `--add-dir` set
+    // does NOT enforce write boundaries (the cwd is writable and Bash has full
+    // fs access) — it is a defense-in-depth / forward-compat signal only. Real
+    // containment is the system prompt + git recoverability.
+    ...(writableRoots !== undefined
+      ? writableRoots.flatMap((d) => ['--add-dir', d])
+      : (config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : [])),
     // A write-scoped run adds its target dirs so the agent can write there
     // (default cwd is the vault, which is otherwise its only writable root).
     ...(writeScope ? writeScope.writableDirs.flatMap((d) => ['--add-dir', d]) : []),
@@ -248,22 +425,14 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
     : [];
   const fullArgs = [...baseArgs, ...streamArgs, ...args];
 
-  // RUNE_WORKSPACE_DIR is governed solely by config.WORKSPACE_DIR: set it when
-  // configured, and strip any inherited value when not, so a spawned child never
-  // silently inherits the parent daemon's RUNE_WORKSPACE_DIR.
-  const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    RUNE_PROJECT_ROOT: PROJECT_ROOT,
-  };
-  if (config.WORKSPACE_DIR) {
-    childEnv.RUNE_WORKSPACE_DIR = config.WORKSPACE_DIR;
-  } else {
-    delete childEnv.RUNE_WORKSPACE_DIR;
-  }
+  const childEnv = buildClaudeChildEnv(envMode);
 
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
-      cwd: writeScope?.cwd ?? config.VAULT_DIR,
+      // Explicit cwd (product-chat working repo) wins; otherwise a write-scoped
+      // agent's cwd; otherwise the vault. rune-kb resolves regardless of cwd
+      // because getProjectMcpArgs pins the MCP server to PROJECT_ROOT.
+      cwd: cwd ?? writeScope?.cwd ?? config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Expose PROJECT_ROOT so agents that shell out can locate the Rune
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
@@ -383,6 +552,9 @@ function askClaudeSession(
   allowedTools?: string[],
   opLabel?: string,
   voice?: boolean,
+  cwd?: string,
+  writableRoots?: string[],
+  envMode?: ClaudeChildEnvMode,
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -399,7 +571,7 @@ function askClaudeSession(
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
-    const result = await execClaude(args, undefined, opMeta);
+    const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots, envMode ?? 'default');
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -429,6 +601,20 @@ export interface AskClaudeWithContextOpts {
   /** Prepend the user's writing voice (see src/vault/voice.ts). Set for callers
    *  that produce prose the user reads; leave unset for structured output. */
   voice?: boolean;
+  /** Working directory for the spawn. Set by product chats to the product repo
+   *  so Rune operates from (and reports) the product repo, not the vault. When
+   *  omitted, the spawn defaults to the vault. */
+  cwd?: string;
+  /** Narrow the default WORKSPACE_DIR read add-dir to exactly these roots. Set
+   *  by a product chat to its repo. NOTE: under --dangerously-skip-permissions
+   *  --add-dir does NOT enforce write boundaries — this is a defense-in-depth /
+   *  forward-compat hint, not containment. Omit to keep workspace-wide access. */
+  writableRoots?: string[];
+  /** `product-chat` scrubs Rune secrets + personal identifiers from the child
+   *  env (defense-in-depth for the chat's Bash) and omits RUNE_PROJECT_ROOT.
+   *  Non-secret paths (VAULT_DIR, RUNE_WORKSPACE_DIR) are kept so the rune-kb
+   *  MCP/KB still resolve. Omit (`default`) for agents/one-shot/global chat. */
+  envMode?: ClaudeChildEnvMode;
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt. */
@@ -438,7 +624,18 @@ export async function askClaudeWithContext(
   systemPrompt: string,
   opts: AskClaudeWithContextOpts = {},
 ): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice);
+  return askClaudeSession(
+    message,
+    sessionId,
+    opts.model,
+    systemPrompt,
+    opts.allowedTools,
+    opts.opLabel,
+    opts.voice,
+    opts.cwd,
+    opts.writableRoots,
+    opts.envMode,
+  );
 }
 
 /** One-shot query with no session persistence. Pass `opLabel` to surface as a

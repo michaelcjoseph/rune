@@ -8,6 +8,7 @@ import {
   setSessionModel,
   appendMessageToSession,
   buildSessionSystemPrompt,
+  resolveProductChatWorkspace,
   type Transport,
   type SessionScope,
 } from '../../vault/sessions.js';
@@ -446,14 +447,37 @@ async function routeToPlanning(
   }
 }
 
-// Read-only by design: chat must never modify the vault. The "never write
-// files" instruction in the session system prompt is reinforced here by
-// omitting Write / Edit / Bash / NotebookEdit. If you find yourself wanting
-// to add a write tool, route the operation through a slash command instead.
+// Global (Telegram / cockpit Home) chat is read-only by design: it must never
+// modify the vault. The "never write files" instruction in the global system
+// prompt is reinforced here by omitting Write / Edit / Bash / NotebookEdit. For
+// a write capability in global chat, route through a slash command instead.
 const CONVERSATION_TOOLS = [
   'Read',
   'Glob',
   'Grep',
+  'WebSearch',
+  'WebFetch',
+  'mcp__rune-kb__repo_search',
+  'mcp__rune-kb__kb_query',
+  'mcp__rune-kb__kb_search',
+  'mcp__rune-kb__kb_stats',
+];
+
+// A write-enabled PRODUCT chat: Rune is a development agent for the active
+// product (Edit/Write/Bash). NOTE: none of these are OS-confined — the spawn
+// uses --dangerously-skip-permissions, so `writableRoots`/`--add-dir` do not
+// restrict Edit/Write and Bash has full filesystem access. The narrowed
+// writableRoots and the scrubbed product-chat env are defense-in-depth; the
+// actual vault-write / unrelated-path / Rune-secret boundaries are enforced by
+// the system prompt (buildProductIdentityPreamble) + the vault's git
+// recoverability. This chat is effectively a full-trust local agent.
+const PRODUCT_CHAT_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Edit',
+  'Write',
+  'Bash',
   'WebSearch',
   'WebFetch',
   'mcp__rune-kb__repo_search',
@@ -481,11 +505,25 @@ async function handleConversation(
 
   sender.startTyping(userId, 'Asking Claude');
   try {
+    // A product chat with a resolvable repo becomes a write-enabled agent. Bash
+    // starts from repoRoot; Edit/Write are limited to workRoot. Global chats —
+    // and product chats whose repo can't be resolved — stay read-only with the
+    // vault cwd.
+    const workspace = scope?.kind === 'product' ? resolveProductChatWorkspace(scope.product) : null;
+    const writeEnabled = !!workspace;
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
-      buildSessionSystemPrompt({ scope }),
-      { model: session.model, allowedTools: CONVERSATION_TOOLS, opLabel: 'chat', voice: true },
+      buildSessionSystemPrompt({ scope, writeEnabled }),
+      {
+        model: session.model,
+        allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
+        opLabel: 'chat',
+        voice: true,
+        ...(workspace
+          ? { cwd: workspace.repoRoot, writableRoots: [workspace.workRoot], envMode: 'product-chat' as const }
+          : {}),
+      },
     );
 
     if (result.error) {

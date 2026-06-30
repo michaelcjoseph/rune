@@ -42,6 +42,7 @@ const {
 interface ProductPromptFixture {
   product: string;
   repoPath: string;
+  scopePath?: string;
   repoDocs: Array<{ path: string; content: string }>;
   projects: Array<{ slug: string; spec: string; tasks: string }>;
   worldview: Array<{ path: string; anchor?: string; content: string }>;
@@ -51,6 +52,7 @@ type BuildSessionSystemPrompt = (input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
+  writeEnabled?: boolean;
 }) => string;
 
 function requireBuildSessionSystemPrompt(): BuildSessionSystemPrompt {
@@ -68,6 +70,7 @@ function buildSessionSystemPrompt(input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
+  writeEnabled?: boolean;
 }): string {
   return requireBuildSessionSystemPrompt()(input);
 }
@@ -459,6 +462,91 @@ describe('vault/sessions', () => {
       expect(prompt).not.toContain('Operator cockpits should preserve human judgment');
     });
 
+    it('presents the product repo as the working repo and drops the vault-as-working-dir identity', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+
+      // Rune introduces itself as the product's dev agent, working in the product repo.
+      expect(prompt).toMatch(/development agent for[^\n]*\brune\b/i);
+      expect(prompt).toMatch(/working repo/i);
+      expect(prompt).toContain('/workspace/rune');
+
+      // The global vault-centric identity must NOT leak into a product chat —
+      // this is the bug: Rune called the vault its primary working repo.
+      expect(prompt).not.toContain('second-brain conversational layer');
+      expect(prompt).not.toMatch(/working directory is their Obsidian vault/i);
+      // The bald global "Never write files." blanket is gone for product chats.
+      expect(prompt).not.toContain('Never write files.');
+    });
+
+    it('frames the second brain as read-only via the rune-kb MCP, not as the working directory', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+
+      expect(prompt).toMatch(/rune-kb/);
+      expect(prompt).toMatch(/read-only/i);
+      // Explicitly never writes the vault from chat.
+      expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
+    });
+
+    it('states scoped edit + raw Bash capability honestly when writeEnabled', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+        writeEnabled: true,
+      });
+
+      // Can read, edit, and run code in the repo.
+      expect(prompt).toMatch(/\bedit\b/i);
+      expect(prompt).toContain('Edit');
+      expect(prompt).toContain('Write');
+      expect(prompt).toContain('Bash');
+      expect(prompt).toMatch(/run|build|test/i);
+      // The prompt must state honestly that tools are NOT OS-confined — the
+      // boundary is an explicit instruction, not harness enforcement.
+      expect(prompt).toMatch(/not OS-confined|not.*confined/i);
+      // Must forbid writing the vault / outside the repo via ANY tool (incl. Bash).
+      expect(prompt).toMatch(/write only inside this product's repo|never[^\n]*vault/i);
+      // Must forbid reading/printing Rune's own secrets (new boundary).
+      expect(prompt).toMatch(/secrets/i);
+      // Vault remains read-only even when the repo is writable.
+      expect(prompt).toMatch(/read-only/i);
+    });
+
+    it('tells scoped products their editable workspace is the scoped subdirectory', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'writing' },
+        productContext: {
+          ...runeContext,
+          product: 'writing',
+          repoPath: '/workspace/site',
+          scopePath: 'docs/rune',
+        },
+        workspaceDir: '/workspace',
+        writeEnabled: true,
+      });
+
+      expect(prompt).toContain('Your working repo is /workspace/site (focused on docs/rune).');
+      expect(prompt).toContain('Your editable product workspace is /workspace/site/docs/rune.');
+    });
+
+    it('keeps read-and-reason language (no edit claim) when writeEnabled is off', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+      expect(prompt).toMatch(/read and reason/i);
+      expect(prompt).not.toContain('Read/Edit/Write');
+    });
+
     it('fails closed instead of grounding one product chat with another product context', () => {
       const buildPrompt = requireBuildSessionSystemPrompt();
       const auraContext: ProductPromptFixture = {
@@ -510,6 +598,34 @@ describe('vault/sessions', () => {
       expect(brandPrompt).toContain('BRAND_PROJECT_CONTEXT');
       expect(brandPrompt).not.toContain('WRITING_SCOPED_CONTEXT');
       expect(brandPrompt).not.toContain('WRITING_PROJECT_CONTEXT');
+    });
+  });
+
+  describe('resolveProductChatWorkspace', () => {
+    function resolveProductChatWorkspace(product: string): { repoRoot: string; workRoot: string; scopePath?: string } | null {
+      const fn = (sessionsModule as unknown as {
+        resolveProductChatWorkspace?: (p: string) => { repoRoot: string; workRoot: string; scopePath?: string } | null;
+      }).resolveProductChatWorkspace;
+      expect(
+        fn,
+        'src/vault/sessions.ts must export resolveProductChatWorkspace so the chat handler can set repo-root cwd and scoped writable roots',
+      ).toEqual(expect.any(Function));
+      return fn!(product);
+    }
+
+    it('returns repoRoot and workRoot for a configured product', () => {
+      const { runeRepo, siteRepo } = writeProductChatFixture();
+      expect(resolveProductChatWorkspace('rune-mcp')).toEqual({ repoRoot: runeRepo, workRoot: runeRepo });
+      expect(resolveProductChatWorkspace('writing')).toEqual({
+        repoRoot: siteRepo,
+        workRoot: join(siteRepo, 'docs/rune'),
+        scopePath: 'docs/rune',
+      });
+    });
+
+    it('returns null for an unknown product', () => {
+      writeProductChatFixture();
+      expect(resolveProductChatWorkspace('does-not-exist')).toBeNull();
     });
   });
 
