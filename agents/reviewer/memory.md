@@ -14,3 +14,7 @@ rules; the SOUL charter governs on any conflict.
 ## Completeness: judge the tree, not only the diff
 
 - [2026-06-22 · source: deliverable-already-on-tree] When judging whether a task's deliverable is complete, check the branch tree, not only the diff you were handed. If an earlier commit bundled the deliverable in out of sequence, it won't appear in this task's diff and will read as "missing" — failing a task whose work is already present on the branch. A deliverable that already exists on the tree counts as satisfied; absence-from-this-diff is not absence-from-the-branch.
+
+## Protected local service ownership
+
+- [2026-06-29 · source: agent-protected-service-invariant] Never kill, stop, interrupt, or reuse protected listeners without explicit human approval: Rune web / cockpit at `127.0.0.1:3847` (`com.jarvis.daemon`) and Rune MCP daemon at `127.0.0.1:3848` (`com.jarvis.rune-mcp`). If a test collides, require a dynamic/task-local port, and before killing any process verify the PID was spawned by the current task/worktree/test command.

@@ -24,6 +24,17 @@ const REGISTRY_VERSION = 1;
 
 /** Durable lifecycle status of a project. Never run-status (running / blocked). */
 export type LifecycleStatus = 'planned' | 'active' | 'done';
+export type ProductClass = 'internal' | 'external';
+export type MonitoringCapability = 'enabled' | 'stubbed';
+
+export interface ProductContainerCapabilities {
+  projects: boolean;
+  bugs: boolean;
+  ideas: boolean;
+  runs: boolean;
+  chat: boolean;
+  monitoring: MonitoringCapability;
+}
 
 /** A single project within a product. */
 export interface RegistryProject {
@@ -41,6 +52,12 @@ export interface RegistryProject {
 export interface RegistryProduct {
   /** Product name, e.g. `rune`, `assay`. */
   name: string;
+  /** Product-OS class. Internal products are Rune itself; external products are public-facing. */
+  class?: ProductClass;
+  /** Optional repo-relative product scope for products sharing a repository. */
+  scopePath?: string;
+  /** Product-aware container contract consumed by cockpit clients. */
+  containerCapabilities?: ProductContainerCapabilities;
   /** Whether the product has a code repo (repo-backed products are executable). */
   repoBacked: boolean;
   /** Projects under this product; empty when the product has no project docs. */
@@ -60,6 +77,9 @@ export interface Registry {
 /** Raw scanned input for a single product — one entry per product repo / vault product file. */
 export interface ProductSource {
   name: string;
+  class?: ProductClass;
+  scopePath?: string;
+  containerCapabilities?: ProductContainerCapabilities;
   repoBacked: boolean;
   /**
    * Raw text of the product repo's `docs/projects/index.md`, or `null` when the repo has
@@ -138,6 +158,9 @@ export function buildRegistry(sources: RegistrySources): Registry {
   const startedAt = Date.now();
   const products: RegistryProduct[] = sources.products.map((source) => ({
     name: source.name,
+    ...(source.class ? { class: source.class } : {}),
+    ...(source.scopePath ? { scopePath: source.scopePath } : {}),
+    ...(source.containerCapabilities ? { containerCapabilities: source.containerCapabilities } : {}),
     repoBacked: source.repoBacked,
     projects: parseProjects(source.projectsIndex).map((project) => {
       const progress = source.taskProgress?.[project.slug];

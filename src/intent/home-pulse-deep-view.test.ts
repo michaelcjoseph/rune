@@ -216,6 +216,43 @@ describe('buildHomePulse - HomePulse projection (cockpit redesign Phase 1)', () 
     ]);
   });
 
+  it('carries product class into HomePulse so the roster can render internal and external groups', async () => {
+    const { buildHomePulse } = await import('./home-pulse.js');
+    const classifiedRegistry = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        { name: 'rune', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'rune-mcp', class: 'internal', repoBacked: true, projects: [] },
+        { name: 'aura', class: 'external', repoBacked: true, projects: [] },
+        { name: 'assay', class: 'external', repoBacked: true, projects: [] },
+        { name: 'relay', class: 'external', repoBacked: true, projects: [] },
+        { name: 'writing', class: 'external', repoBacked: true, projects: [] },
+        { name: 'brand', class: 'external', repoBacked: true, projects: [] },
+      ],
+    } as unknown as Registry;
+
+    const pulse = buildHomePulse(deps({
+      readRegistry: vi.fn(() => classifiedRegistry),
+      readSupervisedRuns: vi.fn(() => []),
+      readRecentWorkRuns: vi.fn(() => []),
+      readBacklogs: vi.fn(() => []),
+    }));
+
+    const classesByProduct = Object.fromEntries(
+      pulse.products.map((product: any) => [product.name, product.class]),
+    );
+    expect(classesByProduct).toEqual({
+      rune: 'internal',
+      'rune-mcp': 'internal',
+      aura: 'external',
+      assay: 'external',
+      relay: 'external',
+      writing: 'external',
+      brand: 'external',
+    });
+  });
+
   it('degrades backlog-derived fields when the backlog store read fails instead of failing the pulse', async () => {
     const { buildHomePulse } = await import('./home-pulse.js');
     const pulse = buildHomePulse(
@@ -423,6 +460,261 @@ describe('buildProductDeepView - ProductDeepView projection (cockpit redesign Ph
         { role: 'reviewer', active: true },
       ],
     });
+  });
+
+  it('applies the writing product container contract: ideas and writing runs only, with no projects or bugs', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const writingRegistry: Registry = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        {
+          name: 'writing',
+          repoBacked: true,
+          projects: [
+            { slug: 'legacy-project-that-must-not-render', status: 'active', progress: { done: 0, total: 4 } },
+          ],
+        },
+      ],
+    };
+    const writingIdea = item({
+      id: 'idea-writing-1',
+      kind: 'ideas',
+      text: 'draft the first Rune essay',
+      status: 'open',
+      section: 'user-authored',
+      source: { file: 'docs/rune/writing-ideas.md', lineNumber: 3, raw: '- [ ] draft the first Rune essay' },
+    });
+    const writingBug = item({
+      id: 'bug-writing-1',
+      kind: 'bugs',
+      text: 'this bug should not be part of the writing work container',
+      status: 'open',
+    });
+
+    const view = buildProductDeepView({
+      product: 'writing',
+      ...deps({
+        readRegistry: vi.fn(() => writingRegistry),
+        readBacklogs: vi.fn((): ProductBacklogFixture[] => [
+          {
+            product: 'writing',
+            notRepoBacked: false,
+            bugs: [writingBug],
+            ideas: [writingIdea],
+            fileWarnings: [],
+          },
+        ]),
+        readSupervisedRuns: vi.fn(() => [
+          run({
+            id: 'run-writing-draft',
+            product: 'writing',
+            project: 'draft-the-first-rune-essay',
+            status: 'running',
+            startedAt: '2026-06-23T12:00:00.000Z',
+          }),
+        ]),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [
+          {
+            runId: 'run-writing-publish',
+            product: 'writing',
+            target: { kind: 'project', slug: 'draft-the-first-rune-essay' },
+            outcome: 'branch-complete',
+            endedAt: '2026-06-23T11:45:00.000Z',
+            transcriptExists: true,
+          },
+        ]),
+      }),
+    });
+
+    expect(view.name).toBe('writing');
+    expect(view.projects).toEqual([]);
+    expect(view.backlog.bugs).toEqual([]);
+    expect(view.backlog.ideas.map((idea: any) => idea.id)).toEqual(['idea-writing-1']);
+    expect(view.runs.map((row: any) => row.runId)).toEqual(['run-writing-publish']);
+    expect(view.activeRun).toMatchObject({
+      runId: 'run-writing-draft',
+      state: 'running',
+    });
+  });
+
+  it('projects writing run route, branch, and draft/publish stage metadata for the cockpit surface', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const writingRegistry = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          projects: [],
+        },
+      ],
+    } as unknown as Registry;
+
+    const view = buildProductDeepView({
+      product: 'writing',
+      ...deps({
+        readRegistry: vi.fn(() => writingRegistry),
+        readBacklogs: vi.fn((): ProductBacklogFixture[] => [
+          {
+            product: 'writing',
+            notRepoBacked: false,
+            bugs: [],
+            ideas: [
+              item({
+                id: 'idea-writing-memory',
+                kind: 'ideas',
+                text: 'Operating from memory',
+                status: 'open',
+                section: 'user-authored',
+                source: {
+                  file: 'docs/rune/writing-ideas.md',
+                  lineNumber: 3,
+                  raw: '- [ ] Operating from memory',
+                },
+              }),
+            ],
+            fileWarnings: [],
+          },
+        ]),
+        readSupervisedRuns: vi.fn(() => [
+          {
+            ...run({
+              id: 'run-writing-draft',
+              product: 'writing',
+              project: 'operating-from-memory',
+              status: 'running',
+              startedAt: '2026-06-23T12:00:00.000Z',
+            }),
+            target: { kind: 'writing-page', slug: 'operating-from-memory' },
+            branch: 'rune-writing/operating-from-memory',
+            routePath: '/rune/operating-from-memory',
+            writingStage: 'drafting',
+          } as unknown as SupervisedRun,
+        ]),
+        readRecentWorkRuns: vi.fn((): WorkRunFixture[] => [
+          {
+            runId: 'run-writing-publish',
+            product: 'writing',
+            target: { kind: 'writing-page', slug: 'operating-from-memory' } as unknown as WorkRunFixture['target'],
+            outcome: 'branch-complete',
+            endedAt: '2026-06-23T11:45:00.000Z',
+            transcriptExists: true,
+            branch: 'rune-writing/operating-from-memory',
+            routePath: '/rune/operating-from-memory',
+            writingStage: 'committed',
+          } as WorkRunFixture,
+        ]),
+      }),
+    });
+
+    expect(view).toMatchObject({
+      name: 'writing',
+      scopePath: 'docs/rune',
+      projects: [],
+      backlog: {
+        bugs: [],
+        ideas: [expect.objectContaining({ id: 'idea-writing-memory' })],
+      },
+      activeRun: expect.objectContaining({
+        runId: 'run-writing-draft',
+        target: { kind: 'writing-page', slug: 'operating-from-memory' },
+        branch: 'rune-writing/operating-from-memory',
+        routePath: '/rune/operating-from-memory',
+        writingStage: 'drafting',
+      }),
+      runs: [
+        expect.objectContaining({
+          runId: 'run-writing-publish',
+          target: { kind: 'writing-page', slug: 'operating-from-memory' },
+          branch: 'rune-writing/operating-from-memory',
+          routePath: '/rune/operating-from-memory',
+          writingStage: 'committed',
+        }),
+      ],
+    });
+  });
+
+  it('applies container capabilities from product metadata instead of hardcoded product names', async () => {
+    const { buildProductDeepView } = await import('./product-deep-view.js');
+    const registryWithCapabilities = {
+      version: 1,
+      builtAt: '2026-06-23T00:00:00.000Z',
+      products: [
+        {
+          name: 'essay-lab',
+          class: 'external',
+          repoBacked: true,
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          projects: [
+            { slug: 'legacy-project-that-must-not-render', status: 'active', progress: { done: 0, total: 3 } },
+          ],
+        },
+      ],
+    } as unknown as Registry;
+    const idea = item({
+      id: 'idea-essay-lab-1',
+      kind: 'ideas',
+      text: 'draft a product essay',
+      status: 'open',
+      section: 'user-authored',
+      source: { file: 'docs/rune/writing-ideas.md', lineNumber: 8, raw: '- [ ] draft a product essay' },
+    });
+    const bug = item({
+      id: 'bug-essay-lab-1',
+      kind: 'bugs',
+      text: 'this bug should not render when bug capability is disabled',
+      status: 'open',
+    });
+
+    const view = buildProductDeepView({
+      product: 'essay-lab',
+      ...deps({
+        readRegistry: vi.fn(() => registryWithCapabilities),
+        readBacklogs: vi.fn((): ProductBacklogFixture[] => [
+          {
+            product: 'essay-lab',
+            notRepoBacked: false,
+            bugs: [bug],
+            ideas: [idea],
+            fileWarnings: [],
+          },
+        ]),
+        readSupervisedRuns: vi.fn(() => []),
+        readRecentWorkRuns: vi.fn(() => []),
+      }),
+    });
+
+    expect((view as any).class).toBe('external');
+    expect((view as any).containerCapabilities).toEqual({
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    });
+    expect(view.projects).toEqual([]);
+    expect(view.backlog.bugs).toEqual([]);
+    expect(view.backlog.ideas.map((row: any) => row.id)).toEqual(['idea-essay-lab-1']);
   });
 
   it('filters run history to the selected product, sorts most-recent first, maps outcomes, and preserves bug targets', async () => {

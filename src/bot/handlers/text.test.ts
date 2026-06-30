@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { MessageSender } from '../../transport/sender.js';
 
+const mockStartReview = vi.hoisted(() => vi.fn());
+const mockStartWritingProductRun = vi.hoisted(() => vi.fn());
+
 vi.mock('../../config.js', () => ({
   default: {
     TELEGRAM_USER_ID: 42,
@@ -70,7 +73,7 @@ vi.mock('../commands/done-workout.js', () => ({ handleDoneWorkout: vi.fn() }));
 vi.mock('../commands/syllabus.js', () => ({ handleSyllabus: vi.fn() }));
 vi.mock('../commands/study.js', () => ({ handleStudy: vi.fn() }));
 vi.mock('../commands/health.js', () => ({ handleHealth: vi.fn() }));
-vi.mock('../commands/blog.js', () => ({ handleBlog: vi.fn() }));
+vi.mock('../commands/writing-critique.js', () => ({ handleWritingCritique: vi.fn() }));
 vi.mock('../commands/seed.js', () => ({ handleSeed: vi.fn() }));
 vi.mock('../commands/priorities.js', () => ({ handlePriorities: vi.fn() }));
 vi.mock('../commands/cancel.js', () => ({ handleCancel: vi.fn() }));
@@ -88,9 +91,13 @@ vi.mock('../../reviews/planning-handler.js', () => ({
 }));
 vi.mock('../../kb/engine.js', () => ({ lintKB: vi.fn().mockResolvedValue({ report: 'clean' }) }));
 vi.mock('../../reviews/orchestrator.js', () => ({
+  startReview: mockStartReview,
   hasActiveReview: vi.fn(() => false),
   handleReviewMessage: vi.fn(),
   registerReviewHandler: vi.fn(),
+}));
+vi.mock('../../jobs/writing-product-orchestration.js', () => ({
+  startWritingProductRun: mockStartWritingProductRun,
 }));
 vi.mock('../../study/sr-session.js', () => ({
   hasActiveSRSession: vi.fn(() => false),
@@ -123,6 +130,7 @@ const { getActivePlanningSession } = await import('../../reviews/planning.js');
 const { handlePlanningTurn } = await import('../../reviews/planning-handler.js');
 const { handleSyllabus } = await import('../commands/syllabus.js');
 const { handleStudy } = await import('../commands/study.js');
+const { handleWritingCritique } = await import('../commands/writing-critique.js');
 const {
   getSession,
   createSession,
@@ -500,6 +508,55 @@ describe('text handler routing', () => {
     expect(handleSyllabus).not.toHaveBeenCalled();
   });
 
+  it('routes /blog to the writing-product pipeline entry point, not the legacy review flow', async () => {
+    mockStartWritingProductRun.mockResolvedValue(undefined);
+    const sender = mockSender();
+
+    await handleTextMessage(sender, msg('/blog operating from memory'));
+
+    expect(mockStartWritingProductRun).toHaveBeenCalledOnce();
+    expect(mockStartWritingProductRun).toHaveBeenCalledWith({
+      command: 'blog',
+      chatId: 100,
+      topic: 'operating from memory',
+      sender,
+    });
+    expect(mockStartReview).not.toHaveBeenCalled();
+  });
+
+  it('routes /writing-critique to the writing critique command handler with the target args', async () => {
+    await handleTextMessage(mockSender(), msg('/writing-critique draft about memory'));
+
+    expect(handleWritingCritique).toHaveBeenCalledWith(expect.anything(), 100, 'draft about memory');
+  });
+
+  it.each(['/topics', '/voice'])('%s is not a standalone slash command', async command => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'unknown-slash-sess',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: command,
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'conversation fallback', error: null });
+
+    await handleTextMessage(mockSender(), msg(command));
+
+    expect(mockStartWritingProductRun).not.toHaveBeenCalled();
+    expect(handleWritingCritique).not.toHaveBeenCalled();
+    expect(mockClassify).not.toHaveBeenCalled();
+    expect(askMock).toHaveBeenCalledWith(command, 'unknown-slash-sess', expect.any(String), {
+      model: 'haiku',
+      allowedTools: expect.any(Array),
+      opLabel: 'chat',
+      voice: true,
+    });
+  });
+
   it('routes /start and sends help listing the canonical command catalog', async () => {
     const sender = mockSender();
     await handleTextMessage(sender, msg('/start'));
@@ -532,6 +589,21 @@ describe('text handler routing', () => {
     expect(helpText).toMatch(/^# Rune\b/);
     expect(helpText).toContain('Rune leans Socratic');
     expect(helpText).not.toMatch(new RegExp(`\\b${retiredBrand}\\b`));
+  });
+
+  it('/start describes /blog as a writing-product /rune artifact command, not a review session', async () => {
+    const sender = mockSender();
+    await handleTextMessage(sender, msg('/start'));
+
+    const helpText = vi.mocked(sender.send).mock.calls[0]![1] as string;
+    const blogLine = helpText
+      .split('\n')
+      .find(line => line.includes('`/blog <topic>`')) ?? '';
+
+    expect(blogLine).toMatch(/writing[- ]product/i);
+    expect(blogLine).toMatch(/\/rune(?:\/\{topic\})?/);
+    expect(blogLine).not.toMatch(/\b(review|interview|session)\b/i);
+    expect(helpText).toMatch(/`\/writing-critique\b/);
   });
 
   it('routes /lint', async () => {

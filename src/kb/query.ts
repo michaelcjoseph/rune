@@ -5,6 +5,19 @@ import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-query');
 
+interface SearchResult {
+  file: string;
+  line: number;
+  content: string;
+}
+
+export interface QueryKBDeps {
+  searchVault?: (
+    query: string,
+    options?: { directory?: string; maxResults?: number },
+  ) => SearchResult[] | Promise<SearchResult[]>;
+}
+
 /** Infer a wiki page type filter from the question phrasing. */
 function inferTypeFilter(question: string): string | undefined {
   const q = question.toLowerCase();
@@ -18,7 +31,10 @@ function inferTypeFilter(question: string): string | undefined {
  * Query the knowledge base. Searches both wiki and personal vault,
  * then uses the kb-query agent to synthesize an answer.
  */
-export async function queryKB(question: string): Promise<{ success: boolean; answer: string }> {
+export async function queryKB(
+  question: string,
+  deps: QueryKBDeps = {},
+): Promise<{ success: boolean; answer: string }> {
   log.info('Querying KB', { question: question.slice(0, 100) });
 
   // Filtered wiki search for targeted results
@@ -30,7 +46,9 @@ export async function queryKB(question: string): Promise<{ success: boolean; ans
   );
 
   // Broader vault search for additional context
-  const vaultResults = searchVault(question, { maxResults: 10 });
+  const vaultResults = deps.searchVault
+    ? await deps.searchVault(question, { maxResults: 10 })
+    : searchVault(question, { maxResults: 10 });
 
   const filteredContext = filteredResults.length > 0
     ? `\n\nFiltered wiki results (type: ${typeFilter || 'all'}):\n${filteredResults.map((r) => `- ${r.file}: ${r.content}`).join('\n')}`

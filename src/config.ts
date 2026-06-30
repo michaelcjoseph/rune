@@ -54,6 +54,13 @@ const config = {
    *  the request Host header (local use only — the header is caller-controlled). */
   MCP_ISSUER_URL: process.env['MCP_ISSUER_URL'] || '',
 
+  /** Standalone MCP daemon OAuth gate secret. Kept separate from the webview
+   *  `RUNE_HTTP_SECRET` so the cockpit process never owns MCP OAuth state. */
+  RUNE_MCP_SECRET: process.env['RUNE_MCP_SECRET'] || '',
+
+  /** Pinned public issuer URL for the standalone MCP daemon OAuth metadata. */
+  RUNE_MCP_ISSUER_URL: process.env['RUNE_MCP_ISSUER_URL'] || '',
+
   get OBSIDIAN_VAULT_NAME() {
     return process.env['OBSIDIAN_VAULT_NAME'] || basename(this.VAULT_DIR);
   },
@@ -133,6 +140,12 @@ const config = {
    *  written 0600, gitignored. Revoke all access = delete this file + restart. */
   get MCP_OAUTH_STORE_FILE() {
     return join(this.LOGS_DIR, 'mcp-oauth-store.json');
+  },
+
+  /** Persisted OAuth state for the standalone MCP daemon. Separate from the
+   *  legacy web-process MCP store so the daemon can survive cockpit restarts. */
+  get RUNE_MCP_OAUTH_STORE_FILE() {
+    return optional('RUNE_MCP_OAUTH_STORE_FILE') ?? join(this.LOGS_DIR, 'rune-mcp-oauth-store.json');
   },
 
   /** Append-only audit log of backlog `+` add writes (09-expand-cockpit). */
@@ -253,6 +266,10 @@ const config = {
 
   HTTP_PORT: 3847,
   HTTP_HOST: '127.0.0.1',
+
+  RUNE_MCP_HOST: process.env['RUNE_MCP_HOST'] || '127.0.0.1',
+  RUNE_MCP_PORT: parseNumericEnv('RUNE_MCP_PORT', 3848, { min: 0, max: 65535, integer: true }),
+  RUNE_MCP_TOOL_TIMEOUT_MS: parseNumericEnv('RUNE_MCP_TOOL_TIMEOUT_MS', 30_000, { min: 1, integer: true }),
 
   CLAUDE_TIMEOUT_MS: 1_800_000,
   CLAUDE_LINT_TIMEOUT_MS: 300_000,

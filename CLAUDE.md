@@ -9,7 +9,8 @@ Always-on personal second brain server. TypeScript/Node.js. A single Node.js pro
 A single Node.js process handles everything:
 
 - **Telegram bot** (polling) — chat, commands, content triage, photos; free-form messages are classified by a Haiku resolver and routed to a skill, else fall through to multi-turn conversation.
-- **HTTP server** (localhost:3847) — health endpoint, session capture, Whoop OAuth, and the **webview/cockpit** at `/` (cookie auth + host-guard): a vanilla HTML/JS chat UI plus a cockpit sidebar (per-product/project lifecycle + run status + action buttons), backlog drawer, planning panel, pending-approvals, product deep-view, and a real-time run-feed. REST + WebSocket. Optionally mounts the **`/mcp` Claude App connector** (single-user OAuth 2.1) when `RUNE_HTTP_SECRET` is set.
+- **HTTP server** (localhost:3847) — health endpoint, session capture, Whoop OAuth, and the **webview/cockpit** at `/` (cookie auth + host-guard): a vanilla HTML/JS chat UI plus a cockpit sidebar (per-product/project lifecycle + run status + action buttons), backlog drawer, planning panel, pending-approvals, product deep-view, and a real-time run-feed. REST + WebSocket.
+- **MCP daemon** (localhost:3848) — standalone Streamable HTTP MCP service at `/mcp` plus daemon `/health`, with separate OAuth config/store so cockpit restarts do not drop Claude App MCP sessions.
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` and emits bus frames; TG shows a "🤔 · /cancel" tracker, the webview a cancellable pill. → `docs/architecture/subsystems.md`.
 - **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
 - **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`.
@@ -123,6 +124,7 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 ```bash
 npm run dev          # tsx watch mode
 npm run start        # production
+npm run mcp:start    # standalone MCP daemon
 npm run build        # type-check only (no emit)
 npm run test         # vitest run
 npm run cli          # local CLI interface
@@ -143,8 +145,9 @@ Loaded from `.env.local` via `--env-file-if-exists`. Defaults in `src/config.ts`
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_USER_ID`, `VAULT_DIR` | **Required** — bot token, your numeric ID, vault path |
 | `FAMILY_NAMES`, `IMPLICIT_CRM_NAMES` | Enable `/family` / implicit-CRM journal mentions |
 | `WHOOP_CLIENT_ID`/`_SECRET`, `READWISE_TOKEN`, `LENNY_MCP_TOKEN` | Integration credentials |
-| `RUNE_HTTP_SECRET` | Webview auth + `/mcp` OAuth gate (unset ⇒ `/mcp` connector not mounted) |
-| `MCP_ISSUER_URL` | Pinned issuer base URL for `/mcp` OAuth metadata |
+| `RUNE_HTTP_SECRET` | Webview auth |
+| `RUNE_MCP_SECRET`, `RUNE_MCP_ISSUER_URL`, `RUNE_MCP_OAUTH_STORE_FILE`, `RUNE_MCP_HOST`, `RUNE_MCP_PORT`, `RUNE_MCP_TOOL_TIMEOUT_MS` | Standalone MCP daemon auth/store/bind/metrics config |
+| `MCP_ISSUER_URL` | Legacy web-process MCP issuer setting; standalone daemon uses `RUNE_MCP_ISSUER_URL` |
 | `OBSIDIAN_VAULT_NAME`, `RUNE_ALLOWED_HOSTS` | Webview vault display name / host-guard allowlist |
 | `RESOLVER_CONFIDENCE_THRESHOLD`, `RESOLVER_MIN_WORDS` | Resolver dispatch threshold / min word count |
 | `RUNE_WORKSPACE_DIR` | Absolute workspace root for autonomous ops (no `~` expansion) |
@@ -168,7 +171,7 @@ Runtime agents are spawned by Rune via `runAgent()`; dev-tooling agents are used
 ## MCP Server
 
 - **Local (`rune-kb`)** — the KB is exposed as a stdio MCP server registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
-- **Remote (`/mcp` Claude App connector)** — single-user OAuth 2.1 endpoint serving the six App-surface tools (kb_* admin tools never remotely reachable), mounted only when `RUNE_HTTP_SECRET` is set. → `docs/architecture/subsystems.md`.
+- **Remote (`/mcp` Claude App connector)** — standalone daemon serving App-surface plus W1 content/utility tools (kb_* admin tools never remotely reachable) over Streamable HTTP with single-user OAuth 2.1. → `docs/architecture/subsystems.md`.
 
 ## Reference
 

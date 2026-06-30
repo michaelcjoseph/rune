@@ -1,5 +1,5 @@
 import type { BacklogItem, FileWarning } from './backlog-parser.js';
-import type { Registry, RegistryProduct } from './registry.js';
+import type { ProductClass, ProductContainerCapabilities, Registry, RegistryProduct } from './registry.js';
 import type { SupervisedRun } from './supervision.js';
 import {
   computeFixAction,
@@ -12,7 +12,7 @@ import {
 export type ProductDeepViewOutcome = 'completed' | 'no-op' | 'partial' | 'failed';
 
 export interface ProductDeepViewTarget {
-  kind: 'project' | 'bug';
+  kind: 'project' | 'bug' | 'writing-page';
   slug: string;
 }
 
@@ -37,6 +37,9 @@ export interface RunSummaryRow {
   outcome: ProductDeepViewOutcome;
   endedAt: string;
   transcriptUrl?: string;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface AgentOnRun {
@@ -54,6 +57,9 @@ export interface ActiveRunDetail {
   worktreePath: string;
   agents: AgentOnRun[];
   transcriptUrl: string;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface BacklogItemWithActions extends BacklogItem {
@@ -63,6 +69,9 @@ export interface BacklogItemWithActions extends BacklogItem {
 
 export interface ProductDeepView {
   name: string;
+  class?: ProductClass;
+  scopePath?: string;
+  containerCapabilities?: ProductContainerCapabilities;
   repoBacked: boolean;
   limitedReason?: string;
   projects: DeepProject[];
@@ -100,6 +109,9 @@ export interface ProductDeepViewWorkRun {
   endedAt: string;
   transcriptExists?: boolean;
   transcriptUrl?: string | null;
+  branch?: string;
+  routePath?: string;
+  writingStage?: string;
 }
 
 export interface ProductDeepViewTaskRunRecord {
@@ -166,6 +178,15 @@ function targetFromSupervisedRun(run: SupervisedRun): ProductDeepViewTarget {
   return maybeTarget ?? { kind: 'project', slug: run.project };
 }
 
+function writingRunMetadata(run: unknown): { branch?: string; routePath?: string; writingStage?: string } {
+  const record = run as Record<string, unknown>;
+  return {
+    ...(typeof record['branch'] === 'string' ? { branch: record['branch'] } : {}),
+    ...(typeof record['routePath'] === 'string' ? { routePath: record['routePath'] } : {}),
+    ...(typeof record['writingStage'] === 'string' ? { writingStage: record['writingStage'] } : {}),
+  };
+}
+
 function elapsedMs(startedAt: string, now: number): number {
   const parsed = Date.parse(startedAt);
   if (Number.isNaN(parsed)) return 0;
@@ -194,6 +215,30 @@ function compareEndedDesc(a: ProductDeepViewWorkRun, b: ProductDeepViewWorkRun):
 
 function projectLifecycle(status: RegistryProduct['projects'][number]['status']): 'active' | 'done' {
   return status === 'done' ? 'done' : 'active';
+}
+
+function resolveProductContainerCapabilities(
+  product: Pick<RegistryProduct, 'name' | 'class' | 'containerCapabilities'>,
+): ProductContainerCapabilities {
+  if (product.containerCapabilities) return product.containerCapabilities;
+  if (product.name === 'writing') {
+    return {
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    };
+  }
+  return {
+    projects: true,
+    bugs: true,
+    ideas: true,
+    runs: true,
+    chat: true,
+    monitoring: product.class === 'internal' ? 'enabled' : 'stubbed',
+  };
 }
 
 function isCancellableProjectMutation(mutation: ProductDeepViewActiveMutation, product: string, projectSlug: string): boolean {
@@ -327,6 +372,7 @@ function activeRunDetail(
     worktreePath: resolveWorktreePath(deps, run, target),
     agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
     transcriptUrl: `/api/work-runs/${run.id}/transcript`,
+    ...writingRunMetadata(run),
   };
 }
 
@@ -344,6 +390,9 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
   if (!product.repoBacked) {
     return {
       name: product.name,
+      ...(product.class ? { class: product.class } : {}),
+      ...(product.scopePath ? { scopePath: product.scopePath } : {}),
+      containerCapabilities: resolveProductContainerCapabilities(product),
       repoBacked: false,
       limitedReason: 'product is not backed by a repo',
       projects: [],
@@ -367,30 +416,40 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       return compareStartedDesc(a, b);
     });
   const activeMutations = deps.readActiveMutations ? readOrEmpty(deps.readActiveMutations) : [];
+  const containerCapabilities = resolveProductContainerCapabilities(product);
 
   const view: ProductDeepView = {
     name: product.name,
+    ...(product.class ? { class: product.class } : {}),
+    ...(product.scopePath ? { scopePath: product.scopePath } : {}),
+    containerCapabilities,
     repoBacked: true,
-    projects: product.projects
-      .filter((project) => project.status !== 'done')
-      .map((project) => ({
-        slug: project.slug,
-        lifecycle: projectLifecycle(project.status),
-        taskProgress: project.progress ?? { done: 0, total: 0 },
-        runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
-      })),
+    projects: !containerCapabilities.projects
+      ? []
+      : product.projects
+        .filter((project) => project.status !== 'done')
+        .map((project) => ({
+          slug: project.slug,
+          lifecycle: projectLifecycle(project.status),
+          taskProgress: project.progress ?? { done: 0, total: 0 },
+          runControl: runControlForProject(product.name, project.slug, activeMutations, deps.dispatchModes),
+        })),
     backlog: {
-      bugs: (backlog?.bugs ?? [])
-        .filter((item) => item.status !== 'done')
-        .map((item) =>
+      bugs: !containerCapabilities.bugs
+        ? []
+        : (backlog?.bugs ?? [])
+          .filter((item) => item.status !== 'done')
+          .map((item) =>
+            withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
+          ),
+      ideas: containerCapabilities.ideas
+        ? (backlog?.ideas ?? []).map((item) =>
           withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
-        ),
-      ideas: (backlog?.ideas ?? []).map((item) =>
-        withBacklogActions(product.name, item, deps.planningActive ?? false, fixAttempts),
-      ),
+        )
+        : [],
       warnings: backlog?.fileWarnings ?? [],
     },
-    runs: recentRuns.map((run) => {
+    runs: containerCapabilities.runs ? recentRuns.map((run) => {
       const id = runId(run);
       const row: RunSummaryRow = {
         runId: id,
@@ -400,12 +459,13 @@ export function buildProductDeepView(deps: ProductDeepViewDeps): ProductDeepView
       };
       const transcriptUrl = transcriptUrlForRun(run, id);
       if (transcriptUrl) row.transcriptUrl = transcriptUrl;
+      Object.assign(row, writingRunMetadata(run));
       return row;
-    }),
+    }) : [],
   };
 
   const active = liveRuns[0];
-  if (active) {
+  if (active && containerCapabilities.runs) {
     view.activeRun = activeRunDetail(active, deps, now);
   }
 

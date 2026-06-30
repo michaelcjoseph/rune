@@ -114,6 +114,15 @@ describe('SLASH_COMMAND_METADATA', () => {
     }
   });
 
+  it('advertises only the supported writing commands and does not create topics/voice routes', () => {
+    const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
+    expect(names.has('blog'), 'missing slash metadata for /blog').toBe(true);
+    expect(names.has('writing-critique'), 'missing slash metadata for /writing-critique').toBe(true);
+    for (const absent of ['topics', 'voice']) {
+      expect(names.has(absent), `/${absent} should not be a standalone resolver route`).toBe(false);
+    }
+  });
+
   it('includes both study and syllabus as distinct slash entries', () => {
     const names = new Set(SLASH_COMMAND_METADATA.map(m => m.name));
     expect(names.has('study'), 'missing slash metadata for /study').toBe(true);

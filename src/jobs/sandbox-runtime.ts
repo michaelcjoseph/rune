@@ -43,9 +43,31 @@ const execFile = promisify(execFileCb);
 /** One product's entry in `policies/products.json`. Tilde-bearing paths are
  *  expanded to absolute paths by `readProductsConfig` before this is returned
  *  to a caller. */
+export type ProductClass = 'internal' | 'external';
+export type MonitoringCapability = 'enabled' | 'stubbed';
+
+export interface ProductContainerCapabilities {
+  projects: boolean;
+  bugs: boolean;
+  ideas: boolean;
+  runs: boolean;
+  chat: boolean;
+  monitoring: MonitoringCapability;
+}
+
 export interface ProductConfig {
-  /** Absolute path of the product's repo (the one `git worktree add` targets). */
+  /** Product-OS class used by the cockpit roster. Absent only for legacy fixtures/config. */
+  class?: ProductClass;
+  /** Product-aware container contract consumed by cockpit clients. */
+  containerCapabilities?: ProductContainerCapabilities;
+  /**
+   * Absolute path of the product's repo (the one `git worktree add` targets).
+   * Empty for projection-only product entries whose execution metadata lands in
+   * a later phase.
+   */
   repoPath: string;
+  /** Optional repo-relative scope for products sharing a repository. */
+  scopePath?: string;
   /** Branch a fresh worktree is based on when no explicit branch is given. */
   baseBranch: string;
   /** Absolute path of the product's scoped credentials file (A1.2 wires this). */
@@ -110,6 +132,39 @@ function expandTilde(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
 }
 
+function parseContainerCapabilities(
+  slug: string,
+  path: string,
+  raw: unknown,
+): ProductContainerCapabilities | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`readProductsConfig: product '${slug}' has invalid containerCapabilities in ${path}`);
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of ['projects', 'bugs', 'ideas', 'runs', 'chat'] as const) {
+    if (typeof entry[key] !== 'boolean') {
+      throw new Error(
+        `readProductsConfig: product '${slug}' has invalid containerCapabilities.${key} in ${path} — expected boolean`,
+      );
+    }
+  }
+  if (entry['monitoring'] !== 'enabled' && entry['monitoring'] !== 'stubbed') {
+    throw new Error(
+      `readProductsConfig: product '${slug}' has invalid containerCapabilities.monitoring in ${path} — ` +
+        "expected 'enabled' or 'stubbed'",
+    );
+  }
+  return {
+    projects: entry['projects'] as boolean,
+    bugs: entry['bugs'] as boolean,
+    ideas: entry['ideas'] as boolean,
+    runs: entry['runs'] as boolean,
+    chat: entry['chat'] as boolean,
+    monitoring: entry['monitoring'] as MonitoringCapability,
+  };
+}
+
 /**
  * Read and parse `policies/products.json`. Tilde-expands `repoPath` and
  * `credentialsFile` for each entry. A malformed file or a missing file throws
@@ -150,14 +205,31 @@ export function readProductsConfig(path: string): Record<string, ProductConfig> 
       );
     }
     const entry = entryRaw as Record<string, unknown>;
+    let productClass: ProductClass | undefined;
+    if (entry['class'] !== undefined) {
+      if (entry['class'] !== 'internal' && entry['class'] !== 'external') {
+        throw new Error(
+          `readProductsConfig: product '${slug}' has invalid class '${String(entry['class'])}' in ${path} — ` +
+            "expected 'internal' or 'external'",
+        );
+      }
+      productClass = entry['class'];
+    }
     const repoPath = expandTilde(String(entry['repoPath'] ?? ''));
-    if (!repoPath) {
+    if (!repoPath && !productClass) {
       throw new Error(
         `readProductsConfig: product '${slug}' is missing required field 'repoPath' in ${path}`,
       );
     }
     out[slug] = {
+      ...(productClass ? { class: productClass } : {}),
+      ...(entry['containerCapabilities'] !== undefined
+        ? { containerCapabilities: parseContainerCapabilities(slug, path, entry['containerCapabilities']) }
+        : {}),
       repoPath,
+      ...(typeof entry['scopePath'] === 'string' && entry['scopePath']
+        ? { scopePath: entry['scopePath'] }
+        : {}),
       baseBranch: String(entry['baseBranch'] ?? 'main'),
       credentialsFile: expandTilde(String(entry['credentialsFile'] ?? '')),
       egressAllowlist: Array.isArray(entry['egressAllowlist'])
@@ -191,6 +263,11 @@ export function getProductConfig(product: string, configPath: string): ProductCo
   if (!entry) {
     throw new Error(
       `getProductConfig: product '${product}' not found in ${configPath}`,
+    );
+  }
+  if (!entry.repoPath) {
+    throw new Error(
+      `getProductConfig: product '${product}' has no configured repoPath in ${configPath}`,
     );
   }
   return entry;

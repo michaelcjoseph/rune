@@ -1,7 +1,24 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ingestSource, queryKB, lintKB, getKBStats } from '../kb/engine.js';
-import { searchRepo, searchWithFilter } from '../kb/search.js';
+import { searchRepo, searchVault as coldVaultSearch, searchWithFilter } from '../kb/search.js';
+import {
+  getVaultIndexStatus as daemonIndexStatus,
+  queryVaultIndex as daemonIndexSearch,
+} from '../kb/./vault-index.js';
+import { getMcpMetricsSnapshot, instrumentMcpTool, type McpToolCallback } from './metrics.js';
+
+type BroadVaultSearch = (
+  query: string,
+  options?: { directory?: string; maxResults?: number },
+) => Array<{ file: string; line: number; content: string }> | Promise<Array<{ file: string; line: number; content: string }>>;
+
+export interface CreateRuneMcpServerOptions {
+  tools: readonly ToolName[];
+  name?: string;
+  kbQueryBroadSearch?: BroadVaultSearch;
+  getActiveSessionCount?: () => number;
+}
 
 /**
  * Shared MCP server factory (project 16-claude-app-connector).
@@ -43,23 +60,79 @@ export const ADMIN_TOOLS = [
   'kb_lint',
 ] as const;
 
+export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks', 'tag_date_query'] as const;
+
+const UTILITY_TOOLS = ['refresh_vault_index', 'mcp_metrics_snapshot'] as const;
+
 /** Union of every tool name the factory can register. */
-export type ToolName = (typeof APP_SURFACE_TOOLS)[number] | (typeof ADMIN_TOOLS)[number];
+export type ToolName =
+  | (typeof APP_SURFACE_TOOLS)[number]
+  | (typeof ADMIN_TOOLS)[number]
+  | (typeof CONTENT_TOOLS)[number]
+  | (typeof UTILITY_TOOLS)[number];
 
 /** Lazy loader for the read-tools trio handler + deps modules (shared by
  *  three registrations; Node's module cache makes repeat calls free). */
 const lazyReadTools = () =>
   Promise.all([import('./tools/read-tools.js'), import('./tools/read-tools-deps.js')]);
 
+const lazyVaultIndexTools = () => import('./tools/vault-index-tools.js');
+
+const lazyJournalRangeTool = () =>
+  Promise.all([import('./tools/journal-range.js'), import('./tools/journal-range-deps.js')]);
+
+const lazyFollowWikilinksTool = () =>
+  Promise.all([import('./tools/follow-wikilinks.js'), import('./tools/follow-wikilinks-deps.js')]);
+
+const lazyTagDateQueryTool = () =>
+  Promise.all([import('./tools/tag-date-query.js'), import('./tools/tag-date-query-deps.js')]);
+
+function daemonBroadSearch(
+  query: string,
+  options?: { directory?: string; maxResults?: number },
+): Array<{ file: string; line: number; content: string }> {
+  const { ready } = daemonIndexStatus();
+  return ready ? daemonIndexSearch(query, options) : coldVaultSearch(query, options);
+}
+
+type ServerWithMutableTool = {
+  tool: (name: string, ...rest: unknown[]) => unknown;
+};
+
+function instrumentServerTools(server: McpServer): McpServer {
+  const mutableServer = server as unknown as ServerWithMutableTool;
+  const originalTool = mutableServer.tool.bind(server);
+  mutableServer.tool = (name: string, ...rest: unknown[]): unknown => {
+    const callback = rest.at(-1);
+    if (typeof callback === 'function') {
+      rest[rest.length - 1] = instrumentMcpTool(name, callback as McpToolCallback);
+    }
+    return originalTool(name, ...rest);
+  };
+  return server;
+}
+
+function warmIndexAgeMs(status: ReturnType<typeof daemonIndexStatus>): number | null {
+  const lastRebuildAt = (status as { lastRebuildAt?: unknown }).lastRebuildAt;
+  if (typeof lastRebuildAt !== 'string') return null;
+  const timestamp = Date.parse(lastRebuildAt);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Date.now() - timestamp);
+}
+
 /** Every tool the factory knows how to register, keyed by tool name. */
-const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
-  kb_query: (server) => {
+const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpServerOptions) => void> = {
+  kb_query: (server, opts) => {
     server.tool(
       'kb_query',
       'Query the Rune knowledge base. Returns a synthesized answer with wikilink citations.',
       { question: z.string().describe('The question to answer using the knowledge base') },
       async ({ question }) => {
-        const result = await queryKB(question);
+        const broadSearch = opts.kbQueryBroadSearch
+          ?? (opts.name === 'rune-mcp' ? daemonBroadSearch : undefined);
+        const result = broadSearch
+          ? await queryKB(question, { searchVault: broadSearch })
+          : await queryKB(question);
         return {
           content: [{ type: 'text' as const, text: result.answer }],
           isError: !result.success,
@@ -166,14 +239,106 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
     );
   },
 
+  refresh_vault_index: (server) => {
+    server.tool(
+      'refresh_vault_index',
+      'Refresh the warm vault index and report readiness plus build statistics.',
+      {},
+      async () => {
+        const { refreshVaultIndexTool, buildProductionRefreshVaultIndexDeps } =
+          await lazyVaultIndexTools();
+        return refreshVaultIndexTool(buildProductionRefreshVaultIndexDeps());
+      },
+    );
+  },
+
+  mcp_metrics_snapshot: (server, opts) => {
+    server.tool(
+      'mcp_metrics_snapshot',
+      'Return live in-memory MCP call metrics plus session and warm-index status.',
+      {},
+      async () => {
+        const metrics = getMcpMetricsSnapshot();
+        const warmIndex = daemonIndexStatus();
+        return {
+          content: [{
+            type: 'text' as const,
+            text: JSON.stringify({
+              ...metrics,
+              activeSessions: opts.getActiveSessionCount?.() ?? 0,
+              warmIndex: {
+                ready: warmIndex.ready,
+                status: warmIndex.status,
+                ageMs: warmIndexAgeMs(warmIndex),
+                lastRebuild: warmIndex.lastRebuild,
+              },
+            }),
+          }],
+        };
+      },
+    );
+  },
+
+  journal_range: (server) => {
+    server.tool(
+      'journal_range',
+      'Return journal entries for an inclusive date range from the warm vault index, with cold fallback while the index is building.',
+      {
+        startDate: z.string().describe('Inclusive start date in YYYY-MM-DD format'),
+        endDate: z.string().describe('Inclusive end date in YYYY-MM-DD format'),
+      },
+      async (input) => {
+        const [{ journalRange }, { buildProductionJournalRangeDeps }] =
+          await lazyJournalRangeTool();
+        return journalRange(input, buildProductionJournalRangeDeps());
+      },
+    );
+  },
+
+  follow_wikilinks: (server) => {
+    server.tool(
+      'follow_wikilinks',
+      'Resolve Obsidian wikilinks from a source file or text snippet to target vault content using the warm vault index.',
+      {
+        sourceFile: z.string().optional().describe('Vault-relative source markdown file to scan for wikilinks'),
+        text: z.string().optional().describe('Text snippet to scan for wikilinks'),
+        maxDepth: z.number().optional().describe('Maximum wikilink traversal depth, 1-5 (default 1)'),
+        maxResults: z.number().optional().describe('Maximum resolved target files to return, 1-50 (default 10)'),
+      },
+      async (input) => {
+        const [{ followWikilinks }, { buildProductionFollowWikilinksDeps }] =
+          await lazyFollowWikilinksTool();
+        return followWikilinks(input, buildProductionFollowWikilinksDeps());
+      },
+    );
+  },
+
+  tag_date_query: (server) => {
+    server.tool(
+      'tag_date_query',
+      'Query warm-index markdown content by tag and/or date range, with stable result shape and bounded results.',
+      {
+        tag: z.string().optional().describe('Tag or hashtag to match, with or without #'),
+        startDate: z.string().optional().describe('Inclusive start date in YYYY-MM-DD format'),
+        endDate: z.string().optional().describe('Inclusive end date in YYYY-MM-DD format'),
+        maxResults: z.number().optional().describe('Maximum results to return, 1-50 (default 20)'),
+      },
+      async (input) => {
+        const [{ tagDateQuery }, { buildProductionTagDateQueryDeps }] =
+          await lazyTagDateQueryTool();
+        return tagDateQuery(input, buildProductionTagDateQueryDeps());
+      },
+    );
+  },
+
   vault_search: (server) => {
     server.tool(
       'vault_search',
-      'Search vault content (journals, pages, projects). Returns matching snippets with paths.',
+      'Search whole-vault markdown content. Returns matching snippets with paths.',
       {
         query: z.string().describe('Search query text'),
-        types: z.array(z.enum(['journals', 'pages', 'projects'])).optional()
-          .describe('Restrict search to these vault areas (default: all three)'),
+        types: z.array(z.string()).optional()
+          .describe('Optional top-level folder prefixes to narrow search; unknown or unsafe values are ignored. Default: whole vault.'),
         maxResults: z.number().optional().describe('Max results to return'),
       },
       // Lazy import: the deps module pulls config.ts (env-var-required at
@@ -265,7 +430,7 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer) => void> = {
  * Does NOT initialize the KB — `initKB()` is a process-startup concern
  * (daemon: src/index.ts; standalone stdio: src/mcp/index.ts).
  */
-export function createRuneMcpServer(opts: { tools: readonly ToolName[]; name?: string }): McpServer {
+export function createRuneMcpServer(opts: CreateRuneMcpServerOptions): McpServer {
   if (opts.tools.length === 0) {
     throw new Error('createRuneMcpServer: empty tool list — a server exposing no tools is a configuration error');
   }
@@ -277,13 +442,13 @@ export function createRuneMcpServer(opts: { tools: readonly ToolName[]; name?: s
     throw new Error(`createRuneMcpServer: unknown tool name(s): ${unknown.join(', ')}`);
   }
 
-  const server = new McpServer({
+  const server = instrumentServerTools(new McpServer({
     name: opts.name ?? 'rune-kb',
     version: '1.0.0',
-  });
+  }));
 
   for (const name of opts.tools) {
-    TOOL_REGISTRY[name](server);
+    TOOL_REGISTRY[name](server, opts);
   }
 
   return server;

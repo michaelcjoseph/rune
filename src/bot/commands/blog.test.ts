@@ -2,10 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { MessageSender } from '../../transport/sender.js';
 
 const mockStartReview = vi.fn<() => Promise<void>>();
+const mockStartWritingProductRun = vi.fn<() => Promise<void>>();
 const mockGetTodayDate = vi.fn(() => '2026-04-14');
 
 vi.mock('../../reviews/orchestrator.js', () => ({
   startReview: mockStartReview,
+}));
+
+vi.mock('../../jobs/writing-product-orchestration.js', () => ({
+  startWritingProductRun: mockStartWritingProductRun,
 }));
 
 vi.mock('../../utils/time.js', () => ({
@@ -51,14 +56,20 @@ describe('handleBlog', () => {
     expect(mockStartReview).not.toHaveBeenCalled();
   });
 
-  it('sets topic and calls startReview with correct args', async () => {
-    mockStartReview.mockResolvedValue(undefined);
+  it('starts the specialized writing product pipeline, not the legacy blog review flow', async () => {
+    mockStartWritingProductRun.mockResolvedValue(undefined);
     const sender = makeSender();
 
     await handleBlog(sender, CHAT_ID, 'why testing matters');
 
-    expect(mockStartReview).toHaveBeenCalledOnce();
-    expect(mockStartReview).toHaveBeenCalledWith(CHAT_ID, 'blog', '2026-04-14', sender, 'why testing matters');
+    expect(mockStartWritingProductRun).toHaveBeenCalledOnce();
+    expect(mockStartWritingProductRun).toHaveBeenCalledWith({
+      command: 'blog',
+      chatId: CHAT_ID,
+      topic: 'why testing matters',
+      sender,
+    });
+    expect(mockStartReview).not.toHaveBeenCalled();
     expect(sender.send).not.toHaveBeenCalled();
   });
 });

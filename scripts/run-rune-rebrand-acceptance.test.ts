@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process';
 import { cpSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { chmod } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -13,14 +13,20 @@ const retired = ['ja', 'rvis'].join('');
 const launchdLabel = ['com', retired, 'daemon'].join('.');
 
 const cleanupPaths: string[] = [];
-let healthServer: Server | null = null;
+let healthServer: ChildProcessByStdio<null, Readable, Readable> | null = null;
 
 afterEach(async () => {
   if (healthServer) {
-    await new Promise<void>((resolve, reject) => {
-      healthServer!.close((err) => (err ? reject(err) : resolve()));
-    });
+    const child = healthServer;
     healthServer = null;
+    child.kill('SIGTERM');
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 1000);
+      child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   for (const path of cleanupPaths.splice(0).reverse()) {
@@ -66,24 +72,43 @@ function makeMovedCheckout(): { home: string; checkout: string; scriptPath: stri
   return { home, checkout, scriptPath: join(checkout, SCRIPT_RELATIVE_PATH) };
 }
 
-async function startHealthServer(): Promise<void> {
-  healthServer = createServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
+async function startHealthServer(): Promise<string> {
+  const script = [
+    "const { createServer } = require('node:http');",
+    "const server = createServer((_req, res) => {",
+    "  res.writeHead(200, { 'content-type': 'application/json' });",
+    "  res.end(JSON.stringify({ status: 'ok' }));",
+    '});',
+    "server.listen(0, '127.0.0.1', () => {",
+    '  const address = server.address();',
+    "  console.log(`http://127.0.0.1:${address.port}/health`);",
+    '});',
+    "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+  ].join('\n');
+  healthServer = spawn(process.execPath, ['-e', script], {
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  await new Promise<void>((resolve, reject) => {
-    healthServer!.once('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        healthServer = null;
-        resolve();
-        return;
-      }
+  return await new Promise<string>((resolve, reject) => {
+    let stderr = '';
+    const timer = setTimeout(() => {
+      reject(new Error(`health server did not start: ${stderr.slice(0, 500)}`));
+    }, 5000);
+
+    healthServer!.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    healthServer!.stdout.once('data', (chunk: Buffer) => {
+      clearTimeout(timer);
+      resolve(chunk.toString('utf8').trim());
+    });
+    healthServer!.once('error', (err) => {
+      clearTimeout(timer);
       reject(err);
     });
-    healthServer!.listen(3847, '127.0.0.1', () => {
-      healthServer!.off('error', reject);
-      resolve();
+    healthServer!.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`health server exited before listening: code=${String(code)} ${stderr}`));
     });
   });
 }
@@ -141,7 +166,7 @@ describe('Rune rebrand live acceptance harness', () => {
     await executable(handleVerify, '#!/bin/sh\necho "authenticated owner: @runeai"\n');
     await executable(fakeClaude, '#!/bin/sh\necho "fake routine agent response"\n');
     await makePassingExternalSurface(binDir, checkout);
-    await startHealthServer();
+    const healthUrl = await startHealthServer();
 
     const result = runAcceptance(scriptPath, {
       ...process.env,
@@ -150,6 +175,7 @@ describe('Rune rebrand live acceptance harness', () => {
       TELEGRAM_BOT_TOKEN: 'acceptance-token',
       TELEGRAM_USER_ID: '1',
       VAULT_DIR: vaultDir,
+      RUNE_ACCEPTANCE_HEALTH_URL: healthUrl,
       RUNE_HANDLE_OWNERSHIP_RECORD: handleRecord,
       RUNE_HANDLE_VERIFY_COMMAND: handleVerify,
     });

@@ -41,6 +41,7 @@ const log = createLogger('registry-rebuild');
  */
 function scanProductTaskProgress(projectsDir: string): Record<string, { done: number; total: number }> {
   const out: Record<string, { done: number; total: number }> = {};
+  if (!projectsDir) return out;
   let entries: string[];
   try {
     entries = readdirSync(projectsDir);
@@ -81,8 +82,8 @@ export function scanRegistrySources(
   const products = readProductsConfig(productsConfigPath);
   const sources: ProductSource[] = [];
   for (const [name, cfg] of Object.entries(products)) {
-    const repoBacked = existsSync(cfg.repoPath);
-    const projectsDir = join(cfg.repoPath, 'docs', 'projects');
+    const repoBacked = Boolean(cfg.repoPath) && existsSync(cfg.repoPath);
+    const projectsDir = cfg.repoPath ? join(cfg.repoPath, 'docs', 'projects') : '';
     let projectsIndex: string | null = null;
     try {
       projectsIndex = readFileSync(join(projectsDir, 'index.md'), 'utf8');
@@ -90,7 +91,15 @@ export function scanRegistrySources(
       projectsIndex = null;
     }
     const taskProgress = scanProductTaskProgress(projectsDir);
-    sources.push({ name, repoBacked, projectsIndex, taskProgress });
+    sources.push({
+      name,
+      ...(cfg.class ? { class: cfg.class } : {}),
+      ...(cfg.scopePath ? { scopePath: cfg.scopePath } : {}),
+      ...(cfg.containerCapabilities ? { containerCapabilities: cfg.containerCapabilities } : {}),
+      repoBacked,
+      projectsIndex,
+      taskProgress,
+    });
   }
   return { products: sources };
 }

@@ -24,9 +24,7 @@ import { workRunReleaseApplier } from './jobs/work-run-release.js';
 import { restoreReviewSessions, persistReviewSessions, getAllReviewSessions } from './reviews/session.js';
 import { restorePlanningSessions, persistPlanningSessions, getAllPlanningSessions } from './reviews/planning.js';
 import { createBot, wireHandlers } from './bot/telegram.js';
-import { startHttpServer, closeMcpSessions } from './server/http.js';
-import { createMcpOAuth } from './server/mcp-oauth.js';
-import { readOAuthStore, writeOAuthStore } from './server/mcp-oauth-store.js';
+import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
 import {
@@ -250,30 +248,7 @@ void cleanupOrphanWorktrees({
   log.warn('Orphan worktree cleanup failed', { error: (err as Error).message });
 });
 
-// /mcp Claude App connector (project 16): mounted only when the gate secret
-// exists — the OAuth consent flow is gated on RUNE_HTTP_SECRET, and tokens
-// bind to the one known user id. Without the secret the route stays absent.
-const mcpOauth = config.RUNE_HTTP_SECRET
-  ? createMcpOAuth({
-      gateSecret: config.RUNE_HTTP_SECRET,
-      userId: String(config.TELEGRAM_USER_ID),
-      issuerBaseUrl: config.MCP_ISSUER_URL || undefined,
-      // Never-expire, persisted: the App authenticates once and survives
-      // every restart; revoke by deleting MCP_OAUTH_STORE_FILE + restarting.
-      tokenTtlMs: null,
-      loadState: () => readOAuthStore(config.MCP_OAUTH_STORE_FILE),
-      saveState: (s) => writeOAuthStore(config.MCP_OAUTH_STORE_FILE, s),
-    })
-  : null;
-if (!mcpOauth) {
-  log.warn('RUNE_HTTP_SECRET not set — /mcp (Claude App connector) not mounted');
-}
-const server = startHttpServer(
-  { webview, isReady: () => ready },
-  mcpOauth
-    ? { verifyBearer: mcpOauth.verifyBearer, handleOAuthRoute: mcpOauth.handleOAuthRoute }
-    : undefined,
-);
+const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
 startStallCheck(bus);
 try {
@@ -306,9 +281,6 @@ async function shutdown() {
   stopWatcher();
   destroy();
   stopInFlightTicker();
-  // Tear down /mcp sessions FIRST so no new MCP work arrives while child
-  // processes drain (no-op when /mcp is not mounted).
-  await closeMcpSessions(server);
   killActiveProcesses();
   await waitForActiveProcesses();
   persistSessions();

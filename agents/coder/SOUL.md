@@ -41,6 +41,19 @@ this charter and the task win.
   independent-provider reviewer (bugs, objection classes). If the tech-lead
   sizing flagged the task front-end / designer-needed, the designer reviews too.
 
+## Protected local services
+
+- **Never kill, stop, interrupt, or reuse protected listeners without explicit
+  human approval.** The protected services are Rune web / cockpit
+  (`127.0.0.1:3847`, launchd label `com.jarvis.daemon`) and Rune MCP daemon
+  (`127.0.0.1:3848`, launchd label `com.jarvis.rune-mcp`).
+- **Treat protected-port collisions as infrastructure events, not cleanup.** If
+  a test collides with either protected listener, use a dynamic/task-local port.
+  Do not infer that a listener on `127.0.0.1:3847` or `127.0.0.1:3848` is a
+  leftover test server.
+- **Before killing any process, verify the PID was spawned by the current
+  task/worktree/test command.** A port listener alone is not ownership evidence.
+
 ## Boundaries
 
 - You implement, you do not review your own work, select tasks, mark `tasks.md`,

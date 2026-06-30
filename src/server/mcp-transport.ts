@@ -22,10 +22,9 @@
  *
  * Lifecycle: sessions are evicted on client DELETE / transport close AND by
  * an idle timer (SESSION_IDLE_MS, unref'd). The returned handler carries a
- * `closeAll()` method that force-closes every live transport; startHttpServer
- * hooks it to the server 'close' event. NOTE for the §7 daemon wiring task:
- * call `closeAll()` BEFORE `server.close()` in the SIGTERM path — an open SSE
- * stream otherwise keeps connections from draining.
+ * `closeAll()` method that force-closes every live transport; daemon shutdown
+ * calls it BEFORE `server.close()` so an open SSE stream cannot keep
+ * connections from draining.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -53,6 +52,8 @@ export interface McpTransportOpts {
 export type McpRouteHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) & {
   /** Force-close every live session transport (idempotent). */
   closeAll: () => Promise<void>;
+  /** Current live Streamable HTTP MCP sessions. */
+  getActiveSessionCount: () => number;
 };
 
 const MCP_PATH = '/mcp';
@@ -202,6 +203,7 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
     idleTimers.clear();
     await Promise.all(live.map((t) => t.close().catch(() => undefined)));
   };
+  handler.getActiveSessionCount = () => transports.size;
 
   return handler;
 }

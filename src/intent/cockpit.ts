@@ -15,7 +15,13 @@
  * See docs/projects/08-intent-layer/{spec.md (§"Cockpit"), test-plan.md (§7)}.
  */
 
-import type { LifecycleStatus, Registry } from './registry.js';
+import type {
+  LifecycleStatus,
+  ProductClass,
+  ProductContainerCapabilities,
+  Registry,
+  RegistryProduct,
+} from './registry.js';
 
 /** Live run-status of a project — held by supervision (Layer 3), never by the registry. */
 export type CockpitRunStatus = 'idle' | 'running' | 'blocked-on-human';
@@ -149,6 +155,12 @@ export interface BacklogCounts {
 /** A product and the projects under it, as the cockpit presents them. */
 export interface CockpitProduct {
   name: string;
+  /** Product-OS class copied from the registry for internal/external roster grouping. */
+  class?: ProductClass;
+  /** Optional repo-relative product scope for shared-repo product containers. */
+  scopePath?: string;
+  /** Product-aware container contract copied from the registry. */
+  containerCapabilities?: ProductContainerCapabilities;
   repoBacked: boolean;
   projects: CockpitProject[];
   /** Backlog open/done + warning counts (09-expand-cockpit). Absent unless the caller passes
@@ -164,6 +176,30 @@ export interface CockpitView {
   products: CockpitProduct[];
   /** Human-readable reason, set only when `available` is false. */
   unavailableReason?: string;
+}
+
+function resolveProductContainerCapabilities(
+  product: Pick<RegistryProduct, 'name' | 'class' | 'containerCapabilities'>,
+): ProductContainerCapabilities {
+  if (product.containerCapabilities) return product.containerCapabilities;
+  if (product.name === 'writing') {
+    return {
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+      monitoring: 'stubbed',
+    };
+  }
+  return {
+    projects: true,
+    bugs: true,
+    ideas: true,
+    runs: true,
+    chat: true,
+    monitoring: product.class === 'internal' ? 'enabled' : 'stubbed',
+  };
 }
 
 /** A richer per-project entry the supervision surface can pass — carries
@@ -273,6 +309,9 @@ export function buildCockpitView(
     });
     const prod: CockpitProduct = {
       name: product.name,
+      ...(product.class ? { class: product.class } : {}),
+      ...(product.scopePath ? { scopePath: product.scopePath } : {}),
+      containerCapabilities: resolveProductContainerCapabilities(product),
       repoBacked: product.repoBacked,
       projects,
     };

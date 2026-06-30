@@ -66,6 +66,18 @@ function renderActiveRun(product) {
     `</button>`;
 }
 
+function renderMcpMonitoring(product) {
+  const mcp = product?.monitoring?.mcp;
+  if (!mcp?.status) return '';
+  const status = mcp.status === 'ok' ? 'ok' : 'degraded';
+  const label = status === 'ok' ? 'MCP daemon ok' : 'MCP daemon degraded';
+  const detail = mcp.error || mcp.endpoint || mcp.checkedAt || '';
+  return `<div class="home-mcp-status home-mcp-status--${escHtml(status)}" data-mcp-status="${escHtml(status)}">` +
+    `<strong>${escHtml(label)}</strong>` +
+    (detail ? `<span>${escHtml(detail)}</span>` : '<span>Health check returned no detail</span>') +
+  `</div>`;
+}
+
 function renderProductCard(product) {
   const counts = product.counts || {};
   const warnings = counts.backlogWarnings || 0;
@@ -87,6 +99,7 @@ function renderProductCard(product) {
       `<span>${escHtml(fmtCount(counts.openIdeas, 'open idea', 'open ideas'))}</span>` +
       `<span>${escHtml(fmtCount(warnings, 'warning', 'warnings'))}</span>` +
     `</div>` +
+    renderMcpMonitoring(product) +
     outcome +
     (attention
       ? `<div class="home-attention home-attention--urgent" aria-label="attention signals"><strong>Needs attention</strong><ul>${attention}</ul></div>`
@@ -94,6 +107,50 @@ function renderProductCard(product) {
     `<button class="home-open-product" type="button" data-home-open-product ` +
       `data-product="${escHtml(product.name)}">Open project</button>` +
   `</article>`;
+}
+
+function productClass(product) {
+  return product?.class === 'internal' ? 'internal' : 'external';
+}
+
+function renderProductGroup(productGroup, label) {
+  const products = productGroup.products.map(renderProductCard).join('');
+  return `<section class="home-product-class home-product-class--${attr(productGroup.class)}" ` +
+    `data-home-product-class="${attr(productGroup.class)}">` +
+      `<div class="home-product-class-head">` +
+        `<h3>${escHtml(label)}</h3>` +
+        `<span>${escHtml(fmtCount(productGroup.products.length, 'product', 'products'))}</span>` +
+      `</div>` +
+      `<div class="home-product-class-grid">${products}</div>` +
+    `</section>`;
+}
+
+function renderProductRoster(products) {
+  const groups = {
+    internal: [],
+    external: [],
+  };
+  for (const product of products) {
+    groups[productClass(product)].push(product);
+  }
+  return [
+    groups.internal.length > 0
+      ? renderProductGroup({ class: 'internal', products: groups.internal }, 'Internal')
+      : '',
+    groups.external.length > 0
+      ? renderProductGroup({ class: 'external', products: groups.external }, 'External')
+      : '',
+  ].join('');
+}
+
+function fillBlankBlockClosures(html) {
+  let next = String(html || '');
+  let previous = '';
+  while (next !== previous) {
+    previous = next;
+    next = next.replace(/>\s*<\/(section|div|article)>/gi, '>&#8203;</$1>');
+  }
+  return next;
 }
 
 function renderStatus(status) {
@@ -182,14 +239,14 @@ function renderHomeViewWithOptions(pulse, options = {}) {
   return `<section class="home-view">` +
     `<div class="home-header"><h2>Home</h2><span>${escHtml(fmtCount(products.length, 'product', 'products'))}</span></div>` +
     `<div class="home-layout">` +
-      `<div class="home-products">${products.map(renderProductCard).join('')}</div>` +
+      `<div class="home-products">${renderProductRoster(products)}</div>` +
       `${renderOperationalRail(options.operations)}` +
     `</div>` +
   `</section>`;
 }
 
 export function renderHomeView(pulse, options = {}) {
-  return renderHomeViewWithOptions(pulse, options);
+  return fillBlankBlockClosures(renderHomeViewWithOptions(pulse, options));
 }
 
 function list(value) {

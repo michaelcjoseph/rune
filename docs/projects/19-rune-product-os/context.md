@@ -64,4 +64,14 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-Start with W1 Phase 1: extract the MCP server into a standalone, long-lived process whose lifecycle is independent of the cockpit, so a cockpit restart never drops the MCP OAuth session. Acceptance splits in two: the **assertable** half (a cockpit restart performs no read/write/delete of the MCP OAuth store file) is an automatable task; the **live** half (real Claude App session survives a web restart with no reauth) is a manual/live gate, alongside Tailscale Funnel provisioning and launchd install — see spec "Manual Acceptance Gates." Then W1 Phase 2 lands the warm retrieval core (the carried-forward warm-index work; see tasks.md Phase 2 and examples/qa.md for parity/acceptance intent).
+- 
+Verified with:
+
+```bash
+npx vitest run src/jobs/nightly-knowledge-reachability.test.ts
+npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts
+npx vitest run src/kb/knowledge-supersession.test.ts src/kb/supersession-adjudicator.test.ts
+npm run build
+```
+
+All passed. No commit made.

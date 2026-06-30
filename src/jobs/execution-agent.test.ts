@@ -114,6 +114,14 @@ function makeSandbox(): SandboxSpec {
 
 const coderModel: RoleModelBinding = { alias: 'gpt-5.5', provider: 'openai', format: 'codex' };
 const claudeModel: RoleModelBinding = { alias: 'opus', provider: 'anthropic', format: 'claude' };
+const protectedServiceRuntimePrompt = [
+  '## Protected Localhost Services',
+  '',
+  'Never kill, never stop, never interrupt, and never reuse either protected listener without explicit human approval.',
+  '- Rune web / cockpit at 127.0.0.1:3847 (launchd label com.jarvis.daemon)',
+  '- Rune MCP daemon at 127.0.0.1:3848 (launchd label com.jarvis.rune-mcp)',
+  'Before killing any process, verify the PID was spawned by the current task/worktree/test command.',
+].join('\n');
 
 function makeOpts(overrides: Partial<ExecutionAgentOpts> = {}): ExecutionAgentOpts {
   return {
@@ -329,6 +337,84 @@ describe('runExecutionAgent — Codex JSON event forwarding', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.output).toBe('legacy stdout from private/file.md');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Protected-service runtime prompt transport
+// ---------------------------------------------------------------------------
+
+describe('runExecutionAgent — protected-service runtime prompt transport', () => {
+  it('carries the protected-service invariant into Codex executor prompts by prepending the system prompt', async () => {
+    let capturedPrompt = '';
+    mockRunCodex.mockImplementation(async (prompt: string) => {
+      capturedPrompt = prompt;
+      return { text: 'no changes needed', error: null, exitCode: 0 };
+    });
+
+    const result = await runExecutionAgent({
+      ...makeOpts({
+        prompt: '## Task\n\nWrite only the tests for the selected task.',
+        systemPrompt: protectedServiceRuntimePrompt,
+        model: coderModel,
+      }),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(capturedPrompt).toContain('Rune web / cockpit at 127.0.0.1:3847');
+    expect(capturedPrompt).toContain('com.jarvis.daemon');
+    expect(capturedPrompt).toContain('Rune MCP daemon at 127.0.0.1:3848');
+    expect(capturedPrompt).toContain('com.jarvis.rune-mcp');
+    expect(capturedPrompt).toMatch(/Never kill[\s\S]*never stop[\s\S]*never interrupt[\s\S]*never reuse/i);
+    expect(capturedPrompt).toContain('explicit human approval');
+    expect(capturedPrompt).toContain('spawned by the current task/worktree/test command');
+    expect(capturedPrompt.startsWith(`${protectedServiceRuntimePrompt}\n\n## Task`)).toBe(true);
+  });
+
+  it('carries the protected-service invariant into Claude executor prompts via append-system-prompt', async () => {
+    mockSpawn.mockReturnValue(makeFakeChild({
+      stdoutLines: [
+        JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'No implementation changes.' }] },
+        }),
+      ],
+    }));
+
+    const result = await runExecutionAgent({
+      ...makeOpts({
+        prompt: '## Task\n\nImplement the selected task.',
+        systemPrompt: protectedServiceRuntimePrompt,
+        model: claudeModel,
+      }),
+    }, {
+      buildEnv: () => ({ PATH: process.env['PATH'] ?? '' }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const systemPromptIndex = args.indexOf('--append-system-prompt');
+    const userPromptIndex = args.indexOf('-p');
+
+    expect(systemPromptIndex).toBeGreaterThan(-1);
+    expect(args[systemPromptIndex + 1]).toContain('Rune web / cockpit at 127.0.0.1:3847');
+    expect(args[systemPromptIndex + 1]).toContain('com.jarvis.daemon');
+    expect(args[systemPromptIndex + 1]).toContain('Rune MCP daemon at 127.0.0.1:3848');
+    expect(args[systemPromptIndex + 1]).toContain('com.jarvis.rune-mcp');
+    expect(args[systemPromptIndex + 1]).toMatch(
+      /Never kill[\s\S]*never stop[\s\S]*never interrupt[\s\S]*never reuse/i,
+    );
+    expect(args[systemPromptIndex + 1]).toContain('explicit human approval');
+    expect(args[systemPromptIndex + 1]).toContain(
+      'spawned by the current task/worktree/test command',
+    );
+    expect(userPromptIndex).toBeGreaterThan(-1);
+    expect(args[userPromptIndex + 1]).toBe('## Task\n\nImplement the selected task.');
+    expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3847');
+    expect(args[userPromptIndex + 1]).not.toContain('127.0.0.1:3848');
   });
 });
 

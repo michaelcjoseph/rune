@@ -136,6 +136,72 @@ describe('backlog-reader — registry roll-up', () => {
     expect(aura.ideas.map((i) => i.text)).toEqual(['Aura idea']);
   });
 
+  it('fills shared-repo writing from docs/rune/writing-ideas.md while brand uses standard site-root backlog files', () => {
+    const root = makeRoot('backlog-shared-repo-products-');
+    const siteRepo = scaffoldRepo(root, 'michaelcjoseph.com', {
+      bugs: '- [ ] Root homepage bug\n',
+      ideas: '## User-authored\n- Refresh the site root positioning\n',
+    });
+    mkdirSync(join(siteRepo, 'docs', 'rune'), { recursive: true });
+    writeFileSync(
+      join(siteRepo, 'docs', 'rune', 'writing-ideas.md'),
+      '## User-authored\n- Draft the first Rune essay\n',
+    );
+
+    const registry: Registry = {
+      version: 1,
+      builtAt: '2026-06-29T00:00:00.000Z',
+      products: [
+        {
+          name: 'writing',
+          class: 'external',
+          scopePath: 'docs/rune',
+          containerCapabilities: {
+            projects: false,
+            bugs: false,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          repoBacked: true,
+          projects: [],
+        },
+        {
+          name: 'brand',
+          class: 'external',
+          containerCapabilities: {
+            projects: true,
+            bugs: true,
+            ideas: true,
+            runs: true,
+            chat: true,
+            monitoring: 'stubbed',
+          },
+          repoBacked: true,
+          projects: [],
+        },
+      ],
+    };
+
+    const result = readBacklogs(
+      registry,
+      configWith({ writing: siteRepo, brand: siteRepo }),
+      { workspaceRoot: root },
+    );
+
+    const writing = byProduct(result, 'writing');
+    expect(writing.bugs).toEqual([]);
+    expect(writing.ideas.map((i) => i.text)).toEqual(['Draft the first Rune essay']);
+    expect(writing.ideas[0]!.source.file).toBe('docs/rune/writing-ideas.md');
+
+    const brand = byProduct(result, 'brand');
+    expect(brand.bugs.map((b) => b.text)).toEqual(['Root homepage bug']);
+    expect(brand.ideas.map((i) => i.text)).toEqual(['Refresh the site root positioning']);
+    expect(brand.bugs[0]!.source.file).toBe('docs/projects/bugs.md');
+    expect(brand.ideas[0]!.source.file).toBe('docs/projects/ideas.md');
+  });
+
   it('reports source.file as the repo-relative path, never the absolute host path', () => {
     const root = makeRoot('backlog-relpath-');
     scaffoldRepo(root, 'rune', { bugs: '- [ ] A bug\n' });

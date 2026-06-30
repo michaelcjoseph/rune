@@ -89,6 +89,18 @@ vi.mock('../kb/engine.js', () => ({
   lintKB: vi.fn(),
   enqueue: vi.fn(),
 }));
+vi.mock('../kb/knowledge-supersession.js', () => ({
+  runKnowledgeSupersessionReconciliation: vi.fn(async () => ({
+    scannedFiles: 0,
+    candidates: 0,
+    accepted: 0,
+    rejected: 0,
+    ambiguous: 0,
+    editedFiles: [],
+    unchangedFiles: [],
+    detail: 'No supersession candidates found',
+  })),
+}));
 vi.mock('../ai/claude.js', () => ({
   askClaudeOneShot: vi.fn(),
   runAgent: vi.fn(),
@@ -104,7 +116,9 @@ vi.mock('../utils/time.js', () => ({
 }));
 
 const { captureSessions } = await import('./capture.js');
+const { executeActivitySync } = await import('./whoop-sync.js');
 const { processIngestionQueue, lintKB, enqueue } = await import('../kb/engine.js');
+const { runKnowledgeSupersessionReconciliation } = await import('../kb/knowledge-supersession.js');
 const { askClaudeOneShot, runAgent } = await import('../ai/claude.js');
 const { readVaultFile, writeVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
@@ -122,7 +136,9 @@ const { writeRoleLesson } = await import('../roles/memory-writer.js');
 const { executeNightly, runNightly } = await import('./nightly.js');
 
 const captureMock = captureSessions as unknown as ReturnType<typeof vi.fn>;
+const activityMock = executeActivitySync as unknown as ReturnType<typeof vi.fn>;
 const queueMock = processIngestionQueue as unknown as ReturnType<typeof vi.fn>;
+const reconciliationMock = runKnowledgeSupersessionReconciliation as unknown as ReturnType<typeof vi.fn>;
 const enqueueMock = enqueue as unknown as ReturnType<typeof vi.fn>;
 const lintMock = lintKB as unknown as ReturnType<typeof vi.fn>;
 const askMock = askClaudeOneShot as unknown as ReturnType<typeof vi.fn>;
@@ -143,7 +159,19 @@ const writeRoleLessonMock = writeRoleLesson as unknown as ReturnType<typeof vi.f
 
 function setDefaults() {
   captureMock.mockResolvedValue({ captured: 0 });
+  activityMock.mockReturnValue({ status: 'skipped', detail: 'Whoop not configured' });
   queueMock.mockResolvedValue({ processed: 0, errors: 0, created: 0, updated: 0 });
+  reconciliationMock.mockResolvedValue({
+    scannedFiles: 0,
+    candidates: 0,
+    accepted: 0,
+    rejected: 0,
+    ambiguous: 0,
+    editedFiles: [],
+    unchangedFiles: [],
+    detail: 'No supersession candidates found',
+  });
+  lintMock.mockResolvedValue({ success: true, report: 'ok' });
   agentMock.mockResolvedValue({ text: null, error: null });
   readMock.mockReturnValue(null);
   dayMock.mockReturnValue('Saturday');
@@ -170,9 +198,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 15 steps and returns results', async () => {
+    it('runs all 16 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(15);
+      expect(result.steps).toHaveLength(16);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -184,6 +212,7 @@ describe('jobs/nightly', () => {
         'Meeting extract',
         'Library sync',
         'KB queue',
+        'Knowledge reconciliation',
         'Whoop activity',
         'Observation loop',
         'Learning loop',
@@ -259,6 +288,56 @@ describe('jobs/nightly', () => {
       const result = await executeNightly();
       const step = result.steps.find((s) => s.step === 'KB queue')!;
       expect(step.status).toBe('skipped');
+    });
+
+    // -- Knowledge reconciliation step --
+    it('runs knowledge reconciliation immediately after KB queue and before unrelated nightly work', async () => {
+      dayMock.mockReturnValue('Sunday');
+
+      const result = await executeNightly();
+      const names = result.steps.map((s) => s.step);
+
+      expect(names.indexOf('Knowledge reconciliation')).toBe(names.indexOf('KB queue') + 1);
+      expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Whoop activity'));
+      expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Observation loop'));
+      expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Learning loop'));
+      expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('KB lint'));
+
+      expect(reconciliationMock).toHaveBeenCalledTimes(1);
+      const queueOrder = queueMock.mock.invocationCallOrder[0]!;
+      const reconciliationOrder = reconciliationMock.mock.invocationCallOrder[0]!;
+      const whoopOrder = activityMock.mock.invocationCallOrder[0]!;
+      const lintOrder = lintMock.mock.invocationCallOrder[0]!;
+      expect(queueOrder).toBeLessThan(reconciliationOrder);
+      expect(reconciliationOrder).toBeLessThan(whoopOrder);
+      expect(reconciliationOrder).toBeLessThan(lintOrder);
+    });
+
+    it('calls knowledge reconciliation with the vault root and the canonical Jarvis to Rune supersession', async () => {
+      await executeNightly();
+
+      expect(reconciliationMock).toHaveBeenCalledWith(expect.objectContaining({
+        vaultDir: '/test/vault',
+        supersessions: expect.arrayContaining([
+          expect.objectContaining({ from: 'Jarvis', to: 'Rune' }),
+        ]),
+        adjudicateCandidate: expect.any(Function),
+      }));
+    });
+
+    it('continues to Whoop and KB lint when knowledge reconciliation fails', async () => {
+      dayMock.mockReturnValue('Sunday');
+      reconciliationMock.mockRejectedValue(new Error('reconciliation exploded'));
+
+      const result = await executeNightly();
+
+      const step = result.steps.find((s) => s.step === 'Knowledge reconciliation');
+      expect(step).toBeDefined();
+      if (!step) return;
+      expect(step.status).toBe('error');
+      expect(step.detail).toContain('reconciliation exploded');
+      expect(activityMock).toHaveBeenCalled();
+      expect(lintMock).toHaveBeenCalled();
     });
 
     // -- Daily tags step --
@@ -999,7 +1078,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(15);
+      expect(result.steps).toHaveLength(16);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -1028,7 +1107,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(15);
+      expect(result.steps).toHaveLength(16);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -1059,7 +1138,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(15);
+      expect(result.steps).toHaveLength(16);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -1070,22 +1149,22 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(15);
-      // Registry rebuild (inserted between Playbook extract and Journal-intent
-      // producer) shifts KB queue from index 8 → 9. Order ahead of it: Session
-      // capture, Daily tags, Birthday alerts, Playbook extract, Registry rebuild,
-      // Journal-intent producer, Journal ingest, Meeting extract, Library sync.
+      expect(result.steps).toHaveLength(16);
+      // Order ahead of KB queue: Session capture, Daily tags, Birthday alerts,
+      // Playbook extract, Registry rebuild, Journal-intent producer, Journal
+      // ingest, Meeting extract, Library sync.
       expect(result.steps[9]!.step).toBe('KB queue');
       expect(result.steps[9]!.status).toBe('error');
-      // Whoop activity still ran after it
-      expect(result.steps[10]!.step).toBe('Whoop activity');
+      // Reconciliation is fixed immediately after KB queue; Whoop still runs after it.
+      expect(result.steps[10]!.step).toBe('Knowledge reconciliation');
+      expect(result.steps[11]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(15);
+      expect(result.steps).toHaveLength(16);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -1096,9 +1175,8 @@ describe('jobs/nightly', () => {
       expect(meetingExtract.status).toBe('skipped');
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
-      // Mark processed is last (index 14 after the Registry rebuild and Learning
-      // loop steps were inserted; they shift the tail down).
-      expect(result.steps[14]!.step).toBe('Mark processed');
+      // Mark processed is last after reconciliation is inserted in the tail.
+      expect(result.steps[15]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {

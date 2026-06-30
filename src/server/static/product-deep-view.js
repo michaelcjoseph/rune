@@ -29,6 +29,14 @@ function fmtTarget(target) {
   return `${target.kind || 'target'} ${target.slug}`;
 }
 
+function renderWritingRunMeta(run) {
+  const bits = [];
+  if (run?.routePath) bits.push(run.routePath);
+  if (run?.branch) bits.push(run.branch);
+  if (run?.writingStage) bits.push(run.writingStage);
+  return bits.map(bit => `<span>${escHtml(bit)}</span>`).join('');
+}
+
 function fmtProgress(progress) {
   const done = Number.isFinite(progress?.done) ? progress.done : 0;
   const total = Number.isFinite(progress?.total) ? progress.total : 0;
@@ -39,6 +47,19 @@ function fmtRemaining(progress) {
   const done = Number.isFinite(progress?.done) ? progress.done : 0;
   const total = Number.isFinite(progress?.total) ? progress.total : 0;
   return `${Math.max(0, total - done)} remaining`;
+}
+
+function fmtNumber(value) {
+  return Number.isFinite(value) ? String(value) : '0';
+}
+
+function fmtDurationMs(ms) {
+  if (!Number.isFinite(ms)) return '0ms';
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
 function itemTitle(item) {
@@ -137,7 +158,41 @@ function renderProjectRunControl(project) {
   `</div>`;
 }
 
-function renderProjects(projects) {
+function renderEmptyState(kind, view) {
+  const product = view?.name || 'This product';
+  const lowerProduct = product.toLowerCase();
+  let title = `${product} has nothing here yet`;
+  let body = 'This panel is empty right now.';
+  if (kind === 'projects') {
+    title = `${product} has no active projects yet`;
+    body = 'Projects appear here when Rune is tracking implementation work for this product.';
+  } else if (kind === 'ideas') {
+    title = lowerProduct === 'writing'
+      ? `${product} has no writing ideas yet`
+      : `${product} has no ideas captured yet`;
+    body = 'Capture an idea to seed planning from this product space.';
+  } else if (kind === 'bugs') {
+    title = `${product} has no open bugs`;
+    body = 'Bugs appear here when the product backlog has unresolved defects.';
+  } else if (kind === 'runs') {
+    title = `${product} has no recent runs`;
+    body = 'Work-run history appears here after Rune executes product work.';
+  }
+  return `<div class="deep-empty-state" data-empty-state="${attr(kind)}">` +
+    `<strong>${escHtml(title)}</strong>` +
+    `<p>${escHtml(body)}</p>` +
+  `</div>`;
+}
+
+function renderRepoUnavailableState(view) {
+  const reason = view?.limitedReason || 'Repository unavailable for this product.';
+  return `<div class="deep-degraded-state" data-degraded-state="repo">` +
+    `<strong>${escHtml(view?.name || 'Product')} repository unavailable</strong>` +
+    `<p>${escHtml(reason)}</p>` +
+  `</div>`;
+}
+
+function renderProjects(projects, view) {
   const rows = list(projects).map(project => {
     const progress = fmtProgress(project.taskProgress);
     const percent = project.taskProgress?.total > 0
@@ -157,7 +212,7 @@ function renderProjects(projects) {
   }).join('');
   return `<section class="deep-panel deep-panel--projects" data-surface="projects">` +
     `<div class="deep-panel-head"><h3>Projects</h3><span>${list(projects).length}</span></div>` +
-    (rows || '<p class="muted">No projects</p>') +
+    (rows || renderEmptyState('projects', view)) +
   `</section>`;
 }
 
@@ -199,42 +254,93 @@ function renderBacklogAdd(kind) {
   `</form>`;
 }
 
-function renderBacklogKind(backlog, kind) {
+function renderBacklogKind(backlog, kind, view) {
   const items = list(backlog?.[kind]);
   const title = kind === 'bugs' ? 'Bugs' : 'Ideas';
+  const add = view?.repoBacked === false ? '' : `<div class="deep-backlog-add deep-backlog-add--single">${renderBacklogAdd(kind)}</div>`;
+  const empty = renderEmptyState(kind, view);
   return `<section class="deep-panel deep-panel--backlog deep-panel--${attr(kind)}" data-surface="${attr(kind)}">` +
     `<div class="deep-panel-head"><h3>${title}</h3><span>${items.length}</span></div>` +
-    `<div class="deep-backlog-add deep-backlog-add--single">${renderBacklogAdd(kind)}</div>` +
+    add +
     `<div class="deep-backlog-list" data-backlog-kind="${attr(kind)}">` +
-      `${items.map(item => renderBacklogItem(item, kind)).join('') || `<p class="muted">No ${title.toLowerCase()}</p>`}` +
+      `${items.map(item => renderBacklogItem(item, kind)).join('') || empty}` +
     `</div>` +
   `</section>`;
 }
 
+function containerCapabilitiesFor(view) {
+  const capabilities = view?.containerCapabilities || {};
+  if (!view?.containerCapabilities && view?.name === 'writing') {
+    return {
+      projects: false,
+      bugs: false,
+      ideas: true,
+      runs: true,
+      chat: true,
+    };
+  }
+  return {
+    projects: capabilities.projects !== false,
+    bugs: capabilities.bugs !== false,
+    ideas: capabilities.ideas !== false,
+    runs: capabilities.runs !== false,
+    chat: capabilities.chat !== false,
+  };
+}
+
+function containerProfileFor(view) {
+  return view?.name === 'rune-mcp' ? 'operations-runs-heavy' : 'standard';
+}
+
+function workTabsFor(view) {
+  const capabilities = containerCapabilitiesFor(view);
+  return [
+    capabilities.projects ? { id: 'projects', label: 'Projects', count: list(view.projects).length } : null,
+    capabilities.bugs ? { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length } : null,
+    capabilities.ideas ? { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length } : null,
+  ].filter(Boolean);
+}
+
+function normalizeWorkTab(view, activeTab) {
+  const tabs = workTabsFor(view).map(tab => tab.id);
+  return tabs.includes(activeTab) ? activeTab : tabs[0] || 'ideas';
+}
+
+function renderWorkTabPanel(view, id) {
+  if (id === 'projects') return renderProjects(view.projects, view);
+  if (id === 'bugs') return renderBacklogKind(view.backlog, 'bugs', view);
+  return renderBacklogKind(view.backlog, 'ideas', view);
+}
+
+function workSummary(view) {
+  const capabilities = containerCapabilitiesFor(view);
+  return [
+    ...(capabilities.projects ? list(view.projects).map(project => project.slug) : []),
+    ...(capabilities.bugs ? list(view.backlog?.bugs).map(itemTitle) : []),
+    ...(capabilities.ideas ? list(view.backlog?.ideas).map(itemTitle) : []),
+  ].filter(Boolean).slice(0, 8).join(' ');
+}
+
 function renderWorkTabs(view, activeTab = 'projects') {
-  const tabs = [
-    { id: 'projects', label: 'Projects', count: list(view.projects).length },
-    { id: 'bugs', label: 'Bugs', count: list(view.backlog?.bugs).length },
-    { id: 'ideas', label: 'Ideas', count: list(view.backlog?.ideas).length },
-  ];
+  const tabs = workTabsFor(view);
+  const active = normalizeWorkTab(view, activeTab);
   const warnings = list(view.backlog?.warnings).map(renderWarning).join('');
   const panel = (id, html) =>
-    `<div class="deep-tab-panel ${activeTab === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
-      `${activeTab === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
+    `<div class="deep-tab-panel ${active === id ? 'is-active' : ''}" data-work-tab-panel="${attr(id)}" ` +
+      `${active === id ? '' : 'aria-hidden="true"'}>${html}</div>`;
 
-  return `<section class="deep-work-tabs-panel" data-surface="work" data-active-work-tab="${attr(activeTab)}">` +
+  return `<section class="deep-work-tabs-panel" data-surface="work" data-active-work-tab="${attr(active)}" ` +
+    `data-work-summary="${attr(workSummary(view))}">` +
     `<div class="deep-work-tabs" role="tablist" aria-label="Product work">` +
       tabs.map(tab =>
-        `<button type="button" class="${activeTab === tab.id ? 'is-active' : ''}" ` +
-          `data-work-tab="${attr(tab.id)}" role="tab" aria-selected="${activeTab === tab.id ? 'true' : 'false'}">` +
+        `<button type="button" class="${active === tab.id ? 'is-active' : ''}" ` +
+          `data-work-tab="${attr(tab.id)}" role="tab" aria-selected="${active === tab.id ? 'true' : 'false'}">` +
           `${escHtml(tab.label)} <span>${escHtml(tab.count)}</span>` +
         `</button>`
       ).join('') +
     `</div>` +
     (warnings ? `<div class="deep-warnings"><strong>Warnings</strong><ul>${warnings}</ul></div>` : '') +
-    panel('projects', renderProjects(view.projects)) +
-    panel('bugs', renderBacklogKind(view.backlog, 'bugs')) +
-    panel('ideas', renderBacklogKind(view.backlog, 'ideas')) +
+    tabs.map(tab => panel(tab.id, renderWorkTabPanel(view, tab.id))).join('') +
   `</section>`;
 }
 
@@ -271,6 +377,7 @@ function renderActiveRun(activeRun, liveRuns = {}) {
     `</div>` +
     `<div class="deep-run-meta">` +
       `<span>${escHtml(fmtTarget(target))}</span>` +
+      renderWritingRunMeta({ ...activeRun, ...live }) +
       `<span>${escHtml(fmtProgress(tasks))} tasks</span>` +
       `<span>${escHtml(fmtRemaining(tasks))}</span>` +
       `<span>${escHtml(fmtElapsed(elapsedMs))}</span>` +
@@ -294,6 +401,7 @@ function renderRuns(view, liveRuns = {}) {
       `</div>` +
       `<div class="deep-run-meta">` +
         `<span>${escHtml(fmtTarget(run.target))}</span>` +
+        renderWritingRunMeta(run) +
         `<time>${escHtml(run.endedAt)}</time>` +
       `</div>` +
       (run.transcriptUrl ? `<a class="workrun-transcript" href="${attr(run.transcriptUrl)}">Transcript</a>` : '') +
@@ -302,7 +410,7 @@ function renderRuns(view, liveRuns = {}) {
   return `<section class="deep-panel deep-panel--runs" data-surface="runs">` +
     `<div class="deep-panel-head"><h3>Runs</h3><span>${list(view.runs).length}</span></div>` +
     renderActiveRun(view.activeRun, liveRuns) +
-    `<div class="deep-run-history">${history || '<p class="muted">No recent runs</p>'}</div>` +
+    `<div class="deep-run-history">${history || renderEmptyState('runs', view)}</div>` +
   `</section>`;
 }
 
@@ -336,13 +444,134 @@ function renderOperations(operations) {
   `</section>`;
 }
 
-function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'operations') {
-  const active = activeSidePanel === 'runs' ? 'runs' : 'operations';
+function monitoringMode(view) {
+  const capability = view?.containerCapabilities?.monitoring;
+  if (capability === 'enabled') return 'live';
+  if (capability === 'stubbed') return 'stubbed';
+  return view?.class === 'internal' ? 'live' : 'stubbed';
+}
+
+function runMetricsFromState(state) {
+  const active = list(state?.mutations?.active).filter(mutation =>
+    WORK_RUN_MUTATION_KINDS.has(mutation?.kind) &&
+    !isTerminalMutation(mutation)
+  );
+  return {
+    activeRuns: active.length,
+    parkedRuns: active.filter(mutation => mutation?.status === 'blocked-on-human').length,
+    recentFailures: 0,
+    recentCompleted: 0,
+  };
+}
+
+function renderMetricRow(label, value) {
+  return `<div class="deep-monitoring-metric"><span>${escHtml(label)}</span><strong>${escHtml(value)}</strong></div>`;
+}
+
+function renderTerminalOutcomes(outcomes) {
+  const entries = Object.entries(outcomes && typeof outcomes === 'object' ? outcomes : {});
+  if (entries.length === 0) return '';
+  return `<h4>Terminal outcomes</h4>` +
+    `<div class="deep-monitoring-grid deep-monitoring-grid--outcomes">` +
+      entries.map(([outcome, count]) => renderMetricRow(outcome, fmtNumber(count))).join('') +
+    `</div>`;
+}
+
+function renderRecentFailures(failures) {
+  const rows = list(failures).map(row =>
+    `<article class="deep-monitoring-failure" data-monitoring-run-id="${attr(row.id || '')}">` +
+      `<div class="deep-row-head"><strong>${escHtml(row.id || 'run')}</strong><span>${escHtml(row.outcome || 'failed')}</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span>${escHtml(row.project || 'project')}</span>` +
+        `<span>${escHtml(fmtDurationMs(row.durationMs))}</span>` +
+        `<time>${escHtml(row.endedAt || '')}</time>` +
+      `</div>` +
+    `</article>`
+  ).join('');
+  return `<h4>Recent failed runs</h4>` +
+    `<div class="deep-monitoring-failures">` +
+      (rows || '<p class="muted">No recent failed or dirty runs</p>') +
+    `</div>`;
+}
+
+function renderMonitoringMeta(monitoring) {
+  const rows = [];
+  const checkedAt = monitoring?.checkedAt || monitoring?.lastUpdatedAt;
+  if (checkedAt) rows.push(`Last updated ${fmtClock(checkedAt)}`);
+  if (monitoring?.error) rows.push(monitoring.error);
+  return rows.length
+    ? `<div class="deep-monitoring-source">${rows.map(escHtml).join(' - ')}</div>`
+    : '';
+}
+
+function renderMonitoring(view, monitoring = {}) {
+  const mode = monitoringMode(view);
+  if (mode !== 'live') {
+    return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="stubbed" data-monitoring-state="stubbed">` +
+      `<div class="deep-panel-head"><h3>Monitoring</h3><span>stubbed</span></div>` +
+      `<div class="deep-empty-state" data-empty-state="monitoring">` +
+        `<strong>Monitoring not available yet</strong>` +
+        `<p>External product monitoring lands later; the container shape is reserved.</p>` +
+      `</div>` +
+    `</section>`;
+  }
+
+  const mcp = monitoring.mcpMetrics || {};
+  const runMetrics = monitoring.runMetrics || {};
+  const status = monitoring.status || 'ok';
+  const tools = mcp.tools && typeof mcp.tools === 'object' ? mcp.tools : {};
+  const toolRows = Object.entries(tools).map(([name, metrics]) => {
+    const latency = metrics?.latencyMs || {};
+    return `<article class="deep-monitoring-tool" data-monitoring-tool="${attr(name)}">` +
+      `<div class="deep-row-head"><strong>${escHtml(name)}</strong><span>${escHtml(fmtNumber(metrics?.calls))} calls</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span>${escHtml(fmtNumber(metrics?.errors))} errors</span>` +
+        `<span>${escHtml(fmtNumber(metrics?.timeouts))} timeouts</span>` +
+        `<span>p95 ${escHtml(fmtNumber(latency.p95))}ms</span>` +
+      `</div>` +
+    `</article>`;
+  }).join('');
+  const warmReady = mcp.warmIndex?.ready ? 'ready' : 'warming';
+  return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="live" data-monitoring-state="${attr(status)}">` +
+    `<div class="deep-panel-head"><h3>Monitoring</h3><span>${escHtml(status)}</span></div>` +
+    `<div class="deep-monitoring-source">MCP call metrics via ${escHtml(monitoring.sourceTool || 'mcp_metrics_snapshot')}</div>` +
+    `${renderMonitoringMeta(monitoring)}` +
+    `<div class="deep-monitoring-grid">` +
+      `${renderMetricRow('total calls', fmtNumber(mcp.totals?.calls))}` +
+      `${renderMetricRow('timeouts', fmtNumber(mcp.totals?.timeouts))}` +
+      `${renderMetricRow('active sessions', fmtNumber(mcp.activeSessions))}` +
+      `${renderMetricRow('warm index', warmReady)}` +
+    `</div>` +
+    `<div class="deep-monitoring-tools">${toolRows || '<p class="muted">No MCP tool calls yet</p>'}</div>` +
+    `<h4>Rune run metrics</h4>` +
+    `<div class="deep-monitoring-grid">` +
+      `${renderMetricRow('active runs', fmtNumber(runMetrics.activeRuns))}` +
+      `${renderMetricRow('parked', fmtNumber(runMetrics.parkedRuns))}` +
+      `${renderMetricRow('recent failures', Array.isArray(runMetrics.recentFailures) ? String(runMetrics.recentFailures.length) : fmtNumber(runMetrics.recentFailures))}` +
+      `${renderMetricRow('p95 runtime', Number.isFinite(runMetrics.runtimeMs?.p95) ? fmtDurationMs(runMetrics.runtimeMs.p95) : 'n/a')}` +
+      `${renderMetricRow('sample count', fmtNumber(runMetrics.runtimeMs?.sampleCount))}` +
+    `</div>` +
+    `${renderTerminalOutcomes(runMetrics.terminalOutcomes)}` +
+    `${renderRecentFailures(runMetrics.recentFailures)}` +
+  `</section>`;
+}
+
+function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'operations', monitoring = {}) {
+  const active = activeSidePanel === 'runs' || activeSidePanel === 'monitoring' ? activeSidePanel : 'operations';
   const tabs = [
     { id: 'operations', label: 'Operations' },
     { id: 'runs', label: 'Runs' },
+    { id: 'monitoring', label: 'Monitoring' },
   ];
-  return `<section class="deep-side-tab-panel" data-surface="side-panel" data-active-side-panel="${attr(active)}">` +
+  const profile = containerProfileFor(view);
+  const weight = profile === 'operations-runs-heavy' ? 'heavy' : 'standard';
+  const body = active === 'runs'
+    ? renderRuns(view, liveRuns)
+    : active === 'monitoring'
+      ? renderMonitoring(view, monitoring)
+      : renderOperations(operations);
+  return `<section class="deep-side-tab-panel${weight === 'heavy' ? ' deep-side-tab-panel--heavy' : ''}" ` +
+    `data-surface="side-panel" data-active-side-panel="${attr(active)}" data-container-weight="${attr(weight)}">` +
     `<div class="deep-side-tabs" role="tablist" aria-label="Product operations panels">` +
       tabs.map(tab =>
         `<button type="button" role="tab" data-side-panel-tab="${attr(tab.id)}" ` +
@@ -351,7 +580,7 @@ function renderSideTabs(view, operations, liveRuns = {}, activeSidePanel = 'oper
       ).join('') +
     `</div>` +
     `<div class="deep-side-tab-body">` +
-      (active === 'runs' ? renderRuns(view, liveRuns) : renderOperations(operations)) +
+      body +
     `</div>` +
   `</section>`;
 }
@@ -482,8 +711,12 @@ function isSpecArtifact(value) {
 }
 
 export function renderProductDeepView(view, options = {}) {
-  const activeTab = options.activeTab || 'projects';
-  const activeSidePanel = options.activeSidePanel === 'runs' ? 'runs' : 'operations';
+  const activeTab = normalizeWorkTab(view, options.activeTab || 'projects');
+  const defaultSidePanel = view?.repoBacked === false ? 'runs' : 'operations';
+  const requestedSidePanel = options.activeSidePanel || defaultSidePanel;
+  const activeSidePanel = requestedSidePanel === 'runs' || requestedSidePanel === 'monitoring'
+    ? requestedSidePanel
+    : 'operations';
   const chatMessages = options.chatMessages || [];
   const planning = options.planning || null;
   const activeOp = options.activeOp || null;
@@ -491,28 +724,34 @@ export function renderProductDeepView(view, options = {}) {
     return '<section class="product-deep-view product-deep-view--unavailable"><h2>Product unavailable</h2></section>';
   }
 
-  if (view.repoBacked === false) {
-    return `<section class="product-deep-view product-deep-view--limited" data-product="${attr(view.name)}">` +
-      `<header class="deep-header"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2><span>limited - not repo-backed</span></header>` +
-      `<p>${escHtml(view.limitedReason || 'Known product is not repo-backed.')}</p>` +
-    `</section>`;
-  }
+  const profile = containerProfileFor(view);
+  const profileClass = profile === 'operations-runs-heavy' ? ' product-deep-view--operations-runs-heavy' : '';
+  const degradedClass = view.repoBacked === false ? ' product-deep-view--repo-unavailable product-deep-view--limited' : '';
+  const capabilities = containerCapabilitiesFor(view);
+  const navSurfaces = [
+    capabilities.projects ? { id: 'projects', label: 'Projects' } : null,
+    capabilities.bugs ? { id: 'bugs', label: 'Bugs' } : null,
+    capabilities.ideas ? { id: 'ideas', label: 'Ideas' } : null,
+    capabilities.runs ? { id: 'runs', label: 'Runs' } : null,
+    capabilities.chat ? { id: 'chat', label: 'Chat' } : null,
+  ].filter(Boolean);
 
-  return `<section class="product-deep-view" data-product="${attr(view.name)}">` +
+  return `<section class="product-deep-view${profileClass}${degradedClass}" data-product="${attr(view.name)}" ` +
+    `data-container-profile="${attr(profile)}"${view.repoBacked === false ? ' data-degraded-state="repo"' : ''}>` +
     `<header class="deep-header">` +
-      `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2></div>` +
+      `<div class="deep-title-row"><button type="button" class="deep-home-btn" data-go-home>Home</button><h2>${escHtml(view.name)}</h2>` +
+        `${view.repoBacked === false ? '<span>limited - not repo-backed</span>' : ''}</div>` +
       `<nav aria-label="Product surfaces">` +
-        `<button type="button" data-surface-jump="projects">Projects</button>` +
-        `<button type="button" data-surface-jump="bugs">Bugs</button>` +
-        `<button type="button" data-surface-jump="ideas">Ideas</button>` +
-        `<button type="button" data-surface-jump="runs">Runs</button>` +
-        `<button type="button" data-surface-jump="chat">Chat</button>` +
+        navSurfaces.map(surface =>
+          `<button type="button" data-surface-jump="${attr(surface.id)}">${escHtml(surface.label)}</button>`
+        ).join('') +
       `</nav>` +
     `</header>` +
+    `${view.repoBacked === false ? renderRepoUnavailableState(view) : ''}` +
     `<div class="deep-two-column">` +
       `<div class="deep-work-column">` +
         `${renderWorkTabs(view, activeTab)}` +
-        `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel)}` +
+        `${renderSideTabs(view, options.operations, options.liveRuns || {}, activeSidePanel, options.monitoring || {})}` +
       `</div>` +
       `<aside class="deep-chat-column">` +
         `${renderChat(view, chatMessages, planning, activeOp)}` +
@@ -696,6 +935,7 @@ export function createProductDeepView({
   let current = null;
   let currentOperations = operations || null;
   let liveRuns = {};
+  let monitoring = {};
   let subscription = null;
   let activeTab = 'projects';
   let activeSidePanel = 'operations';
@@ -706,6 +946,7 @@ export function createProductDeepView({
   let opActivity = list(session.opActivity);
   let streamingMessageIndex = -1;
   let opTicker = null;
+  let monitoringPoller = null;
 
   function persistSession() {
     session.chatMessages = chatMessages;
@@ -789,9 +1030,71 @@ export function createProductDeepView({
       chatMessages,
       planning,
       activeOp,
+      monitoring,
     });
     restoreChatScroll(chatScroll, options);
     restoreChatInput(chatInput);
+  }
+
+  function stopMonitoringPoll() {
+    if (monitoringPoller) {
+      clearTimeout(monitoringPoller);
+      monitoringPoller = null;
+    }
+  }
+
+  async function refreshMonitoring(checkedAt = new Date().toISOString()) {
+    if (!current || activeSidePanel !== 'monitoring' || monitoringMode(current) !== 'live') return;
+    const [mcpMetricsResult, state] = await Promise.all([
+      loadJson('/api/mcp/tools/mcp_metrics_snapshot')
+        .then(value => ({ ok: true, value }))
+        .catch(error => ({ ok: false, error })),
+      loadJson('/api/state').catch(() => null),
+    ]);
+    const metricsState = mcpMetricsResult.ok && mcpMetricsResult.value && typeof mcpMetricsResult.value === 'object'
+      ? mcpMetricsResult.value
+      : {};
+    const wrappedMcpMetrics = metricsState && Object.prototype.hasOwnProperty.call(metricsState, 'mcpMetrics');
+    monitoring = {
+      sourceTool: typeof metricsState.sourceTool === 'string' ? metricsState.sourceTool : 'mcp_metrics_snapshot',
+      status: mcpMetricsResult.ok ? (metricsState.status || 'ok') : 'degraded',
+      checkedAt: typeof metricsState.checkedAt === 'string' ? metricsState.checkedAt : checkedAt,
+      ...(mcpMetricsResult.ok
+        ? { mcpMetrics: wrappedMcpMetrics ? metricsState.mcpMetrics : mcpMetricsResult.value }
+        : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
+      ...(mcpMetricsResult.ok && metricsState.error ? { error: metricsState.error } : {}),
+      runMetrics: metricsState.runMetrics || runMetricsFromState(state),
+    };
+    render();
+  }
+
+  function scheduleMonitoringPoll() {
+    if (monitoringPoller || activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') return;
+    const scheduledAt = new Date(Date.now() + 1000).toISOString();
+    monitoringPoller = setTimeout(async () => {
+      monitoringPoller = null;
+      await refreshMonitoring(scheduledAt);
+      scheduleMonitoringPoll();
+    }, 1000);
+  }
+
+  function syncMonitoringPoll() {
+    if (activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') {
+      stopMonitoringPoll();
+      return;
+    }
+    scheduleMonitoringPoll();
+  }
+
+  async function openSidePanel(next) {
+    activeSidePanel = next;
+    render();
+    if (next === 'monitoring') {
+      await refreshMonitoring();
+      syncMonitoringPoll();
+    } else {
+      syncMonitoringPoll();
+    }
   }
 
   function syncOpTicker() {
@@ -1164,9 +1467,8 @@ export function createProductDeepView({
     if (sidePanelTab) {
       event.preventDefault?.();
       const next = sidePanelTab.dataset?.sidePanelTab;
-      if (next === 'operations' || next === 'runs') {
-        activeSidePanel = next;
-        render();
+      if (next === 'operations' || next === 'runs' || next === 'monitoring') {
+        await openSidePanel(next);
       }
       return;
     }
@@ -1179,8 +1481,9 @@ export function createProductDeepView({
         activeTab = surface;
         render();
       } else if (surface === 'runs') {
-        activeSidePanel = 'runs';
-        render();
+        await openSidePanel('runs');
+      } else if (surface === 'monitoring') {
+        await openSidePanel('monitoring');
       } else if (surface === 'chat') {
         render();
       }
@@ -1399,6 +1702,7 @@ export function createProductDeepView({
       render();
       if (focusRunId) {
         activeSidePanel = 'runs';
+        syncMonitoringPoll();
         await focusRun(focusRunId);
         render();
       } else if (current?.activeRun?.runId) {
@@ -1411,15 +1715,18 @@ export function createProductDeepView({
       current = view;
       if (opts.liveRuns) liveRuns = opts.liveRuns;
       if (opts.activeTab) activeTab = opts.activeTab;
-      if (opts.activeSidePanel === 'operations' || opts.activeSidePanel === 'runs') activeSidePanel = opts.activeSidePanel;
+      if (opts.activeSidePanel === 'operations' || opts.activeSidePanel === 'runs' || opts.activeSidePanel === 'monitoring') activeSidePanel = opts.activeSidePanel;
       if (opts.chatMessages) chatMessages = opts.chatMessages;
       if ('activeOp' in opts) activeOp = opts.activeOp;
+      if (opts.monitoring) monitoring = opts.monitoring;
       currentOperations = opts.operations || currentOperations;
       render();
+      syncMonitoringPoll();
     },
     close() {
       subscription?.close?.();
       subscription = null;
+      stopMonitoringPoll();
       if (opTicker) {
         clearInterval(opTicker);
         opTicker = null;

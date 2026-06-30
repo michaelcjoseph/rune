@@ -29,6 +29,7 @@ import { realpathSync } from 'node:fs';
 import { isContainedIn } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { createLogger } from '../utils/logger.js';
+import { evaluateProcessCleanupKill } from '../utils/protected-local-services.js';
 
 const log = createLogger('worktree-sweep');
 
@@ -37,6 +38,14 @@ export interface SweepProcess {
   pid: number;
   /** The process's current working directory (absolute). */
   cwd: string;
+  /** Ports the process is known to own, when the caller has that metadata. */
+  listeningOn?: Array<{ host: string; port: number }>;
+  /** launchd service label, when the caller has that metadata. */
+  launchdLabel?: string;
+  /** Explicit ownership proof from the current task/worktree/test command. */
+  ownedByCurrentTask?: boolean;
+  /** Explicit human approval for exceptional protected-service termination. */
+  humanApproval?: { approved: boolean; approvalId: string };
 }
 
 /** The reap plan: the pids to signal, scoped to exactly one worktree path. */
@@ -150,14 +159,32 @@ export function sweepWorktreeProcesses(worktreePath: string, io: SweepIO = defau
   const root = io.realpath(worktreePath);
   let procs: SweepProcess[];
   try {
-    procs = io.listProcesses().map((p) => ({ pid: p.pid, cwd: io.realpath(p.cwd) }));
+    procs = io.listProcesses().map((p) => ({ ...p, cwd: io.realpath(p.cwd) }));
   } catch (err) {
     log.warn('worktree sweep: listProcesses failed; skipping', { error: (err as Error).message });
     return [];
   }
+  const candidatesByPid = new Map(procs.map((p) => [p.pid, p]));
   const { toKill } = planWorktreeScopedReap(procs, root);
   const killed: number[] = [];
   for (const pid of toKill) {
+    const candidate = candidatesByPid.get(pid);
+    const decision = evaluateProcessCleanupKill({
+      pid,
+      source: 'worktree-sweep',
+      ownedByCurrentTask: candidate?.ownedByCurrentTask ?? true,
+      listeningOn: candidate?.listeningOn ?? [],
+      launchdLabel: candidate?.launchdLabel,
+      humanApproval: candidate?.humanApproval,
+    });
+    if (!decision.allowed) {
+      log.warn('worktree sweep refused process kill', {
+        pid,
+        reason: decision.reason,
+        protectedService: decision.protectedService?.id,
+      });
+      continue;
+    }
     try {
       io.kill(pid, 'SIGKILL');
       killed.push(pid);

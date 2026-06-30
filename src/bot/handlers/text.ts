@@ -36,6 +36,7 @@ import { handleQuarterly } from '../commands/quarterly.js';
 import { handleYearly } from '../commands/yearly.js';
 import { handleHealth } from '../commands/health.js';
 import { handleBlog } from '../commands/blog.js';
+import { handleWritingCritique } from '../commands/writing-critique.js';
 import { handleNewProject } from '../commands/new-project.js';
 import { handlePlan } from '../commands/plan.js';
 import { handleApprove } from '../commands/approve.js';
@@ -196,6 +197,7 @@ export async function dispatchText(
   if (text.startsWith('/career')) return withCommandLog('career', () => handleCareer(sender, userId));
   if (text.startsWith('/health')) return withCommandLog('health', () => handleHealth(sender, userId, text.slice('/health'.length).trim()));
   if (text.startsWith('/blog')) return withCommandLog('blog', () => handleBlog(sender, userId, text.slice('/blog'.length).trim()));
+  if (text.startsWith('/writing-critique')) return withCommandLog('writing-critique', () => handleWritingCritique(sender, userId, text.slice('/writing-critique'.length).trim()));
   if (text.startsWith('/new-project')) return withCommandLog('new-project', () => handleNewProject(sender, userId, text.slice('/new-project'.length).trim()));
   if (text === '/plan' || text.startsWith('/plan ')) return withCommandLog('plan', () => handlePlan(sender, userId, text.slice('/plan'.length).trim()));
   if (text === '/approve' || text.startsWith('/approve ')) return withCommandLog('approve', () => handleApprove(sender, userId));
@@ -389,6 +391,7 @@ async function invokeSkill(
     case 'yearly': return handleYearly(sender, userId, args);
     case 'health': return handleHealth(sender, userId, args);
     case 'blog': return handleBlog(sender, userId, args);
+    case 'writing-critique': return handleWritingCritique(sender, userId, args);
     case 'library-sync': return handleLibrarySync(sender, userId);
     case 'learn': return handleLearn(sender, userId, args || message);
     case 'learn-list': return handleLearnList(sender, userId);
@@ -645,7 +648,8 @@ Send any message to start a multi-turn chat with your vault. Rune leans Socratic
 **Coaching sessions**
 
 - \`/health [focus]\` — health coaching session
-- \`/blog <topic>\` — blog writing session
+- \`/blog <topic>\` — writing-product run for a \`/rune/{topic}\` artifact
+- \`/writing-critique <target>\` — writing-product critique run
 
 **Fitness**
 

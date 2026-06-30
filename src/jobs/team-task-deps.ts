@@ -73,8 +73,10 @@ import type { SizedTask } from '../intent/planning-roles.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { createLogger } from '../utils/logger.js';
+import { formatProtectedLocalServicesWarning } from '../utils/protected-local-services.js';
 
 const log = createLogger('team-task-deps');
+const PROTECTED_LOCAL_SERVICES_WARNING = formatProtectedLocalServicesWarning();
 
 // One shape for the (model, provider, format) triple — defined at the
 // executor boundary, re-exported here so both layers share it.
@@ -590,10 +592,14 @@ function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string) {
     return seams.judgmentCall({
       role,
       model: binding.alias,
-      systemPrompt: ctx.systemInstructions,
+      systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       message,
     });
   };
+}
+
+function withProtectedLocalServicesWarning(systemInstructions: string): string {
+  return `${systemInstructions}\n\n${PROTECTED_LOCAL_SERVICES_WARNING}`;
 }
 
 /** Pull the changed-file paths out of a unified diff (`+++ b/<path>` lines). */
@@ -782,7 +788,7 @@ export function buildProductionTeamTaskDeps(
       ? attributeRoleEvents(args.emit, role, binding)
       : undefined;
     return seams.runExecution({
-      systemPrompt: ctx.systemInstructions,
+      systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       prompt: ctx.referenceContext ? `${ctx.referenceContext}\n\n${body}` : body,
       sandbox,
       model: binding,

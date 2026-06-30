@@ -26,7 +26,8 @@ import { fileURLToPath } from 'node:url';
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXPECTED_REPO = 'rune';
 const EXPECTED_CHECKOUT = join(homedir(), 'workspace', EXPECTED_REPO);
-const HTTP_HEALTH_URL = 'http://127.0.0.1:3847/health';
+const HTTP_HEALTH_URL =
+  process.env['RUNE_ACCEPTANCE_HEALTH_URL'] ?? 'http://127.0.0.1:3847/health';
 
 const retired = ['ja', 'rvis'].join('');
 const retiredUpper = retired.toUpperCase();

@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { scanRegistrySources } from './registry-rebuild.js';
+import { buildRegistry } from '../intent/registry.js';
 
 /**
  * Build a fake multi-repo workspace on disk: a `products.json` plus per-product
@@ -50,11 +51,11 @@ beforeEach(() => {
   mkdirSync(join(root, 'relay'), { recursive: true });
 
   const productsJson = {
-    rune: { repoPath: rune, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
-    aura: { repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
-    relay: { repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    rune: { class: 'internal', repoPath: rune, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    aura: { class: 'external', repoPath: aura, baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    relay: { class: 'external', repoPath: join(root, 'relay'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
     // a product whose repo is absent on disk entirely
-    ghost: { repoPath: join(root, 'does-not-exist'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
+    ghost: { class: 'external', repoPath: join(root, 'does-not-exist'), baseBranch: 'main', credentialsFile: '', egressAllowlist: [] },
   };
   writeFileSync(join(root, 'products.json'), JSON.stringify(productsJson), 'utf8');
 });
@@ -67,6 +68,86 @@ describe('scanRegistrySources', () => {
   it('scans every product in products.json', () => {
     const sources = scanRegistrySources(join(root, 'products.json'));
     expect(sources.products.map((p) => p.name).sort()).toEqual(['aura', 'ghost', 'relay', 'rune']);
+  });
+
+  it('copies product class from products.json into registry sources', () => {
+    const sources = scanRegistrySources(join(root, 'products.json'));
+    expect(Object.fromEntries(sources.products.map((p) => [p.name, p.class]))).toEqual({
+      rune: 'internal',
+      aura: 'external',
+      relay: 'external',
+      ghost: 'external',
+    });
+  });
+
+  it('copies scopePath from products.json into registry sources for shared-repo products', () => {
+    const sharedRepo = join(root, 'michaelcjoseph.com');
+    mkdirSync(sharedRepo, { recursive: true });
+    writeFileSync(
+      join(root, 'products.json'),
+      JSON.stringify({
+        writing: {
+          class: 'external',
+          repoPath: sharedRepo,
+          scopePath: 'docs/rune',
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+        brand: {
+          class: 'external',
+          repoPath: sharedRepo,
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+      }),
+      'utf8',
+    );
+
+    const sources = scanRegistrySources(join(root, 'products.json'));
+
+    const byName = Object.fromEntries(sources.products.map((p) => [p.name, p]));
+    expect(byName['writing']!.scopePath).toBe('docs/rune');
+    expect(byName['brand']!.scopePath).toBeUndefined();
+  });
+
+  it('builds a registry projection with product class and scopePath from products.json', () => {
+    const sharedRepo = join(root, 'michaelcjoseph.com');
+    mkdirSync(sharedRepo, { recursive: true });
+    writeFileSync(
+      join(root, 'products.json'),
+      JSON.stringify({
+        'rune-mcp': {
+          class: 'internal',
+          repoPath: join(root, 'rune'),
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+        writing: {
+          class: 'external',
+          repoPath: sharedRepo,
+          scopePath: 'docs/rune',
+          baseBranch: 'main',
+          credentialsFile: '',
+          egressAllowlist: [],
+        },
+      }),
+      'utf8',
+    );
+
+    const registry = buildRegistry(scanRegistrySources(join(root, 'products.json')));
+
+    expect(registry.products).toEqual([
+      expect.objectContaining({ name: 'rune-mcp', class: 'internal' }),
+      expect.objectContaining({
+        name: 'writing',
+        class: 'external',
+        scopePath: 'docs/rune',
+        projects: [],
+      }),
+    ]);
   });
 
   it('reads each repo index and per-project task progress', () => {

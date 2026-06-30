@@ -317,4 +317,111 @@ describe('config', () => {
       expect(config['WORK_RUN_QUIET_CANCEL_AFTER_MS']).toBe(DEFAULTS['WORK_RUN_QUIET_CANCEL_AFTER_MS']);
     });
   });
+
+  describe('MCP daemon standalone config (project 19 / W1 Phase 1)', () => {
+    const REQUIRED = {
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_USER_ID: '12345',
+      VAULT_DIR: '/tmp/vault',
+    };
+
+    async function loadConfig(extra: Record<string, string | undefined> = {}) {
+      Object.assign(process.env, REQUIRED);
+      for (const key of [
+        'RUNE_HTTP_SECRET',
+        'MCP_ISSUER_URL',
+        'RUNE_MCP_SECRET',
+        'RUNE_MCP_ISSUER_URL',
+        'RUNE_MCP_OAUTH_STORE_FILE',
+        'RUNE_MCP_HOST',
+        'RUNE_MCP_PORT',
+        'RUNE_MCP_TOOL_TIMEOUT_MS',
+        'RUNE_LOGS_DIR',
+      ]) {
+        delete process.env[key];
+      }
+      for (const [key, value] of Object.entries(extra)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      const { default: config } = await import('./config.js');
+      return config as unknown as Record<string, unknown>;
+    }
+
+    it('defaults daemon host, port, and OAuth store independently of web MCP config', async () => {
+      const config = await loadConfig({
+        RUNE_HTTP_SECRET: 'web-secret',
+        MCP_ISSUER_URL: 'https://web.example.invalid',
+      });
+
+      expect(config['RUNE_MCP_HOST']).toBe('127.0.0.1');
+      expect(config['RUNE_MCP_PORT']).toBe(3848);
+      expect(config['RUNE_MCP_OAUTH_STORE_FILE']).toMatch(/\/logs\/rune-mcp-oauth-store\.json$/);
+      expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(30_000);
+      expect(config['RUNE_MCP_SECRET']).toBe('');
+      expect(config['RUNE_MCP_ISSUER_URL']).toBe('');
+    });
+
+    it('reads daemon secret and issuer from RUNE_MCP_* env vars, not the web vars', async () => {
+      const config = await loadConfig({
+        RUNE_HTTP_SECRET: 'web-secret',
+        MCP_ISSUER_URL: 'https://web.example.invalid',
+        RUNE_MCP_SECRET: 'daemon-secret',
+        RUNE_MCP_ISSUER_URL: 'https://mcp.example.invalid',
+      });
+
+      expect(config['RUNE_HTTP_SECRET']).toBe('web-secret');
+      expect(config['MCP_ISSUER_URL']).toBe('https://web.example.invalid');
+      expect(config['RUNE_MCP_SECRET']).toBe('daemon-secret');
+      expect(config['RUNE_MCP_ISSUER_URL']).toBe('https://mcp.example.invalid');
+    });
+
+    it('honors daemon host, port, and OAuth store overrides without changing web auth config', async () => {
+      const config = await loadConfig({
+        RUNE_HTTP_SECRET: 'web-secret',
+        MCP_ISSUER_URL: 'https://web.example.invalid',
+        RUNE_MCP_HOST: '0.0.0.0',
+        RUNE_MCP_PORT: '4850',
+        RUNE_MCP_OAUTH_STORE_FILE: '/tmp/rune-mcp/oauth-store.json',
+      });
+
+      expect(config['RUNE_MCP_HOST']).toBe('0.0.0.0');
+      expect(config['RUNE_MCP_PORT']).toBe(4850);
+      expect(config['RUNE_MCP_OAUTH_STORE_FILE']).toBe('/tmp/rune-mcp/oauth-store.json');
+      expect(config['RUNE_HTTP_SECRET']).toBe('web-secret');
+      expect(config['MCP_ISSUER_URL']).toBe('https://web.example.invalid');
+    });
+
+    it('honors the MCP per-tool timeout override and rejects unsafe values', async () => {
+      let config = await loadConfig({ RUNE_MCP_TOOL_TIMEOUT_MS: '1250' });
+      expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(1_250);
+
+      for (const badTimeout of ['not-a-number', '0', '-1']) {
+        vi.resetModules();
+        config = await loadConfig({ RUNE_MCP_TOOL_TIMEOUT_MS: badTimeout });
+        expect(config['RUNE_MCP_TOOL_TIMEOUT_MS']).toBe(30_000);
+      }
+    });
+
+    it('falls back to the default daemon port when RUNE_MCP_PORT is not a valid TCP port', async () => {
+      for (const badPort of ['not-a-number', '-1', '65536']) {
+        vi.resetModules();
+        const config = await loadConfig({
+          RUNE_MCP_PORT: badPort,
+        });
+
+        expect(config['RUNE_MCP_PORT']).toBe(3848);
+      }
+    });
+
+    it('places the default daemon OAuth store under an overridden LOGS_DIR', async () => {
+      const config = await loadConfig({
+        RUNE_LOGS_DIR: '/tmp/rune-config-test-logs',
+      });
+
+      expect(config['RUNE_MCP_OAUTH_STORE_FILE']).toBe(
+        '/tmp/rune-config-test-logs/rune-mcp-oauth-store.json',
+      );
+    });
+  });
 });

@@ -12,3 +12,7 @@ rules; the SOUL charter governs on any conflict.
 ## Sequencing tests before implementation
 
 - [2026-06-22 · source: impl-bundled-before-red-gate] Land a phase's tests in their own commit, observe red, then implement in a separate commit. If tests and implementation ride one commit, a later "confirm red" gate can never see red (the implementation is already present, so the suite is green) and a diff-based completeness gate can't see the deliverable (it's not in any new diff). Bundling them strands the phase: the gate guarding the work can no longer evaluate the state it exists to check, and no later turn can un-commit the work to recover.
+
+## Protected local service ownership
+
+- [2026-06-29 · source: agent-protected-service-invariant] Never kill, stop, interrupt, or reuse protected listeners without explicit human approval: Rune web / cockpit at `127.0.0.1:3847` (`com.jarvis.daemon`) and Rune MCP daemon at `127.0.0.1:3848` (`com.jarvis.rune-mcp`). If a test collides, use a dynamic/task-local port, and before killing any process verify the PID was spawned by the current task/worktree/test command.

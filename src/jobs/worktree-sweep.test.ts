@@ -27,6 +27,13 @@ import {
 
 const WT = '/tmp/worktrees/rune/15-work-run-finalizer';
 
+type ProtectedAwareSweepProcess = SweepProcess & {
+  listeningOn?: Array<{ host: string; port: number }>;
+  launchdLabel?: string;
+  ownedByCurrentTask?: boolean;
+  humanApproval?: { approved: boolean; approvalId: string };
+};
+
 function proc(pid: number, cwd: string): SweepProcess {
   return { pid, cwd };
 }
@@ -111,6 +118,82 @@ describe('sweepWorktreeProcesses — runtime fallback reap (P2.7)', () => {
     const result = sweepWorktreeProcesses(WT, io);
     expect(result.sort((a, b) => a - b)).toEqual([1, 3]);
     expect(killed.sort((a, b) => a - b)).toEqual([1, 3]);
+  });
+
+  it('refuses to SIGKILL an in-worktree PID that owns a protected Rune service port', () => {
+    const processes: ProtectedAwareSweepProcess[] = [
+      {
+        pid: 384700,
+        cwd: `${WT}/sub`,
+        ownedByCurrentTask: true,
+        listeningOn: [{ host: '127.0.0.1', port: 3847 }],
+      },
+      {
+        pid: 384800,
+        cwd: `${WT}/sub`,
+        ownedByCurrentTask: true,
+        listeningOn: [{ host: '127.0.0.1', port: 3848 }],
+      },
+      { pid: 9101, cwd: `${WT}/sub`, ownedByCurrentTask: true },
+    ];
+    const { io, killed } = makeIO(processes);
+
+    const result = sweepWorktreeProcesses(WT, io);
+
+    expect(result).toEqual([9101]);
+    expect(killed).toEqual([9101]);
+  });
+
+  it('refuses to SIGKILL an in-worktree PID matching a protected launchd service label', () => {
+    const processes: ProtectedAwareSweepProcess[] = [
+      {
+        pid: 7102,
+        cwd: `${WT}/sub`,
+        ownedByCurrentTask: true,
+        launchdLabel: 'com.jarvis.rune-mcp',
+      },
+      { pid: 9102, cwd: `${WT}/sub`, ownedByCurrentTask: true },
+    ];
+    const { io, killed } = makeIO(processes);
+
+    const result = sweepWorktreeProcesses(WT, io);
+
+    expect(result).toEqual([9102]);
+    expect(killed).toEqual([9102]);
+  });
+
+  it('requires an explicit human approval path before sweeping a protected service process', () => {
+    const approved: ProtectedAwareSweepProcess = {
+      pid: 7103,
+      cwd: `${WT}/sub`,
+      ownedByCurrentTask: true,
+      launchdLabel: 'com.jarvis.daemon',
+      humanApproval: { approved: true, approvalId: 'protected-service-kill:7103' },
+    };
+    const { io, killed } = makeIO([approved]);
+
+    const result = sweepWorktreeProcesses(WT, io);
+
+    expect(result).toEqual([7103]);
+    expect(killed).toEqual([7103]);
+  });
+
+  it('refuses to sweep a non-protected PID until current-task ownership is verified', () => {
+    const processes: ProtectedAwareSweepProcess[] = [
+      {
+        pid: 9103,
+        cwd: `${WT}/sub`,
+        ownedByCurrentTask: false,
+        listeningOn: [{ host: '127.0.0.1', port: 49152 }],
+      },
+      { pid: 9104, cwd: `${WT}/sub`, ownedByCurrentTask: true },
+    ];
+    const { io, killed } = makeIO(processes);
+
+    const result = sweepWorktreeProcesses(WT, io);
+
+    expect(result).toEqual([9104]);
+    expect(killed).toEqual([9104]);
   });
 
   it('realpath-resolves the root and cwds before the containment check (macOS /tmp parity)', () => {

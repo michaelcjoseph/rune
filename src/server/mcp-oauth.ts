@@ -4,7 +4,7 @@
  *
  * Minimal authorization server for ONE user: Dynamic Client Registration,
  * an authorization-code + PKCE (S256-only) flow whose human-approval gate is
- * the RUNE_HTTP_SECRET, and bearer verification consumed by the /mcp
+ * the configured gate secret, and bearer verification consumed by the /mcp
  * transport (src/server/mcp-transport.ts) on every request.
  *
  * SECURITY PROPERTIES (pinned by mcp-oauth.test.ts):
@@ -31,8 +31,10 @@ import { createLogger } from '../utils/logger.js';
 const log = createLogger('mcp-oauth');
 
 export interface McpOAuthDeps {
-  /** The human-approval gate: authorization requires this secret (RUNE_HTTP_SECRET). */
+  /** The human-approval gate: authorization requires this secret. */
   gateSecret: string;
+  /** Human-readable env/config label shown on the consent form. */
+  gateSecretLabel?: string;
   /** The ONE known user id every issued token binds to. */
   userId: string;
   /** Injectable clock (ms epoch). */
@@ -127,6 +129,7 @@ function escapeHtml(s: string): string {
 
 export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
   const now = deps.now ?? Date.now;
+  const gateSecretLabel = deps.gateSecretLabel ?? 'authorization secret';
   // null = never expire; undefined = default 1h; positive = that TTL.
   const tokenTtlMs: number | null =
     deps.tokenTtlMs === null ? null : Math.max(1, deps.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS);
@@ -301,10 +304,10 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
   <body>
     <h1>Authorize Claude App access to Rune</h1>
     <p>The authorization code will be sent to: <strong>${escapeHtml(destination)}</strong></p>
-    <p>Only approve if YOU initiated this connection. Enter the Rune HTTP secret to approve.</p>
+    <p>Only approve if YOU initiated this connection. Enter ${escapeHtml(gateSecretLabel)} to approve.</p>
     <form method="POST" action="${AUTHORIZE_PATH}">
       ${fields}
-      <input type="password" name="secret" autocomplete="off" placeholder="RUNE_HTTP_SECRET">
+      <input type="password" name="secret" autocomplete="off" placeholder="${escapeHtml(gateSecretLabel)}">
       <button type="submit">Approve</button>
     </form>
   </body>

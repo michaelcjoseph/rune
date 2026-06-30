@@ -1,15 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { SessionScope } from './sessions.js';
 
 const tmpDir = join(tmpdir(), `rune-sessions-test-${Date.now()}`);
 mkdirSync(tmpDir, { recursive: true });
 const sessionsFile = join(tmpDir, 'tg-sessions.json');
+const productsConfigFile = join(tmpDir, 'products.json');
+const workspaceDir = join(tmpDir, 'workspace');
+const vaultDir = join(tmpDir, 'vault');
 
 vi.mock('../config.js', () => ({
-  default: { SESSIONS_FILE: sessionsFile, LOGS_DIR: tmpDir, TIMEZONE: 'America/Chicago' },
+  default: {
+    SESSIONS_FILE: sessionsFile,
+    LOGS_DIR: tmpDir,
+    TIMEZONE: 'America/Chicago',
+    PRODUCTS_CONFIG_FILE: productsConfigFile,
+    WORKSPACE_DIR: workspaceDir,
+    VAULT_DIR: vaultDir,
+  },
   // Required by transitively-imported ai/claude.js, which builds an MCP
   // config path at module load.
   PROJECT_ROOT: '/tmp/test-project',
@@ -60,6 +70,75 @@ function buildSessionSystemPrompt(input: {
   workspaceDir?: string;
 }): string {
   return requireBuildSessionSystemPrompt()(input);
+}
+
+function writeFileEnsuringDir(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+}
+
+function writeProductChatFixture(): { runeRepo: string; siteRepo: string } {
+  const runeRepo = join(tmpDir, 'product-chat-rune');
+  const siteRepo = join(tmpDir, 'product-chat-site');
+
+  writeFileSync(productsConfigFile, JSON.stringify({
+    'rune-mcp': {
+      class: 'internal',
+      repoPath: runeRepo,
+      baseBranch: 'main',
+      credentialsFile: join(tmpDir, 'creds', 'rune-mcp.env'),
+      egressAllowlist: [],
+    },
+    writing: {
+      class: 'external',
+      repoPath: siteRepo,
+      scopePath: 'docs/rune',
+      baseBranch: 'main',
+      credentialsFile: join(tmpDir, 'creds', 'writing.env'),
+      egressAllowlist: [],
+    },
+    brand: {
+      class: 'external',
+      repoPath: siteRepo,
+      baseBranch: 'main',
+      credentialsFile: join(tmpDir, 'creds', 'brand.env'),
+      egressAllowlist: [],
+    },
+  }));
+
+  writeFileEnsuringDir(join(runeRepo, 'AGENTS.md'), 'RUNE_MCP_REPO_CONTEXT: MCP daemon lives in the Rune repo.');
+  writeFileEnsuringDir(
+    join(runeRepo, 'docs', 'projects', '19-rune-product-os', 'spec.md'),
+    'RUNE_MCP_PROJECT_CONTEXT: standalone MCP and cockpit product OS.',
+  );
+  writeFileEnsuringDir(
+    join(runeRepo, 'docs', 'projects', '19-rune-product-os', 'tasks.md'),
+    '- [ ] RUNE_MCP_TASK_CONTEXT product-scoped chat',
+  );
+
+  writeFileEnsuringDir(join(siteRepo, 'README.md'), 'BRAND_ROOT_CONTEXT: root Next.js brand app.');
+  writeFileEnsuringDir(
+    join(siteRepo, 'docs', 'projects', 'brand-refresh', 'spec.md'),
+    'BRAND_PROJECT_CONTEXT: brand home page work.',
+  );
+  writeFileEnsuringDir(
+    join(siteRepo, 'docs', 'projects', 'brand-refresh', 'tasks.md'),
+    '- [ ] BRAND_TASK_CONTEXT brand app polish',
+  );
+  writeFileEnsuringDir(
+    join(siteRepo, 'docs', 'rune', 'AGENTS.md'),
+    'WRITING_SCOPED_CONTEXT: writing product owns /rune content only.',
+  );
+  writeFileEnsuringDir(
+    join(siteRepo, 'docs', 'rune', 'projects', 'writing-pipeline', 'spec.md'),
+    'WRITING_PROJECT_CONTEXT: Rune-authored essays under /rune/{topic}.',
+  );
+  writeFileEnsuringDir(
+    join(siteRepo, 'docs', 'rune', 'projects', 'writing-pipeline', 'tasks.md'),
+    '- [ ] WRITING_TASK_CONTEXT draft and publish scoped writing',
+  );
+
+  return { runeRepo, siteRepo };
 }
 
 describe('vault/sessions', () => {
@@ -394,6 +473,43 @@ describe('vault/sessions', () => {
         productContext: auraContext,
         workspaceDir: '/workspace',
       })).toThrow(/rune|aura|product context|scope/i);
+    });
+
+    it('loads runnable chat context for rune-mcp, writing, and brand from product policy', () => {
+      const { runeRepo, siteRepo } = writeProductChatFixture();
+
+      const runeMcpPrompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'rune-mcp' },
+        workspaceDir,
+      });
+      expect(runeMcpPrompt).toMatch(/active product:\s*rune-mcp/i);
+      expect(runeMcpPrompt).toContain(`Product repo: ${runeRepo}`);
+      expect(runeMcpPrompt).toContain('RUNE_MCP_REPO_CONTEXT');
+      expect(runeMcpPrompt).toContain('RUNE_MCP_PROJECT_CONTEXT');
+      expect(runeMcpPrompt).not.toContain('BRAND_ROOT_CONTEXT');
+      expect(runeMcpPrompt).not.toContain('WRITING_SCOPED_CONTEXT');
+
+      const writingPrompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'writing' },
+        workspaceDir,
+      });
+      expect(writingPrompt).toMatch(/active product:\s*writing/i);
+      expect(writingPrompt).toContain(`Product repo: ${siteRepo}`);
+      expect(writingPrompt).toContain('WRITING_SCOPED_CONTEXT');
+      expect(writingPrompt).toContain('WRITING_PROJECT_CONTEXT');
+      expect(writingPrompt).not.toContain('BRAND_ROOT_CONTEXT');
+      expect(writingPrompt).not.toContain('BRAND_PROJECT_CONTEXT');
+
+      const brandPrompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'brand' },
+        workspaceDir,
+      });
+      expect(brandPrompt).toMatch(/active product:\s*brand/i);
+      expect(brandPrompt).toContain(`Product repo: ${siteRepo}`);
+      expect(brandPrompt).toContain('BRAND_ROOT_CONTEXT');
+      expect(brandPrompt).toContain('BRAND_PROJECT_CONTEXT');
+      expect(brandPrompt).not.toContain('WRITING_SCOPED_CONTEXT');
+      expect(brandPrompt).not.toContain('WRITING_PROJECT_CONTEXT');
     });
   });
 

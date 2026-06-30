@@ -7,6 +7,8 @@ import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
+import { runKnowledgeSupersessionReconciliation } from '../kb/knowledge-supersession.js';
+import { conservativeSupersessionAdjudicator } from '../kb/supersession-adjudicator.js';
 import { runLibrarySync } from './lenny-sync.js';
 import { extractPlaybookDrafts } from './playbook-extract.js';
 import {
@@ -86,6 +88,29 @@ async function stepKBQueue(): Promise<NightlyStepResult> {
     status: 'success',
     detail: `${processed} source(s) ingested, ${created} created, ${updated} updated`,
   };
+}
+
+async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepResult> {
+  const result = await runKnowledgeSupersessionReconciliation({
+    vaultDir: config.VAULT_DIR,
+    now: date,
+    supersessions: [{ from: 'Jarvis', to: 'Rune', aliases: ['jarvis'] }],
+    adjudicateCandidate: conservativeSupersessionAdjudicator,
+  });
+
+  const status = result.candidates === 0 ? 'skipped' : 'success';
+  const artifactParts: string[] = [];
+  if (result.editedFiles.length > 0) {
+    artifactParts.push(`inline changelog: ${result.editedFiles.join(', ')}`);
+  }
+  if (result.candidates > 0) {
+    artifactParts.push('supersession audit: knowledge/supersessions.jsonl');
+  }
+  const artifactDetail = artifactParts.length > 0 ? `; ${artifactParts.join('; ')}` : '';
+  const detail =
+    `${result.candidates} candidate(s), ${result.accepted} accepted, ` +
+    `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}${artifactDetail}`;
+  return { step: 'Knowledge reconciliation', status, detail };
 }
 
 async function stepDailyTags(date: string, content: string | null): Promise<NightlyStepResult> {
@@ -771,6 +796,7 @@ export async function executeNightly(
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('Library sync', stepLibrarySync);
   await run('KB queue', stepKBQueue);
+  await run('Knowledge reconciliation', () => stepKnowledgeReconciliation(todayDate));
   await run('Whoop activity', stepWhoopActivity);
   await run('Observation loop', () => stepObservation(options?.bus));
   await run('Learning loop', stepLearningLoop);
