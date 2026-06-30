@@ -116,6 +116,30 @@ describe('kb/supersession-adjudicator', () => {
     expect(prompt).toContain('The current product identity is Rune now, not Jarvis.');
   });
 
+  it('tells the adjudicator that psychology pages are eligible only for current-state facts, not historical references', async () => {
+    const { conservativeSupersessionAdjudicator } = await requireSupersessionAdjudicator();
+    askMock.mockResolvedValueOnce({
+      text: JSON.stringify({
+        status: 'ambiguous',
+        rationale: 'Prompt inspection fixture; no edit.',
+      }),
+      error: null,
+    });
+
+    await conservativeSupersessionAdjudicator(jarvisRuneCandidate({
+      file: 'pages/psychology.md',
+      line: 12,
+      text: 'I used Jarvis as a name in older personal notes before the Rune rename.',
+    }));
+
+    expect(askMock).toHaveBeenCalledTimes(1);
+    const prompt = String(askMock.mock.calls[0]![0]);
+    expect(prompt).toMatch(/psychology pages?/i);
+    expect(prompt).toMatch(/current-state facts?/i);
+    expect(prompt).toMatch(/historical references?/i);
+    expect(prompt).toContain('I used Jarvis as a name in older personal notes before the Rune rename.');
+  });
+
   it('falls back to ambiguous when the model output is malformed or not a conservative decision', async () => {
     const { conservativeSupersessionAdjudicator } = await requireSupersessionAdjudicator();
     askMock.mockResolvedValueOnce({

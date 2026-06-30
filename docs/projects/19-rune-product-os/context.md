@@ -64,9 +64,12 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- ## Rune`
-- `Jarvis orchestration ... jarvis/CLAUDE.md` → `Rune orchestration ... rune/CLAUDE.md`
-- `Jarvis nightly drafts...` → `Rune nightly drafts...`
-- `propose-only through Jarvis` → `propose-only through Rune`
+- at psychology pages are eligible only for current-state facts, and historical psychology references must stay unchanged.
 
-No tests run; this was a vault instruction-content edit and no changes were applied.
+Verified with:
+
+```bash
+npx vitest run src/kb/knowledge-supersession.test.ts src/kb/supersession-adjudicator.test.ts
+```
+
+Result: 2 files passed, 17 tests passed. No commit made.

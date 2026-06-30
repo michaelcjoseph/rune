@@ -28,6 +28,8 @@ The candidate below was already surfaced by the deterministic finder because it 
 
 Accept only if the candidate is a current-state fact and is clearly superseded by the newer evidence. Historical references, rename history, quotations, lineage notes, and ambiguous copy must be ambiguous or rejected and left unchanged.
 
+Psychology pages are eligible only when the candidate line is a current-state fact; historical references in psychology pages must be left unchanged.
+
 Return only JSON with this shape:
 {
   "status": "accepted" | "rejected" | "ambiguous",

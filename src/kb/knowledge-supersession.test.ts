@@ -419,6 +419,120 @@ describe('kb/knowledge-supersession', () => {
     expect(result.unchangedFiles).toContain('knowledge/rename-history.md');
   });
 
+  it('uses the remaining curated-page Jarvis to Rune drift strings as the canonical reconciliation fixture', async () => {
+    writeVaultFile('knowledge/rune.md', [
+      '# Rune',
+      '',
+      'Jarvis orchestration is documented in jarvis/CLAUDE.md.',
+      '',
+    ].join('\n'));
+    writeVaultFile('projects/rune-product-os.md', [
+      '# Rune Product-OS',
+      '',
+      'Jarvis nightly drafts summarize product-team work for review.',
+      '',
+    ].join('\n'));
+    writeVaultFile('pages/playbook.md', [
+      '# Playbook',
+      '',
+      'Worldview updates remain propose-only through Jarvis.',
+      '',
+    ].join('\n'));
+    const historicalReference = [
+      '# Rename lineage',
+      '',
+      'The assistant was named Jarvis before the Rune identity refactor.',
+      '',
+    ].join('\n');
+    writeVaultFile('knowledge/rename-lineage.md', historicalReference);
+    writeVaultFile('journals/2026_06_29.md', [
+      '# 2026-06-29',
+      '',
+      'The Jarvis to Rune rename is current; Rune is the current orchestrator name and jarvis paths moved to rune.',
+      '',
+    ].join('\n'));
+
+    const replacements = new Map<string, string>([
+      [
+        'knowledge/rune.md',
+        'Rune orchestration is documented in rune/CLAUDE.md.',
+      ],
+      [
+        'projects/rune-product-os.md',
+        'Rune nightly drafts summarize product-team work for review.',
+      ],
+      [
+        'pages/playbook.md',
+        'Worldview updates remain propose-only through Rune.',
+      ],
+    ]);
+    const adjudicator = vi.fn(async (candidate: SupersessionCandidate): Promise<SupersessionDecision> => {
+      const replacement = replacements.get(candidate.file);
+      if (!replacement) {
+        return {
+          status: 'rejected',
+          rationale: 'historical reference to the prior assistant name remains true',
+        };
+      }
+      return {
+        status: 'accepted',
+        replacement,
+        rationale: `canonical remaining curated-page drift in ${candidate.file}`,
+      };
+    });
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(readVaultFile('knowledge/rune.md')).toContain(
+      'Rune orchestration is documented in rune/CLAUDE.md.',
+    );
+    expect(readVaultFile('projects/rune-product-os.md')).toContain(
+      'Rune nightly drafts summarize product-team work for review.',
+    );
+    expect(readVaultFile('pages/playbook.md')).toContain(
+      'Worldview updates remain propose-only through Rune.',
+    );
+    expect(readVaultFile('knowledge/rename-lineage.md')).toBe(historicalReference);
+    expect(result).toMatchObject({
+      candidates: 4,
+      accepted: 3,
+      rejected: 1,
+    });
+    expect(result.editedFiles).toEqual([
+      'knowledge/rune.md',
+      'pages/playbook.md',
+      'projects/rune-product-os.md',
+    ]);
+    expect(result.unchangedFiles).toContain('knowledge/rename-lineage.md');
+
+    const records = readSupersessionAuditRecords();
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'accepted',
+        file: 'knowledge/rune.md',
+        before: 'Jarvis orchestration is documented in jarvis/CLAUDE.md.',
+        after: 'Rune orchestration is documented in rune/CLAUDE.md.',
+      }),
+      expect.objectContaining({
+        status: 'accepted',
+        file: 'projects/rune-product-os.md',
+        before: 'Jarvis nightly drafts summarize product-team work for review.',
+        after: 'Rune nightly drafts summarize product-team work for review.',
+      }),
+      expect.objectContaining({
+        status: 'accepted',
+        file: 'pages/playbook.md',
+        before: 'Worldview updates remain propose-only through Jarvis.',
+        after: 'Worldview updates remain propose-only through Rune.',
+      }),
+      expect.objectContaining({
+        status: 'rejected',
+        file: 'knowledge/rename-lineage.md',
+        text: 'The assistant was named Jarvis before the Rune identity refactor.',
+      }),
+    ]));
+  });
+
   it('does not rewrite a still-valid curated historical fact even when it resembles a supersession candidate', async () => {
     const nearMiss = [
       '# Agent lineage',
@@ -585,6 +699,71 @@ describe('kb/knowledge-supersession', () => {
       after: 'Rune frames my AI operating model.',
       rationale: 'current-state identity drift in worldview page',
     }));
+  });
+
+  it('edits psychology pages only when adjudication accepts a current-state fact, not historical references', async () => {
+    const currentStatePage = [
+      '# Psychology',
+      '',
+      'Jarvis is the operator-facing AI system I rely on for planning.',
+      '',
+    ].join('\n');
+    const historicalPage = [
+      '# Psychology history',
+      '',
+      'I used the name Jarvis in older notes before the Rune rename.',
+      '',
+    ].join('\n');
+    writeVaultFile('pages/psychology.md', currentStatePage);
+    writeVaultFile('pages/psychology-history.md', historicalPage);
+    writeVaultFile('journals/2026_06_26.md', [
+      '# 2026-06-26',
+      '',
+      'Rune is the current AI system name; Jarvis is historical.',
+      '',
+    ].join('\n'));
+
+    const adjudicator = vi.fn(async (candidate: SupersessionCandidate): Promise<SupersessionDecision> => {
+      if (candidate.file === 'pages/psychology.md') {
+        return {
+          status: 'accepted',
+          replacement: 'Rune is the operator-facing AI system I rely on for planning.',
+          rationale: 'psychology page states a current-state fact',
+        };
+      }
+      return {
+        status: 'rejected',
+        rationale: 'psychology page reference is historical, not a current-state fact',
+      };
+    });
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(readVaultFile('pages/psychology.md')).toContain(
+      'Rune is the operator-facing AI system I rely on for planning.',
+    );
+    expect(readVaultFile('pages/psychology-history.md')).toBe(historicalPage);
+    expect(result).toMatchObject({
+      candidates: 2,
+      accepted: 1,
+      rejected: 1,
+    });
+    expect(result.editedFiles).toEqual(['pages/psychology.md']);
+    expect(result.unchangedFiles).toEqual(['pages/psychology-history.md']);
+
+    const records = readSupersessionAuditRecords();
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'accepted',
+        file: 'pages/psychology.md',
+        rationale: 'psychology page states a current-state fact',
+      }),
+      expect.objectContaining({
+        status: 'rejected',
+        file: 'pages/psychology-history.md',
+        rationale: 'psychology page reference is historical, not a current-state fact',
+      }),
+    ]));
   });
 
   it('logs ambiguous supersession candidates without editing the curated page or raw journal evidence', async () => {
