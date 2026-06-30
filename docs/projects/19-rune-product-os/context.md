@@ -64,9 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- _modules/.bin/vitest run src/bot/commands/writing-critique.test.ts src/jobs/writing-product-orchestration.test.ts --reporter=verbose --configLoader runner
-npm run build
-git diff --check -- src/bot/commands/writing-critique.ts src/jobs/writing-product-orchestration.ts
-```
+- an.
 
-All passed. No commit made.
+Verified:
+`npm exec -- vitest run src/bot/no-topics-voice-commands.test.ts src/bot/skill-registry.test.ts --reporter=verbose --configLoader runner`  
+Result: 2 test files passed, 23 tests passed.
+
+Also ran `git diff --check --cached` on the staged QA files; no whitespace issues. No commit made.
