@@ -28,9 +28,10 @@ vi.mock('../../vault/sessions.js', () => ({
     'When to skip the KB: named files and structured JSON stores.',
     'The answer is synthesis-quality; adapt minimally.',
     scope?.kind === 'product'
-      ? `PRODUCT CHAT: Active product: ${scope.product}. Search the product repo and vault.`
+      ? `PRODUCT CHAT: Active product: ${scope.product}. Search the product repo and the second brain via the rune-kb MCP.`
       : '',
   ].join('\n')),
+  resolveProductRepoCwd: vi.fn((product: string) => `/workspace/${product}`),
 }));
 vi.mock('../../ai/claude.js', () => ({
   askClaude: vi.fn(),
@@ -1416,7 +1417,7 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(setSessionModelMock).toHaveBeenCalledWith(100, 'webview', 'sonnet', productScope);
   });
 
-  it('tells product-scoped chat to search both the active repo and the vault', async () => {
+  it('runs product-scoped chat in the product repo and routes via the rune-kb MCP', async () => {
     const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
     const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
     const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
@@ -1434,10 +1435,13 @@ describe('dispatchText — product-scoped webview sessions', () => {
     await (dispatchText as any)(webviewSender(), 100, 'where is the fix?', productScope);
 
     const systemPrompt = askMock.mock.calls[0]![2] as string;
-    const options = askMock.mock.calls[0]![3] as { allowedTools: string[] };
+    const options = askMock.mock.calls[0]![3] as { allowedTools: string[]; cwd?: string };
     expect(systemPrompt).toMatch(/active product:\s*rune/i);
     expect(systemPrompt).toMatch(/product repo/i);
-    expect(systemPrompt).toMatch(/vault/i);
+    expect(systemPrompt).toMatch(/rune-kb/i);
+    // The spawn runs from the product repo (not the vault) — the fix for Rune
+    // reporting /pkms as its working repo in product chats.
+    expect(options.cwd).toBe('/workspace/rune');
     expect(options.allowedTools).toEqual(expect.arrayContaining([
       'Read',
       'Glob',
@@ -1449,6 +1453,27 @@ describe('dispatchText — product-scoped webview sessions', () => {
     expect(options.allowedTools).not.toContain(retiredMcpTool('repo_search'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_query'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_search'));
+  });
+
+  it('does not set a product cwd for global (non-product) chat', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'global-cwd-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'hello');
+
+    const options = askMock.mock.calls[0]![3] as { cwd?: string };
+    expect(options.cwd).toBeUndefined();
   });
 
   it('passes the product-tailored system prompt built for the active product scope to Claude', async () => {

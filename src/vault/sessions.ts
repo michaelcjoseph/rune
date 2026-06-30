@@ -55,6 +55,12 @@ export interface BuildSessionSystemPromptInput {
   scope?: SessionScope;
   productContext?: ProductPromptContext;
   workspaceDir?: string;
+  /** When true, the product preamble describes Rune as able to edit/run code in
+   *  the product repo (Phase 2 write-enabled chat). When false/omitted, it
+   *  describes a read-and-reason posture. The actual tool allowlist + writable
+   *  dirs are enforced at the spawn (src/bot/handlers/text.ts, src/ai/claude.ts);
+   *  this flag only keeps the prompt's stated capability honest. */
+  writeEnabled?: boolean;
 }
 
 interface Session {
@@ -106,6 +112,46 @@ function buildGenericSystemPrompt(workspaceDir: string | undefined): string {
   return `${VAULT_SYSTEM_PROMPT_BASE}${workspacePrompt}`;
 }
 
+/** Identity preamble for a PRODUCT-scoped chat. Unlike the global vault persona,
+ *  Rune here is the development agent for one product, working IN that product's
+ *  repo; the second brain is reached read-only through the rune-kb MCP, never as
+ *  the working directory. `writeEnabled` flips the stated capability between
+ *  read-and-reason and edit-and-run (kept in sync with the spawn's tool
+ *  allowlist + writable dirs — see src/bot/handlers/text.ts). */
+function buildProductIdentityPreamble(
+  product: string,
+  repoPath: string | undefined,
+  scopePath: string | undefined,
+  writeEnabled: boolean,
+): string {
+  const repoSentence = repoPath
+    ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
+    : `Your working repo is this product's repository.`;
+  const capability = writeEnabled
+    ? `WORKING IN THIS REPO: You can read, edit, and run code in this repo (Read/Edit/Write/Bash, plus repo_search). Act directly on small, well-scoped changes. You CANNOT write anywhere outside this repo — the vault and other repos are read-only. For anything multi-step, risky, or that should land on main through review, dispatch a work run instead of hand-editing; restate the product and the target, and get the user's go before dispatching.`
+    : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
+  const actLine = writeEnabled
+    ? `For development questions and small changes, act directly: read the repo, make the change, run the check.`
+    : `For development and factual questions, answer directly from the repo.`;
+  return `You are Rune, the development agent for the ${product} product. ${repoSentence} ${actLine}
+
+${capability}
+
+SECOND BRAIN (read-only): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP, READ-ONLY. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it — it is maintained by dedicated agents and scheduled jobs, not from this chat.
+
+DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly and act. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in something specific you found in the repo or the second brain, then give your view.
+
+KNOWLEDGE BASE (rune-kb MCP) is your first move for any question about the user's world (people, companies, concepts, frameworks, prior decisions). Don't grep the vault — ask the synthesizer.
+
+WEB SEARCH (WebSearch, WebFetch): use actively for anything outside the repo and the second brain — library/API docs, third-party behavior, current events. Cite sources inline.
+
+HOW TO ANSWER:
+- Pick mode by shape: development/lookup → act directly; strategy/reflection → probe first.
+- Route by subject: code/this-repo → repo tools; the user's domain (concepts, people, prior thinking) → kb_query first; the outside world → web.
+- Responses may render on mobile — be concise; structure over length.
+- The user can end the thread with /fresh.`;
+}
+
 function limitText(text: string, limit = PROMPT_FILE_CHAR_LIMIT): string {
   const trimmed = text.trim();
   return trimmed.length > limit ? `${trimmed.slice(0, limit)}\n...[truncated]` : trimmed;
@@ -143,7 +189,7 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
     `PRODUCT CHAT: Active product: ${scope.product}.`,
     `Product repo: ${context.repoPath}`,
     ...(context.scopePath ? [`Product repo scope: ${context.scopePath}`] : []),
-    'Ground this conversation in the loaded product context below. Search the active product repo and the vault before answering product-specific development questions.',
+    'Ground this conversation in the loaded product context below. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.',
     `REPO + KB ROUTING: code/project questions route to the active product repo (${context.repoPath}${context.scopePath ? `, scoped to ${context.scopePath}` : ''}) with repo_search/Read/Grep. Concept/people questions route to the KB with kb_query first, then kb_search for source pages. Mixed questions should use both.`,
     '',
     '## Loaded Repo Docs',
@@ -159,20 +205,38 @@ function buildProductContextPrompt(scope: Extract<SessionScope, { kind: 'product
 
 export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = {}): string {
   const scope = input.scope ?? { kind: 'global' };
-  const base = buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
-  if (scope.kind !== 'product') return base;
-
-  const context = input.productContext ?? loadProductPromptContext(scope.product);
-  if (!context) {
-    return `${base}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search both the product repo and the vault before answering product-specific development questions. REPO + KB ROUTING: code/project questions route to the active product repo when the repo path is known; concept/people questions route to the KB with kb_query first.`;
+  // Global (Telegram / cockpit Home) chat keeps the vault thinking-partner
+  // persona. Product chats get a product-development identity instead (working
+  // repo = the product repo; second brain read-only via the rune-kb MCP).
+  if (scope.kind !== 'product') {
+    return buildGenericSystemPrompt(input.workspaceDir ?? config.WORKSPACE_DIR);
   }
 
+  const writeEnabled = input.writeEnabled ?? false;
+  const context = input.productContext ?? loadProductPromptContext(scope.product);
+  if (!context) {
+    const preamble = buildProductIdentityPreamble(scope.product, undefined, undefined, writeEnabled);
+    return `${preamble}\n\nPRODUCT CHAT: Active product: ${scope.product}. Product context could not be loaded; fail closed by asking the user to clarify rather than assuming another product's context. Search the active product repo, and the second brain via the rune-kb MCP, before answering product-specific development questions.`;
+  }
+
+  const preamble = buildProductIdentityPreamble(scope.product, context.repoPath, context.scopePath, writeEnabled);
   const productPrompt = buildProductContextPrompt(scope, context);
-  const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - base.length - 2);
+  const available = Math.max(0, PROMPT_CONTEXT_CHAR_LIMIT - preamble.length - 2);
   const boundedProductPrompt = productPrompt.length > available
     ? `${productPrompt.slice(0, available)}\n...[truncated product context]`
     : productPrompt;
-  return `${base}\n\n${boundedProductPrompt}`;
+  return `${preamble}\n\n${boundedProductPrompt}`;
+}
+
+/** Resolve the absolute working-directory (git repo root) for a product chat,
+ *  or null when the product is unknown or has no repo configured (projection-
+ *  only entries have an empty repoPath). The chat handler uses this to set the
+ *  spawn cwd so Rune operates from the product repo, not the vault. Returns the
+ *  repo root even for scoped products (scopePath narrows focus, not the repo). */
+export function resolveProductRepoCwd(product: string): string | null {
+  const context = loadProductPromptContext(product);
+  if (!context || !context.repoPath) return null;
+  return context.repoPath;
 }
 
 function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {

@@ -8,6 +8,7 @@ import {
   setSessionModel,
   appendMessageToSession,
   buildSessionSystemPrompt,
+  resolveProductRepoCwd,
   type Transport,
   type SessionScope,
 } from '../../vault/sessions.js';
@@ -481,11 +482,20 @@ async function handleConversation(
 
   sender.startTyping(userId, 'Asking Claude');
   try {
+    // Product chats run from the product repo so Rune operates from (and
+    // reports) the product, not the vault. Global chats keep the vault cwd.
+    const productCwd = scope?.kind === 'product' ? resolveProductRepoCwd(scope.product) : null;
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
       buildSessionSystemPrompt({ scope }),
-      { model: session.model, allowedTools: CONVERSATION_TOOLS, opLabel: 'chat', voice: true },
+      {
+        model: session.model,
+        allowedTools: CONVERSATION_TOOLS,
+        opLabel: 'chat',
+        voice: true,
+        ...(productCwd ? { cwd: productCwd } : {}),
+      },
     );
 
     if (result.error) {

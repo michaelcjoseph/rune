@@ -352,6 +352,26 @@ describe('ai/claude', () => {
       expect(args).toContain('opus');
     });
 
+    it('spawns with the provided cwd (product-chat working repo) over the vault default', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeWithContext('hi', 'ctx-cwd-sess', 'sys', { cwd: '/workspace/some-product' });
+      expect(spawnMock).toHaveBeenLastCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/workspace/some-product' }),
+      );
+    });
+
+    it('defaults to the vault cwd when no cwd is provided', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeWithContext('hi', 'ctx-cwd-default', 'sys');
+      expect(spawnMock).toHaveBeenLastCalledWith(
+        '/usr/local/bin/claude',
+        expect.any(Array),
+        expect.objectContaining({ cwd: '/tmp/test-vault' }),
+      );
+    });
+
     it('does not mark session as created on error', async () => {
       spawnMock.mockReturnValue(createChild({ stderr: 'fail', code: 1 }));
       await askClaudeWithContext('msg', 'ctx-fail-sess', 'sys');

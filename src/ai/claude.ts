@@ -284,7 +284,7 @@ function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | un
   }
 }
 
-function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope): Promise<ClaudeResult> {
+function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope, cwd?: string): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
   // Haiku calls) bypass it because their callers expect a single JSON blob on
@@ -321,7 +321,10 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
 
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
-      cwd: writeScope?.cwd ?? config.VAULT_DIR,
+      // Explicit cwd (product-chat working repo) wins; otherwise a write-scoped
+      // agent's cwd; otherwise the vault. rune-kb resolves regardless of cwd
+      // because getProjectMcpArgs pins the MCP server to PROJECT_ROOT.
+      cwd: cwd ?? writeScope?.cwd ?? config.VAULT_DIR,
       stdio: ['ignore', 'pipe', 'pipe'],
       // Expose PROJECT_ROOT so agents that shell out can locate the Rune
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
@@ -441,6 +444,7 @@ function askClaudeSession(
   allowedTools?: string[],
   opLabel?: string,
   voice?: boolean,
+  cwd?: string,
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -457,7 +461,7 @@ function askClaudeSession(
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
-    const result = await execClaude(args, undefined, opMeta);
+    const result = await execClaude(args, undefined, opMeta, undefined, cwd);
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -487,6 +491,10 @@ export interface AskClaudeWithContextOpts {
   /** Prepend the user's writing voice (see src/vault/voice.ts). Set for callers
    *  that produce prose the user reads; leave unset for structured output. */
   voice?: boolean;
+  /** Working directory for the spawn. Set by product chats to the product repo
+   *  so Rune operates from (and reports) the product repo, not the vault. When
+   *  omitted, the spawn defaults to the vault. */
+  cwd?: string;
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt. */
@@ -496,7 +504,7 @@ export async function askClaudeWithContext(
   systemPrompt: string,
   opts: AskClaudeWithContextOpts = {},
 ): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice);
+  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice, opts.cwd);
 }
 
 /** One-shot query with no session persistence. Pass `opLabel` to surface as a

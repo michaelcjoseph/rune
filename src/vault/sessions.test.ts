@@ -459,6 +459,39 @@ describe('vault/sessions', () => {
       expect(prompt).not.toContain('Operator cockpits should preserve human judgment');
     });
 
+    it('presents the product repo as the working repo and drops the vault-as-working-dir identity', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+
+      // Rune introduces itself as the product's dev agent, working in the product repo.
+      expect(prompt).toMatch(/development agent for[^\n]*\brune\b/i);
+      expect(prompt).toMatch(/working repo/i);
+      expect(prompt).toContain('/workspace/rune');
+
+      // The global vault-centric identity must NOT leak into a product chat —
+      // this is the bug: Rune called the vault its primary working repo.
+      expect(prompt).not.toContain('second-brain conversational layer');
+      expect(prompt).not.toMatch(/working directory is their Obsidian vault/i);
+      // The bald global "Never write files." blanket is gone for product chats.
+      expect(prompt).not.toContain('Never write files.');
+    });
+
+    it('frames the second brain as read-only via the rune-kb MCP, not as the working directory', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+
+      expect(prompt).toMatch(/rune-kb/);
+      expect(prompt).toMatch(/read-only/i);
+      // Explicitly never writes the vault from chat.
+      expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
+    });
+
     it('fails closed instead of grounding one product chat with another product context', () => {
       const buildPrompt = requireBuildSessionSystemPrompt();
       const auraContext: ProductPromptFixture = {
@@ -510,6 +543,31 @@ describe('vault/sessions', () => {
       expect(brandPrompt).toContain('BRAND_PROJECT_CONTEXT');
       expect(brandPrompt).not.toContain('WRITING_SCOPED_CONTEXT');
       expect(brandPrompt).not.toContain('WRITING_PROJECT_CONTEXT');
+    });
+  });
+
+  describe('resolveProductRepoCwd', () => {
+    function resolveProductRepoCwd(product: string): string | null {
+      const fn = (sessionsModule as unknown as {
+        resolveProductRepoCwd?: (p: string) => string | null;
+      }).resolveProductRepoCwd;
+      expect(
+        fn,
+        'src/vault/sessions.ts must export resolveProductRepoCwd so the chat handler can set the product-repo cwd',
+      ).toEqual(expect.any(Function));
+      return fn!(product);
+    }
+
+    it('returns the product repo path for a configured product', () => {
+      const { runeRepo, siteRepo } = writeProductChatFixture();
+      expect(resolveProductRepoCwd('rune-mcp')).toBe(runeRepo);
+      // A scoped product still resolves to the repo root (the git repo), not the subdir.
+      expect(resolveProductRepoCwd('writing')).toBe(siteRepo);
+    });
+
+    it('returns null for an unknown product', () => {
+      writeProductChatFixture();
+      expect(resolveProductRepoCwd('does-not-exist')).toBeNull();
     });
   });
 
