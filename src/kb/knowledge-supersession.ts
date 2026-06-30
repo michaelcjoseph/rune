@@ -327,6 +327,11 @@ function appendSupersessionAudit(root: string, record: Record<string, unknown>):
 
 function appendChangelogEntry(lines: string[], now: string, candidate: SupersessionCandidate): void {
   const date = parseDateOnly(now) ?? now;
+  if (candidate.file.startsWith('world-view/')) {
+    appendWorldviewChangelogEntry(lines, date, candidate);
+    return;
+  }
+
   const entry = `- ${date}: Supersession audit: ${candidate.supersession.from} -> ${candidate.supersession.to} at ${candidate.file}:${candidate.line}.`;
   const headingIndex = lines.findIndex((line) => /^##\s+Supersession audit\s*$/i.test(line));
 
@@ -340,6 +345,32 @@ function appendChangelogEntry(lines: string[], now: string, candidate: Supersess
   while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
   if (lines.length > 0) lines.push('');
   lines.push('## Supersession audit', '', entry);
+}
+
+function appendWorldviewChangelogEntry(lines: string[], date: string, candidate: SupersessionCandidate): void {
+  const wikiDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.replaceAll('-', '_') : date;
+  const dateHeading = `### [[${wikiDate}]]`;
+  const entry = `- Supersession audit: ${candidate.supersession.from} -> ${candidate.supersession.to} at ${candidate.file}:${candidate.line}.`;
+  const changelogIndex = lines.findIndex((line) => /^##\s+Changelog\s*$/i.test(line));
+
+  if (changelogIndex >= 0) {
+    const existingDateIndex = lines.findIndex((line, index) => index > changelogIndex && line === dateHeading);
+    if (existingDateIndex >= 0) {
+      let insertAt = existingDateIndex + 1;
+      while (insertAt < lines.length && lines[insertAt] === '') insertAt++;
+      lines.splice(insertAt, 0, entry);
+      return;
+    }
+
+    let insertAt = changelogIndex + 1;
+    while (insertAt < lines.length && lines[insertAt] === '') insertAt++;
+    lines.splice(insertAt, 0, dateHeading, entry, '');
+    return;
+  }
+
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  if (lines.length > 0) lines.push('');
+  lines.push('## Changelog', '', dateHeading, entry);
 }
 
 function escapeRegExp(value: string): string {

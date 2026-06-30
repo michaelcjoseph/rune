@@ -528,6 +528,65 @@ describe('kb/knowledge-supersession', () => {
     ]));
   });
 
+  it('uses the existing world-view changelog format when an accepted auto-edit touches a world-view page', async () => {
+    writeVaultFile('world-view/ai.md', [
+      '# AI beliefs',
+      '',
+      'Jarvis frames my AI operating model.',
+      '',
+      '## Changelog',
+      '',
+      '### [[2026_05_01]]',
+      '- Initial thesis.',
+      '',
+    ].join('\n'));
+    writeVaultFile('journals/2026_06_25.md', [
+      '# 2026-06-25',
+      '',
+      'The current assistant identity is Rune, not Jarvis.',
+      '',
+    ].join('\n'));
+
+    const adjudicator = vi.fn(async (candidate: SupersessionCandidate): Promise<SupersessionDecision> => ({
+      status: 'accepted',
+      replacement: candidate.text.replace(/\bJarvis\b/g, 'Rune'),
+      rationale: 'current-state identity drift in worldview page',
+    }));
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+    const updated = readVaultFile('world-view/ai.md');
+    const lines = updated.split('\n');
+    const changelogIndex = lines.findIndex((line) => line === '## Changelog');
+    const supersessionEntryIndex = lines.findIndex((line) => line === '### [[2026_06_30]]');
+    const olderEntryIndex = lines.findIndex((line) => line === '### [[2026_05_01]]');
+
+    expect(result).toMatchObject({
+      accepted: 1,
+      editedFiles: ['world-view/ai.md'],
+    });
+    expect(updated).toContain('Rune frames my AI operating model.');
+    expect(updated).not.toContain('Jarvis frames my AI operating model.');
+    expect(changelogIndex).toBeGreaterThanOrEqual(0);
+    expect(supersessionEntryIndex).toBeGreaterThan(changelogIndex);
+    expect(supersessionEntryIndex).toBeLessThan(olderEntryIndex);
+    expect(lines[supersessionEntryIndex + 1]).toMatch(/Jarvis\s*(?:->|to)\s*Rune/i);
+    expect(lines[supersessionEntryIndex + 1]).toMatch(/supersession/i);
+    expect(updated).not.toContain('## Supersession audit');
+
+    const records = readSupersessionAuditRecords();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual(expect.objectContaining({
+      timestamp: '2026-06-30T05:00:00.000Z',
+      status: 'accepted',
+      file: 'world-view/ai.md',
+      line: 3,
+      supersession: { from: 'Jarvis', to: 'Rune' },
+      before: 'Jarvis frames my AI operating model.',
+      after: 'Rune frames my AI operating model.',
+      rationale: 'current-state identity drift in worldview page',
+    }));
+  });
+
   it('logs ambiguous supersession candidates without editing the curated page or raw journal evidence', async () => {
     const ambiguousPage = [
       '# Runtime nickname',

@@ -64,10 +64,10 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- us function.
+- generic supersession audit section.
 
 Verified:
-- `npx vitest run src/kb/supersession-adjudicator.test.ts --configLoader runner`
 - `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner`
-- `npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner`
 - `npm run build`
+
+No commit made. Note: `src/kb/knowledge-supersession.test.ts` was already modified/staged in the branch; I only changed `src/kb/knowledge-supersession.ts`.
