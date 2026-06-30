@@ -1,3 +1,11 @@
+> **⚠️ OUTDATED (2026-06-30).** This runbook predates the standalone MCP
+> daemon. It targets the web process on `127.0.0.1:3847` with the legacy
+> `MCP_ISSUER_URL` env. The live setup now funnels `/mcp` + the OAuth
+> `.well-known` paths to the **standalone daemon on `127.0.0.1:3848`**
+> (launchd label `com.jarvis.rune-mcp`, env `RUNE_MCP_ISSUER_URL`,
+> consent-form secret `RUNE_MCP_SECRET`). Read for the surface contract and
+> recovery shape, not the exact ports/env/commands.
+
 # Tunnel runbook — exposing `/mcp` for the Claude App connector
 
 Project 16 Phase 2, task **remote-tunnel-exposure**. The tunnel is the ONLY

@@ -51,3 +51,8 @@ below it.
      The B4.2 reader (`readFiledIdeas` in src/intent/observation-ideas-io.ts)
      parses only the lines under this section header so user-authored ideas above
      never collide with loop-filed dedupe. -->
+
+- **Make wiki-compiler robust to recurring failures** — wiki-compiler agent fails 7+ times in 7 days
+- **Make observation-triage agent robust to failing inputs** — observation-triage agent fails 5+ times in 7d
+- **Make lenny-sync robust to repeated failures** — lenny-sync agent fails 3 times in 7 days
+- **Stabilize recurring agent-call failure bursts** — Agent-call failures recurring in bursts over 7 days
