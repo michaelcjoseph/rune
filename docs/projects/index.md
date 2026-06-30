@@ -24,7 +24,7 @@ its `spec.md`.
 | [16-claude-app-connector](16-claude-app-connector/spec.md) | Done | Make the Rune chat surface portable into the Claude App via a lean six-tool MCP connector, at zero cost to the vault → pipeline → KB funnel Rune still owns. |
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
 | [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
-| [19-rune-product-os](19-rune-product-os/spec.md) | Not Started | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, writer-as-product, knowledge freshness. |
+| [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Not Started | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 ---
 
@@ -381,15 +381,17 @@ The retired brand is not trademark-clean or distinctively ownable; **Rune** is t
 - **Non-goals:** no macOS account/home rename, no launchd label rename, no agent-filename renames, no history rewrite, no visual identity, no compatibility alias.
 - **Task breakdown & test plan:** see [tasks.md](18-rebrand-rune-to-rune/tasks.md) and [test-plan.md](18-rebrand-rune-to-rune/test-plan.md). Test-first per phase.
 
-## 19-rune-product-os — Not Started
+## 19-rune-product-os — Done
 
 [Spec](19-rune-product-os/spec.md)
+
+> Phases 1-5 + 7 merged to `main` 2026-06-29 (gate green). Phase 6 (Writing & Brand) was extracted to the michaelcjoseph.com `01-rune-writing-product` project — its deliverables live in a second repo that a single-repo orchestrated run can't write to. The rune-side writing engine (`/blog`, `/writing-critique`, pipeline) still landed here.
 
 The cockpit becomes a product operating system: every product Rune touches — external (aura, assay, relay, writing, brand) and internal (Rune, Rune MCP) — is a first-class entity sharing one spine, with internal/external as a top-level UI distinction. Four workstreams. The prior "full-vault warm index" project was one slice of W1; it lands here as Phase 2.
 
 - **W1 — MCP re-architecture:** split the MCP into a standalone, always-on service so cockpit restarts never force the Claude App to re-authenticate (Phase 1); hold the full vault + an in-memory index warm so deep search answers without timeouts, no vector DB (Phase 2, the carried-forward warm-index work); add journal-range pulls, link-following, tag/date queries, and a live metrics endpoint (Phase 3).
 - **W2 — Cockpit product-OS reframe:** make the existing three containers (projects/ideas/bugs; operations/runs; chat) product-aware, draw the internal/external line (Phase 4), and add a monitoring tab — internal-only (MCP call metrics + Rune run metrics read from the live endpoint), stubbed on external products (Phase 5).
-- **W4 — Writing & Brand:** `michaelcjoseph.com` becomes a two-product repo — Brand (existing root single-page app) + Writing (`/rune/{topic}` page per piece, Rune-orchestrated as work runs). Ideas migrate, workflow commands recreated, historical content stays in pkms, writing consumes pkms only via the MCP (Phase 6).
+- **W4 — Writing & Brand (Phase 6, EXTRACTED 2026-06-29):** moved to the michaelcjoseph.com `01-rune-writing-product` project — `michaelcjoseph.com` becomes a two-product repo (Brand + Writing `/rune/{topic}`), built as a separate writing-scoped run since a single-repo orchestrated run can't write a second repo. The rune-side engine (`/blog`, `/writing-critique`, writing pipeline) landed with this merge.
 - **W3 — Knowledge freshness:** a Rune-nightly reconciliation step that supersedes curated facts contradicted by newer journal entries; the in-flight Jarvis→Rune drift is the canonical proof case (Phase 7, parallelizable).
 - **Non-goals:** no vector DB, no external-product monitoring (stubs only), no migration of historical writing content.
 - **Task breakdown & test plan:** see [tasks.md](19-rune-product-os/tasks.md) and [test-plan.md](19-rune-product-os/test-plan.md). Test-first per phase.
