@@ -248,6 +248,19 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
     : [];
   const fullArgs = [...baseArgs, ...streamArgs, ...args];
 
+  // RUNE_WORKSPACE_DIR is governed solely by config.WORKSPACE_DIR: set it when
+  // configured, and strip any inherited value when not, so a spawned child never
+  // silently inherits the parent daemon's RUNE_WORKSPACE_DIR.
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    RUNE_PROJECT_ROOT: PROJECT_ROOT,
+  };
+  if (config.WORKSPACE_DIR) {
+    childEnv.RUNE_WORKSPACE_DIR = config.WORKSPACE_DIR;
+  } else {
+    delete childEnv.RUNE_WORKSPACE_DIR;
+  }
+
   return new Promise((resolve) => {
     const child = spawn(CLAUDE_BIN, fullArgs, {
       cwd: writeScope?.cwd ?? config.VAULT_DIR,
@@ -255,11 +268,7 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
       // Expose PROJECT_ROOT so agents that shell out can locate the Rune
       // repo (cwd is the vault). Needed for the intent-scan cron-dogfood
       // agent, which runs `npm run intent-scan` from the project root.
-      env: {
-        ...process.env,
-        RUNE_PROJECT_ROOT: PROJECT_ROOT,
-        ...(config.WORKSPACE_DIR ? { RUNE_WORKSPACE_DIR: config.WORKSPACE_DIR } : {}),
-      },
+      env: childEnv,
     });
 
     activeProcesses.add(child);
