@@ -40,12 +40,12 @@ describe('confirm-no-topics-voice-commands', () => {
     }
   });
 
-  it('keeps pkms topics and voice content covered by the writing migration tasks', () => {
-    const tasks = readProjectFile('docs/projects/19-rune-product-os/tasks.md');
+  it('keeps pkms topics and voice content covered by the writing migration code', () => {
+    // The migration is planned in the extracted writing-product project
+    // (michaelcjoseph.com docs/projects/01-rune-writing-product), not project 19's
+    // tasks.md. The substantive rune-side proof is that the orchestration code carries
+    // the topics/voice source→destination paths.
     const writingPlan = readProjectFile('src/jobs/writing-product-orchestration.ts');
-
-    expect(tasks).toMatch(/\*\*writing-ideas-migration\*\*[\s\S]*writing\/topics\.md/);
-    expect(tasks).toMatch(/\*\*voice-guidelines-copy\*\*[\s\S]*writing\/voice\.md/);
 
     expect(writingPlan).toContain("sourceVaultPath: 'writing/topics.md'");
     expect(writingPlan).toContain("destinationRepoPath: 'docs/rune/writing-ideas.md'");
