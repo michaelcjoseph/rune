@@ -52,6 +52,18 @@ interface KnowledgeSupersessionModule {
   }) => Promise<SupersessionResult>;
 }
 
+interface KnowledgeSupersessionCandidateFinderModule {
+  findSupersessionCandidates: (opts: {
+    vaultDir: string;
+    now: string;
+    supersessions: Array<{
+      from: string;
+      to: string;
+      aliases?: string[];
+    }>;
+  }) => SupersessionCandidate[];
+}
+
 async function requireKnowledgeSupersessionModule(): Promise<KnowledgeSupersessionModule> {
   const specifier = './knowledge-supersession' + '.js';
   try {
@@ -63,6 +75,20 @@ async function requireKnowledgeSupersessionModule(): Promise<KnowledgeSupersessi
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     expect.fail(`src/kb/knowledge-supersession.ts implementation pending: ${message}`);
+  }
+}
+
+async function requireKnowledgeSupersessionCandidateFinder(): Promise<KnowledgeSupersessionCandidateFinderModule> {
+  const specifier = './knowledge-supersession' + '.js';
+  try {
+    const mod = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>;
+    if (typeof mod.findSupersessionCandidates === 'function') {
+      return mod as unknown as KnowledgeSupersessionCandidateFinderModule;
+    }
+    expect.fail('src/kb/knowledge-supersession.ts must export findSupersessionCandidates(opts)');
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    expect.fail(`src/kb/knowledge-supersession.ts candidate finder implementation pending: ${message}`);
   }
 }
 
@@ -96,6 +122,15 @@ async function runJarvisRuneReconciliation(
   });
 }
 
+async function findJarvisRuneCandidates(): Promise<SupersessionCandidate[]> {
+  const { findSupersessionCandidates } = await requireKnowledgeSupersessionCandidateFinder();
+  return findSupersessionCandidates({
+    vaultDir: vaultRoot,
+    now: '2026-06-30T05:00:00.000Z',
+    supersessions: [{ from: 'Jarvis', to: 'Rune', aliases: ['jrv'] }],
+  });
+}
+
 describe('kb/knowledge-supersession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -105,6 +140,106 @@ describe('kb/knowledge-supersession', () => {
 
   afterAll(() => {
     rmSync(vaultRoot, { recursive: true, force: true });
+  });
+
+  describe('deterministic candidate finder', () => {
+    it('finds token and alias matches in curated pages while leaving raw journals as evidence only', async () => {
+      writeVaultFile('knowledge/runtime-identity.md', [
+        '---',
+        'last-verified: 2026-05-15',
+        '---',
+        '# Runtime identity',
+        '',
+        'Jarvis owns the product-team orchestration loop.',
+        '',
+      ].join('\n'));
+      writeVaultFile('pages/psychology.md', [
+        '# Psychology',
+        '',
+        'The operator still refers to jrv in a current setup note.',
+        '',
+      ].join('\n'));
+      writeVaultFile('journals/2026_06_20.md', [
+        '# 2026-06-20',
+        '',
+        'The product identity is Rune now, not Jarvis.',
+        'Raw journal note: Jarvis appeared in old scratch text.',
+        '',
+      ].join('\n'));
+
+      const candidates = await findJarvisRuneCandidates();
+
+      expect(candidates.map((candidate) => `${candidate.file}:${candidate.line}`)).toEqual([
+        'knowledge/runtime-identity.md:6',
+        'pages/psychology.md:3',
+      ]);
+      expect(candidates).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          file: 'knowledge/runtime-identity.md',
+          line: 6,
+          text: 'Jarvis owns the product-team orchestration loop.',
+          supersession: { from: 'Jarvis', to: 'Rune' },
+          newerSources: expect.arrayContaining([
+            expect.objectContaining({
+              file: 'journals/2026_06_20.md',
+              content: expect.stringContaining('Rune now, not Jarvis'),
+            }),
+          ]),
+        }),
+        expect.objectContaining({
+          file: 'pages/psychology.md',
+          line: 3,
+          text: 'The operator still refers to jrv in a current setup note.',
+          supersession: { from: 'Jarvis', to: 'Rune' },
+          newerSources: expect.arrayContaining([
+            expect.objectContaining({
+              file: 'journals/2026_06_20.md',
+              content: expect.stringContaining('Rune now, not Jarvis'),
+            }),
+          ]),
+        }),
+      ]));
+      expect(candidates.some((candidate) => candidate.file.startsWith('journals/'))).toBe(false);
+    });
+
+    it('does not surface free-prose semantic contradictions when the superseded identity token is absent', async () => {
+      writeVaultFile('knowledge/current-status.md', [
+        '# Current status',
+        '',
+        'The assistant is still a Telegram-only personal helper.',
+        '',
+      ].join('\n'));
+      writeVaultFile('journals/2026_06_21.md', [
+        '# 2026-06-21',
+        '',
+        'Rune is now a product operating system rather than only a Telegram helper.',
+        '',
+      ].join('\n'));
+
+      const candidates = await findJarvisRuneCandidates();
+
+      expect(candidates).toEqual([]);
+    });
+
+    it('requires token boundaries so partial words and unrelated substrings are not rename candidates', async () => {
+      writeVaultFile('knowledge/integration-notes.md', [
+        '# Integration notes',
+        '',
+        'The marjarvis-plugin fixture is unrelated.',
+        'A jarvisian naming style in a historical joke is unrelated.',
+        '',
+      ].join('\n'));
+      writeVaultFile('journals/2026_06_22.md', [
+        '# 2026-06-22',
+        '',
+        'Rune replaced Jarvis as the current system identity.',
+        '',
+      ].join('\n'));
+
+      const candidates = await findJarvisRuneCandidates();
+
+      expect(candidates).toEqual([]);
+    });
   });
 
   it('supersedes a stale curated current-state fact when a newer journal names the new identity', async () => {

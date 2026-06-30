@@ -49,6 +49,12 @@ export interface KnowledgeSupersessionOptions {
   adjudicateCandidate: (candidate: SupersessionCandidate) => Promise<SupersessionDecision>;
 }
 
+export interface SupersessionCandidateFinderOptions {
+  vaultDir: string;
+  now: string;
+  supersessions: SupersessionTerm[];
+}
+
 interface MarkdownLine {
   file: string;
   line: number;
@@ -64,12 +70,11 @@ interface MarkdownLine {
 export async function runKnowledgeSupersessionReconciliation(
   opts: KnowledgeSupersessionOptions,
 ): Promise<SupersessionResult> {
-  const curatedFiles = listMarkdownFiles(opts.vaultDir, ['knowledge']);
-  const journalLines = readMarkdownLines(opts.vaultDir, listMarkdownFiles(opts.vaultDir, ['journals']));
-  const currentDate = parseDateOnly(opts.now);
+  const candidates = findSupersessionCandidates(opts);
+  const scannedFiles = listCuratedMarkdownFiles(opts.vaultDir).length;
 
   const result: SupersessionResult = {
-    scannedFiles: curatedFiles.length,
+    scannedFiles,
     candidates: 0,
     accepted: 0,
     rejected: 0,
@@ -83,58 +88,45 @@ export async function runKnowledgeSupersessionReconciliation(
   const unchangedFiles = new Set<string>();
   const detailParts: string[] = [];
 
-  for (const file of curatedFiles) {
+  const candidatesByFile = groupCandidatesByFile(candidates);
+
+  for (const [file, fileCandidates] of candidatesByFile) {
     const fullPath = join(opts.vaultDir, file);
     const original = readFileSync(fullPath, 'utf8');
     const hasTrailingNewline = original.endsWith('\n');
     const lines = original.split(/\r?\n/);
     if (hasTrailingNewline) lines.pop();
-    const lastVerified = extractLastVerified(original);
 
     let fileChanged = false;
 
-    for (let index = 0; index < lines.length; index++) {
-      const text = lines[index] ?? '';
-      for (const supersession of opts.supersessions) {
-        if (!containsToken(text, supersession.from, supersession.aliases)) continue;
+    for (const candidate of fileCandidates) {
+      const index = candidate.line - 1;
+      const text = lines[index] ?? candidate.text;
+      result.candidates++;
+      const decision = await opts.adjudicateCandidate({
+        ...candidate,
+        text,
+      });
 
-        const newerSources = findEvidence(journalLines, supersession, {
-          after: lastVerified,
-          onOrBefore: currentDate,
-        });
-        if (newerSources.length === 0) continue;
-
-        result.candidates++;
-        const decision = await opts.adjudicateCandidate({
-          file,
-          line: index + 1,
-          text,
-          supersession: {
-            from: supersession.from,
-            to: supersession.to,
-          },
-          newerSources,
-        });
-
-        if (decision.status === 'accepted') {
-          result.accepted++;
-          const replacement = decision.replacement ?? replaceToken(text, supersession);
-          if (replacement !== text) {
-            lines[index] = replacement;
-            fileChanged = true;
-          } else {
-            unchangedFiles.add(file);
-          }
-          detailParts.push(`accepted ${supersession.from}->${supersession.to} in ${file}`);
-        } else if (decision.status === 'rejected') {
-          result.rejected++;
-          unchangedFiles.add(file);
-          detailParts.push(`rejected ${supersession.from}->${supersession.to} in ${file}`);
+      const supersession = findSupersessionTerm(opts.supersessions, candidate.supersession);
+      if (decision.status === 'accepted') {
+        result.accepted++;
+        const replacement = decision.replacement ?? (supersession ? replaceToken(text, supersession) : text);
+        if (replacement !== text) {
+          lines[index] = replacement;
+          fileChanged = true;
         } else {
-          result.ambiguous++;
           unchangedFiles.add(file);
-          detailParts.push(`ambiguous ${supersession.from}->${supersession.to} in ${file}`);
         }
+        detailParts.push(`accepted ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
+      } else if (decision.status === 'rejected') {
+        result.rejected++;
+        unchangedFiles.add(file);
+        detailParts.push(`rejected ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
+      } else {
+        result.ambiguous++;
+        unchangedFiles.add(file);
+        detailParts.push(`ambiguous ${candidate.supersession.from}->${candidate.supersession.to} in ${file}`);
       }
     }
 
@@ -149,6 +141,76 @@ export async function runKnowledgeSupersessionReconciliation(
   result.unchangedFiles = [...unchangedFiles].sort();
   result.detail = detailParts.length > 0 ? detailParts.join('; ') : result.detail;
   return result;
+}
+
+export function findSupersessionCandidates(
+  opts: SupersessionCandidateFinderOptions,
+): SupersessionCandidate[] {
+  const curatedFiles = listCuratedMarkdownFiles(opts.vaultDir);
+  const journalLines = readMarkdownLines(opts.vaultDir, listMarkdownFiles(opts.vaultDir, ['journals']));
+  const currentDate = parseDateOnly(opts.now);
+  const candidates: SupersessionCandidate[] = [];
+
+  for (const file of curatedFiles) {
+    const fullPath = join(opts.vaultDir, file);
+    const original = readFileSync(fullPath, 'utf8');
+    const hasTrailingNewline = original.endsWith('\n');
+    const lines = original.split(/\r?\n/);
+    if (hasTrailingNewline) lines.pop();
+    const lastVerified = extractLastVerified(original);
+
+    for (let index = 0; index < lines.length; index++) {
+      const text = lines[index] ?? '';
+      for (const supersession of opts.supersessions) {
+        if (!containsToken(text, supersession.from, supersession.aliases)) continue;
+
+        const newerSources = findEvidence(journalLines, supersession, {
+          after: lastVerified,
+          onOrBefore: currentDate,
+        });
+        if (newerSources.length === 0) continue;
+
+        candidates.push({
+          file,
+          line: index + 1,
+          text,
+          supersession: {
+            from: supersession.from,
+            to: supersession.to,
+          },
+          newerSources,
+        });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function listCuratedMarkdownFiles(root: string): string[] {
+  return [
+    ...listMarkdownFiles(root, ['knowledge']).filter((file) => !file.startsWith('knowledge/raw/')),
+    ...listMarkdownFiles(root, ['pages']),
+    ...listMarkdownFiles(root, ['projects']),
+    ...listMarkdownFiles(root, ['world-view']),
+  ].sort();
+}
+
+function groupCandidatesByFile(candidates: SupersessionCandidate[]): Map<string, SupersessionCandidate[]> {
+  const grouped = new Map<string, SupersessionCandidate[]>();
+  for (const candidate of candidates) {
+    const fileCandidates = grouped.get(candidate.file) ?? [];
+    fileCandidates.push(candidate);
+    grouped.set(candidate.file, fileCandidates);
+  }
+  return grouped;
+}
+
+function findSupersessionTerm(
+  terms: SupersessionTerm[],
+  supersession: SupersessionCandidate['supersession'],
+): SupersessionTerm | null {
+  return terms.find((term) => term.from === supersession.from && term.to === supersession.to) ?? null;
 }
 
 function listMarkdownFiles(root: string, segments: string[]): string[] {
@@ -206,7 +268,7 @@ function findEvidence(
       if (line.date === null) return false;
       if (bounds.after !== null && line.date <= bounds.after) return false;
       if (bounds.onOrBefore !== null && line.date > bounds.onOrBefore) return false;
-      return containsToken(line.content, supersession.to) && containsToken(line.content, supersession.from, supersession.aliases);
+      return containsToken(line.content, supersession.to);
     })
     .map((line) => ({ file: line.file, line: line.line, content: line.content }));
 }

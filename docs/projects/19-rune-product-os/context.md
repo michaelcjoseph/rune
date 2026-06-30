@@ -64,6 +64,7 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- didates assert audit logging without edits, and raw journals are checked byte-for-byte unchanged.
-
-Verification: `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner` is red as expected for this test-first task: 5 passed, 2 failed on the missing audit/changelog implementation.
+- :
+- `npx vitest run src/kb/knowledge-supersession.test.ts --configLoader runner -t "deterministic candidate finder"`: passed
+- `npm run build`: passed
+- Full `src/kb/knowledge-supersession.test.ts`: 8 passed, 2 failed on audit/changelog behavior, which is outside this selected candidate-finder task.
