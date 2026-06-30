@@ -494,7 +494,7 @@ describe('vault/sessions', () => {
       expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
     });
 
-    it('states edit capability (but no shell) when writeEnabled, and defers running to a work run', () => {
+    it('states edit + run capability (Bash) with a hard vault-write boundary when writeEnabled', () => {
       const prompt = buildSessionSystemPrompt({
         scope: runeScope,
         productContext: runeContext,
@@ -502,13 +502,15 @@ describe('vault/sessions', () => {
         writeEnabled: true,
       });
 
-      // Can edit code in the repo.
+      // Can read, edit, and run code in the repo.
       expect(prompt).toMatch(/\bedit\b/i);
       expect(prompt).toContain('Edit');
       expect(prompt).toContain('Write');
-      // No shell in chat (hard vault-write guard) — running goes via a work run.
-      expect(prompt).not.toContain('Bash');
-      expect(prompt).toMatch(/no shell|dispatch a work run|work run/i);
+      expect(prompt).toContain('Bash');
+      expect(prompt).toMatch(/run|build|test/i);
+      // Bash is unsandboxed, so the vault boundary is an explicit, emphatic
+      // instruction: never write the vault (or outside the repo), even via Bash.
+      expect(prompt).toMatch(/never[^\n]*write[^\n]*(vault|outside)/i);
       // Vault remains read-only even when the repo is writable.
       expect(prompt).toMatch(/read-only/i);
     });

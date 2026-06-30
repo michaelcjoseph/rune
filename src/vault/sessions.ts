@@ -128,10 +128,10 @@ function buildProductIdentityPreamble(
     ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
     : `Your working repo is this product's repository.`;
   const capability = writeEnabled
-    ? `WORKING IN THIS REPO: You can read and edit code in this repo (Read/Edit/Write, plus repo_search/Glob/Grep). Make small, well-scoped edits directly. You have NO shell here and CANNOT write anywhere outside this repo — the vault and other repos are read-only (vault via the rune-kb MCP). To run builds/tests/git, or for anything multi-step or risky, dispatch a work run instead of hand-editing; restate the product and the target, and get the user's go before dispatching.`
+    ? `WORKING IN THIS REPO: You can read, edit, and run code in this repo (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). Make well-scoped edits and run builds/tests/git directly here. HARD BOUNDARY: NEVER write to the vault or anything outside this repo — not even via Bash. The vault is a separately-managed store reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If the user asks you to save something to the vault/journal/notes/KB, do NOT do it by hand — tell them which slash command or flow owns that write.`
     : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
   const actLine = writeEnabled
-    ? `For development questions and small edits, act directly: read the repo and make the change.`
+    ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make the change, run the check.`
     : `For development and factual questions, answer directly from the repo.`;
   return `You are Rune, the development agent for the ${product} product. ${repoSentence} ${actLine}
 

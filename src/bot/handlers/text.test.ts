@@ -1445,18 +1445,19 @@ describe('dispatchText — product-scoped webview sessions', () => {
     // Writes are hard-confined to the product repo: the blanket workspace
     // add-dir is replaced with exactly the repo, keeping the vault unwritable.
     expect(options.writableRoots).toEqual(['/workspace/rune']);
-    // Write-enabled: Edit/Write available, but NO Bash (hard vault-write guard).
+    // Write-enabled: Edit/Write/Bash available. Edit/Write are hard-confined to
+    // the repo via writableRoots; Bash's vault boundary is a prompt instruction.
     expect(options.allowedTools).toEqual(expect.arrayContaining([
       'Read',
       'Glob',
       'Grep',
       'Edit',
       'Write',
+      'Bash',
       'mcp__rune-kb__repo_search',
       'mcp__rune-kb__kb_query',
       'mcp__rune-kb__kb_search',
     ]));
-    expect(options.allowedTools).not.toContain('Bash');
     expect(options.allowedTools).not.toContain(retiredMcpTool('repo_search'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_query'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_search'));

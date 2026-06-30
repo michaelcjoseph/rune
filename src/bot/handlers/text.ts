@@ -463,18 +463,21 @@ const CONVERSATION_TOOLS = [
   'mcp__rune-kb__kb_stats',
 ];
 
-// A write-enabled PRODUCT chat: Rune edits the product repo directly. Adds
-// Edit/Write to the read set but deliberately OMITS Bash — Bash bypasses the
-// filesystem allowlist under --dangerously-skip-permissions and could write the
-// vault, so the vault-write guarantee stays hard. Running builds/tests/git goes
-// through a dispatched work run instead. Writes are confined to the product repo
-// by the spawn (cwd + writableRoots = the repo; vault read-only via rune-kb).
+// A write-enabled PRODUCT chat: Rune is a development agent for the active
+// product. Edit/Write are HARD-confined to the product repo by the spawn
+// (cwd + writableRoots = the repo). Bash runs builds/tests/git; it is NOT
+// bounded by the filesystem allowlist (it has full OS permissions under
+// --dangerously-skip-permissions), so the vault-write boundary for Bash is an
+// emphatic prompt instruction (see buildProductIdentityPreamble) plus the
+// vault's git recoverability — not an OS-level guarantee. The vault stays
+// read-only via the rune-kb MCP.
 const PRODUCT_CHAT_TOOLS = [
   'Read',
   'Glob',
   'Grep',
   'Edit',
   'Write',
+  'Bash',
   'WebSearch',
   'WebFetch',
   'mcp__rune-kb__repo_search',
