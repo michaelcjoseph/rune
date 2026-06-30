@@ -131,6 +131,14 @@ function makeDeps(overrides: Partial<WritingPipelineDeps> = {}) {
   return { deps, events, toolCalls, writes, commits };
 }
 
+const PLANTED_PRIVATE_MARKER = 'ZZ_PRIVATE_MARKER_DO_NOT_PUBLISH';
+const RAW_JOURNAL_EXCERPT = 'raw journal excerpt: therapy sleep score was 47 after a private family call';
+const PRIVATE_IDENTIFIER = 'PRIVATE_PERSON_ALPHA';
+const PRIVATE_HEALTH_DETAIL = 'health-specific detail: recovery strain note 18.9';
+const PRIVATE_PSYCHOLOGY_DETAIL = 'psychology-specific detail: attachment trigger inventory';
+const PRIVATE_VAULT_IDENTIFIER = 'PRIVATE_VAULT_SOURCE_ALPHA';
+const PRIVATE_WIKILINK_DETAIL = 'health-specific detail: wikilink recovery score 12';
+
 describe('writing-pipeline-core', () => {
   it('declares the operations/runs states exactly as the writing product contract', async () => {
     const { WRITING_PIPELINE_STATES } = await requireWritingPipeline();
@@ -199,6 +207,98 @@ describe('writing-pipeline-core', () => {
     expect(deps.directPkms?.readFile).not.toHaveBeenCalled();
     expect(deps.directPkms?.writeFile).not.toHaveBeenCalled();
     expect(writes.map((write) => write.content).join('\n')).not.toContain('ZZ_PRIVATE_MARKER_DO_NOT_PUBLISH');
+  });
+
+  it('does not commit published writing that copies private research source material verbatim', async () => {
+    const { runWritingPipeline } = await requireWritingPipeline();
+    const { deps, writes, commits } = makeDeps({
+      mcp: {
+        callTool: vi.fn(async (name: string) => {
+          if (name === 'vault_search') {
+            return {
+              results: [
+                {
+                  file: 'knowledge/private-writing-seed.md',
+                  line: 7,
+                  content: `private identifier: ${PRIVATE_VAULT_IDENTIFIER}`,
+                },
+              ],
+            };
+          }
+          if (name === 'journal_range') {
+            return {
+              entries: [
+                {
+                  file: 'journals/2026_06_29.md',
+                  content: [
+                    `${PLANTED_PRIVATE_MARKER} planted in a private journal source`,
+                    RAW_JOURNAL_EXCERPT,
+                    `third-party personal name: ${PRIVATE_IDENTIFIER}`,
+                    PRIVATE_HEALTH_DETAIL,
+                    PRIVATE_PSYCHOLOGY_DETAIL,
+                  ].join('\n'),
+                },
+              ],
+            };
+          }
+          if (name === 'follow_wikilinks') {
+            return {
+              results: [
+                {
+                  targetFile: 'pages/psychology.md',
+                  content: PRIVATE_WIKILINK_DETAIL,
+                },
+              ],
+            };
+          }
+          return { results: [] };
+        }),
+      },
+      model: {
+        plan: vi.fn(async () => ({ outline: 'Synthesize the private source into a public argument.' })),
+        draft: vi.fn(async () => ({ markdown: '# Operating from memory\n\nDraft.' })),
+        critique: vi.fn(async () => ({ notes: 'Remove private source material before publishing.' })),
+        revise: vi.fn(async () => ({
+          markdown: [
+            '# Operating from memory',
+            '',
+            'A public synthesized paragraph.',
+            PLANTED_PRIVATE_MARKER,
+            RAW_JOURNAL_EXCERPT,
+            `I spoke with ${PRIVATE_IDENTIFIER} about this.`,
+            PRIVATE_HEALTH_DETAIL,
+            PRIVATE_PSYCHOLOGY_DETAIL,
+            `private identifier: ${PRIVATE_VAULT_IDENTIFIER}`,
+            PRIVATE_WIKILINK_DETAIL,
+          ].join('\n'),
+        })),
+      },
+    });
+
+    const result = await runWritingPipeline(
+      { topic: 'Operating from memory', requestedBy: 'blog' },
+      deps,
+    );
+
+    expect(result).toMatchObject({ state: 'committed', committed: true });
+    expect(commits).toEqual([
+      expect.objectContaining({
+        branch: 'rune-writing/operating-from-memory',
+        paths: ['docs/rune/operating-from-memory.md'],
+      }),
+    ]);
+
+    const committedArtifact = writes
+      .filter((write) => commits[0]?.paths.includes(write.path))
+      .map((write) => write.content)
+      .join('\n');
+    expect(committedArtifact).not.toContain(PLANTED_PRIVATE_MARKER);
+    expect(committedArtifact).not.toContain(RAW_JOURNAL_EXCERPT);
+    expect(committedArtifact).not.toContain(PRIVATE_IDENTIFIER);
+    expect(committedArtifact).not.toContain(PRIVATE_HEALTH_DETAIL);
+    expect(committedArtifact).not.toContain(PRIVATE_PSYCHOLOGY_DETAIL);
+    expect(committedArtifact).not.toContain(PRIVATE_VAULT_IDENTIFIER);
+    expect(committedArtifact).not.toContain(PRIVATE_WIKILINK_DETAIL);
   });
 
   it('surfaces failed and does not commit when a pipeline stage throws', async () => {

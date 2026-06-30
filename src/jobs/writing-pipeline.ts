@@ -58,6 +58,12 @@ type WritingPipelineTarget = {
   artifactPath: string;
 };
 
+type WritingPipelineResearch = {
+  vaultSearch: unknown;
+  journalRange: unknown;
+  wikilinks: unknown;
+};
+
 function targetForTopic(topic: string): WritingPipelineTarget {
   const slug = slugifyWritingIdentifier(topic);
   return {
@@ -68,10 +74,124 @@ function targetForTopic(topic: string): WritingPipelineTarget {
   };
 }
 
-function sanitizePublicMarkdown(markdown: string): string {
+function objectValue(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+function collectSourceTexts(source: unknown): string[] {
+  const texts: string[] = [];
+  const seenObjects = new WeakSet<object>();
+
+  const collect = (value: unknown) => {
+    if (typeof value === 'string') {
+      texts.push(value);
+      const trimmed = value.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          collect(JSON.parse(trimmed));
+        } catch {
+          // Plain text MCP results are expected; only parse JSON-shaped payloads.
+        }
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collect(item);
+      }
+      return;
+    }
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+    if (seenObjects.has(value)) {
+      return;
+    }
+    seenObjects.add(value);
+
+    const content = objectValue(value, 'content') ?? objectValue(value, 'text') ?? objectValue(value, 'excerpt');
+    if (typeof content === 'string' || Array.isArray(content)) {
+      collect(content);
+    }
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collect(nested);
+    }
+  };
+
+  collect(source);
+  return texts;
+}
+
+function normalizedText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function collectPrivateSourceBoundaries(research: WritingPipelineResearch): {
+  fragments: Set<string>;
+  normalizedFragments: Set<string>;
+  tokens: Set<string>;
+} {
+  const fragments = new Set<string>();
+  const normalizedFragments = new Set<string>();
+  const tokens = new Set<string>();
+
+  for (const sourceText of [
+    ...collectSourceTexts(research.vaultSearch),
+    ...collectSourceTexts(research.journalRange),
+    ...collectSourceTexts(research.wikilinks),
+  ]) {
+    for (const token of sourceText.matchAll(/\b(?:PRIVATE|ZZ)_[A-Z0-9_]+\b/g)) {
+      tokens.add(token[0]);
+    }
+
+    for (const rawLine of sourceText.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line.length < 8) {
+        continue;
+      }
+      fragments.add(line);
+      normalizedFragments.add(normalizedText(line));
+
+      const vaultSearchContent = line.match(/^[^:\n]+:\d+\s+[\u2014-]\s+(.+)$/)?.[1]?.trim();
+      if (vaultSearchContent && vaultSearchContent.length >= 8) {
+        fragments.add(vaultSearchContent);
+        normalizedFragments.add(normalizedText(vaultSearchContent));
+      }
+
+      const labeledPrivateValue = line.match(
+        /^(?:raw journal excerpt|third-party personal name|private identifier|private name|personal identifier|health-specific detail|psychology-specific detail)\s*:\s*(.+)$/i,
+      )?.[1]?.trim();
+      if (labeledPrivateValue && labeledPrivateValue.length >= 3) {
+        fragments.add(labeledPrivateValue);
+        normalizedFragments.add(normalizedText(labeledPrivateValue));
+      }
+    }
+  }
+
+  return { fragments, normalizedFragments, tokens };
+}
+
+function sanitizePublicMarkdown(markdown: string, research: WritingPipelineResearch): string {
+  const privateSource = collectPrivateSourceBoundaries(research);
+  const tokens = [...privateSource.tokens];
+  const fragments = [...privateSource.fragments];
+  const normalizedFragments = [...privateSource.normalizedFragments];
+
   return markdown
     .split('\n')
-    .filter((line) => !line.includes('ZZ_PRIVATE_MARKER_DO_NOT_PUBLISH'))
+    .filter((line) => {
+      if (tokens.some((token) => line.includes(token))) {
+        return false;
+      }
+      if (fragments.some((fragment) => line.includes(fragment))) {
+        return false;
+      }
+      const normalizedLine = normalizedText(line);
+      return !normalizedFragments.some((fragment) => normalizedLine.includes(fragment));
+    })
     .join('\n')
     .trimEnd() + '\n';
 }
@@ -141,7 +261,7 @@ export async function runWritingPipeline(
       critique: critique.notes,
       routePath: target.routePath,
     });
-    const publicMarkdown = sanitizePublicMarkdown(revision.markdown);
+    const publicMarkdown = sanitizePublicMarkdown(revision.markdown, research);
     await deps.writeArtifact(target.artifactPath, publicMarkdown);
 
     emit('ready-for-review');
