@@ -164,7 +164,14 @@ A separable curation-pipeline workstream. When a new journal entry contradicts a
 - Each auto-edit appends a concise inline changelog entry to the touched wiki/curated page and appends a machine-readable record to `knowledge/supersessions.jsonl`.
 - The in-flight Jarvis→Rune rename is the canonical proof case. Update the pkms instruction files (`CLAUDE.md` / `AGENTS.md`) from Jarvis to Rune, leave raw journal mentions untouched, and use the remaining curated-page drift as the reconciliation fixture.
 
-### W4 — Writing & Brand (`michaelcjoseph.com`)
+### W4 — Writing & Brand (`michaelcjoseph.com`) — EXTRACTED 2026-06-29
+
+> This workstream was split into its own project: `michaelcjoseph.com`
+> `docs/projects/01-rune-writing-product`. Its deliverables live in the `michaelcjoseph.com`
+> repo, which a `rune`-scoped orchestrated run structurally cannot write to — the cause of the
+> project-19 run's Phase 6 false-complete (see `docs/projects/bugs.md`). The narrative below is
+> retained as the original rationale; the live plan, tasks, and acceptance now live in the new
+> project, which executes as two coordinated single-repo runs (rune engine, then michaelcjoseph.com site).
 
 Writing becomes a product Rune orchestrates, publishing to the personal site. This is **only viable because of W1**: writing leans hard on the KB (journals, worldview, playbook, Lenny, PG), and once the MCP is a standalone service reachable from any repo, writing content can live in `michaelcjoseph.com` while Rune still reaches back into pkms for source material.
 

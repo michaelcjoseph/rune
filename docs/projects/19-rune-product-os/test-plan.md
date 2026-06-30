@@ -100,22 +100,12 @@ test-plan sections pass.
 - [ ] 🟡 Polling runs once per second only while the monitoring view is visible and stops when hidden/unmounted.
 - [ ] 🔴 Integration verification: open `rune-mcp` monitoring, call a MCP tool, see counters update within roughly one second, stop the MCP daemon, and verify cockpit remains usable with degraded monitoring.
 
-## 6. Writing & Brand (W4 Phase 6)
+## 6. Writing & Brand (W4 Phase 6) — EXTRACTED
 
-- [ ] 🔴 Rune produces both `/rune` and `/rune/{topic}` pages in `michaelcjoseph.com` as a writing-product work run (drafting/publishing shows in the operations/runs container).
-- [ ] 🔴 `michaelcjoseph.com` hosts two products: Brand (root single-page app, identity unchanged) and Writing (`/rune` subtree).
-- [ ] 🟡 The writing surface shows ideas, draft/publish runs, and scoped chat; no projects/bugs.
-- [ ] 🔴 Forward-looking ideas migrate to `michaelcjoseph.com/docs/rune/writing-ideas.md`; historical content stays in pkms.
-- [ ] 🔴 `/blog` and `/writing-critique` are Rune commands backed by the specialized writing pipeline.
-- [ ] 🟡 `/topics` and `/voice` are confirmed to not exist as Rune commands/resolver destinations (they never did — this is a confirmation, not a removal); topics content comes from the migrated writing-ideas file, and voice guidance is copied into the writing product/pipeline from pkms `writing/voice.md`.
-- [ ] 🔴 Writing reads pkms source material only through the MCP (no direct pkms file access from `michaelcjoseph.com`).
-- [ ] 🔴 Published-content privacy boundary: a planted private marker placed in a journal source does **not** appear in the committed published artifact; pkms material is synthesized, never copied verbatim.
-- [ ] 🔴 Writing branches use `rune-writing/{slug}`; `/blog <topic>` resumes an existing topic branch when present and starts one otherwise.
-- [ ] 🔴 Writing operations/runs surface `researching`, `drafting`, `critiquing`, `revising`, `ready-for-review`, `committed`, and `failed`.
-- [ ] 🟡 `/writing-critique <target>` writes critique output to `docs/rune/critiques/<target-slug>.md` by default; revisions require explicit user request and stay on the same writing branch.
-- [ ] 🔴 V1 publish means committed to the writing branch; no external deployment is required.
-- [ ] 🔴 *(assertable)* Integration verification: trigger `/blog`, observe a writing work run reach a terminal state, and verify the resulting `rune-writing/{slug}` branch in `michaelcjoseph.com` contains the `/rune` page, first `/rune/{topic}` page, copied voice guidance, and writing ideas file.
-- [ ] 🟡 **(manual/live gate)** The generated prose quality ("Rune describes itself well") is judged manually; it is not an automated assertion. Requires the cross-repo working-directory prerequisite (`~/workspace/michaelcjoseph.com` writable by the agent).
+> **Moved 2026-06-29** to `michaelcjoseph.com` `docs/projects/01-rune-writing-product/test-plan.md`.
+> These criteria assert artifacts in the `michaelcjoseph.com` repo, which a `rune`-scoped
+> orchestrated run cannot produce. They now run against a `writing`-scoped run whose worktree
+> is that repo. See the bugs file for why the original phase false-completed.
 
 ## 7. Knowledge-Freshness Reconciliation (W3 Phase 7)
 

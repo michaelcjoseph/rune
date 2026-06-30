@@ -118,35 +118,16 @@ Not started. See [spec.md](spec.md) for the workstreams and [test-plan.md](test-
 - [ ] **monitoring-polling-lifecycle** — Poll once per second while the monitoring view is visible; stop polling when hidden/unmounted; show last-updated time and degraded state when MCP is unreachable.
 - [ ] **user-reachability-check** — With MCP running, open `rune-mcp` monitoring and watch counters change after an MCP tool call; stop MCP and verify cockpit remains usable with degraded monitoring.
 
-## Phase 6 — Writing & Brand surfaces + migration (W4)
+## Phase 6 — Writing & Brand surfaces + migration (W4) — EXTRACTED
 
-> Depends on: Phase 3 (standalone MCP reachable cross-repo), Phase 4 (product surfaces).
-
-### Tests (write first)
-
-- [ ] Write the suite/checks for **writing-product-orchestration** — test-plan.md §6: Rune produces a `/rune/{topic}` page in `michaelcjoseph.com` as a work run; the writing surface shows ideas, draft/publish runs, and scoped chat.
-- [ ] Write the checks for **writing-migration-boundary** — test-plan.md §6: ideas migrate; historical content stays in pkms; `/blog` and `/writing-critique` are the writing commands; `/topics` and `/voice` are retired as standalone commands; writing reads pkms only via the MCP.
-- [ ] Write the suite for **writing-commands** — test-plan.md §6: `/blog` and `/writing-critique` route to the writing product pipeline; `/topics` and `/voice` are not separate Rune commands; voice guidelines are copied into the writing product and used by the pipeline.
-- [ ] Confirm red before implementation.
-
-### Implementation
-
-- [ ] **michaelcjoseph-route-survey** — Lead-in (do first in this phase): read `michaelcjoseph.com`'s Next.js structure (`src/`, routing) and settle the concrete `/rune` and `/rune/{topic}` route/page convention (app-router vs pages-router, file locations, slug handling). Record the decision in this project's docs so the artifact tasks below are concrete. Resolves Open Question #2. No human decision required — it is read-and-decide against the real repo.
-- [ ] **michaelcjoseph-product-config** — Complete the `brand` and `writing` entries in `policies/products.json` (started in Phase 4): add the shared `michaelcjoseph.com` repoPath, baseBranch, work-run support, validation commands, and scoped credentials/egress settings. Confirm the writing work run inherits standard sandbox credential isolation (`src/jobs/credential-injector.ts`) — only `writing`'s own credentials reach the child, never Rune's secrets.
-- [ ] **michaelcjoseph-two-product-repo** — Expand `michaelcjoseph.com` to host Brand (existing root single-page app, unchanged identity) and Writing (a new `/rune` subtree with `/rune` and `/rune/{topic}` pages). Preserve the root brand app.
-- [ ] **writing-ideas-migration** — Create `michaelcjoseph.com/docs/rune/writing-ideas.md`, migrate forward-looking topics from pkms `writing/topics.md`, leave historical blog content in pkms, and update Rune's writing surface to read ideas from the new file.
-- [ ] **voice-guidelines-copy** — Copy the current voice guidelines into the writing product as an owned input to the writing pipeline. `/voice` is not recreated as a standalone Rune command.
-- [ ] **writing-pipeline-core** — Build a specialized writer pipeline that plans, drafts, critiques, revises, and commits writing artifacts as a work run against the `writing` product. It must read pkms only through MCP tools and must not use direct pkms file access. Surface pipeline states in operations/runs: `researching`, `drafting`, `critiquing`, `revising`, `ready-for-review`, `committed`, and `failed`.
-- [ ] **writing-personal-content-boundary** — Enforce the published-content privacy boundary (spec "Writer pipeline contract"): pkms material is source for synthesis, never copied verbatim into a published page; published artifacts must not surface raw journal excerpts, private identifiers, health/psychology specifics, or third-party personal names unless the topic is explicitly public-shareable. Required negative test: a planted private marker placed in a journal source must not appear in the committed published artifact.
-- [ ] **writing-branch-contract** — Use deterministic writing branches under `rune-writing/{slug}`. `/blog <topic>` starts a new branch when none exists for the topic and resumes the existing topic branch when one exists. V1 "publish" means committed to the writing branch; no external deployment required.
-- [ ] **blog-command-replacement** — Replace the existing `/blog` implementation (today `src/bot/commands/blog.ts` → `startReview(userId, 'blog')`) with a writing-product command that starts/resumes the specialized writer pipeline and produces/updates `/rune/{topic}` artifacts in `michaelcjoseph.com`. Remove or redirect the old `blog` review type and its draft-write path so nothing dangles in the review registry, resolver metadata, or help text.
-- [ ] **writing-critique-command** — Add `/writing-critique <target>` as a Rune command scoped to the writing product. It critiques an existing draft/page using the copied voice guidelines and MCP-sourced context. By default, critique output lands next to the target under `docs/rune/critiques/<target-slug>.md`; if the user explicitly asks for revision, the command writes a revision commit on the same `rune-writing/{slug}` branch.
-- [ ] **confirm-no-topics-voice-commands** — `/topics` and `/voice` do **not** exist as Rune commands today (verified: not in `src/bot/commands/`, command table, or review types). This task is a confirmation, not a removal: assert no `/topics`/`/voice` command or resolver destination exists or is added, and that today's pkms `writing/topics.md` content is covered by `writing-ideas-migration` and `writing/voice.md` by `voice-guidelines-copy`. Do not write code to "retire" a command that does not exist.
-- [ ] **writing-v1-artifacts** *(assertable + live gate)* — Produce the v1 acceptance branch containing `/rune` (Rune describes itself) and `/rune/{topic}` (first Rune-authored piece), both committed in `michaelcjoseph.com`. Assertable: the branch exists and contains the two committed pages, the copied voice guidelines, and the writing-ideas file. The **quality** of the generated prose ("describes itself well") is a **manual/live gate**, not an automated assertion.
-- [ ] **writing-brand-surfaces** — Wire both products into the cockpit product-OS: writing's ideas/runs/chat containers; brand's standard three containers over the existing single-page app.
-- [ ] **user-reachability-check** *(assertable half)* — From cockpit or Telegram, trigger `/blog` for the writing product, observe the work run reach a terminal state, and verify (assertable) the `rune-writing/{slug}` branch in `michaelcjoseph.com` contains the two required pages. The live judgment of output quality is the **manual/live gate** above.
-
-> **Environment prerequisite for this phase:** `michaelcjoseph.com` (`~/workspace/michaelcjoseph.com`) is a separate repo outside the `rune` working tree. Cross-repo edits require the executing harness/agent to have that path as a permitted working directory, or Phase 6 file writes will fail on a permission boundary. Confirm before starting.
+> **Extracted 2026-06-29 to its own project:** `michaelcjoseph.com`
+> `docs/projects/01-rune-writing-product`. Phase 6's deliverables live in the
+> `michaelcjoseph.com` repo, which a `rune`-scoped orchestrated run cannot write to
+> (single-repo worktree). The original run silently false-completed this phase by
+> committing assertion tests against the empty target; see `docs/projects/bugs.md`.
+> The writing product is planned and tracked in that repo's project now, including the
+> rune-side engine work (writer pipeline, `/blog` + `/writing-critique`, products.json,
+> cockpit surfaces) as its Phase A dependency. Do not re-run Phase 6 from this project.
 
 ## Phase 7 — Knowledge-freshness reconciliation (W3)
 

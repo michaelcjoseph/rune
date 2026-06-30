@@ -1,5 +1,44 @@
 ## Active
 
+<!-- The five entries below were surfaced by the 2026-06-29 investigation of the
+     project-19 orchestrated run (run 977f0f40-cce2-4b9f-87e9-b2464f93880d). The run
+     marked all tasks complete but the gate held at branch-complete on tests-red,
+     because Phase 6's deliverables targeted a second repo (michaelcjoseph.com) the
+     single-repo worktree model cannot write to. See the forensics inline. -->
+
+- [ ] Orchestrated runs are single-repo, but a project can carry tasks whose deliverables live in a *different* product's repo — those tasks have no way to land and "complete" by writing assertion tests instead. **The core defect behind the project-19 Phase 6 false-complete.**
+  - **Issue**
+    - An orchestrated run is bound to exactly one product worktree. `createWorktree` resolves a single `product.repoPath` (`src/jobs/sandbox-runtime.ts:272,~355`) and every `git add`/`commit`/`merge`/`push` runs with `cwd = sandbox.worktree` (`src/jobs/orchestrated-work-runner.ts:283,333,361-363,1097-1141`). There is **no code path** that opens a second repo for an agent task.
+    - Project 19 ran scoped to product `rune`, so its worktree was the rune checkout. But Phase 6's real deliverables lived in `michaelcjoseph.com` (registered as products `writing`/`brand`, `repoPath: ~/workspace/michaelcjoseph.com`): a `/rune` App Router subtree, `docs/rune/writing-{ideas,voice}.md`, and a `rune-writing/{slug}` branch. The run could not write any of them.
+    - Faced with an unreachable target, the team did the only thing it structurally could inside the rune worktree: it authored acceptance **tests** that *assert* the external artifacts exist (`michaelcjosephRepo()` reads the path from `policies/products.json`), ticked the `tasks.md` boxes, and closed out. The five Phase 6 closeout commits (`3d04f9b`, `f07bfb9`, `94346cf`, `36e51bb`, `4dc4eb2`) touched only rune-repo files — tasks.md, context.md, `policies/products.json`, and three `src/jobs/*.test.ts` files — never one file in michaelcjoseph.com.
+    - The run reported `outcome: branch-complete`, "44 commit(s), all original tasks checked." The gate then ran those tests against the empty target repo and held red. The gate was the **first** thing to execute the asserting tests; nothing earlier noticed the target was untouched.
+  - **Fix options** (A is prevention; B is the real capability)
+    - A. (planning guard) At plan/dispatch time, reject or split a project whose tasks name a `repoPath` other than the run's product. A task whose deliverable lives in another product's repo must be scoped to a run against *that* product. The test-plan even wrote the prerequisite in prose ("`~/workspace/michaelcjoseph.com` writable by the agent") — make it machine-enforced, not a comment.
+    - B. (capability) Support multi-repo projects as a sequence of single-repo runs (one per product), coordinated by the orchestrator, rather than one run that silently can't reach a second tree. Cross-product dependencies become explicit run ordering.
+    - C. (cheap backstop) A task that commits only `*.test.ts` under a phase whose description names file deliverables in another repo is suspicious — flag "tests-only against an external target" at closeout instead of accepting it as done.
+- [ ] Closeout accepts a task as "done" without ever running its committed tests; the reviewer downgrades unverifiable cross-repo assertions to warnings instead of blocking. The merge gate is the first thing to run the suite — far too late.
+  - **Issue**
+    - Phase 6 tasks closed out `outcome: ready-for-closeout`, `verdicts: {reviewer: pass-with-warnings}`, `gates: {objectionOpen: false}`, `transcriptIds: []` (no execution session — no cross-repo write was ever attempted). A task can self-certify complete by committing tests that assert work that was never performed.
+    - The reviewer *noticed*: on `michaelcjoseph-two-product-repo` it logged "neither can be verified from this diff (external michaelcjoseph.com repo), so the assumption rides into acceptance unchecked," and on `writing-ideas-migration` that the tests "couple CI to mutable external state." It recorded these as **low-severity warnings** and passed (`objectionOpen: false`) rather than opening a blocking objection.
+    - Nothing between closeout and the final merge gate runs the committed tests, so a green-by-construction task and a never-executed-against-target task are indistinguishable until the gate fires at the very end of the run.
+  - **Fix options**
+    - A. Run the task's own new tests at closeout (in the integration worktree) and refuse `ready-for-closeout` if they don't pass — move the gate's test execution to per-task, not just final merge.
+    - B. Make "I cannot verify this deliverable from the available diff/tree evidence" a blocking objection class, not a downgradeable warning, when the unverifiable target is the task's primary deliverable.
+- [ ] `cancelMutation` / the max-runtime ceiling kill is a no-op for a wedged orchestrated run — it sets an in-process flag the orchestration loop never reads and never signals the OS process tree.
+  - **Issue**
+    - `cancelMutation` only flips `handle.cancel()` → `cancelled = true; cancelReason` (`src/transport/mutations.ts:481-502`) and returns `{ok:true}`; it does not SIGTERM the child process tree. `planMaxRuntimeKills` calls `cancelMutation(run.id, 'system')` and logs `cancelled: result.ok` = true regardless of effect (`src/jobs/stall-check-runner.ts:190-198`).
+    - The orchestration loop (`runProjectOrchestration`, `src/intent/project-orchestrator.ts`) has no internal cancel/abort check; `apply()` reads `ctx.cancel()` only once before the loop starts (`orchestrated-work-runner.ts:846`). So a cancel that lands mid-run is observed by nothing.
+    - Confirmed: for run `977f0f40`, the max-runtime ceiling kill fired **305 times over ~2.5h** (every 30s), each logging `cancelled:true`, while the child kept executing tasks until it finished naturally at 02:10:37Z. The "kill" never killed anything.
+  - **Fix options**
+    - A. Make `cancelMutation` (or the max-runtime actuator) actually reap the process group — reuse the plain-work-run `killProcessTree` group-kill (SIGTERM→SIGKILL) the project-15 finalizer already has.
+    - B. Give `runProjectOrchestration` a cooperative cancel check between iterations (re-read `ctx.cancel()` each loop), so a flagged cancel interrupts the loop at the next task boundary even before a hard reap.
+- [ ] Cockpit shows a finalized run as still "running" / the project as "planned 0/84" — `registry.json` is not rebuilt after a run finalizes, so the project card reads pre-run state.
+  - **Issue**
+    - The project-card / home-pulse surface reads `logs/registry.json`. For run `977f0f40` that file's `builtAt` was `2026-06-29T21:24:36Z`, *before* the run started (21:38Z), and still listed `19-rune-product-os` as `status: planned, done: 0, total: 84`. Every live store (summary.json, cursor.json, supervised-runs.json, mutations.jsonl) correctly showed the run terminal. The "still running" the operator saw was a stale-display artifact, not a live process.
+  - **Fix:** rebuild (or invalidate) `registry.json` on run finalize so the cockpit reflects the terminal state and completed task counts.
+- [ ] `src/ai/claude.test.ts > WORKSPACE_DIR env passthrough > does not set RUNE_WORKSPACE_DIR when WORKSPACE_DIR is empty` fails on `main`, independent of any feature work.
+  - The branch `rune-work/19-rune-product-os` never touched this file (byte-identical to `main`), yet the test fails with `WORKSPACE_DIR` empty in the shell — so it fails on `main` too. Pre-existing/environmental (likely test-ordering or an env leak setting `RUNE_WORKSPACE_DIR`), but it reddens any gate run from a clean tree. Fix independently of project 19.
+
 - [ ] Nightly processing error. Observation loop — TypeError: readers.interactions is not a function or its return value is not iterable
 - [ ] Rune MCP server times out on complex `kb_query` requests, and serves `/mcp` from the same process + event loop as the webview — a heavy query degrades both. _(moved from ideas.md, 2026-06-22)_
   - **Issue** (two distinct roots — latency and isolation)
