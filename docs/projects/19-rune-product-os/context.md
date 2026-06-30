@@ -64,10 +64,6 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- an.
+-  not exist in `michaelcjoseph.com`.
 
-Verified:
-`npm exec -- vitest run src/bot/no-topics-voice-commands.test.ts src/bot/skill-registry.test.ts --reporter=verbose --configLoader runner`  
-Result: 2 test files passed, 23 tests passed.
-
-Also ran `git diff --check --cached` on the staged QA files; no whitespace issues. No commit made.
+No changes were left in `michaelcjoseph.com`; it is still clean on `main`. The Rune worktree only shows the pre-existing added QA test `src/jobs/writing-v1-artifacts.test.ts`. To complete this task, the session needs `michaelcjoseph.com` added as a writable root.
