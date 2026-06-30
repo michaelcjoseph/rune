@@ -1036,6 +1036,23 @@ export function createProductDeepView({
     restoreChatInput(chatInput);
   }
 
+  // Replace ONLY the Monitoring panel subtree. The monitoring poll runs once a
+  // second while the panel is open; routing it through the full render() (which
+  // assigns root.innerHTML) was blurring the chat composer, resetting the caret,
+  // dropping IME composition, and destroying any text selection elsewhere in the
+  // view on every tick. The monitoring <section> is self-contained and the click/
+  // submit/keydown handlers are delegated on root, so swapping its outerHTML
+  // leaves everything else — and the user's focus and selection — untouched.
+  // Fall back to a full render only if the node is somehow absent.
+  function renderMonitoringPanel() {
+    const node = root.querySelector?.('[data-surface="monitoring"]');
+    if (!node) {
+      render();
+      return;
+    }
+    node.outerHTML = renderMonitoring(current, monitoring);
+  }
+
   function stopMonitoringPoll() {
     if (monitoringPoller) {
       clearTimeout(monitoringPoller);
@@ -1065,7 +1082,7 @@ export function createProductDeepView({
       ...(mcpMetricsResult.ok && metricsState.error ? { error: metricsState.error } : {}),
       runMetrics: metricsState.runMetrics || runMetricsFromState(state),
     };
-    render();
+    renderMonitoringPanel();
   }
 
   function scheduleMonitoringPoll() {

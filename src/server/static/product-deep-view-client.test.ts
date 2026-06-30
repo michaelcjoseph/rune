@@ -19,6 +19,22 @@ function makeRoot() {
   };
   const chatSurface = { scrollIntoView: vi.fn() };
   const chatInput = { value: '', focus: vi.fn() };
+  // Models a real outerHTML replacement of the self-contained monitoring
+  // <section> (no nested <section>, so the first following </section> closes it).
+  // Splicing html directly — instead of going through the root innerHTML setter —
+  // mirrors the production scoped repaint: the rest of the tree, including the
+  // chat composer, is left untouched (chatInput.value is NOT reset).
+  const monitoringNode = {
+    scrollIntoView: vi.fn(),
+    set outerHTML(next: string) {
+      const attrIdx = html.indexOf('data-surface="monitoring"');
+      if (attrIdx === -1) return;
+      const openIdx = html.lastIndexOf('<section', attrIdx);
+      const closeIdx = html.indexOf('</section>', attrIdx);
+      if (openIdx === -1 || closeIdx === -1) return;
+      html = html.slice(0, openIdx) + next + html.slice(closeIdx + '</section>'.length);
+    },
+  };
   const emit = async (type: string, event: unknown) => {
     const handlers = Array.from(listeners.get(type) ?? []);
     await Promise.all(handlers.map(listener => listener(event)));
@@ -48,7 +64,7 @@ function makeRoot() {
       if (selector === '[data-surface="projects"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="bugs"]') return { scrollIntoView: vi.fn() };
       if (selector === '[data-surface="ideas"]') return { scrollIntoView: vi.fn() };
-      if (selector === '[data-surface="monitoring"]') return { scrollIntoView: vi.fn() };
+      if (selector === '[data-surface="monitoring"]') return monitoringNode;
       return null;
     }),
     addEventListener: vi.fn((type: string, listener: Listener) => {
@@ -1119,6 +1135,64 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
 
       expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}11|11[\s\S]{0,120}total calls/i);
       expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,120}3 calls/i);
+
+      view.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refreshes Monitoring metrics on poll without rebuilding the chat composer (preserves in-progress typing)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { createProductDeepView } = await import('./product-deep-view.js');
+      const root = makeRoot();
+      const snapshotFor = (totalCalls: number, kbQueryCalls: number) => ({
+        ...mcpMetricsSnapshot,
+        totals: { calls: totalCalls, errors: 0, timeouts: 0 },
+        tools: {
+          kb_query: { ...mcpMetricsSnapshot.tools.kb_query, calls: kbQueryCalls, errors: 0, timeouts: 0 },
+        },
+      });
+      const fetchJson = vi.fn(async (url: string) => {
+        if (url === '/api/products/rune-mcp') {
+          return productView({
+            name: 'rune-mcp',
+            class: 'internal',
+            containerCapabilities: monitoringCapabilities,
+            activeRun: undefined,
+          });
+        }
+        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+          const callIndex = fetchJson.mock.calls
+            .filter(([calledUrl]) => calledUrl === '/api/mcp/tools/mcp_metrics_snapshot').length;
+          return {
+            status: 'ok',
+            sourceTool: 'mcp_metrics_snapshot',
+            checkedAt: `2026-06-29T15:20:0${callIndex}.000Z`,
+            mcpMetrics: callIndex === 1 ? snapshotFor(10, 2) : snapshotFor(11, 3),
+          };
+        }
+        if (url === '/api/state') return { inFlight: [], mutations: { active: [] } };
+        throw new Error(`unexpected fetch ${url}`);
+      });
+
+      const view = createProductDeepView({ root, product: 'rune-mcp', fetchJson });
+      await view.load();
+      await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
+      expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}10|10[\s\S]{0,120}total calls/i);
+
+      // The user starts typing a message into the composer. A full root.innerHTML
+      // rebuild (the old behavior) resets chatInput.value via the mock, mirroring
+      // the real DOM discarding a freshly-created textarea's contents and focus.
+      root.chatInput.value = 'half-written question I have not sent yet';
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      // The scoped repaint must leave the composer untouched...
+      expect(root.chatInput.value).toBe('half-written question I have not sent yet');
+      // ...while still advancing the live monitoring metrics.
+      expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}11|11[\s\S]{0,120}total calls/i);
 
       view.close();
     } finally {
