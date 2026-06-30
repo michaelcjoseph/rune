@@ -284,7 +284,7 @@ function handleStreamEvent(raw: string, opId: string | null, opMeta: OpMeta | un
   }
 }
 
-function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope, cwd?: string): Promise<ClaudeResult> {
+function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeScope?: AgentWriteScope, cwd?: string, writableRoots?: string[]): Promise<ClaudeResult> {
   const timeout = timeoutMs ?? config.CLAUDE_TIMEOUT_MS;
   // Stream-json is opt-in for user-visible ops only. Classifier ops (resolver
   // Haiku calls) bypass it because their callers expect a single JSON blob on
@@ -296,7 +296,13 @@ function execClaude(args: string[], timeoutMs?: number, opMeta?: OpMeta, writeSc
   const baseArgs = [
     '--dangerously-skip-permissions',
     ...getProjectMcpArgs(),
-    ...(config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : []),
+    // Default spawns add the whole WORKSPACE_DIR (read access to every repo +
+    // the vault). A confined spawn (write-enabled product chat) passes
+    // `writableRoots` to REPLACE that blanket with exactly its product repo, so
+    // the vault stays off the writable surface (reached read-only via rune-kb).
+    ...(writableRoots !== undefined
+      ? writableRoots.flatMap((d) => ['--add-dir', d])
+      : (config.WORKSPACE_DIR ? ['--add-dir', config.WORKSPACE_DIR] : [])),
     // A write-scoped run adds its target dirs so the agent can write there
     // (default cwd is the vault, which is otherwise its only writable root).
     ...(writeScope ? writeScope.writableDirs.flatMap((d) => ['--add-dir', d]) : []),
@@ -445,6 +451,7 @@ function askClaudeSession(
   opLabel?: string,
   voice?: boolean,
   cwd?: string,
+  writableRoots?: string[],
 ): Promise<ClaudeResult> {
   const previous = sessionLocks.get(sessionId) || Promise.resolve();
   const current = previous.then(async () => {
@@ -461,7 +468,7 @@ function askClaudeSession(
     if (allowedTools && allowedTools.length > 0) args.push('--allowedTools', ...allowedTools);
     args.push('--model', model || config.DEFAULT_CHAT_MODEL);
     const opMeta: OpMeta | undefined = opLabel ? { kind: 'chat', label: opLabel } : undefined;
-    const result = await execClaude(args, undefined, opMeta, undefined, cwd);
+    const result = await execClaude(args, undefined, opMeta, undefined, cwd, writableRoots);
     if (!result.error) createdSessions.add(sessionId);
     return result;
   });
@@ -495,6 +502,11 @@ export interface AskClaudeWithContextOpts {
    *  so Rune operates from (and reports) the product repo, not the vault. When
    *  omitted, the spawn defaults to the vault. */
   cwd?: string;
+  /** Replace the default WORKSPACE_DIR read add-dir with exactly these roots.
+   *  Set by a write-enabled product chat to `[productRepo]` so Edit/Write are
+   *  confined to the product repo and the vault is never on the writable
+   *  surface. Omit to keep the default workspace-wide read access. */
+  writableRoots?: string[];
 }
 
 /** Multi-turn conversation with session persistence and appended system prompt. */
@@ -504,7 +516,7 @@ export async function askClaudeWithContext(
   systemPrompt: string,
   opts: AskClaudeWithContextOpts = {},
 ): Promise<ClaudeResult> {
-  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice, opts.cwd);
+  return askClaudeSession(message, sessionId, opts.model, systemPrompt, opts.allowedTools, opts.opLabel, opts.voice, opts.cwd, opts.writableRoots);
 }
 
 /** One-shot query with no session persistence. Pass `opLabel` to surface as a

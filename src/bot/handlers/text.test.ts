@@ -1435,24 +1435,61 @@ describe('dispatchText — product-scoped webview sessions', () => {
     await (dispatchText as any)(webviewSender(), 100, 'where is the fix?', productScope);
 
     const systemPrompt = askMock.mock.calls[0]![2] as string;
-    const options = askMock.mock.calls[0]![3] as { allowedTools: string[]; cwd?: string };
+    const options = askMock.mock.calls[0]![3] as { allowedTools: string[]; cwd?: string; writableRoots?: string[] };
     expect(systemPrompt).toMatch(/active product:\s*rune/i);
     expect(systemPrompt).toMatch(/product repo/i);
     expect(systemPrompt).toMatch(/rune-kb/i);
     // The spawn runs from the product repo (not the vault) — the fix for Rune
     // reporting /pkms as its working repo in product chats.
     expect(options.cwd).toBe('/workspace/rune');
+    // Writes are hard-confined to the product repo: the blanket workspace
+    // add-dir is replaced with exactly the repo, keeping the vault unwritable.
+    expect(options.writableRoots).toEqual(['/workspace/rune']);
+    // Write-enabled: Edit/Write available, but NO Bash (hard vault-write guard).
     expect(options.allowedTools).toEqual(expect.arrayContaining([
       'Read',
       'Glob',
       'Grep',
+      'Edit',
+      'Write',
       'mcp__rune-kb__repo_search',
       'mcp__rune-kb__kb_query',
       'mcp__rune-kb__kb_search',
     ]));
+    expect(options.allowedTools).not.toContain('Bash');
     expect(options.allowedTools).not.toContain(retiredMcpTool('repo_search'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_query'));
     expect(options.allowedTools).not.toContain(retiredMcpTool('kb_search'));
+
+    // The product prompt is built write-enabled (capability stated honestly).
+    const buildPromptMock = buildSessionSystemPrompt as unknown as ReturnType<typeof vi.fn>;
+    expect(buildPromptMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: productScope,
+      writeEnabled: true,
+    }));
+  });
+
+  it('keeps global (non-product) chat read-only — no Edit/Write/Bash', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'global-tools-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'hello',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'hello');
+
+    const options = askMock.mock.calls[0]![3] as { allowedTools: string[] };
+    expect(options.allowedTools).not.toContain('Edit');
+    expect(options.allowedTools).not.toContain('Write');
+    expect(options.allowedTools).not.toContain('Bash');
   });
 
   it('does not set a product cwd for global (non-product) chat', async () => {

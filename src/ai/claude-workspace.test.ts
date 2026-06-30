@@ -52,7 +52,7 @@ vi.mock('node:fs', async () => {
 });
 
 const { spawn } = await import('node:child_process');
-const { askClaudeOneShot, runAgent } = await import('./claude.js');
+const { askClaudeOneShot, runAgent, askClaudeWithContext } = await import('./claude.js');
 
 const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
 
@@ -88,6 +88,37 @@ describe('ai/claude WORKSPACE_DIR set', () => {
       await askClaudeOneShot('test prompt');
       const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
       expect(spawnEnv['RUNE_PROJECT_ROOT']).toBe('/tmp/test-project');
+    });
+  });
+
+  describe('askClaudeWithContext writable-roots confinement', () => {
+    function addDirsOf(args: string[]): string[] {
+      const dirs: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--add-dir') dirs.push(args[i + 1]!);
+      }
+      return dirs;
+    }
+
+    it('defaults to the blanket WORKSPACE_DIR add-dir when no writableRoots given', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeWithContext('hi', 'wr-default-sess', 'sys');
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      expect(addDirsOf(args)).toContain('/home/user/workspace');
+    });
+
+    it('replaces the WORKSPACE_DIR add-dir with exactly the writableRoots (confines a product chat to its repo)', async () => {
+      spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+      await askClaudeWithContext('hi', 'wr-confined-sess', 'sys', {
+        cwd: '/home/user/workspace/aura',
+        writableRoots: ['/home/user/workspace/aura'],
+      });
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const dirs = addDirsOf(args);
+      expect(dirs).toEqual(['/home/user/workspace/aura']);
+      // The vault lives under WORKSPACE_DIR; dropping that blanket keeps it off
+      // the writable surface (reached read-only via the rune-kb MCP instead).
+      expect(dirs).not.toContain('/home/user/workspace');
     });
   });
 

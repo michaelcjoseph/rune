@@ -447,14 +447,34 @@ async function routeToPlanning(
   }
 }
 
-// Read-only by design: chat must never modify the vault. The "never write
-// files" instruction in the session system prompt is reinforced here by
-// omitting Write / Edit / Bash / NotebookEdit. If you find yourself wanting
-// to add a write tool, route the operation through a slash command instead.
+// Global (Telegram / cockpit Home) chat is read-only by design: it must never
+// modify the vault. The "never write files" instruction in the global system
+// prompt is reinforced here by omitting Write / Edit / Bash / NotebookEdit. For
+// a write capability in global chat, route through a slash command instead.
 const CONVERSATION_TOOLS = [
   'Read',
   'Glob',
   'Grep',
+  'WebSearch',
+  'WebFetch',
+  'mcp__rune-kb__repo_search',
+  'mcp__rune-kb__kb_query',
+  'mcp__rune-kb__kb_search',
+  'mcp__rune-kb__kb_stats',
+];
+
+// A write-enabled PRODUCT chat: Rune edits the product repo directly. Adds
+// Edit/Write to the read set but deliberately OMITS Bash — Bash bypasses the
+// filesystem allowlist under --dangerously-skip-permissions and could write the
+// vault, so the vault-write guarantee stays hard. Running builds/tests/git goes
+// through a dispatched work run instead. Writes are confined to the product repo
+// by the spawn (cwd + writableRoots = the repo; vault read-only via rune-kb).
+const PRODUCT_CHAT_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Edit',
+  'Write',
   'WebSearch',
   'WebFetch',
   'mcp__rune-kb__repo_search',
@@ -482,19 +502,22 @@ async function handleConversation(
 
   sender.startTyping(userId, 'Asking Claude');
   try {
-    // Product chats run from the product repo so Rune operates from (and
-    // reports) the product, not the vault. Global chats keep the vault cwd.
+    // A product chat with a resolvable repo becomes a write-enabled agent that
+    // operates from the product repo (cwd + writes confined to that repo, vault
+    // read-only via rune-kb). Global chats — and product chats whose repo can't
+    // be resolved — stay read-only with the vault cwd.
     const productCwd = scope?.kind === 'product' ? resolveProductRepoCwd(scope.product) : null;
+    const writeEnabled = !!productCwd;
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
-      buildSessionSystemPrompt({ scope }),
+      buildSessionSystemPrompt({ scope, writeEnabled }),
       {
         model: session.model,
-        allowedTools: CONVERSATION_TOOLS,
+        allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
         opLabel: 'chat',
         voice: true,
-        ...(productCwd ? { cwd: productCwd } : {}),
+        ...(productCwd ? { cwd: productCwd, writableRoots: [productCwd] } : {}),
       },
     );
 

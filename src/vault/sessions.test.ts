@@ -51,6 +51,7 @@ type BuildSessionSystemPrompt = (input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
+  writeEnabled?: boolean;
 }) => string;
 
 function requireBuildSessionSystemPrompt(): BuildSessionSystemPrompt {
@@ -68,6 +69,7 @@ function buildSessionSystemPrompt(input: {
   scope?: SessionScope;
   productContext?: ProductPromptFixture;
   workspaceDir?: string;
+  writeEnabled?: boolean;
 }): string {
   return requireBuildSessionSystemPrompt()(input);
 }
@@ -490,6 +492,35 @@ describe('vault/sessions', () => {
       expect(prompt).toMatch(/read-only/i);
       // Explicitly never writes the vault from chat.
       expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
+    });
+
+    it('states edit capability (but no shell) when writeEnabled, and defers running to a work run', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+        writeEnabled: true,
+      });
+
+      // Can edit code in the repo.
+      expect(prompt).toMatch(/\bedit\b/i);
+      expect(prompt).toContain('Edit');
+      expect(prompt).toContain('Write');
+      // No shell in chat (hard vault-write guard) — running goes via a work run.
+      expect(prompt).not.toContain('Bash');
+      expect(prompt).toMatch(/no shell|dispatch a work run|work run/i);
+      // Vault remains read-only even when the repo is writable.
+      expect(prompt).toMatch(/read-only/i);
+    });
+
+    it('keeps read-and-reason language (no edit claim) when writeEnabled is off', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: runeScope,
+        productContext: runeContext,
+        workspaceDir: '/workspace',
+      });
+      expect(prompt).toMatch(/read and reason/i);
+      expect(prompt).not.toContain('Read/Edit/Write');
     });
 
     it('fails closed instead of grounding one product chat with another product context', () => {
