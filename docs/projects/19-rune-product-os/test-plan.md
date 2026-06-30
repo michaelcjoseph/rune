@@ -60,7 +60,7 @@ test-plan sections pass.
 - [ ] 🟡 `types` narrows by top-level folder-name prefix; an unknown value is ignored or returns no matches consistently, never a hidden exclusion.
 - [ ] 🟢 The `vault_search` schema is broadened off the closed 3-value enum and the tool description advertises whole-vault markdown search.
 - [ ] 🔴 Production `vault_search` is bound to `queryVaultIndex` (`read-tools-deps.ts`); result shape and `maxResults` preserved.
-- [ ] 🔴 The resolved `kb_query`/admin-stdio boundary is enforced: a per-session local admin stdio spawn does **not** build or hold the warm index (assert no warm-index build is triggered across the stdio entry/factory/admin `kb_query` load graph) and stays on cold ripgrep; only the long-lived daemon routes daemon-internal broad `kb_query` through `queryVaultIndex` after readiness. Automated pin: `src/mcp/admin-stdio-boundary.test.ts`.
+- [ ] 🔴 The resolved `kb_query`/admin-stdio boundary is enforced: a per-session local admin stdio spawn does **not** build or hold the warm index (assert no warm-index build is triggered) and stays on cold ripgrep; only the long-lived daemon routes daemon-internal broad `kb_query` through `queryVaultIndex` after readiness.
 - [ ] 🔴 Startup begins building the index without blocking tools; during initial warmup, daemon `vault_search` and daemon-internal broad `kb_query` fall back to cold ripgrep; after readiness, both use the warm index.
 - [ ] 🔴 The background rebuild interval schedules at the configured 15-minute cadence, is unref'd, and tears down cleanly; a failed refresh logs and retains the prior complete index; rebuild cadence default is documented.
 - [ ] 🟡 The warm index follows symlinks under the vault root and indexes large markdown files fully.
@@ -100,35 +100,12 @@ test-plan sections pass.
 - [ ] 🟡 Polling runs once per second only while the monitoring view is visible and stops when hidden/unmounted.
 - [ ] 🔴 Integration verification: open `rune-mcp` monitoring, call a MCP tool, see counters update within roughly one second, stop the MCP daemon, and verify cockpit remains usable with degraded monitoring.
 
-## 5A. Protected Localhost Services (W2 Safety Hardening)
+## 6. Writing & Brand (W4 Phase 6) — EXTRACTED
 
-- [ ] 🔴 A single shared contract/module defines the protected services: Rune web at `127.0.0.1:3847` with launchd label `com.jarvis.daemon`, and Rune MCP at `127.0.0.1:3848` with launchd label `com.jarvis.rune-mcp`.
-- [ ] 🔴 Coder, QA, tech-lead, and reviewer role instructions/memories include the protected-service invariant: never kill, stop, interrupt, or reuse either protected listener without explicit human approval.
-- [ ] 🔴 Runtime product-team prompts include the same protected-service invariant for both Claude and Codex executors, independent of static role-file content.
-- [ ] 🔴 Automated tests and test helpers do not bind listeners on `3847` or `3848`; they use port `0` or injected task-local ports. Production-port references are allowed only in config/default assertions, docs, or manual/live acceptance text.
-- [ ] 🔴 Rune-owned cleanup helpers refuse to kill a process that owns `3847` or `3848`, or that matches the protected launchd service identity, unless an explicit human approval path is present.
-- [ ] 🔴 Regression for the exact outage shape: when a stuck test or cleanup path reports `127.0.0.1:3847` occupied, the system classifies it as protected Rune web and refuses to kill it without approval.
-- [ ] 🔴 Equivalent MCP regression: when `127.0.0.1:3848` is occupied, the system classifies it as protected Rune MCP and refuses to kill it without approval.
-- [ ] 🟡 Before killing any non-protected process, cleanup logic verifies that the PID was spawned by the current task/worktree/test command; "something is listening on the port" is not enough evidence.
-- [ ] 🟡 If Rune web or Rune MCP is down after a work run or monitoring check, cockpit/run telemetry surfaces a degraded/outage state rather than silently killing, reusing, or restarting the service.
-- [ ] 🟢 The protected-service warning text is generated from the shared contract so docs, prompts, and guard error messages do not drift.
-
-## 6. Writing & Brand (W4 Phase 6)
-
-- [ ] 🔴 Rune produces both `/rune` and `/rune/{topic}` pages in `michaelcjoseph.com` as a writing-product work run (drafting/publishing shows in the operations/runs container).
-- [ ] 🔴 `michaelcjoseph.com` hosts two products: Brand (root single-page app, identity unchanged) and Writing (`/rune` subtree).
-- [ ] 🟡 The writing surface shows ideas, draft/publish runs, and scoped chat; no projects/bugs.
-- [ ] 🔴 Forward-looking ideas migrate to `michaelcjoseph.com/docs/rune/writing-ideas.md`; historical content stays in pkms.
-- [ ] 🔴 `/blog` and `/writing-critique` are Rune commands backed by the specialized writing pipeline.
-- [ ] 🟡 `/topics` and `/voice` are confirmed to not exist as Rune commands/resolver destinations (they never did — this is a confirmation, not a removal); topics content comes from the migrated writing-ideas file, and voice guidance is copied into the writing product/pipeline from pkms `writing/voice.md`.
-- [ ] 🔴 Writing reads pkms source material only through the MCP (no direct pkms file access from `michaelcjoseph.com`).
-- [ ] 🔴 Published-content privacy boundary: a planted private marker placed in a journal source does **not** appear in the committed published artifact; pkms material is synthesized, never copied verbatim.
-- [ ] 🔴 Writing branches use `rune-writing/{slug}`; `/blog <topic>` resumes an existing topic branch when present and starts one otherwise.
-- [ ] 🔴 Writing operations/runs surface `researching`, `drafting`, `critiquing`, `revising`, `ready-for-review`, `committed`, and `failed`.
-- [ ] 🟡 `/writing-critique <target>` writes critique output to `docs/rune/critiques/<target-slug>.md` by default; revisions require explicit user request and stay on the same writing branch.
-- [ ] 🔴 V1 publish means committed to the writing branch; no external deployment is required.
-- [ ] 🔴 *(assertable)* Integration verification: trigger `/blog`, observe a writing work run reach a terminal state, and verify the resulting `rune-writing/{slug}` branch in `michaelcjoseph.com` contains the `/rune` page, first `/rune/{topic}` page, copied voice guidance, and writing ideas file.
-- [ ] 🟡 **(manual/live gate)** The generated prose quality ("Rune describes itself well") is judged manually; it is not an automated assertion. Requires the cross-repo working-directory prerequisite (`~/workspace/michaelcjoseph.com` writable by the agent).
+> **Moved 2026-06-29** to `michaelcjoseph.com` `docs/projects/01-rune-writing-product/test-plan.md`.
+> These criteria assert artifacts in the `michaelcjoseph.com` repo, which a `rune`-scoped
+> orchestrated run cannot produce. They now run against a `writing`-scoped run whose worktree
+> is that repo. See the bugs file for why the original phase false-completed.
 
 ## 7. Knowledge-Freshness Reconciliation (W3 Phase 7)
 
