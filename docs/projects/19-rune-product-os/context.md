@@ -64,9 +64,9 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- 19-rune-product-os/src/jobs/nightly.ts:790) runs `Knowledge reconciliation` immediately after `KB queue` and before `KB lint`.
+- ## Rune`
+- `Jarvis orchestration ... jarvis/CLAUDE.md` → `Rune orchestration ... rune/CLAUDE.md`
+- `Jarvis nightly drafts...` → `Rune nightly drafts...`
+- `propose-only through Jarvis` → `propose-only through Rune`
 
-Verified:
-`npx vitest run src/jobs/nightly.test.ts src/jobs/nightly.nosleep.test.ts --configLoader runner`
-
-Result: 2 files passed, 83 tests passed. Worktree remains clean.
+No tests run; this was a vault instruction-content edit and no changes were applied.
