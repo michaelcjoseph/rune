@@ -75,7 +75,8 @@ vi.mock('node:fs', async () => {
 });
 
 const { spawn } = await import('node:child_process');
-const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef, getProjectMcpArgs } =
+const { readFileSync } = await import('node:fs');
+const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef, getProjectMcpArgs, clearProjectMcpArgsCacheForTest } =
   await import('./claude.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
@@ -135,6 +136,24 @@ describe('getProjectMcpArgs — cwd-independent rune-kb config', () => {
     // No relative entrypoint survives (the bug that broke MCP from a foreign cwd).
     expect((server!.args ?? [])).not.toContain('src/mcp/index.ts');
     expect((server!.args ?? [])).not.toContain('--env-file-if-exists=.env.local');
+  });
+
+  it('fails loudly when project MCP settings are malformed instead of silently falling back', () => {
+    const readMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+    const originalImpl = readMock.getMockImplementation() as ((path: string) => string) | undefined;
+    clearProjectMcpArgsCacheForTest();
+    readMock.mockImplementation((path: string) => {
+      if (typeof path === 'string' && path.includes('.claude/settings.json')) return '{malformed';
+      return originalImpl!(path);
+    });
+    try {
+      expect(() => getProjectMcpArgs()).toThrow(/Could not build Claude MCP config|settings\.json/i);
+    } finally {
+      readMock.mockImplementation(originalImpl!);
+      clearProjectMcpArgsCacheForTest();
+      // Repopulate the normal fallback used by this test file's fs mock.
+      getProjectMcpArgs();
+    }
   });
 });
 

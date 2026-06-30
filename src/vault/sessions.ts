@@ -51,6 +51,12 @@ export interface ProductPromptContext {
   worldview: ProductPromptWorldview[];
 }
 
+export interface ProductChatWorkspace {
+  repoRoot: string;
+  workRoot: string;
+  scopePath?: string;
+}
+
 export interface BuildSessionSystemPromptInput {
   scope?: SessionScope;
   productContext?: ProductPromptContext;
@@ -124,20 +130,24 @@ function buildProductIdentityPreamble(
   scopePath: string | undefined,
   writeEnabled: boolean,
 ): string {
+  const workRoot = repoPath && scopePath ? join(repoPath, scopePath) : repoPath;
   const repoSentence = repoPath
     ? `Your working repo is ${repoPath}${scopePath ? ` (focused on ${scopePath})` : ''}.`
     : `Your working repo is this product's repository.`;
+  const workspaceSentence = workRoot
+    ? `Your editable product workspace is ${workRoot}.`
+    : `Your editable product workspace is this product's configured workspace.`;
   const capability = writeEnabled
-    ? `WORKING IN THIS REPO: You can read, edit, and run code in this repo (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). Make well-scoped edits and run builds/tests/git directly here. HARD BOUNDARY: NEVER write to the vault or anything outside this repo — not even via Bash. The vault is a separately-managed store reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If the user asks you to save something to the vault/journal/notes/KB, do NOT do it by hand — tell them which slash command or flow owns that write.`
+    ? `WORKING IN THIS REPO: You can read, edit, and run code for this product (Read/Edit/Write/Bash, plus repo_search/Glob/Grep). ${workspaceSentence} Edit/Write are confined to that product workspace; Bash starts at the repo root so you can run builds/tests/git. Bash is intentionally powerful and operator-approved, not OS-confined: do NOT use Bash to write the vault or unrelated product paths. The vault is a separately-managed store reached READ-ONLY through the rune-kb MCP; writing it from here corrupts it. If the user asks you to save something to the vault/journal/notes/KB, do NOT do it by hand — tell them which slash command or flow owns that write. For larger multi-step or risky work, propose using the existing cockpit work-run/Fix flow and ask the user to start it there.`
     : `WORKING IN THIS REPO: In this chat you read and reason about ${product} — its code, specs, and how it works. You don't edit files from this chat; for changes, point the user to the work-run/Fix flow.`;
   const actLine = writeEnabled
-    ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make the change, run the check.`
+    ? `For development questions, small edits, and running builds/tests, act directly: read the repo, make scoped edits, run the check.`
     : `For development and factual questions, answer directly from the repo.`;
   return `You are Rune, the development agent for the ${product} product. ${repoSentence} ${actLine}
 
 ${capability}
 
-SECOND BRAIN (read-only): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP, READ-ONLY. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it — it is maintained by dedicated agents and scheduled jobs, not from this chat.
+SECOND BRAIN (read-only by policy): You understand the user's second brain — journals, world-view, knowledge base, projects, playbook — and you reach it through the rune-kb MCP. kb_query gives a synthesized answer with [[wikilink]] citations; kb_search returns specific source pages; repo_search searches code. The vault is NOT your working directory and you never write to it from product chat — it is maintained by dedicated agents and scheduled jobs.
 
 DEFAULT POSTURE — a capable engineer paired with the user on ${product}. For development/lookup questions, answer directly and act. For strategic or open-ended product questions, probe first: ask one or two sharp questions grounded in something specific you found in the repo or the second brain, then give your view.
 
@@ -228,15 +238,24 @@ export function buildSessionSystemPrompt(input: BuildSessionSystemPromptInput = 
   return `${preamble}\n\n${boundedProductPrompt}`;
 }
 
-/** Resolve the absolute working-directory (git repo root) for a product chat,
- *  or null when the product is unknown or has no repo configured (projection-
- *  only entries have an empty repoPath). The chat handler uses this to set the
- *  spawn cwd so Rune operates from the product repo, not the vault. Returns the
- *  repo root even for scoped products (scopePath narrows focus, not the repo). */
-export function resolveProductRepoCwd(product: string): string | null {
+/** Resolve the repo root and editable workspace for a product chat, or null
+ *  when the product is unknown or has no repo configured. Bash runs from
+ *  repoRoot; Edit/Write are confined to workRoot. For scoped shared-repo
+ *  products (e.g. writing), workRoot is repoPath/scopePath. */
+export function resolveProductChatWorkspace(product: string): ProductChatWorkspace | null {
   const context = loadProductPromptContext(product);
   if (!context || !context.repoPath) return null;
-  return context.repoPath;
+  return {
+    repoRoot: context.repoPath,
+    workRoot: context.scopePath ? join(context.repoPath, context.scopePath) : context.repoPath,
+    ...(context.scopePath ? { scopePath: context.scopePath } : {}),
+  };
+}
+
+/** Back-compat helper for callers that only need the repo root. Prefer
+ *  resolveProductChatWorkspace for product-chat execution. */
+export function resolveProductRepoCwd(product: string): string | null {
+  return resolveProductChatWorkspace(product)?.repoRoot ?? null;
 }
 
 function readIfExists(absPath: string, relPath: string): ProductPromptDoc | null {

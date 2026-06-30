@@ -8,7 +8,7 @@ import {
   setSessionModel,
   appendMessageToSession,
   buildSessionSystemPrompt,
-  resolveProductRepoCwd,
+  resolveProductChatWorkspace,
   type Transport,
   type SessionScope,
 } from '../../vault/sessions.js';
@@ -464,13 +464,11 @@ const CONVERSATION_TOOLS = [
 ];
 
 // A write-enabled PRODUCT chat: Rune is a development agent for the active
-// product. Edit/Write are HARD-confined to the product repo by the spawn
-// (cwd + writableRoots = the repo). Bash runs builds/tests/git; it is NOT
-// bounded by the filesystem allowlist (it has full OS permissions under
-// --dangerously-skip-permissions), so the vault-write boundary for Bash is an
-// emphatic prompt instruction (see buildProductIdentityPreamble) plus the
-// vault's git recoverability — not an OS-level guarantee. The vault stays
-// read-only via the rune-kb MCP.
+// product. Edit/Write are confined to the product workspace by the spawn
+// (writableRoots = repoPath/scopePath when scoped, else repoPath). Bash runs
+// from the repo root for builds/tests/git; it is intentionally not OS-confined,
+// so it runs with a scrubbed env and an explicit prompt boundary around vault
+// and unrelated-product writes.
 const PRODUCT_CHAT_TOOLS = [
   'Read',
   'Glob',
@@ -505,12 +503,12 @@ async function handleConversation(
 
   sender.startTyping(userId, 'Asking Claude');
   try {
-    // A product chat with a resolvable repo becomes a write-enabled agent that
-    // operates from the product repo (cwd + writes confined to that repo, vault
-    // read-only via rune-kb). Global chats — and product chats whose repo can't
-    // be resolved — stay read-only with the vault cwd.
-    const productCwd = scope?.kind === 'product' ? resolveProductRepoCwd(scope.product) : null;
-    const writeEnabled = !!productCwd;
+    // A product chat with a resolvable repo becomes a write-enabled agent. Bash
+    // starts from repoRoot; Edit/Write are limited to workRoot. Global chats —
+    // and product chats whose repo can't be resolved — stay read-only with the
+    // vault cwd.
+    const workspace = scope?.kind === 'product' ? resolveProductChatWorkspace(scope.product) : null;
+    const writeEnabled = !!workspace;
     const result = await askClaudeWithContext(
       text,
       session.sessionId,
@@ -520,7 +518,9 @@ async function handleConversation(
         allowedTools: writeEnabled ? PRODUCT_CHAT_TOOLS : CONVERSATION_TOOLS,
         opLabel: 'chat',
         voice: true,
-        ...(productCwd ? { cwd: productCwd, writableRoots: [productCwd] } : {}),
+        ...(workspace
+          ? { cwd: workspace.repoRoot, writableRoots: [workspace.workRoot], envMode: 'product-chat' as const }
+          : {}),
       },
     );
 

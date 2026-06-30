@@ -120,6 +120,37 @@ describe('ai/claude WORKSPACE_DIR set', () => {
       // the writable surface (reached read-only via the rune-kb MCP instead).
       expect(dirs).not.toContain('/home/user/workspace');
     });
+
+    it('scrubs Rune secrets and broad workspace env for product chat Bash', async () => {
+      const oldEnv = { ...process.env };
+      process.env['TELEGRAM_BOT_TOKEN'] = 'bot-secret';
+      process.env['RUNE_HTTP_SECRET'] = 'web-secret';
+      process.env['RUNE_MCP_SECRET'] = 'mcp-secret';
+      process.env['READWISE_TOKEN'] = 'readwise-secret';
+      process.env['WHOOP_CLIENT_SECRET'] = 'whoop-secret';
+      process.env['SOME_API_KEY'] = 'api-secret';
+      process.env['SAFE_VALUE'] = 'keep-me';
+      try {
+        spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
+        await askClaudeWithContext('hi', 'wr-product-env-sess', 'sys', {
+          cwd: '/home/user/workspace/aura',
+          writableRoots: ['/home/user/workspace/aura'],
+          envMode: 'product-chat',
+        });
+        const spawnEnv = spawnMock.mock.calls[0]![2].env as NodeJS.ProcessEnv;
+        expect(spawnEnv['RUNE_PROJECT_ROOT']).toBe('/tmp/test-project');
+        expect(spawnEnv['SAFE_VALUE']).toBe('keep-me');
+        expect(spawnEnv['TELEGRAM_BOT_TOKEN']).toBeUndefined();
+        expect(spawnEnv['RUNE_HTTP_SECRET']).toBeUndefined();
+        expect(spawnEnv['RUNE_MCP_SECRET']).toBeUndefined();
+        expect(spawnEnv['READWISE_TOKEN']).toBeUndefined();
+        expect(spawnEnv['WHOOP_CLIENT_SECRET']).toBeUndefined();
+        expect(spawnEnv['SOME_API_KEY']).toBeUndefined();
+        expect(spawnEnv['RUNE_WORKSPACE_DIR']).toBeUndefined();
+      } finally {
+        process.env = oldEnv;
+      }
+    });
   });
 
   describe('runAgent prompt with WORKSPACE_DIR', () => {

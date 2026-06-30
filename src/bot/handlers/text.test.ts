@@ -31,7 +31,11 @@ vi.mock('../../vault/sessions.js', () => ({
       ? `PRODUCT CHAT: Active product: ${scope.product}. Search the product repo and the second brain via the rune-kb MCP.`
       : '',
   ].join('\n')),
-  resolveProductRepoCwd: vi.fn((product: string) => `/workspace/${product}`),
+  resolveProductChatWorkspace: vi.fn((product: string) => ({
+    repoRoot: `/workspace/${product}`,
+    workRoot: product === 'writing' ? `/workspace/${product}/docs/rune` : `/workspace/${product}`,
+    ...(product === 'writing' ? { scopePath: 'docs/rune' } : {}),
+  })),
 }));
 vi.mock('../../ai/claude.js', () => ({
   askClaude: vi.fn(),
@@ -1445,6 +1449,8 @@ describe('dispatchText — product-scoped webview sessions', () => {
     // Writes are hard-confined to the product repo: the blanket workspace
     // add-dir is replaced with exactly the repo, keeping the vault unwritable.
     expect(options.writableRoots).toEqual(['/workspace/rune']);
+    // Raw Bash is operator-approved, so product chat gets a scrubbed child env.
+    expect((options as any).envMode).toBe('product-chat');
     // Write-enabled: Edit/Write/Bash available. Edit/Write are hard-confined to
     // the repo via writableRoots; Bash's vault boundary is a prompt instruction.
     expect(options.allowedTools).toEqual(expect.arrayContaining([
@@ -1468,6 +1474,31 @@ describe('dispatchText — product-scoped webview sessions', () => {
       scope: productScope,
       writeEnabled: true,
     }));
+  });
+
+  it('runs scoped product Bash from repo root while confining Edit/Write to the product scope', async () => {
+    const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+    const createSessionMock = createSession as unknown as ReturnType<typeof vi.fn>;
+    const askMock = askClaudeWithContext as unknown as ReturnType<typeof vi.fn>;
+    const productScope = { kind: 'product' as const, product: 'writing' };
+
+    getSessionMock.mockReturnValue(null);
+    createSessionMock.mockReturnValue({
+      sessionId: 'writing-product-session',
+      lastActivity: new Date().toISOString(),
+      messageCount: 1,
+      firstMessage: 'where do you work?',
+      model: 'haiku',
+    });
+    askMock.mockResolvedValue({ text: 'ok', error: null });
+
+    await (dispatchText as any)(webviewSender(), 100, 'where do you work?', productScope);
+
+    const options = askMock.mock.calls[0]![3] as { allowedTools: string[]; cwd?: string; writableRoots?: string[]; envMode?: string };
+    expect(options.cwd).toBe('/workspace/writing');
+    expect(options.writableRoots).toEqual(['/workspace/writing/docs/rune']);
+    expect(options.envMode).toBe('product-chat');
+    expect(options.allowedTools).toContain('Bash');
   });
 
   it('keeps global (non-product) chat read-only — no Edit/Write/Bash', async () => {

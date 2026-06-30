@@ -42,6 +42,7 @@ const {
 interface ProductPromptFixture {
   product: string;
   repoPath: string;
+  scopePath?: string;
   repoDocs: Array<{ path: string; content: string }>;
   projects: Array<{ slug: string; spec: string; tasks: string }>;
   worldview: Array<{ path: string; anchor?: string; content: string }>;
@@ -494,7 +495,7 @@ describe('vault/sessions', () => {
       expect(prompt).toMatch(/never write[^\n]*vault|vault[^\n]*(read-only|never)/i);
     });
 
-    it('states edit + run capability (Bash) with a hard vault-write boundary when writeEnabled', () => {
+    it('states scoped edit + raw Bash capability honestly when writeEnabled', () => {
       const prompt = buildSessionSystemPrompt({
         scope: runeScope,
         productContext: runeContext,
@@ -508,11 +509,29 @@ describe('vault/sessions', () => {
       expect(prompt).toContain('Write');
       expect(prompt).toContain('Bash');
       expect(prompt).toMatch(/run|build|test/i);
-      // Bash is unsandboxed, so the vault boundary is an explicit, emphatic
-      // instruction: never write the vault (or outside the repo), even via Bash.
-      expect(prompt).toMatch(/never[^\n]*write[^\n]*(vault|outside)/i);
+      // Bash is intentionally raw/operator-approved, so the prompt must not
+      // claim it is OS-confined. The boundary is an explicit instruction.
+      expect(prompt).toMatch(/Bash[^\n]*(operator-approved|not OS-confined|not.*confined)/i);
+      expect(prompt).toMatch(/do NOT use Bash to write/i);
       // Vault remains read-only even when the repo is writable.
       expect(prompt).toMatch(/read-only/i);
+    });
+
+    it('tells scoped products their editable workspace is the scoped subdirectory', () => {
+      const prompt = buildSessionSystemPrompt({
+        scope: { kind: 'product', product: 'writing' },
+        productContext: {
+          ...runeContext,
+          product: 'writing',
+          repoPath: '/workspace/site',
+          scopePath: 'docs/rune',
+        },
+        workspaceDir: '/workspace',
+        writeEnabled: true,
+      });
+
+      expect(prompt).toContain('Your working repo is /workspace/site (focused on docs/rune).');
+      expect(prompt).toContain('Your editable product workspace is /workspace/site/docs/rune.');
     });
 
     it('keeps read-and-reason language (no edit claim) when writeEnabled is off', () => {
@@ -579,28 +598,31 @@ describe('vault/sessions', () => {
     });
   });
 
-  describe('resolveProductRepoCwd', () => {
-    function resolveProductRepoCwd(product: string): string | null {
+  describe('resolveProductChatWorkspace', () => {
+    function resolveProductChatWorkspace(product: string): { repoRoot: string; workRoot: string; scopePath?: string } | null {
       const fn = (sessionsModule as unknown as {
-        resolveProductRepoCwd?: (p: string) => string | null;
-      }).resolveProductRepoCwd;
+        resolveProductChatWorkspace?: (p: string) => { repoRoot: string; workRoot: string; scopePath?: string } | null;
+      }).resolveProductChatWorkspace;
       expect(
         fn,
-        'src/vault/sessions.ts must export resolveProductRepoCwd so the chat handler can set the product-repo cwd',
+        'src/vault/sessions.ts must export resolveProductChatWorkspace so the chat handler can set repo-root cwd and scoped writable roots',
       ).toEqual(expect.any(Function));
       return fn!(product);
     }
 
-    it('returns the product repo path for a configured product', () => {
+    it('returns repoRoot and workRoot for a configured product', () => {
       const { runeRepo, siteRepo } = writeProductChatFixture();
-      expect(resolveProductRepoCwd('rune-mcp')).toBe(runeRepo);
-      // A scoped product still resolves to the repo root (the git repo), not the subdir.
-      expect(resolveProductRepoCwd('writing')).toBe(siteRepo);
+      expect(resolveProductChatWorkspace('rune-mcp')).toEqual({ repoRoot: runeRepo, workRoot: runeRepo });
+      expect(resolveProductChatWorkspace('writing')).toEqual({
+        repoRoot: siteRepo,
+        workRoot: join(siteRepo, 'docs/rune'),
+        scopePath: 'docs/rune',
+      });
     });
 
     it('returns null for an unknown product', () => {
       writeProductChatFixture();
-      expect(resolveProductRepoCwd('does-not-exist')).toBeNull();
+      expect(resolveProductChatWorkspace('does-not-exist')).toBeNull();
     });
   });
 
