@@ -64,12 +64,8 @@ The MCP runs as its own long-lived process on `127.0.0.1:3848` under launchd lab
 
 ## Next Task Handoff
 
-- lities`, with the existing writing fallback preserved. That gives writing ideas/runs/chat only, while brand and standard products keep projects/bugs/ideas plus runs/chat.
+- writing-user-reachability.test.ts](rune/.worktrees/rune/19-rune-product-os/src/jobs/writing-user-reachability.test.ts) so `npm run build` does not widen the mocked terminal status to `string`.
 
-Verified with:
-
-```bash
-npm test -- src/server/static/product-deep-view-client.test.ts
-```
-
-Result: 67 passed. I did not commit.
+Verified:
+- `npm test -- src/jobs/writing-user-reachability.test.ts` → 4 passed
+- `npm run build` → passed
