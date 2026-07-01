@@ -186,11 +186,13 @@ function buildClaudeChildEnv(mode: ClaudeChildEnvMode): NodeJS.ProcessEnv {
     delete env.RUNE_WORKSPACE_DIR;
   }
   if (mode === 'product-chat') {
-    // Drop Rune secrets + personal env. RUNE_PROJECT_ROOT is deliberately NOT
-    // added: the chat operates on the product repo, and the rune-kb MCP loads
-    // its own config from .env.local — so the chat has no need for Rune's repo
-    // path, and omitting it avoids handing a Bash shell a pointer to
-    // PROJECT_ROOT/.env.local (defense-in-depth; the path is still discoverable).
+    // Drop Rune secrets + personal env. RUNE_PROJECT_ROOT is explicitly stripped,
+    // not merely left unset: `env` is seeded from process.env above, which on a
+    // dev box or the daemon may already export RUNE_PROJECT_ROOT. The chat
+    // operates on the product repo and has no need for Rune's repo path; omitting
+    // it avoids handing a Bash shell a pointer to PROJECT_ROOT/.env.local
+    // (defense-in-depth; the path is still discoverable).
+    delete env.RUNE_PROJECT_ROOT;
     return scrubProductChatEnv(env);
   }
   // Default (agents / one-shot / global chat): expose RUNE_PROJECT_ROOT so

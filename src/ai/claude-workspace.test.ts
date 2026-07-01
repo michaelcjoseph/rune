@@ -139,6 +139,7 @@ describe('ai/claude WORKSPACE_DIR set', () => {
       process.env['GIT_ASKPASS'] = '/usr/bin/askpass';    // credential helper
       process.env['VAULT_DIR'] = '/home/user/pkms';       // non-secret path — KEPT
       process.env['SAFE_VALUE'] = 'keep-me';
+      process.env['RUNE_PROJECT_ROOT'] = '/home/user/workspace/rune'; // must be stripped for product-chat
       try {
         spawnMock.mockReturnValue(createChild({ stdout: 'ok' }));
         await askClaudeWithContext('hi', 'wr-product-env-sess', 'sys', {
