@@ -44,4 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-Start with: Replace the standalone Planner scoping with PM-charter scoping. Wire `defaultScopingTurn` (`src/reviews/planning-handler.ts`) to compose the PM role context via `composeRoleContext('pm', INTERVIEW_INSTRUCTION)` instead of `SCOPING_SYSTEM_PROMPT`, run the interview on the persistent planning-session id (the one intentional fresh-context exception), apply one-question-at-a-time discipline, honor the two stop conditions (PM satisfied OR user proceed-intent — resolver-detected, not literal "go"), and emit the finished spec directly as a versioned PM-only approval artifact (`kind:'pm-spec'` with product/title/spec/assumptions/selfReview) via a `pm-spec` fence instead of a planning-brief fence. Narrow the `/plan` `ScopingResult` to `question | spec` and retire the `kind:'ready'` planning-brief handoff on the `/plan` path. `INTERVIEW_INSTRUCTION` authoring is part of this task.
+- er.test.ts` is red as expected: 7 failing, 9 passing. The failures correspond to the current implementation still using the old Planner/`planning-brief` path.
+
+Note: `src/reviews/planning-handler.test.ts` was already staged before my edits; git now shows it as `MM` with my additions unstaged on top.
