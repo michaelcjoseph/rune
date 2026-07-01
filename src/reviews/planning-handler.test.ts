@@ -154,6 +154,31 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     });
   });
 
+  it('does not consult the retired specified-enough gate when the PM emits a spec', async () => {
+    createPlanningSession(9, 'idea', 'chat', 'aura');
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'spec',
+      text: 'Spec ready for approval.',
+      artifact: SAMPLE_ARTIFACT,
+    }));
+    const runRoles = vi.fn(async () => ({
+      kind: 'blocked-for-interview' as const,
+      interviewNeeds: ['This second interview gate must stay unreachable from /plan.'],
+    }));
+
+    const result = await handlePlanningTurn({ scopingTurn, runRoles }, 9, 'go');
+
+    expect(result).toEqual({
+      reply: 'Spec ready for approval.',
+      status: 'spec-proposed',
+    });
+    expect(runRoles).not.toHaveBeenCalled();
+
+    const stored = getPlanningSession(9)!;
+    expect(stored.planning.status).toBe('spec-proposed');
+    expect(stored.planning.artifact).toEqual(SAMPLE_ARTIFACT);
+  });
+
   it('refuses to overwrite an existing PM spec on a second spec-ready turn', async () => {
     // After spec-proposed, the conversation is awaiting approval — another
     // spec-ready signal shouldn't transition again (the planner state

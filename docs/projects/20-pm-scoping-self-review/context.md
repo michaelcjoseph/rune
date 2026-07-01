@@ -44,12 +44,9 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- ompleted `pm-spec` output fails clearly.
+- and rejects retired `ready` handoffs.
 
 Verification:
-- `npx vitest run src/reviews/planning-handler.test.ts` passed: 19/19.
-- `git diff --check` passed.
-- `npm run build` is still blocked by later-phase branch tests expecting `runDownstreamPlan` in `planning-roles.ts`, outside this selected task.
-- -handler.test.ts` passed: 20 tests.
-- `git diff --check -- src/reviews/planning-handler.ts src/reviews/planning-handler.test.ts` passed.
-- `npm run build` is blocked by existing branch test errors around unimplemented `runDownstreamPlan` imports in approval/webview tests, not by this handler change.
+- `npx vitest run src/reviews/planning-handler.test.ts` passed: 21/21
+- `git diff --check --cached -- src/reviews/planning-handler.test.ts` passed
+- Audit found no production `/plan` entry-point references to `runPlannerRoles` or `pmAssessAndSpec`
