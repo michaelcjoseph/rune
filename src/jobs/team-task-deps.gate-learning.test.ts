@@ -157,6 +157,18 @@ function sandbox(): SandboxSpec {
   } as SandboxSpec;
 }
 
+// Project 20 added a cold coder self-review that routes through judgmentCall
+// with role 'coder' and expects the corrected-or-confirmed coder artifact
+// echoed back in a `self-review-artifact` fence. Echoing the artifact unchanged
+// yields revised=false, so the run proceeds as it did before the step existed.
+function confirmCoderSelfReview(message: string): string {
+  const fence = message.match(/```self-review-artifact[\s\S]*?```/);
+  if (fence === null) {
+    throw new Error('coder self-review prompt missing self-review-artifact fence');
+  }
+  return fence[0];
+}
+
 describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
   beforeEach(() => {
     h.roleMemory.clear();
@@ -239,7 +251,10 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     let executionCalls = 0;
     let techLeadTestReviews = 0;
 
-    const judgmentCall: JudgmentModelCall = async ({ role }) => {
+    const judgmentCall: JudgmentModelCall = async ({ role, message }) => {
+      if (role === 'coder') {
+        return confirmCoderSelfReview(message);
+      }
       if (role === 'tech-lead') {
         techLeadTestReviews += 1;
         if (techLeadTestReviews === 1) {
@@ -379,6 +394,9 @@ describe('buildProductionTeamTaskDeps - gate-time learning compounding', () => {
     });
 
     const judgmentCall: JudgmentModelCall = async (call) => {
+      if (call.role === 'coder') {
+        return confirmCoderSelfReview(call.message);
+      }
       if (call.role === 'tech-lead' && call.message.includes('<gate-rejection>')) {
         return [
           '```gate-lesson-candidate',
