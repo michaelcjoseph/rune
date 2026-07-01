@@ -35,7 +35,7 @@ import { createMutation, cancelMutation, activeRuns } from '../transport/mutatio
 import type { MutationKind } from '../transport/mutations.js';
 import { resolveWorkDispatch, readDispatchModeInput } from '../jobs/work-dispatch.js';
 import type { DispatchModeView } from '../intent/cockpit.js';
-import { cancelOp } from '../transport/in-flight.js';
+import { cancelOp, isCancelled, registerOp, unregisterOp } from '../transport/in-flight.js';
 import { restartServer } from './restart.js';
 import { readCockpitRunStatus } from './cockpit-run-status.js';
 import { getProjectSummaries } from './projects-snapshot.js';
@@ -82,6 +82,22 @@ import { startFixRun } from '../jobs/fix-run-handoff.js';
 import { readOAuthStore } from './mcp-oauth-store.js';
 
 const log = createLogger('webview');
+
+class PlanningApprovalCancelled extends Error {
+  constructor() {
+    super('Planning approval cancelled.');
+  }
+}
+
+type PlanningApprovalStatus =
+  | { status: 'success' }
+  | { status: 'error'; error: string }
+  | { status: 'cancelled' };
+
+interface PlanningApprovalControl {
+  opId?: string;
+  terminalSent: boolean;
+}
 
 // __dirname for this ESM file → src/server/; static files live alongside it
 const STATIC_DIR = join(dirname(fileURLToPath(import.meta.url)), 'static');
@@ -2023,13 +2039,7 @@ async function handleApiPlanningApprove(
   const userId = config.TELEGRAM_USER_ID;
   const existing = getPlanningSession(userId);
   if (existing?.planning.status === 'approved') {
-    const prepared = await preparePlanningSessionForScaffold(userId, existing, sender);
-    if (!prepared.ok) {
-      res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: prepared.error }));
-      return;
-    }
-    await scaffoldPlanningSession(res, userId, prepared.session, sender);
+    await runPlanningApprovalPipeline(res, userId, existing, sender);
     return;
   }
 
@@ -2053,13 +2063,7 @@ async function handleApiPlanningApprove(
     return;
   }
 
-  const prepared = await preparePlanningSessionForScaffold(userId, result.session, sender);
-  if (!prepared.ok) {
-    res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: prepared.error }));
-    return;
-  }
-  await scaffoldPlanningSession(res, userId, prepared.session, sender);
+  await runPlanningApprovalPipeline(res, userId, result.session, sender);
 }
 
 type PreparedPlanningSession =
@@ -2070,6 +2074,7 @@ async function preparePlanningSessionForScaffold(
   userId: number,
   session: StoredPlanningSession,
   sender: WebviewSender,
+  control: PlanningApprovalControl,
 ): Promise<PreparedPlanningSession> {
   if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
     return {
@@ -2082,7 +2087,7 @@ async function preparePlanningSessionForScaffold(
     return { ok: true, session };
   }
   const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {
-    progress: (event) => sendPlanningProgress(sender, userId, event),
+    progress: (event) => sendPlanningProgress(sender, userId, event, control),
   });
   updatePlanningSession(userId, (sess) => ({
     ...sess,
@@ -2092,6 +2097,73 @@ async function preparePlanningSessionForScaffold(
     },
   }));
   return { ok: true, session: withDownstreamArtifact(session, downstreamArtifact) };
+}
+
+async function runPlanningApprovalPipeline(
+  res: ServerResponse,
+  userId: number,
+  session: StoredPlanningSession,
+  sender: WebviewSender,
+): Promise<void> {
+  if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'This planning approval uses a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+    }));
+    return;
+  }
+
+  const op = registerOp({
+    kind: 'agent',
+    label: 'planning approval scaffold',
+    userId,
+    child: makeNoopChild(),
+  });
+  const control: PlanningApprovalControl = { opId: op?.opId, terminalSent: false };
+  const status = await runPlanningApprovalPipelineWithOp(res, userId, session, sender, control);
+  if (control.opId) {
+    if (status.status === 'error') {
+      unregisterOp(control.opId, 'error', status.error);
+    } else {
+      unregisterOp(control.opId, status.status);
+    }
+  }
+}
+
+async function runPlanningApprovalPipelineWithOp(
+  res: ServerResponse,
+  userId: number,
+  session: StoredPlanningSession,
+  sender: WebviewSender,
+  control: PlanningApprovalControl,
+): Promise<PlanningApprovalStatus> {
+  try {
+    const prepared = await preparePlanningSessionForScaffold(userId, session, sender, control);
+    if (!prepared.ok) {
+      res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: prepared.error }));
+      return { status: 'error', error: scrubAbsolutePaths(prepared.error) };
+    }
+    return await scaffoldPlanningSession(res, userId, prepared.session, sender, control);
+  } catch (err) {
+    if (err instanceof PlanningApprovalCancelled) {
+      res.writeHead(499, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'planning approval cancelled; click approve again or run /approve again to retry',
+      }));
+      return { status: 'cancelled' };
+    }
+    const message = (err as Error).message;
+    await sendTerminalOnce(sender, userId, control, message);
+    await sender.send(
+      userId,
+      'Planning session is still approved — click approve again or run /approve again to retry.',
+    );
+    const error = `${scrubAbsolutePaths(message)}; click approve again or run /approve again to retry`;
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error }));
+    return { status: 'error', error };
+  }
 }
 
 function withDownstreamArtifact(
@@ -2112,20 +2184,24 @@ async function scaffoldPlanningSession(
   userId: number,
   session: StoredPlanningSession,
   sender: WebviewSender,
-): Promise<void> {
+  control: PlanningApprovalControl,
+): Promise<PlanningApprovalStatus> {
   // Run the shared scaffold-approval flow (resolve the target product repo, spawn the
   // setup-writer scoped to it, cross-check the scaffold-result, and drive any linked promotion).
   // Tolerate failure by leaving the session approved (retry via /approve or a re-click).
-  await sendPlanningProgress(sender, userId, { stage: 'scaffold' });
+  await sendPlanningProgress(sender, userId, { stage: 'scaffold' }, control);
   const outcome = await runScaffoldApproval(session);
   if (!outcome.ok) {
     log.error('handleApiPlanningApprove: scaffold-approval failed', {
       reason: outcome.reason,
       message: outcome.message,
     });
+    const message = `scaffold failed: ${outcome.message}`;
+    await sendTerminalOnce(sender, userId, control, message);
+    const error = `scaffolding failed: ${scrubAbsolutePaths(outcome.message)}`;
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: `scaffolding failed: ${scrubAbsolutePaths(outcome.message)}` }));
-    return;
+    res.end(JSON.stringify({ error }));
+    return { status: 'error', error: scrubAbsolutePaths(message) };
   }
   deletePlanningSession(userId);
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2136,13 +2212,24 @@ async function scaffoldPlanningSession(
     promotion: outcome.promotion,
   }));
   await sendPlanningProgress(sender, userId, { success: outcome.agentText });
+  return { status: 'success' };
 }
 
 async function sendPlanningProgress(
   sender: WebviewSender,
   userId: number,
   event: PlanningProgress,
+  control?: PlanningApprovalControl,
 ): Promise<void> {
+  if (event.stage && control?.opId && isCancelled(control.opId)) {
+    await sendTerminalOnce(sender, userId, control, 'planning approval cancelled');
+    await sender.send(
+      userId,
+      'Planning session is still approved — click approve again or run /approve again to retry.',
+    );
+    throw new PlanningApprovalCancelled();
+  }
+  if (event.terminal && control) control.terminalSent = true;
   const message = formatPlanningProgress(event);
   if (!message) return;
   try {
@@ -2150,6 +2237,21 @@ async function sendPlanningProgress(
   } catch (err) {
     log.warn('Planning progress send failed', { userId, error: (err as Error).message });
   }
+}
+
+async function sendTerminalOnce(
+  sender: WebviewSender,
+  userId: number,
+  control: PlanningApprovalControl,
+  message: string,
+): Promise<void> {
+  if (control.terminalSent) return;
+  control.terminalSent = true;
+  await sendPlanningProgress(sender, userId, { terminal: message });
+}
+
+function makeNoopChild(): Parameters<typeof registerOp>[0]['child'] {
+  return { kill: () => true } as unknown as Parameters<typeof registerOp>[0]['child'];
 }
 
 function formatPlanningProgress(event: PlanningProgress): string | null {

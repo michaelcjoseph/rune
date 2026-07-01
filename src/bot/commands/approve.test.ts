@@ -319,11 +319,15 @@ describe('handleApprove — PM-spec approval persistence (project 20 test-plan �
     expect(messages.filter((message) => /^Planning progress: Codex critique\.$/i.test(message))).toHaveLength(1);
     const warning = messages.find((message) => /codex.*skipped/i.test(message));
     expect(warning).toBeDefined();
+    expect(warning).toMatch(/^Planning warning:/);
     expect(warning).not.toContain('/test/project');
     expect(warning).toContain('<project>');
     expect(messages.filter((message) => /^Planning progress: context seed\.$/i.test(message))).toHaveLength(1);
     expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(1);
-    expect(messages.some((message) => /Planning succeeded:.*Created docs\/projects\/09-test\/spec\.md/i.test(message))).toBe(true);
+    const success = messages.find((message) => /^Planning succeeded:/i.test(message));
+    expect(success).toBeDefined();
+    expect(success).toMatch(/09-test/);
+    expect(success).toMatch(/Created docs\/projects\/09-test\/spec\.md/i);
     expect(vi.mocked(sender.send).mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
   });
 
@@ -350,6 +354,41 @@ describe('handleApprove — PM-spec approval persistence (project 20 test-plan �
     expect(deletePlanningSessionMock).not.toHaveBeenCalled();
     const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
     const terminal = messages.find((message) => /Planning stopped:.*PM review mismatch/i.test(message));
+    expect(terminal).toBeDefined();
+    expect(terminal).not.toContain('/test/project');
+    expect(terminal).toContain('<project>');
+    expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
+  });
+
+  it('surfaces a scrubbed context-seed terminal line when downstream planning fails during context seed', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runDownstreamPlanMock.mockImplementation(async (_approvedSpec: unknown, options: any) => {
+      await options.progress({ stage: 'tech-lead-breakdown' });
+      await options.progress({ stage: 'pm-review-match' });
+      await options.progress({ stage: 'claude-critique' });
+      await options.progress({ stage: 'codex-critique' });
+      await options.progress({ stage: 'context-seed' });
+      throw new Error('context seed failed while reading /test/project/docs/projects/20/context.md');
+    });
+
+    const sender = makeSender();
+    await expect(handleApprove(sender, 100)).resolves.toBeUndefined();
+
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    expect(messages.filter((message) => /^Planning progress: context seed\.$/i.test(message))).toHaveLength(1);
+    const terminal = messages.find((message) => /Planning stopped:.*context seed/i.test(message));
     expect(terminal).toBeDefined();
     expect(terminal).not.toContain('/test/project');
     expect(terminal).toContain('<project>');
@@ -497,9 +536,10 @@ describe('handleApprove — post-approval in-flight op (project 20 test-plan §2
 
     const sendMock = vi.mocked(sender.send);
     const successIndex = sendMock.mock.calls.findIndex(([, message]) =>
-      /Planning succeeded:.*Created docs\/projects\/20-inflight-plan\/spec\.md/i.test(String(message)),
+      /^Planning succeeded:.*20-inflight-plan/i.test(String(message)),
     );
     expect(successIndex).toBeGreaterThanOrEqual(0);
+    expect(String(sendMock.mock.calls[successIndex]![1])).toMatch(/Created docs\/projects\/20-inflight-plan\/spec\.md/i);
     expect(unregisterOpMock).toHaveBeenCalledWith('op-post-approval-plan', 'success');
     expect(unregisterOpMock.mock.invocationCallOrder[0]!).toBeGreaterThan(
       sendMock.mock.invocationCallOrder[successIndex]!,

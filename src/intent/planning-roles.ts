@@ -319,7 +319,9 @@ export async function runDownstreamPlan(
     tasks: techLead.tasks,
   });
   if (!review.match) {
-    throw new Error(`Downstream planning mismatch: ${review.mismatches.join('; ')}`);
+    const message = `PM review mismatch: ${review.mismatches.join('; ')}`;
+    await progress({ terminal: message });
+    throw new Error(message);
   }
 
   let critiquedSpec = spec;
@@ -344,15 +346,22 @@ export async function runDownstreamPlan(
   }
 
   await progress({ stage: 'context-seed' });
-  const firstTask = critiquedTasks[0];
-  const context = seedProjectContext({
-    product: approvedSpec.product,
-    projectTitle: approvedSpec.title,
-    specSummary: firstParagraph(critiquedSpec),
-    assumptions,
-    interfaces: critiquedTechSpec,
-    firstTaskHandoff: firstTask ? `Start with: ${firstTask.text}` : undefined,
-  });
+  let context: string;
+  try {
+    const firstTask = critiquedTasks[0];
+    context = seedProjectContext({
+      product: approvedSpec.product,
+      projectTitle: approvedSpec.title,
+      specSummary: firstParagraph(critiquedSpec),
+      assumptions,
+      interfaces: critiquedTechSpec,
+      firstTaskHandoff: firstTask ? `Start with: ${firstTask.text}` : undefined,
+    });
+  } catch (err) {
+    const message = `context seed failed: ${(err as Error).message}`;
+    await progress({ terminal: message });
+    throw new Error(message);
+  }
 
   return plannedOutcomeToArtifact(approvedSpec.product, {
     kind: 'planned',

@@ -25,6 +25,7 @@ import type { MessageSender } from '../../transport/sender.js';
 import { runScaffoldApproval } from '../../jobs/scaffold-approval.js';
 import { runDownstreamPlan, type PlanningProgress, type PlanningProgressStage } from '../../intent/planning-roles.js';
 import { isPmSpecApprovalArtifact, type SpecArtifact } from '../../intent/planner.js';
+import { isCancelled, registerOp, unregisterOp } from '../../transport/in-flight.js';
 import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
 import {
   approveActivePlanningSession,
@@ -36,6 +37,22 @@ import {
 import { createLogger } from '../../utils/logger.js';
 
 const log = createLogger('cmd-approve');
+
+class PlanningApprovalCancelled extends Error {
+  constructor() {
+    super('Planning approval cancelled.');
+  }
+}
+
+type PlanningApprovalStatus =
+  | { status: 'success' }
+  | { status: 'error'; error: string }
+  | { status: 'cancelled' };
+
+interface PlanningApprovalControl {
+  opId?: string;
+  terminalSent: boolean;
+}
 
 export async function handleApprove(sender: MessageSender, userId: number): Promise<void> {
   // Retry path first — if a previous /approve left the session in `approved`
@@ -84,30 +101,75 @@ async function downstreamThenScaffoldAndDelete(
   userId: number,
   session: StoredPlanningSession,
 ): Promise<void> {
-  const prepared = await prepareApprovedSessionForScaffold(sender, userId, session);
-  if (!prepared) return;
-  await scaffoldAndDelete(sender, userId, prepared);
+  if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
+    await sender.send(
+      userId,
+      'This planning approval was created with a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+    );
+    return;
+  }
+
+  const op = registerOp({
+    kind: 'agent',
+    label: 'planning approval scaffold',
+    userId,
+    child: makeNoopChild(),
+  });
+  const control: PlanningApprovalControl = { opId: op?.opId, terminalSent: false };
+  const status = await runPlanningApprovalPipeline(sender, userId, session, control);
+  if (control.opId) {
+    if (status.status === 'error') {
+      unregisterOp(control.opId, 'error', status.error);
+    } else {
+      unregisterOp(control.opId, status.status);
+    }
+  }
+}
+
+async function runPlanningApprovalPipeline(
+  sender: MessageSender,
+  userId: number,
+  session: StoredPlanningSession,
+  control: PlanningApprovalControl,
+): Promise<PlanningApprovalStatus> {
+  try {
+    const prepared = await prepareApprovedSessionForScaffold(sender, userId, session, control);
+    if (!prepared) return { status: 'cancelled' };
+    return await scaffoldAndDelete(sender, userId, prepared, control);
+  } catch (err) {
+    if (err instanceof PlanningApprovalCancelled) {
+      return { status: 'cancelled' };
+    }
+    const message = (err as Error).message;
+    await sendTerminalOnce(sender, userId, control, message);
+    await sender.send(
+      userId,
+      'Planning session is still approved — run /approve again to retry.',
+    );
+    return { status: 'error', error: scrubAbsolutePaths(message) };
+  }
 }
 
 async function prepareApprovedSessionForScaffold(
   sender: MessageSender,
   userId: number,
   session: StoredPlanningSession,
+  control: PlanningApprovalControl,
 ): Promise<StoredPlanningSession | null> {
-  if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
+  const approvedSpec = session.planning.approvedSpec;
+  if (!isPmSpecApprovalArtifact(approvedSpec)) {
     await sender.send(
       userId,
       'This planning approval was created with a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
     );
     return null;
   }
-
   if (session.planning.downstreamArtifact) {
     return session;
   }
 
-  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {
-    progress: (event) => sendPlanningProgress(sender, userId, event),
+  const downstreamArtifact = await runDownstreamPlan(approvedSpec, {
+    progress: (event) => sendPlanningProgress(sender, userId, event, control),
   });
   updatePlanningSession(userId, (sess) => ({
     ...sess,
@@ -146,14 +208,15 @@ async function scaffoldAndDelete(
   sender: MessageSender,
   userId: number,
   session: StoredPlanningSession,
-): Promise<void> {
+  control: PlanningApprovalControl,
+): Promise<PlanningApprovalStatus> {
   log.info('Dispatching scaffold-approval', {
     userId,
     product: session.planning.product,
     promotionId: session.promotionId,
   });
 
-  await sendPlanningProgress(sender, userId, { stage: 'scaffold' });
+  await sendPlanningProgress(sender, userId, { stage: 'scaffold' }, control);
   const outcome = await runScaffoldApproval(session);
   if (!outcome.ok) {
     log.error('scaffold-approval failed; session left approved for retry', {
@@ -163,17 +226,21 @@ async function scaffoldAndDelete(
     });
     // Echo the agent's reply on a verify failure so the user sees what it said.
     const body = outcome.agentText
-      ? `${scrubAbsolutePaths(outcome.message)}\n\nAgent reply:\n${outcome.agentText}`
+      ? `${scrubAbsolutePaths(outcome.message)}\n\nAgent reply:\n${scrubAbsolutePaths(outcome.agentText)}`
       : scrubAbsolutePaths(outcome.message);
+    await sendTerminalOnce(sender, userId, control, `scaffold failed: ${outcome.message}`);
     await sender.send(
       userId,
       `Scaffolding failed: ${body}\n\n` +
         `Planning session is still approved — run /approve again to retry.`,
     );
-    return;
+    return { status: 'error', error: scrubAbsolutePaths(`scaffold failed: ${outcome.message}`) };
   }
 
-  let reply = outcome.agentText;
+  await sendPlanningProgress(sender, userId, {
+    success: `${outcome.slug}: ${outcome.agentText}`,
+  });
+  let reply = scrubAbsolutePaths(outcome.agentText);
   if (outcome.promotion === 'mark-source-error') {
     // The project scaffolded but the source bullet couldn't be marked — the promotion is in a
     // retryable error state. Tell the user; the project itself is fine.
@@ -187,13 +254,24 @@ async function scaffoldAndDelete(
     slug: outcome.slug,
     promotion: outcome.promotion,
   });
+  return { status: 'success' };
 }
 
 async function sendPlanningProgress(
   sender: MessageSender,
   userId: number,
   event: PlanningProgress,
+  control?: PlanningApprovalControl,
 ): Promise<void> {
+  if (event.stage && control?.opId && isCancelled(control.opId)) {
+    await sendTerminalOnce(sender, userId, control, 'planning approval cancelled');
+    await sender.send(
+      userId,
+      'Planning session is still approved — run /approve again to retry.',
+    );
+    throw new PlanningApprovalCancelled();
+  }
+  if (event.terminal && control) control.terminalSent = true;
   const message = formatPlanningProgress(event);
   if (!message) return;
   try {
@@ -201,6 +279,21 @@ async function sendPlanningProgress(
   } catch (err) {
     log.warn('Planning progress send failed', { userId, error: (err as Error).message });
   }
+}
+
+async function sendTerminalOnce(
+  sender: MessageSender,
+  userId: number,
+  control: PlanningApprovalControl,
+  message: string,
+): Promise<void> {
+  if (control.terminalSent) return;
+  control.terminalSent = true;
+  await sendPlanningProgress(sender, userId, { terminal: message });
+}
+
+function makeNoopChild(): Parameters<typeof registerOp>[0]['child'] {
+  return { kill: () => true } as unknown as Parameters<typeof registerOp>[0]['child'];
 }
 
 function formatPlanningProgress(event: PlanningProgress): string | null {

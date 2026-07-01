@@ -104,6 +104,21 @@ describe('Planner — the approval gate (test-plan §9)', () => {
       /scoping|propos|already/i,
     );
   });
+
+  it('has exactly one planning-flow human approval gate before downstream automation', () => {
+    const scoping = startPlanning('an idea', 'chat', 'aura');
+    const proposed = proposeSpec(scoping, samplePmSpecArtifact() as any);
+    const approved = approvePlan(proposed);
+    const downstreamReady = { ...approved, downstreamArtifact: sampleArtifact() } as any;
+
+    const planningFlowStates = [scoping, proposed, approved, downstreamReady];
+    const humanGateStates = planningFlowStates.filter((session) => session.status === 'spec-proposed');
+
+    expect(humanGateStates).toHaveLength(1);
+    expect(() => approvePlan(scoping)).toThrow(/spec|propos/i);
+    expect(() => approvePlan(approved)).toThrow(/spec|propos|approved/i);
+    expect(() => approvePlan(downstreamReady)).toThrow(/spec|propos|approved/i);
+  });
 });
 
 describe('Planner — the spec artifact (test-plan §9)', () => {

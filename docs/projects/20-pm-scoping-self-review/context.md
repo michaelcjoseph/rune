@@ -44,9 +44,9 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- `
+- cancellation, terminal, success, and path-scrub behavior for cockpit approval.
 
-Verification:
-
+Verified:
+- `npm test -- src/intent/planning-roles.test.ts src/bot/commands/approve.test.ts src/server/webview.test.ts src/intent/planner.test.ts` passes: 145 tests.
 - `npm run build` passes.
-- `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts` is red as expected for this tests-first task: 11 failures, pointing at missing progress success/terminal surfacing, in-flight registration/unregistering, and cancellation behavior.
+- `git diff --check` passes.

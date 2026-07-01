@@ -417,6 +417,16 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
       'codex-critique',
       'context-seed',
     ]);
+    expect(
+      progress.map((event) => event.stage ? `stage:${event.stage}` : event.warning ? 'warning' : 'other'),
+    ).toEqual([
+      'stage:tech-lead-breakdown',
+      'stage:pm-review-match',
+      'stage:claude-critique',
+      'stage:codex-critique',
+      'warning',
+      'stage:context-seed',
+    ]);
     for (const stage of ['tech-lead-breakdown', 'pm-review-match', 'claude-critique', 'codex-critique', 'context-seed']) {
       expect(progress.filter((event) => event.stage === stage)).toHaveLength(1);
     }
@@ -424,5 +434,78 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
     expect(warning?.warning).toMatch(/codex.*skipped|last coherent plan/i);
     expect(progress.some((event) => event.terminal || event.success)).toBe(false);
     expect(artifact.techSpec).toContain('last coherent plan');
+  });
+
+  it('emits a terminal progress event before stopping on pmReviewMatch mismatch', async () => {
+    const progress: PlanningProgress[] = [];
+    const deps = makeDeps({
+      pmAssessAndSpec: vi.fn(async (): Promise<PmSpecResult> => {
+        throw new Error('the retired specified-enough gate must not run post-approval');
+      }),
+      pmReviewMatch: vi.fn(async () => ({
+        match: false,
+        mismatches: ['Tech spec dropped the approved dashboard scope'],
+      })),
+      critiquePlan: vi.fn(async (plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0]) => ({
+        plan,
+        codexSkipped: false,
+      })),
+    });
+
+    await expect(
+      (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+        deps,
+        progress: (event) => {
+          progress.push(event);
+        },
+      }),
+    ).rejects.toThrow(/dashboard scope/i);
+
+    expect(progress.filter((event) => event.stage).map((event) => event.stage)).toEqual([
+      'tech-lead-breakdown',
+      'pm-review-match',
+    ]);
+    const terminal = progress.find((event) => event.terminal);
+    expect(terminal).toBeDefined();
+    expect(terminal!.terminal).toMatch(/pm review|mismatch|dashboard scope/i);
+    expect(progress.some((event) => event.stage === 'claude-critique')).toBe(false);
+    expect(progress.some((event) => event.success)).toBe(false);
+  });
+
+  it('emits a terminal progress event when context seed fails after the context-seed stage starts', async () => {
+    const progress: PlanningProgress[] = [];
+    const invalidProductSpec = {
+      ...PM_SPEC_APPROVAL,
+      product: 'not a valid product slug',
+    } satisfies PmSpecApprovalArtifact;
+
+    await expect(
+      (await import('./planning-roles.js')).runDownstreamPlan(invalidProductSpec, {
+        deps: makeDeps({
+          pmAssessAndSpec: vi.fn(async (): Promise<PmSpecResult> => {
+            throw new Error('the retired specified-enough gate must not run post-approval');
+          }),
+          critiquePlan: vi.fn(async (plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0]) => ({
+            plan,
+            codexSkipped: false,
+          })),
+        }),
+        progress: (event) => {
+          progress.push(event);
+        },
+      }),
+    ).rejects.toThrow(/context|product slug/i);
+
+    expect(progress.filter((event) => event.stage).map((event) => event.stage)).toEqual([
+      'tech-lead-breakdown',
+      'pm-review-match',
+      'claude-critique',
+      'codex-critique',
+      'context-seed',
+    ]);
+    const terminal = progress.find((event) => event.terminal);
+    expect(terminal).toBeDefined();
+    expect(terminal!.terminal).toMatch(/context seed|product slug/i);
+    expect(progress.some((event) => event.success)).toBe(false);
   });
 });

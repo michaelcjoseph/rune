@@ -896,11 +896,15 @@ describe('server/webview', () => {
       expect(messages.filter((message) => /^Planning progress: Codex critique\.$/i.test(message))).toHaveLength(1);
       const warning = messages.find((message) => /codex.*skipped/i.test(message));
       expect(warning).toBeDefined();
+      expect(warning).toMatch(/^Planning warning:/);
       expect(warning).not.toContain('/test/project');
       expect(warning).toContain('<project>');
       expect(messages.filter((message) => /^Planning progress: context seed\.$/i.test(message))).toHaveLength(1);
       expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(1);
-      expect(messages.some((message) => /Planning succeeded:.*Created docs\/projects\/20-downstream-plan\/spec\.md/i.test(message))).toBe(true);
+      const success = messages.find((message) => /^Planning succeeded:/i.test(message));
+      expect(success).toBeDefined();
+      expect(success).toMatch(/20-downstream-plan/);
+      expect(success).toMatch(/Created docs\/projects\/20-downstream-plan\/spec\.md/i);
       expect(mockWebviewSender.send.mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
     });
 
@@ -937,9 +941,12 @@ describe('server/webview', () => {
       );
 
       const successIndex = mockWebviewSender.send.mock.calls.findIndex(([, message]) =>
-        /Planning succeeded:.*Created docs\/projects\/20-webview-inflight-plan\/spec\.md/i.test(String(message)),
+        /^Planning succeeded:.*20-webview-inflight-plan/i.test(String(message)),
       );
       expect(successIndex).toBeGreaterThanOrEqual(0);
+      expect(String(mockWebviewSender.send.mock.calls[successIndex]![1])).toMatch(
+        /Created docs\/projects\/20-webview-inflight-plan\/spec\.md/i,
+      );
       expect(mockUnregisterOp).toHaveBeenCalledWith('op-webview-post-approval-plan', 'success');
       expect(mockUnregisterOp.mock.invocationCallOrder[0]!).toBeGreaterThan(
         mockWebviewSender.send.mock.invocationCallOrder[successIndex]!,
