@@ -313,8 +313,29 @@ type FakeMcpRequest = {
 async function startMcpMetricsToolServer(opts: {
   toolResult?: 'ok' | 'tool-error';
   requiredBearerToken?: string;
+  /**
+   * How the fake daemon frames MCP protocol responses. The real Streamable-HTTP
+   * daemon answers with SSE (`text/event-stream`) because the SDK transport does
+   * not enable JSON responses, so that is the default. `'json'` covers the
+   * forward-compatible case where `enableJsonResponse` is ever turned on.
+   */
+  transport?: 'sse' | 'json';
 } = {}): Promise<{ port: number; requests: FakeMcpRequest[]; close: () => Promise<void> }> {
   const requests: FakeMcpRequest[] = [];
+  const transport = opts.transport ?? 'sse';
+  const writeMcpResult = (
+    res: ServerResponse,
+    message: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): void => {
+    if (transport === 'sse') {
+      res.writeHead(200, { ...extraHeaders, 'Content-Type': 'text/event-stream' });
+      res.end(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+    } else {
+      res.writeHead(200, { ...extraHeaders, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(message));
+    }
+  };
   const mcpServer = http.createServer((req, res) => {
     let raw = '';
     req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
@@ -344,11 +365,7 @@ async function startMcpMetricsToolServer(opts: {
       }
 
       if (body?.method === 'initialize') {
-        res.writeHead(200, {
-          'Content-Type': 'application/json',
-          'mcp-session-id': 'test-mcp-session',
-        });
-        res.end(JSON.stringify({
+        writeMcpResult(res, {
           jsonrpc: '2.0',
           id: body.id,
           result: {
@@ -356,7 +373,7 @@ async function startMcpMetricsToolServer(opts: {
             capabilities: { tools: {} },
             serverInfo: { name: 'fake-rune-mcp', version: '1.0.0' },
           },
-        }));
+        }, { 'mcp-session-id': 'test-mcp-session' });
         return;
       }
 
@@ -367,8 +384,7 @@ async function startMcpMetricsToolServer(opts: {
       }
 
       if (body?.method === 'tools/call' && body?.params?.name === 'mcp_metrics_snapshot') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
+        writeMcpResult(res, {
           jsonrpc: '2.0',
           id: body.id,
           result: opts.toolResult === 'tool-error'
@@ -379,7 +395,7 @@ async function startMcpMetricsToolServer(opts: {
             : {
                 content: [{ type: 'text', text: JSON.stringify(mcpMetricsSnapshotFixture) }],
               },
-        }));
+        });
         return;
       }
 
@@ -954,6 +970,54 @@ describe('server/webview', () => {
         ))).toBe(true);
         expect(mcpServer.requests.map((request) => request.path)).not.toContain('/health');
         expect(mcpServer.requests.map((request) => request.path)).not.toContain('/metrics');
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('parses an SSE (text/event-stream) metrics response from the Streamable-HTTP daemon', async () => {
+      // Regression: the daemon's StreamableHTTPServerTransport answers with
+      // `event: message\ndata: {...}` (no enableJsonResponse), and the proxy
+      // used to JSON.parse the raw body, throwing
+      // `Unexpected token 'e', "event: men"... is not valid JSON` and forcing
+      // the cockpit Monitoring panel into a permanent degraded state.
+      const mcpServer = await startMcpMetricsToolServer({ transport: 'sse' });
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+          status: 'ok',
+          sourceTool: 'mcp_metrics_snapshot',
+          mcpMetrics: mcpMetricsSnapshotFixture,
+        });
+        expect(res.body.error).toBeUndefined();
+      } finally {
+        await mcpServer.close();
+      }
+    });
+
+    it('still parses a plain JSON metrics response if the daemon enables JSON responses', async () => {
+      const mcpServer = await startMcpMetricsToolServer({ transport: 'json' });
+      try {
+        mockConfig.RUNE_MCP_HOST = '127.0.0.1';
+        mockConfig.RUNE_MCP_PORT = mcpServer.port;
+
+        const res = await makeRequest(port, '/api/mcp/tools/mcp_metrics_snapshot', {
+          headers: { authorization: 'Bearer test-secret' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+          status: 'ok',
+          sourceTool: 'mcp_metrics_snapshot',
+          mcpMetrics: mcpMetricsSnapshotFixture,
+        });
       } finally {
         await mcpServer.close();
       }

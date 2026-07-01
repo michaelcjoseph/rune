@@ -258,6 +258,47 @@ type McpMetricsSession = {
 let mcpMetricsSession: McpMetricsSession | null = null;
 let mcpMetricsSessionInit: Promise<McpMetricsSession> | null = null;
 
+/**
+ * Extract the JSON-RPC payload from a Server-Sent Events body.
+ *
+ * The Streamable-HTTP MCP daemon answers a single `tools/call`/`initialize`
+ * POST with `Content-Type: text/event-stream` (the SDK transport does not set
+ * `enableJsonResponse`), so the body is one or more SSE frames:
+ *
+ *   event: message
+ *   data: {"jsonrpc":"2.0","id":2,"result":{...}}
+ *
+ * We collect the `data:` field(s) of each event (blank-line-separated, multiple
+ * `data:` lines joined with `\n` per the SSE spec), JSON.parse each, and return
+ * the JSON-RPC response carrying `result`/`error` — falling back to the last
+ * parsed event. Comment lines (`:`-prefixed keep-alives) and non-JSON data are
+ * skipped. Throws if no JSON data payload is present.
+ */
+function extractSseJson(body: string): unknown {
+  const events: unknown[] = [];
+  const blocks = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
+  for (const block of blocks) {
+    const dataLines: string[] = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+    const payload = dataLines.join('\n').trim();
+    if (!payload) continue;
+    try {
+      events.push(JSON.parse(payload));
+    } catch {
+      // Skip non-JSON data payloads (keep-alives, partial frames).
+    }
+  }
+  if (events.length === 0) {
+    throw new Error('MCP daemon returned an event stream with no JSON data payload');
+  }
+  const response = events.find((evt) => (
+    evt !== null && typeof evt === 'object' && ('result' in evt || 'error' in evt)
+  ));
+  return response ?? events[events.length - 1];
+}
+
 function readJsonResponse(res: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -266,6 +307,24 @@ function readJsonResponse(res: IncomingMessage): Promise<unknown> {
     res.on('end', () => {
       if (!body.trim()) {
         resolve(null);
+        return;
+      }
+      // The Streamable-HTTP MCP daemon replies with SSE, not JSON. Detect it by
+      // content-type, with a body-shape fallback so a missing/odd header still
+      // parses instead of throwing `Unexpected token 'e', "event: mes...`. The
+      // SDK transport always emits the frame's `event:`/`data:` field at byte 0,
+      // and valid JSON never begins with either, so this can't reroute real JSON.
+      const contentType = String(res.headers['content-type'] ?? '').toLowerCase();
+      if (
+        contentType.includes('text/event-stream') ||
+        body.startsWith('event:') ||
+        body.startsWith('data:')
+      ) {
+        try {
+          resolve(extractSseJson(body));
+        } catch (err) {
+          reject(err);
+        }
         return;
       }
       try {
