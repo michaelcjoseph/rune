@@ -22,7 +22,13 @@ vi.mock('../utils/logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
-const { mockConfig, mockAskClaudeWithContext, mockCleanupSession, mockComposeRoleContext } = vi.hoisted(() => ({
+const {
+  mockConfig,
+  mockAskClaudeWithContext,
+  mockCleanupSession,
+  mockComposeRoleContext,
+  mockRunSelfReview,
+} = vi.hoisted(() => ({
   mockConfig: {
     PLANNING_SESSIONS_FILE: '/test/planning-sessions.json',
     PLANNING_ARTIFACTS_DIR: '/test/planning-artifacts',
@@ -30,6 +36,7 @@ const { mockConfig, mockAskClaudeWithContext, mockCleanupSession, mockComposeRol
   mockAskClaudeWithContext: vi.fn(),
   mockCleanupSession: vi.fn(),
   mockComposeRoleContext: vi.fn(),
+  mockRunSelfReview: vi.fn(),
 }));
 vi.mock('../config.js', () => ({ default: mockConfig }));
 vi.mock('../ai/claude.js', () => ({
@@ -38,6 +45,9 @@ vi.mock('../ai/claude.js', () => ({
 }));
 vi.mock('../roles/loader.js', () => ({
   composeRoleContext: mockComposeRoleContext,
+}));
+vi.mock('../intent/self-review.js', () => ({
+  runSelfReview: mockRunSelfReview,
 }));
 
 // --- Imports under test ---
@@ -75,6 +85,7 @@ beforeEach(() => {
     systemInstructions: 'PM ROLE SYSTEM PROMPT',
     referenceContext: '<pm-memory>reference only</pm-memory>',
   });
+  mockRunSelfReview.mockImplementation(async ({ artifact }) => ({ artifact, revised: false }));
   restorePlanningSessions();
 });
 
@@ -152,6 +163,101 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
       assumptions: ['Assume Telegram first.'],
       selfReview: 'Confirmed the scope is internally consistent.',
     });
+  });
+
+  it('runs PM self-review after the interview emits a spec and exposes the reviewed artifact for approval', async () => {
+    const authoredSpec = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'Approval boundary',
+      spec: 'Approve this spec, then also approve generated tasks.',
+      assumptions: [],
+      selfReview: 'Ready.',
+    } satisfies PmSpecApprovalArtifact;
+    const reviewedSpec = {
+      ...authoredSpec,
+      spec: 'Approve this PM spec once; generated downstream planning runs automatically after approval.',
+      selfReview: {
+        revised: true,
+        summary: 'Aligned the approval boundary with the one-gate contract.',
+      },
+    } satisfies PmSpecApprovalArtifact;
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'spec',
+      text: 'Spec ready for approval.',
+      artifact: authoredSpec,
+    }));
+    mockRunSelfReview.mockImplementationOnce(async ({ role, artifact, render, parse }) => {
+      expect(role).toBe('pm');
+      expect(artifact).toEqual(authoredSpec);
+      expect(scopingTurn).toHaveBeenCalledOnce();
+      expect(getPlanningSession(29)?.planning.status).toBe('scoping');
+      expect(getPlanningSession(29)?.planning.artifact).toBeUndefined();
+
+      const rendered = render(artifact);
+      expect(rendered).toContain('Approval boundary');
+      expect(rendered).toContain('Approve this spec, then also approve generated tasks.');
+      expect(rendered).not.toContain('interview transcript');
+      expect(rendered).not.toContain('go');
+
+      const parsed = parse([
+        'Self-review complete.',
+        '```pm-spec',
+        JSON.stringify(reviewedSpec, null, 2),
+        '```',
+      ].join('\n'));
+      expect(parsed).toEqual(reviewedSpec);
+
+      return { artifact: reviewedSpec, revised: true };
+    });
+    createPlanningSession(29, 'idea', 'chat', 'aura');
+
+    const result = await handlePlanningTurn({ scopingTurn }, 29, 'go');
+
+    expect(result).toEqual({
+      reply: 'Spec ready for approval.',
+      status: 'spec-proposed',
+      artifact: reviewedSpec,
+    });
+    expect(mockRunSelfReview).toHaveBeenCalledOnce();
+    expect(scopingTurn.mock.invocationCallOrder[0]!).toBeLessThan(
+      mockRunSelfReview.mock.invocationCallOrder[0]!,
+    );
+    expect(mockRunSelfReview).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'pm',
+      artifact: authoredSpec,
+      render: expect.any(Function),
+      parse: expect.any(Function),
+    }));
+    expect(getPlanningSession(29)?.planning.artifact).toEqual(reviewedSpec);
+    expect(getPlanningSession(29)?.planning.artifact).not.toEqual(authoredSpec);
+  });
+
+  it('surfaces PM self-review failure instead of presenting an unreviewed spec as reviewed', async () => {
+    const authoredSpec = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'Unreviewed spec',
+      spec: 'This spec should not be presented if the cold review fails.',
+      assumptions: [],
+      selfReview: 'Ready.',
+    } satisfies PmSpecApprovalArtifact;
+    const scopingTurn: ScopingTurn = vi.fn(async () => ({
+      kind: 'spec',
+      text: 'Spec ready for approval.',
+      artifact: authoredSpec,
+    }));
+    mockRunSelfReview.mockRejectedValueOnce(new Error('self-review failed: missing self-review-artifact fence'));
+    createPlanningSession(30, 'scope an idea', 'chat', 'aura');
+
+    await expect(handlePlanningTurn({ scopingTurn }, 30, 'go')).rejects.toThrow(
+      /self-review|planning/i,
+    );
+    expect(mockRunSelfReview).toHaveBeenCalledOnce();
+    expect(getPlanningSession(30)?.planning.status).toBe('scoping');
+    expect(getPlanningSession(30)?.planning.artifact).toBeUndefined();
   });
 
   it('does not consult the retired specified-enough gate when the PM emits a spec', async () => {

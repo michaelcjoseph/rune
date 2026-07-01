@@ -44,10 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- y one strict-format retry for malformed/flag-only output
-- failure after retry remains unparseable
-- scope preservation
-- whitespace-normalized `revised=false`
+-  fails red as expected: 2 PM self-review tests fail because `handlePlanningTurn` does not yet invoke `runSelfReview` or return the reviewed artifact.
 
-Verification:
-`npx vitest run src/intent/self-review.test.ts` fails red as expected because `src/intent/self-review.ts` does not exist yet.
+No production code changed. Note: `src/reviews/planning-handler.test.ts` already had staged changes; my additional edits are unstaged on top of that.
