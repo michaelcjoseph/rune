@@ -14,7 +14,7 @@
  * See: docs/projects/14-product-team-agents/test-plan.md §2
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import {
   runPlannerRoles,
@@ -263,5 +263,126 @@ describe('planning-roles — context seed', () => {
     const outcome = await runPlannerRoles(INPUT, makeDeps());
     if (outcome.kind !== 'planned') throw new Error('expected planned');
     expect(outcome.context).toContain('Streaks reset at local midnight');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project 20: downstream split after the single PM-spec approval gate
+// ---------------------------------------------------------------------------
+
+const PM_SPEC_APPROVAL = {
+  version: 2,
+  kind: 'pm-spec',
+  product: 'aura',
+  title: 'PM-authored streak spec',
+  spec: 'PM-authored spec from the interview.\n\n## Assumptions\n\n- Local midnight resets.',
+  assumptions: ['Local midnight resets.'],
+  selfReview: { revised: false, summary: 'Spec is internally consistent.' },
+} as const;
+
+async function runDownstreamPlanForTest(
+  deps: PlanningRoleDeps,
+): Promise<{
+  product: string;
+  title: string;
+  spec: string;
+  tasks: string;
+  testPlan: string;
+  techSpec?: string;
+  context?: string;
+  assumptions?: string[];
+}> {
+  const planningRoles = await import('./planning-roles.js') as Record<string, unknown>;
+  expect(planningRoles.runDownstreamPlan).toBeTypeOf('function');
+  return (planningRoles.runDownstreamPlan as (
+    approvedSpec: typeof PM_SPEC_APPROVAL,
+    options: { deps: PlanningRoleDeps },
+  ) => Promise<{
+    product: string;
+    title: string;
+    spec: string;
+    tasks: string;
+    testPlan: string;
+    techSpec?: string;
+    context?: string;
+    assumptions?: string[];
+  }>)(PM_SPEC_APPROVAL, { deps });
+}
+
+describe('planning-roles — runDownstreamPlan approval split (project 20 test-plan §1)', () => {
+  it('starts from the approved PM spec and returns the full scaffold artifact without re-running PM specified-enough assessment', async () => {
+    const calls: string[] = [];
+    const pmAssessAndSpec = vi.fn(async (): Promise<PmSpecResult> => {
+      throw new Error('the retired specified-enough gate must not run post-approval');
+    });
+    const techLeadBreakdown = vi.fn(async ({
+      product,
+      spec,
+    }: Parameters<PlanningRoleDeps['techLeadBreakdown']>[0]) => {
+      calls.push('tech-lead-breakdown');
+      expect(product).toBe('aura');
+      expect(spec).toContain('PM-authored spec from the interview');
+      return {
+        techSpec: 'Tech spec from approved PM spec.',
+        tasks: SIZED_TASKS.slice(0, 1),
+      };
+    });
+    const pmReviewMatch = vi.fn(async () => {
+      calls.push('pm-review-match');
+      return { match: true, mismatches: [] };
+    });
+    const critiquePlan = vi.fn(async (
+      plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0],
+    ) => {
+      calls.push('critique');
+      return {
+        plan: {
+          ...plan,
+          techSpec: `${plan.techSpec}\n\nCritiqued before context seed.`,
+        },
+        codexSkipped: false,
+      };
+    });
+
+    const artifact = await runDownstreamPlanForTest({
+      pmAssessAndSpec,
+      techLeadBreakdown,
+      pmReviewMatch,
+      critiquePlan,
+    });
+
+    expect(pmAssessAndSpec).not.toHaveBeenCalled();
+    expect(calls).toEqual(['tech-lead-breakdown', 'pm-review-match', 'critique']);
+    expect(artifact).toMatchObject({
+      product: 'aura',
+      title: 'PM-authored streak spec',
+      assumptions: ['Local midnight resets.'],
+    });
+    expect(artifact.spec).toContain('PM-authored spec from the interview');
+    expect(artifact.techSpec).toContain('Critiqued before context seed');
+    expect(artifact.tasks).toContain('Tests (write first)');
+    expect(artifact.testPlan).toContain('p1-core');
+    expect(artifact.context).toContain('PM-authored streak spec');
+  });
+
+  it('keeps pmReviewMatch automated and fail-closed before critique or scaffold artifacts are produced', async () => {
+    const critiquePlan = vi.fn(async (
+      plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0],
+    ) => ({ plan, codexSkipped: false }));
+    const deps = makeDeps({
+      pmAssessAndSpec: vi.fn(async (): Promise<PmSpecResult> => {
+        throw new Error('the retired specified-enough gate must not run post-approval');
+      }),
+      pmReviewMatch: vi.fn(async () => ({
+        match: false,
+        mismatches: ['Tech spec dropped the approved home-card scope'],
+      })),
+      critiquePlan,
+    });
+
+    await expect(runDownstreamPlanForTest(deps)).rejects.toThrow(/mismatch|drift|home-card/i);
+    expect(deps.pmAssessAndSpec).not.toHaveBeenCalled();
+    expect(deps.pmReviewMatch).toHaveBeenCalledOnce();
+    expect(critiquePlan).not.toHaveBeenCalled();
   });
 });

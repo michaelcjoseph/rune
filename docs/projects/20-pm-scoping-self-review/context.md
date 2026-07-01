@@ -44,6 +44,7 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- -reporter verbose`
+- `
+- Failures point to missing `runDownstreamPlan` export and webview approval still scaffolding directly.
 
-Result is red as expected for test-first work: `14 failed | 92 passed`. Failures point at the missing PM-spec approval split, downstream planning persistence/reuse, legacy hard-fail, and scaffold use of `downstreamArtifact`. No implementation files changed and no commit was made.
+No commits made. Note: `src/server/cockpit-ux.test.ts` already had staged changes before my edits, so it now shows `MM`; I left the existing staged content staged and added my changes unstaged.

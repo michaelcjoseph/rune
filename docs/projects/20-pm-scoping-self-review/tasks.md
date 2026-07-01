@@ -16,7 +16,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] Write the test suite for **merge-interview-into-pm** — test-plan.md §1.
 - [x] Write the test suite for **retire-specified-enough-gate** — test-plan.md §1.
 - [x] Write the test suite for **persist-spec-approval-state** — test-plan.md §1.
-- [ ] Write the test suite for **reposition-approval-split-pipeline** — test-plan.md §1.
+- [x] Write the test suite for **reposition-approval-split-pipeline** — test-plan.md §1.
 - [ ] Write the test suite for **legacy-session-hard-fail** — test-plan.md §1.
 - [ ] Confirm every suite above fails (red) before starting implementation.
 
