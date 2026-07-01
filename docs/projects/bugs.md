@@ -1,5 +1,7 @@
 ## Active
 - [ ] Operations container should show stream in reverse descending order starting with most recent at the top instead of most recent at the bottom.
+- [ ] /fresh is failing
+  - Keep getting errors like this: `Could not summarize conversation — session reset. Error: No conversation found with session ID: 5f3dadf7-b327-418f-acb0-6cbb94b9945d`
 - [ ] Orchestrated runs are single-repo, but a project can carry tasks whose deliverables live in a *different* product's repo — those tasks have no way to land and "complete" by writing assertion tests instead. **The core defect behind the project-19 Phase 6 false-complete.**
   - **Issue**
     - An orchestrated run is bound to exactly one product worktree. `createWorktree` resolves a single `product.repoPath` (`src/jobs/sandbox-runtime.ts:272,~355`) and every `git add`/`commit`/`merge`/`push` runs with `cwd = sandbox.worktree` (`src/jobs/orchestrated-work-runner.ts:283,333,361-363,1097-1141`). There is **no code path** that opens a second repo for an agent task.
