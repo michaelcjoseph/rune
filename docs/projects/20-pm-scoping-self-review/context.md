@@ -44,6 +44,5 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
--  tests for ordering, QA revalidation on revised diff, and failing before downstream review on self-review failure.
-
-Verification: `npm test -- src/intent/team-task-workflow.test.ts` is red as expected: 3 failing tests, all in `team-task-workflow — coder diff self-review`. No production code changed.
+- -existing `src/reviews/planning-handler.test.ts` typing errors around `selfReview.summary` and `ScopingTurn` mocks, not this new module.
+- Plain `npm test -- src/intent/self-review.test.ts` hung under the default Vitest pool, so I interrupted the test process I started and reran with `--pool=forks`.

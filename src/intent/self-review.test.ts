@@ -219,6 +219,30 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
   });
 
+  it('cleans up the throwaway session when the cold model call fails', async () => {
+    const calls: CapturedRoleCall[] = [];
+    const modelCall: SelfReviewModelCall = async ({ role, sessionId, systemPrompt, message }) => {
+      calls.push({ role, sessionId, systemPrompt, message });
+      throw new Error('transport unavailable');
+    };
+
+    await expect(
+      runSelfReview({
+        role: 'tech-lead',
+        artifact: FLAWED_SPEC,
+        render: renderArtifact,
+        parse: parseArtifact,
+        modelCall,
+      }),
+    ).rejects.toThrow(/transport unavailable/);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sessionId).toBe('self-review-session-1');
+    expect(mockRandomUUID).toHaveBeenCalledTimes(1);
+    expect(mockCleanupSession).toHaveBeenCalledTimes(1);
+    expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
+  });
+
   it('does not accept new product direction absent from the rendered artifact', async () => {
     const inventedDirection: ReviewArtifact = {
       title: 'Daily summary card',
