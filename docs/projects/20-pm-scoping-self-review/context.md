@@ -44,7 +44,10 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- ove.test.ts` fails red: current code still skips `runDownstreamPlan` for PM-spec cases and still scaffolds legacy sessions.
-- `npx vitest run src/server/webview.test.ts` fails red: current route returns `200`/`404` instead of the expected `409 restart planning` for legacy sessions.
+- sions still reach scaffold.
 
-No commits made.
+- `npx vitest run src/server/webview.test.ts`
+  - Red: 2 failed, 69 passed
+  - Failures confirm legacy approval paths return `200` / `404` instead of expected `409 restart planning`.
+
+Task complete: the suites fail for the expected contract reasons before implementation.
