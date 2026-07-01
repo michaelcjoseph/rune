@@ -44,6 +44,8 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- s/team-task-deps.test.ts` initially exposed the live-call seam issue, which I fixed. After fixture updates, the suite hung before useful output and I interrupted only the test session I started.
+- t.ts). It drives `/plan` through persisted approval, downstream scaffold progress, terminal failure surfacing, and a scaffolded task execution with real self-review ordering.
 
-Note: `src/intent/team-task-workflow.test.ts` has pre-existing staged changes; I did not edit that file.
+Verification:
+- `npx vitest run src/intent/e2e-acceptance-four-behaviors.test.ts` passes: 2 tests.
+- `npm run build` passes.
