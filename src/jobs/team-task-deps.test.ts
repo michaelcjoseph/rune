@@ -86,6 +86,9 @@ const GREEN_JUDGMENT_REPLY = [
   '```tl-test-review',
   '{"approved": true}',
   '```',
+  '```qa-diff-revalidation',
+  '{"approved": true}',
+  '```',
   '```reviewer-verdict',
   '{"pass": true, "objections": []}',
   '```',
@@ -100,7 +103,13 @@ const GREEN_JUDGMENT_REPLY = [
   '```',
 ].join('\n');
 
-const greenJudgment: JudgmentModelCall = async () => GREEN_JUDGMENT_REPLY;
+function echoSelfReviewArtifact(message: string): string | undefined {
+  const match = /```self-review-artifact\s*\n[\s\S]*?\n```/.exec(message);
+  return match?.[0];
+}
+
+const greenJudgment: JudgmentModelCall = async ({ message }) =>
+  echoSelfReviewArtifact(message) ?? GREEN_JUDGMENT_REPLY;
 
 const greenExecution = async (): Promise<ExecutionAgentResult> => ({
   ok: true,
@@ -1159,6 +1168,8 @@ describe('no-stub regression (Phase 8)', () => {
     let executionCalls = 0;
     let techLeadTestReviews = 0;
     const judgment: JudgmentModelCall = async ({ role, message }) => {
+      const selfReviewEcho = echoSelfReviewArtifact(message);
+      if (selfReviewEcho !== undefined) return selfReviewEcho;
       if (message.includes('<gate-rejection>')) {
         return 'no reusable lesson for this fixture';
       }

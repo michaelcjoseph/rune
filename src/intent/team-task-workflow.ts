@@ -201,6 +201,20 @@ export interface TeamTaskDeps {
     rejectionFeedback?: GateRejectionFeedback[];
     findingsLedger?: FindingsLedgerEntry[];
   }) => Promise<CoderResult>;
+  coderSelfReview?: (input: {
+    task: SizedTask;
+    artifact: CoderResult;
+    spec: string;
+    context: string;
+    tests: string[] | string;
+  }) => Promise<{ artifact: CoderResult; revised: boolean }>;
+  qaRevalidateDiff?: (input: {
+    task: SizedTask;
+    qa: QaResult;
+    diff: string;
+    spec: string;
+    context: string;
+  }) => Promise<{ approved: boolean; notes?: string }>;
   reviewer: (input: ReviewerInput) => Promise<ReviewerVerdict>;
   techLeadReviewDiff: (input: {
     task: SizedTask;
@@ -423,6 +437,7 @@ async function runGated(
   let previousMaxOpenSeverity: ObjectionSeverity | undefined;
   let flatMaxOpenSeverityRounds = 0;
   let continueConvergingPastConfiguredCap = false;
+  let coderSelfReviewDone = false;
   const findingsLedger: FindingsLedgerEntry[] = [];
   const explicitNonReversibleFindingIds = new Set<string>();
   while (round < configuredRoundBudget || continueConvergingPastConfiguredCap) {
@@ -436,7 +451,7 @@ async function runGated(
       'implementation',
       'coder-implementation',
     );
-    const coder = await deps.coder({
+    let coder = await deps.coder({
       task,
       spec: input.spec,
       context: input.contextMd,
@@ -444,6 +459,45 @@ async function runGated(
       ...(coderFeedback.length > 0 ? { rejectionFeedback: coderFeedback } : {}),
       ...coderFindingsLedger(findingsLedger),
     });
+    if (!coderSelfReviewDone) {
+      coderSelfReviewDone = true;
+      const reviewed = await runCoderSelfReview(deps, {
+        task,
+        artifact: coder,
+        spec: input.spec,
+        context: input.contextMd,
+        tests,
+      });
+      if (reviewed.revised && diffBehaviorChanged(coder.diff, reviewed.artifact.diff)) {
+        const qaDiffReview = await revalidateQaDiff(deps, {
+          task,
+          qa,
+          diff: reviewed.artifact.diff,
+          spec: input.spec,
+          context: input.contextMd,
+        });
+        if (!qaDiffReview.approved) {
+          const reason = qaDiffReview.notes?.trim() ||
+            'QA test intent no longer matches the self-reviewed implementation diff';
+          const feedback = buildGateRejectionFeedback({
+            rejectingRole: 'qa',
+            counterpartRole: 'coder',
+            artifact: 'implementation-diff',
+            reason,
+          });
+          await recordGateRejection(deps, feedback);
+          emitGateRejection(input, feedback);
+          return block(task, roles, handoffNotes, {
+            blockedReason: reason,
+            rejectionFeedback: feedback,
+            findingsLedger,
+            loopExitReason: 'operational',
+            noCodeTestRationale,
+          });
+        }
+      }
+      coder = reviewed.artifact;
+    }
     handoffNotes.push(...coder.handoffNotes);
     const roundFeedback: GateRejectionFeedback[] = [];
 
@@ -828,6 +882,46 @@ function fail(
       ? { noCodeTestRationale: extra.noCodeTestRationale }
       : {}),
   };
+}
+
+async function runCoderSelfReview(
+  deps: TeamTaskDeps,
+  input: {
+    task: SizedTask;
+    artifact: CoderResult;
+    spec: string;
+    context: string;
+    tests: string[] | string;
+  },
+): Promise<{ artifact: CoderResult; revised: boolean }> {
+  if (deps.coderSelfReview === undefined) {
+    return { artifact: input.artifact, revised: false };
+  }
+  return deps.coderSelfReview(input);
+}
+
+async function revalidateQaDiff(
+  deps: TeamTaskDeps,
+  input: {
+    task: SizedTask;
+    qa: QaResult;
+    diff: string;
+    spec: string;
+    context: string;
+  },
+): Promise<{ approved: boolean; notes?: string }> {
+  if (deps.qaRevalidateDiff === undefined) {
+    return { approved: true };
+  }
+  return deps.qaRevalidateDiff(input);
+}
+
+function diffBehaviorChanged(before: string, after: string): boolean {
+  return normalizeDiffForBehavior(before) !== normalizeDiffForBehavior(after);
+}
+
+function normalizeDiffForBehavior(diff: string): string {
+  return diff.replace(/\r\n?/g, '\n').trim();
 }
 
 function buildGateRejectionFeedback(input: {

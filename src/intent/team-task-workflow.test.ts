@@ -1512,6 +1512,72 @@ describe('team-task-workflow — coder diff self-review', () => {
     ]);
   });
 
+  it('does not re-validate QA test intent when coder self-review explicitly confirms the diff unchanged', async () => {
+    const order: string[] = [];
+    const reviewerDiffs: string[] = [];
+    const techLeadDiffs: string[] = [];
+    const designerDiffs: string[] = [];
+    let revalidateCalled = false;
+
+    const ev = await runTeamTaskWorkflow(
+      frontEndTask,
+      { ...INPUT, cap: 1 },
+      makeCoderSelfReviewDeps({
+        qaWriteTests: async () => {
+          order.push('qa');
+          return { kind: 'tests-written', testIds: ['test/coder-diff.test.ts'] };
+        },
+        techLeadReviewTests: async () => {
+          order.push('tl-tests');
+          return { approved: true };
+        },
+        coder: async () => {
+          order.push('coder');
+          return { diff: 'diff confirmed by self-review', handoffNotes: ['ready'] };
+        },
+        coderSelfReview: async ({ artifact }) => {
+          order.push('coder-self-review');
+          return { artifact, revised: false };
+        },
+        qaRevalidateDiff: async () => {
+          revalidateCalled = true;
+          return { approved: true };
+        },
+        reviewer: async ({ diff }) => {
+          order.push('reviewer');
+          reviewerDiffs.push(diff);
+          return cleanVerdict;
+        },
+        techLeadReviewDiff: async ({ diff }) => {
+          order.push('tech-lead-diff');
+          techLeadDiffs.push(diff);
+          return { pass: true };
+        },
+        designer: async ({ diff }) => {
+          order.push('designer');
+          designerDiffs.push(diff);
+          return { pass: true };
+        },
+        pmWrapup: forbidPmWrapup(),
+      }),
+    );
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(revalidateCalled).toBe(false);
+    expect(reviewerDiffs).toEqual(['diff confirmed by self-review']);
+    expect(techLeadDiffs).toEqual(['diff confirmed by self-review']);
+    expect(designerDiffs).toEqual(['diff confirmed by self-review']);
+    expect(order).toEqual([
+      'qa',
+      'tl-tests',
+      'coder',
+      'coder-self-review',
+      'reviewer',
+      'tech-lead-diff',
+      'designer',
+    ]);
+  });
+
   it('fails the task run when coder self-review fails, before downstream diff review sees the unreviewed diff', async () => {
     let reviewerCalled = false;
     let techLeadDiffCalled = false;

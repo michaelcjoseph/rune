@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- - `npm run build`
-- `npm test -- src/intent/planning-roles.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
-- `npm test -- src/intent/self-review.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
+- s/team-task-deps.test.ts` initially exposed the live-call seam issue, which I fixed. After fixture updates, the suite hung before useful output and I interrupted only the test session I started.
+
+Note: `src/intent/team-task-workflow.test.ts` has pre-existing staged changes; I did not edit that file.

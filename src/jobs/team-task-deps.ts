@@ -39,6 +39,7 @@ import { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
 import { loadModelPolicy, resolveModel, type ModelPolicy } from '../intent/model-policy.js';
 import { extractFencedJson } from '../intent/planning-roles-wiring.js';
+import { runSelfReview } from '../intent/self-review.js';
 import { runGateTriggeredLearning } from '../intent/gate-learning.js';
 import { writeGateLearningLesson } from '../intent/learning-write-path.js';
 import { runPostMortem } from '../intent/postmortem.js';
@@ -57,6 +58,7 @@ import {
   type GateOutcome,
   type ReviewerVerdict,
   type TaskEvidence,
+  type CoderResult,
   type TeamTaskDeps,
   type WorkflowActivityEvent,
 } from '../intent/team-task-workflow.js';
@@ -172,7 +174,13 @@ function toBinding(alias: string, policy: ModelPolicy, role: string): RoleModelB
 /** One judgment-role model invocation (the `/plan` `defaultRoleModelCall`
  *  pattern plus the policy-resolved model pin). Injected in tests. */
 export interface JudgmentModelCall {
-  (input: { role: RoleName; model: string; systemPrompt: string; message: string }): Promise<string>;
+  (input: {
+    role: RoleName;
+    model: string;
+    systemPrompt: string;
+    message: string;
+    sessionId?: string;
+  }): Promise<string>;
 }
 
 export interface TeamTaskSeams {
@@ -186,8 +194,15 @@ export interface TeamTaskSeams {
 /** Production judgment call: SOUL on the system channel, one throwaway
  *  session per invocation (fresh context, no cross-role bleed), cleaned up
  *  immediately. */
-const defaultJudgmentCall: JudgmentModelCall = async ({ role, model, systemPrompt, message }) => {
-  const sessionId = randomUUID();
+const defaultJudgmentCall: JudgmentModelCall = async ({
+  role,
+  model,
+  systemPrompt,
+  message,
+  sessionId: providedSessionId,
+}) => {
+  const sessionId = providedSessionId ?? randomUUID();
+  const ownsSession = providedSessionId === undefined;
   try {
     const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
       model,
@@ -198,7 +213,9 @@ const defaultJudgmentCall: JudgmentModelCall = async ({ role, model, systemPromp
     }
     return result.text ?? '';
   } finally {
-    cleanupSession(sessionId);
+    if (ownsSession) {
+      cleanupSession(sessionId);
+    }
   }
 };
 
@@ -333,6 +350,20 @@ const CODER_EXEC_INSTRUCTION = [
   'You are the coder. Implement EXACTLY the selected task below — nothing more.',
   'QA\'s tests already pin the contract; make them pass. Follow the conventions',
   'in the repo\'s CLAUDE.md. Do not commit; leave your changes in the worktree.',
+].join('\n');
+
+const QA_DIFF_REVALIDATION_INSTRUCTION = [
+  'You are QA. Re-evaluate the existing test intent against the coder\'s',
+  'self-reviewed diff before downstream code review starts.',
+  '',
+  'Approve only when the existing tests or no-code-test rationale still pin the',
+  'behavior represented by the revised diff. If the self-review changed behavior',
+  'outside the agreed test intent, reject with a concrete note.',
+  '',
+  'Respond with EXACTLY ONE fenced ```qa-diff-revalidation block containing JSON:',
+  '```qa-diff-revalidation',
+  '{"approved": true, "notes": "<short reason>"}',
+  '```',
 ].join('\n');
 
 const PM_WRAPUP_INSTRUCTION = [
@@ -567,6 +598,36 @@ function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } 
   return {
     resolved,
     ...(rationale !== undefined ? { rationale } : {}),
+  };
+}
+
+function renderCoderSelfReviewArtifact(artifact: CoderResult): string {
+  return [
+    'Return the corrected-or-confirmed coder artifact as exactly this fenced JSON block.',
+    '',
+    '```self-review-artifact',
+    JSON.stringify(artifact, null, 2),
+    '```',
+  ].join('\n');
+}
+
+function parseCoderSelfReviewArtifact(reply: string): CoderResult {
+  const parsed = extractFencedJson(reply, 'self-review-artifact');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('missing self-review-artifact fence');
+  }
+  const artifact = parsed as Record<string, unknown>;
+  if (typeof artifact['diff'] !== 'string') {
+    throw new Error('self-review-artifact missing diff');
+  }
+  const handoffNotes = Array.isArray(artifact['handoffNotes'])
+    ? artifact['handoffNotes']
+        .filter((note): note is string => typeof note === 'string')
+        .map((note) => note.slice(0, NOTE_MAX_CHARS))
+    : [];
+  return {
+    diff: artifact['diff'],
+    handoffNotes,
   };
 }
 
@@ -865,6 +926,52 @@ export function buildProductionTeamTaskDeps(
         throw new Error(`coder execution failed: ${result.error}`);
       }
       return { diff: result.diff, handoffNotes: tailNote(result.output) };
+    },
+
+    coderSelfReview: async ({ artifact }) => {
+      try {
+        return await runSelfReview({
+          role: 'coder',
+          artifact,
+          render: renderCoderSelfReviewArtifact,
+          parse: parseCoderSelfReviewArtifact,
+          modelCall: async ({ sessionId, systemPrompt, message }) => {
+            return seams.judgmentCall({
+              role: 'coder',
+              model: models.coder.alias,
+              systemPrompt,
+              message,
+              sessionId,
+            });
+          },
+        });
+      } catch (err) {
+        throw new Error(`coder self-review failed: ${(err as Error).message}`);
+      }
+    },
+
+    qaRevalidateDiff: async ({ task, qa, diff, spec, context }) => {
+      const qaBlock = qa.kind === 'tests-written'
+        ? `## QA tests\n\n${qa.testIds.join('\n')}\n\n## QA test diff\n\n${lastQaDiff}`
+        : `## QA no-code-test rationale\n\n${qa.rationale}`;
+      const body = [
+        `## Task\n\n${task.text}`,
+        '',
+        `## Spec\n\n${spec}`,
+        '',
+        qaBlock,
+        '',
+        `## Self-reviewed coder diff\n\n${diff}`,
+        '',
+        `## Project context\n\n${scrubPathsInText(context)}`,
+      ].join('\n');
+      const reply = await judge('qa', models.qa, QA_DIFF_REVALIDATION_INSTRUCTION, body);
+      const { value, notes } = parseFlagVerdict(
+        reply,
+        'qa-diff-revalidation',
+        'approved',
+      );
+      return { approved: value, ...(notes !== undefined ? { notes } : {}) };
     },
 
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
