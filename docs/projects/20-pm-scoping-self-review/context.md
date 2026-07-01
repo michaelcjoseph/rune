@@ -44,8 +44,9 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- t.ts). It drives `/plan` through persisted approval, downstream scaffold progress, terminal failure surfacing, and a scaffolded task execution with real self-review ordering.
+- lf-reviewed PM spec appears at exactly one approval gate
+- post-approval progress lines stream
+- `/cancel` works during the in-flight run
+- scaffold success line includes a real created identifier
 
-Verification:
-- `npx vitest run src/intent/e2e-acceptance-four-behaviors.test.ts` passes: 2 tests.
-- `npm run build` passes.
+Verified I left the worktree unchanged: `git status --short` and `git diff --stat` produced no output.
