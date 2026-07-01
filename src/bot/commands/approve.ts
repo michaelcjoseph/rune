@@ -23,11 +23,14 @@
 
 import type { MessageSender } from '../../transport/sender.js';
 import { runScaffoldApproval } from '../../jobs/scaffold-approval.js';
+import { runDownstreamPlan } from '../../intent/planning-roles.js';
+import { isPmSpecApprovalArtifact, type SpecArtifact } from '../../intent/planner.js';
 import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
 import {
   approveActivePlanningSession,
   deletePlanningSession,
   getPlanningSession,
+  updatePlanningSession,
   type StoredPlanningSession,
 } from '../../reviews/planning.js';
 import { createLogger } from '../../utils/logger.js';
@@ -41,7 +44,7 @@ export async function handleApprove(sender: MessageSender, userId: number): Prom
   const existing = getPlanningSession(userId);
   if (existing?.planning.status === 'approved') {
     log.info('Approve retry path — re-scaffolding already-approved session', { userId });
-    await scaffoldAndDelete(sender, userId, existing);
+    await downstreamThenScaffoldAndDelete(sender, userId, existing);
     return;
   }
 
@@ -67,7 +70,58 @@ export async function handleApprove(sender: MessageSender, userId: number): Prom
   }
 
   // spec-proposed → approved transition succeeded.
-  await scaffoldAndDelete(sender, userId, result.session);
+  await downstreamThenScaffoldAndDelete(sender, userId, result.session);
+}
+
+async function downstreamThenScaffoldAndDelete(
+  sender: MessageSender,
+  userId: number,
+  session: StoredPlanningSession,
+): Promise<void> {
+  const prepared = await prepareApprovedSessionForScaffold(sender, userId, session);
+  if (!prepared) return;
+  await scaffoldAndDelete(sender, userId, prepared);
+}
+
+async function prepareApprovedSessionForScaffold(
+  sender: MessageSender,
+  userId: number,
+  session: StoredPlanningSession,
+): Promise<StoredPlanningSession | null> {
+  if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
+    await sender.send(
+      userId,
+      'This planning approval was created with a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+    );
+    return null;
+  }
+
+  if (session.planning.downstreamArtifact) {
+    return session;
+  }
+
+  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {});
+  updatePlanningSession(userId, (sess) => ({
+    ...sess,
+    planning: {
+      ...sess.planning,
+      downstreamArtifact,
+    },
+  }));
+  return withDownstreamArtifact(session, downstreamArtifact);
+}
+
+function withDownstreamArtifact(
+  session: StoredPlanningSession,
+  downstreamArtifact: SpecArtifact,
+): StoredPlanningSession {
+  return {
+    ...session,
+    planning: {
+      ...session.planning,
+      downstreamArtifact,
+    },
+  };
 }
 
 /** Run the scaffold-approval flow for an `approved` session and delete the

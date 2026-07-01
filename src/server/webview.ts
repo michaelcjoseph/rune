@@ -48,12 +48,17 @@ import {
   createPlanningSession,
   getActivePlanningSession,
   getAllPlanningSessions,
+  getPlanningSession,
+  updatePlanningSession,
   deletePlanningSession,
   approveActivePlanningSession,
   abandonActivePlanningSession,
+  type StoredPlanningSession,
 } from '../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
 import { runScaffoldApproval, retryPromotionMarkSource } from '../jobs/scaffold-approval.js';
+import { runDownstreamPlan } from '../intent/planning-roles.js';
+import { isPmSpecApprovalArtifact, type SpecArtifact } from '../intent/planner.js';
 import { createPromotion, appendPromotion, loadPromotions, transitionPromotion } from '../intent/promotions.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { readIntentProposalQueue } from '../intent/intent-proposal-queue.js';
@@ -2012,6 +2017,18 @@ async function handleApiPlanningTurn(req: IncomingMessage, res: ServerResponse):
 
 async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const userId = config.TELEGRAM_USER_ID;
+  const existing = getPlanningSession(userId);
+  if (existing?.planning.status === 'approved') {
+    const prepared = await preparePlanningSessionForScaffold(userId, existing);
+    if (!prepared.ok) {
+      res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: prepared.error }));
+      return;
+    }
+    await scaffoldPlanningSession(res, userId, prepared.session);
+    return;
+  }
+
   const result = approveActivePlanningSession(userId);
   if (!result.ok) {
     if (result.reason === 'no-session') {
@@ -2025,10 +2042,66 @@ async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  // Approved — run the shared scaffold-approval flow (resolve the target product repo, spawn the
+  const prepared = await preparePlanningSessionForScaffold(userId, result.session);
+  if (!prepared.ok) {
+    res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: prepared.error }));
+    return;
+  }
+  await scaffoldPlanningSession(res, userId, prepared.session);
+}
+
+type PreparedPlanningSession =
+  | { ok: true; session: StoredPlanningSession }
+  | { ok: false; status: number; error: string };
+
+async function preparePlanningSessionForScaffold(
+  userId: number,
+  session: StoredPlanningSession,
+): Promise<PreparedPlanningSession> {
+  if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'This planning approval uses a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+    };
+  }
+  if (session.planning.downstreamArtifact) {
+    return { ok: true, session };
+  }
+  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {});
+  updatePlanningSession(userId, (sess) => ({
+    ...sess,
+    planning: {
+      ...sess.planning,
+      downstreamArtifact,
+    },
+  }));
+  return { ok: true, session: withDownstreamArtifact(session, downstreamArtifact) };
+}
+
+function withDownstreamArtifact(
+  session: StoredPlanningSession,
+  downstreamArtifact: SpecArtifact,
+): StoredPlanningSession {
+  return {
+    ...session,
+    planning: {
+      ...session.planning,
+      downstreamArtifact,
+    },
+  };
+}
+
+async function scaffoldPlanningSession(
+  res: ServerResponse,
+  userId: number,
+  session: StoredPlanningSession,
+): Promise<void> {
+  // Run the shared scaffold-approval flow (resolve the target product repo, spawn the
   // setup-writer scoped to it, cross-check the scaffold-result, and drive any linked promotion).
   // Tolerate failure by leaving the session approved (retry via /approve or a re-click).
-  const outcome = await runScaffoldApproval(result.session);
+  const outcome = await runScaffoldApproval(session);
   if (!outcome.ok) {
     log.error('handleApiPlanningApprove: scaffold-approval failed', {
       reason: outcome.reason,

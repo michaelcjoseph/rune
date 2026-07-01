@@ -44,9 +44,4 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- and rejects retired `ready` handoffs.
-
-Verification:
-- `npx vitest run src/reviews/planning-handler.test.ts` passed: 21/21
-- `git diff --check --cached -- src/reviews/planning-handler.test.ts` passed
-- Audit found no production `/plan` entry-point references to `runPlannerRoles` or `pmAssessAndSpec`
+- assertions: the older “normal path outcome mapping” tests expect a legacy approved session with only `planning.artifact` to scaffold, while the selected task and newer tests require that exact legacy shape to hard-fail with “restart planning.” I left the implementation on the selected-task contract.

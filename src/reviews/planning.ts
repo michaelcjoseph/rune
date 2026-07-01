@@ -30,6 +30,7 @@ import {
   type PlanningSession,
   type PlanningStatus,
   type PlanningSurface,
+  type PmSpecApprovalArtifact,
   type SpecArtifact,
 } from '../intent/planner.js';
 import { loadPromotions, appendPromotion, transitionPromotion } from '../intent/promotions.js';
@@ -162,8 +163,8 @@ export function updatePlanningSession(
 }
 
 function artifactsEqual(
-  a: SpecArtifact | undefined,
-  b: SpecArtifact | undefined,
+  a: SpecArtifact | PmSpecApprovalArtifact | undefined,
+  b: SpecArtifact | PmSpecApprovalArtifact | undefined,
 ): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -175,7 +176,7 @@ function artifactsEqual(
  *  thrown — a snapshot failure must not break the planning conversation. */
 function snapshotArtifact(
   session: StoredPlanningSession,
-  artifact: SpecArtifact,
+  artifact: SpecArtifact | PmSpecApprovalArtifact,
 ): void {
   const dir = config.PLANNING_ARTIFACTS_DIR;
   const ts = new Date().toISOString();

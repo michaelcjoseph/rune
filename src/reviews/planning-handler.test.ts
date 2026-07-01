@@ -157,7 +157,7 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
   it('does not consult the retired specified-enough gate when the PM emits a spec', async () => {
     createPlanningSession(9, 'idea', 'chat', 'aura');
     const scopingTurn: ScopingTurn = vi.fn(async () => ({
-      kind: 'spec',
+      kind: 'spec' as const,
       text: 'Spec ready for approval.',
       artifact: SAMPLE_ARTIFACT,
     }));

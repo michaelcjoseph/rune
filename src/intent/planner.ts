@@ -56,6 +56,17 @@ export interface SpecArtifact {
   perProjectExemplars?: PerProjectExemplars;
 }
 
+/** PM-only artifact the human approves before downstream planning runs. */
+export interface PmSpecApprovalArtifact {
+  version: 2;
+  kind: 'pm-spec';
+  product: string;
+  title: string;
+  spec: string;
+  assumptions?: string[];
+  selfReview?: unknown;
+}
+
 /** A planning conversation in progress — the unit the Planner state machine transitions. */
 export interface PlanningSession {
   /** The raw, possibly-fuzzy idea the conversation started from. */
@@ -66,8 +77,13 @@ export interface PlanningSession {
   product: string;
   /** Lifecycle status. */
   status: PlanningStatus;
-  /** The proposed spec artifact — set once the Planner proposes it (status `spec-proposed`+). */
-  artifact?: SpecArtifact;
+  /** The proposed PM spec artifact — set while awaiting approval. Legacy sessions may carry a
+   *  full scaffold artifact here; approval rejects those under the project-20 contract. */
+  artifact?: PmSpecApprovalArtifact | SpecArtifact;
+  /** The approved PM-only artifact. Durable source for downstream planning retry. */
+  approvedSpec?: PmSpecApprovalArtifact;
+  /** The downstream full scaffold artifact. Set after post-approval planning succeeds. */
+  downstreamArtifact?: SpecArtifact;
 }
 
 /**
@@ -86,7 +102,10 @@ export function startPlanning(
  * Record the spec artifact the Planner has scoped (`scoping` → `spec-proposed`). Throws if
  * the session is not in `scoping` — a spec is proposed once, from an active conversation.
  */
-export function proposeSpec(session: PlanningSession, artifact: SpecArtifact): PlanningSession {
+export function proposeSpec(
+  session: PlanningSession,
+  artifact: PmSpecApprovalArtifact | SpecArtifact,
+): PlanningSession {
   if (session.status !== 'scoping') {
     throw new Error(
       `proposeSpec: a spec can only be proposed while scoping — session status is '${session.status}'`,
@@ -106,7 +125,13 @@ export function approvePlan(session: PlanningSession): PlanningSession {
       `approvePlan: cannot approve — no spec has been proposed (session status is '${session.status}')`,
     );
   }
-  return { ...session, status: 'approved' };
+  if (!isPmSpecApprovalArtifact(session.artifact)) {
+    throw new Error(
+      'approvePlan: legacy planning artifact cannot be approved; restart planning to produce a versioned pm-spec artifact',
+    );
+  }
+  const { artifact: _artifact, downstreamArtifact: _downstreamArtifact, ...rest } = session;
+  return { ...rest, status: 'approved', approvedSpec: session.artifact };
 }
 
 /**
@@ -129,7 +154,7 @@ export function abandonPlan(session: PlanningSession): PlanningSession {
  * the hard gate that nothing is dispatched before approval.
  */
 export function isScaffoldReady(session: PlanningSession): boolean {
-  return session.status === 'approved';
+  return session.status === 'approved' && (session.downstreamArtifact !== undefined || isFullSpecArtifact(session.artifact));
 }
 
 /**
@@ -147,11 +172,11 @@ export function isScaffoldReady(session: PlanningSession): boolean {
  * Rune-workspace-scoped brief.
  */
 export function buildSetupWriterBrief(session: PlanningSession, targetRepoPath?: string): string {
-  const { artifact } = session;
+  const artifact = session.downstreamArtifact ?? (isFullSpecArtifact(session.artifact) ? session.artifact : undefined);
   if (!isScaffoldReady(session) || artifact === undefined) {
     throw new Error(
-      `buildSetupWriterBrief: the plan is not approved — nothing is scaffolded before ` +
-        `approval (session status is '${session.status}')`,
+      `buildSetupWriterBrief: the approved spec has no downstream full scaffold artifact — ` +
+        `run downstream planning before scaffold (session status is '${session.status}')`,
     );
   }
   const lines = [
@@ -189,4 +214,28 @@ export function buildSetupWriterBrief(session: PlanningSession, targetRepoPath?:
     artifact.testPlan,
   );
   return lines.join('\n');
+}
+
+export function isPmSpecApprovalArtifact(value: unknown): value is PmSpecApprovalArtifact {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v['version'] === 2 &&
+    v['kind'] === 'pm-spec' &&
+    typeof v['product'] === 'string' &&
+    typeof v['title'] === 'string' &&
+    typeof v['spec'] === 'string'
+  );
+}
+
+function isFullSpecArtifact(value: unknown): value is SpecArtifact {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v['product'] === 'string' &&
+    typeof v['title'] === 'string' &&
+    typeof v['spec'] === 'string' &&
+    typeof v['tasks'] === 'string' &&
+    typeof v['testPlan'] === 'string'
+  );
 }

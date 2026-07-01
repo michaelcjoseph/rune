@@ -220,8 +220,8 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
 
     expect(runDownstreamPlanMock).toHaveBeenCalledWith(PM_SPEC_ARTIFACT, expect.any(Object));
     expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
-    expect(updatePlanningSessionMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runScaffoldApprovalMock.mock.invocationCallOrder[0],
+    expect(updatePlanningSessionMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      runScaffoldApprovalMock.mock.invocationCallOrder[0]!,
     );
     const scaffoldedSession = runScaffoldApprovalMock.mock.calls[0]![0] as any;
     expect(scaffoldedSession.planning.approvedSpec).toEqual(PM_SPEC_ARTIFACT);
@@ -274,6 +274,7 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
 
     expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
     expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
     expect(runScaffoldApprovalMock).toHaveBeenCalledWith(session);
   });
 
@@ -319,7 +320,37 @@ describe('handleApprove â€” retry path (session already approved)', () => {
     await handleApprove(sender, 100);
 
     expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
     expect(runScaffoldApprovalMock).toHaveBeenCalledWith(session);
+    expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
+  });
+
+  it('retry path: approvedSpec only reruns downstream planning, persists it, then scaffolds', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    getPlanningSessionMock.mockReturnValue(session);
+    runScaffoldApprovalMock.mockResolvedValue(okOutcome({ slug: '11-retry-after-downstream' }));
+
+    await handleApprove(makeSender(), 100);
+
+    expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
+    expect(runDownstreamPlanMock).toHaveBeenCalledOnce();
+    expect(runDownstreamPlanMock).toHaveBeenCalledWith(PM_SPEC_ARTIFACT, expect.any(Object));
+    expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
+    expect(updatePlanningSessionMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      runScaffoldApprovalMock.mock.invocationCallOrder[0]!,
+    );
+    const scaffoldedSession = runScaffoldApprovalMock.mock.calls[0]![0] as any;
+    expect(scaffoldedSession.planning.approvedSpec).toEqual(PM_SPEC_ARTIFACT);
+    expect(scaffoldedSession.planning.downstreamArtifact).toEqual(DOWNSTREAM_ARTIFACT);
     expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
   });
 

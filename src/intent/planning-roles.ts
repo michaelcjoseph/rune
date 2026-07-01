@@ -24,7 +24,9 @@
  */
 
 import { seedProjectContext } from './project-context.js';
+import { plannedOutcomeToArtifact } from './planning-artifact.js';
 import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.js';
+import type { PmSpecApprovalArtifact, SpecArtifact } from './planner.js';
 import type { RoleName } from '../roles/loader.js';
 
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
@@ -122,6 +124,21 @@ export interface PlanningRoleDeps {
 export interface RunPlannerInput {
   brief: string;
   product: string;
+}
+
+export type PlanningProgressStage =
+  | 'tech-lead-breakdown'
+  | 'pm-review-match'
+  | 'claude-critique'
+  | 'codex-critique'
+  | 'context-seed'
+  | 'scaffold';
+
+export interface PlanningProgress {
+  stage?: PlanningProgressStage;
+  warning?: string;
+  terminal?: string;
+  success?: string;
 }
 
 /** Outcome of the planner-roles flow — a discriminated union over the three exit
@@ -266,6 +283,93 @@ export async function runPlannerRoles(
     perProjectExemplars: techLead.perProjectExemplars,
     codexCritiqueSkipped,
   };
+}
+
+/**
+ * Post-approval downstream planning. Starts from the already-approved PM-only spec and runs only
+ * the automated tail needed to assemble the full scaffold artifact.
+ */
+export async function runDownstreamPlan(
+  approvedSpec: PmSpecApprovalArtifact,
+  options: {
+    deps?: PlanningRoleDeps;
+    progress?: (event: PlanningProgress) => void | Promise<void>;
+  } = {},
+): Promise<SpecArtifact> {
+  const deps = options.deps ?? await loadDefaultPlanningRoleDeps();
+  const progress = async (event: PlanningProgress) => {
+    await options.progress?.(event);
+  };
+
+  const assumptions = approvedSpec.assumptions ?? [];
+  const spec = withAssumptionsSection(approvedSpec.spec, assumptions);
+  const brief = [`# ${approvedSpec.title}`, '', spec].join('\n');
+
+  await progress({ stage: 'tech-lead-breakdown' });
+  const techLead = await deps.techLeadBreakdown({
+    brief,
+    product: approvedSpec.product,
+    spec,
+  });
+
+  await progress({ stage: 'pm-review-match' });
+  const review = await deps.pmReviewMatch({
+    spec,
+    techSpec: techLead.techSpec,
+    tasks: techLead.tasks,
+  });
+  if (!review.match) {
+    throw new Error(`Downstream planning mismatch: ${review.mismatches.join('; ')}`);
+  }
+
+  let critiquedSpec = spec;
+  let critiquedTechSpec = techLead.techSpec;
+  let critiquedTasks = techLead.tasks;
+  let codexCritiqueSkipped = false;
+  if (deps.critiquePlan) {
+    await progress({ stage: 'claude-critique' });
+    await progress({ stage: 'codex-critique' });
+    const critique = await deps.critiquePlan({
+      spec,
+      techSpec: techLead.techSpec,
+      tasks: techLead.tasks,
+    });
+    critiquedSpec = withAssumptionsSection(critique.plan.spec, assumptions);
+    critiquedTechSpec = critique.plan.techSpec;
+    critiquedTasks = critique.plan.tasks;
+    codexCritiqueSkipped = critique.codexSkipped;
+    if (critique.codexSkipped) {
+      await progress({ warning: 'Codex critique skipped; continuing with the last coherent plan.' });
+    }
+  }
+
+  await progress({ stage: 'context-seed' });
+  const firstTask = critiquedTasks[0];
+  const context = seedProjectContext({
+    product: approvedSpec.product,
+    projectTitle: approvedSpec.title,
+    specSummary: firstParagraph(critiquedSpec),
+    assumptions,
+    interfaces: critiquedTechSpec,
+    firstTaskHandoff: firstTask ? `Start with: ${firstTask.text}` : undefined,
+  });
+
+  return plannedOutcomeToArtifact(approvedSpec.product, {
+    kind: 'planned',
+    title: approvedSpec.title,
+    spec: critiquedSpec,
+    assumptions,
+    techSpec: critiquedTechSpec,
+    tasks: critiquedTasks,
+    context,
+    perProjectExemplars: techLead.perProjectExemplars,
+    codexCritiqueSkipped,
+  });
+}
+
+async function loadDefaultPlanningRoleDeps(): Promise<PlanningRoleDeps> {
+  const { defaultPlanningRoleDeps } = await import('./planning-roles-wiring.js');
+  return defaultPlanningRoleDeps();
 }
 
 /** First non-empty paragraph of a markdown body — a compact Current-State seed. */

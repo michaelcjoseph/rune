@@ -89,6 +89,7 @@ vi.mock('../reviews/planning.js', () => ({
   getActivePlanningSession: vi.fn(() => null),
   getPlanningSession: vi.fn(() => null),
   getAllPlanningSessions: vi.fn(() => []),
+  updatePlanningSession: vi.fn(),
   deletePlanningSession: vi.fn(),
   approveActivePlanningSession: vi.fn(),
   abandonActivePlanningSession: vi.fn(),
@@ -170,7 +171,12 @@ const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const { getSession } = await import('../vault/sessions.js');
 const { getStateSnapshot } = await import('./state-snapshot.js');
 const { readRegistry } = await import('../intent/registry.js');
-const { approveActivePlanningSession, deletePlanningSession, getPlanningSession } = await import('../reviews/planning.js');
+const {
+  approveActivePlanningSession,
+  deletePlanningSession,
+  getPlanningSession,
+  updatePlanningSession,
+} = await import('../reviews/planning.js');
 const { runDownstreamPlan } = await import('../intent/planning-roles.js');
 const { runScaffoldApproval } = await import('../jobs/scaffold-approval.js');
 
@@ -720,7 +726,45 @@ describe('server/webview', () => {
     });
   });
 
-  describe('POST /api/planning/approve — legacy PM-spec gate', () => {
+  describe('POST /api/planning/approve — PM-spec approval persistence', () => {
+    const pmSpecArtifact = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'rune',
+      title: 'Cockpit PM Spec',
+      spec: 'Approved PM-only scope.',
+      assumptions: ['The approval artifact is PM-only.'],
+      selfReview: { revised: false, summary: 'Spec is internally consistent.' },
+    };
+
+    const downstreamArtifact = {
+      product: 'rune',
+      title: 'Cockpit PM Spec',
+      spec: 'Approved PM-only scope.',
+      techSpec: 'Tech lead breakdown.',
+      tasks: '## Phase 1\n### Tests (write first)\n- [ ] approval persists downstream artifact',
+      testPlan: '## Approval resume\n- [ ] retries skip downstream once persisted',
+      context: '# Context',
+    };
+
+    function approvedPmSpecSession(over: Record<string, unknown> = {}) {
+      return {
+        id: 'pm-spec-plan-webview',
+        chatId: 42,
+        claudeSessionId: 'claude-pm-spec-plan',
+        planning: {
+          status: 'approved' as const,
+          product: 'rune',
+          idea: 'new plan',
+          surface: 'cockpit' as const,
+          approvedSpec: pmSpecArtifact,
+        },
+        createdAt: '2026-07-01T00:00:00.000Z',
+        lastActivity: '2026-07-01T00:00:00.000Z',
+        ...over,
+      };
+    }
+
     function legacyApprovedSession() {
       return {
         id: 'legacy-plan-webview',
@@ -744,6 +788,75 @@ describe('server/webview', () => {
         lastActivity: '2026-07-01T00:00:00.000Z',
       };
     }
+
+    it('runs downstream planning from the PM-only approval artifact, persists it, then scaffolds', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(runDownstreamPlan).toHaveBeenCalledWith(pmSpecArtifact, expect.any(Object));
+      expect(updatePlanningSession).toHaveBeenCalledWith(42, expect.any(Function));
+      expect((updatePlanningSession as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!).toBeLessThan(
+        (runScaffoldApproval as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+      );
+      const scaffoldedSession = (runScaffoldApproval as ReturnType<typeof vi.fn>).mock.calls[0]![0] as any;
+      expect(scaffoldedSession.planning.approvedSpec).toEqual(pmSpecArtifact);
+      expect(scaffoldedSession.planning.downstreamArtifact).toEqual(downstreamArtifact);
+      expect(deletePlanningSession).toHaveBeenCalledWith(42);
+    });
+
+    it('retry path reruns downstream when the approved session has only approvedSpec', async () => {
+      (getPlanningSession as ReturnType<typeof vi.fn>).mockReturnValue(approvedPmSpecSession());
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(approveActivePlanningSession).not.toHaveBeenCalled();
+      expect(runDownstreamPlan).toHaveBeenCalledWith(pmSpecArtifact, expect.any(Object));
+      expect(updatePlanningSession).toHaveBeenCalledWith(42, expect.any(Function));
+      const scaffoldedSession = (runScaffoldApproval as ReturnType<typeof vi.fn>).mock.calls[0]![0] as any;
+      expect(scaffoldedSession.planning.approvedSpec).toEqual(pmSpecArtifact);
+      expect(scaffoldedSession.planning.downstreamArtifact).toEqual(downstreamArtifact);
+      expect(deletePlanningSession).toHaveBeenCalledWith(42);
+    });
+
+    it('retry path skips downstream when downstreamArtifact is already persisted', async () => {
+      const session = approvedPmSpecSession({
+        planning: {
+          status: 'approved' as const,
+          product: 'rune',
+          idea: 'new plan',
+          surface: 'cockpit' as const,
+          approvedSpec: pmSpecArtifact,
+          downstreamArtifact,
+        },
+      });
+      (getPlanningSession as ReturnType<typeof vi.fn>).mockReturnValue(session);
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(approveActivePlanningSession).not.toHaveBeenCalled();
+      expect(runDownstreamPlan).not.toHaveBeenCalled();
+      expect(updatePlanningSession).not.toHaveBeenCalled();
+      expect(runScaffoldApproval).toHaveBeenCalledWith(session);
+      expect(deletePlanningSession).toHaveBeenCalledWith(42);
+    });
 
     it('hard-fails a legacy approval transition that lacks the version 2 pm-spec discriminant', async () => {
       (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({

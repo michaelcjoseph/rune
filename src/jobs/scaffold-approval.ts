@@ -298,12 +298,12 @@ export async function runScaffoldApproval(
   const newDirs = [...after].filter((d) => !before.has(d));
   const parsed = parseScaffoldResult(agent.text);
   const check = crossCheckScaffold(parsed, newDirs);
-  if (!check.ok) {
+  if (!check.ok && !(parsed && check.error === 'slug-mismatch' && requiredFilesExist(projectsDir, parsed.slug, deps))) {
     const message = `scaffold verification failed: ${check.error}`;
     failPromotion(session, deps, message);
     return { ok: false, reason: 'verify', message, agentText: agent.text };
   }
-  const slug = check.slug;
+  const slug = check.ok ? check.slug : parsed!.slug;
 
   // The three project files must actually be on disk — the load-bearing silent-failure backstop.
   const missing = REQUIRED_FILES.filter((f) => !deps.fileExists(join(projectsDir, slug, f)));
@@ -317,7 +317,11 @@ export async function runScaffoldApproval(
   // a tech spec, a Rune-seeded context.md, and possibly per-project role
   // exemplars. Write them DETERMINISTICALLY here — never via the setup-writer
   // agent — so role/context artifacts do not depend on agent formatting.
-  writeRoleArtifacts(session.planning.artifact, join(projectsDir, slug), deps);
+  writeRoleArtifacts(
+    session.planning.downstreamArtifact ?? (session.planning.artifact as SpecArtifact | undefined),
+    join(projectsDir, slug),
+    deps,
+  );
 
   // No linked promotion — a plain /plan session. Scaffold succeeded; nothing else to drive.
   if (!session.promotionId) {
@@ -326,6 +330,14 @@ export async function runScaffoldApproval(
 
   const promotionResult = await drivePromotion(session.promotionId, repoPath, slug, deps);
   return { ok: true, slug, agentText: agent.text, promotion: promotionResult };
+}
+
+function requiredFilesExist(
+  projectsDir: string,
+  slug: string,
+  deps: ScaffoldApprovalDeps,
+): boolean {
+  return REQUIRED_FILES.every((f) => deps.fileExists(join(projectsDir, slug, f)));
 }
 
 /** Result of an explicit mark-source retry (POST /api/promotions/:id/retry). On success the final
