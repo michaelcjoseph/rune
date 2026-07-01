@@ -44,10 +44,12 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- sions still reach scaffold.
+- ompleted `pm-spec` output fails clearly.
 
-- `npx vitest run src/server/webview.test.ts`
-  - Red: 2 failed, 69 passed
-  - Failures confirm legacy approval paths return `200` / `404` instead of expected `409 restart planning`.
-
-Task complete: the suites fail for the expected contract reasons before implementation.
+Verification:
+- `npx vitest run src/reviews/planning-handler.test.ts` passed: 19/19.
+- `git diff --check` passed.
+- `npm run build` is still blocked by later-phase branch tests expecting `runDownstreamPlan` in `planning-roles.ts`, outside this selected task.
+- -handler.test.ts` passed: 20 tests.
+- `git diff --check -- src/reviews/planning-handler.ts src/reviews/planning-handler.test.ts` passed.
+- `npm run build` is blocked by existing branch test errors around unimplemented `runDownstreamPlan` imports in approval/webview tests, not by this handler change.

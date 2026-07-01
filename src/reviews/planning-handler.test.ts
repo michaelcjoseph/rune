@@ -53,7 +53,6 @@ import {
   handlePlanningTurn,
   type ScopingTurn,
 } from './planning-handler.js';
-import type { SpecArtifact } from '../intent/planner.js';
 
 type PmSpecApprovalArtifact = {
   version: 2;
@@ -133,7 +132,7 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     const scopingTurn: ScopingTurn = vi.fn(async () => ({
       kind: 'spec' as const,
       text: 'Here is the proposed spec — please approve.',
-      artifact: SAMPLE_ARTIFACT as unknown as SpecArtifact,
+      artifact: SAMPLE_ARTIFACT,
     }));
     const runRoles = vi.fn();
 
@@ -161,12 +160,12 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     // machine in intent/planner.ts already throws; handler surfaces it).
     createPlanningSession(3, 'idea', 'chat', 'aura');
     const turn1: ScopingTurn = vi.fn(async () => ({
-      kind: 'spec' as const, text: 'first', artifact: SAMPLE_ARTIFACT as unknown as SpecArtifact,
+      kind: 'spec' as const, text: 'first', artifact: SAMPLE_ARTIFACT,
     }));
     await handlePlanningTurn({ scopingTurn: turn1 }, 3, 'msg');
 
     const turn2: ScopingTurn = vi.fn(async () => ({
-      kind: 'spec' as const, text: 'second', artifact: SAMPLE_ARTIFACT as unknown as SpecArtifact,
+      kind: 'spec' as const, text: 'second', artifact: SAMPLE_ARTIFACT,
     }));
     await expect(
       handlePlanningTurn({ scopingTurn: turn2 }, 3, 'msg2'),
@@ -324,6 +323,9 @@ describe('defaultScopingTurn — PM-led interview contract', () => {
     expect(baseInstructions).toMatch(/go|proceed|ship it|done/i);
     expect(baseInstructions).toMatch(/not.*literal|not.*exact|not.*===\s*['"]go['"]/i);
     expect(baseInstructions).toMatch(/```pm-spec/i);
+    expect(baseInstructions).toMatch(/version\s*:?\s*2|versioned/i);
+    expect(baseInstructions).toMatch(/kind\s*:?\s*['"]?pm-spec|pm-spec artifact/i);
+    expect(baseInstructions).toMatch(/selfReview/i);
     expect(baseInstructions).not.toMatch(/```planning-brief|Planner/i);
   });
 
@@ -395,6 +397,18 @@ describe('defaultScopingTurn — PM-led interview contract', () => {
     await expect(defaultScopingTurn({ session, userMessage: 'done' })).rejects.toThrow(
       /pm-spec|fence|planning/i,
     );
+  });
+
+  it('does not mistake a normal approval-refinement question for a completed spec', async () => {
+    const session = createPlanningSession(27, 'scope an idea', 'chat', 'aura');
+    mockAskClaudeWithContext.mockResolvedValue({
+      text: 'Ready to approve this spec, or refine scope first?',
+    });
+
+    await expect(defaultScopingTurn({ session, userMessage: 'maybe' })).resolves.toEqual({
+      kind: 'question',
+      text: 'Ready to approve this spec, or refine scope first?',
+    });
   });
 });
 

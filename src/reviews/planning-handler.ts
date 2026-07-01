@@ -2,9 +2,9 @@
  * Per-turn orchestration for the Planner's Socratic conversation (Phase 6
  * A4.2). Mutates the planning-session store from A4.1.
  *
- * One turn = the user sends a message → the handler asks the LLM to either
- * pose a scoping question or emit a SpecArtifact → the handler either
- * records the question (status stays `scoping`) or transitions via
+ * One turn = the user sends a message → the handler asks the PM role to either
+ * pose one scoping question or emit a PM spec approval artifact → the handler
+ * either records the question (status stays `scoping`) or transitions via
  * `proposeSpec` (status → `spec-proposed`) → the reply text is returned for
  * the bot/webview to send.
  *
@@ -14,10 +14,8 @@
  */
 
 import { askClaudeWithContext } from '../ai/claude.js';
-import { plannedOutcomeToArtifact } from '../intent/planning-artifact.js';
-import { runPlannerRoles, type PlanningRolesOutcome } from '../intent/planning-roles.js';
-import { defaultPlanningRoleDeps } from '../intent/planning-roles-wiring.js';
 import { proposeSpec, type PlanningStatus, type SpecArtifact } from '../intent/planner.js';
+import { composeRoleContext } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import {
   getActivePlanningSession,
@@ -29,14 +27,21 @@ const log = createLogger('planning-handler');
 
 /** What the scoping primitive can return on a single turn.
  *  - `question` — keep scoping, no status change.
- *  - `ready` — the conversation has enough; hand the consolidated `brief` to the
- *    PM + tech-lead role flow (project 14) to author the spec/tech-spec/tasks.
- *  - `spec` — a directly-supplied artifact (legacy single-shot path + tests),
- *    transitioned straight to spec-proposed without the role flow. */
+ *  - `spec` — a directly-supplied PM spec approval artifact, transitioned
+ *    straight to spec-proposed. */
 export type ScopingResult =
   | { kind: 'question'; text: string }
-  | { kind: 'ready'; text: string; brief: string }
-  | { kind: 'spec'; text: string; artifact: SpecArtifact };
+  | { kind: 'spec'; text: string; artifact: PmSpecArtifact };
+
+export interface PmSpecArtifact {
+  version: 2;
+  kind: 'pm-spec';
+  product: string;
+  title: string;
+  spec: string;
+  assumptions?: string[];
+  selfReview?: unknown;
+}
 
 /** Per-turn scoping primitive — production wraps Claude; tests inject a mock. */
 export type ScopingTurn = (input: {
@@ -44,24 +49,11 @@ export type ScopingTurn = (input: {
   userMessage: string;
 }) => Promise<ScopingResult>;
 
-/** The planner-role flow seam: brief → PM judges specified-enough → tech lead
- *  breaks it down → PM reviews the match → seeded context. Injectable so tests
- *  drive the outcomes deterministically; production wires the live role seams. */
-export type RunPlannerRolesFn = (input: {
-  brief: string;
-  product: string;
-}) => Promise<PlanningRolesOutcome>;
-
 export interface PlanningHandlerDeps {
   scopingTurn: ScopingTurn;
-  /** Override the planner-role flow. Defaults to the live PM/tech-lead role
-   *  seams (`runPlannerRoles` over `defaultPlanningRoleDeps()`). */
-  runRoles?: RunPlannerRolesFn;
+  /** Retired project-14 seam kept only so stale tests/callers fail explicitly. */
+  runRoles?: unknown;
 }
-
-/** Live planner-role flow: drive `runPlannerRoles` over the real role seams. */
-const defaultRunRoles: RunPlannerRolesFn = (input) =>
-  runPlannerRoles(input, defaultPlanningRoleDeps());
 
 export interface PlanningTurnResult {
   reply: string;
@@ -100,10 +92,11 @@ export async function handlePlanningTurn(
     return transitionToSpec(chatId, result.artifact, result.text);
   }
 
-  if (result.kind === 'ready') {
-    // The conversation has enough — hand the consolidated brief to the PM +
-    // tech-lead role flow, which authors the spec/tech-spec/tasks (or blocks).
-    return handleRolePlanning(deps, chatId, session.planning.product, result.brief);
+  if (result.kind !== 'question') {
+    throw new Error(
+      'handlePlanningTurn: retired ready/planning handoff is no longer valid on /plan; ' +
+        'the PM must emit a versioned pm-spec artifact directly',
+    );
   }
 
   // A scoping question — no status change, but refresh lastActivity by
@@ -115,141 +108,77 @@ export async function handlePlanningTurn(
 /** Transition an in-flight session to `spec-proposed` with the given artifact. */
 function transitionToSpec(
   chatId: number,
-  artifact: SpecArtifact,
+  artifact: PmSpecArtifact,
   reply: string,
 ): PlanningTurnResult {
   updatePlanningSession(chatId, (sess) => ({
     ...sess,
-    planning: proposeSpec(sess.planning, artifact),
+    planning: proposeSpec(sess.planning, artifact as unknown as SpecArtifact),
   }));
   return { reply, status: 'spec-proposed' };
-}
-
-/**
- * Drive the PM + tech-lead role flow for a ready brief and map its three
- * outcomes onto the planning conversation:
- *  - `planned` → serialize to an artifact and transition to spec-proposed.
- *  - `blocked-for-interview` → surface the PM's open questions, stay scoping.
- *  - `spec-mismatch` → surface the PM-flagged drift, stay scoping so the next
- *    user turn can refine the brief and re-plan.
- */
-async function handleRolePlanning(
-  deps: PlanningHandlerDeps,
-  chatId: number,
-  product: string,
-  brief: string,
-): Promise<PlanningTurnResult> {
-  const runRoles = deps.runRoles ?? defaultRunRoles;
-  const outcome = await runRoles({ brief, product });
-
-  if (outcome.kind === 'planned') {
-    const artifact = plannedOutcomeToArtifact(product, outcome);
-    log.info('planner-role flow produced a spec', {
-      chatId,
-      product,
-      taskCount: outcome.tasks.length,
-    });
-    return transitionToSpec(chatId, artifact, formatPlannedReply(outcome));
-  }
-
-  // Both non-happy outcomes keep the conversation in `scoping`.
-  updatePlanningSession(chatId, (sess) => sess);
-  if (outcome.kind === 'blocked-for-interview') {
-    return { reply: formatInterviewReply(outcome.interviewNeeds), status: 'scoping' };
-  }
-  return { reply: formatMismatchReply(outcome.mismatches), status: 'scoping' };
-}
-
-type PlannedOutcome = Extract<PlanningRolesOutcome, { kind: 'planned' }>;
-
-/** User-facing summary of a completed plan — concise (Telegram), names the
- *  artifacts produced and prompts for approval. */
-function formatPlannedReply(outcome: PlannedOutcome): string {
-  const lines = [
-    `📋 *${outcome.title}* — spec, tech spec, and ${outcome.tasks.length} task(s) ready.`,
-  ];
-  if (outcome.assumptions.length > 0) {
-    lines.push('', 'Assumptions I made:', ...outcome.assumptions.map((a) => `• ${a}`));
-  }
-  lines.push('', 'Approve to scaffold the project.');
-  return lines.join('\n');
-}
-
-/** User-facing reply when the PM blocks for interview — the open questions
- *  become the next scoping turn. */
-function formatInterviewReply(needs: readonly string[]): string {
-  return ['I need a bit more before I can write the spec:', '', ...needs.map((n) => `• ${n}`)].join(
-    '\n',
-  );
-}
-
-/** User-facing reply when the PM flags spec/tech-spec drift. */
-function formatMismatchReply(mismatches: readonly string[]): string {
-  return [
-    'The technical plan drifted from the spec, so I held it:',
-    '',
-    ...mismatches.map((m) => `• ${m}`),
-    '',
-    'Refine the brief and I\'ll re-plan.',
-  ].join('\n');
 }
 
 // ---------------------------------------------------------------------------
 // Default scopingTurn — production LLM integration
 // ---------------------------------------------------------------------------
 
-/** System prompt that guides Claude's per-turn output. The Planner conducts the
- *  scoping interview; the PM + tech-lead role flow (project 14) authors the
- *  actual spec from the brief this hands off. */
-const SCOPING_SYSTEM_PROMPT = [
-  'You are the Planner, the deliberative intent layer for project execution.',
-  'Your job is to scope a fuzzy idea into a clear brief through conversation. You',
-  'do NOT write the spec yourself — once the idea is scoped, a product manager and',
-  'tech lead turn your brief into the spec, tech spec, and tasks.',
+const INTERVIEW_INSTRUCTION = [
+  'You are the product manager conducting the /plan scoping interview.',
+  'Interview the user directly and write the PM spec from first-hand context.',
   '',
-  'On every turn, do ONE of two things:',
+  'On every turn, do exactly ONE of two things:',
   '',
-  '1. ASK ONE SCOPING QUESTION. Keep it short, specific, and the next-most-useful',
-  '   question to narrow the idea. Surface assumptions when they matter; do not',
-  '   stack multiple questions in one turn.',
+  '1. Ask one question at a time: ONE scoping question. Keep it short, specific, and the next-most-useful',
+  '   question to narrow product intent. Do not stack multiple questions, hidden',
+  '   subquestions, or a checklist into one turn.',
   '',
-  '2. SIGNAL READY when the idea is scoped enough for the product team to write the',
-  '   spec. Emit a fenced code block tagged `planning-brief` containing a thorough,',
-  '   self-contained brief: the idea, the scope decisions made in this conversation,',
-  '   constraints, and the success definition. Write the BRIEF, not the spec — the',
-  '   product manager writes the spec. Place a one-line user-facing message before',
-  '   the fence; place nothing after it.',
+  '2. Stop interviewing when either condition is true: you are satisfied you have',
+  '   enough context to write the PM spec, OR the user signals proceed intent.',
+  '   Intent-detect proceed phrases such as "go", "proceed", "ship it", "done",',
+  '   and "let\'s go"; do not use a literal exact match or a === "go" check.',
   '',
-  'Example ready signal:',
+  'When you stop, emit the finished approval artifact directly as JSON inside a',
+  '```pm-spec fenced block. Place a short user-facing approval sentence before',
+  'the fence and nothing after it. The artifact is PM-only and versioned;',
+  'it is a pm-spec artifact with version: 2 and kind: pm-spec.',
   '',
-  'I have enough to hand this to the product team.',
-  '```planning-brief',
-  'Build a streak tracker for the aura home screen. Scope: ... Constraints: ...',
-  'Success: ...',
+  '```pm-spec',
+  '{',
+  '  "version": 2,',
+  '  "kind": "pm-spec",',
+  '  "product": "<product slug>",',
+  '  "title": "<one-line project title>",',
+  '  "spec": "<full markdown product spec: value, goals, non-goals, requirements, definition of done>",',
+  '  "assumptions": ["<each gap you filled, if any>"],',
+  '  "selfReview": "<brief note confirming you reviewed the spec for internal consistency>"',
+  '}',
   '```',
+  '',
+  'Do not emit any downstream tech-spec, tasks, test-plan, or context. Those are',
+  'created only after the human approves this PM spec.',
 ].join('\n');
 
-const BRIEF_FENCE = /```planning-brief\s*\n([\s\S]*?)\n```/;
-/** Legacy single-shot artifact fence — still parsed so a directly-supplied
- *  `spec-artifact` keeps working, but the production prompt now emits a
- *  `planning-brief` that routes through the role flow instead. */
-const ARTIFACT_FENCE = /```spec-artifact\s*\n([\s\S]*?)\n```/;
+const PM_SPEC_FENCE = /```pm-spec\s*\n([\s\S]*?)\n```/;
 
 /**
  * Production scopingTurn — calls Claude with the planning session's
  * claudeSessionId for multi-turn continuity, parses the response into a
- * `ScopingResult`. A `planning-brief` fence is a ready signal (routes to the
- * role flow); a legacy `spec-artifact` fence is a direct artifact; anything
- * else is a scoping question.
+ * `ScopingResult`. A `pm-spec` fence is the terminal PM approval artifact;
+ * anything else is a scoping question unless the reply claims completion but
+ * omits the required fence.
  */
 export async function defaultScopingTurn(input: {
   session: StoredPlanningSession;
   userMessage: string;
 }): Promise<ScopingResult> {
+  const ctx = composeRoleContext('pm', INTERVIEW_INSTRUCTION);
+  const message = ctx.referenceContext
+    ? `${ctx.referenceContext}\n\n${input.userMessage}`
+    : input.userMessage;
   const result = await askClaudeWithContext(
-    input.userMessage,
+    message,
     input.session.claudeSessionId,
-    SCOPING_SYSTEM_PROMPT,
+    ctx.systemInstructions,
     { opLabel: 'chat', voice: true },
   );
   if (result.error) {
@@ -257,25 +186,17 @@ export async function defaultScopingTurn(input: {
   }
   const text = result.text ?? '';
 
-  // A consolidated brief → hand off to the PM + tech-lead role flow.
-  const briefFenced = BRIEF_FENCE.exec(text);
-  if (briefFenced) {
-    const brief = briefFenced[1]!.trim();
-    if (brief) {
-      const summary = text.slice(0, briefFenced.index).trim();
-      return {
-        kind: 'ready',
-        text: summary || 'Scoping complete — handing off to the product team.',
-        brief,
-      };
-    }
-    log.warn('defaultScopingTurn: empty planning-brief block; treating as question');
-    return { kind: 'question', text };
+  if (/```\s*planning-brief\b/i.test(text)) {
+    throw new Error(
+      'scopingTurn: retired planning handoff received; expected a versioned pm-spec fence',
+    );
   }
 
-  // Legacy: a directly-supplied spec-artifact still transitions straight through.
-  const fenced = ARTIFACT_FENCE.exec(text);
+  const fenced = PM_SPEC_FENCE.exec(text);
   if (!fenced) {
+    if (looksLikeFinishedSpec(text)) {
+      throw new Error('scopingTurn: planning reply looked complete but omitted the pm-spec fence');
+    }
     return { kind: 'question', text };
   }
 
@@ -283,16 +204,16 @@ export async function defaultScopingTurn(input: {
   try {
     parsed = JSON.parse(fenced[1]!);
   } catch (err) {
-    log.warn('defaultScopingTurn: malformed spec-artifact JSON; treating as question', {
+    log.warn('defaultScopingTurn: malformed pm-spec JSON', {
       error: (err as Error).message,
     });
-    return { kind: 'question', text };
+    throw new Error(`scopingTurn: malformed pm-spec JSON: ${(err as Error).message}`);
   }
 
-  const artifact = validateArtifact(parsed);
+  const artifact = validatePmSpecArtifact(parsed);
   if (!artifact) {
-    log.warn('defaultScopingTurn: spec-artifact JSON missing required fields; treating as question');
-    return { kind: 'question', text };
+    log.warn('defaultScopingTurn: pm-spec JSON missing required fields');
+    throw new Error('scopingTurn: pm-spec artifact missing version:2, kind:pm-spec, product, title, or spec');
   }
 
   // Strip the fenced block from the user-facing reply — the structured
@@ -302,23 +223,41 @@ export async function defaultScopingTurn(input: {
   return { kind: 'spec', text: summary || 'Proposed spec ready — approve to scaffold.', artifact };
 }
 
-function validateArtifact(value: unknown): SpecArtifact | null {
+function validatePmSpecArtifact(value: unknown): PmSpecArtifact | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
   if (
+    v['version'] !== 2 ||
+    v['kind'] !== 'pm-spec' ||
     typeof v['product'] !== 'string' ||
     typeof v['title'] !== 'string' ||
-    typeof v['spec'] !== 'string' ||
-    typeof v['tasks'] !== 'string' ||
-    typeof v['testPlan'] !== 'string'
+    typeof v['spec'] !== 'string'
   ) {
     return null;
   }
+  const assumptions = parseOptionalStringArray(v['assumptions']);
+  if (assumptions === null) return null;
   return {
+    version: 2,
+    kind: 'pm-spec',
     product: v['product'],
     title: v['title'],
     spec: v['spec'],
-    tasks: v['tasks'],
-    testPlan: v['testPlan'],
+    ...(assumptions ? { assumptions } : {}),
+    ...(v['selfReview'] !== undefined ? { selfReview: v['selfReview'] } : {}),
   };
+}
+
+function parseOptionalStringArray(value: unknown): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  return value.every((entry) => typeof entry === 'string') ? value : null;
+}
+
+function looksLikeFinishedSpec(text: string): boolean {
+  const trimmed = text.trim();
+  return /```pm-spec\b/i.test(trimmed) ||
+    /\b(?:spec|proposal|artifact)\s+(?:is\s+)?(?:ready|complete)\s+for\s+(?:approval|review)\b/i.test(trimmed) ||
+    /\b(?:spec|proposal|artifact)\s+(?:ready|complete)\s*:/i.test(trimmed) ||
+    /\bhere is (?:the )?(?:finished|complete|ready)\s+(?:spec|proposal|artifact)\b/i.test(trimmed);
 }
