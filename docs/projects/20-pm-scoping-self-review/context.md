@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
--  fails red as expected: 2 PM self-review tests fail because `handlePlanningTurn` does not yet invoke `runSelfReview` or return the reviewed artifact.
+- ue, passes the revised artifact downstream, and surfaces self-review failure as a terminal post-approval outcome.
 
-No production code changed. Note: `src/reviews/planning-handler.test.ts` already had staged changes; my additional edits are unstaged on top of that.
+Verification: `npm test -- src/intent/planning-roles.test.ts` is red as expected: 2 failing tests, both for the missing tech-lead self-review implementation. No production code changed.

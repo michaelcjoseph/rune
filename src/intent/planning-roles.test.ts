@@ -14,7 +14,15 @@
  * See: docs/projects/14-product-team-agents/test-plan.md §2
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+
+const { mockRunSelfReview } = vi.hoisted(() => ({
+  mockRunSelfReview: vi.fn(),
+}));
+
+vi.mock('./self-review.js', () => ({
+  runSelfReview: mockRunSelfReview,
+}));
 
 import {
   runPlannerRoles,
@@ -82,6 +90,14 @@ function makeDeps(over: Partial<PlanningRoleDeps> = {}): PlanningRoleDeps {
 }
 
 const INPUT = { brief: 'Add a streak tracker to the home screen.', product: 'aura' };
+
+beforeEach(() => {
+  mockRunSelfReview.mockReset();
+  mockRunSelfReview.mockImplementation(async ({ artifact }: { artifact: TechLeadResult }) => ({
+    artifact,
+    revised: false,
+  }));
+});
 
 // ---------------------------------------------------------------------------
 // Interview gate — underspecified brief blocks, never fabricates a spec
@@ -507,5 +523,125 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
     expect(terminal).toBeDefined();
     expect(terminal!.terminal).toMatch(/context seed|product slug/i);
     expect(progress.some((event) => event.success)).toBe(false);
+  });
+});
+
+describe('planning-roles — tech-lead self-review in runDownstreamPlan (project 20 test-plan §3)', () => {
+  it('runs tech-lead self-review after breakdown and before PM review, and hands the revised artifact downstream', async () => {
+    const calls: string[] = [];
+    const reviewedTasks: SizedTask[] = [
+      {
+        ...SIZED_TASKS[0]!,
+        text: 'Implement the reviewed streak-count pure core with the missing timezone edge case covered.',
+      },
+    ];
+    mockRunSelfReview.mockImplementationOnce(async (input: {
+      role: string;
+      artifact: TechLeadResult;
+      render?: (artifact: TechLeadResult) => string;
+      parse?: (reply: string) => TechLeadResult;
+    }) => {
+      calls.push('self-review');
+      expect(input.role).toBe('tech-lead');
+      expect(input.artifact).toMatchObject({
+        techSpec: 'Initial tech spec missing the timezone edge case.',
+        tasks: SIZED_TASKS.slice(0, 1),
+      });
+      expect(input.render).toBeTypeOf('function');
+      expect(input.parse).toBeTypeOf('function');
+      return {
+        artifact: {
+          techSpec: 'Reviewed tech spec adds the timezone edge case before downstream checks.',
+          tasks: reviewedTasks,
+        },
+        revised: true,
+      };
+    });
+
+    let pmReviewInput: Parameters<PlanningRoleDeps['pmReviewMatch']>[0] | undefined;
+    let critiqueInput: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0] | undefined;
+    const progress: PlanningProgress[] = [];
+
+    const artifact = await (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+      deps: makeDeps({
+        techLeadBreakdown: vi.fn(async () => {
+          calls.push('tech-lead-breakdown');
+          return {
+            techSpec: 'Initial tech spec missing the timezone edge case.',
+            tasks: SIZED_TASKS.slice(0, 1),
+          };
+        }),
+        pmReviewMatch: vi.fn(async (input) => {
+          calls.push('pm-review-match');
+          pmReviewInput = input;
+          return { match: true, mismatches: [] };
+        }),
+        critiquePlan: vi.fn(async (plan) => {
+          calls.push('critique');
+          critiqueInput = plan;
+          return { plan, codexSkipped: false };
+        }),
+      }),
+      progress: (event) => {
+        progress.push(event);
+        if (event.stage) calls.push(`progress:${event.stage}`);
+      },
+    });
+
+    expect(calls).toEqual([
+      'progress:tech-lead-breakdown',
+      'tech-lead-breakdown',
+      'self-review',
+      'progress:pm-review-match',
+      'pm-review-match',
+      'progress:claude-critique',
+      'progress:codex-critique',
+      'critique',
+      'progress:context-seed',
+    ]);
+    expect(mockRunSelfReview).toHaveBeenCalledOnce();
+    expect(pmReviewInput?.techSpec).toContain('Reviewed tech spec');
+    expect(pmReviewInput?.tasks).toEqual(reviewedTasks);
+    expect(critiqueInput?.techSpec).toContain('Reviewed tech spec');
+    expect(critiqueInput?.tasks).toEqual(reviewedTasks);
+    expect(artifact.techSpec).toContain('Reviewed tech spec');
+    expect(artifact.tasks).toContain('missing timezone edge case covered');
+  });
+
+  it('surfaces tech-lead self-review failure as a terminal post-approval outcome before PM review or critique', async () => {
+    const progress: PlanningProgress[] = [];
+    const pmReviewMatch = vi.fn(async (): Promise<SpecMatchResult> => ({ match: true, mismatches: [] }));
+    const critiquePlan = vi.fn(async (
+      plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0],
+    ) => ({ plan, codexSkipped: false }));
+    mockRunSelfReview.mockRejectedValueOnce(
+      new Error('self-review failed: missing self-review-artifact fence'),
+    );
+
+    await expect(
+      (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+        deps: makeDeps({
+          techLeadBreakdown: vi.fn(async () => ({
+            techSpec: 'Initial tech spec.',
+            tasks: SIZED_TASKS.slice(0, 1),
+          })),
+          pmReviewMatch,
+          critiquePlan,
+        }),
+        progress: (event) => {
+          progress.push(event);
+        },
+      }),
+    ).rejects.toThrow(/self-review|tech-lead/i);
+
+    expect(mockRunSelfReview).toHaveBeenCalledOnce();
+    expect(progress.filter((event) => event.stage).map((event) => event.stage)).toEqual([
+      'tech-lead-breakdown',
+    ]);
+    const terminal = progress.find((event) => event.terminal);
+    expect(terminal).toBeDefined();
+    expect(terminal!.terminal).toMatch(/tech-lead self-review|missing self-review-artifact fence/i);
+    expect(pmReviewMatch).not.toHaveBeenCalled();
+    expect(critiquePlan).not.toHaveBeenCalled();
   });
 });
