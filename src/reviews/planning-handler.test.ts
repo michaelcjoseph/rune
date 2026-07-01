@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -198,6 +198,32 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     expect(stored.planning.status).toBe('scoping');
     expect(stored.planning.artifact).toBeUndefined();
   });
+
+  it('cannot surface a specified-enough blocked-for-interview result as a second /plan interview', async () => {
+    createPlanningSession(8, 'idea', 'chat', 'aura');
+    const scopingTurn = vi.fn(async () => ({
+      kind: 'ready' as const,
+      text: 'The PM is ready to present a spec.',
+      brief: 'retired planning brief',
+    }));
+    const runRoles = vi.fn(async () => ({
+      kind: 'blocked-for-interview' as const,
+      interviewNeeds: ['Answer this second PM gate question.'],
+    }));
+
+    await expect(
+      handlePlanningTurn(
+        { scopingTurn: scopingTurn as unknown as ScopingTurn, runRoles },
+        8,
+        'ship it',
+      ),
+    ).rejects.toThrow(/blocked-for-interview|specified-enough|ready|planning-brief|retired/i);
+    expect(runRoles).not.toHaveBeenCalled();
+
+    const stored = getPlanningSession(8)!;
+    expect(stored.planning.status).toBe('scoping');
+    expect(stored.planning.artifact).toBeUndefined();
+  });
 });
 
 describe('handlePlanningTurn — error paths', () => {
@@ -371,3 +397,62 @@ describe('defaultScopingTurn — PM-led interview contract', () => {
     );
   });
 });
+
+describe('retired specified-enough gate — /plan source audit', () => {
+  it('narrows the /plan scoping result to question or spec, with no ready/planning-brief variant', () => {
+    const source = readFileSync(join(process.cwd(), 'src/reviews/planning-handler.ts'), 'utf8');
+
+    expect(source).not.toMatch(/\|\s*\{\s*kind:\s*['"]ready['"]/);
+    expect(source).not.toMatch(/\bBRIEF_FENCE\b|```planning-brief/);
+    expect(source).toMatch(/pm-spec/);
+  });
+
+  it('keeps runPlannerRoles and pmAssessAndSpec out of production /plan entry points', () => {
+    const offenders = collectProductionSourceFiles(join(process.cwd(), 'src'))
+      .filter((file) => {
+        const relative = file.slice(process.cwd().length + 1);
+        return ![
+          'src/intent/planning-roles.ts',
+          'src/intent/planning-roles-wiring.ts',
+        ].includes(relative);
+      })
+      .flatMap((file) => {
+        const relative = file.slice(process.cwd().length + 1);
+        const source = stripTsComments(readFileSync(file, 'utf8'));
+        const violations: string[] = [];
+        if (/\brunPlannerRoles\s*\(/.test(source) || /\brunPlannerRoles\b/.test(source)) {
+          violations.push('runPlannerRoles');
+        }
+        if (/\bpmAssessAndSpec\b/.test(source)) {
+          violations.push('pmAssessAndSpec');
+        }
+        return violations.map((violation) => `${relative}: ${violation}`);
+      });
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+function collectProductionSourceFiles(dir: string): string[] {
+  const entries = readdirSync(dir);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      files.push(...collectProductionSourceFiles(path));
+      continue;
+    }
+    if (!path.endsWith('.ts')) continue;
+    if (path.endsWith('.test.ts')) continue;
+    if (path.endsWith('.d.ts')) continue;
+    files.push(path);
+  }
+  return files;
+}
+
+function stripTsComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|\s)\/\/.*$/gm, '$1');
+}

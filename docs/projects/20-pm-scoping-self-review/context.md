@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- er.test.ts` is red as expected: 7 failing, 9 passing. The failures correspond to the current implementation still using the old Planner/`planning-brief` path.
+- les` / `pmAssessAndSpec` entry points.
 
-Note: `src/reviews/planning-handler.test.ts` was already staged before my edits; git now shows it as `MM` with my additions unstaged on top.
+Verification: `npx vitest run src/reviews/planning-handler.test.ts --reporter verbose` is red as expected: `10 failed | 9 passed`. The new failures correspond to the current implementation still routing through `ready`, `planning-brief`, and `runPlannerRoles`.
