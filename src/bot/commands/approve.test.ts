@@ -302,7 +302,16 @@ describe('handleApprove — retry path (session already approved)', () => {
   });
 
   it('picks up an already-approved session via getPlanningSession and re-scaffolds without re-approving', async () => {
-    const session = approvedSession();
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+        downstreamArtifact: DOWNSTREAM_ARTIFACT,
+      },
+    });
     getPlanningSessionMock.mockReturnValue(session);
     runScaffoldApprovalMock.mockResolvedValue(okOutcome({ slug: '10-retry' }));
 
@@ -314,8 +323,47 @@ describe('handleApprove — retry path (session already approved)', () => {
     expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
   });
 
+  it('hard-fails legacy approved retry sessions that have no versioned pm-spec approval artifact', async () => {
+    const legacySession = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'old plan',
+        surface: 'chat' as const,
+        artifact: {
+          product: 'rune',
+          title: 'Legacy Full Plan',
+          spec: 'Old approved spec.',
+          techSpec: 'Old tech spec.',
+          tasks: 'Old tasks.',
+          testPlan: 'Old tests.',
+        },
+      },
+    });
+    getPlanningSessionMock.mockReturnValue(legacySession);
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /restart planning/i.test(m))?.[1];
+    expect(reply).toBeDefined();
+  });
+
   it('retry path: helper failure again leaves the approved session in place', async () => {
-    getPlanningSessionMock.mockReturnValue(approvedSession());
+    getPlanningSessionMock.mockReturnValue(approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+        downstreamArtifact: DOWNSTREAM_ARTIFACT,
+      },
+    }));
     runScaffoldApprovalMock.mockResolvedValue({ ok: false, reason: 'agent', message: 'still broken' });
 
     const sender = makeSender();

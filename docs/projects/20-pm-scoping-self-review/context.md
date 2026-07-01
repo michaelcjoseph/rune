@@ -44,7 +44,7 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- `
-- Failures point to missing `runDownstreamPlan` export and webview approval still scaffolding directly.
+- ove.test.ts` fails red: current code still skips `runDownstreamPlan` for PM-spec cases and still scaffolds legacy sessions.
+- `npx vitest run src/server/webview.test.ts` fails red: current route returns `200`/`404` instead of the expected `409 restart planning` for legacy sessions.
 
-No commits made. Note: `src/server/cockpit-ux.test.ts` already had staged changes before my edits, so it now shows `MM`; I left the existing staged content staged and added my changes unstaged.
+No commits made.

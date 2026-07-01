@@ -87,6 +87,7 @@ vi.mock('../ai/claude.js', () => ({
 vi.mock('../reviews/planning.js', () => ({
   createPlanningSession: vi.fn(),
   getActivePlanningSession: vi.fn(() => null),
+  getPlanningSession: vi.fn(() => null),
   getAllPlanningSessions: vi.fn(() => []),
   deletePlanningSession: vi.fn(),
   approveActivePlanningSession: vi.fn(),
@@ -95,6 +96,15 @@ vi.mock('../reviews/planning.js', () => ({
 vi.mock('../reviews/planning-handler.js', () => ({
   handlePlanningTurn: vi.fn(),
   defaultScopingTurn: vi.fn(),
+}));
+
+vi.mock('../intent/planning-roles.js', () => ({
+  runDownstreamPlan: vi.fn(),
+}));
+
+vi.mock('../jobs/scaffold-approval.js', () => ({
+  runScaffoldApproval: vi.fn(),
+  retryPromotionMarkSource: vi.fn(),
 }));
 
 vi.mock('../vault/sessions.js', () => ({
@@ -160,6 +170,9 @@ const { handleWebviewMessage } = await import('./webview-bootstrap.js');
 const { getSession } = await import('../vault/sessions.js');
 const { getStateSnapshot } = await import('./state-snapshot.js');
 const { readRegistry } = await import('../intent/registry.js');
+const { approveActivePlanningSession, deletePlanningSession, getPlanningSession } = await import('../reviews/planning.js');
+const { runDownstreamPlan } = await import('../intent/planning-roles.js');
+const { runScaffoldApproval } = await import('../jobs/scaffold-approval.js');
 
 // ---- helpers ----
 
@@ -484,6 +497,26 @@ describe('server/webview', () => {
       warnings: [],
     });
     (readRegistry as ReturnType<typeof vi.fn>).mockReturnValue(mockRegistry);
+    (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: false,
+      reason: 'no-session',
+    });
+    (getPlanningSession as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue({
+      product: 'rune',
+      title: 'Downstream Plan',
+      spec: 'Spec.',
+      techSpec: 'Tech spec.',
+      tasks: 'Tasks.',
+      testPlan: 'Test plan.',
+      context: 'Context.',
+    });
+    (runScaffoldApproval as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      slug: '20-downstream-plan',
+      agentText: 'Created docs/projects/20-downstream-plan/spec.md',
+      promotion: 'none',
+    });
     // Re-establish the default getProjectSummaries return alongside the
     // other restored mocks for consistency — vi.clearAllMocks clears call
     // history but not implementations today, so the default persists; this
@@ -684,6 +717,66 @@ describe('server/webview', () => {
       });
       expect(res.status).toBe(200);
       expect(res.body.ingestionQueueDepth).toBe(2);
+    });
+  });
+
+  describe('POST /api/planning/approve — legacy PM-spec gate', () => {
+    function legacyApprovedSession() {
+      return {
+        id: 'legacy-plan-webview',
+        chatId: 42,
+        claudeSessionId: 'claude-legacy-plan',
+        planning: {
+          status: 'approved' as const,
+          product: 'rune',
+          idea: 'old plan',
+          surface: 'cockpit' as const,
+          artifact: {
+            product: 'rune',
+            title: 'Legacy Full Plan',
+            spec: 'Old approved spec.',
+            techSpec: 'Old tech spec.',
+            tasks: 'Old tasks.',
+            testPlan: 'Old test plan.',
+          },
+        },
+        createdAt: '2026-07-01T00:00:00.000Z',
+        lastActivity: '2026-07-01T00:00:00.000Z',
+      };
+    }
+
+    it('hard-fails a legacy approval transition that lacks the version 2 pm-spec discriminant', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: legacyApprovedSession(),
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/restart planning/i);
+      expect(runDownstreamPlan).not.toHaveBeenCalled();
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+    });
+
+    it('hard-fails an already-approved legacy retry session before downstream planning or scaffold', async () => {
+      (getPlanningSession as ReturnType<typeof vi.fn>).mockReturnValue(legacyApprovedSession());
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/restart planning/i);
+      expect(approveActivePlanningSession).not.toHaveBeenCalled();
+      expect(runDownstreamPlan).not.toHaveBeenCalled();
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
     });
   });
 
