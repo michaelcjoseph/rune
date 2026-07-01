@@ -448,7 +448,7 @@ const mockWebviewSender = {
   name: 'webview' as const,
   register: vi.fn(),
   unregister: vi.fn(),
-  send: vi.fn(async () => undefined),
+  send: vi.fn(async (_userId: number, _message: string) => undefined),
   startTyping: vi.fn(),
   stopTyping: vi.fn(),
   shutdown: vi.fn(),
@@ -833,6 +833,55 @@ describe('server/webview', () => {
       expect(scaffoldedSession.planning.approvedSpec).toEqual(pmSpecArtifact);
       expect(scaffoldedSession.planning.downstreamArtifact).toEqual(downstreamArtifact);
       expect(deletePlanningSession).toHaveBeenCalledWith(42);
+    });
+
+    it('streams downstream progress, critique warnings, scaffold stage, and scaffold success through the webview sender', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_approvedSpec: unknown, options: any) => {
+          if (typeof options.progress === 'function') {
+            await options.progress({ stage: 'tech-lead-breakdown' });
+            await options.progress({ stage: 'pm-review-match' });
+            await options.progress({ stage: 'claude-critique' });
+            await options.progress({
+              warning: 'Codex critique skipped after reading /test/project/private-plan.md; continuing with the last coherent plan.',
+            });
+            await options.progress({ stage: 'context-seed' });
+          }
+          return downstreamArtifact;
+        },
+      );
+      (runScaffoldApproval as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        slug: '20-downstream-plan',
+        agentText: 'Created docs/projects/20-downstream-plan/spec.md',
+        promotion: 'none',
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(runDownstreamPlan).toHaveBeenCalledWith(
+        pmSpecArtifact,
+        expect.objectContaining({ progress: expect.any(Function) }),
+      );
+      const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
+      expect(messages.some((message) => /tech[- ]lead.*breakdown/i.test(message))).toBe(true);
+      expect(messages.some((message) => /pm.*review/i.test(message))).toBe(true);
+      expect(messages.some((message) => /claude.*critique/i.test(message))).toBe(true);
+      const warning = messages.find((message) => /codex.*skipped/i.test(message));
+      expect(warning).toBeDefined();
+      expect(warning).not.toContain('/test/project');
+      expect(warning).toContain('<project>');
+      expect(messages.some((message) => /context.*seed/i.test(message))).toBe(true);
+      expect(messages.some((message) => /scaffold/i.test(message))).toBe(true);
+      expect(messages.some((message) => /Created docs\/projects\/20-downstream-plan\/spec\.md/i.test(message))).toBe(true);
     });
 
     it('retry path reruns downstream when the approved session has only approvedSpec', async () => {

@@ -253,6 +253,51 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
     expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
   });
 
+  it('streams downstream progress, critique warnings, scaffold stage, and scaffold success through the sender', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runDownstreamPlanMock.mockImplementation(async (_approvedSpec: unknown, options: any) => {
+      if (typeof options.progress === 'function') {
+        await options.progress({ stage: 'tech-lead-breakdown' });
+        await options.progress({ stage: 'pm-review-match' });
+        await options.progress({ stage: 'claude-critique' });
+        await options.progress({
+          warning: 'Codex critique skipped after reading /test/project/private-plan.md; continuing with the last coherent plan.',
+        });
+        await options.progress({ stage: 'context-seed' });
+      }
+      return DOWNSTREAM_ARTIFACT;
+    });
+    runScaffoldApprovalMock.mockResolvedValue(okOutcome({ slug: '09-test' }));
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).toHaveBeenCalledWith(
+      PM_SPEC_ARTIFACT,
+      expect.objectContaining({ progress: expect.any(Function) }),
+    );
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    expect(messages.some((message) => /tech[- ]lead.*breakdown/i.test(message))).toBe(true);
+    expect(messages.some((message) => /pm.*review/i.test(message))).toBe(true);
+    expect(messages.some((message) => /claude.*critique/i.test(message))).toBe(true);
+    const warning = messages.find((message) => /codex.*skipped/i.test(message));
+    expect(warning).toBeDefined();
+    expect(warning).not.toContain('/test/project');
+    expect(warning).toContain('<project>');
+    expect(messages.some((message) => /context.*seed/i.test(message))).toBe(true);
+    expect(messages.some((message) => /scaffold/i.test(message))).toBe(true);
+    expect(messages.some((message) => /Created docs\/projects\/09-test\/spec\.md/i.test(message))).toBe(true);
+  });
+
   it('keeps the approved session resumable with downstreamArtifact when scaffold fails after downstream planning', async () => {
     const session = approvedSession({
       planning: {

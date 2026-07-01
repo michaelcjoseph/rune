@@ -44,9 +44,10 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- val route surface a restart-planning message and skip downstream planning/scaffold/delete.
+- ck fix so `tsc` accepts the progress assertion.
 
 Verified:
 - `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts`
-- `npm test -- src/reviews/planning.test.ts src/bot/commands/approve.test.ts src/server/webview.test.ts`
 - `npm run build`
+
+Note: the QA test edits in `approve.test.ts` and `webview.test.ts` were already staged before my changes; I left staging alone and did not commit.

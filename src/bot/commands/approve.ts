@@ -23,7 +23,7 @@
 
 import type { MessageSender } from '../../transport/sender.js';
 import { runScaffoldApproval } from '../../jobs/scaffold-approval.js';
-import { runDownstreamPlan } from '../../intent/planning-roles.js';
+import { runDownstreamPlan, type PlanningProgress, type PlanningProgressStage } from '../../intent/planning-roles.js';
 import { isPmSpecApprovalArtifact, type SpecArtifact } from '../../intent/planner.js';
 import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
 import {
@@ -106,7 +106,9 @@ async function prepareApprovedSessionForScaffold(
     return session;
   }
 
-  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {});
+  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {
+    progress: (event) => sendPlanningProgress(sender, userId, event),
+  });
   updatePlanningSession(userId, (sess) => ({
     ...sess,
     planning: {
@@ -151,6 +153,7 @@ async function scaffoldAndDelete(
     promotionId: session.promotionId,
   });
 
+  await sendPlanningProgress(sender, userId, { stage: 'scaffold' });
   const outcome = await runScaffoldApproval(session);
   if (!outcome.ok) {
     log.error('scaffold-approval failed; session left approved for retry', {
@@ -184,4 +187,43 @@ async function scaffoldAndDelete(
     slug: outcome.slug,
     promotion: outcome.promotion,
   });
+}
+
+async function sendPlanningProgress(
+  sender: MessageSender,
+  userId: number,
+  event: PlanningProgress,
+): Promise<void> {
+  const message = formatPlanningProgress(event);
+  if (!message) return;
+  try {
+    await sender.send(userId, scrubAbsolutePaths(message));
+  } catch (err) {
+    log.warn('Planning progress send failed', { userId, error: (err as Error).message });
+  }
+}
+
+function formatPlanningProgress(event: PlanningProgress): string | null {
+  if (event.warning) return `Planning warning: ${event.warning}`;
+  if (event.terminal) return `Planning stopped: ${event.terminal}`;
+  if (event.success) return `Planning succeeded: ${event.success}`;
+  if (event.stage) return `Planning progress: ${planningStageLabel(event.stage)}.`;
+  return null;
+}
+
+function planningStageLabel(stage: PlanningProgressStage): string {
+  switch (stage) {
+    case 'tech-lead-breakdown':
+      return 'tech-lead breakdown';
+    case 'pm-review-match':
+      return 'PM review';
+    case 'claude-critique':
+      return 'Claude critique';
+    case 'codex-critique':
+      return 'Codex critique';
+    case 'context-seed':
+      return 'context seed';
+    case 'scaffold':
+      return 'scaffold';
+  }
 }

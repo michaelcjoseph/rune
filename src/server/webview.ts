@@ -57,7 +57,7 @@ import {
 } from '../reviews/planning.js';
 import { handlePlanningTurn, defaultScopingTurn } from '../reviews/planning-handler.js';
 import { runScaffoldApproval, retryPromotionMarkSource } from '../jobs/scaffold-approval.js';
-import { runDownstreamPlan } from '../intent/planning-roles.js';
+import { runDownstreamPlan, type PlanningProgress, type PlanningProgressStage } from '../intent/planning-roles.js';
 import { isPmSpecApprovalArtifact, type SpecArtifact } from '../intent/planner.js';
 import { createPromotion, appendPromotion, loadPromotions, transitionPromotion } from '../intent/promotions.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
@@ -2015,17 +2015,21 @@ async function handleApiPlanningTurn(req: IncomingMessage, res: ServerResponse):
   }
 }
 
-async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleApiPlanningApprove(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  sender: WebviewSender,
+): Promise<void> {
   const userId = config.TELEGRAM_USER_ID;
   const existing = getPlanningSession(userId);
   if (existing?.planning.status === 'approved') {
-    const prepared = await preparePlanningSessionForScaffold(userId, existing);
+    const prepared = await preparePlanningSessionForScaffold(userId, existing, sender);
     if (!prepared.ok) {
       res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: prepared.error }));
       return;
     }
-    await scaffoldPlanningSession(res, userId, prepared.session);
+    await scaffoldPlanningSession(res, userId, prepared.session, sender);
     return;
   }
 
@@ -2049,13 +2053,13 @@ async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerRespon
     return;
   }
 
-  const prepared = await preparePlanningSessionForScaffold(userId, result.session);
+  const prepared = await preparePlanningSessionForScaffold(userId, result.session, sender);
   if (!prepared.ok) {
     res.writeHead(prepared.status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: prepared.error }));
     return;
   }
-  await scaffoldPlanningSession(res, userId, prepared.session);
+  await scaffoldPlanningSession(res, userId, prepared.session, sender);
 }
 
 type PreparedPlanningSession =
@@ -2065,6 +2069,7 @@ type PreparedPlanningSession =
 async function preparePlanningSessionForScaffold(
   userId: number,
   session: StoredPlanningSession,
+  sender: WebviewSender,
 ): Promise<PreparedPlanningSession> {
   if (!isPmSpecApprovalArtifact(session.planning.approvedSpec)) {
     return {
@@ -2076,7 +2081,9 @@ async function preparePlanningSessionForScaffold(
   if (session.planning.downstreamArtifact) {
     return { ok: true, session };
   }
-  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {});
+  const downstreamArtifact = await runDownstreamPlan(session.planning.approvedSpec, {
+    progress: (event) => sendPlanningProgress(sender, userId, event),
+  });
   updatePlanningSession(userId, (sess) => ({
     ...sess,
     planning: {
@@ -2104,10 +2111,12 @@ async function scaffoldPlanningSession(
   res: ServerResponse,
   userId: number,
   session: StoredPlanningSession,
+  sender: WebviewSender,
 ): Promise<void> {
   // Run the shared scaffold-approval flow (resolve the target product repo, spawn the
   // setup-writer scoped to it, cross-check the scaffold-result, and drive any linked promotion).
   // Tolerate failure by leaving the session approved (retry via /approve or a re-click).
+  await sendPlanningProgress(sender, userId, { stage: 'scaffold' });
   const outcome = await runScaffoldApproval(session);
   if (!outcome.ok) {
     log.error('handleApiPlanningApprove: scaffold-approval failed', {
@@ -2126,6 +2135,46 @@ async function scaffoldPlanningSession(
     slug: outcome.slug,
     promotion: outcome.promotion,
   }));
+  await sendPlanningProgress(sender, userId, { success: outcome.agentText });
+}
+
+async function sendPlanningProgress(
+  sender: WebviewSender,
+  userId: number,
+  event: PlanningProgress,
+): Promise<void> {
+  const message = formatPlanningProgress(event);
+  if (!message) return;
+  try {
+    await sender.send(userId, scrubAbsolutePaths(message));
+  } catch (err) {
+    log.warn('Planning progress send failed', { userId, error: (err as Error).message });
+  }
+}
+
+function formatPlanningProgress(event: PlanningProgress): string | null {
+  if (event.warning) return `Planning warning: ${event.warning}`;
+  if (event.terminal) return `Planning stopped: ${event.terminal}`;
+  if (event.success) return `Planning succeeded: ${event.success}`;
+  if (event.stage) return `Planning progress: ${planningStageLabel(event.stage)}.`;
+  return null;
+}
+
+function planningStageLabel(stage: PlanningProgressStage): string {
+  switch (stage) {
+    case 'tech-lead-breakdown':
+      return 'tech-lead breakdown';
+    case 'pm-review-match':
+      return 'PM review';
+    case 'claude-critique':
+      return 'Claude critique';
+    case 'codex-critique':
+      return 'Codex critique';
+    case 'context-seed':
+      return 'context seed';
+    case 'scaffold':
+      return 'scaffold';
+  }
 }
 
 function handleApiPlanningAbandon(_req: IncomingMessage, res: ServerResponse): void {
@@ -2588,7 +2637,7 @@ export function mountWebviewRoutes(
         return true;
       }
       if (req.method === 'POST' && pathname === '/api/planning/approve') {
-        await handleApiPlanningApprove(req, res);
+        await handleApiPlanningApprove(req, res, deps.webview);
         return true;
       }
       if (req.method === 'POST' && pathname === '/api/planning/abandon') {
