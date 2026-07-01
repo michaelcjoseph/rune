@@ -44,10 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- ck fix so `tsc` accepts the progress assertion.
-
-Verified:
-- `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts`
-- `npm run build`
-
-Note: the QA test edits in `approve.test.ts` and `webview.test.ts` were already staged before my changes; I left staging alone and did not commit.
+- n:
+- `npm run build` passes.
+- `npm test -- src/bot/commands/approve.test.ts src/intent/planning-roles.test.ts src/server/webview.test.ts` is red as expected for the tests-first task. Failures now point at missing implementation behavior for progress terminal/success surfacing, not test type errors.

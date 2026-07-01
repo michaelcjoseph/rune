@@ -269,6 +269,7 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
         await options.progress({ stage: 'tech-lead-breakdown' });
         await options.progress({ stage: 'pm-review-match' });
         await options.progress({ stage: 'claude-critique' });
+        await options.progress({ stage: 'codex-critique' });
         await options.progress({
           warning: 'Codex critique skipped after reading /test/project/private-plan.md; continuing with the last coherent plan.',
         });
@@ -286,16 +287,47 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
       expect.objectContaining({ progress: expect.any(Function) }),
     );
     const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
-    expect(messages.some((message) => /tech[- ]lead.*breakdown/i.test(message))).toBe(true);
-    expect(messages.some((message) => /pm.*review/i.test(message))).toBe(true);
-    expect(messages.some((message) => /claude.*critique/i.test(message))).toBe(true);
+    expect(messages.filter((message) => /^Planning progress: tech[- ]lead breakdown\.$/i.test(message))).toHaveLength(1);
+    expect(messages.filter((message) => /^Planning progress: PM review\.$/i.test(message))).toHaveLength(1);
+    expect(messages.filter((message) => /^Planning progress: Claude critique\.$/i.test(message))).toHaveLength(1);
+    expect(messages.filter((message) => /^Planning progress: Codex critique\.$/i.test(message))).toHaveLength(1);
     const warning = messages.find((message) => /codex.*skipped/i.test(message));
     expect(warning).toBeDefined();
     expect(warning).not.toContain('/test/project');
     expect(warning).toContain('<project>');
-    expect(messages.some((message) => /context.*seed/i.test(message))).toBe(true);
-    expect(messages.some((message) => /scaffold/i.test(message))).toBe(true);
-    expect(messages.some((message) => /Created docs\/projects\/09-test\/spec\.md/i.test(message))).toBe(true);
+    expect(messages.filter((message) => /^Planning progress: context seed\.$/i.test(message))).toHaveLength(1);
+    expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(1);
+    expect(messages.some((message) => /Planning succeeded:.*Created docs\/projects\/09-test\/spec\.md/i.test(message))).toBe(true);
+    expect(vi.mocked(sender.send).mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
+  });
+
+  it('surfaces a scrubbed terminal line and leaves the session resumable when downstream planning fails', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runDownstreamPlanMock.mockRejectedValue(
+      new Error('PM review mismatch after reading /test/project/private-plan.md'),
+    );
+
+    const sender = makeSender();
+    await expect(handleApprove(sender, 100)).resolves.toBeUndefined();
+
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    const terminal = messages.find((message) => /Planning stopped:.*PM review mismatch/i.test(message));
+    expect(terminal).toBeDefined();
+    expect(terminal).not.toContain('/test/project');
+    expect(terminal).toContain('<project>');
+    expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
   });
 
   it('keeps the approved session resumable with downstreamArtifact when scaffold fails after downstream planning', async () => {
@@ -322,6 +354,8 @@ describe('handleApprove â€” PM-spec approval persistence (project 20 test-plan Â
     expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
     expect(runScaffoldApprovalMock).toHaveBeenCalledOnce();
     expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    expect(messages.some((message) => /Planning stopped:.*scaffold/i.test(message))).toBe(true);
     const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /retry/i.test(m))?.[1];
     expect(reply).toMatch(/run \/approve again/i);
   });

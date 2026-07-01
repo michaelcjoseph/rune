@@ -448,7 +448,7 @@ const mockWebviewSender = {
   name: 'webview' as const,
   register: vi.fn(),
   unregister: vi.fn(),
-  send: vi.fn(async (_userId: number, _message: string) => undefined),
+  send: vi.fn(async (_userId: number, _message: string, _opts?: { approval?: unknown }) => undefined),
   startTyping: vi.fn(),
   stopTyping: vi.fn(),
   shutdown: vi.fn(),
@@ -846,6 +846,7 @@ describe('server/webview', () => {
             await options.progress({ stage: 'tech-lead-breakdown' });
             await options.progress({ stage: 'pm-review-match' });
             await options.progress({ stage: 'claude-critique' });
+            await options.progress({ stage: 'codex-critique' });
             await options.progress({
               warning: 'Codex critique skipped after reading /test/project/private-plan.md; continuing with the last coherent plan.',
             });
@@ -872,16 +873,46 @@ describe('server/webview', () => {
         expect.objectContaining({ progress: expect.any(Function) }),
       );
       const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
-      expect(messages.some((message) => /tech[- ]lead.*breakdown/i.test(message))).toBe(true);
-      expect(messages.some((message) => /pm.*review/i.test(message))).toBe(true);
-      expect(messages.some((message) => /claude.*critique/i.test(message))).toBe(true);
+      expect(messages.filter((message) => /^Planning progress: tech[- ]lead breakdown\.$/i.test(message))).toHaveLength(1);
+      expect(messages.filter((message) => /^Planning progress: PM review\.$/i.test(message))).toHaveLength(1);
+      expect(messages.filter((message) => /^Planning progress: Claude critique\.$/i.test(message))).toHaveLength(1);
+      expect(messages.filter((message) => /^Planning progress: Codex critique\.$/i.test(message))).toHaveLength(1);
       const warning = messages.find((message) => /codex.*skipped/i.test(message));
       expect(warning).toBeDefined();
       expect(warning).not.toContain('/test/project');
       expect(warning).toContain('<project>');
-      expect(messages.some((message) => /context.*seed/i.test(message))).toBe(true);
-      expect(messages.some((message) => /scaffold/i.test(message))).toBe(true);
-      expect(messages.some((message) => /Created docs\/projects\/20-downstream-plan\/spec\.md/i.test(message))).toBe(true);
+      expect(messages.filter((message) => /^Planning progress: context seed\.$/i.test(message))).toHaveLength(1);
+      expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(1);
+      expect(messages.some((message) => /Planning succeeded:.*Created docs\/projects\/20-downstream-plan\/spec\.md/i.test(message))).toBe(true);
+      expect(mockWebviewSender.send.mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
+    });
+
+    it('surfaces a scrubbed terminal progress line when scaffold fails', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+      (runScaffoldApproval as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: false,
+        reason: 'agent',
+        message: 'project-setup-writer failed while writing /test/project/docs/projects/20-downstream-plan/spec.md',
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(500);
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+      const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
+      const terminal = messages.find((message) => /Planning stopped:.*scaffold/i.test(message));
+      expect(terminal).toBeDefined();
+      expect(terminal).not.toContain('/test/project');
+      expect(terminal).toContain('<project>');
+      expect(String(res.body.error)).not.toContain('/test/project');
+      expect(String(res.body.error)).toContain('<project>');
     });
 
     it('retry path reruns downstream when the approved session has only approvedSpec', async () => {

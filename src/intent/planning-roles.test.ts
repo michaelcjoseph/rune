@@ -20,11 +20,13 @@ import {
   runPlannerRoles,
   withAssumptionsSection,
   type PlanningRoleDeps,
+  type PlanningProgress,
   type PmSpecResult,
   type TechLeadResult,
   type SpecMatchResult,
   type SizedTask,
 } from './planning-roles.js';
+import type { PmSpecApprovalArtifact } from './planner.js';
 import { hasRequiredSections } from './project-context.js';
 
 // ---------------------------------------------------------------------------
@@ -278,7 +280,7 @@ const PM_SPEC_APPROVAL = {
   spec: 'PM-authored spec from the interview.\n\n## Assumptions\n\n- Local midnight resets.',
   assumptions: ['Local midnight resets.'],
   selfReview: { revised: false, summary: 'Spec is internally consistent.' },
-} as const;
+} satisfies PmSpecApprovalArtifact;
 
 async function runDownstreamPlanForTest(
   deps: PlanningRoleDeps,
@@ -295,7 +297,7 @@ async function runDownstreamPlanForTest(
   const planningRoles = await import('./planning-roles.js') as Record<string, unknown>;
   expect(planningRoles.runDownstreamPlan).toBeTypeOf('function');
   return (planningRoles.runDownstreamPlan as (
-    approvedSpec: typeof PM_SPEC_APPROVAL,
+    approvedSpec: PmSpecApprovalArtifact,
     options: { deps: PlanningRoleDeps },
   ) => Promise<{
     product: string;
@@ -384,5 +386,43 @@ describe('planning-roles — runDownstreamPlan approval split (project 20 test-p
     expect(deps.pmAssessAndSpec).not.toHaveBeenCalled();
     expect(deps.pmReviewMatch).toHaveBeenCalledOnce();
     expect(critiquePlan).not.toHaveBeenCalled();
+  });
+});
+
+describe('planning-roles — runDownstreamPlan progress events (project 20 test-plan §2)', () => {
+  it('emits each downstream planning stage exactly once, in order, and warns non-terminally on Codex skip', async () => {
+    const progress: PlanningProgress[] = [];
+    const artifact = await (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+      deps: makeDeps({
+        pmAssessAndSpec: vi.fn(async (): Promise<PmSpecResult> => {
+          throw new Error('the retired specified-enough gate must not run post-approval');
+        }),
+        critiquePlan: vi.fn(async (plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0]) => ({
+          plan: {
+            ...plan,
+            techSpec: `${plan.techSpec}\n\nKept the last coherent plan after Codex skipped.`,
+          },
+          codexSkipped: true,
+        })),
+      }),
+      progress: (event) => {
+        progress.push(event);
+      },
+    });
+
+    expect(progress.filter((event) => event.stage).map((event) => event.stage)).toEqual([
+      'tech-lead-breakdown',
+      'pm-review-match',
+      'claude-critique',
+      'codex-critique',
+      'context-seed',
+    ]);
+    for (const stage of ['tech-lead-breakdown', 'pm-review-match', 'claude-critique', 'codex-critique', 'context-seed']) {
+      expect(progress.filter((event) => event.stage === stage)).toHaveLength(1);
+    }
+    const warning = progress.find((event) => event.warning);
+    expect(warning?.warning).toMatch(/codex.*skipped|last coherent plan/i);
+    expect(progress.some((event) => event.terminal || event.success)).toBe(false);
+    expect(artifact.techSpec).toContain('last coherent plan');
   });
 });
