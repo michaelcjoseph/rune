@@ -36,7 +36,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 - [x] Write the test suite for **downstream-progress-streaming** — test-plan.md §2.
 - [x] Write the test suite for **post-approval-inflight-op** — test-plan.md §2.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
