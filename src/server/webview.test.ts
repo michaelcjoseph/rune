@@ -789,6 +789,28 @@ describe('server/webview', () => {
       };
     }
 
+    function versionOnlyApprovedSession() {
+      return {
+        id: 'version-only-plan-webview',
+        chatId: 42,
+        claudeSessionId: 'claude-version-only-plan',
+        planning: {
+          status: 'approved' as const,
+          product: 'rune',
+          idea: 'old plan with partial marker',
+          surface: 'cockpit' as const,
+          approvedSpec: {
+            version: 2,
+            product: 'rune',
+            title: 'Version Only Plan',
+            spec: 'This persisted approval lacks kind: pm-spec.',
+          },
+        },
+        createdAt: '2026-07-01T00:00:00.000Z',
+        lastActivity: '2026-07-01T00:00:00.000Z',
+      };
+    }
+
     it('runs downstream planning from the PM-only approval artifact, persists it, then scaffolds', async () => {
       (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
         ok: true,
@@ -862,6 +884,42 @@ describe('server/webview', () => {
       (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
         ok: true,
         session: legacyApprovedSession(),
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/restart planning/i);
+      expect(runDownstreamPlan).not.toHaveBeenCalled();
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+    });
+
+    it('hard-fails a legacy spec-proposed transition result before downstream planning or scaffold', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: false,
+        reason: 'legacy-artifact',
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/restart planning|pm-spec/i);
+      expect(runDownstreamPlan).not.toHaveBeenCalled();
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+    });
+
+    it('hard-fails a stored approval with version 2 but no pm-spec kind discriminant', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: versionOnlyApprovedSession(),
       });
 
       const res = await makeRequest(port, '/api/planning/approve', {

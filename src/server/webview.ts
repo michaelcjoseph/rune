@@ -2036,6 +2036,13 @@ async function handleApiPlanningApprove(_req: IncomingMessage, res: ServerRespon
       res.end(JSON.stringify({ error: 'no active planning session' }));
       return;
     }
+    if (result.reason === 'legacy-artifact') {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'This planning approval uses a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+      }));
+      return;
+    }
     // 'wrong-status' — session is in scoping or terminal.
     res.writeHead(409, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `cannot approve from status '${result.status}'` }));

@@ -26,6 +26,7 @@ import { cleanupSession } from '../ai/claude.js';
 import config from '../config.js';
 import {
   approvePlan,
+  isPmSpecApprovalArtifact,
   startPlanning,
   type PlanningSession,
   type PlanningStatus,
@@ -239,7 +240,8 @@ function abandonLinkedPromotion(promotionId: string): void {
 export type ApproveResult =
   | { ok: true; session: StoredPlanningSession }
   | { ok: false; reason: 'no-session' }
-  | { ok: false; reason: 'wrong-status'; status: PlanningStatus };
+  | { ok: false; reason: 'wrong-status'; status: PlanningStatus }
+  | { ok: false; reason: 'legacy-artifact' };
 
 /**
  * Approve an active planning session in `spec-proposed` — transitions the
@@ -258,6 +260,9 @@ export function approveActivePlanningSession(chatId: number): ApproveResult {
   if (!session) return { ok: false, reason: 'no-session' };
   if (session.planning.status !== 'spec-proposed') {
     return { ok: false, reason: 'wrong-status', status: session.planning.status };
+  }
+  if (!isPmSpecApprovalArtifact(session.planning.artifact)) {
+    return { ok: false, reason: 'legacy-artifact' };
   }
   // approvePlan validates the spec-proposed precondition again and throws
   // on a state-machine violation. Catching here would swallow a logic bug —

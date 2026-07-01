@@ -98,6 +98,20 @@ function approvedSession(over: Record<string, unknown> = {}) {
   };
 }
 
+function approvedPmSpecReadySession(over: Record<string, unknown> = {}) {
+  return approvedSession({
+    planning: {
+      status: 'approved' as const,
+      product: 'rune',
+      idea: 'build something cool',
+      surface: 'chat' as const,
+      approvedSpec: PM_SPEC_ARTIFACT,
+      downstreamArtifact: DOWNSTREAM_ARTIFACT,
+    },
+    ...over,
+  });
+}
+
 function okOutcome(over: Record<string, unknown> = {}) {
   return { ok: true, slug: '09-test', agentText: 'Created docs/projects/09-test/spec.md', promotion: 'none', ...over };
 }
@@ -126,6 +140,16 @@ describe('handleApprove — gating', () => {
     expect(deletePlanningSessionMock).not.toHaveBeenCalled();
   });
 
+  it('sends a restart-planning reply on a legacy proposed artifact and never scaffolds', async () => {
+    approveActivePlanningSessionMock.mockReturnValue({ ok: false, reason: 'legacy-artifact' });
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+    expect((vi.mocked(sender.send).mock.calls[0]![1] as string)).toMatch(/restart planning|pm-spec/i);
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+  });
+
   it('passes the correct userId to approveActivePlanningSession', async () => {
     approveActivePlanningSessionMock.mockReturnValue({ ok: false, reason: 'no-session' });
     await handleApprove(makeSender(), 99999);
@@ -141,7 +165,7 @@ describe('handleApprove — normal path outcome mapping', () => {
   });
 
   it('success: passes the approved session to the helper, surfaces output, deletes the session', async () => {
-    const session = approvedSession();
+    const session = approvedPmSpecReadySession();
     approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
     runScaffoldApprovalMock.mockResolvedValue(okOutcome());
 
@@ -155,7 +179,7 @@ describe('handleApprove — normal path outcome mapping', () => {
   });
 
   it('mark-source-error: still deletes the session but warns about the unmarked bullet', async () => {
-    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession() });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedPmSpecReadySession() });
     runScaffoldApprovalMock.mockResolvedValue(okOutcome({ promotion: 'mark-source-error' }));
 
     const sender = makeSender();
@@ -167,7 +191,7 @@ describe('handleApprove — normal path outcome mapping', () => {
   });
 
   it('failure: surfaces the error and does NOT delete the session', async () => {
-    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession() });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedPmSpecReadySession() });
     runScaffoldApprovalMock.mockResolvedValue({ ok: false, reason: 'agent', message: 'agent failed' });
 
     const sender = makeSender();
@@ -179,7 +203,7 @@ describe('handleApprove — normal path outcome mapping', () => {
   });
 
   it('verify failure echoes the agent reply text', async () => {
-    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession() });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedPmSpecReadySession() });
     runScaffoldApprovalMock.mockResolvedValue({
       ok: false, reason: 'verify', message: 'scaffold verification failed: no-new-project-dir',
       agentText: 'I have a few clarifying questions before I start...',
@@ -282,6 +306,35 @@ describe('handleApprove — PM-spec approval persistence (project 20 test-plan �
     approveActivePlanningSessionMock.mockReturnValue({
       ok: true,
       session: approvedSession(),
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /restart planning/i.test(m))?.[1];
+    expect(reply).toBeDefined();
+  });
+
+  it('hard-fails stored approvals with version 2 but no pm-spec kind discriminant', async () => {
+    approveActivePlanningSessionMock.mockReturnValue({
+      ok: true,
+      session: approvedSession({
+        planning: {
+          status: 'approved' as const,
+          product: 'rune',
+          idea: 'old plan',
+          surface: 'chat' as const,
+          approvedSpec: {
+            version: 2,
+            product: 'rune',
+            title: 'Legacy Version-Only Plan',
+            spec: 'This has a version field but no kind discriminant.',
+          },
+        },
+      }),
     });
 
     const sender = makeSender();
@@ -412,7 +465,7 @@ describe('handleApprove — error sanitization', () => {
   });
 
   it('strips absolute vault and project paths from the failure reply', async () => {
-    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedSession() });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session: approvedPmSpecReadySession() });
     runScaffoldApprovalMock.mockResolvedValue({
       ok: false, reason: 'agent',
       message: 'Error reading /test/vault/foo.md and /test/project/bar.md',

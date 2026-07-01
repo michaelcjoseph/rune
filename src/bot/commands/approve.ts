@@ -66,6 +66,12 @@ export async function handleApprove(sender: MessageSender, userId: number): Prom
           'No spec proposed yet — keep scoping until Rune proposes one.',
         );
         return;
+      case 'legacy-artifact':
+        await sender.send(
+          userId,
+          'This planning approval was created with a retired artifact shape. Please restart planning to produce a versioned pm-spec approval.',
+        );
+        return;
     }
   }
 

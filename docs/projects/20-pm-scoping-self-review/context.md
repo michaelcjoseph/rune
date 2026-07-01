@@ -44,4 +44,9 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- assertions: the older “normal path outcome mapping” tests expect a legacy approved session with only `planning.artifact` to scaffold, while the selected task and newer tests require that exact legacy shape to hard-fail with “restart planning.” I left the implementation on the selected-task contract.
+- val route surface a restart-planning message and skip downstream planning/scaffold/delete.
+
+Verified:
+- `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts`
+- `npm test -- src/reviews/planning.test.ts src/bot/commands/approve.test.ts src/server/webview.test.ts`
+- `npm run build`

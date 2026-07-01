@@ -35,6 +35,7 @@ vi.mock('../ai/claude.js', () => ({
 
 import {
   abandonActivePlanningSession,
+  approveActivePlanningSession,
   createPlanningSession,
   deletePlanningSession,
   getActivePlanningSession,
@@ -275,6 +276,34 @@ describe('getAllPlanningSessions', () => {
     const chatIds = all.map(([chatId]) => chatId);
     expect(chatIds).toContain(1);
     expect(chatIds).toContain(2);
+  });
+});
+
+describe('approveActivePlanningSession', () => {
+  it('returns legacy-artifact without mutating a spec-proposed legacy artifact', () => {
+    createPlanningSession(31, 'legacy idea', 'chat', 'aura');
+    const legacyArtifact = {
+      product: 'aura',
+      title: 'Legacy full artifact',
+      spec: 'Old shape.',
+      tasks: 'Old tasks.',
+      testPlan: 'Old test plan.',
+    };
+    updatePlanningSession(31, (sess) => ({
+      ...sess,
+      planning: {
+        ...sess.planning,
+        status: 'spec-proposed',
+        artifact: legacyArtifact,
+      },
+    }));
+
+    const result = approveActivePlanningSession(31);
+
+    expect(result).toEqual({ ok: false, reason: 'legacy-artifact' });
+    const stored = getPlanningSession(31);
+    expect(stored?.planning.status).toBe('spec-proposed');
+    expect(stored?.planning.artifact).toEqual(legacyArtifact);
   });
 });
 
