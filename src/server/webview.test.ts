@@ -28,9 +28,15 @@ vi.mock('../jobs/work-run-release.js', () => ({
 
 // In-flight op mocks for POST /api/ops/:id/cancel
 const mockCancelOp = vi.fn();
+const mockRegisterOp = vi.fn();
+const mockUnregisterOp = vi.fn();
+const mockIsCancelled = vi.fn(() => false);
 vi.mock('../transport/in-flight.js', () => ({
   cancelOp: mockCancelOp,
   listOps: vi.fn(() => []),
+  registerOp: mockRegisterOp,
+  unregisterOp: mockUnregisterOp,
+  isCancelled: mockIsCancelled,
 }));
 
 const mockReadRecentMutations = vi.fn(() => []);
@@ -523,6 +529,17 @@ describe('server/webview', () => {
       agentText: 'Created docs/projects/20-downstream-plan/spec.md',
       promotion: 'none',
     });
+    mockRegisterOp.mockReturnValue({
+      opId: 'op-webview-post-approval-plan',
+      kind: 'agent',
+      label: 'planning approval',
+      userId: 42,
+      startedAt: 1,
+      startedAtIso: '2026-07-01T12:00:00.000Z',
+      child: { kill: vi.fn() },
+      cancelled: false,
+    });
+    mockIsCancelled.mockReturnValue(false);
     // Re-establish the default getProjectSummaries return alongside the
     // other restored mocks for consistency — vi.clearAllMocks clears call
     // history but not implementations today, so the default persists; this
@@ -887,6 +904,49 @@ describe('server/webview', () => {
       expect(mockWebviewSender.send.mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
     });
 
+    it('registers the webview approval pipeline as a cancellable in-flight op and marks it successful after scaffold success', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+      (runScaffoldApproval as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        slug: '20-webview-inflight-plan',
+        agentText: 'Created docs/projects/20-webview-inflight-plan/spec.md',
+        promotion: 'none',
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(mockRegisterOp).toHaveBeenCalledOnce();
+      expect(mockRegisterOp).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 42,
+        label: expect.stringMatching(/planning|approve|scaffold/i),
+        child: expect.objectContaining({ kill: expect.any(Function) }),
+      }));
+      expect(mockRegisterOp.mock.invocationCallOrder[0]!).toBeLessThan(
+        (runDownstreamPlan as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+      );
+      expect((runDownstreamPlan as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!).toBeLessThan(
+        (runScaffoldApproval as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+      );
+
+      const successIndex = mockWebviewSender.send.mock.calls.findIndex(([, message]) =>
+        /Planning succeeded:.*Created docs\/projects\/20-webview-inflight-plan\/spec\.md/i.test(String(message)),
+      );
+      expect(successIndex).toBeGreaterThanOrEqual(0);
+      expect(mockUnregisterOp).toHaveBeenCalledWith('op-webview-post-approval-plan', 'success');
+      expect(mockUnregisterOp.mock.invocationCallOrder[0]!).toBeGreaterThan(
+        mockWebviewSender.send.mock.invocationCallOrder[successIndex]!,
+      );
+      expect(deletePlanningSession).toHaveBeenCalledWith(42);
+    });
+
     it('surfaces a scrubbed terminal progress line when scaffold fails', async () => {
       (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
         ok: true,
@@ -913,6 +973,72 @@ describe('server/webview', () => {
       expect(terminal).toContain('<project>');
       expect(String(res.body.error)).not.toContain('/test/project');
       expect(String(res.body.error)).toContain('<project>');
+    });
+
+    it('marks the webview in-flight op as error on scaffold terminal failure after downstream planning was persisted', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+      (runScaffoldApproval as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: false,
+        reason: 'agent',
+        message: 'project-setup-writer failed while writing /test/project/docs/projects/20-webview-inflight-plan/spec.md',
+      });
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(500);
+      expect(updatePlanningSession).toHaveBeenCalledWith(42, expect.any(Function));
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+      const terminal = mockWebviewSender.send.mock.calls.find(([, message]) =>
+        /Planning stopped:.*scaffold/i.test(String(message)),
+      )?.[1] as string | undefined;
+      expect(terminal).toBeDefined();
+      expect(terminal).not.toContain('/test/project');
+      expect(terminal).toContain('<project>');
+      expect(mockUnregisterOp).toHaveBeenCalledWith(
+        'op-webview-post-approval-plan',
+        'error',
+        expect.stringMatching(/scaffold.*<project>/i),
+      );
+    });
+
+    it('cooperatively cancels the webview approval pipeline at the next downstream stage boundary', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      let completedStageBoundaries = 0;
+      mockIsCancelled.mockImplementation(() => completedStageBoundaries >= 1);
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_approvedSpec: unknown, options: any) => {
+          await options.progress({ stage: 'tech-lead-breakdown' });
+          completedStageBoundaries += 1;
+          await options.progress({ stage: 'pm-review-match' });
+          return downstreamArtifact;
+        },
+      );
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(499);
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(updatePlanningSession).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+      const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
+      expect(messages.filter((message) => /^Planning progress: tech[- ]lead breakdown\.$/i.test(message))).toHaveLength(1);
+      expect(messages.some((message) => /^Planning progress: PM review\.$/i.test(message))).toBe(false);
+      expect(messages.some((message) => /Planning stopped:.*cancelled/i.test(message))).toBe(true);
+      expect(messages.some((message) => /click approve again|run \/approve again/i.test(message))).toBe(true);
+      expect(mockUnregisterOp).toHaveBeenCalledWith('op-webview-post-approval-plan', 'cancelled');
     });
 
     it('retry path reruns downstream when the approved session has only approvedSpec', async () => {

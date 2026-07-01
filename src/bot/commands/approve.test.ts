@@ -34,9 +34,16 @@ vi.mock('../../jobs/scaffold-approval.js', () => ({
   runScaffoldApproval: vi.fn(),
 }));
 
+vi.mock('../../transport/in-flight.js', () => ({
+  registerOp: vi.fn(),
+  unregisterOp: vi.fn(),
+  isCancelled: vi.fn(() => false),
+}));
+
 const { approveActivePlanningSession, deletePlanningSession, getPlanningSession, updatePlanningSession } = await import('../../reviews/planning.js');
 const { runDownstreamPlan } = await import('../../intent/planning-roles.js');
 const { runScaffoldApproval } = await import('../../jobs/scaffold-approval.js');
+const { registerOp, unregisterOp, isCancelled } = await import('../../transport/in-flight.js');
 const { handleApprove } = await import('./approve.js');
 
 const approveActivePlanningSessionMock = approveActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
@@ -45,6 +52,25 @@ const getPlanningSessionMock = getPlanningSession as unknown as ReturnType<typeo
 const updatePlanningSessionMock = updatePlanningSession as unknown as ReturnType<typeof vi.fn>;
 const runDownstreamPlanMock = runDownstreamPlan as unknown as ReturnType<typeof vi.fn>;
 const runScaffoldApprovalMock = runScaffoldApproval as unknown as ReturnType<typeof vi.fn>;
+const registerOpMock = registerOp as unknown as ReturnType<typeof vi.fn>;
+const unregisterOpMock = unregisterOp as unknown as ReturnType<typeof vi.fn>;
+const isCancelledMock = isCancelled as unknown as ReturnType<typeof vi.fn>;
+
+const POST_APPROVAL_OP = {
+  opId: 'op-post-approval-plan',
+  kind: 'agent' as const,
+  label: 'planning approval',
+  userId: 100,
+  startedAt: 1,
+  startedAtIso: '2026-07-01T12:00:00.000Z',
+  child: { kill: vi.fn() },
+  cancelled: false,
+};
+
+beforeEach(() => {
+  registerOpMock.mockReturnValue(POST_APPROVAL_OP);
+  isCancelledMock.mockReturnValue(false);
+});
 
 function makeSender(): MessageSender {
   return {
@@ -424,6 +450,163 @@ describe('handleApprove — PM-spec approval persistence (project 20 test-plan �
     expect(deletePlanningSessionMock).not.toHaveBeenCalled();
     const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /restart planning/i.test(m))?.[1];
     expect(reply).toBeDefined();
+  });
+});
+
+describe('handleApprove — post-approval in-flight op (project 20 test-plan §2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPlanningSessionMock.mockReturnValue(null);
+    registerOpMock.mockReturnValue(POST_APPROVAL_OP);
+    isCancelledMock.mockReturnValue(false);
+    runDownstreamPlanMock.mockResolvedValue(DOWNSTREAM_ARTIFACT);
+    runScaffoldApprovalMock.mockResolvedValue(okOutcome({ slug: '20-inflight-plan' }));
+  });
+
+  it('registers one cancellable in-flight op for the planning user around downstream planning and scaffold, then marks success after the scaffold-success line', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runScaffoldApprovalMock.mockResolvedValue(okOutcome({
+      slug: '20-inflight-plan',
+      agentText: 'Created docs/projects/20-inflight-plan/spec.md',
+    }));
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(registerOpMock).toHaveBeenCalledOnce();
+    expect(registerOpMock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 100,
+      label: expect.stringMatching(/planning|approve|scaffold/i),
+      child: expect.objectContaining({ kill: expect.any(Function) }),
+    }));
+    expect(registerOpMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      runDownstreamPlanMock.mock.invocationCallOrder[0]!,
+    );
+    expect(runDownstreamPlanMock.mock.invocationCallOrder[0]!).toBeLessThan(
+      runScaffoldApprovalMock.mock.invocationCallOrder[0]!,
+    );
+
+    const sendMock = vi.mocked(sender.send);
+    const successIndex = sendMock.mock.calls.findIndex(([, message]) =>
+      /Planning succeeded:.*Created docs\/projects\/20-inflight-plan\/spec\.md/i.test(String(message)),
+    );
+    expect(successIndex).toBeGreaterThanOrEqual(0);
+    expect(unregisterOpMock).toHaveBeenCalledWith('op-post-approval-plan', 'success');
+    expect(unregisterOpMock.mock.invocationCallOrder[0]!).toBeGreaterThan(
+      sendMock.mock.invocationCallOrder[successIndex]!,
+    );
+    expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
+  });
+
+  it('marks the in-flight op as error on downstream terminal failure and leaves the approved session resumable', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runDownstreamPlanMock.mockRejectedValue(
+      new Error('PM review mismatch after reading /test/project/private-plan.md'),
+    );
+
+    const sender = makeSender();
+    await expect(handleApprove(sender, 100)).resolves.toBeUndefined();
+
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const terminal = vi.mocked(sender.send).mock.calls.find(([, message]) =>
+      /Planning stopped:.*PM review mismatch/i.test(String(message)),
+    )?.[1] as string | undefined;
+    expect(terminal).toBeDefined();
+    expect(terminal).not.toContain('/test/project');
+    expect(terminal).toContain('<project>');
+    expect(unregisterOpMock).toHaveBeenCalledWith(
+      'op-post-approval-plan',
+      'error',
+      expect.stringMatching(/PM review mismatch.*<project>/i),
+    );
+  });
+
+  it('marks the in-flight op as error on scaffold terminal failure after downstream planning was persisted', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runScaffoldApprovalMock.mockResolvedValue({
+      ok: false,
+      reason: 'agent',
+      message: 'project-setup-writer failed while writing /test/project/docs/projects/20-inflight-plan/spec.md',
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const terminal = vi.mocked(sender.send).mock.calls.find(([, message]) =>
+      /Planning stopped:.*scaffold/i.test(String(message)),
+    )?.[1] as string | undefined;
+    expect(terminal).toBeDefined();
+    expect(terminal).not.toContain('/test/project');
+    expect(terminal).toContain('<project>');
+    expect(unregisterOpMock).toHaveBeenCalledWith(
+      'op-post-approval-plan',
+      'error',
+      expect.stringMatching(/scaffold.*<project>/i),
+    );
+  });
+
+  it('cooperatively cancels at the next downstream stage boundary, emits a terminal line, and keeps the session resumable', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    let completedStageBoundaries = 0;
+    isCancelledMock.mockImplementation(() => completedStageBoundaries >= 1);
+    runDownstreamPlanMock.mockImplementation(async (_approvedSpec: unknown, options: any) => {
+      await options.progress({ stage: 'tech-lead-breakdown' });
+      completedStageBoundaries += 1;
+      await options.progress({ stage: 'pm-review-match' });
+      return DOWNSTREAM_ARTIFACT;
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    expect(messages.filter((message) => /^Planning progress: tech[- ]lead breakdown\.$/i.test(message))).toHaveLength(1);
+    expect(messages.some((message) => /^Planning progress: PM review\.$/i.test(message))).toBe(false);
+    expect(messages.some((message) => /Planning stopped:.*cancelled/i.test(message))).toBe(true);
+    expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
+    expect(unregisterOpMock).toHaveBeenCalledWith('op-post-approval-plan', 'cancelled');
   });
 });
 
