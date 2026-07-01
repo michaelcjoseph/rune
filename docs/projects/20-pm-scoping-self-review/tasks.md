@@ -54,7 +54,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 - [x] Write the test suite for **pm-spec-self-review** — test-plan.md §3.
 - [x] Write the test suite for **tech-lead-self-review** — test-plan.md §3.
 - [x] Write the test suite for **coder-diff-self-review** — test-plan.md §3.
-- [ ] Confirm red before implementation.
+- [x] Confirm red before implementation.
 
 ### Implementation
 
