@@ -21,21 +21,29 @@ vi.mock('../../utils/logger.js', () => ({
 vi.mock('../../reviews/planning.js', () => ({
   getActivePlanningSession: vi.fn(() => null),
   getPlanningSession: vi.fn(() => null),
+  updatePlanningSession: vi.fn(),
   approveActivePlanningSession: vi.fn(),
   deletePlanningSession: vi.fn(),
+}));
+
+vi.mock('../../intent/planning-roles.js', () => ({
+  runDownstreamPlan: vi.fn(),
 }));
 
 vi.mock('../../jobs/scaffold-approval.js', () => ({
   runScaffoldApproval: vi.fn(),
 }));
 
-const { approveActivePlanningSession, deletePlanningSession, getPlanningSession } = await import('../../reviews/planning.js');
+const { approveActivePlanningSession, deletePlanningSession, getPlanningSession, updatePlanningSession } = await import('../../reviews/planning.js');
+const { runDownstreamPlan } = await import('../../intent/planning-roles.js');
 const { runScaffoldApproval } = await import('../../jobs/scaffold-approval.js');
 const { handleApprove } = await import('./approve.js');
 
 const approveActivePlanningSessionMock = approveActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
 const deletePlanningSessionMock = deletePlanningSession as unknown as ReturnType<typeof vi.fn>;
 const getPlanningSessionMock = getPlanningSession as unknown as ReturnType<typeof vi.fn>;
+const updatePlanningSessionMock = updatePlanningSession as unknown as ReturnType<typeof vi.fn>;
+const runDownstreamPlanMock = runDownstreamPlan as unknown as ReturnType<typeof vi.fn>;
 const runScaffoldApprovalMock = runScaffoldApproval as unknown as ReturnType<typeof vi.fn>;
 
 function makeSender(): MessageSender {
@@ -60,6 +68,26 @@ const BASE_SESSION = {
   },
   createdAt: new Date().toISOString(),
   lastActivity: new Date().toISOString(),
+};
+
+const PM_SPEC_ARTIFACT = {
+  version: 2,
+  kind: 'pm-spec',
+  product: 'rune',
+  title: 'Test Project',
+  spec: 'A spec.',
+  assumptions: ['existing users keep access'],
+  selfReview: { revised: false, summary: 'Spec is internally consistent.' },
+};
+
+const DOWNSTREAM_ARTIFACT = {
+  product: 'rune',
+  title: 'Test Project',
+  spec: 'A spec.',
+  techSpec: 'tech spec',
+  tasks: 'tasks',
+  testPlan: 'tp',
+  context: 'context',
 };
 
 function approvedSession(over: Record<string, unknown> = {}) {
@@ -109,6 +137,7 @@ describe('handleApprove — normal path outcome mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPlanningSessionMock.mockReturnValue(null);
+    runDownstreamPlanMock.mockResolvedValue(DOWNSTREAM_ARTIFACT);
   });
 
   it('success: passes the approved session to the helper, surfaces output, deletes the session', async () => {
@@ -166,10 +195,110 @@ describe('handleApprove — normal path outcome mapping', () => {
   });
 });
 
+describe('handleApprove — PM-spec approval persistence (project 20 test-plan §1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPlanningSessionMock.mockReturnValue(null);
+    runDownstreamPlanMock.mockResolvedValue(DOWNSTREAM_ARTIFACT);
+    runScaffoldApprovalMock.mockResolvedValue(okOutcome());
+  });
+
+  it('runs downstream planning from the approved PM spec, persists the full artifact, then scaffolds', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).toHaveBeenCalledWith(PM_SPEC_ARTIFACT, expect.any(Object));
+    expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
+    expect(updatePlanningSessionMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runScaffoldApprovalMock.mock.invocationCallOrder[0],
+    );
+    const scaffoldedSession = runScaffoldApprovalMock.mock.calls[0]![0] as any;
+    expect(scaffoldedSession.planning.approvedSpec).toEqual(PM_SPEC_ARTIFACT);
+    expect(scaffoldedSession.planning.downstreamArtifact).toEqual(DOWNSTREAM_ARTIFACT);
+    expect(deletePlanningSessionMock).toHaveBeenCalledWith(100);
+  });
+
+  it('keeps the approved session resumable with downstreamArtifact when scaffold fails after downstream planning', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runScaffoldApprovalMock.mockResolvedValue({
+      ok: false,
+      reason: 'agent',
+      message: 'scaffold failed after downstream planning',
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).toHaveBeenCalledOnce();
+    expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
+    expect(runScaffoldApprovalMock).toHaveBeenCalledOnce();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /retry/i.test(m))?.[1];
+    expect(reply).toMatch(/run \/approve again/i);
+  });
+
+  it('retries an approved-but-unscaffolded session with persisted downstreamArtifact without re-running downstream planning', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+        downstreamArtifact: DOWNSTREAM_ARTIFACT,
+      },
+    });
+    getPlanningSessionMock.mockReturnValue(session);
+
+    await handleApprove(makeSender(), 100);
+
+    expect(approveActivePlanningSessionMock).not.toHaveBeenCalled();
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(runScaffoldApprovalMock).toHaveBeenCalledWith(session);
+  });
+
+  it('hard-fails legacy approved sessions that lack the versioned pm-spec discriminant', async () => {
+    approveActivePlanningSessionMock.mockReturnValue({
+      ok: true,
+      session: approvedSession(),
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).not.toHaveBeenCalled();
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const reply = vi.mocked(sender.send).mock.calls.find(([, m]) => typeof m === 'string' && /restart planning/i.test(m))?.[1];
+    expect(reply).toBeDefined();
+  });
+});
+
 describe('handleApprove — retry path (session already approved)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getPlanningSessionMock.mockReturnValue(null);
+    runDownstreamPlanMock.mockResolvedValue(DOWNSTREAM_ARTIFACT);
   });
 
   it('picks up an already-approved session via getPlanningSession and re-scaffolds without re-approving', async () => {

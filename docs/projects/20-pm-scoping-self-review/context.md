@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- les` / `pmAssessAndSpec` entry points.
+- -reporter verbose`
 
-Verification: `npx vitest run src/reviews/planning-handler.test.ts --reporter verbose` is red as expected: `10 failed | 9 passed`. The new failures correspond to the current implementation still routing through `ready`, `planning-brief`, and `runPlannerRoles`.
+Result is red as expected for test-first work: `14 failed | 92 passed`. Failures point at the missing PM-spec approval split, downstream planning persistence/reuse, legacy hard-fail, and scaffold use of `downstreamArtifact`. No implementation files changed and no commit was made.

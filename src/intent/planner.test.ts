@@ -35,6 +35,32 @@ function sampleArtifact(): SpecArtifact {
   };
 }
 
+/** The PM-only approval artifact emitted by the project-20 scoping flow. */
+function samplePmSpecArtifact() {
+  return {
+    version: 2,
+    kind: 'pm-spec',
+    product: 'aura',
+    title: 'Seat-based pricing tiers',
+    spec: 'Add seat-based pricing tiers to Aura.',
+    assumptions: ['Seat count is already tracked.'],
+    selfReview: { revised: false, summary: 'Spec is internally consistent.' },
+  } as const;
+}
+
+function approvedPmSpecSession(surface: PlanningSurface = 'chat') {
+  return approvePlan(
+    proposeSpec(startPlanning('an idea', surface, 'aura'), samplePmSpecArtifact() as any),
+  ) as any;
+}
+
+function approvedSessionWithDownstream(surface: PlanningSurface = 'chat') {
+  return {
+    ...approvedPmSpecSession(surface),
+    downstreamArtifact: sampleArtifact(),
+  } as any;
+}
+
 describe('Planner — scoping the idea (test-plan §9)', () => {
   it('starts a fuzzy idea in scoping — it does not jump straight to a spec', () => {
     const session = startPlanning('maybe do something with pricing', 'chat', 'aura');
@@ -49,14 +75,20 @@ describe('Planner — the approval gate (test-plan §9)', () => {
   it('is not scaffold-ready while scoping or after a spec is merely proposed', () => {
     const scoping = startPlanning('an idea', 'chat', 'aura');
     expect(isScaffoldReady(scoping)).toBe(false);
-    const proposed = proposeSpec(scoping, sampleArtifact());
+    const proposed = proposeSpec(scoping, samplePmSpecArtifact() as any);
     expect(proposed.status).toBe('spec-proposed');
     // A proposed-but-unapproved spec still dispatches nothing.
     expect(isScaffoldReady(proposed)).toBe(false);
   });
 
-  it('becomes scaffold-ready only once the spec is approved', () => {
-    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+  it('does not become scaffold-ready when only the PM spec has been approved', () => {
+    const approved = approvedPmSpecSession();
+    expect(approved.status).toBe('approved');
+    expect(isScaffoldReady(approved)).toBe(false);
+  });
+
+  it('becomes scaffold-ready only after the downstream full scaffold artifact is persisted', () => {
+    const approved = approvedSessionWithDownstream();
     expect(approved.status).toBe('approved');
     expect(isScaffoldReady(approved)).toBe(true);
   });
@@ -67,22 +99,59 @@ describe('Planner — the approval gate (test-plan §9)', () => {
   });
 
   it('refuses to propose a spec on a session that is not scoping', () => {
-    const proposed = proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact());
-    expect(() => proposeSpec(proposed, sampleArtifact())).toThrow(/scoping|propos|already/i);
+    const proposed = proposeSpec(startPlanning('an idea', 'chat', 'aura'), samplePmSpecArtifact() as any);
+    expect(() => proposeSpec(proposed, samplePmSpecArtifact() as any)).toThrow(
+      /scoping|propos|already/i,
+    );
   });
 });
 
 describe('Planner — the spec artifact (test-plan §9)', () => {
-  it('carries the spec, tasks, and test-plan that scaffold into the three project files', () => {
-    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
-    // The approved session carries exactly the proposed artifact — spec, tasks, test-plan.
-    expect(approved.artifact).toEqual(sampleArtifact());
+  it('keeps the approved PM spec separate from the downstream scaffold artifact', () => {
+    const approved = approvedSessionWithDownstream();
+    expect(approved.approvedSpec).toEqual(samplePmSpecArtifact());
+    expect(approved.artifact).toBeUndefined();
+    expect(approved.downstreamArtifact).toEqual(sampleArtifact());
+  });
+});
+
+describe('Planner — PM-spec approval state (project 20 test-plan §1)', () => {
+  it('stores the pending approval as a versioned PM-only artifact, not a full scaffold artifact', () => {
+    const approved = approvedPmSpecSession();
+
+    expect(approved.status).toBe('approved');
+    expect(approved.approvedSpec).toEqual(samplePmSpecArtifact());
+    expect(approved.artifact).toBeUndefined();
+    expect(approved.downstreamArtifact).toBeUndefined();
+  });
+
+  it('does not treat an approved PM-only spec as scaffold-ready until downstream planning is persisted', () => {
+    const approved = approvedPmSpecSession();
+
+    expect(isScaffoldReady(approved)).toBe(false);
+    expect(() => buildSetupWriterBrief(approved)).toThrow(/downstream|full scaffold|approved spec/i);
+  });
+
+  it('hard-fails legacy proposed artifacts by the absence of the versioned pm-spec discriminant', () => {
+    const legacyProposed = proposeSpec(startPlanning('legacy idea', 'chat', 'aura'), sampleArtifact());
+
+    expect(() => approvePlan(legacyProposed)).toThrow(/restart planning|legacy|pm-spec/i);
+  });
+
+  it('requires the exact version 2 pm-spec discriminant, not only a pm-spec-shaped object', () => {
+    const wrongVersion = {
+      ...samplePmSpecArtifact(),
+      version: 1,
+    };
+    const proposed = proposeSpec(startPlanning('old pm-spec idea', 'chat', 'aura'), wrongVersion as any);
+
+    expect(() => approvePlan(proposed)).toThrow(/restart planning|legacy|pm-spec/i);
   });
 });
 
 describe('Planner — scaffolding the approved plan (test-plan §9)', () => {
   it('builds a project-setup-writer brief carrying all three artifact parts', () => {
-    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+    const approved = approvedSessionWithDownstream();
     const brief = buildSetupWriterBrief(approved);
     const art = sampleArtifact();
     expect(brief).toContain(art.title);
@@ -93,13 +162,13 @@ describe('Planner — scaffolding the approved plan (test-plan §9)', () => {
   });
 
   it('carries the per-phase Tests (write first) block into the brief', () => {
-    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+    const approved = approvedSessionWithDownstream();
     expect(buildSetupWriterBrief(approved)).toContain('Tests (write first)');
   });
 
   it('refuses to build a scaffold brief before the plan is approved', () => {
     // Nothing is scaffolded before approval.
-    const proposed = proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact());
+    const proposed = proposeSpec(startPlanning('an idea', 'chat', 'aura'), samplePmSpecArtifact() as any);
     expect(() => buildSetupWriterBrief(proposed)).toThrow(/approv|scaffold/i);
   });
 });
@@ -107,9 +176,7 @@ describe('Planner — scaffolding the approved plan (test-plan §9)', () => {
 describe('Planner — chat and cockpit surfaces (test-plan §9)', () => {
   it('runs the full scoping → propose → approve flow identically on both surfaces', () => {
     for (const surface of ['chat', 'cockpit'] as const satisfies readonly PlanningSurface[]) {
-      const approved = approvePlan(
-        proposeSpec(startPlanning('an idea', surface, 'aura'), sampleArtifact()),
-      );
+      const approved = approvedSessionWithDownstream(surface);
       expect(approved.status).toBe('approved');
       expect(approved.surface).toBe(surface);
       expect(isScaffoldReady(approved)).toBe(true);
@@ -126,12 +193,12 @@ describe('Planner — abandonment (test-plan §9)', () => {
   });
 
   it('abandoning a session after a spec was proposed is allowed', () => {
-    const proposed = proposeSpec(startPlanning('an idea', 'cockpit', 'aura'), sampleArtifact());
+    const proposed = proposeSpec(startPlanning('an idea', 'cockpit', 'aura'), samplePmSpecArtifact() as any);
     expect(abandonPlan(proposed).status).toBe('abandoned');
   });
 
   it('refuses to abandon a session that has already reached a terminal state', () => {
-    const approved = approvePlan(proposeSpec(startPlanning('an idea', 'chat', 'aura'), sampleArtifact()));
+    const approved = approvedPmSpecSession();
     expect(() => abandonPlan(approved)).toThrow(/approved|terminal|already/i);
   });
 });

@@ -181,6 +181,85 @@ describe('persistPlanningSessions / restorePlanningSessions', () => {
     expect(restored!.planning.product).toBe('assay');
   });
 
+  it('round-trips approved PM-spec state and persisted downstream artifact for restart resume', () => {
+    const approvedSpec = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'PM-owned spec',
+      spec: 'The approved PM spec.',
+      assumptions: ['The user approved this exact artifact.'],
+      selfReview: { revised: true, summary: 'Clarified the acceptance boundary.' },
+    };
+    const downstreamArtifact = {
+      product: 'aura',
+      title: 'PM-owned spec',
+      spec: 'The approved PM spec.',
+      techSpec: 'Tech lead breakdown.',
+      tasks: '## Phase 1\n### Tests (write first)\n- [ ] contract test',
+      testPlan: '## 1. Contract\n- [ ] approval resumes',
+      context: '# Context',
+    };
+    const original = createPlanningSession(13, 'an idea', 'chat', 'aura');
+    updatePlanningSession(13, (sess) => ({
+      ...sess,
+      planning: {
+        ...sess.planning,
+        status: 'approved',
+        approvedSpec,
+        downstreamArtifact,
+      } as any,
+    }));
+
+    restorePlanningSessions();
+
+    const restored = getPlanningSession(13) as any;
+    expect(restored).not.toBeNull();
+    expect(restored.id).toBe(original.id);
+    expect(restored.planning.status).toBe('approved');
+    expect(restored.planning.approvedSpec).toEqual(approvedSpec);
+    expect(restored.planning.downstreamArtifact).toEqual(downstreamArtifact);
+  });
+
+  it('keeps approved PM-spec state separate for concurrent same-product sessions', () => {
+    const firstSpec = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'First PM spec',
+      spec: 'First approved scope.',
+      assumptions: ['first assumption'],
+      selfReview: { revised: false, summary: 'First clean review.' },
+    };
+    const secondSpec = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'Second PM spec',
+      spec: 'Second approved scope.',
+      assumptions: ['second assumption'],
+      selfReview: { revised: true, summary: 'Second revised review.' },
+    };
+
+    createPlanningSession(21, 'first idea', 'chat', 'aura');
+    createPlanningSession(22, 'second idea', 'cockpit', 'aura');
+    updatePlanningSession(21, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'approved', approvedSpec: firstSpec } as any,
+    }));
+    updatePlanningSession(22, (sess) => ({
+      ...sess,
+      planning: { ...sess.planning, status: 'approved', approvedSpec: secondSpec } as any,
+    }));
+
+    restorePlanningSessions();
+
+    expect((getPlanningSession(21) as any)?.planning.approvedSpec).toEqual(firstSpec);
+    expect((getPlanningSession(22) as any)?.planning.approvedSpec).toEqual(secondSpec);
+    expect(getPlanningSession(21)?.planning.product).toBe('aura');
+    expect(getPlanningSession(22)?.planning.product).toBe('aura');
+  });
+
   it('restorePlanningSessions returns silently on a missing file (no throw)', () => {
     // Use a path that doesn't exist.
     mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'no-such-file.json');

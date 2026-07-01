@@ -77,6 +77,17 @@ vi.mock('../jobs/scaffold-approval.js', () => ({
   })),
   defaultScaffoldApprovalDeps: vi.fn(),
 }));
+vi.mock('../intent/planning-roles.js', () => ({
+  runDownstreamPlan: vi.fn(async () => ({
+    product: 'aura',
+    title: 'X',
+    spec: 'S',
+    techSpec: 'TS',
+    tasks: 'T',
+    testPlan: 'P',
+    context: 'C',
+  })),
+}));
 // Still mocked because other transitively-imported modules touch the Claude CLI at load.
 vi.mock('../ai/claude.js', () => ({
   runAgent: vi.fn(async () => ({ text: 'scaffolded', error: null })),
@@ -113,6 +124,7 @@ vi.mock('../intent/registry.js', () => ({ readRegistry: vi.fn(() => mockRegistry
 const mockCreatePlanningSession = vi.fn();
 const mockGetActivePlanningSession = vi.fn<() => StoredPlanningSession | null>(() => null);
 const mockDeletePlanningSession = vi.fn();
+const mockUpdatePlanningSession = vi.fn();
 const mockApproveActivePlanningSession = vi.fn();
 const mockAbandonActivePlanningSession = vi.fn();
 vi.mock('../reviews/planning.js', () => ({
@@ -120,6 +132,7 @@ vi.mock('../reviews/planning.js', () => ({
   getActivePlanningSession: mockGetActivePlanningSession,
   getAllPlanningSessions: vi.fn(() => []),
   deletePlanningSession: mockDeletePlanningSession,
+  updatePlanningSession: mockUpdatePlanningSession,
   approveActivePlanningSession: mockApproveActivePlanningSession,
   abandonActivePlanningSession: mockAbandonActivePlanningSession,
 }));
@@ -132,6 +145,8 @@ vi.mock('../reviews/planning-handler.js', () => ({
 
 const { mountWebviewRoutes } = await import('./webview.js');
 const { buildCockpitView } = await import('../intent/cockpit.js');
+const { runDownstreamPlan } = await import('../intent/planning-roles.js');
+const { runScaffoldApproval } = await import('../jobs/scaffold-approval.js');
 
 // ---------------------------------------------------------------------------
 // HTTP helper — identical to the one in webview.test.ts.
@@ -308,6 +323,26 @@ describe('cockpit planning panel — POST /api/planning/turn (C1)', () => {
 });
 
 describe('cockpit planning panel — POST /api/planning/approve (C1)', () => {
+  const PM_SPEC_ARTIFACT = {
+    version: 2,
+    kind: 'pm-spec',
+    product: 'aura',
+    title: 'X',
+    spec: 'S',
+    assumptions: ['A'],
+    selfReview: { revised: false, summary: 'clean' },
+  };
+
+  const DOWNSTREAM_ARTIFACT = {
+    product: 'aura',
+    title: 'X',
+    spec: 'S',
+    techSpec: 'TS',
+    tasks: 'T',
+    testPlan: 'P',
+    context: 'C',
+  };
+
   it('rejects unauthenticated requests', async () => {
     const res = await makeRequest(port, '/api/planning/approve', { method: 'POST' });
     expect(res.status).toBe(401);
@@ -330,6 +365,67 @@ describe('cockpit planning panel — POST /api/planning/approve (C1)', () => {
       headers: { Cookie: AUTH_COOKIE },
     });
     expect(res.status).toBe(200);
+  });
+
+  it('runs the same post-approval downstream pipeline as Telegram before scaffold', async () => {
+    vi.mocked(runDownstreamPlan).mockResolvedValueOnce(DOWNSTREAM_ARTIFACT);
+    vi.mocked(runScaffoldApproval).mockResolvedValueOnce({
+      ok: true,
+      slug: '20-x',
+      agentText: 'scaffolded',
+      promotion: 'none',
+    });
+    mockApproveActivePlanningSession.mockReturnValue({
+      ok: true,
+      session: {
+        id: 'plan-1', chatId: 42, claudeSessionId: 'cl-1',
+        planning: {
+          status: 'approved', product: 'aura', idea: '', surface: 'cockpit',
+          approvedSpec: PM_SPEC_ARTIFACT,
+        },
+        createdAt: '2026-05-25T12:00:00Z', lastActivity: '2026-05-25T12:00:00Z',
+      },
+    });
+
+    const res = await makeRequest(port, '/api/planning/approve', {
+      method: 'POST',
+      headers: { Cookie: AUTH_COOKIE },
+    });
+
+    expect(res.status).toBe(200);
+    expect(runDownstreamPlan).toHaveBeenCalledWith(PM_SPEC_ARTIFACT, expect.any(Object));
+    expect(mockUpdatePlanningSession).toHaveBeenCalledWith(42, expect.any(Function));
+    expect(mockUpdatePlanningSession.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runScaffoldApproval).mock.invocationCallOrder[0],
+    );
+    const scaffoldedSession = vi.mocked(runScaffoldApproval).mock.calls[0]![0] as any;
+    expect(scaffoldedSession.planning.approvedSpec).toEqual(PM_SPEC_ARTIFACT);
+    expect(scaffoldedSession.planning.downstreamArtifact).toEqual(DOWNSTREAM_ARTIFACT);
+  });
+
+  it('hard-fails legacy approval artifacts with a restart-planning message instead of scaffolding', async () => {
+    mockApproveActivePlanningSession.mockReturnValue({
+      ok: true,
+      session: {
+        id: 'plan-legacy', chatId: 42, claudeSessionId: 'cl-legacy',
+        planning: {
+          status: 'approved', product: 'aura', idea: '', surface: 'cockpit',
+          artifact: { product: 'aura', title: 'Legacy', spec: 'S', tasks: 'T', testPlan: 'P' },
+        },
+        createdAt: '2026-05-25T12:00:00Z', lastActivity: '2026-05-25T12:00:00Z',
+      },
+    });
+
+    const res = await makeRequest(port, '/api/planning/approve', {
+      method: 'POST',
+      headers: { Cookie: AUTH_COOKIE },
+    });
+
+    expect(res.status).toBe(409);
+    expect(JSON.stringify(res.body)).toMatch(/restart planning/i);
+    expect(runDownstreamPlan).not.toHaveBeenCalled();
+    expect(runScaffoldApproval).not.toHaveBeenCalled();
+    expect(mockDeletePlanningSession).not.toHaveBeenCalled();
   });
 
   it('409s when the session is in scoping (not yet spec-proposed)', async () => {

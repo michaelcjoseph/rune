@@ -98,6 +98,56 @@ describe('runScaffoldApproval — plain session (no promotion)', () => {
     expect(h.writes).toHaveLength(0);
   });
 
+  it('scaffolds from persisted downstreamArtifact when approval state is PM-only', async () => {
+    const prompts: string[] = [];
+    const h = makeHarness({
+      runAgent: async (_agent, prompt) => {
+        prompts.push(String(prompt));
+        return { text: scaffoldMsg(SLUG), error: null };
+      },
+    });
+    const session = makeSession({
+      planning: {
+        status: 'approved',
+        product: 'rune',
+        idea: 'idea',
+        surface: 'chat',
+        approvedSpec: {
+          version: 2,
+          kind: 'pm-spec',
+          product: 'rune',
+          title: 'T',
+          spec: 'approved PM spec',
+          assumptions: [],
+          selfReview: { revised: false, summary: 'clean' },
+        },
+        downstreamArtifact: {
+          product: 'rune',
+          title: 'T',
+          spec: 'approved PM spec',
+          techSpec: 'downstream tech spec',
+          tasks: 'downstream tasks with Tests (write first)',
+          testPlan: 'downstream test plan',
+          context: 'downstream context',
+        },
+      } as any,
+    });
+
+    const out = await runScaffoldApproval(session, h.deps);
+
+    expect(out.ok).toBe(true);
+    expect(prompts[0]).toContain('downstream tasks with Tests (write first)');
+    expect(prompts[0]).toContain('downstream test plan');
+    expect(h.projectWrites).toContainEqual({
+      path: `/ws/rune/docs/projects/${SLUG}/tech-spec.md`,
+      content: 'downstream tech spec',
+    });
+    expect(h.projectWrites).toContainEqual({
+      path: `/ws/rune/docs/projects/${SLUG}/context.md`,
+      content: 'downstream context',
+    });
+  });
+
   it('writes tech-spec.md and context.md when the artifact carries them (role flow)', async () => {
     const h = makeHarness();
     const session = makeSession();
