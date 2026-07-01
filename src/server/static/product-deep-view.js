@@ -632,8 +632,8 @@ function specField(label, value) {
 // Inline planning surface rendered inside the product chat panel. The chat
 // panel IS the planning surface in the home/product layout (the standalone
 // #planning-panel overlay is unreachable now that the sidebar is hidden). When
-// a spec is proposed the structured artifact (title/spec/tasks/test-plan) and
-// the Approve/Refine/Abandon actions render here instead of in a separate panel.
+// a PM spec is proposed the approval artifact and the Approve/Refine/Abandon
+// actions render here instead of in a separate panel.
 function renderPlanning(planning) {
   if (!planning?.active) return '';
   const status = planning.status || 'scoping';
@@ -641,17 +641,18 @@ function renderPlanning(planning) {
   if (status !== 'spec-proposed' || !planning.artifact) {
     return `<div class="deep-planning" data-planning-active>` +
       `<div class="deep-planning-head"><strong>Planning</strong>${statusPill}</div>` +
-      `<p class="muted">Reply below to shape the spec. Approve scaffolds it; /clear abandons.</p>` +
+      `<p class="muted">Reply below to shape the PM spec. Approve starts downstream planning and scaffold progress; /clear abandons.</p>` +
     `</div>`;
   }
   const a = planning.artifact;
   return `<div class="deep-planning deep-planning--spec" data-planning-active>` +
-    `<div class="deep-planning-head"><strong>Proposed spec</strong>${statusPill}</div>` +
+    `<div class="deep-planning-head"><strong>Proposed PM spec</strong>${statusPill}</div>` +
+    `<p class="muted">This is the only planning approval. Tech-spec and tasks are generated after approval and are not separately approved.</p>` +
     `<div class="deep-planning-spec-body">` +
       specField('title', a.title) +
       specField('spec', a.spec) +
-      specField('tasks', a.tasks) +
-      specField('test-plan', a.testPlan) +
+      specField('assumptions', Array.isArray(a.assumptions) ? a.assumptions.join('\n') : a.assumptions) +
+      specField('self-review', a.selfReview?.summary || (a.selfReview ? JSON.stringify(a.selfReview, null, 2) : '')) +
     `</div>` +
     `<div class="deep-planning-actions">` +
       `<button type="button" class="deep-planning-approve" data-planning-action="approve">Approve</button>` +
@@ -682,20 +683,21 @@ function renderChat(view, messages = [], planning = null, activeOp = null) {
   `</section>`;
 }
 
-// Best-effort parse of the fenced ```spec-artifact JSON block the planning
-// scoping turn emits, so the chat panel can render the structured spec without a
+// Best-effort parse of the fenced ```pm-spec JSON block the planning scoping
+// turn emits, so the chat panel can render the structured PM spec without a
 // separate fetch. Mirrors tryParseSpecArtifactFromReply in app.js. Returns null
 // when no well-formed block is present.
 function tryParseSpecArtifact(reply) {
-  const match = /```spec-artifact\s*\n([\s\S]*?)\n```/.exec(String(reply || ''));
+  const match = /```pm-spec\s*\n([\s\S]*?)\n```/.exec(String(reply || ''));
   if (!match) return null;
   try {
     const parsed = JSON.parse(match[1]);
     if (parsed && typeof parsed === 'object' &&
+        parsed.version === 2 &&
+        parsed.kind === 'pm-spec' &&
+        typeof parsed.product === 'string' &&
         typeof parsed.title === 'string' &&
-        typeof parsed.spec === 'string' &&
-        typeof parsed.tasks === 'string' &&
-        typeof parsed.testPlan === 'string') {
+        typeof parsed.spec === 'string') {
       return parsed;
     }
   } catch (_) { /* malformed — fall through */ }
@@ -704,10 +706,11 @@ function tryParseSpecArtifact(reply) {
 
 function isSpecArtifact(value) {
   return value && typeof value === 'object' &&
+    value.version === 2 &&
+    value.kind === 'pm-spec' &&
+    typeof value.product === 'string' &&
     typeof value.title === 'string' &&
-    typeof value.spec === 'string' &&
-    typeof value.tasks === 'string' &&
-    typeof value.testPlan === 'string';
+    typeof value.spec === 'string';
 }
 
 export function renderProductDeepView(view, options = {}) {
@@ -1335,8 +1338,8 @@ export function createProductDeepView({
       return;
     }
     appendChatMessage('system', body?.slug
-      ? `Spec approved — scaffolding ${body.slug}.`
-      : 'Spec approved — scaffolding project files.');
+      ? `PM spec approved — downstream planning and scaffold completed for ${body.slug}.`
+      : 'PM spec approved — downstream planning and scaffold completed.');
     resetPlanning({ restorePlanActions: false });
   }
 
@@ -1570,7 +1573,7 @@ export function createProductDeepView({
       markPlanningActiveOnBacklog();
       appendChatMessage(
         'system',
-        `Planning started for ${itemTitle(item) || itemId}. Reply in this chat to shape the spec; Approve scaffolds it.`,
+        `Planning started for ${itemTitle(item) || itemId}. Reply in this chat to shape the PM spec; approval streams downstream planning and scaffold progress.`,
       );
       persistSession();
       focusChat();

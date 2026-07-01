@@ -171,7 +171,7 @@ export const SLASH_COMMAND_METADATA: readonly { name: string; description: strin
   },
   {
     name: 'plan',
-    description: 'Start a Planner conversation scoped to a product — turns a fuzzy idea into an approved spec through Socratic scoping. Pass a product slug to scope immediately.',
+    description: 'Start a PM-led scoping conversation scoped to a product — turns a fuzzy idea into a PM spec for approval. Approval then streams tech-lead breakdown, critique, context seed, and scaffold; tech-spec and tasks are not separately approved.',
     triggers: [
       'let\'s plan a project',
       'plan something for one of my products',

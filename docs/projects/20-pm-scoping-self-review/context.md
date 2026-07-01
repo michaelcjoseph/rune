@@ -44,9 +44,15 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- -scoping-self-review/src/server/webview.test.ts): fixed the cancellation fixture to return the downstream artifact it asserts is persisted.
+- metadata, and cockpit/webview planning copy.
 
-Verified:
-- `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts` passes: 108 tests.
-- `npm run build` passes.
-- `git diff --check` passes.
+Verification:
+- `node --check src/server/static/app.js && node --check src/server/static/product-deep-view.js && git diff --check`
+- `npm run build`
+
+I did not run the full unit suite; this task has the supplied docs/operator-copy no-code-test rationale.
+- passed: 100 tests
+- `npm run build` passed
+- `git diff --check && git diff --cached --check` passed
+
+Note: I attempted to stage the follow-up edits, but the sandbox cannot write this worktree’s git index under the parent `.git/worktrees/...` directory. The edits are present unstaged in the worktree.

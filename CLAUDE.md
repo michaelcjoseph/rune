@@ -16,7 +16,7 @@ A single Node.js process handles everything:
 - **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
 - **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 15-step nightly orchestrator, review nudges.
-- **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + Planner conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
+- **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + PM-led planning conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages); two-layer search (LLM index → ripgrep), no vector DB; exposed locally via the `rune-kb` stdio MCP server.
 
 All AI operations use the Claude Code CLI (Max subscription, no API key). Custom agents in `.claude/agents/` handle structured operations; multi-model dispatch can route to Codex for cross-model work.
@@ -68,7 +68,7 @@ One file per command in `src/bot/commands/`. Free-form messages are classified a
 | `/status`, `/cancel [opId]` | System health / SIGTERM an in-flight op |
 | `/prep`, `/priorities` | Morning prep / review-set daily priorities |
 | `/daily`…`/yearly`, `/health`, `/blog` | Interview-based review + drafting sessions |
-| `/plan [product]`, `/approve` | Start a Planner conversation → spec / approve a proposed spec and scaffold |
+| `/plan [product]`, `/approve` | Start a PM-led scoping conversation → approve the PM spec / run downstream planning + scaffold |
 | `/cancel-review`, `/active-context` | Cancel an in-progress review / show active orchestration context |
 | `/workout [home\|gym]`, `/done-workout` | Generate a tailored workout / log it to the journal |
 | `/study`, `/syllabus` | Spaced-repetition quiz / study syllabus progress |

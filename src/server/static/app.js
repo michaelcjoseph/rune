@@ -896,9 +896,7 @@
   }
 
   // Cockpit per-project actions. start/continue dispatch /work --auto (gated by the
-  // confirmation modal); enter-planning-mode dispatches `/plan <product>` through the chat
-  // surface — the Planner conversation (Layer 1) runs in the chat panel until the dedicated
-  // planning panel (Track C1) lands.
+  // confirmation modal); enter-planning-mode opens PM-led scoping for the product.
   function cockpitAction(slug, action, product, dispatchMode, fallbackReason) {
     if (action === 'enter-planning-mode') {
       // C1.3: open the dedicated planning panel rather than dispatching
@@ -1594,7 +1592,7 @@
     product: '',
     status: 'scoping', // 'scoping' | 'spec-proposed' | 'approved' | 'abandoned'
     transcript: [], // [{role: 'user'|'assistant', text: string}]
-    artifact: null, // {product, title, spec, tasks, testPlan} | null
+    artifact: null, // PM spec approval artifact | null
   };
 
   function planningEl(id) { return document.getElementById(id); }
@@ -1631,8 +1629,8 @@
       const a = planningState.artifact;
       planningEl('planning-panel-spec-title').textContent = a.title || '';
       planningEl('planning-panel-spec-spec').textContent = a.spec || '';
-      planningEl('planning-panel-spec-tasks').textContent = a.tasks || '';
-      planningEl('planning-panel-spec-testplan').textContent = a.testPlan || '';
+      planningEl('planning-panel-spec-assumptions').textContent = Array.isArray(a.assumptions) ? a.assumptions.join('\n') : (a.assumptions || '');
+      planningEl('planning-panel-spec-self-review').textContent = a.selfReview?.summary || (a.selfReview ? JSON.stringify(a.selfReview, null, 2) : '');
     } else {
       scopingEl.classList.remove('hidden');
       specEl.classList.add('hidden');
@@ -1767,21 +1765,22 @@
     }
   }
 
-  /** Best-effort: try to extract a spec-artifact JSON block from the
+  /** Best-effort: try to extract a pm-spec JSON block from the
    *  assistant's reply text. The defaultScopingTurn prompt emits a fenced
-   *  ```spec-artifact JSON``` block; parse it client-side so the panel can
+   *  ```pm-spec JSON``` block; parse it client-side so the panel can
    *  render the artifact without a separate fetch. Returns null if the
    *  reply has no fenced block or the JSON is malformed. */
   function tryParseSpecArtifactFromReply(reply) {
-    const m = /```spec-artifact\s*\n([\s\S]*?)\n```/.exec(reply);
+    const m = /```pm-spec\s*\n([\s\S]*?)\n```/.exec(reply);
     if (!m) return null;
     try {
       const parsed = JSON.parse(m[1]);
       if (parsed && typeof parsed === 'object' &&
+          parsed.version === 2 &&
+          parsed.kind === 'pm-spec' &&
+          typeof parsed.product === 'string' &&
           typeof parsed.title === 'string' &&
-          typeof parsed.spec === 'string' &&
-          typeof parsed.tasks === 'string' &&
-          typeof parsed.testPlan === 'string') {
+          typeof parsed.spec === 'string') {
         return parsed;
       }
     } catch (e) { /* malformed — fall through */ }
@@ -1793,7 +1792,7 @@
       const r = await fetch('/api/planning/approve', { method: 'POST' });
       const body = await r.json().catch(() => ({}));
       if (r.ok) {
-        showPlanningToast('Spec approved — scaffolding project files.');
+        showPlanningToast('PM spec approved — downstream planning and scaffold completed.');
         closePlanningPanel();
       } else {
         planningState.transcript.push({

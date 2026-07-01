@@ -670,8 +670,8 @@ Send any message to start a multi-turn chat with your vault. Rune leans Socratic
 
 **Planning**
 
-- \`/plan [product]\` — Socratic planning conversation scoped to a product; produces a spec for approval
-- \`/approve\` — approve the proposed spec and scaffold \`docs/projects/<NN-slug>/{spec,tasks,test-plan}.md\`
+- \`/plan [product]\` — PM-led scoping conversation scoped to a product; produces the PM spec for approval
+- \`/approve\` — approve the PM spec; Rune streams tech-lead breakdown, critique, context seed, and scaffold
 - \`/new-project [topic]\` — product interview → spec/tasks/test-plan for a new Rune project
 
 **Reviews**

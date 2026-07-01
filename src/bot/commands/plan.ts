@@ -1,7 +1,7 @@
 /**
- * `/plan <product>` — start a Planner (Layer 1) conversation scoped to the
- * named product. Project 08-intent-layer Phase 6 A4.3 (also Track C4 — the
- * Telegram side of the planning surface).
+ * `/plan <product>` — start a PM-led scoping conversation scoped to the named
+ * product. Project 08-intent-layer Phase 6 A4.3 (also Track C4 — the Telegram
+ * side of the planning surface).
  *
  * With a known product slug, creates a planning session via `createPlanningSession`
  * (A4.1) and replies with the kickoff prompt; subsequent messages route through
@@ -9,8 +9,9 @@
  * `dispatchText`. With an unknown or missing product, lists the registered
  * products from the registry — no session is created until the user picks one.
  *
- * Approval-on-spec-proposed (A4.4) and the inline-button round-trip (C6) land
- * in later tasks; until then the user can `/clear` or `/fresh` to abandon.
+ * The single planning-flow approval gate is on the PM spec. Approving it runs
+ * the downstream tech-lead breakdown, critique, context seed, and scaffold
+ * pipeline with progress; tech-spec and tasks are not separately approved.
  */
 
 import type { MessageSender } from '../../transport/sender.js';

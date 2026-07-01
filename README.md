@@ -94,8 +94,8 @@ Free-form messages are classified by a Haiku skill resolver against the slash-co
 | `/blog <topic>` | Interview-based blog drafting (matches your writing voice) |
 | `/cancel-review` | Cancel an in-progress review session |
 | `/new-project [topic]` | Product-style interview that drafts a project brief + spec/tasks/test-plan files |
-| `/plan [product]` | Start a Planner conversation scoped to a product (idea → approved spec) |
-| `/approve` | Approve a spec-proposed planning session and scaffold the project files |
+| `/plan [product]` | Start a PM-led scoping conversation scoped to a product (idea → PM spec for approval) |
+| `/approve` | Approve the PM spec; Rune then streams tech-lead breakdown, critique, context seed, and scaffold |
 
 ### Vault Operations
 | Command | Description |
@@ -178,8 +178,8 @@ Beyond the personal-assistant core, Rune runs an autonomous product-team orchest
 - **Cockpit.** The webview at `/` includes a cockpit sidebar that renders each registered product's projects with lifecycle status, live run status, and per-project action buttons (start / continue / enter-planning). It also surfaces a backlog drawer (per-product bugs/ideas with Plan buttons + an add chip), a pending-approvals inbox, a per-product deep-view, and a real-time run-feed (transcript + outcome). A production-only "↻ Restart server" button relaunches the launchd daemon.
 - **Mutation pipeline + work runs.** Autonomous codebase ops go through `src/transport/mutations.ts`. The legacy `work-runner` spawns Claude with `/work --auto` against a project's `spec.md` + `tasks.md`. Each run streams a durable transcript (`logs/work-runs/<id>/`), classifies its outcome on the actual work product (branch-complete / partial / noop / dirty / failed), exports a forensics bundle, and finalizes through a **gated-merge finalizer** that runs validation in an integration worktree before merging. Supervision + a stall-check loop monitor liveness; a run can **park** for human input and is released from Telegram or the cockpit.
 - **Orchestrated product team.** When enabled (`ORCHESTRATED_WORK_ENABLED`, or per-product `orchestratedMode`), Start routes to the orchestrated applier: a six-role team (PM, tech-lead, QA, coder, reviewer, designer) drives a planned task graph with test-first gates, an independent-provider reviewer, and a Rune-owned closeout. It never self-merges — a completed run holds branch-complete for operator merge. Roles carry a SOUL charter + a learning `memory.md` updated by the nightly learning loop.
-- **Planning → backlog → promotions.** `/plan` (or a cockpit backlog item's Plan button) opens a Socratic planning conversation that hardens an idea into a spec; `/approve` scaffolds the project files. A durable promotion job (`logs/promotions.jsonl`) survives restarts so a half-scaffolded item is re-driven on boot.
-- **Multi-model dispatch.** A model-selection policy (`policies/model-policy.json`) routes each role/agent to a model; cross-model work can dispatch to **Codex** (GPT-5.x) with a fail-closed provider probe. Planning runs an optional sequential cross-model critique pass (Claude then Codex) before the human approval gate.
+- **Planning → backlog → promotions.** `/plan` (or a cockpit backlog item's Plan button) opens a PM-led scoping conversation. The PM writes the approval spec directly; there is no separate Planner step or planning-brief intermediary. `/approve` is the single planning-flow human gate, and it automatically runs tech-lead breakdown, critique, context seed, and scaffold with streamed progress. The user no longer separately approves tech-spec and tasks. A durable promotion job (`logs/promotions.jsonl`) survives restarts so a half-scaffolded item is re-driven on boot.
+- **Multi-model dispatch.** A model-selection policy (`policies/model-policy.json`) routes each role/agent to a model; cross-model work can dispatch to **Codex** (GPT-5.x) with a fail-closed provider probe. Planning runs the sequential cross-model critique pass (Claude then Codex) after the PM spec is approved, as part of the automated downstream pipeline.
 
 Live end-to-end proofs: `npm run acceptance:orchestrated` and `npm run acceptance:cockpit-real` (both make real model calls).
 

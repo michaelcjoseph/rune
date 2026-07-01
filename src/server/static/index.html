@@ -124,7 +124,7 @@
        routes a /plan Telegram conversation in. Three view-states driven by
        the planning session's status:
          - 'scoping'       → transcript + reply textarea
-         - 'spec-proposed' → transcript + proposed-spec block + Approve/Refine/Abandon
+         - 'spec-proposed' → transcript + proposed PM-spec block + Approve/Refine/Abandon
          - 'approved' / 'abandoned' → panel auto-closes with a toast
        API surface: POST /api/planning/{start,turn,approve,abandon} (C1.2). -->
   <div id="planning-panel" class="planning-panel hidden" aria-hidden="true">
@@ -150,14 +150,15 @@
       <button id="planning-panel-send" type="button" class="planning-panel-send-btn">Send</button>
     </div>
 
-    <!-- Spec-proposed state: artifact preview + action row -->
+    <!-- Spec-proposed state: PM-spec preview + action row. Approval is the only
+         planning gate; tech-spec and tasks are generated downstream. -->
     <div id="planning-panel-spec" class="planning-panel-spec hidden">
-      <div class="planning-panel-spec-header">Proposed Spec</div>
+      <div class="planning-panel-spec-header">Proposed PM Spec</div>
       <div class="planning-panel-spec-body">
         <div class="spec-field"><span class="spec-field-label">title</span><span id="planning-panel-spec-title"></span></div>
         <div class="spec-field"><span class="spec-field-label">spec</span><pre id="planning-panel-spec-spec" class="spec-field-body"></pre></div>
-        <div class="spec-field"><span class="spec-field-label">tasks</span><pre id="planning-panel-spec-tasks" class="spec-field-body"></pre></div>
-        <div class="spec-field"><span class="spec-field-label">test-plan</span><pre id="planning-panel-spec-testplan" class="spec-field-body"></pre></div>
+        <div class="spec-field"><span class="spec-field-label">assumptions</span><pre id="planning-panel-spec-assumptions" class="spec-field-body"></pre></div>
+        <div class="spec-field"><span class="spec-field-label">self-review</span><pre id="planning-panel-spec-self-review" class="spec-field-body"></pre></div>
       </div>
       <div class="planning-panel-actions">
         <button id="planning-panel-approve" type="button" class="planning-panel-approve-btn">Approve</button>

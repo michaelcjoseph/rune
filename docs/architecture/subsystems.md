@@ -75,7 +75,9 @@ The orchestrated path is OFF by default (`ORCHESTRATED_WORK_ENABLED=false`); a p
 
 **Single task workflow** (`team-task-workflow.ts`): one task through role gates in order — reviewer-independence check (fail-closed) → QA-first (tests or no-code-test rationale) → tech-lead test review → bounded coder→reviewer round loop → objection-class hard gate → tech-lead diff review → designer IFF `task.designerNeeded` → PM wrap-up → `TaskEvidence`.
 
-**Planning critique (Phase 9):** `runPlanningCritique` is the Rune-owned NEUTRAL cross-model hardening step (NOT a 7th role) that runs after the PM/tech-lead self-review and before the human approval gate. SEQUENTIAL: Claude (Opus) critiques+revises first, then Codex (GPT-5.5) critiques+revises Claude's output. Degrades to the Claude pass alone when Codex is unavailable; fail-closed.
+**Planning flow:** `/plan` is PM-led scoping: the PM conducts the interview directly and emits the PM spec; there is no separate Planner step or planning-brief intermediary. The single planning-flow human gate is approval of that PM spec. After approval, Rune automatically runs tech-lead breakdown → PM review match → Claude critique → Codex critique → context seed → scaffold with streamed progress; the user no longer separately approves tech-spec and tasks.
+
+**Planning critique (Phase 9):** `runPlanningCritique` is the Rune-owned NEUTRAL cross-model hardening step (NOT a 7th role) in the automated post-approval pipeline. SEQUENTIAL: Claude (Opus) critiques+revises first, then Codex (GPT-5.5) critiques+revises Claude's output. Degrades to the Claude pass alone when Codex is unavailable; fail-closed.
 
 **Live acceptance:** `npm run acceptance:orchestrated` (`__acceptance__/orchestrated-live.acceptance.ts`) — stub-free proof: (1) provider preflight (fail-loud if `claude --model opus` or Codex unavailable); (2) ephemeral fixture repo + temp orchestrated product; (3) drive the production `orchestratedWorkApplier.apply()` over the real path; (4) self-verify (branch diff non-empty + QA-authored test PASSES against the coder's diff + reached `completed`+`held:true`); (5) write a scrubbed proof artifact. Exit 0 = pass.
 

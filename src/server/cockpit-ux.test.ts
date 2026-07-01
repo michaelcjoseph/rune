@@ -24,6 +24,7 @@
 
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 import type { StoredPlanningSession } from '../reviews/planning.js';
 
@@ -41,8 +42,23 @@ vi.mock('../transport/mutations.js', () => ({
 }));
 
 const mockCancelOp = vi.fn();
+const mockRegisterOp = vi.fn(() => ({
+  opId: 'op-cockpit-planning-approval',
+  kind: 'agent',
+  label: 'planning approval scaffold',
+  userId: 42,
+  startedAt: Date.now(),
+  startedAtIso: new Date().toISOString(),
+  child: { kill: vi.fn() },
+  cancelled: false,
+}));
+const mockUnregisterOp = vi.fn();
+const mockIsCancelled = vi.fn(() => false);
 vi.mock('../transport/in-flight.js', () => ({
   cancelOp: mockCancelOp,
+  registerOp: mockRegisterOp,
+  unregisterOp: mockUnregisterOp,
+  isCancelled: mockIsCancelled,
   listOps: vi.fn(() => []),
 }));
 
@@ -279,6 +295,26 @@ describe('cockpit planning panel — POST /api/planning/start (C1)', () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('cockpit planning panel static PM-spec contract', () => {
+  it('parses and renders versioned PM-spec approval artifacts, not legacy full-plan artifacts', () => {
+    const appJs = readFileSync(new URL('./static/app.js', import.meta.url), 'utf8');
+    const indexHtml = readFileSync(new URL('./static/index.html', import.meta.url), 'utf8');
+
+    expect(appJs).toContain('/```pm-spec\\s*\\n([\\s\\S]*?)\\n```/');
+    expect(appJs).toMatch(/parsed\.version === 2[\s\S]{0,160}parsed\.kind === 'pm-spec'/);
+    expect(appJs).not.toContain('```spec-artifact');
+    expect(appJs).not.toMatch(/typeof parsed\.tasks === 'string'|typeof parsed\.testPlan === 'string'/);
+    expect(appJs).toContain("planningEl('planning-panel-spec-assumptions')");
+    expect(appJs).toContain("planningEl('planning-panel-spec-self-review')");
+
+    expect(indexHtml).toContain('Proposed PM Spec');
+    expect(indexHtml).toContain('id="planning-panel-spec-assumptions"');
+    expect(indexHtml).toContain('id="planning-panel-spec-self-review"');
+    expect(indexHtml).not.toContain('id="planning-panel-spec-tasks"');
+    expect(indexHtml).not.toContain('id="planning-panel-spec-testplan"');
   });
 });
 

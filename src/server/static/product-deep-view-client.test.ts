@@ -2667,10 +2667,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const artifact = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
       title: 'Release dashboard',
       spec: 'Build a dashboard for releases.',
-      tasks: '- [ ] scaffold\n- [ ] wire data',
-      testPlan: 'unit + e2e',
+      assumptions: ['Existing release records are available.'],
+      selfReview: { revised: false, summary: 'Spec is internally consistent.' },
     };
     const postJson = vi.fn(async (url: string) => {
       if (url === '/api/backlog/aura/items/IDEA-1/plan') return { planningSessionId: 'planning-1' };
@@ -2695,6 +2698,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-planning-status[^>]*>spec-proposed</i);
     expect(root.innerHTML).toContain('Release dashboard');
     expect(root.innerHTML).toContain('Build a dashboard for releases.');
+    expect(root.innerHTML).toContain('Existing release records are available.');
+    expect(root.innerHTML).toContain('Spec is internally consistent.');
+    expect(root.innerHTML).toMatch(/only planning approval/i);
     expect(root.innerHTML).toMatch(/data-planning-action=["']approve["']/i);
 
     await root.clickClosest('[data-planning-action]', { planningAction: 'approve' });
@@ -2702,6 +2708,47 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/Spec approved/i);
     // Planning surface clears after approval.
     expect(root.innerHTML).not.toMatch(/data-planning-action=["']approve["']/i);
+  });
+
+  it('renders a proposed PM spec from a fenced pm-spec reply when the turn response omits artifact', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const replyArtifact = {
+      version: 2,
+      kind: 'pm-spec',
+      product: 'aura',
+      title: 'Fenced release dashboard',
+      spec: 'Render the PM spec from the assistant reply.',
+      assumptions: ['The reply includes the approval artifact fence.'],
+      selfReview: { revised: true, summary: 'Tightened the acceptance language.' },
+    };
+    const postJson = vi.fn(async (url: string) => {
+      if (url === '/api/backlog/aura/items/IDEA-1/plan') return { planningSessionId: 'planning-1' };
+      if (url === '/api/planning/turn') {
+        return {
+          reply: `Ready for approval.\n\n\`\`\`pm-spec\n${JSON.stringify(replyArtifact, null, 2)}\n\`\`\``,
+          status: 'spec-proposed',
+        };
+      }
+      throw new Error(`unexpected post ${url}`);
+    });
+
+    const view = createProductDeepView({
+      root,
+      product: 'aura',
+      fetchJson: vi.fn(async () => productView()),
+      postJson,
+    });
+    await view.load();
+    await root.clickClosest('[data-plan-item-id]', { planItemId: 'IDEA-1' });
+    await root.submitClosest('[data-product-chat-form]', { product: 'aura', message: 'Proceed with this idea' });
+
+    expect(root.innerHTML).toMatch(/data-planning-status[^>]*>spec-proposed</i);
+    expect(root.innerHTML).toContain('Fenced release dashboard');
+    expect(root.innerHTML).toContain('Render the PM spec from the assistant reply.');
+    expect(root.innerHTML).toContain('The reply includes the approval artifact fence.');
+    expect(root.innerHTML).toContain('Tightened the acceptance language.');
+    expect(root.innerHTML).toMatch(/data-planning-action=["']approve["']/i);
   });
 
   it('retains the product chat transcript across navigate-away-and-back (in-session)', async () => {
