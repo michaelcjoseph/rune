@@ -608,6 +608,44 @@ describe('planning-roles — tech-lead self-review in runDownstreamPlan (project
     expect(artifact.tasks).toContain('missing timezone edge case covered');
   });
 
+  it('accepts an explicitly-confirmed unchanged tech-spec and tasks before downstream checks', async () => {
+    const originalTechLead: TechLeadResult = {
+      techSpec: 'Confirmed tech spec already covers the approved scope.',
+      tasks: SIZED_TASKS.slice(0, 1),
+    };
+    mockRunSelfReview.mockImplementationOnce(async (input: {
+      role: string;
+      artifact: TechLeadResult;
+    }) => {
+      expect(input.role).toBe('tech-lead');
+      expect(input.artifact).toEqual(originalTechLead);
+      return {
+        artifact: originalTechLead,
+        revised: false,
+      };
+    });
+
+    let pmReviewInput: Parameters<PlanningRoleDeps['pmReviewMatch']>[0] | undefined;
+    const artifact = await (await import('./planning-roles.js')).runDownstreamPlan(PM_SPEC_APPROVAL, {
+      deps: makeDeps({
+        techLeadBreakdown: vi.fn(async () => originalTechLead),
+        pmReviewMatch: vi.fn(async (input) => {
+          pmReviewInput = input;
+          return { match: true, mismatches: [] };
+        }),
+        critiquePlan: vi.fn(async (plan) => ({ plan, codexSkipped: false })),
+      }),
+    });
+
+    expect(mockRunSelfReview).toHaveBeenCalledOnce();
+    expect(pmReviewInput).toMatchObject({
+      techSpec: originalTechLead.techSpec,
+      tasks: originalTechLead.tasks,
+    });
+    expect(artifact.techSpec).toBe(originalTechLead.techSpec);
+    expect(artifact.tasks).toContain('Implement the streak-count pure core');
+  });
+
   it('surfaces tech-lead self-review failure as a terminal post-approval outcome before PM review or critique', async () => {
     const progress: PlanningProgress[] = [];
     const pmReviewMatch = vi.fn(async (): Promise<SpecMatchResult> => ({ match: true, mismatches: [] }));

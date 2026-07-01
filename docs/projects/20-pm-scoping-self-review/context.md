@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- npm run build`
-- `npm test -- src/reviews/planning-handler.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
+- - `npm run build`
+- `npm test -- src/intent/planning-roles.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
 - `npm test -- src/intent/self-review.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`

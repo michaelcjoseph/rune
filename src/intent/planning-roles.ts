@@ -27,6 +27,7 @@ import { seedProjectContext } from './project-context.js';
 import { plannedOutcomeToArtifact } from './planning-artifact.js';
 import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.js';
 import type { PmSpecApprovalArtifact, SpecArtifact } from './planner.js';
+import { runSelfReview } from './self-review.js';
 import type { RoleName } from '../roles/loader.js';
 
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
@@ -311,12 +312,36 @@ export async function runDownstreamPlan(
     product: approvedSpec.product,
     spec,
   });
+  let reviewedTechLead: TechLeadResult;
+  try {
+    const selfReview = await runSelfReview({
+      role: 'tech-lead',
+      artifact: techLead,
+      render: renderTechLeadSelfReviewArtifact,
+      parse: parseTechLeadSelfReviewArtifact,
+      modelCall: async ({ sessionId, systemPrompt, message }) => {
+        const { askClaudeWithContext } = await import('../ai/claude.js');
+        const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
+          opLabel: 'planning:tech-lead-self-review',
+        });
+        if (!result || result.error) {
+          throw new Error(`tech-lead self-review failed: ${result?.error ?? 'empty model response'}`);
+        }
+        return result.text ?? '';
+      },
+    });
+    reviewedTechLead = selfReview.artifact;
+  } catch (err) {
+    const message = `tech-lead self-review failed: ${(err as Error).message}`;
+    await progress({ terminal: message });
+    throw new Error(message);
+  }
 
   await progress({ stage: 'pm-review-match' });
   const review = await deps.pmReviewMatch({
     spec,
-    techSpec: techLead.techSpec,
-    tasks: techLead.tasks,
+    techSpec: reviewedTechLead.techSpec,
+    tasks: reviewedTechLead.tasks,
   });
   if (!review.match) {
     const message = `PM review mismatch: ${review.mismatches.join('; ')}`;
@@ -325,16 +350,16 @@ export async function runDownstreamPlan(
   }
 
   let critiquedSpec = spec;
-  let critiquedTechSpec = techLead.techSpec;
-  let critiquedTasks = techLead.tasks;
+  let critiquedTechSpec = reviewedTechLead.techSpec;
+  let critiquedTasks = reviewedTechLead.tasks;
   let codexCritiqueSkipped = false;
   if (deps.critiquePlan) {
     await progress({ stage: 'claude-critique' });
     await progress({ stage: 'codex-critique' });
     const critique = await deps.critiquePlan({
       spec,
-      techSpec: techLead.techSpec,
-      tasks: techLead.tasks,
+      techSpec: reviewedTechLead.techSpec,
+      tasks: reviewedTechLead.tasks,
     });
     critiquedSpec = withAssumptionsSection(critique.plan.spec, assumptions);
     critiquedTechSpec = critique.plan.techSpec;
@@ -371,7 +396,7 @@ export async function runDownstreamPlan(
     techSpec: critiquedTechSpec,
     tasks: critiquedTasks,
     context,
-    perProjectExemplars: techLead.perProjectExemplars,
+    perProjectExemplars: reviewedTechLead.perProjectExemplars,
     codexCritiqueSkipped,
   });
 }
@@ -388,4 +413,126 @@ function firstParagraph(body: string): string {
     .map((p) => p.trim())
     .find((p) => p.length > 0 && !p.startsWith('#'));
   return para ?? body.trim();
+}
+
+function renderTechLeadSelfReviewArtifact(artifact: TechLeadResult): string {
+  return [
+    'Return the corrected-or-confirmed tech lead artifact as exactly these fenced blocks.',
+    '',
+    '```self-review-artifact',
+    JSON.stringify(
+      {
+        tasks: artifact.tasks,
+        ...(artifact.perProjectExemplars ? { perProjectExemplars: artifact.perProjectExemplars } : {}),
+      },
+      null,
+      2,
+    ),
+    '```',
+    '```self-review-tech-spec',
+    artifact.techSpec,
+    '```',
+  ].join('\n');
+}
+
+function parseTechLeadSelfReviewArtifact(reply: string): TechLeadResult {
+  const parsed = extractJsonFence(reply, 'self-review-artifact');
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('missing self-review-artifact fence');
+  }
+  const value = parsed as Record<string, unknown>;
+  const tasks = parseSelfReviewedTasks(value['tasks']);
+  const techSpec = extractTextFence(reply, 'self-review-tech-spec');
+  if (!techSpec) {
+    throw new Error('missing self-review-tech-spec fence');
+  }
+  const perProjectExemplars = parseSelfReviewedPerProjectExemplars(value['perProjectExemplars']);
+  return {
+    techSpec,
+    tasks,
+    ...(perProjectExemplars ? { perProjectExemplars } : {}),
+  };
+}
+
+function extractJsonFence(text: string, tag: string): unknown | null {
+  const fence = new RegExp('```' + tag + '\\s*\\n([\\s\\S]*?)\\n```').exec(text);
+  if (!fence) return null;
+  try {
+    return JSON.parse(fence[1]!);
+  } catch {
+    return null;
+  }
+}
+
+function extractTextFence(text: string, tag: string): string | null {
+  const open = new RegExp('```' + tag + '[^\\n]*\\n').exec(text);
+  if (!open) return null;
+  const rest = text.slice(open.index + open[0].length);
+  const close = rest.lastIndexOf('\n```');
+  if (close < 0) return null;
+  const body = rest.slice(0, close).trim();
+  return body.length > 0 ? body : null;
+}
+
+function parseSelfReviewedTasks(raw: unknown): SizedTask[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('self-review-artifact missing tasks array');
+  }
+  return raw.map((entry, index) => parseSelfReviewedTask(entry, index));
+}
+
+function parseSelfReviewedTask(raw: unknown, index: number): SizedTask {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`self-review-artifact task ${index} is not an object`);
+  }
+  const task = raw as Record<string, unknown>;
+  const id = typeof task['id'] === 'string' && task['id'].trim()
+    ? task['id'].trim()
+    : `task-${index + 1}`;
+  if (typeof task['text'] !== 'string' || !task['text'].trim()) {
+    throw new Error(`self-review-artifact task ${index} ('${id}') has no text`);
+  }
+  const testStrategy = isTestStrategy(task['testStrategy'])
+    ? task['testStrategy']
+    : 'code-tests-required';
+  const roles = Array.isArray(task['roles'])
+    ? task['roles'].filter((role): role is string => typeof role === 'string')
+    : [];
+  const phase = typeof task['phase'] === 'string' && task['phase'].trim()
+    ? task['phase'].trim()
+    : undefined;
+  return {
+    id,
+    text: task['text'].trim(),
+    testStrategy,
+    designerNeeded: task['designerNeeded'] === true,
+    roles,
+    ...(phase ? { phase } : {}),
+  };
+}
+
+function isTestStrategy(value: unknown): value is TestStrategy {
+  return value === 'code-tests-required' ||
+    value === 'docs-or-config-only' ||
+    value === 'tests-as-deliverable';
+}
+
+function parseSelfReviewedPerProjectExemplars(raw: unknown): PerProjectExemplars | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const exemplars: PerProjectExemplars = {};
+  for (const [role, value] of Object.entries(raw)) {
+    if (isRoleName(role) && typeof value === 'string' && value.trim()) {
+      exemplars[role] = value.trim();
+    }
+  }
+  return Object.keys(exemplars).length > 0 ? exemplars : undefined;
+}
+
+function isRoleName(value: string): value is RoleName {
+  return value === 'pm' ||
+    value === 'tech-lead' ||
+    value === 'qa' ||
+    value === 'coder' ||
+    value === 'reviewer' ||
+    value === 'designer';
 }
