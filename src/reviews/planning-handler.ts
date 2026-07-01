@@ -15,6 +15,7 @@
 
 import { askClaudeWithContext } from '../ai/claude.js';
 import { proposeSpec, type PlanningStatus, type SpecArtifact } from '../intent/planner.js';
+import { runSelfReview } from '../intent/self-review.js';
 import { composeRoleContext } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import {
@@ -106,16 +107,56 @@ export async function handlePlanningTurn(
 }
 
 /** Transition an in-flight session to `spec-proposed` with the given artifact. */
-function transitionToSpec(
+async function transitionToSpec(
   chatId: number,
   artifact: PmSpecArtifact,
   reply: string,
-): PlanningTurnResult {
+): Promise<PlanningTurnResult> {
+  const session = getActivePlanningSession(chatId);
+  if (!session) {
+    throw new Error(
+      `transitionToSpec: no active planning session for chatId ${chatId}`,
+    );
+  }
+  if (session.planning.status !== 'scoping') {
+    throw new Error(
+      `proposeSpec: a spec can only be proposed while scoping — session status is '${session.planning.status}'`,
+    );
+  }
+
+  const reviewed = await reviewPmSpecArtifact(artifact);
+  const approvalReply = formatPmSpecApprovalReply(reply, reviewed.artifact);
   updatePlanningSession(chatId, (sess) => ({
     ...sess,
-    planning: proposeSpec(sess.planning, artifact as unknown as SpecArtifact),
+    planning: proposeSpec(sess.planning, reviewed.artifact as unknown as SpecArtifact),
   }));
-  return { reply, status: 'spec-proposed' };
+  return { reply: approvalReply, status: 'spec-proposed' };
+}
+
+async function reviewPmSpecArtifact(artifact: PmSpecArtifact): Promise<{
+  artifact: PmSpecArtifact;
+  revised: boolean;
+}> {
+  try {
+    return await runSelfReview({
+      role: 'pm',
+      artifact,
+      render: renderPmSpecArtifact,
+      parse: parsePmSpecReviewReply,
+      modelCall: async ({ sessionId, systemPrompt, message }) => {
+        const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
+          opLabel: 'planning:pm-self-review',
+          voice: true,
+        });
+        if (!result || result.error) {
+          throw new Error(`PM self-review failed: ${result?.error ?? 'empty model response'}`);
+        }
+        return result.text ?? '';
+      },
+    });
+  } catch (err) {
+    throw new Error(`planning PM self-review failed: ${(err as Error).message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +200,39 @@ const INTERVIEW_INSTRUCTION = [
 ].join('\n');
 
 const PM_SPEC_FENCE = /```pm-spec\s*\n([\s\S]*?)\n```/;
+
+function renderPmSpecArtifact(artifact: PmSpecArtifact): string {
+  return [
+    '```pm-spec',
+    JSON.stringify(artifact, null, 2),
+    '```',
+  ].join('\n');
+}
+
+function parsePmSpecReviewReply(reply: string): PmSpecArtifact {
+  const fenced = PM_SPEC_FENCE.exec(reply);
+  if (!fenced) {
+    throw new Error('missing pm-spec fence');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fenced[1]!);
+  } catch (err) {
+    throw new Error(`malformed pm-spec JSON: ${(err as Error).message}`);
+  }
+
+  const artifact = validatePmSpecArtifact(parsed);
+  if (!artifact) {
+    throw new Error('pm-spec artifact missing version:2, kind:pm-spec, product, title, or spec');
+  }
+  return artifact;
+}
+
+function formatPmSpecApprovalReply(summary: string, artifact: PmSpecArtifact): string {
+  const intro = summary.trim() || 'Proposed spec ready — approve to scaffold.';
+  return [intro, '', renderPmSpecArtifact(artifact)].join('\n');
+}
 
 /**
  * Production scopingTurn — calls Claude with the planning session's

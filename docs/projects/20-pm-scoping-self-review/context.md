@@ -44,5 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- -existing `src/reviews/planning-handler.test.ts` typing errors around `selfReview.summary` and `ScopingTurn` mocks, not this new module.
-- Plain `npm test -- src/intent/self-review.test.ts` hung under the default Vitest pool, so I interrupted the test process I started and reran with `--pool=forks`.
+- npm run build`
+- `npm test -- src/reviews/planning-handler.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
+- `npm test -- src/intent/self-review.test.ts --pool=forks --reporter=verbose --testTimeout=5000 --hookTimeout=5000 --teardownTimeout=5000`
