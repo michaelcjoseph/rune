@@ -44,6 +44,6 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- ue, passes the revised artifact downstream, and surfaces self-review failure as a terminal post-approval outcome.
+-  tests for ordering, QA revalidation on revised diff, and failing before downstream review on self-review failure.
 
-Verification: `npm test -- src/intent/planning-roles.test.ts` is red as expected: 2 failing tests, both for the missing tech-lead self-review implementation. No production code changed.
+Verification: `npm test -- src/intent/team-task-workflow.test.ts` is red as expected: 3 failing tests, all in `team-task-workflow — coder diff self-review`. No production code changed.
