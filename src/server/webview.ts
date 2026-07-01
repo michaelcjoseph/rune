@@ -2096,6 +2096,7 @@ async function preparePlanningSessionForScaffold(
       downstreamArtifact,
     },
   }));
+  await throwIfPlanningApprovalCancelled(sender, userId, control);
   return { ok: true, session: withDownstreamArtifact(session, downstreamArtifact) };
 }
 
@@ -2222,12 +2223,7 @@ async function sendPlanningProgress(
   control?: PlanningApprovalControl,
 ): Promise<void> {
   if (event.stage && control?.opId && isCancelled(control.opId)) {
-    await sendTerminalOnce(sender, userId, control, 'planning approval cancelled');
-    await sender.send(
-      userId,
-      'Planning session is still approved — click approve again or run /approve again to retry.',
-    );
-    throw new PlanningApprovalCancelled();
+    await throwIfPlanningApprovalCancelled(sender, userId, control);
   }
   if (event.terminal && control) control.terminalSent = true;
   const message = formatPlanningProgress(event);
@@ -2237,6 +2233,20 @@ async function sendPlanningProgress(
   } catch (err) {
     log.warn('Planning progress send failed', { userId, error: (err as Error).message });
   }
+}
+
+async function throwIfPlanningApprovalCancelled(
+  sender: WebviewSender,
+  userId: number,
+  control: PlanningApprovalControl,
+): Promise<void> {
+  if (!control.opId || !isCancelled(control.opId)) return;
+  await sendTerminalOnce(sender, userId, control, 'planning approval cancelled');
+  await sender.send(
+    userId,
+    'Planning session is still approved — click approve again or run /approve again to retry.',
+  );
+  throw new PlanningApprovalCancelled();
 }
 
 async function sendTerminalOnce(

@@ -44,9 +44,9 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- cancellation, terminal, success, and path-scrub behavior for cockpit approval.
+- -scoping-self-review/src/server/webview.test.ts): fixed the cancellation fixture to return the downstream artifact it asserts is persisted.
 
 Verified:
-- `npm test -- src/intent/planning-roles.test.ts src/bot/commands/approve.test.ts src/server/webview.test.ts src/intent/planner.test.ts` passes: 145 tests.
+- `npm test -- src/bot/commands/approve.test.ts src/server/webview.test.ts` passes: 108 tests.
 - `npm run build` passes.
 - `git diff --check` passes.

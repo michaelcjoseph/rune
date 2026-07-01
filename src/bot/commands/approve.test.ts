@@ -648,6 +648,41 @@ describe('handleApprove — post-approval in-flight op (project 20 test-plan §2
     expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
     expect(unregisterOpMock).toHaveBeenCalledWith('op-post-approval-plan', 'cancelled');
   });
+
+  it('cancels before scaffold after downstream planning is persisted, so retry resumes from the durable downstream artifact', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+
+    let cancelBeforeScaffold = false;
+    isCancelledMock.mockImplementation(() => cancelBeforeScaffold);
+    updatePlanningSessionMock.mockImplementationOnce((_userId: number, updater: (current: any) => any) => {
+      const updated = updater(session);
+      expect(updated.planning.downstreamArtifact).toEqual(DOWNSTREAM_ARTIFACT);
+      cancelBeforeScaffold = true;
+      return updated;
+    });
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runDownstreamPlanMock).toHaveBeenCalledWith(PM_SPEC_ARTIFACT, expect.any(Object));
+    expect(updatePlanningSessionMock).toHaveBeenCalledWith(100, expect.any(Function));
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(0);
+    expect(messages.some((message) => /Planning stopped:.*cancelled/i.test(message))).toBe(true);
+    expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
+    expect(unregisterOpMock).toHaveBeenCalledWith('op-post-approval-plan', 'cancelled');
+  });
 });
 
 describe('handleApprove — retry path (session already approved)', () => {

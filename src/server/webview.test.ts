@@ -1048,6 +1048,43 @@ describe('server/webview', () => {
       expect(mockUnregisterOp).toHaveBeenCalledWith('op-webview-post-approval-plan', 'cancelled');
     });
 
+    it('cancels before scaffold after persisting downstreamArtifact so cockpit retry resumes without rerunning downstream planning', async () => {
+      const session = approvedPmSpecSession();
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session,
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
+
+      let cancelBeforeScaffold = false;
+      mockIsCancelled.mockImplementation(() => cancelBeforeScaffold);
+      (updatePlanningSession as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_userId: number, updater: (current: any) => any) => {
+          const updated = updater(session);
+          expect(updated.planning.downstreamArtifact).toEqual(downstreamArtifact);
+          cancelBeforeScaffold = true;
+          return updated;
+        },
+      );
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(499);
+      expect(runDownstreamPlan).toHaveBeenCalledWith(pmSpecArtifact, expect.any(Object));
+      expect(updatePlanningSession).toHaveBeenCalledWith(42, expect.any(Function));
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+      const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
+      expect(messages.filter((message) => /^Planning progress: scaffold\.$/i.test(message))).toHaveLength(0);
+      expect(messages.some((message) => /Planning stopped:.*cancelled/i.test(message))).toBe(true);
+      expect(String(res.body.error)).toMatch(/cancelled/i);
+      expect(String(res.body.error)).toMatch(/approve again|\/approve/i);
+      expect(mockUnregisterOp).toHaveBeenCalledWith('op-webview-post-approval-plan', 'cancelled');
+    });
+
     it('retry path reruns downstream when the approved session has only approvedSpec', async () => {
       (getPlanningSession as ReturnType<typeof vi.fn>).mockReturnValue(approvedPmSpecSession());
       (runDownstreamPlan as ReturnType<typeof vi.fn>).mockResolvedValue(downstreamArtifact);
