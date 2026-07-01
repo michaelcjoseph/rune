@@ -44,15 +44,10 @@ The goal is to make `/plan` less lossy and less silent: the PM should conduct th
 
 ## Next Task Handoff
 
-- metadata, and cockpit/webview planning copy.
+- y one strict-format retry for malformed/flag-only output
+- failure after retry remains unparseable
+- scope preservation
+- whitespace-normalized `revised=false`
 
 Verification:
-- `node --check src/server/static/app.js && node --check src/server/static/product-deep-view.js && git diff --check`
-- `npm run build`
-
-I did not run the full unit suite; this task has the supplied docs/operator-copy no-code-test rationale.
-- passed: 100 tests
-- `npm run build` passed
-- `git diff --check && git diff --cached --check` passed
-
-Note: I attempted to stage the follow-up edits, but the sandbox cannot write this worktree’s git index under the parent `.git/worktrees/...` directory. The edits are present unstaged in the worktree.
+`npx vitest run src/intent/self-review.test.ts` fails red as expected because `src/intent/self-review.ts` does not exist yet.

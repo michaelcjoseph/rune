@@ -50,7 +50,7 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 ### Tests (write first)
 
-- [ ] Write the test suite for **self-review-primitive** — test-plan.md §3.
+- [x] Write the test suite for **self-review-primitive** — test-plan.md §3.
 - [ ] Write the test suite for **pm-spec-self-review** — test-plan.md §3.
 - [ ] Write the test suite for **tech-lead-self-review** — test-plan.md §3.
 - [ ] Write the test suite for **coder-diff-self-review** — test-plan.md §3.
