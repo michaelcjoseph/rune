@@ -27,6 +27,7 @@ its `spec.md`.
 | [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Done | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 | [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Not Started | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
+| [22-fix-run-dispatch](22-fix-run-dispatch/spec.md) | Not Started | Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff, reconciling to a readable terminal in the cockpit. |
 ---
 
 ## 01-mvp — Done
@@ -425,3 +426,18 @@ Today a turn in product B is blocked behind product A's turn (a per-user dispatc
 - **Definition of Done requires a live operator gate:** the operator completes the real fire-and-switch loop once in the browser — concurrent turns, per-panel streaming, the activity cue on the sibling channel + home view, buffered switch-back, and two-tab rendered sync. A green suite and reachable paths explicitly do not count. This is the honored form of project 20's skipped `live-reachability-gate`.
 - **Provenance:** scaffolded by hand 2026-07-02 from the operator-approved PM spec after the `/plan` downstream pipeline threw at the `pmReviewMatch` gate — correctly, because the initial tech-lead breakdown verified the frontend only with jsdom + WS tests, which the spec's DoD rejects. The two failure-handling defects that made that throw silent and unrecoverable are filed in [bugs.md](bugs.md).
 - **Task breakdown & test plan:** see [tasks.md](21-parallel-product-chats/tasks.md) and [test-plan.md](21-parallel-product-chats/test-plan.md). Test-first per phase; the live gate is required.
+
+## 22-fix-run-dispatch — Not Started
+
+[Spec](22-fix-run-dispatch/spec.md)
+
+Cockpit Fix dispatches a real, verified orchestrated-work fix run instead of dead-ending at the handoff.
+
+Today `startFixRun` throws `fix-run handoff unavailable`, so a gate-approved Fix records `handoff-failed` and the operator fixes the bug by hand. This project makes one click on Fix dispatch a real run that lands a reviewed, finalizer-gated merge on `main`, or reaches a clear terminal (`declined`, `fixed`, `parked-on-human`, `failed`, `handoff-failed`) the operator can read in the cockpit. v1 is single-product only.
+
+- **Phase 1 — Core state model:** extend `FixAttemptState` with the post-dispatch terminals `fixed` / `failed` / `parked-on-human` (`declined` reused for guard declines).
+- **Phase 2 — Dispatch:** a fail-closed single-product guard with an injectable deliverable-repo resolver; a deterministic, idempotent, safe scaffold-and-commit helper; the real `startFixRun` replacing the throwing stub; and call-site decline vs handoff-failed mapping.
+- **Phase 3 — Terminal reconciliation:** reconcile each `proceeding` attempt to a post-dispatch terminal from the run's existing outcome (event-driven plus a startup catch-up sweep, idempotent), surface the terminals in the cockpit, and make start/terminal/failure logs queryable and scrubbed.
+- **Phase 4 — Acceptance:** a stub-free e2e acceptance test over the load-bearing path, docs-sync if structure changed, and a required live operator gate.
+- **Reuse, not rebuild:** existing orchestrated-work, the team-task reviewer gate, the project-15 finalizer, the transcript, and run observability are reused; no new reviewer, runner, or status system.
+- **Task breakdown & test plan:** see [tasks.md](22-fix-run-dispatch/tasks.md) and [test-plan.md](22-fix-run-dispatch/test-plan.md). Test-first per phase; the live gate is required.
