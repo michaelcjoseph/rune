@@ -26,6 +26,7 @@ its `spec.md`.
 | [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 | [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
 | [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Not Started | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
+| [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Not Started | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
 ---
 
 ## 01-mvp — Done
@@ -410,3 +411,17 @@ Removes the lossy Planner→PM brief handoff and the block-for-interview bounce:
 - **Progress streaming:** every downstream stage emits one informational line; terminal failures and final scaffold success (with the created identifier) are surfaced, human-gate count stays one.
 - **Fix-it self-review:** a reusable `runSelfReview<A>` primitive gives PM (spec), Tech Lead (tech-spec + tasks), and Coder (code diff) one cold fix-pass each — corrected-or-confirmed artifact, no loop, no new gate.
 - **Task breakdown & test plan:** see [tasks.md](20-pm-scoping-self-review/tasks.md) and [test-plan.md](20-pm-scoping-self-review/test-plan.md). Test-first per phase.
+
+## 21-parallel-product-chats — Not Started
+
+[Spec](21-parallel-product-chats/spec.md)
+
+Turn the webview into a real parallel workspace instead of a fire-and-wait one.
+
+Today a turn in product B is blocked behind product A's turn (a per-user dispatch queue), and a reply can even land in the wrong panel (responses broadcast by userId with no scope). This project makes different product chats dispatch and run concurrently, tags every response frame with its product scope, and routes/buffers each into its own transcript with an unread cue on the sibling channel and the home view — plus cross-tab sync. The session store is untouched (already scoped per product/transport/user); only dispatch and delivery change.
+
+- **Phase 1 (shippable):** re-key the dispatch queue per scope; scope-tag message/chunk/status frames; a per-turn scoped-sender wrapper (shared `MessageSender` interface unchanged, Telegram unaffected); frontend per-scope routing, buffering, switch-back, and the unread/activity cue.
+- **Phase 2 (separable):** a live "working now" indicator on a backgrounded panel (op-event scope threaded through `execClaude`).
+- **Definition of Done requires a live operator gate:** the operator completes the real fire-and-switch loop once in the browser — concurrent turns, per-panel streaming, the activity cue on the sibling channel + home view, buffered switch-back, and two-tab rendered sync. A green suite and reachable paths explicitly do not count. This is the honored form of project 20's skipped `live-reachability-gate`.
+- **Provenance:** scaffolded by hand 2026-07-02 from the operator-approved PM spec after the `/plan` downstream pipeline threw at the `pmReviewMatch` gate — correctly, because the initial tech-lead breakdown verified the frontend only with jsdom + WS tests, which the spec's DoD rejects. The two failure-handling defects that made that throw silent and unrecoverable are filed in [bugs.md](bugs.md).
+- **Task breakdown & test plan:** see [tasks.md](21-parallel-product-chats/tasks.md) and [test-plan.md](21-parallel-product-chats/test-plan.md). Test-first per phase; the live gate is required.

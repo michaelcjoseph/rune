@@ -1,4 +1,20 @@
 ## Active
+- [ ] `/plan` post-approval pipeline swallows a legitimate `pmReviewMatch` mismatch with no server-side log and dead-ends the session — the only advice is "run /approve again," which just re-rolls the same tech-lead breakdown and hits the same structural gap. **(project 20 — post-approval remediation.)**
+  - **Issue**
+    - On a real `/plan` run (2026-07-02, product `parallel-product-chats`), the PM interview + spec + approval succeeded, then `runDownstreamPlan` (`src/intent/planning-roles.ts:293`) threw at the `pmReviewMatch` gate (`:340-350`, `throw "PM review mismatch: …"`). The session was left `approved` with `approvedSpec` and no `downstreamArtifact`; no project scaffolded.
+    - The failure left **zero server-side trace.** The catch in `runPlanningApprovalPipeline` (`src/bot/commands/approve.ts:139-150`) sends the operator a terminal message plus "Planning session is still approved — run /approve again to retry," but never calls `log.error`. Combined with the state-machine transition and `runDownstreamPlan` progress both not logging, a whole approval can fail invisibly — confirmed: nothing in `rune.log` for the run beyond "Planning session started."
+    - The mismatch itself was **correct** (the tech-lead breakdown verified the frontend only with jsdom + WS tests; the spec DoD requires a live operator gate). The defect is the *handling* of a correct mismatch: it dead-ends, and the "retry" advice re-runs a nondeterministic tech-lead that keeps producing the same structural gap, so the operator can loop indefinitely with no resolution and no log.
+  - **Fix options**
+    - A. (observability) `log.error` the mismatch/failure in the `approve.ts` catch, and add start/terminal logs around `runDownstreamPlan`, so a failed approval is never silent server-side.
+    - B. (resolution path) On a legitimate `pmReviewMatch` mismatch, surface the specific mismatches to the operator and offer a real next step — amend the spec/DoD, or accept a designated manual release-gate task — instead of a bare "retry."
+    - C. (retry semantics) The `/approve` retry path (`approve.ts:58-65`) re-runs `runDownstreamPlan` from the stored spec; when the mismatch is structural (spec vs plan) a re-roll can't converge, so gate the retry advice on whether a re-roll can plausibly help.
+- [ ] The `pmReviewMatch` gate has no escape hatch — a spec whose Definition of Done requires a manual/live operator step can never pass, because the automated tech-lead breakdown structurally cannot encode a human gate as "matching" verification. **(project 20 — planning-pipeline design.)**
+  - **Issue**
+    - `runDownstreamPlan` (`src/intent/planning-roles.ts:340-350`) is fail-closed: `pmReviewMatch.match === false` throws and aborts scaffold. When the approved spec's DoD legitimately demands a real-operator/live-browser acceptance (as the `parallel-product-chats` spec does — "not merely that code paths are reachable or the test suite is green"), the tech-lead's automatable tech-spec/tasks can never satisfy that DoD, so the gate rejects every breakdown and the plan is un-completable through the pipeline.
+    - This is the same class of gap project 20's own `live-reachability-gate` names — a manual/live gate that automated verification can't stand in for. The pipeline has no way to represent "this task is a required manual release-gate," so the PM-vs-tech-lead match check reads the missing automated proof as a mismatch.
+  - **Fix options**
+    - A. Let the tech-lead breakdown emit a designated **manual/live release-gate task** as a first-class, `match`-satisfying artifact when the spec's DoD requires operator verification — so a live-gated spec can pass `pmReviewMatch` with the manual gate explicitly encoded (mirroring project 20's `live-reachability-gate`).
+    - B. On an unresolvable mismatch, hand off to the operator to amend the spec/DoD or approve a manual-gate plan (pairs with the resolution-path fix above), rather than dead-ending.
 - [ ] Operations container should show stream in reverse descending order starting with most recent at the top instead of most recent at the bottom.
 - [ ] /fresh is failing
   - Keep getting errors like this: `Could not summarize conversation — session reset. Error: No conversation found with session ID: 5f3dadf7-b327-418f-acb0-6cbb94b9945d`
@@ -48,7 +64,6 @@
   - **Fix options**
     - A. Give the reconciler (or a sibling watchdog) a path to drive a long-idle `running` run with no summary toward a real terminal state via the finalizer's recovery path, rather than waiting on a summary that will never appear.
     - B. Have the reconciler treat "running + liveness stale beyond a hard threshold + no summary" as a distinct alert/park so the operator is told, even if it can't auto-finalize.
-
 - [ ] Nightly processing error. Observation loop — TypeError: readers.interactions is not a function or its return value is not iterable
 - [ ] Rune MCP server times out on complex `kb_query` requests, and serves `/mcp` from the same process + event loop as the webview — a heavy query degrades both. _(moved from ideas.md, 2026-06-22)_
   - **Issue** (two distinct roots — latency and isolation)
