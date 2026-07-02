@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 
 import { cleanupSession } from '../ai/claude.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
+import { createLogger } from '../utils/logger.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+
+const log = createLogger('self-review');
 
 export type SelfReviewRole = Extract<RoleName, 'pm' | 'tech-lead' | 'coder'>;
 
@@ -20,6 +24,10 @@ export interface RunSelfReviewInput<A> {
   render: (artifact: A) => string;
   parse: (reply: string) => A;
   modelCall: SelfReviewModelCall;
+  /** Optional resolved model alias when the caller has policy/runtime metadata. */
+  model?: string;
+  /** Optional resolved provider when the caller has policy/runtime metadata. */
+  provider?: string;
 }
 
 export interface SelfReviewResult<A> {
@@ -112,11 +120,15 @@ export async function runSelfReview<A>({
   render,
   parse,
   modelCall,
+  model,
+  provider,
 }: RunSelfReviewInput<A>): Promise<SelfReviewResult<A>> {
   const ctx = composeRoleContext(role, SELF_REVIEW_INSTRUCTION);
   const sessionId = randomUUID();
   const renderedArtifact = render(artifact);
+  const logFields = selfReviewLogFields({ role, model, provider });
 
+  log.info('self-review started', logFields);
   try {
     const firstReply = await modelCall({
       role,
@@ -126,7 +138,9 @@ export async function runSelfReview<A>({
     });
     const firstParsed = parseSelfReviewReply(firstReply, parse);
     if (firstParsed.ok) {
-      return resultForParsedArtifact(artifact, firstParsed.artifact);
+      const result = resultForParsedArtifact(artifact, firstParsed.artifact);
+      log.info('self-review completed', { ...logFields, revised: result.revised });
+      return result;
     }
 
     const retryReply = await modelCall({
@@ -137,15 +151,39 @@ export async function runSelfReview<A>({
     });
     const retryParsed = parseSelfReviewReply(retryReply, parse);
     if (retryParsed.ok) {
-      return resultForParsedArtifact(artifact, retryParsed.artifact);
+      const result = resultForParsedArtifact(artifact, retryParsed.artifact);
+      log.info('self-review completed', { ...logFields, revised: result.revised });
+      return result;
     }
 
     throw new Error(
       `self-review failed: response was still unparseable after strict-format retry (${retryParsed.error.message})`,
     );
+  } catch (err) {
+    log.error('self-review failed', {
+      ...logFields,
+      error: scrubAbsolutePaths((err as Error).message),
+    });
+    throw err;
   } finally {
     cleanupSession(sessionId);
   }
+}
+
+function selfReviewLogFields({
+  role,
+  model,
+  provider,
+}: {
+  role: SelfReviewRole;
+  model?: string;
+  provider?: string;
+}): { role: SelfReviewRole; model?: string; provider?: string } {
+  return {
+    role,
+    ...(model !== undefined ? { model } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+  };
 }
 
 function resultForParsedArtifact<A>(original: A, parsed: A): SelfReviewResult<A> {

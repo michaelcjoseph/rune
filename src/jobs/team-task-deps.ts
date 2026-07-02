@@ -936,6 +936,8 @@ export function buildProductionTeamTaskDeps(
           artifact,
           render: renderCoderSelfReviewArtifact,
           parse: parseCoderSelfReviewArtifact,
+          model: models.coder.alias,
+          provider: models.coder.provider,
           modelCall: async ({ sessionId, systemPrompt, message }) => {
             return seams.judgmentCall({
               role: 'coder',

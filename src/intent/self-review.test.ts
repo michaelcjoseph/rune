@@ -10,9 +10,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSelfReview } from './self-review.js';
 
-const { mockRandomUUID, mockCleanupSession } = vi.hoisted(() => ({
+const { mockRandomUUID, mockCleanupSession, mockLogger } = vi.hoisted(() => ({
   mockRandomUUID: vi.fn(() => 'self-review-session-1'),
   mockCleanupSession: vi.fn(),
+  mockLogger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 vi.mock('node:crypto', () => ({
@@ -21,6 +27,10 @@ vi.mock('node:crypto', () => ({
 
 vi.mock('../ai/claude.js', () => ({
   cleanupSession: mockCleanupSession,
+}));
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => mockLogger,
 }));
 
 interface ReviewArtifact {
@@ -121,6 +131,10 @@ function resetSessionMocks(): void {
   mockRandomUUID.mockReturnValue('self-review-session-1');
   mockRandomUUID.mockClear();
   mockCleanupSession.mockClear();
+  mockLogger.info.mockClear();
+  mockLogger.error.mockClear();
+  mockLogger.warn.mockClear();
+  mockLogger.debug.mockClear();
 }
 
 describe('runSelfReview — primitive contract (test-plan §3)', () => {
@@ -137,6 +151,8 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
       render: renderArtifact,
       parse: parseArtifact,
       modelCall,
+      model: 'opus',
+      provider: 'anthropic',
     });
 
     expect(result).toEqual({ artifact: FIXED_SPEC, revised: true });
@@ -152,6 +168,18 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(mockRandomUUID).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
+    expect(mockLogger.info).toHaveBeenCalledWith('self-review started', {
+      role: 'pm',
+      model: 'opus',
+      provider: 'anthropic',
+    });
+    expect(mockLogger.info).toHaveBeenCalledWith('self-review completed', {
+      role: 'pm',
+      model: 'opus',
+      provider: 'anthropic',
+      revised: true,
+    });
+    expect(mockLogger.error).not.toHaveBeenCalled();
   });
 
   it('does not run a convergence loop after a clean first response', async () => {
@@ -217,13 +245,18 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(calls.map((call) => call.role)).toEqual(['coder', 'coder']);
     expect(mockCleanupSession).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
+    expect(mockLogger.info).toHaveBeenCalledWith('self-review started', { role: 'coder' });
+    expect(mockLogger.error).toHaveBeenCalledWith('self-review failed', {
+      role: 'coder',
+      error: expect.stringContaining('still unparseable'),
+    });
   });
 
   it('cleans up the throwaway session when the cold model call fails', async () => {
     const calls: CapturedRoleCall[] = [];
     const modelCall: SelfReviewModelCall = async ({ role, sessionId, systemPrompt, message }) => {
       calls.push({ role, sessionId, systemPrompt, message });
-      throw new Error('transport unavailable');
+      throw new Error('transport unavailable at /Users/jarvis/workspace/rune/private.log');
     };
 
     await expect(
@@ -233,6 +266,8 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
         render: renderArtifact,
         parse: parseArtifact,
         modelCall,
+        model: 'gpt-5.5',
+        provider: 'openai',
       }),
     ).rejects.toThrow(/transport unavailable/);
 
@@ -241,6 +276,17 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(mockRandomUUID).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
+    expect(mockLogger.info).toHaveBeenCalledWith('self-review started', {
+      role: 'tech-lead',
+      model: 'gpt-5.5',
+      provider: 'openai',
+    });
+    expect(mockLogger.error).toHaveBeenCalledWith('self-review failed', {
+      role: 'tech-lead',
+      model: 'gpt-5.5',
+      provider: 'openai',
+      error: 'transport unavailable at <project>/private.log',
+    });
   });
 
   it('does not accept new product direction absent from the rendered artifact', async () => {
@@ -293,5 +339,9 @@ describe('runSelfReview — primitive contract (test-plan §3)', () => {
     expect(calls).toHaveLength(1);
     expect(mockCleanupSession).toHaveBeenCalledTimes(1);
     expect(mockCleanupSession).toHaveBeenCalledWith('self-review-session-1');
+    expect(mockLogger.info).toHaveBeenCalledWith('self-review completed', {
+      role: 'pm',
+      revised: false,
+    });
   });
 });
