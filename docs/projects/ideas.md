@@ -6,7 +6,6 @@ below it.
 
 ## User-authored
 
-- Chat with Rune across multiple products in parallel
 - Set up CLAUDE.md and AGENTS.md for repos that do not have them
 - Improve design of MCP monitoring in cockpit
 - Expand MCP functionality
@@ -87,3 +86,6 @@ below it.
 - **Make observation-triage agent robust to failing inputs** — observation-triage agent fails 5+ times in 7d
 - **Make lenny-sync robust to repeated failures** — lenny-sync agent fails 3 times in 7 days
 - **Stabilize recurring agent-call failure bursts** — Agent-call failures recurring in bursts over 7 days
+
+- **Make lenny-sync agent robust to sync failures** — lenny-sync agent fails repeatedly
+- **Fix wiki-compiler recurring compile failures** — wiki-compiler fails 7 times in 7 days
