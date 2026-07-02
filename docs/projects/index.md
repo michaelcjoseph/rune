@@ -25,7 +25,7 @@ its `spec.md`.
 | [17-cockpit-redesign](17-cockpit-redesign/spec.md) | Done | A dev-focused, two-tier cockpit (cross-product Home pulse + per-product deep view) for working with Rune across all products, with realtime run visibility and Fix as the headline bug action. |
 | [18-rebrand-rune-to-rune](18-rebrand-rune-to-rune/spec.md) | Done | Cut the agent's public brand over to Rune across repo, runtime identity, env vars, and the local checkout, with behavior unchanged. |
 | [19-rune-product-os](19-rune-product-os/spec.md) | Done | Cockpit becomes a product OS over internal + external products; standalone always-on MCP service, monitoring, knowledge freshness. Phase 6 (writer-as-product) extracted to the michaelcjoseph.com `01-rune-writing-product` project. |
-| [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Not Started | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
+| [20-pm-scoping-self-review](20-pm-scoping-self-review/spec.md) | Done | The PM runs the `/plan` interview directly and writes the spec; one approval, streamed downstream progress, and a fresh-context fix-it self-review for PM, Tech Lead, and Coder. |
 | [21-parallel-product-chats](21-parallel-product-chats/spec.md) | Not Started | Turn the webview into a real parallel workspace: fire a turn in one product chat, switch, and fire in another — concurrent dispatch, scope-addressed responses, per-panel buffering with an unread cue, and cross-tab sync. |
 ---
 
@@ -397,7 +397,7 @@ The cockpit becomes a product operating system: every product Rune touches — e
 - **Non-goals:** no vector DB, no external-product monitoring (stubs only), no migration of historical writing content.
 - **Task breakdown & test plan:** see [tasks.md](19-rune-product-os/tasks.md) and [test-plan.md](19-rune-product-os/test-plan.md). Test-first per phase.
 
-## 20-pm-scoping-self-review — Not Started
+## 20-pm-scoping-self-review — Done
 
 [Spec](20-pm-scoping-self-review/spec.md)
 

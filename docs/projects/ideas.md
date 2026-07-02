@@ -89,3 +89,6 @@ below it.
 
 - **Make lenny-sync agent robust to sync failures** — lenny-sync agent fails repeatedly
 - **Fix wiki-compiler recurring compile failures** — wiki-compiler fails 7 times in 7 days
+
+- **Diagnose recurring wiki-compiler failures** — wiki-compiler agent fails repeatedly
+- **Harden observation-triage against repeated failures** — observation-triage agent fails 5+ times in 7 days
