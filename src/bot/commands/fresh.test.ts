@@ -7,10 +7,17 @@ vi.mock('../../config.js', () => ({
 
 vi.mock('../../vault/sessions.js', () => ({
   getSession: vi.fn(),
+  getSessionMessages: vi.fn(() => [
+    { role: 'user', text: 'Hello', ts: '2026-04-14 14:00' },
+    { role: 'assistant', text: 'Hi', ts: '2026-04-14 14:01' },
+  ]),
   deleteSession: vi.fn(),
   transportLabel: (t: string) => (t === 'webview' ? 'webview chat' : 'telegram chat'),
 }));
-vi.mock('../../ai/claude.js', () => ({ summarizeSession: vi.fn() }));
+vi.mock('../../ai/claude.js', () => ({
+  summarizeSession: vi.fn(),
+  summarizeConversationMessages: vi.fn(),
+}));
 // saveConversationSource now LIVES in vault/journal.ts (relocated, project 16)
 // and is re-exported by fresh.ts — pass the real implementation through so the
 // behavior tests below keep exercising it; only appendToJournal stays mocked.
@@ -34,8 +41,8 @@ vi.mock('../../reviews/planning.js', () => ({
   abandonActivePlanningSession: vi.fn(),
 }));
 
-const { getSession, deleteSession } = await import('../../vault/sessions.js');
-const { summarizeSession } = await import('../../ai/claude.js');
+const { getSession, getSessionMessages, deleteSession } = await import('../../vault/sessions.js');
+const { summarizeSession, summarizeConversationMessages } = await import('../../ai/claude.js');
 const { appendToJournal } = await import('../../vault/journal.js');
 const { gitCommitAndPush } = await import('../../vault/git.js');
 const { writeVaultFile } = await import('../../vault/files.js');
@@ -47,15 +54,23 @@ const writeVaultMock = writeVaultFile as unknown as ReturnType<typeof vi.fn>;
 const enqueueMock = enqueue as unknown as ReturnType<typeof vi.fn>;
 
 const getSessionMock = getSession as unknown as ReturnType<typeof vi.fn>;
+const getSessionMessagesMock = getSessionMessages as unknown as ReturnType<typeof vi.fn>;
 const deleteSessionMock = deleteSession as unknown as ReturnType<typeof vi.fn>;
 const summarizeMock = summarizeSession as unknown as ReturnType<typeof vi.fn>;
+const summarizeMessagesMock = summarizeConversationMessages as unknown as ReturnType<typeof vi.fn>;
 const appendMock = appendToJournal as unknown as ReturnType<typeof vi.fn>;
 const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 const getActivePlanningSessionMock = getActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
 const abandonActivePlanningSessionMock = abandonActivePlanningSession as unknown as ReturnType<typeof vi.fn>;
 
 describe('bot/commands/fresh', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSessionMessagesMock.mockReturnValue([
+      { role: 'user', text: 'Hello', ts: '2026-04-14 14:00' },
+      { role: 'assistant', text: 'Hi', ts: '2026-04-14 14:01' },
+    ]);
+  });
 
   describe('parseKBWorthy', () => {
     it('extracts KB-worthy: yes as isKBWorthy true', () => {
@@ -180,6 +195,28 @@ describe('bot/commands/fresh', () => {
       expect(result).toEqual({ ok: false, error: 'CLI timeout' });
       expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
       expect(appendMock).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the stored transcript when the Claude CLI session is missing', async () => {
+      getSessionMock.mockReturnValue({ sessionId: 'missing-cli-session' });
+      summarizeMock.mockResolvedValue({
+        text: null,
+        error: 'No conversation found with session ID: missing-cli-session',
+      });
+      summarizeMessagesMock.mockResolvedValue({
+        text: 'Recovered summary\nKB-worthy: no',
+        error: null,
+      });
+
+      const result = await closeConversation(123, 'telegram');
+
+      expect(result).toMatchObject({ ok: true, journalSummary: 'Recovered summary', isKBWorthy: false });
+      expect(summarizeMessagesMock).toHaveBeenCalledWith([
+        { role: 'user', text: 'Hello', ts: '2026-04-14 14:00' },
+        { role: 'assistant', text: 'Hi', ts: '2026-04-14 14:01' },
+      ]);
+      expect(appendMock).toHaveBeenCalled();
+      expect(deleteSessionMock).toHaveBeenCalledWith(123, 'telegram');
     });
 
     it('returns { ok: false } and deletes session when summarizeSession throws', async () => {

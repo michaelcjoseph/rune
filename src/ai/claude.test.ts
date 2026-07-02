@@ -76,7 +76,7 @@ vi.mock('node:fs', async () => {
 
 const { spawn } = await import('node:child_process');
 const { readFileSync } = await import('node:fs');
-const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, markSessionCreated, loadAgentDef, getProjectMcpArgs, clearProjectMcpArgsCacheForTest } =
+const { askClaude, askClaudeWithContext, askClaudeOneShot, runAgent, summarizeSession, summarizeConversationMessages, markSessionCreated, loadAgentDef, getProjectMcpArgs, clearProjectMcpArgsCacheForTest } =
   await import('./claude.js');
 // Type import — verifies ClaudeResult is exported (TS compile error if not)
 import type { ClaudeResult } from './claude.js';
@@ -1038,6 +1038,25 @@ Body.`);
         expect.arrayContaining(['--resume', 'sum-sess', '--model', 'opus']),
         expect.any(Object),
       );
+    });
+
+    it('summarizes stored transcript messages in a fresh one-shot call', async () => {
+      markSessionCreated('missing-transcript-session');
+      spawnMock.mockReturnValue(createChild({ stdout: 'Topic: recovered\nKB-worthy: no' }));
+
+      const result = await summarizeConversationMessages([
+        { role: 'user', text: 'What did we decide?', ts: '2026-04-14 14:00' },
+        { role: 'assistant', text: 'We decided to use the fallback.', ts: '2026-04-14 14:01' },
+      ]);
+
+      expect(result.text).toBe('Topic: recovered\nKB-worthy: no');
+      const args = spawnMock.mock.calls.at(-1)![1] as string[];
+      expect(args).toContain('--model');
+      expect(args).toContain('opus');
+      expect(args).not.toContain('--resume');
+      expect(args).not.toContain('--session-id');
+      expect(args[args.indexOf('-p') + 1]).toContain('[user] What did we decide?');
+      expect(args[args.indexOf('-p') + 1]).toContain('[assistant] We decided to use the fallback.');
     });
   });
 

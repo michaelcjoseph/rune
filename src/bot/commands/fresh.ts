@@ -1,5 +1,5 @@
-import { getSession, deleteSession, transportLabel, type Transport, type SessionScope } from '../../vault/sessions.js';
-import { summarizeSession } from '../../ai/claude.js';
+import { getSession, getSessionMessages, deleteSession, transportLabel, type Transport, type SessionScope } from '../../vault/sessions.js';
+import { summarizeConversationMessages, summarizeSession } from '../../ai/claude.js';
 import { appendToJournal, saveConversationSource } from '../../vault/journal.js';
 import { getTimestamp } from '../../utils/time.js';
 import { gitCommitAndPush } from '../../vault/git.js';
@@ -29,6 +29,10 @@ export type CloseConversationResult =
   | { ok: true; journalSummary: string; isKBWorthy: boolean }
   | { ok: false; error: string };
 
+function isMissingClaudeSessionError(error: string): boolean {
+  return /No conversation found with session ID:/i.test(error);
+}
+
 function planningMatchesScope(
   planning: ReturnType<typeof getActivePlanningSession>,
   scope?: SessionScope,
@@ -52,7 +56,17 @@ export async function closeConversation(
   if (!session) return { ok: false, error: 'no-session' };
 
   try {
-    const result = await summarizeSession(session.sessionId);
+    let result = await summarizeSession(session.sessionId);
+    if (result.error && isMissingClaudeSessionError(result.error)) {
+      const messages = scope ? getSessionMessages(chatId, transport, scope) : getSessionMessages(chatId, transport);
+      if (messages.length > 0) {
+        log.warn('Claude session missing during /fresh; summarizing stored transcript', {
+          sessionId: session.sessionId,
+          messageCount: messages.length,
+        });
+        result = await summarizeConversationMessages(messages);
+      }
+    }
 
     if (result.error) {
       log.error('Summarize error', { error: result.error, sessionId: session.sessionId });

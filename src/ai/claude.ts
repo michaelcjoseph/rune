@@ -912,9 +912,7 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   return result;
 }
 
-/** Summarize a session for journal logging */
-export async function summarizeSession(sessionId: string): Promise<ClaudeResult> {
-  const prompt = `Summarize our conversation so far in this exact format (nothing else, no markdown fences):
+const SESSION_SUMMARY_INSTRUCTIONS = `Summarize our conversation so far in this exact format (nothing else, no markdown fences):
 Topic: <brief topic in 5-10 words>
 Prompt: <the user's original question/request>
 Discussion: <2-4 sentence summary of what was discussed>
@@ -923,5 +921,28 @@ KB-worthy: <yes or no>
 
 KB-worthy means this conversation produced insights worth ingesting into the knowledge base. Answer yes if it produced a new insight, framework, mental model, factual information worth preserving, or explored a topic in depth. Answer no if it was purely operational, casual chat, or covered topics already well-documented.`;
 
-  return askClaude(prompt, sessionId, config.DEFAULT_CHAT_MODEL, undefined, true);
+/** Summarize a session for journal logging */
+export async function summarizeSession(sessionId: string): Promise<ClaudeResult> {
+  return askClaude(SESSION_SUMMARY_INSTRUCTIONS, sessionId, config.DEFAULT_CHAT_MODEL, undefined, true);
+}
+
+export interface ConversationSummaryMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  ts?: string;
+}
+
+function formatTranscriptMessage(message: ConversationSummaryMessage): string {
+  const role = message.role === 'assistant' ? 'assistant' : 'user';
+  return `[${role}] ${message.text}`;
+}
+
+/** Summarize stored transcript messages when a persisted Rune session outlives
+ *  the Claude CLI's own session store. Uses a fresh one-shot call by design. */
+export async function summarizeConversationMessages(
+  messages: ConversationSummaryMessage[],
+): Promise<ClaudeResult> {
+  const transcript = messages.map(formatTranscriptMessage).join('\n\n');
+  const prompt = `${SESSION_SUMMARY_INSTRUCTIONS}\n\nConversation transcript:\n${transcript}`;
+  return askClaudeOneShot(prompt, undefined, undefined, true);
 }
