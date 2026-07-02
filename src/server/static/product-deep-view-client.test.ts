@@ -563,6 +563,24 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-active-work-tab=["']bugs["']/i);
   });
 
+  it('renders operation activity with the newest stream event first', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(productView({ activeRun: undefined }), {
+      operations: {
+        ...productOperations,
+        activity: [
+          { opId: 'op-chat-1', at: '12:00:01', status: 'started', label: 'Asking Claude' },
+          { opId: 'op-chat-1', at: '12:00:02', detail: 'Read: package.json' },
+          { opId: 'op-chat-1', at: '12:00:03', status: 'success', detail: 'success' },
+        ],
+      },
+    });
+
+    expect(html.indexOf('success: success')).toBeLessThan(html.indexOf('Read: package.json'));
+    expect(html.indexOf('Read: package.json')).toBeLessThan(html.indexOf('started: Asking Claude'));
+  });
+
   it('renders the shared three-container spine with product-aware work contents', async () => {
     const { renderProductDeepView } = await import('./product-deep-view.js');
 

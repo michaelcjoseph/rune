@@ -1,5 +1,4 @@
 ## Active
-- [ ] Operations container should show stream in reverse descending order starting with most recent at the top instead of most recent at the bottom.
 - [ ] /fresh is failing
   - Keep getting errors like this: `Could not summarize conversation — session reset. Error: No conversation found with session ID: 5f3dadf7-b327-418f-acb0-6cbb94b9945d`
 - [ ] Orchestrated runs are single-repo, but a project can carry tasks whose deliverables live in a *different* product's repo — those tasks have no way to land and "complete" by writing assertion tests instead. **The core defect behind the project-19 Phase 6 false-complete.**
@@ -110,6 +109,7 @@
 
 ## Done
 
+- [x] Operations container should show stream in reverse descending order starting with most recent at the top instead of most recent at the bottom. _(Fixed 2026-07-02 — product deep-view operation activity now renders newest-first while preserving chronological storage/session trimming semantics. Covered by `product-deep-view-client.test.ts`.)_
 - [x] `runDownstreamPlan` stages emit progress to the user but nothing to `rune.log` — a post-approval pipeline failure names no stage server-side. **(project 20 — logging; scoped from the declined observability sweep 2026-07-02.)** _(Fixed 2026-07-02 — `runDownstreamPlan` logs each stage start and one scrubbed terminal failure with product/stage/reason/retryability/mismatches. Existing tests assert stage start logs and a `pm-review-match` failure log.)_
 - [x] An agent's self-review must run on that agent's own defined model, not a hardcoded judgment model — applies to every role (PM, tech-lead, coder). **(project 20 — self-review correctness; direction set by operator 2026-07-02.)** _(Fixed 2026-07-02 — product-team judgment calls now receive the full policy-resolved binding and Codex-format calls route through `runCodex`; coder self-review uses the coder binding (`gpt-5.5`/openai/codex). Planning PM/tech-lead role calls and self-reviews now resolve model policy too, and PM authoring plus PM self-review share the policy-resolved PM model.)_
 - [x] `runPlanningApprovalPipeline` swallows a post-approval failure with no `log.error` — a failed `/approve` leaves no server-side trace. **(project 20 — logging; scoped from the declined observability sweep 2026-07-02.)** _(Fixed 2026-07-02 — both Telegram `/approve` and cockpit approval now log `planning approval failed` with user/product/stage/retryability/path-scrubbed error before sending terminal user guidance; covered by `approve.test.ts` and `webview.test.ts`.)_

@@ -415,7 +415,7 @@ function renderRuns(view, liveRuns = {}) {
 }
 
 function renderOperationActivity(activity) {
-  const rows = list(activity).map(row => {
+  const rows = list(activity).slice().reverse().map(row => {
     const label = row.status ? `${row.status}: ${row.detail || row.label || row.opId || 'op'}` : (row.detail || row.label || row.opId || 'op');
     return `<article class="deep-op-row deep-op-row--activity" data-op-activity-id="${attr(row.opId || '')}">` +
       `<span>${escHtml(row.at || '')}</span><span>${escHtml(label)}</span>` +
