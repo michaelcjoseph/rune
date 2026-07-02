@@ -21,7 +21,7 @@ The operator runs several product chats at once. Send a turn in product A, switc
 - The global chat behaves as it does today.
 
 ### Addressing & routing
-- Every response frame the operator receives carries the product scope it belongs to (global = no product scope).
+- Every turn-scoped response/status frame the operator receives carries the product scope it belongs to (global = no product scope). Any streaming `chunk` frames that enter the WS delivery path carry the same scope.
 - The frontend routes each frame to the transcript for its scope. A frame for product X is never appended to product Y's or the global transcript.
 
 ### Buffering & switch-back
@@ -33,9 +33,11 @@ The operator runs several product chats at once. Send a turn in product A, switc
   - on the other product's channel/switcher entry, and
   - in the home view (the main product-list/landing surface).
 - The cue clears for a chat once the operator views that chat.
+- The cue is browser-local UI state derived from scoped frames; it does not require a new persisted server/API state.
 
 ### Delivery model
 - Responses are delivered by broadcasting scope-tagged frames to all of the operator's connected sockets, with the frontend filtering by scope. This keeps a chat consistent across multiple browser tabs. Delivery is not restricted to the origin socket.
+- The WebSocket path is the concurrency and streaming path. The `/api/chat` REST fallback remains a scoped final-response fallback, but it is not required to provide parallel streaming or cross-tab synchronization.
 
 ## Non-Goals
 
@@ -73,6 +75,8 @@ Done is the operator completing this real fire-and-switch loop against live prod
 5. Buffered output for an inactive scope is replayed in the order it streamed.
 6. Session storage/keying is out of scope because it is already correctly scoped per (product, transport, user); only dispatch and delivery change.
 7. No behavior change for Telegram or any other transport that shares the message-sender contract.
+8. Dispatch queue keys must reuse an exported session-scope helper from the session layer, not duplicate a hand-written key format in `webview.ts`.
+9. The manual acceptance run is recorded in `docs/projects/21-parallel-product-chats/live-acceptance.md`.
 
 ## Provenance
 
