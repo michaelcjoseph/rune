@@ -23,7 +23,12 @@
 
 import type { MessageSender } from '../../transport/sender.js';
 import { runScaffoldApproval } from '../../jobs/scaffold-approval.js';
-import { runDownstreamPlan, type PlanningProgress, type PlanningProgressStage } from '../../intent/planning-roles.js';
+import {
+  runDownstreamPlan,
+  type PlanningDownstreamErrorDetails,
+  type PlanningProgress,
+  type PlanningProgressStage,
+} from '../../intent/planning-roles.js';
 import { isPmSpecApprovalArtifact, type SpecArtifact } from '../../intent/planner.js';
 import { isCancelled, registerOp, unregisterOp } from '../../transport/in-flight.js';
 import { scrubAbsolutePaths } from '../../utils/sanitize-paths.js';
@@ -140,13 +145,25 @@ async function runPlanningApprovalPipeline(
     if (err instanceof PlanningApprovalCancelled) {
       return { status: 'cancelled' };
     }
-    const message = (err as Error).message;
-    await sendTerminalOnce(sender, userId, control, message);
-    await sender.send(
+    const failure = planningDownstreamFailure(err);
+    const message = scrubAbsolutePaths((err as Error).message);
+    log.error('planning approval failed', {
       userId,
-      'Planning session is still approved — run /approve again to retry.',
-    );
-    return { status: 'error', error: scrubAbsolutePaths(message) };
+      product: session.planning.product,
+      stage: failure?.stage,
+      retryable: failure?.retryable ?? true,
+      error: message,
+    });
+    await sendTerminalOnce(sender, userId, control, message);
+    if (isNonRetryablePmMismatch(failure)) {
+      await sender.send(userId, formatNonRetryablePmMismatchMessage(failure));
+    } else {
+      await sender.send(
+        userId,
+        'Planning session is still approved — run /approve again to retry.',
+      );
+    }
+    return { status: 'error', error: message };
   }
 }
 
@@ -329,4 +346,42 @@ function planningStageLabel(stage: PlanningProgressStage): string {
     case 'scaffold':
       return 'scaffold';
   }
+}
+
+function planningDownstreamFailure(err: unknown): PlanningDownstreamErrorDetails | null {
+  const candidate = err as Partial<PlanningDownstreamErrorDetails> | null;
+  if (!candidate || typeof candidate !== 'object') return null;
+  if (typeof candidate.stage !== 'string') return null;
+  if (typeof candidate.reason !== 'string') return null;
+  if (typeof candidate.retryable !== 'boolean') return null;
+  return {
+    stage: candidate.stage as PlanningProgressStage,
+    reason: scrubAbsolutePaths(candidate.reason),
+    ...(Array.isArray(candidate.mismatches)
+      ? { mismatches: candidate.mismatches.map((mismatch) => scrubAbsolutePaths(String(mismatch))) }
+      : {}),
+    retryable: candidate.retryable,
+  };
+}
+
+function isNonRetryablePmMismatch(
+  failure: PlanningDownstreamErrorDetails | null,
+): failure is PlanningDownstreamErrorDetails & { mismatches: string[] } {
+  return failure?.stage === 'pm-review-match' && failure.retryable === false;
+}
+
+function formatNonRetryablePmMismatchMessage(
+  failure: PlanningDownstreamErrorDetails & { mismatches?: string[] },
+): string {
+  const mismatches = failure.mismatches?.length
+    ? failure.mismatches.map((mismatch) => `- ${mismatch}`).join('\n')
+    : `- ${failure.reason}`;
+  return [
+    'Planning session is still approved, but PM review found a structural mismatch. A blind retry is unlikely to help.',
+    '',
+    'Mismatches:',
+    mismatches,
+    '',
+    'Next steps: amend the spec/DoD, or approve/add a manual live release-gate task.',
+  ].join('\n');
 }

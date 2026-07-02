@@ -29,6 +29,10 @@ import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.j
 import type { PmSpecApprovalArtifact, SpecArtifact } from './planner.js';
 import { runSelfReview } from './self-review.js';
 import type { RoleName } from '../roles/loader.js';
+import { createLogger } from '../utils/logger.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
+
+const log = createLogger('planning-roles');
 
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
  *  strategy"). Drives whether QA writes code tests, records a no-code-test
@@ -140,6 +144,31 @@ export interface PlanningProgress {
   warning?: string;
   terminal?: string;
   success?: string;
+}
+
+export interface PlanningDownstreamErrorDetails {
+  stage: PlanningProgressStage;
+  reason: string;
+  mismatches?: string[];
+  retryable: boolean;
+}
+
+export class PlanningDownstreamError extends Error implements PlanningDownstreamErrorDetails {
+  readonly stage: PlanningProgressStage;
+  readonly reason: string;
+  readonly mismatches?: string[];
+  readonly retryable: boolean;
+  readonly cause?: unknown;
+
+  constructor(details: PlanningDownstreamErrorDetails, options: { cause?: unknown } = {}) {
+    super(details.reason);
+    this.name = 'PlanningDownstreamError';
+    this.stage = details.stage;
+    this.reason = details.reason;
+    this.mismatches = details.mismatches;
+    this.retryable = details.retryable;
+    this.cause = options.cause;
+  }
 }
 
 /** Outcome of the planner-roles flow — a discriminated union over the three exit
@@ -305,13 +334,53 @@ export async function runDownstreamPlan(
   const assumptions = approvedSpec.assumptions ?? [];
   const spec = withAssumptionsSection(approvedSpec.spec, assumptions);
   const brief = [`# ${approvedSpec.title}`, '', spec].join('\n');
+  let terminalSent = false;
 
-  await progress({ stage: 'tech-lead-breakdown' });
-  const techLead = await deps.techLeadBreakdown({
-    brief,
-    product: approvedSpec.product,
-    spec,
-  });
+  const startStage = async (stage: PlanningProgressStage) => {
+    log.info('downstream planning stage started', { product: approvedSpec.product, stage });
+    await progress({ stage });
+  };
+
+  const failStage = async (
+    stage: PlanningProgressStage,
+    reason: string,
+    opts: { mismatches?: string[]; retryable: boolean; cause?: unknown },
+  ): Promise<never> => {
+    const scrubbedReason = scrubAbsolutePaths(reason);
+    const scrubbedMismatches = opts.mismatches?.map((mismatch) => scrubAbsolutePaths(mismatch));
+    if (!terminalSent) {
+      terminalSent = true;
+      await progress({ terminal: scrubbedReason });
+    }
+    log.error('downstream planning failed', {
+      product: approvedSpec.product,
+      stage,
+      reason: scrubbedReason,
+      retryable: opts.retryable,
+      ...(scrubbedMismatches ? { mismatches: scrubbedMismatches } : {}),
+    });
+    throw new PlanningDownstreamError({
+      stage,
+      reason: scrubbedReason,
+      ...(scrubbedMismatches ? { mismatches: scrubbedMismatches } : {}),
+      retryable: opts.retryable,
+    }, { cause: opts.cause });
+  };
+
+  await startStage('tech-lead-breakdown');
+  let techLead: TechLeadResult;
+  try {
+    techLead = await deps.techLeadBreakdown({
+      brief,
+      product: approvedSpec.product,
+      spec,
+    });
+  } catch (err) {
+    return await failStage('tech-lead-breakdown', `tech-lead breakdown failed: ${(err as Error).message}`, {
+      retryable: true,
+      cause: err,
+    });
+  }
   let reviewedTechLead: TechLeadResult;
   try {
     const selfReview = await runSelfReview({
@@ -333,20 +402,29 @@ export async function runDownstreamPlan(
     reviewedTechLead = selfReview.artifact;
   } catch (err) {
     const message = `tech-lead self-review failed: ${(err as Error).message}`;
-    await progress({ terminal: message });
-    throw new Error(message);
+    return await failStage('tech-lead-breakdown', message, { retryable: true, cause: err });
   }
 
-  await progress({ stage: 'pm-review-match' });
-  const review = await deps.pmReviewMatch({
-    spec,
-    techSpec: reviewedTechLead.techSpec,
-    tasks: reviewedTechLead.tasks,
-  });
+  await startStage('pm-review-match');
+  let review: SpecMatchResult;
+  try {
+    review = await deps.pmReviewMatch({
+      spec,
+      techSpec: reviewedTechLead.techSpec,
+      tasks: reviewedTechLead.tasks,
+    });
+  } catch (err) {
+    return await failStage('pm-review-match', `PM review failed: ${(err as Error).message}`, {
+      retryable: true,
+      cause: err,
+    });
+  }
   if (!review.match) {
     const message = `PM review mismatch: ${review.mismatches.join('; ')}`;
-    await progress({ terminal: message });
-    throw new Error(message);
+    return await failStage('pm-review-match', message, {
+      mismatches: review.mismatches,
+      retryable: false,
+    });
   }
 
   let critiquedSpec = spec;
@@ -354,13 +432,21 @@ export async function runDownstreamPlan(
   let critiquedTasks = reviewedTechLead.tasks;
   let codexCritiqueSkipped = false;
   if (deps.critiquePlan) {
-    await progress({ stage: 'claude-critique' });
-    await progress({ stage: 'codex-critique' });
-    const critique = await deps.critiquePlan({
-      spec,
-      techSpec: reviewedTechLead.techSpec,
-      tasks: reviewedTechLead.tasks,
-    });
+    await startStage('claude-critique');
+    await startStage('codex-critique');
+    let critique: PlanningCritiqueResult;
+    try {
+      critique = await deps.critiquePlan({
+        spec,
+        techSpec: reviewedTechLead.techSpec,
+        tasks: reviewedTechLead.tasks,
+      });
+    } catch (err) {
+      return await failStage('codex-critique', `planning critique failed: ${(err as Error).message}`, {
+        retryable: true,
+        cause: err,
+      });
+    }
     critiquedSpec = withAssumptionsSection(critique.plan.spec, assumptions);
     critiquedTechSpec = critique.plan.techSpec;
     critiquedTasks = critique.plan.tasks;
@@ -370,7 +456,7 @@ export async function runDownstreamPlan(
     }
   }
 
-  await progress({ stage: 'context-seed' });
+  await startStage('context-seed');
   let context: string;
   try {
     const firstTask = critiquedTasks[0];
@@ -384,8 +470,7 @@ export async function runDownstreamPlan(
     });
   } catch (err) {
     const message = `context seed failed: ${(err as Error).message}`;
-    await progress({ terminal: message });
-    throw new Error(message);
+    return await failStage('context-seed', message, { retryable: true, cause: err });
   }
 
   return plannedOutcomeToArtifact(approvedSpec.product, {

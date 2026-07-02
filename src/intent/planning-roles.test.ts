@@ -16,12 +16,22 @@
 
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 
-const { mockRunSelfReview } = vi.hoisted(() => ({
+const { mockRunSelfReview, mockPlanningLog } = vi.hoisted(() => ({
   mockRunSelfReview: vi.fn(),
+  mockPlanningLog: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
 }));
 
 vi.mock('./self-review.js', () => ({
   runSelfReview: mockRunSelfReview,
+}));
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => mockPlanningLog,
 }));
 
 import {
@@ -92,6 +102,7 @@ function makeDeps(over: Partial<PlanningRoleDeps> = {}): PlanningRoleDeps {
 const INPUT = { brief: 'Add a streak tracker to the home screen.', product: 'aura' };
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mockRunSelfReview.mockReset();
   mockRunSelfReview.mockImplementation(async ({ artifact }: { artifact: TechLeadResult }) => ({
     artifact,
@@ -398,7 +409,11 @@ describe('planning-roles — runDownstreamPlan approval split (project 20 test-p
       critiquePlan,
     });
 
-    await expect(runDownstreamPlanForTest(deps)).rejects.toThrow(/mismatch|drift|home-card/i);
+    await expect(runDownstreamPlanForTest(deps)).rejects.toMatchObject({
+      stage: 'pm-review-match',
+      retryable: false,
+      mismatches: ['Tech spec dropped the approved home-card scope'],
+    });
     expect(deps.pmAssessAndSpec).not.toHaveBeenCalled();
     expect(deps.pmReviewMatch).toHaveBeenCalledOnce();
     expect(critiquePlan).not.toHaveBeenCalled();
@@ -475,7 +490,11 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
           progress.push(event);
         },
       }),
-    ).rejects.toThrow(/dashboard scope/i);
+    ).rejects.toMatchObject({
+      stage: 'pm-review-match',
+      retryable: false,
+      mismatches: ['Tech spec dropped the approved dashboard scope'],
+    });
 
     expect(progress.filter((event) => event.stage).map((event) => event.stage)).toEqual([
       'tech-lead-breakdown',
@@ -486,6 +505,21 @@ describe('planning-roles — runDownstreamPlan progress events (project 20 test-
     expect(terminal!.terminal).toMatch(/pm review|mismatch|dashboard scope/i);
     expect(progress.some((event) => event.stage === 'claude-critique')).toBe(false);
     expect(progress.some((event) => event.success)).toBe(false);
+    expect(mockPlanningLog.info).toHaveBeenCalledWith('downstream planning stage started', {
+      product: PM_SPEC_APPROVAL.product,
+      stage: 'tech-lead-breakdown',
+    });
+    expect(mockPlanningLog.info).toHaveBeenCalledWith('downstream planning stage started', {
+      product: PM_SPEC_APPROVAL.product,
+      stage: 'pm-review-match',
+    });
+    expect(mockPlanningLog.error).toHaveBeenCalledWith('downstream planning failed', {
+      product: PM_SPEC_APPROVAL.product,
+      stage: 'pm-review-match',
+      reason: 'PM review mismatch: Tech spec dropped the approved dashboard scope',
+      retryable: false,
+      mismatches: ['Tech spec dropped the approved dashboard scope'],
+    });
   });
 
   it('emits a terminal progress event when context seed fails after the context-seed stage starts', async () => {

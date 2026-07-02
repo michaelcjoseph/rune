@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { MessageSender } from '../../transport/sender.js';
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 /*
  * approve.ts is now a thin orchestrator: it gates (normal vs retry path) and maps the shared
  * `runScaffoldApproval` outcome to a chat reply + a delete-vs-keep decision. The heavy lifting
@@ -15,7 +24,7 @@ vi.mock('../../config.js', () => ({
 }));
 
 vi.mock('../../utils/logger.js', () => ({
-  createLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() }),
+  createLogger: () => mockLogger,
 }));
 
 vi.mock('../../reviews/planning.js', () => ({
@@ -140,6 +149,22 @@ function approvedPmSpecReadySession(over: Record<string, unknown> = {}) {
 
 function okOutcome(over: Record<string, unknown> = {}) {
   return { ok: true, slug: '09-test', agentText: 'Created docs/projects/09-test/spec.md', promotion: 'none', ...over };
+}
+
+function downstreamMismatchError(mismatches: string[]): Error & {
+  stage: string;
+  reason: string;
+  mismatches: string[];
+  retryable: false;
+} {
+  const reason = `PM review mismatch: ${mismatches.join('; ')}`;
+  return Object.assign(new Error(reason), {
+    name: 'PlanningDownstreamError',
+    stage: 'pm-review-match',
+    reason,
+    mismatches,
+    retryable: false as const,
+  });
 }
 
 describe('handleApprove — gating', () => {
@@ -358,6 +383,48 @@ describe('handleApprove — PM-spec approval persistence (project 20 test-plan �
     expect(terminal).not.toContain('/test/project');
     expect(terminal).toContain('<project>');
     expect(messages.some((message) => /run \/approve again/i.test(message))).toBe(true);
+  });
+
+  it('logs and explains non-retryable PM review mismatches without blind retry advice', async () => {
+    const session = approvedSession({
+      planning: {
+        status: 'approved' as const,
+        product: 'rune',
+        idea: 'build something cool',
+        surface: 'chat' as const,
+        approvedSpec: PM_SPEC_ARTIFACT,
+      },
+    });
+    approveActivePlanningSessionMock.mockReturnValue({ ok: true, session });
+    runDownstreamPlanMock.mockRejectedValue(
+      downstreamMismatchError([
+        'Tech spec dropped the approved home-card scope at /test/project/private-plan.md',
+      ]),
+    );
+
+    const sender = makeSender();
+    await handleApprove(sender, 100);
+
+    expect(runScaffoldApprovalMock).not.toHaveBeenCalled();
+    expect(updatePlanningSessionMock).not.toHaveBeenCalled();
+    expect(deletePlanningSessionMock).not.toHaveBeenCalled();
+    expect(mockLogger.error).toHaveBeenCalledWith('planning approval failed', {
+      userId: 100,
+      product: 'rune',
+      stage: 'pm-review-match',
+      retryable: false,
+      error: expect.stringContaining('<project>'),
+    });
+    const messages = vi.mocked(sender.send).mock.calls.map(([, message]) => String(message));
+    const combined = messages.join('\n');
+    expect(combined).toMatch(/Planning session is still approved/i);
+    expect(combined).toMatch(/home-card scope/i);
+    expect(combined).toMatch(/blind retry is unlikely/i);
+    expect(combined).toMatch(/amend the spec\/DoD/i);
+    expect(combined).toMatch(/manual live release-gate task/i);
+    expect(combined).not.toContain('/test/project');
+    expect(combined).toContain('<project>');
+    expect(messages.some((message) => /run \/approve again to retry/i.test(message))).toBe(false);
   });
 
   it('surfaces a scrubbed context-seed terminal line when downstream planning fails during context seed', async () => {

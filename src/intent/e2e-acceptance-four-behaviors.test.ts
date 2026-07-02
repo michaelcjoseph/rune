@@ -342,7 +342,9 @@ describe('e2e-acceptance-four-behaviors', () => {
     expect(messages).toContain('Planning progress: tech-lead breakdown.');
     expect(messages).toContain('Planning progress: PM review.');
     expect(messages.some((message) => /Planning stopped: PM review mismatch/i.test(message))).toBe(true);
-    expect(messages.some((message) => /still approved.*\/approve again to retry/i.test(message))).toBe(true);
+    expect(messages.some((message) => /still approved.*blind retry is unlikely/i.test(message))).toBe(true);
+    expect(messages.some((message) => /amend the spec\/DoD|manual live release-gate task/i.test(message))).toBe(true);
+    expect(messages.some((message) => /\/approve again to retry/i.test(message))).toBe(false);
     expect(messages.join('\n')).not.toMatch(/approve generated tasks|approve tech-spec|approve tasks/i);
     expect(getPlanningSession(CHAT_ID)?.planning.status).toBe('approved');
     expect(mockRunScaffoldApproval).not.toHaveBeenCalled();

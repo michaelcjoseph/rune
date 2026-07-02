@@ -8,6 +8,19 @@ import { WebSocket } from 'ws';
 
 // --- Mocks must be declared before any imports that pull in the mocked modules ---
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock('../utils/logger.js', () => ({
+  createLogger: () => mockLogger,
+}));
+
 // Mutation mocks (used by the Phase E route tests appended below)
 const mockCreateMutation = vi.fn();
 const mockCancelMutation = vi.fn();
@@ -764,6 +777,22 @@ describe('server/webview', () => {
       context: '# Context',
     };
 
+    function downstreamMismatchError(mismatches: string[]): Error & {
+      stage: string;
+      reason: string;
+      mismatches: string[];
+      retryable: false;
+    } {
+      const reason = `PM review mismatch: ${mismatches.join('; ')}`;
+      return Object.assign(new Error(reason), {
+        name: 'PlanningDownstreamError',
+        stage: 'pm-review-match',
+        reason,
+        mismatches,
+        retryable: false as const,
+      });
+    }
+
     function approvedPmSpecSession(over: Record<string, unknown> = {}) {
       return {
         id: 'pm-spec-plan-webview',
@@ -906,6 +935,45 @@ describe('server/webview', () => {
       expect(success).toMatch(/20-downstream-plan/);
       expect(success).toMatch(/Created docs\/projects\/20-downstream-plan\/spec\.md/i);
       expect(mockWebviewSender.send.mock.calls.every((call) => call[2]?.approval === undefined)).toBe(true);
+    });
+
+    it('logs and returns actionable non-retryable PM mismatch guidance without retry text', async () => {
+      (approveActivePlanningSession as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        session: approvedPmSpecSession(),
+      });
+      (runDownstreamPlan as ReturnType<typeof vi.fn>).mockRejectedValue(
+        downstreamMismatchError([
+          'Tech spec dropped the approved cockpit scope at /test/project/private-plan.md',
+        ]),
+      );
+
+      const res = await makeRequest(port, '/api/planning/approve', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(500);
+      expect(runScaffoldApproval).not.toHaveBeenCalled();
+      expect(updatePlanningSession).not.toHaveBeenCalled();
+      expect(deletePlanningSession).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith('planning approval failed', {
+        userId: 42,
+        product: 'rune',
+        stage: 'pm-review-match',
+        retryable: false,
+        error: expect.stringContaining('<project>'),
+      });
+      const messages = mockWebviewSender.send.mock.calls.map(([, message]) => String(message));
+      const combined = `${messages.join('\n')}\n${String(res.body.error)}`;
+      expect(combined).toMatch(/Planning session is still approved/i);
+      expect(combined).toMatch(/cockpit scope/i);
+      expect(combined).toMatch(/blind retry is unlikely/i);
+      expect(combined).toMatch(/amend the spec\/DoD/i);
+      expect(combined).toMatch(/manual live release-gate task/i);
+      expect(combined).not.toContain('/test/project');
+      expect(combined).toContain('<project>');
+      expect(combined).not.toMatch(/click approve again|run \/approve again/i);
     });
 
     it('registers the webview approval pipeline as a cancellable in-flight op and marks it successful after scaffold success', async () => {
