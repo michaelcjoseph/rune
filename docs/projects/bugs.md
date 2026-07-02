@@ -35,6 +35,15 @@
     - B. Capture and log the model-call stderr (scrubbed), not just the exit code — a bare "exited with code 1" cannot distinguish rate-limit / auth / transient from a real defect.
     - C. Log the resolved model + provider that actually executed each self-review, so the codex-coder-reviewed-by-Claude routing (and any future divergence) is auditable from the logs. Separately decide whether the coder self-review *should* run on the coder's own model rather than the judgment path.
     - D. Prevent at plan time: the tech-lead logging lesson filed 2026-07-02 (`agents/tech-lead/memory.md`) requires future tech specs and task lists to specify logging for every new path and to treat missing logging as a review objection.
+- [ ] An agent's self-review must run on that agent's own defined model, not a hardcoded judgment model — applies to every role (PM, tech-lead, coder). **(project 20 — self-review correctness; direction set by operator 2026-07-02.)**
+  - **Issue**
+    - The coder self-review (`src/jobs/team-task-deps.ts:931`) issues its model call through `seams.judgmentCall` with `model: models.coder.alias`, but the default `judgmentCall` (`:207`) always calls `askClaudeWithContext` (Claude) and **ignores the `model` argument**. So a codex coder's self-review runs on Claude, not codex. Confirmed live: the project-21 run's coder was `openai/gpt-5.5`, yet the self-review failed as `component:claude "Claude exited with code 1"`.
+    - A self-review's premise is that the SAME agent re-reads and fixes its own artifact in a fresh context. Running it on a different model breaks that premise — it becomes an unlabeled cross-model review — and silently couples every role's self-review to Claude's availability and rate limits. The `runSelfReview` primitive (`src/intent/self-review.ts`) is model-agnostic; only the wiring pins it to Claude.
+    - This applies to ALL roles with a self-review (PM spec, tech-lead tech-spec/tasks, coder diff), not just the coder. Each role's self-review must resolve and use that role's configured model/provider via the model policy — the same one that produced the artifact.
+  - **Fix options**
+    - A. Route each role's self-review `modelCall` to that role's resolved model (via the model-policy resolver / the same seam that ran the role's primary call), so the `model` argument actually selects the provider instead of being ignored.
+    - B. If a deliberate cross-model "second opinion" is ever wanted, make it an explicit, named reviewer step — never a mislabeled "self-review" that quietly uses a different model.
+    - C. Pairs with the logging bug above: log the resolved model/provider each self-review actually used, so any divergence is visible immediately.
 - [ ] Operations container should show stream in reverse descending order starting with most recent at the top instead of most recent at the bottom.
 - [ ] /fresh is failing
   - Keep getting errors like this: `Could not summarize conversation — session reset. Error: No conversation found with session ID: 5f3dadf7-b327-418f-acb0-6cbb94b9945d`
