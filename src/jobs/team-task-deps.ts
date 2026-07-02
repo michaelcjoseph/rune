@@ -72,6 +72,7 @@ import {
 import type { DispatchProvider } from '../intent/dispatch.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
 import type { SizedTask } from '../intent/planning-roles.js';
+import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { redactSecrets } from './work-run-transcript.js';
 import { createLogger } from '../utils/logger.js';
@@ -1064,12 +1065,13 @@ export interface TaskWorkflowRunnerArgs {
  *  carries no sizing metadata, so v1 uses conservative defaults: tests
  *  required, no designer (spec req 24's non-flagged default). */
 function toSizedTask(task: SelectedTask): SizedTask {
+  const manualLiveGate = isManualLiveGateTask(task);
   return {
     id: task.id,
     text: task.text,
-    testStrategy: 'code-tests-required',
+    testStrategy: manualLiveGate ? 'manual-live-gate' : 'code-tests-required',
     designerNeeded: false,
-    roles: ['qa', 'tech-lead', 'coder', 'reviewer'],
+    roles: manualLiveGate ? ['human'] : ['qa', 'tech-lead', 'coder', 'reviewer'],
   };
 }
 
@@ -1084,6 +1086,17 @@ function blockedEvidence(task: SelectedTask, reason: string): TaskEvidence {
     findingsLedger: [],
     loopExitReason: 'operational',
   };
+}
+
+function isManualLiveGateTask(task: SelectedTask): boolean {
+  return task.text.includes(MANUAL_LIVE_GATE_MARKER);
+}
+
+function manualLiveGateEvidence(task: SelectedTask): TaskEvidence {
+  return blockedEvidence(
+    task,
+    'manual/live release gate requires operator evidence; automated QA/coder/reviewer workflow is intentionally skipped',
+  );
 }
 
 function bindingForRole(models: TeamRoleModels, role: string): RoleModelBinding | null {
@@ -1170,6 +1183,10 @@ export function createProductionTaskWorkflowRunner(
   ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
 ) => Promise<TaskEvidence> {
   return async (task, ctx) => {
+    if (isManualLiveGateTask(task)) {
+      return manualLiveGateEvidence(task);
+    }
+
     let policy: ModelPolicy | null;
     try {
       policy = loadModelPolicy(args.modelPolicyPath);

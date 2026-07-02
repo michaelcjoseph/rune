@@ -16,6 +16,7 @@ const TASKS: SizedTask[] = [
   { id: 'p1-core', text: 'Streak core', phase: 'Phase 1 - Core', testStrategy: 'code-tests-required', designerNeeded: false, roles: ['qa', 'coder'] },
   { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'code-tests-required', designerNeeded: true, roles: ['designer'] },
   { id: 'p3-docs', text: 'README', phase: 'Phase 2 - UI', testStrategy: 'docs-or-config-only', designerNeeded: false, roles: ['coder'] },
+  { id: 'p4-live-gate', text: 'Operator verifies the live streak card before release', phase: 'Phase 3 - Release', testStrategy: 'manual-live-gate', designerNeeded: false, roles: ['human'] },
 ];
 
 const PLANNED: Extract<PlanningRolesOutcome, { kind: 'planned' }> = {
@@ -43,6 +44,8 @@ describe('sizedTasksToMarkdown', () => {
     expect(md).toContain('Tests for **p2-card**');
     // The docs-only task is not a write-first test target.
     expect(md).not.toContain('Tests for **p3-docs**');
+    // The manual/live gate is not an automatable write-first test target.
+    expect(md).not.toContain('Tests for **p4-live-gate**');
   });
 
   it('annotates each task with its test strategy and flags designer-needed', () => {
@@ -50,16 +53,19 @@ describe('sizedTasksToMarkdown', () => {
     expect(md).toContain('**p1-core** — Streak core');
     expect(md).toContain('Test strategy: `docs-or-config-only`');
     expect(md).toContain('**p2-card** — Home card _(designer review)_');
+    expect(md).toContain('**p4-live-gate** — Operator verifies the live streak card before release *(manual/live - not automatable)*');
+    expect(md).toContain('Test strategy: `manual-live-gate`');
   });
 
   it('groups tasks into milestone sections by phase, in first-seen order', () => {
     const md = sizedTasksToMarkdown(TASKS);
     expect(md).toContain('## Phase 1 - Core');
     expect(md).toContain('## Phase 2 - UI');
+    expect(md).toContain('## Phase 3 - Release');
     // Phase 1 heading comes before Phase 2.
     expect(md.indexOf('## Phase 1 - Core')).toBeLessThan(md.indexOf('## Phase 2 - UI'));
     // Each phase carries its own Tests (write first) block.
-    expect((md.match(/### Tests \(write first\)/g) ?? []).length).toBe(2);
+    expect((md.match(/### Tests \(write first\)/g) ?? []).length).toBe(3);
     // p2-card and p3-docs live under Phase 2, after the Phase 2 heading.
     expect(md.indexOf('**p2-card**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
     expect(md.indexOf('**p3-docs**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
@@ -82,6 +88,9 @@ describe('deriveTestPlan', () => {
     expect(plan).toContain('Tests required (write first)');
     expect(plan).toContain('Docs / config only');
     expect(plan).toContain('**p3-docs**: README');
+    expect(plan).toContain('Manual/live release gates');
+    expect(plan).toContain('**p4-live-gate**: Operator verifies the live streak card before release');
+    expect(plan).toContain('Expected operator evidence');
   });
 
   it('omits a strategy section with no tasks', () => {

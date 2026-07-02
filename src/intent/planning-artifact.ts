@@ -25,7 +25,10 @@ const STRATEGY_LABEL: Record<TestStrategy, string> = {
   'code-tests-required': 'Tests required (write first)',
   'docs-or-config-only': 'Docs / config only (reviewed no-code-test rationale)',
   'tests-as-deliverable': 'Tests as deliverable',
+  'manual-live-gate': 'Manual/live release gates',
 };
+
+export const MANUAL_LIVE_GATE_MARKER = '*(manual/live - not automatable)*';
 
 /** Phase label for tasks the tech lead left unlabeled. */
 const DEFAULT_PHASE = 'Phase 1';
@@ -72,7 +75,8 @@ export function sizedTasksToMarkdown(tasks: readonly SizedTask[]): string {
 
     for (const t of phaseTasks) {
       const designer = t.designerNeeded ? ' _(designer review)_' : '';
-      lines.push(`- [ ] **${t.id}** — ${t.text}${designer}`);
+      const manualGate = t.testStrategy === 'manual-live-gate' ? ` ${MANUAL_LIVE_GATE_MARKER}` : '';
+      lines.push(`- [ ] **${t.id}** — ${t.text}${designer}${manualGate}`);
       lines.push(`  - Test strategy: \`${t.testStrategy}\``);
       if (t.roles.length > 0) {
         lines.push(`  - Roles: ${t.roles.join(', ')}`);
@@ -104,13 +108,19 @@ export function deriveTestPlan(tasks: readonly SizedTask[]): string {
     'code-tests-required',
     'tests-as-deliverable',
     'docs-or-config-only',
+    'manual-live-gate',
   ];
   for (const strategy of strategies) {
     const matching = tasks.filter((t) => t.testStrategy === strategy);
     if (matching.length === 0) continue;
     lines.push(`## ${STRATEGY_LABEL[strategy]}`, '');
     for (const t of matching) {
-      lines.push(`- **${t.id}**: ${t.text}`);
+      if (strategy === 'manual-live-gate') {
+        lines.push(`- **${t.id}**: ${t.text}`);
+        lines.push('  - Expected operator evidence: record the live/browser/integration check result before release.');
+      } else {
+        lines.push(`- **${t.id}**: ${t.text}`);
+      }
     }
     lines.push('');
   }

@@ -37,7 +37,11 @@ const log = createLogger('planning-roles');
 /** Per-task test strategy the tech lead assigns during sizing (spec §"Task test
  *  strategy"). Drives whether QA writes code tests, records a no-code-test
  *  rationale, or owns the tests as the deliverable. */
-export type TestStrategy = 'code-tests-required' | 'docs-or-config-only' | 'tests-as-deliverable';
+export type TestStrategy =
+  | 'code-tests-required'
+  | 'docs-or-config-only'
+  | 'tests-as-deliverable'
+  | 'manual-live-gate';
 
 /** One sized task from the tech lead's breakdown. `designerNeeded` is the
  *  EXPLICIT front-end / designer-needed flag (spec req 7) so designer routing
@@ -98,6 +102,12 @@ export interface SpecMatchResult {
   match: boolean;
   /** Concrete drift items when `match` is false. */
   mismatches: string[];
+  /** Repaired tech spec when PM can reconcile the mismatch without changing the approved spec. */
+  repairedTechSpec?: string;
+  /** Repaired task breakdown when PM can reconcile the mismatch without changing the approved spec. */
+  repairedTasks?: SizedTask[];
+  /** Human-readable summary of the PM repair. */
+  repairSummary?: string;
 }
 
 /** The injected planner-role seams. */
@@ -251,33 +261,45 @@ export async function runPlannerRoles(
     tasks: techLead.tasks,
   });
 
-  // Gate 2: PM-flagged spec/tech-spec drift → surface it, do NOT pass it through
-  // and do NOT seed context (planning did not complete). The critique never
-  // runs on a mismatched plan — it sharpens a coherent plan, not a broken one.
+  const reviewedPlan = applyPmReviewRepair(techLead, review);
+
+  // Gate 2: PM-flagged spec/tech-spec drift without a repair → surface it, do
+  // NOT pass it through and do NOT seed context (planning did not complete).
+  // A PM-provided repair is treated as the corrected coherent plan, so critique
+  // can sharpen it instead of dead-ending an approved spec.
   if (!review.match) {
-    return {
-      kind: 'spec-mismatch',
-      spec,
-      assumptions,
-      techSpec: techLead.techSpec,
-      tasks: techLead.tasks,
-      mismatches: review.mismatches,
-    };
+    if (reviewedPlan !== null) {
+      log.info('PM review repaired planning mismatch', {
+        product: input.product,
+        mismatches: review.mismatches.map((mismatch) => scrubAbsolutePaths(mismatch)),
+        ...(review.repairSummary ? { repairSummary: scrubAbsolutePaths(review.repairSummary) } : {}),
+      });
+    } else {
+      return {
+        kind: 'spec-mismatch',
+        spec,
+        assumptions,
+        techSpec: techLead.techSpec,
+        tasks: techLead.tasks,
+        mismatches: review.mismatches,
+      };
+    }
   }
+  const matchedTechLead = reviewedPlan ?? techLead;
 
   // Phase 9: cross-model critique pass over the assembled spec/tech-spec/tasks,
   // AFTER the match gate and BEFORE the context seed, so its revision feeds both
   // the seed and the human approval surface (every critique change stays
   // human-gated). Optional seam: when absent the plan passes through unchanged.
   let critiquedSpec = spec;
-  let critiquedTechSpec = techLead.techSpec;
-  let critiquedTasks = techLead.tasks;
+  let critiquedTechSpec = matchedTechLead.techSpec;
+  let critiquedTasks = matchedTechLead.tasks;
   let codexCritiqueSkipped = false;
   if (deps.critiquePlan) {
     const critique = await deps.critiquePlan({
       spec,
-      techSpec: techLead.techSpec,
-      tasks: techLead.tasks,
+      techSpec: matchedTechLead.techSpec,
+      tasks: matchedTechLead.tasks,
     });
     // Re-guarantee the Assumptions section in case the critique reshaped the
     // spec body (req 6 holds regardless of how the critic formatted its output).
@@ -310,7 +332,7 @@ export async function runPlannerRoles(
     techSpec: critiquedTechSpec,
     tasks: critiquedTasks,
     context,
-    perProjectExemplars: techLead.perProjectExemplars,
+    perProjectExemplars: matchedTechLead.perProjectExemplars,
     codexCritiqueSkipped,
   };
 }
@@ -420,10 +442,20 @@ export async function runDownstreamPlan(
     });
   }
   if (!review.match) {
-    const message = `PM review mismatch: ${review.mismatches.join('; ')}`;
-    return await failStage('pm-review-match', message, {
-      mismatches: review.mismatches,
-      retryable: false,
+    const repaired = applyPmReviewRepair(reviewedTechLead, review);
+    if (repaired === null) {
+      const message = `PM review mismatch: ${review.mismatches.join('; ')}`;
+      return await failStage('pm-review-match', message, {
+        mismatches: review.mismatches,
+        retryable: false,
+      });
+    }
+    reviewedTechLead = repaired;
+    log.info('PM review repaired downstream planning mismatch', {
+      product: approvedSpec.product,
+      stage: 'pm-review-match',
+      mismatches: review.mismatches.map((mismatch) => scrubAbsolutePaths(mismatch)),
+      ...(review.repairSummary ? { repairSummary: scrubAbsolutePaths(review.repairSummary) } : {}),
     });
   }
 
@@ -599,7 +631,20 @@ function parseSelfReviewedTask(raw: unknown, index: number): SizedTask {
 function isTestStrategy(value: unknown): value is TestStrategy {
   return value === 'code-tests-required' ||
     value === 'docs-or-config-only' ||
-    value === 'tests-as-deliverable';
+    value === 'tests-as-deliverable' ||
+    value === 'manual-live-gate';
+}
+
+function applyPmReviewRepair(original: TechLeadResult, review: SpecMatchResult): TechLeadResult | null {
+  if (review.match) return original;
+  if (!review.repairedTechSpec || !review.repairedTasks || review.repairedTasks.length === 0) {
+    return null;
+  }
+  return {
+    techSpec: review.repairedTechSpec,
+    tasks: review.repairedTasks,
+    ...(original.perProjectExemplars ? { perProjectExemplars: original.perProjectExemplars } : {}),
+  };
 }
 
 function parseSelfReviewedPerProjectExemplars(raw: unknown): PerProjectExemplars | undefined {

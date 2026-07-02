@@ -44,6 +44,7 @@ import {
 } from '../intent/team-task-workflow.js';
 import type { SizedTask } from '../intent/planning-roles.js';
 import type { SelectedTask } from '../intent/orch-task-select.js';
+import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import type { ExecutionAgentResult } from './execution-agent.js';
 
@@ -1274,5 +1275,35 @@ describe('no-stub regression (Phase 8)', () => {
 
     expect(evidence.outcome).toBe('blocked');
     expect(evidence.blockedReason ?? '').toMatch(/model policy/i);
+  });
+
+  it('manual/live gate tasks park for operator evidence without invoking the role workflow', async () => {
+    const manualTask: SelectedTask = {
+      id: 'live-release-gate',
+      text: `**live-release-gate** — Operator verifies the live browser path ${MANUAL_LIVE_GATE_MARKER}`,
+      section: 'Phase 3 - Release',
+    };
+    const run = createProductionTaskWorkflowRunner(
+      {
+        sandbox: makeSandbox(),
+        productsConfigPath: '/nonexistent/products.json',
+        modelPolicyPath: '/nonexistent/model-policy.json',
+      },
+      makeSeams({
+        runExecution: async () => {
+          throw new Error('manual gates must not invoke QA/coder execution');
+        },
+        judgmentCall: async () => {
+          throw new Error('manual gates must not invoke judgment roles');
+        },
+      }),
+    );
+
+    const evidence = await run(manualTask, { handoff: 'h', contextMd: 'c' });
+
+    expect(evidence.outcome).toBe('blocked');
+    expect(evidence.rolesInvoked).toEqual([]);
+    expect(evidence.blockedReason).toMatch(/manual\/live release gate/i);
+    expect(evidence.blockedReason).toMatch(/operator evidence/i);
   });
 });

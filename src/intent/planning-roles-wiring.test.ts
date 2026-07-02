@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  buildProductionCritiquePlan,
   buildPmRolePrompt,
   buildTechLeadRolePrompt,
   defaultPlanningRoleDeps,
@@ -81,6 +82,26 @@ const BREAKDOWN_REPLY = [
       { id: 'p2-card', text: 'Home card', phase: 'Phase 2 - UI', testStrategy: 'bogus-strategy', designerNeeded: true, roles: ['designer'] },
     ],
   }),
+  '```',
+].join('\n');
+
+const BREAKDOWN_WITH_MANUAL_GATE_REPLY = [
+  '```tech-breakdown',
+  JSON.stringify({
+    tasks: [
+      {
+        id: 'live-release-gate',
+        text: 'Operator verifies the workflow in a live browser',
+        phase: 'Phase 3 - Release',
+        testStrategy: 'manual-live-gate',
+        designerNeeded: false,
+        roles: ['human'],
+      },
+    ],
+  }),
+  '```',
+  '```tech-spec',
+  'Tech spec with manual release evidence.',
   '```',
 ].join('\n');
 
@@ -262,6 +283,8 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     const systemPrompt = seenSystem['tech-lead'] ?? '';
     expect(systemPrompt).toContain('```tech-breakdown');
     expect(systemPrompt).toContain('"testStrategy"');
+    expect(systemPrompt).toContain('manual-live-gate');
+    expect(systemPrompt).toContain('real operator/browser');
     expect(systemPrompt).toContain('"perProjectExemplars"');
     expect(systemPrompt.indexOf('"testStrategy"')).toBeLessThan(
       systemPrompt.indexOf('"perProjectExemplars"'),
@@ -346,6 +369,19 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     expect(result.tasks.find((t) => t.id === 'p2-card')?.testStrategy).toBe('code-tests-required');
   });
 
+  it('accepts manual-live-gate as a first-class test strategy', async () => {
+    const { call } = stubModelCall({ 'tech-lead': BREAKDOWN_WITH_MANUAL_GATE_REPLY });
+    const result = await defaultPlanningRoleDeps(call).techLeadBreakdown({
+      brief: 'x',
+      product: 'aura',
+      spec: 's',
+    });
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.testStrategy).toBe('manual-live-gate');
+    expect(result.tasks[0]?.roles).toEqual(['human']);
+  });
+
   it('THROWS on an unparseable breakdown — an empty plan must never reach scaffolding', async () => {
     const { call } = stubModelCall({ 'tech-lead': 'no breakdown block' });
     await expect(
@@ -362,10 +398,93 @@ describe('planning-roles-wiring — PM review seam', () => {
     expect(result.match).toBe(true);
   });
 
+  it('parses PM-repaired tech spec and repaired tasks on mismatch', async () => {
+    const repairedTasks = [
+      {
+        id: 'live-release-gate',
+        text: 'Operator captures live browser evidence before release',
+        phase: 'Phase 3 - Release',
+        testStrategy: 'manual-live-gate',
+        designerNeeded: false,
+        roles: ['human'],
+      },
+    ];
+    const reply = [
+      '```pm-review',
+      JSON.stringify({
+        match: false,
+        mismatches: ['The approved DoD requires live evidence.'],
+        repairSummary: 'Added a manual/live release gate.',
+        repairedTasks,
+      }),
+      '```',
+      '```pm-repaired-tech-spec',
+      'Repaired tech spec preserves the approved scope and adds live release evidence.',
+      '```',
+    ].join('\n');
+    const { call } = stubModelCall({ pm: [reply] });
+
+    const result = await defaultPlanningRoleDeps(call).pmReviewMatch({
+      spec: 's',
+      techSpec: 't',
+      tasks: [],
+    });
+
+    expect(result).toMatchObject({
+      match: false,
+      mismatches: ['The approved DoD requires live evidence.'],
+      repairSummary: 'Added a manual/live release gate.',
+      repairedTechSpec: expect.stringContaining('live release evidence'),
+    });
+    expect(result.repairedTasks?.[0]?.testStrategy).toBe('manual-live-gate');
+  });
+
+  it('asks PM review to repair missing scope and manual/live gates instead of only judging', async () => {
+    const { call, seenSystem } = stubModelCall({
+      pm: [['```pm-review', JSON.stringify({ match: true, mismatches: [] }), '```'].join('\n')],
+    });
+    await defaultPlanningRoleDeps(call).pmReviewMatch({ spec: 's', techSpec: 't', tasks: [] });
+
+    expect(seenSystem['pm']).toContain('REPAIR');
+    expect(seenSystem['pm']).toContain('manual-live-gate');
+    expect(seenSystem['pm']).toContain('do not rubber-stamp');
+  });
+
   it('FAIL-CLOSED: an unparseable review reports a mismatch, never a silent pass', async () => {
     const { call } = stubModelCall({ pm: ['prose, no fence'] });
     const result = await defaultPlanningRoleDeps(call).pmReviewMatch({ spec: 's', techSpec: 't', tasks: [] });
     expect(result.match).toBe(false);
     expect(result.mismatches.length).toBeGreaterThan(0);
+  });
+});
+
+describe('planning-roles-wiring — critique prompt', () => {
+  it('tells the critique pass to preserve and add manual-live-gate tasks', async () => {
+    let seenClaude = '';
+    const critiquePlan = buildProductionCritiquePlan({
+      claudeCall: async (_system, message) => {
+        seenClaude = message;
+        return '';
+      },
+      isCodexAvailable: async () => false,
+    });
+
+    await critiquePlan({
+      spec: 'spec',
+      techSpec: 'tech',
+      tasks: [
+        {
+          id: 'task',
+          text: 'task',
+          testStrategy: 'code-tests-required',
+          designerNeeded: false,
+          roles: ['qa'],
+        },
+      ],
+    });
+
+    expect(seenClaude).toContain('manual-live-gate');
+    expect(seenClaude).toContain('Preserve `manual-live-gate` tasks');
+    expect(seenClaude).toContain('automated tests cannot prove');
   });
 });

@@ -223,6 +223,45 @@ describe('planning-roles — spec/tech-spec match', () => {
     expect(outcome.kind).toBe('spec-mismatch');
     expect('context' in outcome).toBe(false);
   });
+
+  it('continues with PM-repaired tech spec and tasks when a mismatch is repairable', async () => {
+    const repairedTasks: SizedTask[] = [
+      {
+        id: 'live-release-gate',
+        text: 'Operator verifies the streak card in a live browser before release',
+        phase: 'Phase 2 - Release',
+        testStrategy: 'manual-live-gate',
+        designerNeeded: false,
+        roles: ['human'],
+      },
+    ];
+    const critiquePlan = vi.fn(async (
+      plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0],
+    ) => ({ plan, codexSkipped: false }));
+    const outcome = await runPlannerRoles(
+      INPUT,
+      makeDeps({
+        pmReviewMatch: async () => ({
+          match: false,
+          mismatches: ['The Definition of Done requires live browser verification.'],
+          repairedTechSpec: 'Repaired tech spec includes a live release gate.',
+          repairedTasks,
+          repairSummary: 'Added the missing manual/live gate.',
+        }),
+        critiquePlan,
+      }),
+    );
+
+    expect(outcome.kind).toBe('planned');
+    if (outcome.kind !== 'planned') throw new Error(`expected planned, got ${outcome.kind}`);
+    expect(outcome.techSpec).toContain('live release gate');
+    expect(outcome.tasks).toEqual(repairedTasks);
+    expect(critiquePlan).toHaveBeenCalledWith(expect.objectContaining({
+      techSpec: 'Repaired tech spec includes a live release gate.',
+      tasks: repairedTasks,
+    }));
+    expect(outcome.context).toContain('Operator verifies');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -237,7 +276,7 @@ describe('planning-roles — task sizing', () => {
     expect(outcome.tasks).toHaveLength(3);
     // Every task carries a test strategy and an explicit designer-needed flag.
     for (const task of outcome.tasks) {
-      expect(['code-tests-required', 'docs-or-config-only', 'tests-as-deliverable']).toContain(
+      expect(['code-tests-required', 'docs-or-config-only', 'tests-as-deliverable', 'manual-live-gate']).toContain(
         task.testStrategy,
       );
       expect(typeof task.designerNeeded).toBe('boolean');
@@ -417,6 +456,45 @@ describe('planning-roles — runDownstreamPlan approval split (project 20 test-p
     expect(deps.pmAssessAndSpec).not.toHaveBeenCalled();
     expect(deps.pmReviewMatch).toHaveBeenCalledOnce();
     expect(critiquePlan).not.toHaveBeenCalled();
+  });
+
+  it('uses PM-repaired artifacts after a downstream review mismatch and preserves manual-live-gate tasks', async () => {
+    const repairedTasks: SizedTask[] = [
+      {
+        id: 'live-release-gate',
+        text: 'Operator verifies the approved streak workflow against a live browser session',
+        phase: 'Phase 3 - Release',
+        testStrategy: 'manual-live-gate',
+        designerNeeded: false,
+        roles: ['human'],
+      },
+    ];
+    const critiquePlan = vi.fn(async (
+      plan: Parameters<NonNullable<PlanningRoleDeps['critiquePlan']>>[0],
+    ) => ({ plan, codexSkipped: false }));
+
+    const artifact = await runDownstreamPlanForTest(makeDeps({
+      pmAssessAndSpec: vi.fn(async (): Promise<PmSpecResult> => {
+        throw new Error('the retired specified-enough gate must not run post-approval');
+      }),
+      pmReviewMatch: vi.fn(async () => ({
+        match: false,
+        mismatches: ['Approved DoD requires live operator evidence.'],
+        repairedTechSpec: 'Repaired downstream tech spec with release evidence gate.',
+        repairedTasks,
+        repairSummary: 'Added manual/live release gate.',
+      })),
+      critiquePlan,
+    }));
+
+    expect(artifact.techSpec).toContain('release evidence gate');
+    expect(artifact.tasks).toContain('manual/live - not automatable');
+    expect(artifact.tasks).toContain('Test strategy: `manual-live-gate`');
+    expect(artifact.testPlan).toContain('Manual/live release gates');
+    expect(critiquePlan).toHaveBeenCalledWith(expect.objectContaining({
+      techSpec: 'Repaired downstream tech spec with release evidence gate.',
+      tasks: repairedTasks,
+    }));
   });
 });
 

@@ -225,7 +225,11 @@ const TECH_LEAD_INSTRUCTION = [
   '```',
   '',
   'Set designerNeeded true ONLY for front-end / UX tasks. Every task needs a',
-  'testStrategy from the three allowed values and a phase label. Include',
+  'testStrategy from the allowed values and a phase label. Use `manual-live-gate`',
+  'when the approved spec\'s Definition of Done requires real operator/browser/',
+  'integration verification that the automated suite cannot prove; make that task',
+  'an explicit release gate instead of pretending automated tests satisfy it.',
+  'Include',
   '`perProjectExemplars` only for roles that would benefit from a project-specific',
   'example of good output; keys must be role slugs and values must be markdown.',
 ].join('\n');
@@ -234,6 +238,7 @@ const TEST_STRATEGIES: readonly TestStrategy[] = [
   'code-tests-required',
   'docs-or-config-only',
   'tests-as-deliverable',
+  'manual-live-gate',
 ];
 
 /** Throws on an unparseable breakdown — an empty/garbage plan must never reach
@@ -307,14 +312,28 @@ function parseSizedTask(raw: unknown, index: number): SizedTask {
 const PM_REVIEW_INSTRUCTION = [
   'Below are your approved product spec and the tech lead\'s tech spec + task',
   'breakdown. As the product manager, confirm the technical plan still builds what',
-  'the product spec promised. Flag any drift — do not rubber-stamp it.',
+  'the product spec promised. Flag any drift — do not rubber-stamp it and do not',
+  'relax the approved spec.',
+  '',
+  'If the plan misses required scope or a required manual/live operator gate,',
+  'REPAIR the tech spec and tasks so they satisfy the approved spec. Add a',
+  '`manual-live-gate` task when the Definition of Done requires live operator,',
+  'browser, or integration evidence the automated suite cannot prove.',
   '',
   'Respond with EXACTLY ONE fenced ```pm-review block containing a JSON object,',
-  'and nothing after the fence:',
+  'unless you provide a repaired tech spec, in which case put that markdown in a',
+  'final ```pm-repaired-tech-spec block after the JSON. For a clean match:',
   '```pm-review',
   '{"match": true, "mismatches": []}',
   '```',
-  'or, when the tech plan drifts from the product intent:',
+  'When the tech plan drifts from the product intent but you can repair it:',
+  '```pm-review',
+  '{"match": false, "mismatches": ["<each concrete gap>"], "repairSummary": "<what you changed>", "repairedTasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required|docs-or-config-only|tests-as-deliverable|manual-live-gate", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
+  '```',
+  '```pm-repaired-tech-spec',
+  '<repaired markdown technical spec>',
+  '```',
+  'Only when the mismatch cannot be reconciled by revising tech spec/tasks:',
   '```pm-review',
   '{"match": false, "mismatches": ["<each concrete way the plan no longer builds the spec>"]}',
   '```',
@@ -332,10 +351,37 @@ function parsePmReview(text: string): SpecMatchResult {
     return { match: true, mismatches: [] };
   }
   const mismatches = isStringArray(v['mismatches']) ? v['mismatches'] : [];
+  const repairedTasks = Array.isArray(v['repairedTasks'])
+    ? parseRepairedTasks(v['repairedTasks'])
+    : undefined;
+  const repairedTechSpec =
+    extractFencedText(text, 'pm-repaired-tech-spec') ??
+    (typeof v['repairedTechSpec'] === 'string' && v['repairedTechSpec'].trim()
+      ? v['repairedTechSpec'].trim()
+      : undefined);
+  const repairSummary = typeof v['repairSummary'] === 'string' && v['repairSummary'].trim()
+    ? v['repairSummary'].trim()
+    : undefined;
   return {
     match: false,
     mismatches: mismatches.length > 0 ? mismatches : ['The PM flagged a mismatch without detail.'],
+    ...(repairedTechSpec && repairedTasks && repairedTasks.length > 0
+      ? {
+          repairedTechSpec,
+          repairedTasks,
+          ...(repairSummary ? { repairSummary } : {}),
+        }
+      : {}),
   };
+}
+
+function parseRepairedTasks(raw: unknown[]): SizedTask[] | undefined {
+  try {
+    const tasks = raw.map(parseSizedTask);
+    return tasks.length > 0 ? tasks : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +407,9 @@ const CRITIQUE_INSTRUCTION = [
   'Then return the REVISED artifacts — even if you changed nothing (a no-op is fine). Emit EXACTLY',
   'three fenced blocks, the JSON first and nothing after the last block. Keep each task object shaped',
   'like the input tasks (id, text, optional phase, testStrategy one of',
-  'code-tests-required|docs-or-config-only|tests-as-deliverable, designerNeeded boolean, roles array):',
+  'code-tests-required|docs-or-config-only|tests-as-deliverable|manual-live-gate, designerNeeded boolean, roles array).',
+  'Preserve `manual-live-gate` tasks, and add one if real-user usability depends',
+  'on live/operator/browser/integration verification that automated tests cannot prove:',
   '```critique-tasks',
   '{"tasks": [{"id": "<stable-slug>", "text": "<deliverable>", "phase": "Phase 1 - Core", "testStrategy": "code-tests-required", "designerNeeded": false, "roles": ["qa", "coder", "reviewer"]}]}',
   '```',
