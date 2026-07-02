@@ -31,6 +31,7 @@ const {
   mockConfig: {
     PLANNING_SESSIONS_FILE: '/test/planning-sessions.json',
     PLANNING_ARTIFACTS_DIR: '/test/planning-artifacts',
+    MODEL_POLICY_FILE: '/test/model-policy.json',
   },
   mockAskClaudeWithContext: vi.fn(),
   mockCleanupSession: vi.fn(),
@@ -43,6 +44,28 @@ vi.mock('../ai/claude.js', () => ({
 }));
 vi.mock('../roles/loader.js', () => ({
   composeRoleContext: mockComposeRoleContext,
+}));
+vi.mock('../intent/model-policy.js', () => ({
+  loadModelPolicy: vi.fn(() => ({
+    models: [
+      {
+        alias: 'opus',
+        provider: 'anthropic',
+        format: 'claude',
+        capabilities: [],
+        costTier: 'high',
+        status: 'preferred',
+      },
+    ],
+    globalFallback: 'opus',
+    roleDefaults: { pm: 'opus' },
+    evaluatorDistinctFromGenerator: true,
+  })),
+  resolveModel: vi.fn(() => ({
+    model: 'opus',
+    provider: 'anthropic',
+    rule: 'role-default',
+  })),
 }));
 
 // --- Imports under test ---
@@ -200,7 +223,7 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
     }));
     createPlanningSession(29, 'idea', 'chat', 'aura');
     const session = getPlanningSession(29)!;
-    mockAskClaudeWithContext.mockImplementationOnce(async (message, sessionId, systemPrompt) => {
+    mockAskClaudeWithContext.mockImplementationOnce(async (message, sessionId, systemPrompt, opts) => {
       expect(scopingTurn).toHaveBeenCalledOnce();
       expect(getPlanningSession(29)?.planning.status).toBe('scoping');
       expect(getPlanningSession(29)?.planning.artifact).toBeUndefined();
@@ -212,6 +235,11 @@ describe('handlePlanningTurn — spec-ready turn (LLM emits an artifact)', () =>
       expect(message).toContain('Approve this spec, then also approve generated tasks.');
       expect(message).not.toContain('interview transcript');
       expect(message).not.toContain('go');
+      expect(opts).toMatchObject({
+        model: 'opus',
+        opLabel: 'planning:pm-self-review',
+        voice: true,
+      });
 
       return {
         text: [
@@ -434,7 +462,7 @@ describe('defaultScopingTurn — PM-led interview contract', () => {
     expect(sessionId).toBe(session.claudeSessionId);
     expect(systemPrompt).toBe('PM ROLE SYSTEM PROMPT');
     expect(systemPrompt).not.toMatch(/You are the Planner|planning-brief/i);
-    expect(opts).toMatchObject({ opLabel: 'chat', voice: true });
+    expect(opts).toMatchObject({ opLabel: 'chat', voice: true, model: 'opus' });
   });
 
   it('keeps multi-turn PM interview state on the planning session id', async () => {

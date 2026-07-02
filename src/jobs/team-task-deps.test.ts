@@ -243,10 +243,10 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(evidence.blockedReason).toContain('reviewer independence');
   });
 
-  it('judgment seams parse fenced verdicts from the injected model call (no live call), passing the resolved model', async () => {
-    const calls: Array<{ role: string; model: string }> = [];
-    const judgment: JudgmentModelCall = async ({ role, model }) => {
-      calls.push({ role, model });
+  it('judgment seams parse fenced verdicts from the injected model call (no live call), passing the resolved binding', async () => {
+    const calls: Array<{ role: string; model: string; provider?: string; format?: string }> = [];
+    const judgment: JudgmentModelCall = async ({ role, model, provider, format }) => {
+      calls.push({ role, model, provider, format });
       return GREEN_JUDGMENT_REPLY;
     };
     const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({ judgmentCall: judgment }));
@@ -267,6 +267,34 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(calls.map((c) => c.role)).toEqual(['reviewer', 'tech-lead']);
     // Judgment roles run on the policy-resolved opus binding.
     expect(calls.every((c) => c.model === 'opus')).toBe(true);
+    expect(calls.every((c) => c.provider === 'anthropic')).toBe(true);
+    expect(calls.every((c) => c.format === 'claude')).toBe(true);
+  });
+
+  it('routes coder self-review through the coder model binding, not the judgment-role binding', async () => {
+    const calls: Array<{ role: string; model: string; provider?: string; format?: string; selfReview: boolean }> = [];
+    const judgment: JudgmentModelCall = async ({ role, model, provider, format, message }) => {
+      const selfReviewEcho = echoSelfReviewArtifact(message);
+      calls.push({ role, model, provider, format, selfReview: selfReviewEcho !== undefined });
+      if (selfReviewEcho !== undefined) return selfReviewEcho;
+      return GREEN_JUDGMENT_REPLY;
+    };
+    const deps = buildDeps(resolveTeamRoleModels(loadRealPolicy()), makeSeams({ judgmentCall: judgment }));
+
+    const evidence = await runTeamTaskWorkflow(
+      sizedTask,
+      { spec: 'spec', contextMd: 'ctx', coderProvider: 'openai', cap: 1 },
+      deps,
+    );
+
+    expect(evidence.outcome).toBe('ready-for-closeout');
+    expect(calls).toContainEqual({
+      role: 'coder',
+      model: 'gpt-5.5',
+      provider: 'openai',
+      format: 'codex',
+      selfReview: true,
+    });
   });
 
   it('prompts reviewer re-review to verify prior findings before discovery and return cited verification statuses', async () => {

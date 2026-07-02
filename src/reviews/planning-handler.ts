@@ -14,6 +14,8 @@
  */
 
 import { askClaudeWithContext } from '../ai/claude.js';
+import config from '../config.js';
+import { loadModelPolicy, resolveModel, type ModelEntry } from '../intent/model-policy.js';
 import { proposeSpec, type PlanningStatus, type SpecArtifact } from '../intent/planner.js';
 import { runSelfReview } from '../intent/self-review.js';
 import { composeRoleContext } from '../roles/loader.js';
@@ -137,16 +139,34 @@ async function reviewPmSpecArtifact(artifact: PmSpecArtifact): Promise<{
   artifact: PmSpecArtifact;
   revised: boolean;
 }> {
+  const selfReviewModel = resolvePlanningSelfReviewModel('pm');
   try {
     return await runSelfReview({
       role: 'pm',
       artifact,
       render: renderPmSpecArtifact,
       parse: parsePmSpecReviewReply,
+      ...(selfReviewModel ? { model: selfReviewModel.model, provider: selfReviewModel.provider } : {}),
       modelCall: async ({ sessionId, systemPrompt, message }) => {
+        if (selfReviewModel?.format === 'codex') {
+          const [{ runCodex }, { getBaseEnv }] = await Promise.all([
+            import('../ai/codex.js'),
+            import('../jobs/credential-injector.js'),
+          ]);
+          const result = await runCodex(`${systemPrompt}\n\n${message}`, {
+            model: selfReviewModel.model,
+            sandboxMode: 'read-only',
+            env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+          });
+          if (result.error) {
+            throw new Error(`PM self-review failed: ${result.error}`);
+          }
+          return result.text ?? '';
+        }
         const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
           opLabel: 'planning:pm-self-review',
           voice: true,
+          ...(selfReviewModel?.model ? { model: selfReviewModel.model } : {}),
         });
         if (!result || result.error) {
           throw new Error(`PM self-review failed: ${result?.error ?? 'empty model response'}`);
@@ -157,6 +177,21 @@ async function reviewPmSpecArtifact(artifact: PmSpecArtifact): Promise<{
   } catch (err) {
     throw new Error(`planning PM self-review failed: ${(err as Error).message}`);
   }
+}
+
+function resolvePlanningSelfReviewModel(role: 'pm'): {
+  model: string;
+  provider: string;
+  format: ModelEntry['format'];
+} | undefined {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  if (!policy) return undefined;
+  const resolution = resolveModel({ role, capabilities: [] }, policy);
+  const entry = policy.models.find((candidate) => candidate.alias === resolution.model);
+  if (!entry) {
+    throw new Error(`planning PM self-review: resolved alias '${resolution.model}' is not in the model registry`);
+  }
+  return { model: resolution.model, provider: resolution.provider, format: entry.format };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,14 +281,22 @@ export async function defaultScopingTurn(input: {
   userMessage: string;
 }): Promise<ScopingResult> {
   const ctx = composeRoleContext('pm', INTERVIEW_INSTRUCTION);
+  const pmModel = resolvePlanningSelfReviewModel('pm');
   const message = ctx.referenceContext
     ? `${ctx.referenceContext}\n\n${input.userMessage}`
     : input.userMessage;
+  if (pmModel?.format !== undefined && pmModel.format !== 'claude') {
+    throw new Error(`defaultScopingTurn: PM model format '${pmModel.format}' has no multi-turn planning executor`);
+  }
   const result = await askClaudeWithContext(
     message,
     input.session.claudeSessionId,
     ctx.systemInstructions,
-    { opLabel: 'chat', voice: true },
+    {
+      opLabel: 'chat',
+      voice: true,
+      ...(pmModel?.model ? { model: pmModel.model } : {}),
+    },
   );
   if (result.error) {
     throw new Error(`scopingTurn: Claude returned error: ${result.error}`);

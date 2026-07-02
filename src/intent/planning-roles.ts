@@ -28,6 +28,8 @@ import { plannedOutcomeToArtifact } from './planning-artifact.js';
 import type { PlanCritique, PlanningCritiqueResult } from './planning-critique.js';
 import type { PmSpecApprovalArtifact, SpecArtifact } from './planner.js';
 import { runSelfReview } from './self-review.js';
+import config from '../config.js';
+import { loadModelPolicy, resolveModel, type ModelEntry } from './model-policy.js';
 import type { RoleName } from '../roles/loader.js';
 import { createLogger } from '../utils/logger.js';
 import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
@@ -405,15 +407,33 @@ export async function runDownstreamPlan(
   }
   let reviewedTechLead: TechLeadResult;
   try {
+    const selfReviewModel = resolvePlanningSelfReviewModel('tech-lead');
     const selfReview = await runSelfReview({
       role: 'tech-lead',
       artifact: techLead,
       render: renderTechLeadSelfReviewArtifact,
       parse: parseTechLeadSelfReviewArtifact,
+      ...(selfReviewModel ? { model: selfReviewModel.model, provider: selfReviewModel.provider } : {}),
       modelCall: async ({ sessionId, systemPrompt, message }) => {
+        if (selfReviewModel?.format === 'codex') {
+          const [{ runCodex }, { getBaseEnv }] = await Promise.all([
+            import('../ai/codex.js'),
+            import('../jobs/credential-injector.js'),
+          ]);
+          const result = await runCodex(`${systemPrompt}\n\n${message}`, {
+            model: selfReviewModel.model,
+            sandboxMode: 'read-only',
+            env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+          });
+          if (result.error) {
+            throw new Error(`tech-lead self-review failed: ${result.error}`);
+          }
+          return result.text ?? '';
+        }
         const { askClaudeWithContext } = await import('../ai/claude.js');
         const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
           opLabel: 'planning:tech-lead-self-review',
+          ...(selfReviewModel?.model ? { model: selfReviewModel.model } : {}),
         });
         if (!result || result.error) {
           throw new Error(`tech-lead self-review failed: ${result?.error ?? 'empty model response'}`);
@@ -633,6 +653,21 @@ function isTestStrategy(value: unknown): value is TestStrategy {
     value === 'docs-or-config-only' ||
     value === 'tests-as-deliverable' ||
     value === 'manual-live-gate';
+}
+
+function resolvePlanningSelfReviewModel(role: 'tech-lead'): {
+  model: string;
+  provider: string;
+  format: ModelEntry['format'];
+} | undefined {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  if (!policy) return undefined;
+  const resolution = resolveModel({ role, capabilities: [] }, policy);
+  const entry = policy.models.find((candidate) => candidate.alias === resolution.model);
+  if (!entry) {
+    throw new Error(`planning tech-lead self-review: resolved alias '${resolution.model}' is not in the model registry`);
+  }
+  return { model: resolution.model, provider: resolution.provider, format: entry.format };
 }
 
 function applyPmReviewRepair(original: TechLeadResult, review: SpecMatchResult): TechLeadResult | null {

@@ -34,6 +34,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 import { askClaudeWithContext, cleanupSession } from '../ai/claude.js';
+import { runCodex } from '../ai/codex.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { PROJECT_ROOT } from '../config.js';
 import { composeRoleContext, type RoleName } from '../roles/loader.js';
@@ -75,6 +76,7 @@ import type { SizedTask } from '../intent/planning-roles.js';
 import { MANUAL_LIVE_GATE_MARKER } from '../intent/planning-artifact.js';
 import type { SandboxSpec } from '../intent/sandbox.js';
 import { redactSecrets } from './work-run-transcript.js';
+import { getBaseEnv } from './credential-injector.js';
 import { createLogger } from '../utils/logger.js';
 import { formatProtectedLocalServicesWarning } from '../utils/protected-local-services.js';
 
@@ -178,6 +180,8 @@ export interface JudgmentModelCall {
   (input: {
     role: RoleName;
     model: string;
+    provider?: DispatchProvider;
+    format?: RoleModelBinding['format'];
     systemPrompt: string;
     message: string;
     sessionId?: string;
@@ -198,10 +202,23 @@ export interface TeamTaskSeams {
 const defaultJudgmentCall: JudgmentModelCall = async ({
   role,
   model,
+  format = 'claude',
   systemPrompt,
   message,
   sessionId: providedSessionId,
 }) => {
+  if (format === 'codex') {
+    const result = await runCodex(`${systemPrompt}\n\n${message}`, {
+      model,
+      sandboxMode: 'read-only',
+      env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+    });
+    if (result.error) {
+      throw new Error(`team role '${role}' model call failed: ${result.error}`);
+    }
+    return result.text ?? '';
+  }
+
   const sessionId = providedSessionId ?? randomUUID();
   const ownsSession = providedSessionId === undefined;
   try {
@@ -654,6 +671,8 @@ function makeJudge(seams: TeamTaskSeams, projectExemplarsDir: string) {
     return seams.judgmentCall({
       role,
       model: binding.alias,
+      provider: binding.provider,
+      format: binding.format,
       systemPrompt: withProtectedLocalServicesWarning(ctx.systemInstructions),
       message,
     });
@@ -942,6 +961,8 @@ export function buildProductionTeamTaskDeps(
             return seams.judgmentCall({
               role: 'coder',
               model: models.coder.alias,
+              provider: models.coder.provider,
+              format: models.coder.format,
               systemPrompt,
               message,
               sessionId,

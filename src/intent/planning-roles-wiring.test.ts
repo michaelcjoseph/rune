@@ -49,16 +49,23 @@ describe('planning-roles-wiring — tech-lead prompt', () => {
 function stubModelCall(replies: { pm?: string[]; 'tech-lead'?: string }): {
   call: RoleModelCall;
   seenSystem: Record<string, string>;
+  seenBinding: Record<string, { model?: string; provider?: string; format?: string }>;
 } {
   const seenSystem: Record<string, string> = {};
+  const seenBinding: Record<string, { model?: string; provider?: string; format?: string }> = {};
   const pmQueue = [...(replies.pm ?? [])];
-  const call: RoleModelCall = async ({ role, systemPrompt }) => {
+  const call: RoleModelCall = async ({ role, systemPrompt, model, provider, format }) => {
     seenSystem[role] = systemPrompt;
+    seenBinding[role] = {
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
+      ...(format !== undefined ? { format } : {}),
+    };
     if (role === 'pm') return pmQueue.shift() ?? '';
     if (role === 'tech-lead') return replies['tech-lead'] ?? '';
     return '';
   };
-  return { call, seenSystem };
+  return { call, seenSystem, seenBinding };
 }
 
 const SPECIFIED_REPLY = [
@@ -221,7 +228,7 @@ function breakdownWithRawExemplars(raw: unknown): string {
 
 describe('planning-roles-wiring — PM assessment seam', () => {
   it('parses a specified-enough reply into title/spec/assumptions', async () => {
-    const { call, seenSystem } = stubModelCall({ pm: [SPECIFIED_REPLY] });
+    const { call, seenSystem, seenBinding } = stubModelCall({ pm: [SPECIFIED_REPLY] });
     const deps = defaultPlanningRoleDeps(call);
     const result = await deps.pmAssessAndSpec({ brief: 'streaks', product: 'aura' });
     expect(result.specifiedEnough).toBe(true);
@@ -231,6 +238,11 @@ describe('planning-roles-wiring — PM assessment seam', () => {
     }
     // SOUL (system-prompt authority) carried the PM charter — role independence.
     expect(seenSystem['pm']?.toLowerCase()).toContain('product manager');
+    expect(seenBinding['pm']).toEqual({
+      model: 'opus',
+      provider: 'anthropic',
+      format: 'claude',
+    });
   });
 
   it('split format: spec markdown with unescaped quotes + a nested code fence survives verbatim', async () => {
@@ -272,7 +284,7 @@ describe('planning-roles-wiring — PM assessment seam', () => {
 
 describe('planning-roles-wiring — tech-lead breakdown seam', () => {
   it('asks the tech lead to emit per-project exemplars alongside task test strategy', async () => {
-    const { call, seenSystem } = stubModelCall({ 'tech-lead': BREAKDOWN_REPLY });
+    const { call, seenSystem, seenBinding } = stubModelCall({ 'tech-lead': BREAKDOWN_REPLY });
 
     await defaultPlanningRoleDeps(call).techLeadBreakdown({
       brief: 'x',
@@ -291,6 +303,11 @@ describe('planning-roles-wiring — tech-lead breakdown seam', () => {
     );
     expect(systemPrompt).toContain('keys must be role slugs');
     expect(systemPrompt).toContain('values must be markdown');
+    expect(seenBinding['tech-lead']).toEqual({
+      model: 'opus',
+      provider: 'anthropic',
+      format: 'claude',
+    });
   });
 
   it('parses tasks with test strategy + designer flag + phase', async () => {

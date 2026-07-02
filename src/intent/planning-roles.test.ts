@@ -655,6 +655,10 @@ describe('planning-roles — tech-lead self-review in runDownstreamPlan (project
     }) => {
       calls.push('self-review');
       expect(input.role).toBe('tech-lead');
+      expect(input).toMatchObject({
+        model: 'opus',
+        provider: 'anthropic',
+      });
       expect(input.artifact).toMatchObject({
         techSpec: 'Initial tech spec missing the timezone edge case.',
         tasks: SIZED_TASKS.slice(0, 1),

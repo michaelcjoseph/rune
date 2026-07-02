@@ -19,7 +19,9 @@
 
 import { randomUUID } from 'node:crypto';
 
+import config from '../config.js';
 import { ROLE_NAMES, composeRoleContext, type RoleContext, type RoleName } from '../roles/loader.js';
+import { loadModelPolicy, resolveModel, type ModelEntry } from './model-policy.js';
 import { createLogger } from '../utils/logger.js';
 import type {
   PlanningRoleDeps,
@@ -56,7 +58,14 @@ export function buildTechLeadRolePrompt(baseInstructions: string): RoleContext {
  *  `memory.md` reference + the task instruction ride the user turn. Returns the
  *  raw reply text. Injected in tests so the whole flow runs with no live call. */
 export interface RoleModelCall {
-  (input: { role: RoleName; systemPrompt: string; message: string }): Promise<string>;
+  (input: {
+    role: RoleName;
+    systemPrompt: string;
+    message: string;
+    model?: string;
+    provider?: string;
+    format?: ModelEntry['format'];
+  }): Promise<string>;
 }
 
 /**
@@ -65,11 +74,31 @@ export interface RoleModelCall {
  * bleed) — the spec's "fresh execution context" principle at planning time. The
  * session is cleaned up immediately; it is never resumed.
  */
-const defaultRoleModelCall: RoleModelCall = async ({ role, systemPrompt, message }) => {
+const defaultRoleModelCall: RoleModelCall = async ({ role, systemPrompt, message, model, format }) => {
+  if (format === 'codex') {
+    const [{ runCodex }, { getBaseEnv }] = await Promise.all([
+      import('../ai/codex.js'),
+      import('../jobs/credential-injector.js'),
+    ]);
+    const result = await runCodex(`${systemPrompt}\n\n${message}`, {
+      ...(model ? { model } : {}),
+      sandboxMode: 'read-only',
+      env: getBaseEnv(['OPENAI_API_KEY', 'CODEX_HOME', 'HOME', 'PATH', 'TMPDIR']),
+    });
+    if (result.error) {
+      throw new Error(`planner role '${role}' model call failed: ${result.error}`);
+    }
+    return result.text ?? '';
+  }
+  if (format !== undefined && format !== 'claude') {
+    throw new Error(`planner role '${role}' model format '${format}' has no wired executor`);
+  }
+
   const sessionId = randomUUID();
   const { askClaudeWithContext, cleanupSession } = await import('../ai/claude.js');
   try {
     const result = await askClaudeWithContext(message, sessionId, systemPrompt, {
+      ...(model ? { model } : {}),
       opLabel: `planner:${role}`,
     });
     if (result.error) {
@@ -80,6 +109,25 @@ const defaultRoleModelCall: RoleModelCall = async ({ role, systemPrompt, message
     cleanupSession(sessionId);
   }
 };
+
+function resolvePlanningRoleBinding(role: RoleName): {
+  model: string;
+  provider: string;
+  format: ModelEntry['format'];
+} | undefined {
+  const policy = loadModelPolicy(config.MODEL_POLICY_FILE);
+  if (!policy) return undefined;
+  const resolution = resolveModel({ role, capabilities: [] }, policy);
+  const entry = policy.models.find((candidate) => candidate.alias === resolution.model);
+  if (!entry) {
+    throw new Error(`planner role '${role}': resolved alias '${resolution.model}' is not in the model registry`);
+  }
+  return {
+    model: resolution.model,
+    provider: resolution.provider,
+    format: entry.format,
+  };
+}
 
 /** Compose the user-turn message: the role's memory reference fence (when any)
  *  above the task instruction. SOUL stays on the system channel. */
@@ -623,26 +671,31 @@ export function defaultPlanningRoleDeps(
   return {
     pmAssessAndSpec: async ({ brief }) => {
       const ctx = buildPmRolePrompt(PM_ASSESS_INSTRUCTION);
+      const binding = resolvePlanningRoleBinding('pm');
       const reply = await modelCall({
         role: 'pm',
         systemPrompt: ctx.systemInstructions,
         message: roleMessage(ctx, `## Brief\n\n${brief}`),
+        ...(binding ?? {}),
       });
       return parsePmAssessment(reply);
     },
 
     techLeadBreakdown: async ({ spec }) => {
       const ctx = buildTechLeadRolePrompt(TECH_LEAD_INSTRUCTION);
+      const binding = resolvePlanningRoleBinding('tech-lead');
       const reply = await modelCall({
         role: 'tech-lead',
         systemPrompt: ctx.systemInstructions,
         message: roleMessage(ctx, `## Approved product spec\n\n${spec}`),
+        ...(binding ?? {}),
       });
       return parseTechLeadBreakdown(reply);
     },
 
     pmReviewMatch: async ({ spec, techSpec, tasks }) => {
       const ctx = buildPmRolePrompt(PM_REVIEW_INSTRUCTION);
+      const binding = resolvePlanningRoleBinding('pm');
       const taskList = tasks.map((t) => `- ${t.id}: ${t.text}`).join('\n');
       const reply = await modelCall({
         role: 'pm',
@@ -651,6 +704,7 @@ export function defaultPlanningRoleDeps(
           ctx,
           `## Product spec\n\n${spec}\n\n## Tech spec\n\n${techSpec}\n\n## Tasks\n\n${taskList}`,
         ),
+        ...(binding ?? {}),
       });
       return parsePmReview(reply);
     },
