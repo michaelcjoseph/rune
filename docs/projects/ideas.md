@@ -74,6 +74,13 @@ below it.
   - **Risk, auto-merge trust:** bounded by the green-gate and branch-first landing, but a real trust escalation; per-product validation commands must be trustworthy.
   - **Phases (test-first):** (1) sensor enrichment + confirm failure detail is captured (de-risks everything); (2) bugs.json schema + rich bugs.md parser + reconciliation scan (stable ids); (3) triage classification (bug/idea, fail-closed) + structured bug authoring, route bugs to bugs.json/bugs.md, ideas unchanged; (4) implement startFixRun as the gen-eval bug executor (bug-report prompt) + extend FixAttemptState; (5) Option A gated auto-merge wiring + escalation surfacing; (6) nightly bug-drain step + auto-approve bugs, end-to-end acceptance (a real bugs.md bug fixed to a merged branch with no human start-gate).
 - Expand autonomous bug fix lane to run in parallel for all product repos
+- Multi-repo orchestrated project coordinator
+  - **Goal:** support a single product/project plan whose deliverables span multiple product repositories by coordinating a sequence of existing single-repo orchestrated runs, one run per target product/repo, instead of forcing one run to silently operate inside the wrong worktree.
+  - **Why:** orchestrated runs are currently bound to one product worktree. When a project includes tasks whose real deliverables live in another registered product repo, the run cannot write those files. The observed failure mode is that the team lands assertion tests in the current repo, marks tasks done, and the final gate is the first point that notices the target repo was never changed.
+  - **Desired shape:** planning/dispatch identifies each task's target product/repo, partitions work into product-scoped child runs, and executes those child runs in dependency order. Cross-product dependencies become explicit ordering constraints rather than prose in `test-plan.md`.
+  - **Reuse:** keep `createWorktree`, `runProjectOrchestration`, team-task workflow, validation commands, gated merge, supervision, and cockpit run state single-repo at the child-run level. Add a parent coordinator that owns partitioning, child-run sequencing, aggregate status, and cockpit visibility.
+  - **Key decisions before implementation:** task metadata format for target product/repo; whether partitioning happens at planning time or dispatch time; how a parent run resumes if one child succeeds and a later child fails or parks; how task checkboxes are updated without a child run claiming tasks from another repo; merge ordering and rollback/hold policy across repos; cockpit display for parent versus child runs.
+  - **Non-goal for the first guardrail fix:** do not make a single child run write to multiple repos. The safer capability is multi-run coordination over existing single-repo execution.
 
 ## Loop-filed
 
@@ -92,3 +99,5 @@ below it.
 
 - **Diagnose recurring wiki-compiler failures** — wiki-compiler agent fails repeatedly
 - **Harden observation-triage against repeated failures** — observation-triage agent fails 5+ times in 7 days
+
+- **Make wiki-compiler robust to recurring failures** — wiki-compiler agent fails 7+ times in 7d
