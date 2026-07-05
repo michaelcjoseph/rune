@@ -91,7 +91,7 @@ import {
   type WorkOutcome,
   type WorkProductFacts,
 } from './work-run-classify.js';
-import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext } from '../transport/mutations.js';
+import type { MutationApplier, MutationDescriptor, MutationEvent, ApplyContext, CancelReason } from '../transport/mutations.js';
 import { buildRunAgentsEventFromTaskRecords } from '../transport/notification-bus.js';
 import {
   markProjectDoneOnBranch,
@@ -278,6 +278,8 @@ function buildOrchestrationDeps(args: {
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
   emit?: (event: OrchestrationActivityEvent) => void;
+  cancel?: () => boolean;
+  cancelReason?: () => CancelReason | null;
   publishAgents?: (records: TaskRunRecord[]) => void;
   finalize: FinalizerAdapter;
 }): OrchestrationDeps {
@@ -302,6 +304,8 @@ function buildOrchestrationDeps(args: {
     worktreePath: sandbox.worktree,
     baseBranch,
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
+    ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
+    ...(args.cancelReason !== undefined ? { cancelReason: args.cancelReason } : {}),
     appendTaskRunRecord: async (record) => {
       appendOrchestratedTaskRunRecord(args.workRunsDir, descriptor.id, record);
       const records = readOrchestratedTaskRunRecords(args.workRunsDir, descriptor.id);
@@ -974,6 +978,8 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,
+        cancel: ctx.cancel,
+        cancelReason: ctx.cancelReason,
         publishAgents: (records) => {
           ctx.bus.publish(buildRunAgentsEventFromTaskRecords({
             runId: descriptor.id,
@@ -1239,6 +1245,17 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         });
       }, 30_000);
       keepAliveTicker.unref();
+      const unsubscribeCancel = ctx.onCancel?.(() => {
+        enqueue({
+          mutationId: descriptor.id,
+          ts: new Date().toISOString(),
+          kind: 'activity',
+          data: {
+            event: 'cancel-requested',
+            line: 'cancellation requested; stopping at next orchestration boundary',
+          },
+        });
+      });
 
       let outcome: Awaited<typeof orchestration> | undefined;
       try {
@@ -1259,6 +1276,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
           outcome = next;
         }
       } finally {
+        unsubscribeCancel?.();
         clearInterval(keepAliveTicker);
       }
 
@@ -1449,6 +1467,23 @@ async function persistTerminalArtifacts(args: {
       error: (err as Error).message,
     });
   }
+  if (result?.kind !== 'finalized') {
+    try {
+      deps.appendIndexRow(deps.workRunsIndexFile, {
+        id: descriptor.id,
+        project: projectSlug,
+        outcome: summary.outcome,
+        durationMs: Date.parse(endedAt) - startedAtMs,
+        startedAt: new Date(startedAtMs).toISOString(),
+        endedAt,
+      });
+    } catch (err) {
+      log.warn('orchestrated-work-runner: appendIndexRow failed', {
+        id: descriptor.id,
+        error: (err as Error).message,
+      });
+    }
+  }
 }
 
 function normalizeLateErrorTerminalFromWorkProduct(
@@ -1537,12 +1572,16 @@ function buildOrchestratedSummary(args: {
 }): WorkRunSummary {
   const { id, project, product, branch, baseSha, startedAtMs, endedAt, terminal, sink, workRunsDir, workProduct, result } = args;
   const data = (terminal.data ?? {}) as Record<string, unknown>;
+  const cancelReason = data['cancelReason'];
   const exit: ExitFacts = {
     exitCode: terminal.kind === 'completed' ? 0 : 1,
     signal: null,
-    cancelled: false,
+    cancelled: cancelReason === 'user',
     durationMs: Date.parse(endedAt) - startedAtMs,
-    exitFact: 'clean-exit',
+    exitFact:
+      cancelReason === 'user' ? 'user-cancel'
+      : cancelReason === 'system' ? 'system-cancel'
+      : 'clean-exit',
   };
   const classification =
     workProduct !== null
@@ -1578,6 +1617,7 @@ function terminalWorkProduct(event: MutationEvent): WorkProductFacts | null {
 function orchestratedOutcome(result: OrchestrationResult | null, terminal: MutationEvent): WorkOutcome {
   if (result?.kind === 'finalized' && isWorkOutcome(result.outcome)) return result.outcome;
   if (result?.kind === 'held') return 'branch-complete';
+  if (result?.kind === 'cancelled' && result.reason === 'user') return 'failed';
   if (terminal.kind === 'completed') return 'partial';
   return 'failed';
 }
@@ -1688,6 +1728,23 @@ function mapResultToTerminal(
       ...(result.worktreePath !== undefined ? { operatorWorktreePath: result.worktreePath } : {}),
       ...(result.preserveBranch === true ? { preserveBranch: true } : {}),
       ...(result.preserveWorktree === true ? { preserveWorktree: true } : {}),
+    });
+  }
+  if (result.kind === 'cancelled') {
+    if (result.reason === 'user') {
+      return term(mutationId, 'failed', {
+        ...base,
+        cancelReason: 'user',
+        reason: 'cancelled',
+        ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
+      });
+    }
+    return term(mutationId, 'completed', {
+      ...base,
+      cancelReason: 'system',
+      reason: 'system-cancelled; stopped at orchestration boundary',
+      baseBranch,
+      ...(result.task !== undefined ? { taskId: result.task.id, taskText: result.task.text } : {}),
     });
   }
   if (result.parked !== undefined) {

@@ -44,6 +44,7 @@ import type {
   ObjectionSeverity,
   TaskEvidence,
 } from './team-task-workflow.js';
+import type { CancelReason } from '../transport/mutations.js';
 
 export type OrchestrationActivityEvent = {
   kind: 'activity' | 'output' | 'progress';
@@ -95,6 +96,10 @@ export interface OrchestrationDeps {
   baseBranch?: string;
   /** Optional live activity sink for appliers that need supervision heartbeats. */
   emit?: (event: OrchestrationActivityEvent) => void;
+  /** Cooperative cancellation readers. Omitted in fixtures that do not model
+   *  cancellation; default behavior is no cancellation. */
+  cancel?: () => boolean;
+  cancelReason?: () => CancelReason | null;
   /** Optional durable run-record sink used by restart reconstruction. */
   appendTaskRunRecord?: (record: TaskRunRecord) => Promise<void>;
   /** Optional durable cursor sink used to resume a still-running mutation. */
@@ -137,7 +142,8 @@ export type OrchestrationResult =
       preserveBranch?: true;
       preserveWorktree?: true;
     }
-  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun };
+  | { kind: 'blocked'; reason: string; task: SelectedTask; parked?: ParkedTaskRun }
+  | { kind: 'cancelled'; reason: CancelReason; task?: SelectedTask };
 
 export interface ParkedTaskRun {
   status: 'blocked-on-human';
@@ -160,10 +166,16 @@ export async function runProjectOrchestration(
   const maxIterations = countTasks(await deps.readTasksMd()) + 1;
 
   for (let iteration = 0; iteration <= maxIterations; iteration++) {
+    const cancelledBeforeSelection = cancellationResult(deps);
+    if (cancelledBeforeSelection) return cancelledBeforeSelection;
+
     const tasksMd = await deps.readTasksMd();
     const selection = selectNextTask(tasksMd);
 
     if (selection.kind === 'all-complete') {
+      const cancelledBeforeFinalizer = cancellationResult(deps);
+      if (cancelledBeforeFinalizer) return cancelledBeforeFinalizer;
+
       const handoff = buildFinalizerHandoff({
         runId: deps.runId,
         project: deps.project,
@@ -190,6 +202,9 @@ export async function runProjectOrchestration(
       const assembled = assembleTaskContext({ task, contextMd, spec });
       evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
     }
+    const cancelledAfterWorkflow = cancellationResult(deps, task);
+    if (cancelledAfterWorkflow) return cancelledAfterWorkflow;
+
     if (evidence.outcome !== 'ready-for-closeout') {
       if (hasNonReversibleSevereTerminalFinding(evidence)) {
         const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
@@ -271,6 +286,8 @@ export async function runProjectOrchestration(
     if (terminalBugRecording.kind === 'blocked') {
       return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
     }
+    const cancelledAfterCloseout = cancellationResult(deps, task);
+    if (cancelledAfterCloseout) return cancelledAfterCloseout;
     // Loop re-reads tasks.md → the now-ticked task is skipped, the next selected.
   }
 
@@ -280,6 +297,18 @@ export async function runProjectOrchestration(
     kind: 'blocked',
     reason: 'orchestration did not converge (a closeout failed to advance the task list)',
     task: { id: 'unknown', text: 'unknown', section: '' },
+  };
+}
+
+function cancellationResult(
+  deps: OrchestrationDeps,
+  task?: SelectedTask,
+): Extract<OrchestrationResult, { kind: 'cancelled' }> | null {
+  if (deps.cancel?.() !== true) return null;
+  return {
+    kind: 'cancelled',
+    reason: deps.cancelReason?.() ?? 'user',
+    ...(task !== undefined ? { task } : {}),
   };
 }
 

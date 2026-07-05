@@ -211,6 +211,13 @@ describe('mutations', () => {
   });
 
   describe('cancelMutation', () => {
+    async function waitFor(condition: () => boolean): Promise<void> {
+      for (let i = 0; i < 20 && !condition(); i++) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(condition()).toBe(true);
+    }
+
     it('returns ok: false when mutation is not in activeRuns', () => {
       const result = cancelMutation('nonexistent-id');
       expect(result.ok).toBe(false);
@@ -244,6 +251,76 @@ describe('mutations', () => {
 
       // Clean up
       activeRuns.delete('active-id');
+    });
+
+    it('invokes registered cancel listeners exactly once per cancel call', async () => {
+      const listener = vi.fn();
+      let listenerRegistered = false;
+      let finish!: () => void;
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const applier = {
+        kind: 'work-run',
+        autoApprove: true,
+        validate: vi.fn(() => ({ ok: true })),
+        apply: vi.fn(async function* (descriptor: any, ctx: any) {
+          ctx.onCancel(listener);
+          listenerRegistered = true;
+          await finished;
+          yield { mutationId: descriptor.id, ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }),
+      } as any;
+      registerApplier(applier);
+
+      const created = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      expect(created.ok).toBe(true);
+      const id = (created as any).descriptor.id;
+      await waitFor(() => listenerRegistered && activeRuns.has(id));
+
+      expect(cancelMutation(id, 'system')).toEqual({ ok: true });
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenLastCalledWith('system');
+
+      expect(cancelMutation(id, 'user')).toEqual({ ok: true });
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener).toHaveBeenLastCalledWith('user');
+
+      finish();
+      await waitFor(() => !activeRuns.has(id));
+    });
+
+    it('does not call unsubscribed cancel listeners', async () => {
+      const listener = vi.fn();
+      let listenerRegistered = false;
+      let finish!: () => void;
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const applier = {
+        kind: 'work-run',
+        autoApprove: true,
+        validate: vi.fn(() => ({ ok: true })),
+        apply: vi.fn(async function* (descriptor: any, ctx: any) {
+          const unsubscribe = ctx.onCancel(listener);
+          unsubscribe();
+          listenerRegistered = true;
+          await finished;
+          yield { mutationId: descriptor.id, ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }),
+      } as any;
+      registerApplier(applier);
+
+      const created = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      expect(created.ok).toBe(true);
+      const id = (created as any).descriptor.id;
+      await waitFor(() => listenerRegistered && activeRuns.has(id));
+
+      expect(cancelMutation(id)).toEqual({ ok: true });
+      expect(listener).not.toHaveBeenCalled();
+
+      finish();
+      await waitFor(() => !activeRuns.has(id));
     });
   });
 

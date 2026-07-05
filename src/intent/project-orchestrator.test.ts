@@ -234,6 +234,119 @@ type TerminalBugRecordingDeps = OrchestrationDeps & {
 };
 
 // ---------------------------------------------------------------------------
+// Cooperative cancellation
+// ---------------------------------------------------------------------------
+
+describe('project-orchestrator — cancellation boundaries', () => {
+  it('cancels before first task selection without workflow, closeout, or finalizer', async () => {
+    const h = makeHarness({
+      cancel: () => true,
+      cancelReason: () => 'user',
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toEqual({ kind: 'cancelled', reason: 'user' });
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+    expect(eventNames(h.state.events)).toEqual([]);
+    expect(h.state.tasksMd).toBe(TWO_TASKS);
+  });
+
+  it('cancels after a ready workflow returns before closeout', async () => {
+    let cancelled = false;
+    const workflow = vi.fn(async (task: SelectedTask) => {
+      cancelled = true;
+      return readyEvidence(task);
+    });
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => 'user',
+      runTaskWorkflow: workflow,
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'cancelled',
+      reason: 'user',
+      task: { text: 'Build the streak core' },
+    });
+    expect(workflow).toHaveBeenCalledOnce();
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+    expect(h.state.tasksMd).toBe(TWO_TASKS);
+  });
+
+  it('cancels after one successful closeout before selecting the next task', async () => {
+    let cancelled = false;
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => 'user',
+      commitCloseout: async (task) => {
+        const sha = `sha-${task.id}`;
+        h.state.commits.push(sha);
+        cancelled = true;
+        return { sha, subject: `actual closeout subject for ${task.id}` };
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'cancelled',
+      reason: 'user',
+      task: { text: 'Build the streak core' },
+    });
+    expect(h.state.commits).toEqual(['sha-build-the-streak-core']);
+    expect(h.state.tasksMd).toContain('- [x] Build the streak core');
+    expect(h.state.tasksMd).toContain('- [ ] Render the streak card');
+    expect(eventsByName(h.state.events, 'task-selected').map((event) => eventData(event)?.['taskText']))
+      .toEqual(['Build the streak core']);
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+
+  it('cancels when all tasks are complete before finalizer handoff', async () => {
+    const h = makeHarness({
+      cancel: () => true,
+      cancelReason: () => 'user',
+    }, [
+      '# Tasks',
+      '',
+      '## Phase 1',
+      '- [x] Build the streak core',
+    ].join('\n'));
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toEqual({ kind: 'cancelled', reason: 'user' });
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+
+  it('preserves system cancel reason at orchestration boundaries', async () => {
+    let cancelled = false;
+    const h = makeHarness({
+      cancel: () => cancelled,
+      cancelReason: () => 'system',
+      runTaskWorkflow: async (task) => {
+        cancelled = true;
+        return readyEvidence(task);
+      },
+    });
+
+    const res = await runProjectOrchestration(h.deps);
+
+    expect(res).toMatchObject({
+      kind: 'cancelled',
+      reason: 'system',
+      task: { text: 'Build the streak core' },
+    });
+    expect(h.state.commits).toEqual([]);
+    expect(h.state.finalizeCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Closeout — marks exactly the task, commits, advances
 // ---------------------------------------------------------------------------
 

@@ -99,6 +99,7 @@ import {
 import type { OrchestrationTerminalBugEntry } from '../intent/project-orchestrator.js';
 import {
   activeRuns,
+  cancelMutation,
   createMutation,
   registerApplier,
   setMutationBus,
@@ -2908,6 +2909,159 @@ describe('orchestratedWorkApplier', () => {
       const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
       expect(terminal?.kind).toBe('failed');
       expect(destroyed).toBe(false);
+    });
+
+    it('maps user cancellation to failed terminal artifacts and removes the worktree', async () => {
+      const runId = 'mut-user-cancel';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-user-cancel-artifacts-'));
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: [],
+        diffstat: '',
+        status: '',
+      });
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (): Promise<OrchestrationResult> => ({
+          kind: 'cancelled',
+          reason: 'user',
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, any>;
+        const index = readFileSync(join(artifactsDir, 'index.jsonl'), 'utf8');
+
+        expect(terminal).toMatchObject({
+          kind: 'failed',
+          data: { reason: 'cancelled', cancelReason: 'user', outcome: 'failed' },
+        });
+        expect(summary.exit).toMatchObject({ cancelled: true, exitFact: 'user-cancel' });
+        expect(summary.outcome).toBe('failed');
+        expect(index).toContain(runId);
+        expect(latestRun(runId).status).toBe('failed');
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('maps system cancellation to work-product-classified completed artifacts', async () => {
+      const runId = 'mut-system-cancel';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-system-cancel-artifacts-'));
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['closeout-sha'],
+        diffstat: ' docs/projects/demo/tasks.md | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)\n',
+        status: '',
+      });
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree();
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runOrchestration: async (deps): Promise<OrchestrationResult> => {
+          await deps.writeTasksMd('- [x] task one\n');
+          return { kind: 'cancelled', reason: 'system' };
+        },
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const summary = JSON.parse(readFileSync(join(artifactsDir, runId, 'summary.json'), 'utf8')) as Record<string, any>;
+        const index = readFileSync(join(artifactsDir, 'index.jsonl'), 'utf8');
+
+        expect(terminal).toMatchObject({
+          kind: 'completed',
+          data: {
+            cancelReason: 'system',
+            outcome: 'branch-complete',
+            reason: expect.stringContaining('system-cancelled'),
+          },
+        });
+        expect(summary.exit).toMatchObject({ cancelled: false, exitFact: 'system-cancel' });
+        expect(summary.outcome).toBe('branch-complete');
+        expect(summary.workProduct.commitShas).toEqual(['closeout-sha']);
+        expect(index).toContain(runId);
+        expect(latestRun(runId).status).toBe('completed');
+        expect(mockRunFinalizer).not.toHaveBeenCalled();
+        expect(destroyed).toBe(true);
+      } finally {
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('wakes the orchestration stream loop when cancelMutation fires', async () => {
+      const projectSlug = '14-product-team-agents';
+      const fake = makeFakeTranscriptSink();
+      let orchestrationStarted = false;
+      let finishRun: ((result: OrchestrationResult) => void) | undefined;
+      const runResult = new Promise<OrchestrationResult>((resolve) => {
+        finishRun = resolve;
+      });
+      mockCreateTranscriptSink.mockReturnValue(fake.sink);
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree(projectSlug);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runOrchestration: async () => {
+          orchestrationStarted = true;
+          return runResult;
+        },
+      });
+
+      try {
+        registerApplier(orchestratedWorkApplier);
+        const createdMutation = await createMutation(
+          'orchestrated-work',
+          { projectSlug, product: 'rune' },
+          'webview',
+        );
+        if (!createdMutation.ok) throw new Error(createdMutation.reason);
+        const runId = createdMutation.descriptor.id;
+        await waitForCondition(() => created && orchestrationStarted && activeRuns.has(runId));
+
+        expect(cancelMutation(runId, 'system')).toEqual({ ok: true });
+        await waitForCondition(() =>
+          fake.appended.some((event) =>
+            String(((event as MutationEvent).data as Record<string, unknown> | undefined)?.['line'] ?? '')
+              .includes('cancellation requested; stopping at next orchestration boundary'),
+          ),
+        );
+        expect(activeRuns.has(runId)).toBe(true);
+
+        finishRun?.({ kind: 'cancelled', reason: 'system' });
+        await waitForCondition(() => !activeRuns.has(runId));
+        expect(destroyed).toBe(true);
+      } finally {
+        finishRun?.({ kind: 'cancelled', reason: 'system' });
+      }
     });
 
     it('active-harm probe: a silent in-flight orchestration stays quiet and is eligible for the quiet nudge', async () => {

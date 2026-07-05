@@ -305,6 +305,10 @@ export interface ApplyContext {
   /** Why the run was cancelled, once it has been. `null` until a cancel fires.
    *  Optional for back-compat with appliers/tests that don't consult it. */
   cancelReason?: () => CancelReason | null;
+  /** Subscribe to cancellation requests for cooperative appliers that need to
+   *  wake a wait loop. Returns an unsubscribe callback. Optional for
+   *  back-compat with older applier fixtures. */
+  onCancel?: (listener: (reason: CancelReason) => void) => () => void;
 }
 
 export interface RunHandle {
@@ -496,10 +500,24 @@ async function startApply(
 ): Promise<void> {
   let cancelled = false;
   let cancelReason: CancelReason | null = null;
+  const cancelListeners = new Set<(reason: CancelReason) => void>();
 
   const handle: RunHandle = {
     descriptor,
-    cancel: (reason: CancelReason = 'user') => { cancelled = true; cancelReason = reason; },
+    cancel: (reason: CancelReason = 'user') => {
+      cancelled = true;
+      cancelReason = reason;
+      for (const listener of [...cancelListeners]) {
+        try {
+          listener(reason);
+        } catch (err) {
+          log.warn('cancel listener failed', {
+            id: descriptor.id,
+            error: (err as Error).message,
+          });
+        }
+      }
+    },
   };
   activeRuns.set(descriptor.id, handle);
 
@@ -542,6 +560,12 @@ async function startApply(
     bus: _bus ?? noopBus,
     cancel: () => cancelled,
     cancelReason: () => cancelReason,
+    onCancel: (listener) => {
+      cancelListeners.add(listener);
+      return () => {
+        cancelListeners.delete(listener);
+      };
+    },
   };
 
   try {
