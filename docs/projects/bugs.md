@@ -1,13 +1,4 @@
 ## Active
-- [ ] Orchestrated task closeout claims to run task-scoped checks, but production `runCloseoutChecks` is a no-op; task commits can be accepted without executing the tests they just added.
-  - **Issue**
-    - `performCloseout` correctly has a closeout-check seam and blocks on `deps.runCloseoutChecks(task)` before committing (`src/intent/project-orchestrator.ts:330-333`).
-    - The production orchestrated runner does not wire that seam to anything: `buildOrchestrationDeps` still sets `runCloseoutChecks: async () => true` (`src/jobs/orchestrated-work-runner.ts:350-353`), despite the nearby comment saying it should run the product's validation commands.
-    - The finalizer gate still runs validation commands later, but only after the project reaches all-complete. That is too late for per-task correctness: a task can commit tests that fail, tick its checkbox, and let subsequent tasks build on a false closeout until the final merge gate catches it.
-    - The reviewer path is not a substitute for executing tests. It only sees artifacts and is explicitly told to report unconfirmed absence/unverifiable concerns as non-objection notes (`src/jobs/team-task-deps.ts:280-293`); low-severity findings still map to `pass-with-warnings` (`src/intent/team-task-workflow.ts:1106-1113`).
-  - **Recommended fix**
-    - Wire production `runCloseoutChecks` to run the product's configured `validationCommands` in the task worktree immediately before the closeout commit, with the same timeout/process-group cleanup semantics used by the gated finalizer. On failure, return `false` so `performCloseout` blocks with `closeout checks failed` and the task remains uncommitted/unchecked.
-    - Add regression coverage that an orchestrated task reaching `ready-for-closeout` does not commit/tick when the closeout validation command fails, and does commit/tick when it passes. Keep the project-level finalizer gate as the final merge guard; this is an earlier per-task gate.
 - [ ] `cancelMutation` / max-runtime cancellation for orchestrated runs only flips an in-process flag; a cancel that lands after start is not observed until the whole orchestration naturally returns.
   - **Issue**
     - `cancelMutation` calls the active handle's `cancel(reason)` and returns `{ok:true}` (`src/transport/mutations.ts:481-490`), but that handle only sets `cancelled = true; cancelReason = reason` (`src/transport/mutations.ts:497-503`). It does not signal any OS process tree.
@@ -90,6 +81,7 @@
 
 ## Done
 
+- [x] Orchestrated task closeout claims to run task-scoped checks, but production `runCloseoutChecks` is a no-op; task commits can be accepted without executing the tests they just added. _(Fixed 2026-07-05 in `3d850e8` — production closeout now runs the product's `validationCommands` in the task sandbox worktree before staging/committing, using the shared timeout/process-group validation helper. Failed closeout validation returns `closeout checks failed`, emits no closeout progress, makes no git commit, and leaves the task unchecked. Empty closeout command lists still pass per task scope; the project-level merge gate remains fail-closed. Covered by `work-run-gate-runtime.test.ts`, `project-orchestrator.test.ts`, and `orchestrated-work-runner.test.ts`; full `npm test` passed.)_
 - [x] /fresh is failing
   - Keep getting errors like this: `Could not summarize conversation — session reset. Error: No conversation found with session ID: 5f3dadf7-b327-418f-acb0-6cbb94b9945d`
   - **Fixed 2026-07-02:** when Claude's CLI session store no longer has a restored Rune session id, `/fresh` now summarizes Rune's stored transcript with a fresh one-shot call instead of failing and discarding the conversation unsummarized. Other summarization failures still fail closed and reset the stale session. Covered by `fresh.test.ts` and `claude.test.ts`.
