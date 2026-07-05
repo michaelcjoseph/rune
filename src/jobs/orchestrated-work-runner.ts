@@ -151,6 +151,25 @@ export interface OrchestratedWorkRecoveryResult {
   skipped: string[];
 }
 
+export type OrchestratedRunRecoveryRequestResult =
+  | { kind: 'recovered'; runId: string }
+  | { kind: 'not-active'; reason: string }
+  | { kind: 'not-orchestrated'; reason: string }
+  | { kind: 'not-resumable'; reason: string }
+  | { kind: 'error'; reason: string };
+
+export interface OrchestratedRunRecoveryRequestDeps {
+  readRunCursor: (runId: string) => Promise<OrchestrationRunCursor | null>;
+  readTaskRunRecords: (runId: string) => Promise<TaskRunRecord[]>;
+  readTasksMd: (cursor: OrchestrationRunCursor) => Promise<string>;
+  redispatchOrchestratedMutation: (
+    mutation: MutationDescriptor<OrchestratedWorkPayload>,
+    options: OrchestratedRecoveryRedispatch,
+  ) => { ok: true } | { ok: false; reason: string };
+  activeRun: (runId: string) => { descriptor: MutationDescriptor; cancel: (reason?: 'user' | 'system') => void } | null;
+  detachActiveRun: (runId: string) => void;
+}
+
 const recoveryRedispatchOptions = new WeakMap<
   MutationDescriptor<OrchestratedWorkPayload>,
   OrchestratedRecoveryRedispatch
@@ -166,6 +185,85 @@ export function redispatchRecoveredOrchestratedMutation(
     recoveryRedispatchOptions.delete(mutation);
   }
   return result;
+}
+
+export async function readTasksMdForRecoveredCursor(cursor: OrchestrationRunCursor): Promise<string> {
+  const projectsDir = join(cursor.worktreePath, 'docs', 'projects');
+  const names = readdirSync(projectsDir);
+  for (const name of names) {
+    const dir = join(projectsDir, name);
+    if (name !== cursor.project && !name.endsWith(`-${cursor.project}`)) continue;
+    if (statSync(dir).isDirectory()) {
+      return readFileSync(join(dir, 'tasks.md'), 'utf8');
+    }
+  }
+  throw new Error(`tasks.md not found for recovered orchestrated project: ${cursor.project}`);
+}
+
+export function defaultOrchestratedRunRecoveryRequestDeps(): OrchestratedRunRecoveryRequestDeps {
+  return {
+    readRunCursor: async (runId) => readOrchestratedRunCursor(config.WORK_RUNS_DIR, runId),
+    readTaskRunRecords: async (runId) => readOrchestratedTaskRunRecords(config.WORK_RUNS_DIR, runId),
+    readTasksMd: readTasksMdForRecoveredCursor,
+    redispatchOrchestratedMutation: redispatchRecoveredOrchestratedMutation,
+    activeRun: (runId) => activeRuns.get(runId) ?? null,
+    detachActiveRun: (runId) => {
+      activeRuns.delete(runId);
+    },
+  };
+}
+
+export async function requestOrchestratedRunRecovery(
+  runId: string,
+  deps: OrchestratedRunRecoveryRequestDeps = defaultOrchestratedRunRecoveryRequestDeps(),
+): Promise<OrchestratedRunRecoveryRequestResult> {
+  const handle = deps.activeRun(runId);
+  if (!handle) {
+    return { kind: 'not-active', reason: 'run is not active' };
+  }
+  if (handle.descriptor.kind !== 'orchestrated-work') {
+    return { kind: 'not-orchestrated', reason: 'run is not an orchestrated-work mutation' };
+  }
+  if (handle.descriptor.status !== 'running') {
+    return { kind: 'not-active', reason: `run is ${handle.descriptor.status}` };
+  }
+
+  const mutation = handle.descriptor as MutationDescriptor<OrchestratedWorkPayload>;
+  const cursor = await deps.readRunCursor(runId);
+  if (!cursor || cursor.resumeMarker !== 'resumable') {
+    return { kind: 'not-resumable', reason: 'missing resumable orchestrated cursor' };
+  }
+
+  try {
+    const [records, tasksMd] = await Promise.all([
+      deps.readTaskRunRecords(runId),
+      deps.readTasksMd(cursor),
+    ]);
+    const reconstruction = reconstructRun({ tasksMd, records });
+    if (reconstruction.drift) {
+      return {
+        kind: 'not-resumable',
+        reason: 'completed task records disagree with tasks.md',
+      };
+    }
+
+    handle.cancel('system');
+    deps.detachActiveRun(runId);
+    const result = deps.redispatchOrchestratedMutation(mutation, {
+      branch: cursor.branch,
+      baseBranch: cursor.baseBranch,
+      worktreePath: cursor.worktreePath,
+      reconstruction,
+      resumeFromTaskId: reconstruction.nextTask?.id ?? null,
+      existingBranch: true,
+    });
+    if (!result.ok) {
+      return { kind: 'error', reason: result.reason };
+    }
+    return { kind: 'recovered', runId };
+  } catch (err) {
+    return { kind: 'error', reason: (err as Error).message };
+  }
 }
 
 // ---------------------------------------------------------------------------

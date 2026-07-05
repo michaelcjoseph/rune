@@ -18,6 +18,7 @@ import { genEvalLoopApplier } from './jobs/gen-eval-loop-runner.js';
 import {
   orchestratedWorkApplier,
   recoverOrchestratedWorkRuns,
+  readTasksMdForRecoveredCursor,
   redispatchRecoveredOrchestratedMutation as redispatchRecoveredOrchestratedWorkMutation,
 } from './jobs/orchestrated-work-runner.js';
 import { workRunReleaseApplier } from './jobs/work-run-release.js';
@@ -39,7 +40,6 @@ import { loadModelPolicy } from './intent/model-policy.js';
 import { createLogger, flushLogger } from './utils/logger.js';
 import { NotificationBus } from './transport/notification-bus.js';
 import { createSenders } from './transport/sender.js';
-import type { OrchestrationRunCursor } from './intent/project-orchestrator.js';
 import type { MutationDescriptor, MutationEvent } from './transport/mutations.js';
 
 const log = createLogger('main');
@@ -48,20 +48,6 @@ type OrchestratedWorkPayload = {
   projectSlug: string;
   product?: string;
 };
-
-async function readTasksMdForRecoveredCursor(cursor: OrchestrationRunCursor): Promise<string> {
-  const { readFileSync, readdirSync, statSync } = await import('node:fs');
-  const projectsDir = join(cursor.worktreePath, 'docs', 'projects');
-  const names = readdirSync(projectsDir);
-  for (const name of names) {
-    const dir = join(projectsDir, name);
-    if (name !== cursor.project && !name.endsWith(`-${cursor.project}`)) continue;
-    if (statSync(dir).isDirectory()) {
-      return readFileSync(join(dir, 'tasks.md'), 'utf8');
-    }
-  }
-  throw new Error(`tasks.md not found for recovered orchestrated project: ${cursor.project}`);
-}
 
 async function markRecoveredOrchestratedMutationFailed(
   mutation: MutationDescriptor<OrchestratedWorkPayload>,

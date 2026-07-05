@@ -322,6 +322,41 @@ describe('mutations', () => {
       finish();
       await waitFor(() => !activeRuns.has(id));
     });
+
+    it('does not delete a newer active handle when an older apply finally exits', async () => {
+      let finish!: () => void;
+      let runId = '';
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const applier = {
+        kind: 'work-run',
+        autoApprove: true,
+        validate: vi.fn(() => ({ ok: true })),
+        apply: vi.fn(async function* (descriptor: any) {
+          runId = descriptor.id;
+          await finished;
+          yield { mutationId: descriptor.id, ts: new Date().toISOString(), kind: 'completed', data: {} };
+        }),
+      } as any;
+      registerApplier(applier);
+
+      const created = await createMutation('work-run', { projectSlug: 'demo' }, 'webview');
+      expect(created.ok).toBe(true);
+      const id = (created as any).descriptor.id;
+      await waitFor(() => runId === id && activeRuns.has(id));
+
+      const newerHandle = {
+        descriptor: { id, kind: 'work-run', status: 'running', payload: { projectSlug: 'demo' } } as any,
+        cancel: vi.fn(),
+      };
+      activeRuns.set(id, newerHandle);
+      finish();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(activeRuns.get(id)).toBe(newerHandle);
+      activeRuns.delete(id);
+    });
   });
 
   // -------------------------------------------------------------------------

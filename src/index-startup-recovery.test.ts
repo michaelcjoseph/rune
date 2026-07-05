@@ -102,6 +102,7 @@ vi.mock('./jobs/gen-eval-loop-runner.js', () => ({
 vi.mock('./jobs/orchestrated-work-runner.js', () => ({
   orchestratedWorkApplier: { kind: 'orchestrated-work' },
   recoverOrchestratedWorkRuns,
+  readTasksMdForRecoveredCursor: vi.fn(async () => ''),
   redispatchRecoveredOrchestratedMutation: vi.fn(() => ({ ok: true })),
 }));
 

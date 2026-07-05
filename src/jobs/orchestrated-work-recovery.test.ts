@@ -18,7 +18,7 @@ vi.mock('../intent/orch-reconstruct.js', () => ({
   reconstructRun: mockReconstructRun,
 }));
 
-import { recoverOrchestratedWorkRuns } from './orchestrated-work-runner.js';
+import { recoverOrchestratedWorkRuns, requestOrchestratedRunRecovery } from './orchestrated-work-runner.js';
 
 beforeEach(() => {
   mockReconstructRun.mockReset();
@@ -178,5 +178,129 @@ describe('orchestrated-work boot recovery', () => {
       orphaned: [],
       skipped: ['mut-orch-resume'],
     });
+  });
+});
+
+describe('orchestrated-work active recovery request', () => {
+  it('cancels and detaches one active orchestrated run, then redispatches from its durable cursor', async () => {
+    const mutation = runningOrchestratedMutation();
+    const runCursor = cursor();
+    const records = [readyRecord()];
+    const tasksMd = [
+      '# Tasks',
+      '',
+      '## Phase 11B',
+      '- [x] Persist records and cursor',
+      '- [ ] Resume boot',
+    ].join('\n');
+    const reconstruction = {
+      completedTaskIds: ['persist-records-and-cursor'],
+      nextTask: selectedResumeTask(),
+      drift: false,
+    };
+    const cancel = vi.fn();
+    mockReconstructRun.mockReturnValue(reconstruction);
+
+    const deps = {
+      readRunCursor: vi.fn(async (runId: string) => (runId === mutation.id ? runCursor : null)),
+      readTaskRunRecords: vi.fn(async (runId: string) => (runId === mutation.id ? records : [])),
+      readTasksMd: vi.fn(async (loadedCursor: OrchestrationRunCursor) => {
+        expect(loadedCursor).toBe(runCursor);
+        return tasksMd;
+      }),
+      redispatchOrchestratedMutation: vi.fn(() => ({ ok: true as const })),
+      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
+      detachActiveRun: vi.fn(),
+    };
+
+    const result = await requestOrchestratedRunRecovery(mutation.id, deps);
+
+    expect(mockReconstructRun).toHaveBeenCalledWith({ tasksMd, records });
+    expect(cancel).toHaveBeenCalledWith('system');
+    expect(deps.detachActiveRun).toHaveBeenCalledWith(mutation.id);
+    expect(deps.redispatchOrchestratedMutation).toHaveBeenCalledWith(
+      mutation,
+      expect.objectContaining({
+        branch: runCursor.branch,
+        baseBranch: runCursor.baseBranch,
+        worktreePath: runCursor.worktreePath,
+        reconstruction,
+        resumeFromTaskId: 'resume-boot',
+        existingBranch: true,
+      }),
+    );
+    expect(result).toEqual({ kind: 'recovered', runId: mutation.id });
+  });
+
+  it('refuses to recover when the active run is not orchestrated-work', async () => {
+    const descriptor = {
+      ...runningOrchestratedMutation(),
+      kind: 'work-run' as const,
+    };
+    const cancel = vi.fn();
+    const deps = {
+      readRunCursor: vi.fn(),
+      readTaskRunRecords: vi.fn(),
+      readTasksMd: vi.fn(),
+      redispatchOrchestratedMutation: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor, cancel })),
+      detachActiveRun: vi.fn(),
+    };
+
+    const result = await requestOrchestratedRunRecovery('mut-orch-resume', deps);
+
+    expect(result.kind).toBe('not-orchestrated');
+    expect(cancel).not.toHaveBeenCalled();
+    expect(deps.detachActiveRun).not.toHaveBeenCalled();
+    expect(deps.redispatchOrchestratedMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses to recover when the durable cursor is missing', async () => {
+    const mutation = runningOrchestratedMutation();
+    const cancel = vi.fn();
+    const deps = {
+      readRunCursor: vi.fn(async () => null),
+      readTaskRunRecords: vi.fn(),
+      readTasksMd: vi.fn(),
+      redispatchOrchestratedMutation: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
+      detachActiveRun: vi.fn(),
+    };
+
+    const result = await requestOrchestratedRunRecovery(mutation.id, deps);
+
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'missing resumable orchestrated cursor',
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(deps.detachActiveRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses to recover when task records drift from tasks.md', async () => {
+    const mutation = runningOrchestratedMutation();
+    const cancel = vi.fn();
+    mockReconstructRun.mockReturnValue({
+      completedTaskIds: ['persist-records-and-cursor'],
+      nextTask: selectedResumeTask(),
+      drift: true,
+    });
+    const deps = {
+      readRunCursor: vi.fn(async () => cursor()),
+      readTaskRunRecords: vi.fn(async () => [readyRecord()]),
+      readTasksMd: vi.fn(async () => '- [ ] Resume boot\n'),
+      redispatchOrchestratedMutation: vi.fn(),
+      activeRun: vi.fn(() => ({ descriptor: mutation, cancel })),
+      detachActiveRun: vi.fn(),
+    };
+
+    const result = await requestOrchestratedRunRecovery(mutation.id, deps);
+
+    expect(result).toEqual({
+      kind: 'not-resumable',
+      reason: 'completed task records disagree with tasks.md',
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(deps.detachActiveRun).not.toHaveBeenCalled();
   });
 });

@@ -145,10 +145,14 @@ function renderProjectRunControl(project) {
     ? `<span class="deep-action-meta deep-action-meta--error">${escHtml(control.error)}</span>`
     : '';
   if (control.state === 'cancel' && control.mutationId) {
+    const recover = control.recoverable
+      ? `<button type="button" class="deep-action" data-project-run-action="recover" ` +
+        `data-project-slug="${attr(project.slug)}" data-mutation-id="${attr(control.mutationId)}">Recover</button>`
+      : '';
     return `<div class="deep-actions deep-project-actions">` +
       `<button type="button" class="deep-action deep-action--cancel" data-project-run-action="cancel" ` +
         `data-project-slug="${attr(project.slug)}" data-mutation-id="${attr(control.mutationId)}">Cancel</button>` +
-      `${mode}${error}` +
+      `${recover}${mode}${error}` +
     `</div>`;
   }
   return `<div class="deep-actions deep-project-actions">` +
@@ -430,7 +434,9 @@ function renderOperations(operations) {
     `<article class="deep-op-row"><span>${escHtml(op.opId)}</span><span>${escHtml(op.detail || op.label || 'op')}</span><button type="button" data-cancel-op-id="${attr(op.opId)}">Cancel</button></article>`
   ).join('');
   const mutations = list(model.mutations).map(mutation =>
-    `<article class="deep-op-row"><span>${escHtml(mutation.id)}</span><span>${escHtml(mutation.kind || mutation.status || 'mutation')}</span><button type="button" data-cancel-mutation-id="${attr(mutation.id)}">Cancel</button></article>`
+    `<article class="deep-op-row"><span>${escHtml(mutation.id)}</span><span>${escHtml(mutation.kind || mutation.status || 'mutation')}</span>` +
+      (mutation.kind === 'orchestrated-work' ? `<button type="button" data-recover-work-run-id="${attr(mutation.id)}">Recover</button>` : '') +
+      `<button type="button" data-cancel-mutation-id="${attr(mutation.id)}">Cancel</button></article>`
   ).join('');
   const planning = model.planning
     ? `<p>Planning ${escHtml(model.planning.product || '')} ${escHtml(model.planning.status || '')}</p>`
@@ -841,6 +847,7 @@ function overlayRunControlsFromState(view, state, product) {
         runControl: {
           state: 'cancel',
           mutationId: mutation.id,
+          ...(mutation.kind === 'orchestrated-work' ? { recoverable: true } : {}),
           ...(typeof payload.dispatchMode === 'string' ? { dispatchMode: payload.dispatchMode } : {}),
           ...(typeof payload.fallbackReason === 'string' ? { fallbackReason: payload.fallbackReason } : {}),
         },
@@ -1598,6 +1605,10 @@ export function createProductDeepView({
           const mutationId = projectRun.dataset?.mutationId;
           if (!mutationId) throw new Error('missing mutation id');
           await post(`/api/mutations/${encodeURIComponent(mutationId)}/cancel`);
+        } else if (action === 'recover') {
+          const mutationId = projectRun.dataset?.mutationId;
+          if (!mutationId) throw new Error('missing mutation id');
+          await post(`/api/work-runs/${encodeURIComponent(mutationId)}/recover`);
         } else {
           return;
         }
@@ -1609,7 +1620,8 @@ export function createProductDeepView({
         }
       } catch (err) {
         projectRun.disabled = false;
-        setProjectRunControlError(projectSlug, `${action === 'cancel' ? 'Cancel' : 'Start'} failed: ${err?.message || err}`);
+        const label = action === 'cancel' ? 'Cancel' : action === 'recover' ? 'Recover' : 'Start';
+        setProjectRunControlError(projectSlug, `${label} failed: ${err?.message || err}`);
       }
       return;
     }
@@ -1631,6 +1643,18 @@ export function createProductDeepView({
       if (!id || cancelMutation.disabled) return;
       cancelMutation.disabled = true;
       await post(`/api/mutations/${encodeURIComponent(id)}/cancel`).catch(() => { cancelMutation.disabled = false; });
+      return;
+    }
+
+    const recoverWorkRun = event.target?.closest?.('[data-recover-work-run-id]');
+    if (recoverWorkRun) {
+      event.preventDefault?.();
+      const id = recoverWorkRun.dataset?.recoverWorkRunId;
+      if (!id || recoverWorkRun.disabled) return;
+      recoverWorkRun.disabled = true;
+      await post(`/api/work-runs/${encodeURIComponent(id)}/recover`)
+        .then(() => reloadProductAndOperations())
+        .catch(() => { recoverWorkRun.disabled = false; });
       return;
     }
 

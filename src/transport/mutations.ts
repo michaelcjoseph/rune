@@ -711,6 +711,8 @@ async function startApply(
       );
     }
   } finally {
-    activeRuns.delete(descriptor.id);
+    if (activeRuns.get(descriptor.id) === handle) {
+      activeRuns.delete(descriptor.id);
+    }
   }
 }

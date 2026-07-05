@@ -2106,6 +2106,52 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(root.innerHTML).toMatch(/data-project-run-action=["']start["'][\s\S]{0,120}>Start</i);
   });
 
+  it('posts project-card Recover for active orchestrated runs', async () => {
+    const { createProductDeepView } = await import('./product-deep-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/products/aura') {
+        return productView({
+          projects: [
+            {
+              slug: '17-cockpit-redesign',
+              lifecycle: 'active',
+              taskProgress: { done: 4, total: 9 },
+              runControl: { state: 'cancel', mutationId: 'mut-orch-live', recoverable: true },
+            },
+          ],
+        });
+      }
+      if (url === '/api/state') {
+        return {
+          mutations: {
+            active: [{
+              id: 'mut-orch-live',
+              kind: 'orchestrated-work',
+              status: 'running',
+              payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+            }],
+          },
+        };
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async (url: string) => {
+      expect(url).toBe('/api/work-runs/mut-orch-live/recover');
+      return { recovered: true, runId: 'mut-orch-live' };
+    });
+
+    const view = createProductDeepView({ root, product: 'aura', fetchJson, postJson, loadOperations: true });
+    await view.load();
+    await root.clickClosest('[data-project-run-action]', {
+      projectRunAction: 'recover',
+      projectSlug: '17-cockpit-redesign',
+      mutationId: 'mut-orch-live',
+    });
+
+    expect(postJson).toHaveBeenCalledWith('/api/work-runs/mut-orch-live/recover');
+  });
+
   it('keeps project-card run controls usable and renders inline errors after Start or Cancel failures', async () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const startRoot = makeRoot();
@@ -2330,6 +2376,18 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     const { createProductDeepView } = await import('./product-deep-view.js');
     const root = makeRoot();
     const postJson = vi.fn(async () => ({ ok: true }));
+    const operations = {
+      ...productOperations,
+      mutations: [
+        ...(productOperations.mutations || []),
+        {
+          id: 'mut-orch-live',
+          kind: 'orchestrated-work',
+          status: 'running',
+          payload: { product: 'aura', projectSlug: '17-cockpit-redesign' },
+        },
+      ],
+    };
 
     const view = createProductDeepView({
       root,
@@ -2339,18 +2397,21 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       // independent of any active run).
       fetchJson: vi.fn(async () => productView({ activeRun: undefined })),
       postJson,
-      operations: productOperations,
+      operations,
     });
     await view.load();
     expect(root.innerHTML).toMatch(/data-active-side-panel=["']operations["']/i);
     expect(root.innerHTML).toMatch(/data-surface=["']operations["'][\s\S]*data-cancel-op-id=["']op-live-1["']/i);
     expect(root.innerHTML).toMatch(/data-surface=["']operations["'][\s\S]*data-cancel-mutation-id=["']mut-live-1["']/i);
+    expect(root.innerHTML).toMatch(/data-surface=["']operations["'][\s\S]*data-recover-work-run-id=["']mut-orch-live["']/i);
 
     await root.clickClosest('[data-cancel-op-id]', { cancelOpId: 'op-live-1' });
     await root.clickClosest('[data-cancel-mutation-id]', { cancelMutationId: 'mut-live-1' });
+    await root.clickClosest('[data-recover-work-run-id]', { recoverWorkRunId: 'mut-orch-live' });
 
     expect(postJson).toHaveBeenCalledWith('/api/ops/op-live-1/cancel');
     expect(postJson).toHaveBeenCalledWith('/api/mutations/mut-live-1/cancel');
+    expect(postJson).toHaveBeenCalledWith('/api/work-runs/mut-orch-live/recover');
   });
 
   it('renders product-local op status from WebSocket op-event frames and logs activity in Operations', async () => {

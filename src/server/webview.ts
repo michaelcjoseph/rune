@@ -42,6 +42,7 @@ import { getProjectSummaries } from './projects-snapshot.js';
 import { readWorkRunProjections } from './work-run-projection.js';
 import { readRecentIndex, readWorkRunSummary } from '../jobs/work-run-store.js';
 import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
+import { requestOrchestratedRunRecovery } from '../jobs/orchestrated-work-runner.js';
 import { VALID_SLUG, worktreePathFor } from '../intent/sandbox.js';
 import { appendInteraction } from '../utils/observation-log.js';
 import {
@@ -1771,6 +1772,37 @@ async function handleApiWorkRunRelease(req: IncomingMessage, res: ServerResponse
   }
 }
 
+/**
+ * POST /api/work-runs/:id/recover. Operator lever for a live-but-idle
+ * orchestrated run: cancel the active in-process slot, detach it, and re-enter
+ * the durable orchestrated recovery path from its cursor without restarting the
+ * daemon. Only active `orchestrated-work` runs with a resumable cursor are
+ * accepted.
+ */
+async function handleApiWorkRunRecover(res: ServerResponse, id: string): Promise<void> {
+  if (!VALID_SLUG.test(id)) { reject400(res, 'invalid run id'); return; }
+  const outcome = await requestOrchestratedRunRecovery(id);
+  switch (outcome.kind) {
+    case 'recovered':
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ recovered: true, runId: outcome.runId }));
+      logWebviewAction('work-run-recover', 'success', `runId=${id}`);
+      return;
+    case 'not-active':
+    case 'not-orchestrated':
+    case 'not-resumable':
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: outcome.reason }));
+      logWebviewAction('work-run-recover', 'failure', `reason=${outcome.kind}`);
+      return;
+    case 'error':
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: outcome.reason }));
+      logWebviewAction('work-run-recover', 'failure', 'reason=recover-error');
+      return;
+  }
+}
+
 function productScopeFrom(value: unknown): SessionScope | undefined {
   const product = typeof value === 'string' ? value.trim() : '';
   if (!product || !VALID_SLUG.test(product)) return undefined;
@@ -2760,6 +2792,11 @@ export function mountWebviewRoutes(
       const workRunReleaseMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/release$/);
       if (req.method === 'POST' && workRunReleaseMatch) {
         await handleApiWorkRunRelease(req, res, decodeURIComponent(workRunReleaseMatch[1]!));
+        return true;
+      }
+      const workRunRecoverMatch = pathname.match(/^\/api\/work-runs\/([^/]+)\/recover$/);
+      if (req.method === 'POST' && workRunRecoverMatch) {
+        await handleApiWorkRunRecover(res, decodeURIComponent(workRunRecoverMatch[1]!));
         return true;
       }
 

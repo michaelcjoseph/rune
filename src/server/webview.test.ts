@@ -39,6 +39,11 @@ vi.mock('../jobs/work-run-release.js', () => ({
   defaultReleaseRequestDeps: vi.fn(() => ({})),
 }));
 
+const mockRequestOrchestratedRunRecovery = vi.fn();
+vi.mock('../jobs/orchestrated-work-runner.js', () => ({
+  requestOrchestratedRunRecovery: mockRequestOrchestratedRunRecovery,
+}));
+
 // In-flight op mocks for POST /api/ops/:id/cancel
 const mockCancelOp = vi.fn();
 const mockRegisterOp = vi.fn();
@@ -502,6 +507,7 @@ describe('server/webview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockActiveRunsMap.clear();
+    mockRequestOrchestratedRunRecovery.mockResolvedValue({ kind: 'not-active', reason: 'run is not active' });
     mockConfig.RUNE_HTTP_SECRET = 'test-secret';
     mockConfig.RUNE_MCP_OAUTH_STORE_FILE = '/test/missing-rune-mcp-oauth-store.json';
     mockConfig.RUNE_MCP_HOST = '127.0.0.1';
@@ -2124,6 +2130,54 @@ describe('server/webview', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
       });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe('POST /api/work-runs/:id/recover', () => {
+    it('returns 202 when an active orchestrated run is re-entered from its cursor', async () => {
+      mockRequestOrchestratedRunRecovery.mockResolvedValue({ kind: 'recovered', runId: 'mut-orch-1' });
+
+      const res = await makeRequest(port, '/api/work-runs/mut-orch-1/recover', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ recovered: true, runId: 'mut-orch-1' });
+      expect(mockRequestOrchestratedRunRecovery).toHaveBeenCalledWith('mut-orch-1');
+    });
+
+    it('returns 409 when the active run is not resumable', async () => {
+      mockRequestOrchestratedRunRecovery.mockResolvedValue({
+        kind: 'not-resumable',
+        reason: 'missing resumable orchestrated cursor',
+      });
+
+      const res = await makeRequest(port, '/api/work-runs/mut-orch-1/recover', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('missing resumable orchestrated cursor');
+    });
+
+    it('rejects an invalid run id with 400 before invoking recovery', async () => {
+      const res = await makeRequest(port, '/api/work-runs/..%2Fetc/recover', {
+        method: 'POST',
+        headers: { authorization: 'Bearer test-secret' },
+      });
+
+      expect(res.status).toBe(400);
+      expect(mockRequestOrchestratedRunRecovery).not.toHaveBeenCalled();
+    });
+
+    it('returns 401 without auth', async () => {
+      const res = await makeRequest(port, '/api/work-runs/mut-orch-1/recover', {
+        method: 'POST',
+      });
+
       expect(res.status).toBe(401);
     });
   });
