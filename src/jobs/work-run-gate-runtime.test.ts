@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { defaultRunGit } from './sandbox-runtime.js';
 import {
   runGate,
+  runValidationCommands,
   type GateRuntimeOpts,
   type GateRuntimeIO,
   type ValidationCommandResult,
@@ -189,5 +190,35 @@ describe('runGate — test before mutating main (P1.5)', () => {
     // assert the product repo is still byte-for-byte unchanged here too.
     expect(baseState()).toEqual(before);
     expect(existsSync(integrationWorktree)).toBe(false);
+  });
+});
+
+describe('runValidationCommands', () => {
+  it('passes when every command exits 0', async () => {
+    await expect(runValidationCommands([
+      'node -e process.exit(0)',
+      'node -e process.exit(0)',
+    ], tmpRoot, 1_000)).resolves.toEqual({ ok: true });
+  });
+
+  it('fails when any command exits nonzero', async () => {
+    await expect(runValidationCommands([
+      'node -e process.exit(0)',
+      'node -e process.exit(7)',
+    ], tmpRoot, 1_000)).resolves.toMatchObject({
+      ok: false,
+      command: 'node -e process.exit(7)',
+      result: { exitCode: 7, timedOut: false },
+    });
+  });
+
+  it('fails when any command times out', async () => {
+    await expect(runValidationCommands([
+      'node -e setTimeout(()=>{},1000)',
+    ], tmpRoot, 20)).resolves.toMatchObject({
+      ok: false,
+      command: 'node -e setTimeout(()=>{},1000)',
+      result: { timedOut: true },
+    });
   });
 });

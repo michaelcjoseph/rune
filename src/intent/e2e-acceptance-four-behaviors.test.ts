@@ -9,7 +9,7 @@
  * `runDownstreamPlan`, scaffold approval wiring, and `runTeamTaskWorkflow` all run real.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ const {
     PLANNING_SESSIONS_FILE: '/test/logs/planning-sessions.json',
     PLANNING_ARTIFACTS_DIR: '/test/logs/planning-artifacts',
     PROMOTIONS_FILE: '/test/logs/promotions.jsonl',
+    MODEL_POLICY_FILE: '/test/logs/model-policy.json',
   },
   mockAskClaudeWithContext: vi.fn(),
   mockCleanupSession: vi.fn(),
@@ -136,6 +137,26 @@ beforeEach(() => {
   mockConfig.PLANNING_SESSIONS_FILE = join(tmpDir, 'planning-sessions.json');
   mockConfig.PLANNING_ARTIFACTS_DIR = join(tmpDir, 'planning-artifacts');
   mockConfig.PROMOTIONS_FILE = join(tmpDir, 'promotions.jsonl');
+  mockConfig.MODEL_POLICY_FILE = join(tmpDir, 'model-policy.json');
+  writeFileSync(
+    mockConfig.MODEL_POLICY_FILE,
+    JSON.stringify({
+      models: [
+        {
+          alias: 'opus',
+          provider: 'anthropic',
+          format: 'claude',
+          capabilities: [],
+          costTier: 'high',
+          status: 'preferred',
+        },
+      ],
+      globalFallback: 'opus',
+      roleDefaults: { pm: 'opus' },
+      evaluatorDistinctFromGenerator: true,
+    }),
+    'utf8',
+  );
 
   mockAskClaudeWithContext.mockReset();
   mockCleanupSession.mockReset();

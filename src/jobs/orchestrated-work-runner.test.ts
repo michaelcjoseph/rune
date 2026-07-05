@@ -48,6 +48,16 @@ const mockRunFinalizer = vi.hoisted(() =>
   })),
 );
 const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({ ok: true })));
+type MockValidationCommandListResult =
+  | { ok: true }
+  | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean } };
+const mockRunValidationCommands = vi.hoisted(() =>
+  vi.fn(async (
+    _commands: readonly string[],
+    _cwd: string,
+    _timeoutMs: number,
+  ): Promise<MockValidationCommandListResult> => ({ ok: true })),
+);
 
 vi.mock('./mutations-log.js', () => ({
   appendMutationLine: mockAppendMutationLine,
@@ -75,6 +85,7 @@ vi.mock('./work-run-finalizer.js', async (importOriginal) => {
 
 vi.mock('./work-run-gate-runtime.js', () => ({
   runGate: mockRunGate,
+  runValidationCommands: mockRunValidationCommands,
 }));
 
 import {
@@ -128,6 +139,28 @@ function makeWorktree(project = 'demo', tasks = '- [ ] task one\n'): { sandbox: 
     },
     dir,
   };
+}
+
+function writeValidProjectContext(dir: string, project = 'demo'): void {
+  writeFileSync(join(dir, 'docs', 'projects', project, 'context.md'), [
+    '# Project Context',
+    '',
+    '## Current State',
+    'Initial state.',
+    '',
+    '## Key Decisions',
+    'None yet.',
+    '',
+    '## Interfaces & Contracts',
+    'Use the existing orchestration seams.',
+    '',
+    '## Known Risks',
+    'None yet.',
+    '',
+    '## Next Task Handoff',
+    'Start with the first unchecked task.',
+    '',
+  ].join('\n'), 'utf8');
 }
 
 function initGitRepo(dir: string): void {
@@ -290,6 +323,8 @@ describe('orchestratedWorkApplier', () => {
       mockRunFinalizer.mockClear();
       mockRunGate.mockReset();
       mockRunGate.mockResolvedValue({ ok: true });
+      mockRunValidationCommands.mockReset();
+      mockRunValidationCommands.mockResolvedValue({ ok: true });
       mockAppendMutationLine.mockClear();
       mockUpsertRun.mockClear();
       mockCreateTranscriptSink.mockReset();
@@ -1175,6 +1210,284 @@ describe('orchestratedWorkApplier', () => {
         ['rev-parse', 'HEAD'],
       ]));
       expect(destroyed).toBe(true);
+    });
+
+    it('fails closeout validation without committing, ticking the task, or emitting closeout progress', async () => {
+      const runId = 'mut-closeout-validation-fails';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-fails-'));
+      const productsFile = join(artifactsDir, 'products.json');
+      const repoPath = join(artifactsDir, 'canonical-repo');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      const gitCalls: string[][] = [];
+      let tasksAtDestroy = '';
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(
+        productsFile,
+        JSON.stringify({
+          rune: {
+            repoPath,
+            baseBranch: 'main',
+            credentialsFile: '',
+            egressAllowlist: [],
+            validationCommands: ['npm test'],
+          },
+        }),
+        'utf8',
+      );
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockRunValidationCommands.mockResolvedValueOnce({
+        ok: false,
+        command: 'npm test',
+        result: { exitCode: 1, timedOut: false },
+      });
+
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        gitCalls.push([...gitArgs]);
+        if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'rev-list') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'diff') return { stdout: '', stderr: '' };
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'unexpected-closeout-sha\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          writeValidProjectContext(dir);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async (sandbox) => {
+          tasksAtDestroy = readFileSync(join(sandbox.worktree, 'docs', 'projects', 'demo', 'tasks.md'), 'utf8');
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, runId),
+          ctx,
+        ));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const progress = events.filter((event) => {
+          const data = (event.data ?? {}) as Record<string, unknown>;
+          return event.kind === 'progress' && data['event'] === 'closeout-commit';
+        });
+
+        expect(terminal?.kind).toBe('failed');
+        expect(String(((terminal?.data ?? {}) as Record<string, unknown>)['reason'])).toContain('closeout checks failed');
+        expect(gitCalls.some((args) => args[0] === 'commit')).toBe(false);
+        expect(gitCalls.some((args) => args[0] === 'add')).toBe(false);
+        expect(progress).toEqual([]);
+        expect(tasksAtDestroy).toContain('- [ ] Build the streak core');
+        expect(destroyed).toBe(true);
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('runs passing closeout validation before staging, committing, and emitting closeout progress', async () => {
+      const runId = 'mut-closeout-validation-passes';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-passes-'));
+      const productsFile = join(artifactsDir, 'products.json');
+      const repoPath = join(artifactsDir, 'canonical-repo');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      const operations: string[] = [];
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(
+        productsFile,
+        JSON.stringify({
+          rune: {
+            repoPath,
+            baseBranch: 'main',
+            credentialsFile: '',
+            egressAllowlist: [],
+            validationCommands: ['npm test'],
+          },
+        }),
+        'utf8',
+      );
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockRunValidationCommands.mockImplementationOnce(async () => {
+        operations.push('validation');
+        return { ok: true as const };
+      });
+
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'add') operations.push('git:add');
+        if (gitArgs[0] === 'commit') operations.push('git:commit');
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-pass-sha\n', stderr: '' };
+        if (gitArgs[0] === 'rev-list') return { stdout: 'closeout-pass-sha\n', stderr: '' };
+        if (gitArgs[0] === 'diff') return { stdout: ' src/feature.ts | 1 +\n', stderr: '' };
+        if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', [
+            '- [ ] Build the streak core',
+            '- [ ] Render the streak card',
+            '',
+          ].join('\n'));
+          writeValidProjectContext(dir);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, runId),
+          ctx,
+        ));
+        const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+        const progress = events.filter((event) => {
+          const data = (event.data ?? {}) as Record<string, unknown>;
+          return event.kind === 'progress' && data['event'] === 'closeout-commit';
+        });
+
+        expect(terminal?.kind).toBe('completed');
+        expect(operations).toEqual(expect.arrayContaining(['validation', 'git:add', 'git:commit']));
+        expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:add'));
+        expect(operations.indexOf('validation')).toBeLessThan(operations.indexOf('git:commit'));
+        expect(progress).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            mutationId: runId,
+            kind: 'progress',
+            data: expect.objectContaining({
+              event: 'closeout-commit',
+              taskId: 'build-the-streak-core',
+              commitSha: 'closeout-pass-sha',
+            }),
+          }),
+        ]));
+        expect(readFileSync(join(wtDir!, 'docs', 'projects', 'demo', 'tasks.md'), 'utf8')).toContain('- [x] Build the streak core');
+        expect(destroyed).toBe(true);
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
+    });
+
+    it('runs closeout validation in the task sandbox worktree, not the product repo or gate worktree', async () => {
+      const runId = 'mut-closeout-validation-cwd';
+      const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-cwd-'));
+      const productsFile = join(artifactsDir, 'products.json');
+      const repoPath = join(artifactsDir, 'canonical-repo');
+      const integrationWorktree = join(artifactsDir, 'gate-worktree');
+      const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
+      let validationCwd = '';
+
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(
+        productsFile,
+        JSON.stringify({
+          rune: {
+            repoPath,
+            baseBranch: 'main',
+            credentialsFile: '',
+            egressAllowlist: [],
+            validationCommands: ['npm test'],
+          },
+        }),
+        'utf8',
+      );
+      process.env['PRODUCTS_CONFIG_FILE'] = productsFile;
+      mockRunValidationCommands.mockImplementationOnce(async (_commands, cwd) => {
+        validationCwd = String(cwd);
+        return { ok: true as const };
+      });
+
+      const runGit = vi.fn(async (gitArgs: string[]) => {
+        if (gitArgs[0] === 'rev-parse') return { stdout: 'closeout-cwd-sha\n', stderr: '' };
+        if (gitArgs[0] === 'rev-list') return { stdout: 'closeout-cwd-sha\n', stderr: '' };
+        if (gitArgs[0] === 'diff') return { stdout: ' src/feature.ts | 1 +\n', stderr: '' };
+        if (gitArgs[0] === 'status') return { stdout: '', stderr: '' };
+        return { stdout: '', stderr: '' };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [ ] Build the streak core\n');
+          writeValidProjectContext(dir);
+          wtDir = dir;
+          return sandbox;
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        integrationWorktree: () => integrationWorktree,
+        workRunsDir: artifactsDir,
+        workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
+        runGit,
+        createTaskWorkflowRunner: () => async (task) => ({
+          taskId: task.id,
+          outcome: 'ready-for-closeout',
+          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+          findingsLedger: [],
+          loopExitReason: 'all-low',
+          objectionOpen: false,
+          handoffNotes: [`completed ${task.text}`],
+          reviewerVerdict: { pass: true, objections: [] },
+        }),
+      });
+
+      try {
+        const events = await drain(orchestratedWorkApplier.apply(
+          makeDescriptor(undefined, runId),
+          ctx,
+        ));
+        expect(events.find((event) => event.kind === 'completed' || event.kind === 'failed')?.kind).toBe('completed');
+        expect(validationCwd).toBe(wtDir);
+        expect(validationCwd).not.toBe(repoPath);
+        expect(validationCwd).not.toBe(integrationWorktree);
+      } finally {
+        if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
+        else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;
+        rmSync(artifactsDir, { recursive: true, force: true });
+      }
     });
 
     it('passes branch-wide tree-state evidence into each task workflow context', async () => {

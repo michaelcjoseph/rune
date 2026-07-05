@@ -1694,17 +1694,17 @@ describe('project-orchestrator — finalizer handoff', () => {
     expect(h.state.commits).toHaveLength(2);
   });
 
-  it('does not finalize when an operational closeout failure holds mid-way', async () => {
-    // A run that holds on an operational terminal never reaches the finalizer.
-    const worktreePath = '/tmp/rune-worktrees/aura/14-closeout-checks';
+  it('does not finalize or tick the task when closeout checks fail', async () => {
     const h = makeHarness({ runCloseoutChecks: async () => false });
-    const res = await runProjectOrchestration({ ...h.deps, worktreePath });
-    expectOperationalHold(res, {
-      reason: /operational|closeout checks/i,
-      worktreePath,
+    const res = await runProjectOrchestration(h.deps);
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      reason: 'closeout checks failed',
+      task: { id: 'build-the-streak-core' },
     });
     expect(h.state.finalizeCalled).toBe(false);
     expect(h.state.commits).toEqual([]);
+    expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
     expect(closeoutProgressEvents(h.state.events)).toEqual([]);
   });
 });

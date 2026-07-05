@@ -68,6 +68,7 @@ import type { FinalizerAdapter } from '../intent/finalizer-handoff.js';
 import { workBranchName } from './work-runner.js';
 import { VALID_SLUG, type SandboxSpec } from '../intent/sandbox.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
+import { scrubAbsolutePaths } from '../utils/sanitize-paths.js';
 import { activeRuns, redispatchMutation } from '../transport/mutations.js';
 import { createLogger } from '../utils/logger.js';
 import { appendMutationLine } from './mutations-log.js';
@@ -100,7 +101,10 @@ import {
   type FinalizerPhase,
   type GateFailReason,
 } from './work-run-finalizer.js';
-import { runGate as defaultRunGate } from './work-run-gate-runtime.js';
+import {
+  runGate as defaultRunGate,
+  runValidationCommands as defaultRunValidationCommands,
+} from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
 
@@ -269,6 +273,7 @@ function buildOrchestrationDeps(args: {
   projectSlug: string;
   branch: string;
   baseBranch: string;
+  validationCommands: string[];
   workRunsDir: string;
   runGit: GitRunner;
   createTaskWorkflowRunner: typeof createProductionTaskWorkflowRunner;
@@ -350,7 +355,23 @@ function buildOrchestrationDeps(args: {
     // Task-scoped closeout checks: run the product's validation commands. (For
     // v1 these are the same fast checks the finalizer gate uses.) No commands ⇒
     // pass — the project-level finalizer gate still owns the full merge gate.
-    runCloseoutChecks: async () => true,
+    runCloseoutChecks: async () => {
+      const validation = await defaultRunValidationCommands(
+        args.validationCommands,
+        sandbox.worktree,
+        config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
+      );
+      if (validation.ok) return true;
+      log.warn('orchestrated-work-runner: closeout validation command failed', {
+        id: descriptor.id,
+        projectSlug,
+        product,
+        command: redactSecrets(scrubAbsolutePaths(scrubPathsInText(validation.command))),
+        exitCode: validation.result.exitCode,
+        timedOut: validation.result.timedOut,
+      });
+      return false;
+    },
 
     commitCloseout: async (task: SelectedTask): Promise<CloseoutCommit> => {
       const message = `rune(${product}): closeout — ${task.text}`.slice(0, 200);
@@ -949,6 +970,7 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
         projectSlug,
         branch,
         baseBranch: recovery?.baseBranch ?? baseBranch,
+        validationCommands,
         workRunsDir: deps.workRunsDir,
         runGit: deps.runGit,
         createTaskWorkflowRunner: deps.createTaskWorkflowRunner,

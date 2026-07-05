@@ -225,6 +225,9 @@ export async function runProjectOrchestration(
     // --- Rune-owned closeout ---
     const closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
     if (closeout.kind === 'blocked') {
+      if (closeout.reason === 'closeout checks failed') {
+        return { kind: 'blocked', reason: closeout.reason, task };
+      }
       return buildOperationalHold(deps, closeout.reason, taskRecords);
     }
 
@@ -298,8 +301,9 @@ type CloseoutResult =
   | { kind: 'blocked'; reason: string };
 
 /** Perform the closeout sequence for one passed task. The order keeps the branch
- *  finalizer-ready: context update → tick exactly this task → closeout checks →
- *  commit → clean-worktree verify. Any failure blocks durably. */
+ *  finalizer-ready: compute context/tick → closeout checks → persist context
+ *  and tick exactly this task → commit → clean-worktree verify. Any failure
+ *  blocks durably. */
 async function performCloseout(
   deps: OrchestrationDeps,
   task: SelectedTask,
@@ -322,15 +326,16 @@ async function performCloseout(
     return { kind: 'blocked', reason: `closeout checkbox tick failed: ${tick.reason}` };
   }
 
-  // Both transforms succeeded → persist them together (context first, then the
-  // tick that marks the task done).
-  await deps.writeContextMd(ctxResult.content);
-  await deps.writeTasksMd(tick.content);
-
-  // 3. Task-scoped closeout checks.
+  // 3. Task-scoped closeout checks. Run these before persisting the tick so a
+  // validation failure leaves the task visibly unchecked in the live worktree.
   if (!(await deps.runCloseoutChecks(task))) {
     return { kind: 'blocked', reason: 'closeout checks failed' };
   }
+
+  // Both transforms succeeded and validation passed → persist them together
+  // (context first, then the tick that marks the task done).
+  await deps.writeContextMd(ctxResult.content);
+  await deps.writeTasksMd(tick.content);
 
   // 4. Record the closeout commit.
   const commit = await deps.commitCloseout(task);

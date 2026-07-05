@@ -177,6 +177,31 @@ function defaultRunValidationCommand(
   });
 }
 
+export type ValidationCommandListResult =
+  | { ok: true }
+  | { ok: false; command: string; result: ValidationCommandResult };
+
+/**
+ * Run a product validation command list in `cwd`, stopping at the first failed
+ * or timed-out command. An empty list is a pass for callers that intentionally
+ * allow "no task-scoped checks"; the merge gate still fail-closes on missing
+ * commands before it calls into this helper.
+ */
+export async function runValidationCommands(
+  commands: readonly string[],
+  cwd: string,
+  timeoutMs: number,
+  runValidationCommand: GateRuntimeIO['runValidationCommand'] = defaultRunValidationCommand,
+): Promise<ValidationCommandListResult> {
+  for (const command of commands) {
+    const result = await runValidationCommand(command, cwd, timeoutMs);
+    if (result.timedOut || result.exitCode !== 0) {
+      return { ok: false, command, result };
+    }
+  }
+  return { ok: true };
+}
+
 const defaultGateRuntimeIO = (): GateRuntimeIO => ({
   runGit: defaultRunGit,
   runValidationCommand: defaultRunValidationCommand,
@@ -253,12 +278,17 @@ export async function runGate(
       const status = await runGit(['status', '--porcelain'], { cwd: opts.integrationWorktree });
       treeClean = status.stdout.trim() === '';
 
-      // Run each validation command in the integration worktree. testsGreen = all
-      // exited 0; validationTimedOut = any exceeded its budget.
-      for (const command of opts.validationCommands) {
-        const result = await runValidationCommand(command, opts.integrationWorktree, opts.commandTimeoutMs);
-        if (result.timedOut) validationTimedOut = true;
-        if (result.exitCode !== 0) testsGreen = false;
+      // Run validation commands in the integration worktree. testsGreen = all
+      // exited 0; validationTimedOut = the first red command exceeded budget.
+      const validation = await runValidationCommands(
+        opts.validationCommands,
+        opts.integrationWorktree,
+        opts.commandTimeoutMs,
+        runValidationCommand,
+      );
+      if (!validation.ok) {
+        validationTimedOut = validation.result.timedOut;
+        testsGreen = validation.result.exitCode === 0 && !validation.result.timedOut;
       }
     }
 
