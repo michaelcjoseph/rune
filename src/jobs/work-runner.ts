@@ -17,6 +17,7 @@ import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { GateFailReason } from './work-run-gate.js';
 import { exportForensics, type ExportForensicsOpts, type ForensicsResult } from './work-run-forensics.js';
 import { runWorkRunGc } from './work-run-gc-runner.js';
+import { rebuildRegistry } from './registry-rebuild.js';
 import { scrubPathsInText } from '../ai/tool-labels.js';
 import { VALID_SLUG, worktreePathFor, workBranchName, type SandboxSpec } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -70,6 +71,10 @@ export interface WorkRunRuntimeDeps {
    *  leaves these unset today. */
   recordWorkRunPhase?: (runId: string, phase: FinalizerPhase) => void;
   readLastWorkRunPhase?: (runId: string) => FinalizerPhase | null;
+  /** Refresh the rebuildable product/project registry after a branch lands on
+   *  the product's base branch, so cockpit project cards stop reading stale
+   *  lifecycle/progress counts. Best-effort at the call site. */
+  refreshRegistry: () => void;
 }
 
 /** Production defaults — real git, real config dir, real sink + store. */
@@ -87,10 +92,28 @@ function productionRuntimeDeps(): WorkRunRuntimeDeps {
     // merge. Best-effort: recordWorkRunPhase logs + swallows on disk failure.
     recordWorkRunPhase: (runId, phase) => recordWorkRunPhase(config.WORK_RUNS_DIR, runId, phase),
     readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
+    refreshRegistry: () => { rebuildRegistry(); },
   };
 }
 
 let runtimeDeps: WorkRunRuntimeDeps = productionRuntimeDeps();
+
+function refreshRegistryAfterLanding(deps: WorkRunRuntimeDeps, context: {
+  runId: string;
+  projectSlug: string;
+  product: string;
+}): void {
+  try {
+    deps.refreshRegistry();
+  } catch (err) {
+    log.warn('work-runner: registry refresh failed after branch landing', {
+      id: context.runId,
+      projectSlug: context.projectSlug,
+      product: context.product,
+      error: (err as Error).message,
+    });
+  }
+}
 
 /** Test-only: override part of the classification/persist seam. */
 export function __setWorkRunRuntimeForTest(partial: Partial<WorkRunRuntimeDeps>): void {
@@ -883,6 +906,13 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
             // the branch is a redundant tracking ref the GC prunes later) WITHOUT
             // denying the terminal (the merge + push already landed).
             await deps.runGit(['branch', '-d', branch], { cwd: repoPath });
+          },
+          onLanded: () => {
+            refreshRegistryAfterLanding(deps, {
+              runId: descriptor.id,
+              projectSlug,
+              product,
+            });
           },
         };
 

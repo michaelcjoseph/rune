@@ -316,11 +316,13 @@ describe('orchestratedWorkApplier', () => {
     let created: boolean;
     let destroyed: boolean;
     let wtDir: string | null;
+    let refreshRegistrySpy: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
       created = false;
       destroyed = false;
       wtDir = null;
+      refreshRegistrySpy = vi.fn();
       mockRunFinalizer.mockClear();
       mockRunGate.mockReset();
       mockRunGate.mockResolvedValue({ ok: true });
@@ -330,6 +332,9 @@ describe('orchestratedWorkApplier', () => {
       mockUpsertRun.mockClear();
       mockCreateTranscriptSink.mockReset();
       activeRuns.clear();
+      __setOrchestratedRuntimeForTest({
+        refreshRegistry: refreshRegistrySpy as () => void,
+      });
     });
 
     afterEach(() => {
@@ -2092,6 +2097,7 @@ describe('orchestratedWorkApplier', () => {
       });
 
       expect(typeof finalizerEffects.onLanded).toBe('function');
+      expect(refreshRegistrySpy).toHaveBeenCalledOnce();
       expect(notifications).toHaveLength(1);
       expect(notifications[0]).toMatchObject({
         mutationId: runId,
@@ -2106,6 +2112,65 @@ describe('orchestratedWorkApplier', () => {
       });
       expect(notificationIndex).toBeGreaterThanOrEqual(0);
       expect(terminalIndex).toBeGreaterThan(notificationIndex);
+      expect(destroyed).toBe(true);
+    });
+
+    it('does not let a registry refresh failure block an orchestrated landed terminal', async () => {
+      const runId = 'mut-orch-refresh-registry-fails';
+      const { runGit } = makeWorkProductGitStub({
+        commitShas: ['abc1111'],
+        diffstat: ' src/feature.ts | 1 +\n 1 file changed, 1 insertion(+)\n',
+      });
+      refreshRegistrySpy.mockImplementationOnce(() => {
+        throw new Error('registry scan failed');
+      });
+      mockRunFinalizer.mockImplementationOnce(async (_input, effects) => {
+        const terminalEvent = await effects.classify();
+        await effects.flushTranscript();
+        effects.writeSummary(terminalEvent);
+        effects.appendIndexRow(terminalEvent);
+        effects.onLanded?.();
+        effects.writeSupervisionTerminal('completed', terminalEvent);
+        return {
+          outcome: 'branch-complete',
+          terminalEvent,
+          supervisionStatus: 'completed',
+          worktreeRemoved: true,
+          merged: true,
+          branchDeleted: true,
+          phases: [
+            'classified',
+            'transcript-flushed',
+            'summary-written',
+            'index-appended',
+            'merged-not-pushed',
+            'pushed-not-deleted',
+            'worktree-resolved',
+            'finalized',
+          ],
+        };
+      });
+
+      __setOrchestratedRuntimeForTest({
+        createWorktree: async () => {
+          created = true;
+          const { sandbox, dir } = makeWorktree('demo', '- [x] task one\n');
+          wtDir = dir;
+          return { ...sandbox, baseSha: 'base-refresh-fails-123' };
+        },
+        destroyWorktree: async () => {
+          destroyed = true;
+        },
+        runGit,
+        runOrchestration: async (deps) => finalizeAsOrchestrationResult(deps),
+      });
+
+      const events = await drain(orchestratedWorkApplier.apply(makeDescriptor(undefined, runId), ctx));
+      const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
+
+      expect(terminal?.kind).toBe('completed');
+      expect((terminal?.data as Record<string, unknown>)['outcome']).toBe('branch-complete');
+      expect(refreshRegistrySpy).toHaveBeenCalledOnce();
       expect(destroyed).toBe(true);
     });
 

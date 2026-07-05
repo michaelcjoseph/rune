@@ -333,6 +333,7 @@ describe('workRunApplier', () => {
   let currentSink: ReturnType<typeof makeFakeSink>;
   let gitStub: ReturnType<typeof makeGitStub>;
   let runForensicsSpy: ReturnType<typeof vi.fn>;
+  let refreshRegistrySpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -368,6 +369,7 @@ describe('workRunApplier', () => {
     // mocked away from here) — its own contract is covered by
     // work-run-forensics.test.ts; here we only assert it's invoked correctly.
     runForensicsSpy = vi.fn(async () => ({ forensicsPath: '/tmp/test-work-runs/x', files: [] }));
+    refreshRegistrySpy = vi.fn();
     __setWorkRunRuntimeForTest({
       runGit: gitStub.stub as never,
       workRunsDir: '/tmp/test-work-runs',
@@ -376,6 +378,7 @@ describe('workRunApplier', () => {
       writeSummary: writeSummarySpy as never,
       appendIndexRow: ((filePath: string, row: any) => { indexRows.push({ filePath, row }); }) as never,
       runForensics: runForensicsSpy as never,
+      refreshRegistry: refreshRegistrySpy as never,
     });
     // Stub the process-group reaper for every test so a cancel/exit reap never
     // fires a real `process.kill(-pid)` at the fake test pid (12345). Tests that
@@ -2031,6 +2034,40 @@ describe('workRunApplier', () => {
       expect(lastSummary.branchDeleted).toBe(true);
     });
 
+    it('refreshes the product registry after a gate-passing branch lands', async () => {
+      setupBranchComplete();
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-refresh-registry'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(true);
+      expect(refreshRegistrySpy).toHaveBeenCalledOnce();
+    });
+
+    it('does not let a registry refresh failure block the landed terminal', async () => {
+      setupBranchComplete();
+      refreshRegistrySpy.mockImplementationOnce(() => {
+        throw new Error('registry scan failed');
+      });
+      mockSpawn.mockReturnValue(makeFakeChild({ exitCode: 0 }));
+
+      const events: any[] = [];
+      for await (const event of workRunApplier.apply(descriptorFor('mut-gm-refresh-registry-fails'), { bus: null as any, cancel: () => false })) {
+        events.push(event);
+      }
+
+      const terminal = events.find(e => e.kind === 'completed' || e.kind === 'failed');
+      expect(terminal.kind).toBe('completed');
+      expect(terminal.data.outcome).toBe('branch-complete');
+      expect(terminal.data.merged).toBe(true);
+      expect(refreshRegistrySpy).toHaveBeenCalledOnce();
+    });
+
     it('surfaces the gate-held reason on the terminal event when the gate refuses (never a silent drop)', async () => {
       setupBranchComplete();
       // Gate refuses → run holds at branch-complete, never merges.
@@ -2046,6 +2083,7 @@ describe('workRunApplier', () => {
       expect(terminal.data.outcome).toBe('branch-complete');
       expect(terminal.data.merged).toBe(false);
       expect(terminal.data.gateHeldReason).toBe('tests-red');
+      expect(refreshRegistrySpy).not.toHaveBeenCalled();
     });
 
     it('records finalizer phases to the durable per-run phase store and reads the last phase from it (RED until wiring)', async () => {

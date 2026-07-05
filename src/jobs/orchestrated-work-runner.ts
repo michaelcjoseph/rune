@@ -107,6 +107,7 @@ import {
 } from './work-run-gate-runtime.js';
 import { withBaseBranchLock } from './work-run-merge-lock.js';
 import type { SupervisedRun } from '../intent/supervision.js';
+import { rebuildRegistry } from './registry-rebuild.js';
 
 const log = createLogger('orchestrated-work-runner');
 
@@ -199,6 +200,9 @@ export interface OrchestratedRuntimeDeps {
   runGate: typeof defaultRunGate;
   /** Build the throwaway integration worktree path used by the gate runtime. */
   integrationWorktree: (product: string, runId: string) => string;
+  /** Refresh the rebuildable product/project registry after a branch lands on
+   *  the product's base branch. Best-effort at the call site. */
+  refreshRegistry: () => void;
 }
 
 function productionRuntimeDeps(): OrchestratedRuntimeDeps {
@@ -217,6 +221,7 @@ function productionRuntimeDeps(): OrchestratedRuntimeDeps {
     readLastWorkRunPhase: (runId) => readLastWorkRunPhase(config.WORK_RUNS_DIR, runId),
     runGate: defaultRunGate,
     integrationWorktree: (product, runId) => join(config.WORKTREE_ROOT, `gate-${product}-${runId}`),
+    refreshRegistry: () => { rebuildRegistry(); },
   };
 }
 
@@ -236,6 +241,22 @@ export function __resetOrchestratedRuntimeForTest(): void {
  *  asserts the production `createTaskWorkflowRunner` binding). */
 export function __getRuntimeDepsForTest(): OrchestratedRuntimeDeps {
   return runtimeDeps;
+}
+
+function refreshRegistryAfterLanding(
+  deps: OrchestratedRuntimeDeps,
+  context: { runId: string; projectSlug: string; product: string },
+): void {
+  try {
+    deps.refreshRegistry();
+  } catch (err) {
+    log.warn('orchestrated-work-runner: registry refresh failed after branch landing', {
+      id: context.runId,
+      projectSlug: context.projectSlug,
+      product: context.product,
+      error: (err as Error).message,
+    });
+  }
 }
 
 /** Find a project dir by slug under `<base>/docs/projects` (exact or
@@ -1194,6 +1215,11 @@ export const orchestratedWorkApplier: MutationApplier<OrchestratedWorkPayload> =
               });
             },
             onLanded: (notification) => {
+              refreshRegistryAfterLanding(deps, {
+                runId: descriptor.id,
+                projectSlug,
+                product,
+              });
               enqueue({
                 mutationId: descriptor.id,
                 ts: new Date().toISOString(),
