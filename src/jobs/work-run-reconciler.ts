@@ -18,6 +18,19 @@ export interface TerminalWorkRunReconcilerDeps {
   terminalizeMutation: (descriptor: MutationDescriptor, summary: WorkRunSummary) => void;
   findRunningMutation: (id: string) => MutationDescriptor | null;
   findRunningMutations?: (ids: string[]) => Map<string, MutationDescriptor>;
+  /**
+   * Optional recovery path for a stale running row that has no terminal summary
+   * yet. Production wires the recovery finalizer; tests and legacy callers can
+   * omit it to preserve the old "skip no-summary rows" behavior.
+   */
+  recoverPreSummaryRun?: (run: SupervisedRun) => Promise<unknown>;
+  /**
+   * Hard liveness age before the reconciler may recover a no-summary row.
+   * Omit to disable pre-summary recovery.
+   */
+  preSummaryRecoveryStaleMs?: number;
+  /** True while the mutation still has an in-memory applier handle. */
+  hasActiveMutation?: (id: string) => boolean;
   now: () => string;
 }
 
@@ -28,7 +41,9 @@ export interface TerminalWorkRunReconcileResult {
 }
 
 interface TerminalWorkRunReconcilerOptions {
-  reconcileNow?: (deps: TerminalWorkRunReconcilerDeps) => TerminalWorkRunReconcileResult;
+  reconcileNow?: (
+    deps: TerminalWorkRunReconcilerDeps,
+  ) => TerminalWorkRunReconcileResult | Promise<TerminalWorkRunReconcileResult>;
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -95,13 +110,64 @@ function readTerminalSummary(workRunsDir: string, id: string): WorkRunSummary | 
   return null;
 }
 
-export function reconcileTerminalWorkRunsOnce(
+function livenessMs(run: SupervisedRun): number {
+  return Date.parse(run.lastChildAliveAt ?? run.lastHeartbeatAt);
+}
+
+function isPreSummaryRecoveryDue(run: SupervisedRun, deps: TerminalWorkRunReconcilerDeps): boolean {
+  if (!deps.recoverPreSummaryRun) return false;
+  if (deps.preSummaryRecoveryStaleMs === undefined) return false;
+  if (deps.hasActiveMutation?.(run.id)) return false;
+
+  const nowMs = Date.parse(deps.now());
+  if (Number.isNaN(nowMs)) return false;
+  const baselineMs = livenessMs(run);
+  if (Number.isNaN(baselineMs)) return true;
+  return nowMs - baselineMs > deps.preSummaryRecoveryStaleMs;
+}
+
+function isStillPreSummaryRecoveryTarget(
+  run: SupervisedRun,
   deps: TerminalWorkRunReconcilerDeps,
-): TerminalWorkRunReconcileResult {
+): boolean {
+  if (deps.hasActiveMutation?.(run.id)) return false;
+  const current = readAllRuns(deps.supervisedRunsFile).find((entry) => entry.id === run.id);
+  if (!current || current.status !== 'running') return false;
+  return readTerminalSummary(deps.workRunsDir, run.id) === null;
+}
+
+async function recoverPreSummaryRun(
+  run: SupervisedRun,
+  deps: TerminalWorkRunReconcilerDeps,
+): Promise<WorkRunSummary | null> {
+  if (!isPreSummaryRecoveryDue(run, deps)) return null;
+  if (!isStillPreSummaryRecoveryTarget(run, deps)) return null;
+
+  try {
+    await deps.recoverPreSummaryRun!(run);
+  } catch (err) {
+    log.warn('pre-summary work-run recovery failed', {
+      id: run.id,
+      error: (err as Error).message,
+    });
+    return null;
+  }
+
+  const summary = readTerminalSummary(deps.workRunsDir, run.id);
+  if (!summary) {
+    log.warn('pre-summary work-run recovery completed without a terminal summary', { id: run.id });
+  }
+  return summary;
+}
+
+export async function reconcileTerminalWorkRunsOnce(
+  deps: TerminalWorkRunReconcilerDeps,
+): Promise<TerminalWorkRunReconcileResult> {
   const runs = readAllRuns(deps.supervisedRunsFile);
   if (runs.length === 0) return { reconciled: 0, examined: 0, skipped: 0 };
 
   const candidates: Array<{ run: SupervisedRun; summary: WorkRunSummary }> = [];
+  const preSummaryCandidates: SupervisedRun[] = [];
   const runningIds: string[] = [];
   let reconciled = 0;
   let skipped = 0;
@@ -111,7 +177,8 @@ export function reconcileTerminalWorkRunsOnce(
 
     const summary = readTerminalSummary(deps.workRunsDir, run.id);
     if (!summary) {
-      skipped += 1;
+      preSummaryCandidates.push(run);
+      runningIds.push(run.id);
       continue;
     }
     candidates.push({ run, summary });
@@ -119,6 +186,21 @@ export function reconcileTerminalWorkRunsOnce(
   }
 
   const descriptors = deps.findRunningMutations?.(runningIds);
+
+  for (const run of preSummaryCandidates) {
+    const descriptor = descriptors ? (descriptors.get(run.id) ?? null) : deps.findRunningMutation(run.id);
+    if (!descriptor || descriptor.status !== 'running') {
+      skipped += 1;
+      continue;
+    }
+
+    const summary = await recoverPreSummaryRun(run, deps);
+    if (!summary) {
+      skipped += 1;
+      continue;
+    }
+    candidates.push({ run, summary });
+  }
 
   for (const { run, summary } of candidates) {
     const descriptor = descriptors ? (descriptors.get(run.id) ?? null) : deps.findRunningMutation(run.id);
@@ -154,10 +236,22 @@ export function startTerminalWorkRunReconciler(
   if (timer) stopTerminalWorkRunReconciler();
 
   const reconcileNow = options.reconcileNow ?? reconcileTerminalWorkRunsOnce;
+  let tickInFlight = false;
   timer = setInterval(() => {
+    if (tickInFlight) return;
+    tickInFlight = true;
     try {
-      reconcileNow(deps);
+      Promise.resolve(reconcileNow(deps))
+        .catch((err: Error) => {
+          log.warn('terminal work-run reconciliation tick failed', {
+            error: err.message,
+          });
+        })
+        .finally(() => {
+          tickInFlight = false;
+        });
     } catch (err) {
+      tickInFlight = false;
       log.warn('terminal work-run reconciliation tick failed', {
         error: (err as Error).message,
       });
@@ -222,9 +316,14 @@ function eventFromSummary(summary: WorkRunSummary): MutationEvent {
 }
 
 export async function defaultTerminalWorkRunReconcilerDeps(): Promise<TerminalWorkRunReconcilerDeps> {
-  const [{ default: config }, { writeRecoveredTerminalMutation }] = await Promise.all([
+  const [
+    { default: config },
+    { writeRecoveredTerminalMutation, activeRuns },
+    { recoverStaleWorkRun },
+  ] = await Promise.all([
     import('../config.js'),
     import('../transport/mutations.js'),
+    import('./recovery-finalize-runner.js'),
   ]);
   const mutationsLogFile = join(config.LOGS_DIR, 'mutations.jsonl');
 
@@ -236,6 +335,9 @@ export async function defaultTerminalWorkRunReconcilerDeps(): Promise<TerminalWo
     terminalizeMutation: (descriptor, summary) => {
       writeRecoveredTerminalMutation(descriptor, eventFromSummary(summary));
     },
+    recoverPreSummaryRun: (run) => recoverStaleWorkRun(run),
+    preSummaryRecoveryStaleMs: config.WORK_RUN_MAX_RUNTIME_MS,
+    hasActiveMutation: (id) => activeRuns.has(id),
     now: () => new Date().toISOString(),
   };
 }

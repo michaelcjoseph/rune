@@ -438,6 +438,16 @@ export function buildRecoveryFinalizeDeps(io: RecoveryFinalizeIO = defaultIO()):
   };
 }
 
+/** Finalize one stale supervised run through the same recovery path startup
+ * uses. The caller is responsible for deciding that the run is no longer live;
+ * this helper only performs the terminal recovery side effects. */
+export async function recoverStaleWorkRun(
+  run: SupervisedRun,
+  io: RecoveryFinalizeIO = defaultIO(),
+): Promise<FinalizerSupervisionStatus> {
+  return withTimeout(finalizeStaleRun(run, io), RECOVERY_PER_RUN_TIMEOUT_MS, run.id);
+}
+
 /**
  * Run recovery-finalize over the persisted supervised runs. Best-effort: never
  * throws (the core fault-isolates per run; this wrapper guards the rest). Called

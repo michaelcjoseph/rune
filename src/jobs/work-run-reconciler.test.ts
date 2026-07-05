@@ -104,9 +104,18 @@ function withTempDir<T>(fn: (dir: string) => T): T {
   }
 }
 
+async function withTempDirAsync<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), 'rune-work-run-reconciler-test-'));
+  try {
+    return await fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe('reconcileTerminalWorkRunsOnce', () => {
-  it('terminalizes a persisted running supervision row from its terminal summary.json, without a restart or live handle', () => {
-    withTempDir((dir) => {
+  it('terminalizes a persisted running supervision row from its terminal summary.json, without a restart or live handle', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       const runId = '0620f39e';
@@ -114,7 +123,7 @@ describe('reconcileTerminalWorkRunsOnce', () => {
       writeTestSummary(workRunsDir, runId, summary(runId, 'noop'));
       const terminalizedMutations: MutationDescriptor[] = [];
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation: (descriptor) => terminalizedMutations.push(descriptor),
@@ -137,8 +146,8 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('maps failed terminal summaries to failed lifecycle while preserving the richer outcome on the mutation', () => {
-    withTempDir((dir) => {
+  it('maps failed terminal summaries to failed lifecycle while preserving the richer outcome on the mutation', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       const runId = 'failed-run';
@@ -146,7 +155,7 @@ describe('reconcileTerminalWorkRunsOnce', () => {
       writeTestSummary(workRunsDir, runId, summary(runId, 'failed'));
       const terminalizedMutations: MutationDescriptor[] = [];
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation: (descriptor) => terminalizedMutations.push(descriptor),
@@ -165,14 +174,14 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('leaves genuinely in-flight running rows untouched when there is no terminal summary', () => {
-    withTempDir((dir) => {
+  it('leaves genuinely in-flight running rows untouched when there is no terminal summary', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       writeAllRuns([makeRun('still-live', { status: 'running' })], supervisedRunsFile);
       const terminalizeMutation = vi.fn();
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation,
@@ -190,15 +199,97 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('ignores non-running rows even when a terminal summary exists', () => {
-    withTempDir((dir) => {
+  it('drives a stale no-summary running row through recovery finalization, then terminalizes the mutation from the generated summary', async () => {
+    await withTempDirAsync(async (dir) => {
+      const supervisedRunsFile = join(dir, 'supervised-runs.json');
+      const workRunsDir = join(dir, 'work-runs');
+      const runId = 'stale-pre-summary';
+      writeAllRuns([
+        makeRun(runId, {
+          status: 'running',
+          lastHeartbeatAt: '2026-06-18T02:00:00.000Z',
+          lastChildAliveAt: '2026-06-18T02:00:00.000Z',
+        }),
+      ], supervisedRunsFile);
+      const terminalizedMutations: MutationDescriptor[] = [];
+      const recoverPreSummaryRun = vi.fn(async () => {
+        writeTestSummary(workRunsDir, runId, summary(runId, 'branch-complete'));
+      });
+
+      const result = await reconcileTerminalWorkRunsOnce({
+        supervisedRunsFile,
+        workRunsDir,
+        terminalizeMutation: (descriptor) => terminalizedMutations.push(descriptor),
+        findRunningMutation: (id) => makeDescriptor(id),
+        recoverPreSummaryRun,
+        preSummaryRecoveryStaleMs: 30 * 60 * 1000,
+        hasActiveMutation: () => false,
+        now: () => '2026-06-18T03:15:00.000Z',
+      });
+
+      expect(result).toEqual({ reconciled: 1, examined: 1, skipped: 0 });
+      expect(recoverPreSummaryRun).toHaveBeenCalledWith(expect.objectContaining({ id: runId }));
+      expect(readAllRuns(supervisedRunsFile)[0]).toMatchObject({
+        id: runId,
+        status: 'completed',
+        lastHeartbeatAt: '2026-06-18T03:15:00.000Z',
+      });
+      expect(terminalizedMutations).toHaveLength(1);
+      expect(terminalizedMutations[0]).toMatchObject({
+        id: runId,
+        status: 'completed',
+        outcome: 'branch-complete',
+      });
+    });
+  });
+
+  it('does not recover a stale no-summary row while the mutation still has a live applier handle', async () => {
+    await withTempDirAsync(async (dir) => {
+      const supervisedRunsFile = join(dir, 'supervised-runs.json');
+      const workRunsDir = join(dir, 'work-runs');
+      const runId = 'active-pre-summary';
+      writeAllRuns([
+        makeRun(runId, {
+          status: 'running',
+          lastHeartbeatAt: '2026-06-18T02:00:00.000Z',
+          lastChildAliveAt: '2026-06-18T02:00:00.000Z',
+        }),
+      ], supervisedRunsFile);
+      const recoverPreSummaryRun = vi.fn(async () => {
+        writeTestSummary(workRunsDir, runId, summary(runId, 'noop'));
+      });
+      const terminalizeMutation = vi.fn();
+
+      const result = await reconcileTerminalWorkRunsOnce({
+        supervisedRunsFile,
+        workRunsDir,
+        terminalizeMutation,
+        findRunningMutation: (id) => makeDescriptor(id),
+        recoverPreSummaryRun,
+        preSummaryRecoveryStaleMs: 30 * 60 * 1000,
+        hasActiveMutation: () => true,
+        now: () => '2026-06-18T03:15:00.000Z',
+      });
+
+      expect(result).toEqual({ reconciled: 0, examined: 1, skipped: 1 });
+      expect(recoverPreSummaryRun).not.toHaveBeenCalled();
+      expect(readAllRuns(supervisedRunsFile)[0]).toMatchObject({
+        id: runId,
+        status: 'running',
+      });
+      expect(terminalizeMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  it('ignores non-running rows even when a terminal summary exists', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       writeAllRuns([makeRun('already-done', { status: 'completed' })], supervisedRunsFile);
       writeTestSummary(workRunsDir, 'already-done', summary('already-done', 'branch-complete'));
       const terminalizeMutation = vi.fn();
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation,
@@ -212,8 +303,8 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('preserves supervision updates to other rows that happen during terminal reconciliation', () => {
-    withTempDir((dir) => {
+  it('preserves supervision updates to other rows that happen during terminal reconciliation', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       const terminalRunId = 'terminal-run';
@@ -227,7 +318,7 @@ describe('reconcileTerminalWorkRunsOnce', () => {
       );
       writeTestSummary(workRunsDir, terminalRunId, summary(terminalRunId, 'noop'));
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation: () => {
@@ -253,8 +344,8 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('does not overwrite the same row when it already left running after the initial scan', () => {
-    withTempDir((dir) => {
+  it('does not overwrite the same row when it already left running after the initial scan', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       const runId = 'raced-run';
@@ -262,7 +353,7 @@ describe('reconcileTerminalWorkRunsOnce', () => {
       writeTestSummary(workRunsDir, runId, summary(runId, 'noop'));
       const terminalizeMutation = vi.fn();
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation,
@@ -283,8 +374,8 @@ describe('reconcileTerminalWorkRunsOnce', () => {
     });
   });
 
-  it('uses the batch mutation lookup when provided instead of falling back to per-row reads', () => {
-    withTempDir((dir) => {
+  it('uses the batch mutation lookup when provided instead of falling back to per-row reads', async () => {
+    await withTempDirAsync(async (dir) => {
       const supervisedRunsFile = join(dir, 'supervised-runs.json');
       const workRunsDir = join(dir, 'work-runs');
       const runA = 'run-a';
@@ -297,7 +388,7 @@ describe('reconcileTerminalWorkRunsOnce', () => {
         (ids: string[]) => new Map(ids.map((id) => [id, makeDescriptor(id)])),
       );
 
-      const result = reconcileTerminalWorkRunsOnce({
+      const result = await reconcileTerminalWorkRunsOnce({
         supervisedRunsFile,
         workRunsDir,
         terminalizeMutation: vi.fn(),
