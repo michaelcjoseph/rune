@@ -24,8 +24,10 @@ import { readPlaybookQueue, writePlaybookQueue } from '../jobs/playbook-extract.
 import { actionApprovedIntentProposal } from '../intent/journal-intent-consumer.js';
 import { realConsumerDeps } from '../intent/journal-intent-actions.js';
 import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
+import { removeRun } from '../jobs/supervision-store.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
+import config from '../config.js';
 
 const log = createLogger('approval-actions');
 
@@ -129,13 +131,18 @@ function setAskTwiceStatus(idx: number, status: ApprovalStatus): ApprovalDispatc
   return safeWrite('ask-twice-queue', () => writeProposalQueue(queue));
 }
 
+function clearBlockedOnHumanRun(runId: string): ApprovalDispatchResult {
+  return safeWrite('supervised-runs', () => removeRun(runId, config.SUPERVISED_RUNS_FILE));
+}
+
 /**
  * Dispatch an approval action to the correct queue based on the composite id.
  * Returns `'ok'` on a successful pending→approved/rejected transition,
  * `'not-found'` when the id is malformed, the queue index is out of range,
  * the entry is already non-pending, or a `blocked-on-human` approve cannot
- * create a release. `blocked-on-human` reject is a working no-op: it
- * acknowledges the cockpit action while leaving the parked run untouched.
+ * create a release. `blocked-on-human` reject dismisses the parked-row
+ * supervision record; a stale/swept `not-parked` approve also clears it so
+ * the approval inbox can converge.
  */
 export async function dispatchApprovalStatus(id: string, status: ApprovalStatus): Promise<ApprovalDispatchResult> {
   const parsed = parseApprovalId(id);
@@ -158,21 +165,24 @@ export async function dispatchApprovalStatus(id: string, status: ApprovalStatus)
       // Project 13 Phase 1c: a `blocked-on-human` row is a PARKED work-run, made
       // actionable here. Approve/Release routes to the shared release runtime (a
       // clean parked run → creates the cold-finalize mutation → 'ok'); Reject is
-      // a no-op acknowledgement that leaves the parked run untouched. A dirty
-      // worktree is NOT confirm-discarded from the inbox — that requires the
-      // explicit release endpoint/callback carrying confirmDirty=true (the inbox
-      // Approve is a clean-release quick-action only).
-      if (status !== 'approved') return 'ok';
+      // a dismiss action for the parked supervision row. A dirty worktree is NOT
+      // confirm-discarded from the inbox — that requires the explicit release
+      // endpoint/callback carrying confirmDirty=true (the inbox Approve is a
+      // clean-release quick-action only).
       // Guard the id at the trust boundary (consistent with the HTTP route),
       // even though readParkedRun does a pure store lookup with no path join.
       if (!VALID_SLUG.test(parsed.payload)) return 'not-found';
+      if (status !== 'approved') return clearBlockedOnHumanRun(parsed.payload);
       try {
         const outcome = await requestWorkRunRelease(parsed.payload, {}, defaultReleaseRequestDeps('webview'));
         // 'created' → 'ok'; an internal release error surfaces honestly as
-        // 'error' (HTTP 500) rather than masquerading as 'not-found' (404); a
-        // not-parked / dirty-confirm result leaves the row put ('not-found').
+        // 'error' (HTTP 500) rather than masquerading as 'not-found' (404).
+        // not-parked means the worktree was already swept or the record was
+        // stale, so the inbox row can be cleared. dirty-confirm leaves the row
+        // put and returns non-success so inbox Approve never discards worktrees.
         if (outcome.kind === 'created') return 'ok';
         if (outcome.kind === 'error') return 'error';
+        if (outcome.kind === 'not-parked') return clearBlockedOnHumanRun(parsed.payload);
         return 'not-found';
       } catch (err: unknown) {
         log.error('blocked-on-human release failed', {

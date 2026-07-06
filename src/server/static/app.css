@@ -338,6 +338,12 @@ body[data-view="product"] #product-root {
   overflow-wrap: anywhere;
   line-height: 1.25;
 }
+.home-approval-error {
+  color: var(--error);
+  font-size: .75rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
 .home-approval-actions {
   flex: 0 0 auto;
   display: flex;

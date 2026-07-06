@@ -2,13 +2,11 @@
  * Project 13 Phase 1c — the EXISTING `blocked-on-human` cockpit inbox row made
  * actionable (test-plan §3). Before Project 13 the row returned `not-found`
  * (non-actionable) for approve/reject; now Approve/Release routes to the shared
- * release runtime (`requestWorkRunRelease`), while Reject/dismiss acknowledges
- * the action and leaves the parked run untouched.
+ * release runtime (`requestWorkRunRelease`), while Reject/dismiss clears the
+ * parked supervision row.
  *
- * Written TEST-FIRST: `dispatchApprovalStatus` does not yet route
- * `blocked-on-human` approvals to release, so the approve-routes-to-release
- * cases are RED until the implementation lands; the reject-leaves-untouched
- * cases pass.
+ * Regression coverage keeps inbox actions aligned with the parked-run release
+ * runtime and the supervision row cleanup behavior.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -20,6 +18,10 @@ const mockRequestWorkRunRelease = vi.fn();
 vi.mock('../jobs/work-run-release.js', () => ({
   requestWorkRunRelease: mockRequestWorkRunRelease,
   defaultReleaseRequestDeps: vi.fn(() => ({})),
+}));
+const mockRemoveRun = vi.fn();
+vi.mock('../jobs/supervision-store.js', () => ({
+  removeRun: mockRemoveRun,
 }));
 
 // The queue modules are pulled in by the other dispatch branches; stub them so
@@ -49,6 +51,7 @@ const { dispatchApprovalStatus } = await import('./approval-actions.js');
 describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () => {
   beforeEach(() => {
     mockRequestWorkRunRelease.mockReset();
+    mockRemoveRun.mockReset();
   });
 
   it('Approve on a clean parked run routes to the release runtime and returns ok', async () => {
@@ -57,21 +60,24 @@ describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () 
     expect(mockRequestWorkRunRelease).toHaveBeenCalledOnce();
     // The released run id is the composite-id payload.
     expect(mockRequestWorkRunRelease.mock.calls[0]![0]).toBe('run-1');
+    expect(mockRemoveRun).not.toHaveBeenCalled();
     expect(result).toBe('ok');
   });
 
-  it('Reject leaves the parked run untouched — never calls the release runtime', async () => {
+  it('Reject clears the parked supervision row and never calls the release runtime', async () => {
     const result = await dispatchApprovalStatus('blocked-on-human:run-1', 'rejected');
     expect(mockRequestWorkRunRelease).not.toHaveBeenCalled();
-    // A dismissed parked row is a working no-op (not a queue transition): the
-    // endpoint can acknowledge the click while the parked run remains parked.
+    expect(mockRemoveRun).toHaveBeenCalledOnce();
+    expect(mockRemoveRun.mock.calls[0]![0]).toBe('run-1');
     expect(result).toBe('ok');
   });
 
-  it('Approve on a not-parked / already-released run is a clean not-found (no destructive action)', async () => {
+  it('Approve on a not-parked / already-released run clears stale supervision and returns ok', async () => {
     mockRequestWorkRunRelease.mockResolvedValue({ kind: 'not-parked', runId: 'gone-1' });
     const result = await dispatchApprovalStatus('blocked-on-human:gone-1', 'approved');
-    expect(result).toBe('not-found');
+    expect(mockRemoveRun).toHaveBeenCalledOnce();
+    expect(mockRemoveRun.mock.calls[0]![0]).toBe('gone-1');
+    expect(result).toBe('ok');
   });
 
   it('Approve on a DIRTY parked run does NOT confirm-discard from the inbox (returns not-found)', async () => {
@@ -80,6 +86,14 @@ describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () 
     // never an implicit inbox approve.
     mockRequestWorkRunRelease.mockResolvedValue({ kind: 'dirty-confirm', runId: 'run-1', files: ['M a'] });
     const result = await dispatchApprovalStatus('blocked-on-human:run-1', 'approved');
+    expect(mockRemoveRun).not.toHaveBeenCalled();
     expect(result).toBe('not-found');
+  });
+
+  it('Approve release errors remain errors and do not clear supervision', async () => {
+    mockRequestWorkRunRelease.mockResolvedValue({ kind: 'error', runId: 'run-1', error: 'release failed' });
+    const result = await dispatchApprovalStatus('blocked-on-human:run-1', 'approved');
+    expect(mockRemoveRun).not.toHaveBeenCalled();
+    expect(result).toBe('error');
   });
 });

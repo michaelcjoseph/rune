@@ -153,10 +153,16 @@ function fillBlankBlockClosures(html) {
   return next;
 }
 
-function renderStatus(status) {
+function renderStatus(status, approvals) {
   if (!status) return '<p class="muted">Global status unavailable</p>';
   const pending = status.pendingApprovals || {};
-  const pendingCount = Number(pending.intent || 0) + Number(pending.playbook || 0) + Number(pending.proposal || 0);
+  const approvalRows = Array.isArray(approvals) ? approvals : null;
+  const pendingCount = approvalRows
+    ? approvalRows.length
+    : Number(pending.intent || 0) +
+      Number(pending.playbook || 0) +
+      Number(pending.proposal || 0) +
+      Number(pending.blockedOnHuman || pending['blocked-on-human'] || 0);
   const activeOps = Number.isFinite(status.activeOps) ? status.activeOps : list(status.inFlight).length;
   const activeMutations = Number.isFinite(status.activeMutations)
     ? status.activeMutations
@@ -176,10 +182,14 @@ function renderApprovalRow(row) {
   const summary = row.summary || row.label || id;
   const product = row.productProject || '';
   const age = Number.isFinite(row.age) ? fmtElapsed(row.age * 1000) : '';
+  const error = row.error
+    ? `<div class="home-approval-error" role="alert">${escHtml(row.error)}</div>`
+    : '';
   return `<article class="home-approval-row" data-approval-id="${attr(id)}">` +
     `<div class="home-approval-copy">` +
       `<strong>${escHtml(summary)}</strong>` +
       `<span>${escHtml([product, type, age].filter(Boolean).join(' - '))}</span>` +
+      error +
     `</div>` +
     `<div class="home-approval-actions">` +
       `<button type="button" data-approval-id="${attr(id)}" data-approval-action="approve">Approve</button>` +
@@ -211,7 +221,7 @@ function renderOperationalRail(operations) {
     ? `<button type="button" class="home-restart-btn" data-restart-server>Restart server</button>`
     : '';
   return `<aside class="home-operational-rail" data-home-operational-rail>` +
-    `<section class="home-operation-panel">${renderStatus(operations.status)}</section>` +
+    `<section class="home-operation-panel">${renderStatus(operations.status, operations.approvals)}</section>` +
     `<section class="home-operation-panel">` +
       `<div class="home-operation-head"><h3>Pending approvals</h3><span>${escHtml(list(operations.approvals).length)}</span></div>` +
       `${approvals || '<p class="muted">No pending approvals</p>'}` +
@@ -257,15 +267,26 @@ function attr(value) {
   return escHtml(value);
 }
 
-function defaultPostJson(url, body) {
-  return fetch(url, {
+async function defaultPostJson(url, body) {
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
-  }).then(response => {
-    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-    return response.json().catch(() => ({}));
   });
+  const text = await response.text().catch(() => '');
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { error: text };
+    }
+  }
+  if (!response.ok) {
+    const message = payload?.error || payload?.message || `Request failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
 }
 
 function isProductionSurface() {
@@ -284,9 +305,72 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
   const post = postJson || defaultPostJson;
   let currentPulse = null;
   let operations = null;
+  let approvalErrors = {};
 
   function render() {
     root.innerHTML = renderHomeView(currentPulse, { operations });
+  }
+
+  function approvalsWithErrors(approvals) {
+    return list(approvals).map(row => {
+      const error = approvalErrors[row?.id];
+      return error ? { ...row, error } : row;
+    });
+  }
+
+  async function refreshOperations() {
+    const [status, approvals] = await Promise.all([
+      loadJson('/api/state').catch(() => null),
+      loadJson('/api/approvals').catch(() => []),
+    ]);
+    const ids = new Set(list(approvals).map(row => row?.id).filter(Boolean));
+    approvalErrors = Object.fromEntries(
+      Object.entries(approvalErrors).filter(([id]) => ids.has(id)),
+    );
+    operations = {
+      ...(operations || {}),
+      status,
+      approvals: approvalsWithErrors(approvals),
+      restartAvailable: Boolean(status?.restartAvailable || operations?.restartAvailable || isProductionSurface()),
+      connectionStatus: operations?.connectionStatus || currentConnectionStatus(),
+    };
+    if (currentPulse) render();
+  }
+
+  function approvalFailureMessage(err) {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === 'string' && err) return err;
+    return 'Approval action failed';
+  }
+
+  async function actionApproval(approval) {
+    const id = approval.dataset?.approvalId;
+    const action = approval.dataset?.approvalAction;
+    if (!id || !action || approval.disabled) return;
+    approval.disabled = true;
+    const previousApprovals = list(operations?.approvals);
+    approvalErrors = { ...approvalErrors };
+    delete approvalErrors[id];
+    operations = {
+      ...(operations || {}),
+      approvals: previousApprovals.filter(row => row?.id !== id),
+    };
+    if (currentPulse) render();
+    try {
+      await post(`/api/approvals/${encodeURIComponent(id)}/${encodeURIComponent(action)}`);
+      await refreshOperations();
+    } catch (err) {
+      approval.disabled = false;
+      approvalErrors = {
+        ...approvalErrors,
+        [id]: approvalFailureMessage(err),
+      };
+      operations = {
+        ...(operations || {}),
+        approvals: approvalsWithErrors(previousApprovals),
+      };
+      if (currentPulse) render();
+    }
   }
 
   const onConnectionStatus = event => {
@@ -325,12 +409,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
     const approval = event.target?.closest?.('[data-approval-action]');
     if (approval) {
       event.preventDefault?.();
-      const id = approval.dataset?.approvalId;
-      const action = approval.dataset?.approvalAction;
-      if (!id || !action || approval.disabled) return;
-      approval.disabled = true;
-      post(`/api/approvals/${encodeURIComponent(id)}/${encodeURIComponent(action)}`)
-        .catch(() => { approval.disabled = false; });
+      actionApproval(approval);
       return;
     }
 
@@ -352,7 +431,7 @@ export function createHomeView({ root, fetchJson, postJson, router }) {
       ]);
       operations = {
         status,
-        approvals: list(approvals),
+        approvals: approvalsWithErrors(approvals),
         restartAvailable: Boolean(status?.restartAvailable || isProductionSurface()),
         connectionStatus: currentConnectionStatus(),
       };

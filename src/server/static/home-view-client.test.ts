@@ -253,6 +253,16 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/data-restart-server|restart server/i);
   });
 
+  it('counts blocked-on-human rows in the Home status pending count', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+
+    const html = renderHomeView(homePulse, {
+      operations: { ...homeOperations, connectionStatus: 'connected' },
+    });
+
+    expect(html).toMatch(/<strong>Pending approvals<\/strong><span>2<\/span>/i);
+  });
+
   it('updates the Home server connection indicator from WebSocket status events', async () => {
     const { createHomeView } = await import('./home-view.js');
     const root = makeRoot();
@@ -314,6 +324,70 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(fetchJson).not.toHaveBeenCalledWith('/api/cockpit');
     expect(postJson).toHaveBeenCalledWith('/api/approvals/blocked-on-human%3Arun-parked-1/approve');
     expect(postJson).toHaveBeenCalledWith('/api/server/restart');
+  });
+
+  it('removes a successful approval row and reconciles Home operations from the existing endpoints', async () => {
+    const { createHomeView } = await import('./home-view.js');
+    const root = makeRoot();
+    let approvalsCalls = 0;
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/home') return homePulse;
+      if (url === '/api/state') return homeOperations.status;
+      if (url === '/api/approvals') {
+        approvalsCalls += 1;
+        return approvalsCalls === 1 ? homeOperations.approvals : homeOperations.approvals.slice(1);
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async () => ({ ok: true }));
+
+    const home = createHomeView({ root, fetchJson, postJson, router: { goProduct: vi.fn() } });
+    await home.load();
+    expect(root.innerHTML).toContain('run run-park blocked-on-human');
+
+    root.clickClosest('[data-approval-action]', {
+      approvalId: 'blocked-on-human:run-parked-1',
+      approvalAction: 'approve',
+    });
+
+    expect(postJson).toHaveBeenCalledWith('/api/approvals/blocked-on-human%3Arun-parked-1/approve');
+    expect(root.innerHTML).not.toContain('run run-park blocked-on-human');
+    await vi.waitFor(() => {
+      expect(fetchJson.mock.calls.filter(([url]) => url === '/api/approvals')).toHaveLength(2);
+      expect(fetchJson.mock.calls.filter(([url]) => url === '/api/state')).toHaveLength(2);
+    });
+    expect(root.innerHTML).toContain('capture product idea');
+    expect(root.innerHTML).not.toContain('run run-park blocked-on-human');
+  });
+
+  it('restores a failed approval row, re-enables controls, and renders the server failure text inline', async () => {
+    const { createHomeView } = await import('./home-view.js');
+    const root = makeRoot();
+    const fetchJson = vi.fn(async (url: string) => {
+      if (url === '/api/home') return homePulse;
+      if (url === '/api/state') return homeOperations.status;
+      if (url === '/api/approvals') return homeOperations.approvals;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const postJson = vi.fn(async () => {
+      throw new Error('approval action failed');
+    });
+
+    const home = createHomeView({ root, fetchJson, postJson, router: { goProduct: vi.fn() } });
+    await home.load();
+
+    root.clickClosest('[data-approval-action]', {
+      approvalId: 'blocked-on-human:run-parked-1',
+      approvalAction: 'approve',
+    });
+
+    expect(root.innerHTML).not.toContain('run run-park blocked-on-human');
+    await vi.waitFor(() => {
+      expect(root.innerHTML).toContain('run run-park blocked-on-human');
+      expect(root.innerHTML).toContain('approval action failed');
+    });
+    expect(root.innerHTML).toMatch(/home-approval-error[\s\S]{0,120}approval action failed/i);
+    expect(root.innerHTML).not.toMatch(/blocked-on-human:run-parked-1[\s\S]{0,220}disabled|disabled[\s\S]{0,220}blocked-on-human:run-parked-1/i);
   });
 
   it('renders product cards with repo status, live run, counts, outcome, and attention', async () => {
