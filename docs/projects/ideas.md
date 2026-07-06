@@ -6,7 +6,6 @@ below it.
 
 ## User-authored
 
-- Set up CLAUDE.md and AGENTS.md for repos that do not have them
 - Improve design of MCP monitoring in cockpit
 - Expand MCP functionality
 - Install tools to improve agent performance
