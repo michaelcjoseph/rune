@@ -14,7 +14,7 @@ A single Node.js process handles everything:
 - **MCP daemon** (localhost:3848) — standalone Streamable HTTP MCP service at `/mcp` plus daemon `/health`, with separate OAuth config/store so cockpit restarts do not drop Claude App MCP sessions.
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` and emits bus frames; TG shows a "🤔 · /cancel" tracker, the webview a cancellable pill. → `docs/architecture/subsystems.md`.
 - **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
-- **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`.
+- **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`; full `/plan`→merged stage-by-stage map (agents/gates/criteria) → `docs/architecture/project-lifecycle.md`.
 - **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 17-step nightly orchestrator, review nudges.
 - **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + PM-led planning conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages); two-layer search (LLM index → ripgrep), no vector DB; exposed locally via the `rune-kb` stdio MCP server.
@@ -29,6 +29,7 @@ Detailed reference, read on demand (not loaded every session):
 
 - `docs/architecture/module-reference.md` — per-file annotations for every `src/` module + project-phase history.
 - `docs/architecture/subsystems.md` — deep mechanics: mutation pipeline, supervision/stall-check, work-run lifecycle + gated-merge finalizer, orchestrated work + product-team roles, observation loop, MCP/OAuth.
+- `docs/architecture/project-lifecycle.md` — end-to-end project lifecycle `/plan`→merged: every stage's primary agent, reviewing gate, and advance-criteria (planning pipeline, per-task role workflow, closeout, merge gate, terminal states).
 - `docs/architecture/reviews-kb-vault.md` — review→post-agent flow, worldview/playbook write rules, KB raw-source routing, writer/role memory loops.
 - `docs/architecture/configuration.md` — full env-var reference + `logs/` file inventory + `policies/` files.
 - `docs/projects/index.md` — numbered build log (01–18); per-project `spec.md` / `tasks.md` / `test-plan.md`.

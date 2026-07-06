@@ -93,3 +93,11 @@ below it.
 - **Make observation-triage agent robust to failing inputs** — observation-triage agent fails 5+ times in 7d
 - **Make lenny-sync robust to repeated failures** — lenny-sync agent fails 3 times in 7 days
 - **Stabilize recurring agent-call failure bursts** — Agent-call failures recurring in bursts over 7 days
+
+- **Fix recurring wiki-compiler agent failures** — wiki-compiler agent fails 4+ times in 7 days
+- **Fix observation-triage agent repeated failures** — observation-triage agent fails 3 times in 7 days
+
+- **Harden wiki-linter against repeated failures** — wiki-linter fails 19+ times in 7 days
+- **Diagnose recurring wiki-compiler failures** — wiki-compiler fails 4+ times in 7d
+
+- **Fix wiki-linter agent's repeated call failures** — wiki-linter agent fails 26 agent-calls in 24h
