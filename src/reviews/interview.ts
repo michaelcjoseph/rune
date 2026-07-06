@@ -48,12 +48,43 @@ export function extractInterviewInstructions(skillContent: string): string {
   return skillContent.slice(step2Start, end).trim();
 }
 
-/** Detect outline in Claude's response using a case-insensitive marker */
+/** Detect outline in Claude's response.
+ *
+ * The historical path matched a prose marker such as "review outline:".
+ * Newer prompts also require a fenced `outline` block so phase transitions
+ * do not depend on exact wording around the outline.
+ */
 export function detectOutline(response: string, marker: string): string | null {
   const lower = response.toLowerCase();
   const idx = lower.indexOf(marker.toLowerCase());
-  if (idx === -1) return null;
+  if (idx === -1) return detectFencedOutline(response);
   return response.slice(idx).trim();
+}
+
+function detectFencedOutline(response: string): string | null {
+  const fenceRe = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRe.exec(response)) !== null) {
+    const info = match[1]!.trim().toLowerCase();
+    const body = match[2]!.trim();
+    if (!body) continue;
+    if (/\boutline\b/.test(info) || startsWithReviewOutlineHeading(body)) {
+      return body;
+    }
+  }
+  return null;
+}
+
+function startsWithReviewOutlineHeading(text: string): boolean {
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+  const normalized = firstLine.replace(/^#{1,6}\s+/, '').trim();
+  return (
+    /^week in review(?:\s*[—:-].*)?$/i.test(normalized) ||
+    /^review outline:?$/i.test(normalized) ||
+    /^[a-z]+(?:\s+\d{4})?\s+review(?:\s+outline)?:?$/i.test(normalized) ||
+    /^q[1-4]\s+\d{4}\s+review(?:\s+outline)?:?$/i.test(normalized) ||
+    /^\d{4}\s+review(?:\s+outline)?:?$/i.test(normalized)
+  );
 }
 
 const OUTLINE_APPROVAL_OPTIONS: { value: string; label: string }[] = [
@@ -75,7 +106,11 @@ ${prepContext}
 
 ## Interview Instructions
 
-${skillInstructions}`;
+${skillInstructions}
+
+## Rune Review Orchestration Contract
+
+When the interview is complete, present the proposed outline in a fenced block whose info string is exactly \`outline\`, then stop and wait for approval. Do not write the journal entry, run post-review updater agents, or commit changes yourself; Rune will do that after the human approves the outline.`;
 }
 
 function getSkillInstructions(config: InterviewReviewConfig): string {

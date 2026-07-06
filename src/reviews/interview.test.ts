@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 // Mock heavy dependencies so the module can be imported without side effects.
 // interview.ts imports from session, ai/claude, vault/files, vault/git,
@@ -46,6 +46,10 @@ const { toScannerDate, detectOutline, extractInterviewInstructions, createInterv
 const { askClaudeWithContext } = await import('../ai/claude.js');
 const { updateReviewSession } = await import('./session.js');
 const { readVaultFile } = await import('../vault/files.js');
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('toScannerDate', () => {
   it('replaces hyphens with underscores', () => {
@@ -113,6 +117,57 @@ describe('detectOutline', () => {
     expect(result).not.toBeNull();
     expect(result!.charAt(0)).not.toBe(' ');
     expect(result!.charAt(0)).not.toBe('\n');
+  });
+
+  it('detects a deterministic fenced outline block without the prose marker', () => {
+    const response = [
+      'Here is the full outline for approval:',
+      '',
+      '```outline',
+      '# Week in Review — 2026-05-23 to 2026-05-29',
+      '- Projects',
+      '- Health',
+      '```',
+    ].join('\n');
+
+    const result = detectOutline(response, 'week in review outline:');
+
+    expect(result).toBe([
+      '# Week in Review — 2026-05-23 to 2026-05-29',
+      '- Projects',
+      '- Health',
+    ].join('\n'));
+  });
+
+  it('detects a fenced review-heading outline even when the fence info is generic markdown', () => {
+    const response = [
+      "Here's the full outline for approval:",
+      '',
+      '```markdown',
+      '# Week in Review — 2026-05-23 to 2026-05-29',
+      '## Work',
+      '- Shipped the cockpit change.',
+      '```',
+    ].join('\n');
+
+    const result = detectOutline(response, 'week in review outline:');
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('Week in Review');
+    expect(result).toContain('Shipped the cockpit change');
+  });
+
+  it('does not treat unrelated fenced markdown as an outline', () => {
+    const response = [
+      'Here is a code example:',
+      '',
+      '```markdown',
+      '# Notes',
+      '- Not an approval outline',
+      '```',
+    ].join('\n');
+
+    expect(detectOutline(response, 'review outline:')).toBeNull();
   });
 });
 
@@ -231,6 +286,60 @@ describe('createInterviewHandler — approval emission', () => {
           options: expect.arrayContaining([
             expect.objectContaining({ value: 'yes', label: 'Approve' }),
             expect.objectContaining({ value: 'cancel', label: 'Cancel' }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('sends approval sidecar when the model emits a fenced outline instead of the exact marker', async () => {
+    (readVaultFile as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (askClaudeWithContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: [
+        "Here's the full outline for approval:",
+        '',
+        '```outline',
+        '# Week in Review — 2026-05-23 to 2026-05-29',
+        '- Project progress',
+        '- Health reflection',
+        '```',
+      ].join('\n'),
+      error: null,
+    });
+    (updateReviewSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+    const handler = createInterviewHandler({
+      ...config,
+      outlineMarker: 'week in review outline:',
+    });
+    const session = makeSession();
+    const sender = makeSender();
+
+    await handler.handleMessage(session, 'ready for outline', sender);
+
+    expect(askClaudeWithContext).toHaveBeenCalledWith(
+      'ready for outline',
+      'claude-sess-1',
+      expect.stringContaining('Do not write the journal entry, run post-review updater agents, or commit changes yourself'),
+      expect.any(Object),
+    );
+    expect(updateReviewSession).toHaveBeenCalledWith(42, {
+      outline: [
+        '# Week in Review — 2026-05-23 to 2026-05-29',
+        '- Project progress',
+        '- Health reflection',
+      ].join('\n'),
+      phase: 'approval',
+    });
+    expect(sender.send).toHaveBeenCalledTimes(2);
+    expect(sender.send).toHaveBeenNthCalledWith(2,
+      42,
+      expect.stringContaining('Reply *yes*'),
+      expect.objectContaining({
+        approval: expect.objectContaining({
+          options: expect.arrayContaining([
+            expect.objectContaining({ value: 'yes' }),
+            expect.objectContaining({ value: 'cancel' }),
           ]),
         }),
       }),
