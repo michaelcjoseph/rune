@@ -16,7 +16,10 @@ below it.
   - https://www.rtk-ai.app/#install
   - https://browser-use.com
 - Symlink mirror agents between .claude and .agents (dotagents.sentry.dev)
-- As part of nightly processing, Rune should read vault notes and add items to ideas and bugs
+- As part of nightly processing, Rune should read vault notes and add items to 
+  - ideas for the correct product
+  - bugs for the correct product
+  - research / writing topics 
 - Engagement-driven writing lessons (extends project 12)
   - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
 - Research agent
