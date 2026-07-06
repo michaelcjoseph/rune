@@ -200,6 +200,133 @@ describe('buildProductionTeamTaskDeps (Phase 8)', () => {
     expect(deps.resolveReviewerProvider('openai')).toBe('anthropic');
   });
 
+  it('renders suggested changes under actionable retry notes', async () => {
+    const prompts: string[] = [];
+    const deps = buildDeps(
+      resolveTeamRoleModels(loadRealPolicy()),
+      makeSeams({
+        runExecution: async (opts) => {
+          prompts.push(opts.prompt);
+          return {
+            ok: true,
+            diff: 'diff --git a/src/x.test.ts b/src/x.test.ts\n+++ b/src/x.test.ts\n+expect(1).toBe(1)\n',
+            output: 'wrote tests',
+          };
+        },
+      }),
+    );
+
+    await deps.qaWriteTests({
+      task: sizedTask,
+      spec: 'spec',
+      rejectionFeedback: {
+        rejectingRole: 'tech-lead',
+        counterpartRole: 'qa',
+        rejectedRole: 'qa',
+        artifact: 'test-intent',
+        rejectedArtifact: 'test-intent',
+        reason: 'tests miss retry rejection',
+        whatFailed: 'tests miss retry rejection',
+        notes: ['tests miss retry rejection'],
+        actionableNotes: ['Add a retry-rejection assertion.'],
+      },
+    });
+
+    expect(prompts[0]).toContain('What failed: tests miss retry rejection');
+    expect(prompts[0]).toContain('Actionable notes: Add a retry-rejection assertion.');
+  });
+
+  it('renders suggested changes in the open findings ledger', async () => {
+    const prompts: string[] = [];
+    const deps = buildDeps(
+      resolveTeamRoleModels(loadRealPolicy()),
+      makeSeams({
+        runExecution: async (opts) => {
+          prompts.push(opts.prompt);
+          return {
+            ok: true,
+            diff: 'diff --git a/src/x.ts b/src/x.ts\n+++ b/src/x.ts\n+export const x = 1\n',
+            output: 'implemented',
+          };
+        },
+      }),
+    );
+    const findingsLedger: FindingsLedgerEntry[] = [{
+      id: 'finding-lock',
+      sourceGate: 'tech-lead',
+      class: 'concurrency',
+      severity: 'high',
+      location: 'src/jobs/runner.ts:88',
+      rationale: 'status update is outside the lock',
+      suggestedChange: 'Move the status update inside the lock.',
+      reversible: true,
+      raisedRound: 1,
+      status: 'open',
+    }];
+
+    await deps.coder({
+      task: sizedTask,
+      spec: 'spec',
+      context: 'context',
+      tests: ['src/x.test.ts'],
+      findingsLedger,
+    });
+
+    expect(prompts[0]).toContain('Suggested change: Move the status update inside the lock.');
+  });
+
+  it('asks reviewer and tech-lead review prompts for suggested changes', async () => {
+    const systemPrompts: Array<{ role: string; systemPrompt: string }> = [];
+    const deps = buildDeps(
+      resolveTeamRoleModels(loadRealPolicy()),
+      makeSeams({
+        judgmentCall: async ({ role, systemPrompt }) => {
+          systemPrompts.push({ role, systemPrompt });
+          if (role === 'tech-lead') {
+            return [
+              '```tl-test-review',
+              '{"approved": true, "notes": "ok"}',
+              '```',
+              '```tl-diff-review',
+              '{"outcome": "pass", "findings": []}',
+              '```',
+            ].join('\n');
+          }
+          return ['```reviewer-verdict', '{"outcome": "pass", "findings": []}', '```'].join('\n');
+        },
+      }),
+    );
+
+    await deps.techLeadReviewTests({
+      task: sizedTask,
+      qa: { kind: 'tests-written', testIds: ['src/x.test.ts'] },
+    });
+    await deps.reviewer({
+      diff: 'diff',
+      spec: 'spec',
+      tests: ['src/x.test.ts'],
+      task: sizedTask,
+      context: 'context',
+      reviewerProvider: 'anthropic',
+    });
+    await deps.techLeadReviewDiff({
+      task: sizedTask,
+      diff: 'diff',
+      spec: 'spec',
+      context: 'context',
+    });
+
+    const techLeadPrompts = systemPrompts
+      .filter((prompt) => prompt.role === 'tech-lead')
+      .map((prompt) => prompt.systemPrompt)
+      .join('\n');
+    const reviewerPrompt = systemPrompts.find((prompt) => prompt.role === 'reviewer')?.systemPrompt;
+    expect(techLeadPrompts).toContain('suggestedChange');
+    expect(techLeadPrompts).toContain('concrete change');
+    expect(reviewerPrompt).toContain('suggestedChange');
+    expect(reviewerPrompt).toContain('concrete change');
+  });
+
   it('fails closed when only a same-provider reviewer is available: reviewer binding is null and the workflow blocks', async () => {
     // A policy with ONLY anthropic models: the reviewer cannot resolve distinct
     // from an anthropic coder. `evaluatorDistinctFromGenerator: false` is

@@ -303,12 +303,15 @@ const REVIEWER_INSTRUCTION = [
   'security, privacy, data-integrity, concurrency, outbound, cost-perf.',
   'Raise an objection ONLY for those classes; ordinary quality problems are a',
   'fail outcome without objections.',
+  'For every finding, include `suggestedChange`: the concrete change that would',
+  'clear that finding. For a fail outcome without findings, include a verdict-',
+  'level `suggestedChange` that tells the coder what to change.',
   '',
   'Respond with EXACTLY ONE fenced ```reviewer-verdict block containing JSON,',
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
   'value: pass, pass-with-warnings, or fail:',
   '```reviewer-verdict',
-  '{"outcome": "pass", "notes": "<short non-objection feedback>", "verifiedFindings": [{"id": "finding-...", "status": "resolved", "notes": "<what you verified>"}], "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "reversible": true}]}',
+  '{"outcome": "pass", "notes": "<short non-objection feedback>", "suggestedChange": "<concrete change for non-finding fail, omit when not needed>", "verifiedFindings": [{"id": "finding-...", "status": "resolved", "notes": "<what you verified>"}], "findings": [{"class": "security", "severity": "high", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}]}',
   '```',
   'An empty findings array means no objection-class finding.',
 ].join('\n');
@@ -317,10 +320,12 @@ const TL_TEST_REVIEW_INSTRUCTION = [
   'You are the tech lead. QA\'s test work for the task is below — review the TEST',
   'INTENT before the coder starts: do the tests (or the no-code-test rationale)',
   'actually pin the task\'s contract?',
+  'If you reject the test intent, include `suggestedChange`: the concrete test',
+  'or rationale change that would clear the rejection.',
   '',
   'Respond with EXACTLY ONE fenced ```tl-test-review block containing JSON:',
   '```tl-test-review',
-  '{"approved": true, "notes": "<short reason>"}',
+  '{"approved": true, "notes": "<short reason>", "suggestedChange": "<concrete change if approved is false>"}',
   '```',
 ].join('\n');
 
@@ -340,10 +345,13 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   'when the provided context/spec indicates it already exists on the tree. Only',
   'treat a deliverable as missing when it is absent from both the current diff and',
   'the provided tree-state/context evidence, or when the diff regresses it.',
+  'For every finding, include `suggestedChange`: the concrete change that would',
+  'clear that finding. For a fail outcome without findings, include a verdict-',
+  'level `suggestedChange` that tells the coder what to change.',
   '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
-  '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "reversible": true}], "notes": "<short reason>"}',
+  '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}], "notes": "<short reason>", "suggestedChange": "<concrete change for non-finding fail, omit when not needed>"}',
   '```',
 ].join('\n');
 
@@ -421,12 +429,16 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
   const verifiedFindings = parseFindingVerifications(v);
   const hasVerifiedFindings = Array.isArray(v['verifiedFindings']);
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  const suggestedChange = typeof v['suggestedChange'] === 'string'
+    ? v['suggestedChange'].slice(0, NOTE_MAX_CHARS)
+    : undefined;
   if (malformedReason !== undefined) {
     return {
       outcome: 'fail',
       findings,
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       notes: notes ?? malformedReason,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     };
   }
   const legacyPass = typeof v['pass'] === 'boolean' ? v['pass'] : undefined;
@@ -445,6 +457,7 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
       objections: findings,
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       ...(notes !== undefined ? { notes } : {}),
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     };
   }
   return {
@@ -452,6 +465,7 @@ function parseReviewerVerdict(text: string): ReviewerVerdict {
     findings,
     ...(hasVerifiedFindings ? { verifiedFindings } : {}),
     ...(notes !== undefined ? { notes } : {}),
+    ...(suggestedChange !== undefined ? { suggestedChange } : {}),
   };
 }
 
@@ -498,6 +512,9 @@ function parseFindings(v: Record<string, unknown>): {
       severity: o['severity'] as ObjectionSeverity,
       location: o['location'].slice(0, NOTE_MAX_CHARS),
       rationale: o['rationale'].slice(0, NOTE_MAX_CHARS),
+      ...(typeof o['suggestedChange'] === 'string'
+        ? { suggestedChange: o['suggestedChange'].slice(0, NOTE_MAX_CHARS) }
+        : {}),
       ...(typeof o['reversible'] === 'boolean' ? { reversible: o['reversible'] } : {}),
     });
   }
@@ -535,6 +552,9 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
   }
   const v = parsed as Record<string, unknown>;
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
+  const suggestedChange = typeof v['suggestedChange'] === 'string'
+    ? v['suggestedChange'].slice(0, NOTE_MAX_CHARS)
+    : undefined;
   const rawOutcome = typeof v['outcome'] === 'string' ? v['outcome'] : undefined;
   const outcome = typeof v['outcome'] === 'string' && GATE_OUTCOMES.has(v['outcome'])
     ? v['outcome'] as GateOutcome
@@ -546,6 +566,7 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
       outcome: 'fail',
       findings,
       notes: notes ?? malformedReason,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     };
   }
   const normalizedFindings =
@@ -564,6 +585,7 @@ function parseGateVerdict(text: string, tag: string): GateVerdict {
           : 'fail'),
     findings: normalizedFindings,
     ...(notes !== undefined ? { notes } : {}),
+    ...(suggestedChange !== undefined ? { suggestedChange } : {}),
   };
 }
 
@@ -593,14 +615,21 @@ function parseFlagVerdict(
   text: string,
   tag: string,
   flag: string,
-): { value: boolean; notes?: string } {
+): { value: boolean; notes?: string; suggestedChange?: string } {
   const parsed = extractFencedJson(text, tag);
   if (!parsed || typeof parsed !== 'object') {
     return { value: false, notes: `unparseable ${tag} verdict — failing closed` };
   }
   const v = parsed as Record<string, unknown>;
   const notes = typeof v['notes'] === 'string' ? v['notes'].slice(0, NOTE_MAX_CHARS) : undefined;
-  return { value: v[flag] === true, ...(notes !== undefined ? { notes } : {}) };
+  const suggestedChange = typeof v['suggestedChange'] === 'string'
+    ? v['suggestedChange'].slice(0, NOTE_MAX_CHARS)
+    : undefined;
+  return {
+    value: v[flag] === true,
+    ...(notes !== undefined ? { notes } : {}),
+    ...(suggestedChange !== undefined ? { suggestedChange } : {}),
+  };
 }
 
 function parsePmWrapup(text: string): { resolved: boolean; rationale?: string } {
@@ -731,6 +760,9 @@ function formatFindingsLedger(findingsLedger: FindingsLedgerEntry[] | undefined)
         `${finding.location}`,
       `Status: ${finding.status}; reversible: ${finding.reversible ? 'yes' : 'no'}`,
       `Rationale: ${finding.rationale.slice(0, NOTE_MAX_CHARS)}`,
+      ...(finding.suggestedChange !== undefined && finding.suggestedChange.trim() !== ''
+        ? [`Suggested change: ${finding.suggestedChange.slice(0, NOTE_MAX_CHARS)}`]
+        : []),
       '',
     ]),
   ].join('\n').trim();
@@ -913,8 +945,16 @@ export function buildProductionTeamTaskDeps(
           : `## QA no-code-test rationale\n\n${qa.rationale}`,
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_TEST_REVIEW_INSTRUCTION, body);
-      const { value, notes } = parseFlagVerdict(reply, 'tl-test-review', 'approved');
-      return { approved: value, ...(notes !== undefined ? { notes } : {}) };
+      const { value, notes, suggestedChange } = parseFlagVerdict(
+        reply,
+        'tl-test-review',
+        'approved',
+      );
+      return {
+        approved: value,
+        ...(notes !== undefined ? { notes } : {}),
+        ...(suggestedChange !== undefined ? { suggestedChange } : {}),
+      };
     },
 
     coder: async ({ task, spec, context, tests, rejectionFeedback, findingsLedger }) => {

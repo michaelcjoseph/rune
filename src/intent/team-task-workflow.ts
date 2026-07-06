@@ -45,6 +45,8 @@ export interface ObjectionFinding {
   severity: ObjectionSeverity;
   location: string;
   rationale: string;
+  /** Concrete role-authored guidance for the counterpart to clear this finding. */
+  suggestedChange?: string;
   /** Phase 14: whether a plain git revert fully undoes the effect. */
   reversible?: boolean;
 }
@@ -56,6 +58,8 @@ export interface GateVerdict {
   outcome: GateOutcome;
   findings: ObjectionFinding[];
   notes?: string;
+  /** Concrete guidance for verdict-level failures that do not have findings. */
+  suggestedChange?: string;
 }
 
 /** The normalized reviewer's structured verdict carried in workflow evidence. */
@@ -79,9 +83,15 @@ export interface ReviewerVerdict {
   verifiedFindings?: FindingVerification[];
   /** Optional notes for non-objection failures; finding details live in `findings`. */
   notes?: string;
+  /** Concrete guidance for non-finding reviewer failures. */
+  suggestedChange?: string;
 }
 
-export type GateReviewVerdict = GateVerdict | { pass: boolean; notes?: string };
+export type GateReviewVerdict = GateVerdict | {
+  pass: boolean;
+  notes?: string;
+  suggestedChange?: string;
+};
 
 export interface WorkflowGateVerdicts {
   reviewer?: GateVerdict;
@@ -192,7 +202,7 @@ export interface TeamTaskDeps {
   techLeadReviewTests: (input: {
     task: SizedTask;
     qa: QaResult;
-  }) => Promise<{ approved: boolean; notes?: string }>;
+  }) => Promise<{ approved: boolean; notes?: string; suggestedChange?: string }>;
   coder: (input: {
     task: SizedTask;
     spec: string;
@@ -397,6 +407,7 @@ async function runGated(
       counterpartRole: 'qa',
       artifact: 'test-intent',
       reason,
+      actionableNotes: suggestedChangeNotes(tlTests.suggestedChange),
     });
     await recordGateRejection(deps, qaFeedback);
     if (qaAttempt === input.cap - 1) {
@@ -565,6 +576,7 @@ async function runGated(
         reason: lastReviewer.findings.length > 0
           ? summarizeReviewerVerdict(lastReviewer)
           : lastReviewer.notes?.trim() || 'reviewer did not pass the implementation diff',
+        actionableNotes: suggestedChangesFromVerdict(lastReviewer),
       });
       await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
@@ -600,7 +612,10 @@ async function runGated(
         rejectingRole: 'tech-lead',
         counterpartRole: 'coder',
         artifact: 'implementation-diff',
-        reason: lastTechLeadDiff.notes ?? 'tech-lead did not pass the implementation diff',
+        reason: lastTechLeadDiff.findings.length > 0
+          ? summarizeObjections(lastTechLeadDiff.findings)
+          : lastTechLeadDiff.notes ?? 'tech-lead did not pass the implementation diff',
+        actionableNotes: suggestedChangesFromVerdict(lastTechLeadDiff),
       });
       await recordGateRejection(deps, feedback);
       lastRejectionFeedback = feedback;
@@ -644,7 +659,10 @@ async function runGated(
           rejectingRole: 'designer',
           counterpartRole: 'coder',
           artifact: 'design-review',
-          reason: lastDesigner.notes ?? 'designer review failed',
+          reason: lastDesigner.findings.length > 0
+            ? summarizeObjections(lastDesigner.findings)
+            : lastDesigner.notes ?? 'designer review failed',
+          actionableNotes: suggestedChangesFromVerdict(lastDesigner),
         });
         await recordGateRejection(deps, feedback);
         lastRejectionFeedback = feedback;
@@ -929,8 +947,10 @@ function buildGateRejectionFeedback(input: {
   counterpartRole: RoleName;
   artifact: GateRejectedArtifact;
   reason: string;
+  actionableNotes?: string[];
 }): GateRejectionFeedback {
   const reason = input.reason.trim() || `${input.rejectingRole} rejected ${input.artifact}`;
+  const actionableNotes = input.actionableNotes?.map((note) => note.trim()).filter(Boolean);
   return {
     rejectingRole: input.rejectingRole,
     counterpartRole: input.counterpartRole,
@@ -940,7 +960,9 @@ function buildGateRejectionFeedback(input: {
     reason,
     whatFailed: reason,
     notes: [reason],
-    actionableNotes: [reason],
+    actionableNotes: actionableNotes !== undefined && actionableNotes.length > 0
+      ? actionableNotes
+      : [reason],
   };
 }
 
@@ -950,11 +972,26 @@ function summarizeObjections(objections: ObjectionFinding[]): string {
     .join('; ');
 }
 
+function suggestedChangesFromVerdict(verdict: GateVerdict): string[] {
+  const findingSuggestions = verdict.findings.flatMap((finding) =>
+    suggestedChangeNotes(finding.suggestedChange));
+  if (findingSuggestions.length > 0) return findingSuggestions;
+  return suggestedChangeNotes(verdict.suggestedChange);
+}
+
+function suggestedChangeNotes(suggestedChange: string | undefined): string[] {
+  const trimmed = suggestedChange?.trim();
+  return trimmed ? [trimmed] : [];
+}
+
 function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerVerdict {
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
   const verifiedFindings = findingVerificationsFromVerdict(raw);
   const hasVerifiedFindings = Array.isArray(raw['verifiedFindings']);
+  const suggestedChange = typeof raw['suggestedChange'] === 'string'
+    ? raw['suggestedChange']
+    : undefined;
   const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
   if (malformedClass !== undefined) {
     const reason =
@@ -965,6 +1002,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalFailureReason: reason,
     };
@@ -979,6 +1017,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalFailureReason: reason,
     };
@@ -991,6 +1030,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
       findings,
       objections: findings,
       notes: reason,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
       ...(hasVerifiedFindings ? { verifiedFindings } : {}),
       operationalFailureReason: reason,
     };
@@ -1006,6 +1046,7 @@ function normalizeReviewerVerdict(verdict: ReviewerVerdict): NormalizedReviewerV
     objections: findings,
     ...(hasVerifiedFindings ? { verifiedFindings } : {}),
     ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
+    ...(suggestedChange !== undefined ? { suggestedChange } : {}),
   };
 }
 
@@ -1015,12 +1056,16 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
   }
   const raw = verdict as Record<string, unknown>;
   const findings = findingsFromVerdict(raw);
+  const suggestedChange = typeof raw['suggestedChange'] === 'string'
+    ? raw['suggestedChange']
+    : undefined;
   const malformedClass = findings.find((finding) => !isObjectionClass(finding.class));
   if (malformedClass !== undefined) {
     return {
       outcome: 'fail',
       findings,
       notes: `unsupported finding class "${String(malformedClass.class)}" at ${malformedClass.location}`,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     };
   }
   const malformedSeverity = findings.find((finding) => !isObjectionSeverity(finding.severity));
@@ -1029,6 +1074,7 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
       outcome: 'fail',
       findings,
       notes: `unsupported finding severity "${String(malformedSeverity.severity)}" at ${malformedSeverity.location}`,
+      ...(suggestedChange !== undefined ? { suggestedChange } : {}),
     };
   }
   const rawOutcome = raw['outcome'];
@@ -1042,6 +1088,7 @@ function normalizeGateVerdict(verdict: GateReviewVerdict | undefined): GateVerdi
     outcome,
     findings,
     ...(notes !== undefined ? { notes } : {}),
+    ...(suggestedChange !== undefined ? { suggestedChange } : {}),
   };
 }
 
@@ -1067,6 +1114,9 @@ function findingsFromVerdict(raw: Record<string, unknown>): ObjectionFinding[] {
       severity: finding['severity'] as ObjectionSeverity,
       location: finding['location'],
       rationale: finding['rationale'],
+      ...(typeof finding['suggestedChange'] === 'string'
+        ? { suggestedChange: finding['suggestedChange'] }
+        : {}),
       ...(typeof finding['reversible'] === 'boolean'
         ? { reversible: finding['reversible'] }
         : {}),
@@ -1321,6 +1371,7 @@ function toPublicGateVerdict(verdict: GateVerdict): GateVerdict {
     outcome: verdict.outcome,
     findings: verdict.findings.map(toPublicFinding),
     ...(verdict.notes !== undefined ? { notes: verdict.notes } : {}),
+    ...(verdict.suggestedChange !== undefined ? { suggestedChange: verdict.suggestedChange } : {}),
   };
 }
 
@@ -1353,6 +1404,11 @@ function mergeFindingsIntoLedger(
       existing.severity = normalized.severity;
       existing.location = normalized.location;
       existing.rationale = normalized.rationale;
+      if (normalized.suggestedChange !== undefined) {
+        existing.suggestedChange = normalized.suggestedChange;
+      } else {
+        delete existing.suggestedChange;
+      }
       existing.reversible = normalized.reversible;
       existing.status = wasResolved ? 'regressed' : 'open';
       continue;
@@ -1364,6 +1420,9 @@ function mergeFindingsIntoLedger(
       severity: normalized.severity,
       location: normalized.location,
       rationale: normalized.rationale,
+      ...(normalized.suggestedChange !== undefined
+        ? { suggestedChange: normalized.suggestedChange }
+        : {}),
       reversible: normalized.reversible,
       raisedRound: round,
       status: 'open',

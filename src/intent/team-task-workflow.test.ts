@@ -241,6 +241,36 @@ describe('team-task-workflow — QA-first', () => {
     });
   });
 
+  it('passes tech-lead test-intent suggested changes to the QA retry', async () => {
+    const qaInputs: Array<{ rejectionFeedback?: GateRejectionFeedback }> = [];
+    let techLeadReviews = 0;
+    const deps = makeDeps({
+      qaWriteTests: async (input) => {
+        qaInputs.push(input as { rejectionFeedback?: GateRejectionFeedback });
+        return { kind: 'tests-written', testIds: [`t${qaInputs.length}`] };
+      },
+      techLeadReviewTests: async () => {
+        techLeadReviews += 1;
+        return techLeadReviews === 1
+          ? {
+              approved: false,
+              notes: 'test intent misses the retry contract',
+              suggestedChange: 'Add a failing test for retrying after a rejected gate.',
+            }
+          : { approved: true };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(qaInputs[1]?.rejectionFeedback).toMatchObject({
+      whatFailed: 'test intent misses the retry contract',
+      notes: ['test intent misses the retry contract'],
+      actionableNotes: ['Add a failing test for retrying after a rejected gate.'],
+    });
+  });
+
   it('continues the corrective QA retry when gate-time learning fails', async () => {
     const qaInputs: Array<{ rejectionFeedback?: unknown }> = [];
     let techLeadReviews = 0;
@@ -2548,6 +2578,116 @@ describe('team-task-workflow — round cap', () => {
         }),
       ]),
     );
+  });
+
+  it('keeps reviewer diagnostic rationale separate from suggested coder changes', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let reviewerCalls = 0;
+    const finding: ObjectionFinding = {
+      class: 'data-integrity',
+      severity: 'medium',
+      location: 'src/streak.ts:42',
+      rationale: 'The diff increments the streak before validating the date boundary.',
+      suggestedChange: 'Move the date-boundary validation before the streak increment.',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      reviewer: async () => {
+        reviewerCalls += 1;
+        return reviewerCalls === 1
+          ? { outcome: 'fail', findings: [finding], notes: 'date-boundary bug' }
+          : cleanVerdict;
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'reviewer',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'reviewer-verdict',
+        whatFailed:
+          'data-integrity/medium at src/streak.ts:42: The diff increments the streak before validating the date boundary.',
+        notes: [
+          'data-integrity/medium at src/streak.ts:42: The diff increments the streak before validating the date boundary.',
+        ],
+        actionableNotes: ['Move the date-boundary validation before the streak increment.'],
+      }),
+    ]);
+  });
+
+  it('uses tech-lead diff findings and suggested changes in coder retry feedback', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let techLeadCalls = 0;
+    const finding: ObjectionFinding = {
+      class: 'concurrency',
+      severity: 'medium',
+      location: 'src/jobs/runner.ts:88',
+      rationale: 'The run status is read and written without holding the existing lock.',
+      suggestedChange: 'Wrap the status read/write in the existing run lock.',
+      reversible: true,
+    };
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      techLeadReviewDiff: async () => {
+        techLeadCalls += 1;
+        return techLeadCalls === 1
+          ? {
+              outcome: 'fail',
+              findings: [finding],
+              notes: 'locking issue',
+            }
+          : { outcome: 'pass', findings: [] };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderInputs[1]?.rejectionFeedback).toEqual([
+      expect.objectContaining({
+        rejectingRole: 'tech-lead',
+        rejectedRole: 'coder',
+        rejectedArtifact: 'implementation-diff',
+        whatFailed:
+          'concurrency/medium at src/jobs/runner.ts:88: The run status is read and written without holding the existing lock.',
+        actionableNotes: ['Wrap the status read/write in the existing run lock.'],
+      }),
+    ]);
+  });
+
+  it('keeps legacy rejections without suggested changes actionable', async () => {
+    const coderInputs: Array<{ rejectionFeedback?: GateRejectionFeedback[] }> = [];
+    let techLeadCalls = 0;
+    const deps = makeDeps({
+      coder: async (input) => {
+        coderInputs.push(input as { rejectionFeedback?: GateRejectionFeedback[] });
+        return { diff: `diff-${coderInputs.length}`, handoffNotes: [] };
+      },
+      techLeadReviewDiff: async () => {
+        techLeadCalls += 1;
+        return techLeadCalls === 1
+          ? { pass: false, notes: 'legacy note without a suggestedChange' }
+          : { pass: true };
+      },
+    });
+
+    const ev = await runTeamTaskWorkflow(codeTask, INPUT, deps);
+
+    expect(ev.outcome).toBe('ready-for-closeout');
+    expect(coderInputs[1]?.rejectionFeedback?.[0]).toMatchObject({
+      whatFailed: 'legacy note without a suggestedChange',
+      actionableNotes: ['legacy note without a suggestedChange'],
+    });
   });
 
   it('does not blindly redo a retryable role with identical inputs and no feedback', async () => {
