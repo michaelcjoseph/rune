@@ -31,6 +31,7 @@ interface SupersessionDecision {
 interface SupersessionResult {
   scannedFiles: number;
   candidates: number;
+  skipped: number;
   accepted: number;
   rejected: number;
   ambiguous: number;
@@ -817,5 +818,112 @@ describe('kb/knowledge-supersession', () => {
       ]),
     }));
     expect(readVaultFile('knowledge/runtime-nickname.md')).not.toMatch(/2026-06-30|changelog|supersession audit/i);
+  });
+
+  it('does not append another rejected audit row for the same previously decided candidate', async () => {
+    writeVaultFile('knowledge/rename-history.md', [
+      '# Rename history',
+      '',
+      'Rune was formerly known as Jarvis during the first implementation cycle.',
+      '',
+    ].join('\n'));
+    writeVaultFile('journals/2026_06_24.md', [
+      '# 2026-06-24',
+      '',
+      'Rune replaced Jarvis as the current system name.',
+      '',
+    ].join('\n'));
+
+    const firstAdjudicator = vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'rejected',
+      rationale: 'historical reference remains true',
+    }));
+    const first = await runJarvisRuneReconciliation(firstAdjudicator);
+    const secondAdjudicator = vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'accepted',
+      rationale: 'should not be called',
+    }));
+    const second = await runJarvisRuneReconciliation(secondAdjudicator);
+
+    expect(first).toMatchObject({ candidates: 1, rejected: 1, skipped: 0 });
+    expect(second).toMatchObject({ candidates: 1, rejected: 0, skipped: 1 });
+    expect(second.detail).toContain('1 previously decided');
+    expect(firstAdjudicator).toHaveBeenCalledTimes(1);
+    expect(secondAdjudicator).not.toHaveBeenCalled();
+    expect(readSupersessionAuditRecords()).toHaveLength(1);
+  });
+
+  it('reopens adjudication when the evidence fingerprint changes', async () => {
+    writeVaultFile('knowledge/rename-history.md', [
+      '# Rename history',
+      '',
+      'Rune was formerly known as Jarvis during the first implementation cycle.',
+      '',
+    ].join('\n'));
+    writeVaultFile('journals/2026_06_24.md', [
+      '# 2026-06-24',
+      '',
+      'Rune replaced Jarvis as the current system name.',
+      '',
+    ].join('\n'));
+
+    await runJarvisRuneReconciliation(vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'ambiguous',
+      rationale: 'first evidence is not enough',
+    })));
+    writeVaultFile('journals/2026_06_25.md', [
+      '# 2026-06-25',
+      '',
+      'Rune is the current identity; Jarvis is historical.',
+      '',
+    ].join('\n'));
+    const adjudicator = vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'rejected',
+      rationale: 'new evidence considered',
+    }));
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(result).toMatchObject({ candidates: 1, rejected: 1, skipped: 0 });
+    expect(adjudicator).toHaveBeenCalledTimes(1);
+    expect(readSupersessionAuditRecords()).toHaveLength(2);
+  });
+
+  it('reopens adjudication when the candidate text changes', async () => {
+    writeVaultFile('knowledge/runtime-note.md', [
+      '# Runtime note',
+      '',
+      'Jarvis appears in historical setup notes.',
+      '',
+    ].join('\n'));
+    writeVaultFile('journals/2026_06_24.md', [
+      '# 2026-06-24',
+      '',
+      'Rune replaced Jarvis as the current system name.',
+      '',
+    ].join('\n'));
+
+    await runJarvisRuneReconciliation(vi.fn(async (): Promise<SupersessionDecision> => ({
+      status: 'rejected',
+      rationale: 'historical reference',
+    })));
+    writeVaultFile('knowledge/runtime-note.md', [
+      '# Runtime note',
+      '',
+      'Jarvis appears in current operator-facing copy.',
+      '',
+    ].join('\n'));
+    const adjudicator = vi.fn(async (candidate: SupersessionCandidate): Promise<SupersessionDecision> => ({
+      status: 'accepted',
+      replacement: candidate.text.replace(/\bJarvis\b/g, 'Rune'),
+      rationale: 'changed text is current-state drift',
+    }));
+
+    const result = await runJarvisRuneReconciliation(adjudicator);
+
+    expect(result).toMatchObject({ candidates: 1, accepted: 1, skipped: 0 });
+    expect(adjudicator).toHaveBeenCalledTimes(1);
+    expect(readVaultFile('knowledge/runtime-note.md')).toContain('Rune appears in current operator-facing copy.');
+    expect(readSupersessionAuditRecords()).toHaveLength(2);
   });
 });

@@ -132,6 +132,37 @@ export function readFiledIdeas(ideasPath: string): ProjectIdea[] {
   return ideas;
 }
 
+interface ParsedIdeaBullet {
+  title: string;
+  friction: string;
+  id: string;
+}
+
+function parseIdeaBullet(line: string): ParsedIdeaBullet | null {
+  const m = LOOP_BULLET_RE.exec(line);
+  if (!m) return null;
+  const title = m[1]!.trim();
+  let friction = m[2]!.trim();
+  if (!title || !friction) return null;
+  const suffixMatch = PRODUCT_SUFFIX_RE.exec(friction);
+  if (suffixMatch) {
+    friction = suffixMatch[1]!;
+  }
+  return {
+    title,
+    friction,
+    id: deriveIdeaId(friction),
+  };
+}
+
+function normalizeIdeaTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 /** Append `markdown` to `ideasPath`'s `## Loop-filed` section. The
  *  caller produces `markdown` via `formatIdeasMarkdown` (which emits
  *  zero or more `- **Title** — friction\n` lines).
@@ -149,6 +180,24 @@ export function appendFiledIdeas(ideasPath: string, markdown: string): void {
   if (markdown === '') return;
 
   const raw = readFileSync(ideasPath, 'utf8');
+  const existingIdeas = readFiledIdeas(ideasPath);
+  const seenIds = new Set(existingIdeas.map((idea) => idea.id).filter((id) => id !== ''));
+  const seenTitles = new Set(existingIdeas.map((idea) => normalizeIdeaTitle(idea.title)).filter((title) => title !== ''));
+  const linesToInsert: string[] = [];
+  for (const line of markdown.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    const parsed = parseIdeaBullet(line);
+    if (!parsed) continue;
+    const normalizedTitle = normalizeIdeaTitle(parsed.title);
+    if ((parsed.id !== '' && seenIds.has(parsed.id)) || seenTitles.has(normalizedTitle)) {
+      continue;
+    }
+    if (parsed.id !== '') seenIds.add(parsed.id);
+    if (normalizedTitle !== '') seenTitles.add(normalizedTitle);
+    linesToInsert.push(line);
+  }
+  if (linesToInsert.length === 0) return;
+
   const lines = raw.split('\n');
   let sectionIdx = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -180,11 +229,10 @@ export function appendFiledIdeas(ideasPath: string, markdown: string): void {
     insertionIdx--;
   }
 
-  const toInsert = markdown.endsWith('\n') ? markdown.slice(0, -1) : markdown;
   const before = lines.slice(0, insertionIdx);
   const after = lines.slice(insertionIdx);
   // Always one blank line between the prior content and the appended
   // markdown — keeps the file readable across multiple appends.
-  const newLines = [...before, '', ...toInsert.split('\n'), ...after];
+  const newLines = [...before, '', ...linesToInsert, ...after];
   writeFileSync(ideasPath, newLines.join('\n'), 'utf8');
 }

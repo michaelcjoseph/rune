@@ -7,6 +7,7 @@ import { sanitizeErrorForTelegram } from './morning-prep.js';
 import { captureSessions } from './capture.js';
 import { executeActivitySync } from './whoop-sync.js';
 import { processIngestionQueue, lintKB, enqueue } from '../kb/engine.js';
+import { repairKnowledgeIndex } from '../kb/index-integrity.js';
 import { runKnowledgeSupersessionReconciliation } from '../kb/knowledge-supersession.js';
 import { conservativeSupersessionAdjudicator } from '../kb/supersession-adjudicator.js';
 import { runLibrarySync } from './lenny-sync.js';
@@ -90,6 +91,14 @@ async function stepKBQueue(): Promise<NightlyStepResult> {
   };
 }
 
+function stepKBIndexRepair(): NightlyStepResult {
+  const result = repairKnowledgeIndex(config.VAULT_DIR);
+  if (result.added === 0) {
+    return { step: 'KB index repair', status: 'skipped', detail: result.detail };
+  }
+  return { step: 'KB index repair', status: 'success', detail: `added=${result.added}; ${result.detail}` };
+}
+
 async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepResult> {
   const result = await runKnowledgeSupersessionReconciliation({
     vaultDir: config.VAULT_DIR,
@@ -103,13 +112,14 @@ async function stepKnowledgeReconciliation(date: string): Promise<NightlyStepRes
   if (result.editedFiles.length > 0) {
     artifactParts.push(`inline changelog: ${result.editedFiles.join(', ')}`);
   }
-  if (result.candidates > 0) {
+  if (result.accepted + result.rejected + result.ambiguous > 0) {
     artifactParts.push('supersession audit: knowledge/supersessions.jsonl');
   }
   const artifactDetail = artifactParts.length > 0 ? `; ${artifactParts.join('; ')}` : '';
   const detail =
     `${result.candidates} candidate(s), ${result.accepted} accepted, ` +
-    `${result.rejected} rejected, ${result.ambiguous} ambiguous; ${result.detail}${artifactDetail}`;
+    `${result.rejected} rejected, ${result.ambiguous} ambiguous, ` +
+    `${result.skipped} skipped; ${result.detail}${artifactDetail}`;
   return { step: 'Knowledge reconciliation', status, detail };
 }
 
@@ -796,6 +806,7 @@ export async function executeNightly(
   await run('Meeting extract', () => stepMeetingExtract(todayJournal, todayDate));
   await run('Library sync', stepLibrarySync);
   await run('KB queue', stepKBQueue);
+  await run('KB index repair', stepKBIndexRepair);
   await run('Knowledge reconciliation', () => stepKnowledgeReconciliation(todayDate));
   await run('Whoop activity', stepWhoopActivity);
   await run('Observation loop', () => stepObservation(options?.bus));

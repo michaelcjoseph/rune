@@ -218,4 +218,24 @@ describe('nightly knowledge reconciliation user reachability', () => {
       }),
     ]));
   });
+
+  it('surfaces deterministic KB index repair when wiki pages are missing from knowledge/index.md', async () => {
+    writeVaultFile('knowledge/index.md', ['# Knowledge Index', '', '## Entities', ''].join('\n'));
+    writeVaultFile('knowledge/wiki/entities/alice.md', [
+      '# Alice',
+      '',
+      'Alice is a fixture entity for index repair.',
+      '',
+    ].join('\n'));
+
+    const result = await executeNightly('2026-06-30');
+    const step = result.steps.find((s) => s.step === 'KB index repair');
+
+    expect(step).toMatchObject({
+      status: 'success',
+      detail: expect.stringContaining('added=1'),
+    });
+    expect(readVaultFile('knowledge/index.md')).toContain('- [[alice]] — Alice');
+    expect(formatSummary(result)).toContain('[+] KB index repair');
+  });
 });

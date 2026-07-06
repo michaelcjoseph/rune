@@ -15,7 +15,7 @@ A single Node.js process handles everything:
 - **In-flight op tracking** — every `execClaude()` spawn registers an `InFlightOp` and emits bus frames; TG shows a "🤔 · /cancel" tracker, the webview a cancellable pill. → `docs/architecture/subsystems.md`.
 - **Mutation pipeline** (`src/transport/mutations.ts`) — the central registry for autonomous codebase ops. Appliers: `workRunApplier` (legacy `/work --auto`), `genEvalLoopApplier`, `orchestratedWorkApplier` (product-team agents), `workRunReleaseApplier`. Every transition logs to `logs/mutations.jsonl` and drives `supervision-store.ts`. → `docs/architecture/subsystems.md`.
 - **Work-run lifecycle** — work runs stream a durable transcript, classify on work product, and finalize through a gated-merge finalizer (project 11/13/15). Supervision + stall-check monitor liveness; parked runs wait for a human release. → `docs/architecture/subsystems.md`.
-- **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 15-step nightly orchestrator, review nudges.
+- **Scheduled jobs** (node-cron) — morning prep, Whoop sync, the 17-step nightly orchestrator, review nudges.
 - **Review system** — interview-based reviews (daily/weekly/monthly/quarterly/yearly) + health/blog + PM-led planning conversations (`/plan`). Free-form text routes to an active planning or review session, else to Socratic chat. → `docs/architecture/reviews-kb-vault.md`.
 - **Knowledge base engine** — Karpathy-style LLM wiki (raw sources → compiled wiki pages); two-layer search (LLM index → ripgrep), no vector DB; exposed locally via the `rune-kb` stdio MCP server.
 
@@ -44,7 +44,7 @@ Detailed reference, read on demand (not loaded every session):
 - **`transport/`** — `MessageSender` (TG + webview), notification bus, mutation pipeline, in-flight op tracking, approval actions.
 - **`reviews/`** — session-based reviews (daily…yearly, health, blog) + planning sessions.
 - **`server/`** — HTTP, webview/cockpit + REST API, MCP transport + OAuth, auth, snapshots.
-- **`kb/`** — knowledge base engine (ingest/query/lint/search/queue/seed).
+- **`kb/`** — knowledge base engine (ingest/query/lint/search/queue/seed + deterministic index repair).
 - **`jobs/`** — scheduler, nightly, work-run runners + finalizer + classify/transcript/forensics/GC, supervision, stall-check, gen-eval-loop, orchestrated-work, sandbox runtime, learning loop.
 - **`intent/`** — registry, planner, orchestration (orch-*, team-task, project-orchestrator), backlog, promotions, multi-model dispatch, observation loop, sandbox/egress/model/escalation policy, cockpit projection.
 - **`mcp/`** — MCP server factory + per-tool handlers (`tools/`).

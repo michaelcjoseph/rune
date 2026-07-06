@@ -34,6 +34,7 @@ export interface SupersessionDecision {
 export interface SupersessionResult {
   scannedFiles: number;
   candidates: number;
+  skipped: number;
   accepted: number;
   rejected: number;
   ambiguous: number;
@@ -76,6 +77,7 @@ export async function runKnowledgeSupersessionReconciliation(
   const result: SupersessionResult = {
     scannedFiles,
     candidates: 0,
+    skipped: 0,
     accepted: 0,
     rejected: 0,
     ambiguous: 0,
@@ -87,6 +89,7 @@ export async function runKnowledgeSupersessionReconciliation(
   const changedFiles = new Set<string>();
   const unchangedFiles = new Set<string>();
   const detailParts: string[] = [];
+  const priorDecisions = readPriorRejectedOrAmbiguousDecisions(opts.vaultDir);
 
   const candidatesByFile = groupCandidatesByFile(candidates);
 
@@ -103,6 +106,12 @@ export async function runKnowledgeSupersessionReconciliation(
       const index = candidate.line - 1;
       const text = lines[index] ?? candidate.text;
       result.candidates++;
+      if (priorDecisions.has(decisionKey({ ...candidate, text }))) {
+        result.skipped++;
+        unchangedFiles.add(file);
+        continue;
+      }
+
       const decision = await opts.adjudicateCandidate({
         ...candidate,
         text,
@@ -171,6 +180,9 @@ export async function runKnowledgeSupersessionReconciliation(
 
   result.editedFiles = [...changedFiles].sort();
   result.unchangedFiles = [...unchangedFiles].sort();
+  if (result.skipped > 0) {
+    detailParts.push(`${result.skipped} previously decided`);
+  }
   result.detail = detailParts.length > 0 ? detailParts.join('; ') : result.detail;
   return result;
 }
@@ -323,6 +335,82 @@ function appendSupersessionAudit(root: string, record: Record<string, unknown>):
   const auditPath = join(root, 'knowledge', 'supersessions.jsonl');
   mkdirSync(dirname(auditPath), { recursive: true });
   appendFileSync(auditPath, `${JSON.stringify(record)}\n`);
+}
+
+function readPriorRejectedOrAmbiguousDecisions(root: string): Set<string> {
+  const auditPath = join(root, 'knowledge', 'supersessions.jsonl');
+  let raw: string;
+  try {
+    raw = readFileSync(auditPath, 'utf8');
+  } catch {
+    return new Set();
+  }
+
+  const decisions = new Set<string>();
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (record['status'] !== 'rejected' && record['status'] !== 'ambiguous') continue;
+    const file = typeof record['file'] === 'string' ? record['file'] : null;
+    const text = typeof record['text'] === 'string' ? record['text'] : null;
+    const supersession = parseAuditSupersession(record['supersession']);
+    const evidence = parseAuditEvidence(record['evidence']);
+    if (!file || !text || !supersession || !evidence) continue;
+    decisions.add(decisionKey({ file, text, supersession, newerSources: evidence }));
+  }
+  return decisions;
+}
+
+function parseAuditSupersession(value: unknown): SupersessionCandidate['supersession'] | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record['from'] !== 'string' || typeof record['to'] !== 'string') return null;
+  return { from: record['from'], to: record['to'] };
+}
+
+function parseAuditEvidence(value: unknown): SupersessionEvidence[] | null {
+  if (!Array.isArray(value)) return null;
+  const evidence: SupersessionEvidence[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const record = item as Record<string, unknown>;
+    if (
+      typeof record['file'] !== 'string' ||
+      typeof record['line'] !== 'number' ||
+      typeof record['content'] !== 'string'
+    ) {
+      return null;
+    }
+    evidence.push({ file: record['file'], line: record['line'], content: record['content'] });
+  }
+  return evidence;
+}
+
+function decisionKey(
+  candidate: Pick<SupersessionCandidate, 'file' | 'text' | 'supersession' | 'newerSources'>,
+): string {
+  return JSON.stringify({
+    file: candidate.file,
+    supersession: candidate.supersession,
+    text: candidate.text,
+    evidence: evidenceFingerprint(candidate.newerSources),
+  });
+}
+
+function evidenceFingerprint(evidence: SupersessionEvidence[]): string {
+  return JSON.stringify(
+    evidence
+      .map((item) => ({ file: item.file, line: item.line, content: item.content }))
+      .sort((a, b) =>
+        a.file.localeCompare(b.file) ||
+        a.line - b.line ||
+        a.content.localeCompare(b.content)),
+  );
 }
 
 function appendChangelogEntry(lines: string[], now: string, candidate: SupersessionCandidate): void {

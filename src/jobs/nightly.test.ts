@@ -89,10 +89,18 @@ vi.mock('../kb/engine.js', () => ({
   lintKB: vi.fn(),
   enqueue: vi.fn(),
 }));
+vi.mock('../kb/index-integrity.js', () => ({
+  repairKnowledgeIndex: vi.fn(() => ({
+    added: 0,
+    addedPages: [],
+    detail: 'No missing wiki index entries',
+  })),
+}));
 vi.mock('../kb/knowledge-supersession.js', () => ({
   runKnowledgeSupersessionReconciliation: vi.fn(async () => ({
     scannedFiles: 0,
     candidates: 0,
+    skipped: 0,
     accepted: 0,
     rejected: 0,
     ambiguous: 0,
@@ -118,11 +126,14 @@ vi.mock('../utils/time.js', () => ({
 const { captureSessions } = await import('./capture.js');
 const { executeActivitySync } = await import('./whoop-sync.js');
 const { processIngestionQueue, lintKB, enqueue } = await import('../kb/engine.js');
+const { repairKnowledgeIndex } = await import('../kb/index-integrity.js');
 const { runKnowledgeSupersessionReconciliation } = await import('../kb/knowledge-supersession.js');
 const { askClaudeOneShot, runAgent } = await import('../ai/claude.js');
 const { readVaultFile, writeVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
 const { getDayOfWeek } = await import('../utils/time.js');
+const { runNightlyObservation } = await import('../intent/observation-nightly.js');
+const { readInteractionSignals } = await import('../intent/observation-sensor-readers.js');
 const { extractMeetings, appendProjectDecisions } = await import('./meeting-extract.js');
 const {
   readFeedbackRecords,
@@ -138,6 +149,7 @@ const { executeNightly, runNightly } = await import('./nightly.js');
 const captureMock = captureSessions as unknown as ReturnType<typeof vi.fn>;
 const activityMock = executeActivitySync as unknown as ReturnType<typeof vi.fn>;
 const queueMock = processIngestionQueue as unknown as ReturnType<typeof vi.fn>;
+const indexRepairMock = repairKnowledgeIndex as unknown as ReturnType<typeof vi.fn>;
 const reconciliationMock = runKnowledgeSupersessionReconciliation as unknown as ReturnType<typeof vi.fn>;
 const enqueueMock = enqueue as unknown as ReturnType<typeof vi.fn>;
 const lintMock = lintKB as unknown as ReturnType<typeof vi.fn>;
@@ -147,6 +159,8 @@ const readMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
 const writeMock = writeVaultFile as unknown as ReturnType<typeof vi.fn>;
 const gitMock = gitCommitAndPush as unknown as ReturnType<typeof vi.fn>;
 const dayMock = getDayOfWeek as unknown as ReturnType<typeof vi.fn>;
+const nightlyObservationMock = runNightlyObservation as unknown as ReturnType<typeof vi.fn>;
+const readInteractionSignalsMock = readInteractionSignals as unknown as ReturnType<typeof vi.fn>;
 const extractMeetingsMock = extractMeetings as unknown as ReturnType<typeof vi.fn>;
 const appendDecisionsMock = appendProjectDecisions as unknown as ReturnType<typeof vi.fn>;
 const readFeedbackRecordsMock = readFeedbackRecords as unknown as ReturnType<typeof vi.fn>;
@@ -161,9 +175,15 @@ function setDefaults() {
   captureMock.mockResolvedValue({ captured: 0 });
   activityMock.mockReturnValue({ status: 'skipped', detail: 'Whoop not configured' });
   queueMock.mockResolvedValue({ processed: 0, errors: 0, created: 0, updated: 0 });
+  indexRepairMock.mockReturnValue({
+    added: 0,
+    addedPages: [],
+    detail: 'No missing wiki index entries',
+  });
   reconciliationMock.mockResolvedValue({
     scannedFiles: 0,
     candidates: 0,
+    skipped: 0,
     accepted: 0,
     rejected: 0,
     ambiguous: 0,
@@ -175,6 +195,8 @@ function setDefaults() {
   agentMock.mockResolvedValue({ text: null, error: null });
   readMock.mockReturnValue(null);
   dayMock.mockReturnValue('Saturday');
+  nightlyObservationMock.mockResolvedValue({ outcomes: [], dispatchPlans: [], ideasMarkdown: '' });
+  readInteractionSignalsMock.mockReturnValue([]);
   // vi.clearAllMocks() clears call history but NOT implementations, so a test
   // that points gitMock at a thrower would leak into the next test and add a
   // spurious 'Final commit' error step to its result. Reset to a no-op here.
@@ -198,9 +220,9 @@ describe('jobs/nightly', () => {
   });
 
   describe('executeNightly', () => {
-    it('runs all 16 steps and returns results', async () => {
+    it('runs all 17 steps and returns results', async () => {
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       expect(result.steps.map((s) => s.step)).toEqual([
         'Session capture',
         'Daily tags',
@@ -212,6 +234,7 @@ describe('jobs/nightly', () => {
         'Meeting extract',
         'Library sync',
         'KB queue',
+        'KB index repair',
         'Knowledge reconciliation',
         'Whoop activity',
         'Observation loop',
@@ -291,13 +314,40 @@ describe('jobs/nightly', () => {
     });
 
     // -- Knowledge reconciliation step --
-    it('runs knowledge reconciliation immediately after KB queue and before unrelated nightly work', async () => {
+    it('runs KB index repair immediately after KB queue and before knowledge reconciliation', async () => {
+      const result = await executeNightly();
+      const names = result.steps.map((s) => s.step);
+
+      expect(names.indexOf('KB index repair')).toBe(names.indexOf('KB queue') + 1);
+      expect(names.indexOf('Knowledge reconciliation')).toBe(names.indexOf('KB index repair') + 1);
+      expect(indexRepairMock).toHaveBeenCalledWith('/test/vault');
+      expect(queueMock.mock.invocationCallOrder[0]!).toBeLessThan(indexRepairMock.mock.invocationCallOrder[0]!);
+      expect(indexRepairMock.mock.invocationCallOrder[0]!).toBeLessThan(reconciliationMock.mock.invocationCallOrder[0]!);
+    });
+
+    it('reports KB index repair additions in the nightly step detail', async () => {
+      indexRepairMock.mockReturnValue({
+        added: 29,
+        addedPages: ['knowledge/wiki/entities/alice.md'],
+        detail: '29 missing wiki index entries restored',
+      });
+
+      const result = await executeNightly();
+      const step = result.steps.find((s) => s.step === 'KB index repair')!;
+
+      expect(step).toMatchObject({
+        status: 'success',
+        detail: expect.stringContaining('added=29'),
+      });
+    });
+
+    it('runs knowledge reconciliation after KB index repair and before unrelated nightly work', async () => {
       dayMock.mockReturnValue('Sunday');
 
       const result = await executeNightly();
       const names = result.steps.map((s) => s.step);
 
-      expect(names.indexOf('Knowledge reconciliation')).toBe(names.indexOf('KB queue') + 1);
+      expect(names.indexOf('Knowledge reconciliation')).toBe(names.indexOf('KB index repair') + 1);
       expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Whoop activity'));
       expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Observation loop'));
       expect(names.indexOf('Knowledge reconciliation')).toBeLessThan(names.indexOf('Learning loop'));
@@ -305,10 +355,12 @@ describe('jobs/nightly', () => {
 
       expect(reconciliationMock).toHaveBeenCalledTimes(1);
       const queueOrder = queueMock.mock.invocationCallOrder[0]!;
+      const indexRepairOrder = indexRepairMock.mock.invocationCallOrder[0]!;
       const reconciliationOrder = reconciliationMock.mock.invocationCallOrder[0]!;
       const whoopOrder = activityMock.mock.invocationCallOrder[0]!;
       const lintOrder = lintMock.mock.invocationCallOrder[0]!;
-      expect(queueOrder).toBeLessThan(reconciliationOrder);
+      expect(queueOrder).toBeLessThan(indexRepairOrder);
+      expect(indexRepairOrder).toBeLessThan(reconciliationOrder);
       expect(reconciliationOrder).toBeLessThan(whoopOrder);
       expect(reconciliationOrder).toBeLessThan(lintOrder);
     });
@@ -947,6 +999,32 @@ describe('jobs/nightly', () => {
       expect(step.detail).toContain('agent crashed');
     });
 
+    it('passes interaction signals to the observation loop as readers.interactions', async () => {
+      const interactionSignal = {
+        id: 'interaction-1',
+        source: 'interaction',
+        summary: 'fixture interaction signal',
+        severity: 'info',
+      };
+      readInteractionSignalsMock.mockReturnValue([interactionSignal]);
+      nightlyObservationMock.mockImplementation(async (deps: { readers: Record<string, () => unknown[]> }) => {
+        const readInteractions = deps.readers.interactions;
+        expect(typeof readInteractions).toBe('function');
+        if (typeof readInteractions !== 'function') {
+          throw new Error('readers.interactions was not wired');
+        }
+        expect(readInteractions()).toEqual([interactionSignal]);
+        expect('interaction' in deps.readers).toBe(false);
+        return { outcomes: [], dispatchPlans: [], ideasMarkdown: '' };
+      });
+
+      const result = await executeNightly();
+
+      const step = result.steps.find((s) => s.step === 'Observation loop')!;
+      expect(step.status).toBe('success');
+      expect(nightlyObservationMock).toHaveBeenCalledOnce();
+    });
+
     // -- Lint step --
     it('skips lint when not Sunday', async () => {
       dayMock.mockReturnValue('Wednesday');
@@ -1078,7 +1156,7 @@ describe('jobs/nightly', () => {
       const result = await executeNightly(undefined, { force: true });
 
       // Full pipeline ran
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       expect(result.steps[0]!.step).toBe('Session capture');
       expect(captureMock).toHaveBeenCalled();
       // Mark processed still skips its own append because the marker is already in the file
@@ -1107,7 +1185,7 @@ describe('jobs/nightly', () => {
 
       const result = await executeNightly();
 
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       expect(captureMock).toHaveBeenCalled();
     });
 
@@ -1138,7 +1216,7 @@ describe('jobs/nightly', () => {
       captureMock.mockRejectedValue(new Error('crash'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       expect(result.steps[0]!.status).toBe('error');
       // Remaining steps still ran
       expect(result.steps[1]!.step).toBe('Daily tags');
@@ -1149,22 +1227,23 @@ describe('jobs/nightly', () => {
       queueMock.mockRejectedValue(new Error('queue exploded'));
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       // Order ahead of KB queue: Session capture, Daily tags, Birthday alerts,
       // Playbook extract, Registry rebuild, Journal-intent producer, Journal
       // ingest, Meeting extract, Library sync.
       expect(result.steps[9]!.step).toBe('KB queue');
       expect(result.steps[9]!.status).toBe('error');
-      // Reconciliation is fixed immediately after KB queue; Whoop still runs after it.
-      expect(result.steps[10]!.step).toBe('Knowledge reconciliation');
-      expect(result.steps[11]!.step).toBe('Whoop activity');
+      expect(result.steps[10]!.step).toBe('KB index repair');
+      // Reconciliation is fixed immediately after index repair; Whoop still runs after it.
+      expect(result.steps[11]!.step).toBe('Knowledge reconciliation');
+      expect(result.steps[12]!.step).toBe('Whoop activity');
     });
 
     it('continues when journal read throws', async () => {
       readMock.mockImplementation(() => { throw new Error('fs error'); });
 
       const result = await executeNightly();
-      expect(result.steps).toHaveLength(16);
+      expect(result.steps).toHaveLength(17);
       // Journal read is centralized; journal-dependent steps skip gracefully
       const dailyTags = result.steps.find((s) => s.step === 'Daily tags')!;
       const journalIngest = result.steps.find((s) => s.step === 'Journal ingest')!;
@@ -1176,7 +1255,7 @@ describe('jobs/nightly', () => {
       expect(markProcessed.status).toBe('skipped');
       expect(enqueueMock).not.toHaveBeenCalled();
       // Mark processed is last after reconciliation is inserted in the tail.
-      expect(result.steps[15]!.step).toBe('Mark processed');
+      expect(result.steps[16]!.step).toBe('Mark processed');
     });
 
     it('reads today journal only once across steps', async () => {

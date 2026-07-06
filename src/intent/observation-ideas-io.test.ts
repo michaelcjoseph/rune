@@ -196,4 +196,68 @@ describe('appendFiledIdeas', () => {
     writeFileSync(ideasPath, '# Project Ideas\n\n## User-authored\n\n- only this\n');
     expect(() => appendFiledIdeas(ideasPath, '- **X** — y\n')).toThrow(/loop-filed/i);
   });
+
+  it('does not append a bullet whose derived friction id already exists', () => {
+    writeFileSync(ideasPath, [
+      '## Loop-filed',
+      '',
+      '- **First title** — Resolver mis-routes /weekly when user asks for /daily',
+      '',
+    ].join('\n'));
+
+    appendFiledIdeas(ideasPath, '- **Different title** — resolver mis routes weekly when user asks for daily!\n');
+
+    const content = readFileSync(ideasPath, 'utf8');
+    expect(content).toContain('- **First title**');
+    expect(content).not.toContain('- **Different title**');
+  });
+
+  it('does not append a bullet whose normalized title already exists in Loop-filed', () => {
+    writeFileSync(ideasPath, [
+      '## Loop-filed',
+      '',
+      '- **Fix Resolver Routing** — first friction',
+      '',
+    ].join('\n'));
+
+    appendFiledIdeas(ideasPath, '- **fix resolver routing** — slightly different friction\n');
+
+    const content = readFileSync(ideasPath, 'utf8');
+    expect(content.match(/fix resolver routing/gi)).toHaveLength(1);
+    expect(content).not.toContain('slightly different friction');
+  });
+
+  it('deduplicates duplicate bullets within the same append batch', () => {
+    writeFileSync(ideasPath, ['## Loop-filed', ''].join('\n'));
+
+    appendFiledIdeas(ideasPath, [
+      '- **First title** — repeated friction',
+      '- **Second title** — repeated friction',
+      '- **Unique title** — different friction',
+      '',
+    ].join('\n'));
+
+    const content = readFileSync(ideasPath, 'utf8');
+    expect(content).toContain('- **First title** — repeated friction');
+    expect(content).not.toContain('- **Second title** — repeated friction');
+    expect(content).toContain('- **Unique title** — different friction');
+  });
+
+  it('does not use user-authored bullets above Loop-filed for append-time dedupe', () => {
+    writeFileSync(ideasPath, [
+      '# Project Ideas',
+      '',
+      '## User-authored',
+      '',
+      '- **Fix Resolver Routing** — first friction',
+      '',
+      '## Loop-filed',
+      '',
+    ].join('\n'));
+
+    appendFiledIdeas(ideasPath, '- **Fix Resolver Routing** — first friction\n');
+
+    const content = readFileSync(ideasPath, 'utf8');
+    expect(content.match(/\*\*Fix Resolver Routing\*\*/g)).toHaveLength(2);
+  });
 });

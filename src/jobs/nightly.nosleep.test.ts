@@ -49,10 +49,18 @@ vi.mock('../kb/engine.js', () => ({
   lintKB: vi.fn(),
   enqueue: vi.fn(),
 }));
+vi.mock('../kb/index-integrity.js', () => ({
+  repairKnowledgeIndex: vi.fn(() => ({
+    added: 0,
+    addedPages: [],
+    detail: 'No missing wiki index entries',
+  })),
+}));
 vi.mock('../kb/knowledge-supersession.js', () => ({
   runKnowledgeSupersessionReconciliation: vi.fn(async () => ({
     scannedFiles: 0,
     candidates: 0,
+    skipped: 0,
     accepted: 0,
     rejected: 0,
     ambiguous: 0,
