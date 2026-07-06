@@ -51,11 +51,13 @@ vi.mock('../../jobs/whoop-sync.js', () => ({
 
 const {
   parseWorkoutArgs,
+  handleWorkout,
+} = await import('./workout.js');
+const {
   buildWorkoutPrompt,
   extractStructured,
   generateWorkout,
-  handleWorkout,
-} = await import('./workout.js');
+} = await import('../../health/workout-generation.js');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

@@ -50,6 +50,7 @@ const mockConfig = vi.hoisted(() => ({
   RUNE_MCP_HOST: '127.0.0.1',
   RUNE_MCP_PORT: 0,
   RUNE_MCP_OAUTH_STORE_FILE: '/tmp/rune-test-logs/rune-mcp-oauth-store.json',
+  RUNE_MCP_METRICS_HISTORY_FILE: '/tmp/rune-test-logs/rune-mcp-metrics-history.jsonl',
 }));
 
 const warmIndex = vi.hoisted(() => ({
@@ -127,7 +128,7 @@ vi.mock('../server/webview.js', () => ({
   mountWebviewRoutes: vi.fn(() => vi.fn(async () => false)),
 }));
 
-import { APP_SURFACE_TOOLS, CONTENT_TOOLS } from './server.js';
+import { APP_SURFACE_TOOLS, CONTENT_TOOLS, HEALTH_TOOLS } from './server.js';
 
 interface StartMcpDaemonOptions {
   host: string;
@@ -597,7 +598,7 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
     const toolNames = (payload.result?.tools ?? []).map((tool) => tool.name).sort();
 
     expect(toolNames).toEqual(
-      [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index', 'mcp_metrics_snapshot'].sort(),
+      [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, ...HEALTH_TOOLS, 'refresh_vault_index', 'mcp_metrics_snapshot'].sort(),
     );
     expect(toolNames).not.toContain('kb_search');
     expect(toolNames).not.toContain('kb_ingest');
@@ -670,15 +671,22 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
       service?: string;
       status?: string;
       uptime?: number;
+      startedAt?: string;
+      bootId?: string;
       oauth?: { configured?: boolean };
       activeSessions?: number;
+      sessions?: Array<{ id?: string; openedAt?: string; lastSeenAt?: string }>;
       warmIndex?: { ready?: boolean; lastRebuild?: unknown };
     };
     expect(body.service).toBe('rune-mcp');
     expect(body.status).toMatch(/^(ok|starting|degraded)$/);
     expect(typeof body.uptime).toBe('number');
+    expect(typeof body.startedAt).toBe('string');
+    expect(Number.isFinite(Date.parse(body.startedAt!))).toBe(true);
+    expect(body.bootId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.oauth?.configured).toBe(true);
     expect(body.activeSessions).toBe(0);
+    expect(body.sessions).toEqual([]);
     expect(typeof body.warmIndex?.ready).toBe('boolean');
     expect('lastRebuild' in (body.warmIndex ?? {})).toBe(true);
 
@@ -849,7 +857,16 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
       method: 'GET',
     });
     expect(health.status).toBe(200);
-    expect((JSON.parse(health.body) as { activeSessions?: number }).activeSessions).toBe(1);
+    const healthBody = JSON.parse(health.body) as {
+      activeSessions?: number;
+      sessions?: Array<{ id?: string; openedAt?: string; lastSeenAt?: string }>;
+    };
+    expect(healthBody.activeSessions).toBe(1);
+    expect(healthBody.sessions).toHaveLength(1);
+    const session = healthBody.sessions![0]!;
+    expect(session.id).toHaveLength(8);
+    expect(Number.isFinite(Date.parse(session.openedAt!))).toBe(true);
+    expect(Number.isFinite(Date.parse(session.lastSeenAt!))).toBe(true);
   });
 
   it('uses the daemon OAuth secret, issuer, and store independently of web auth cookies', async () => {

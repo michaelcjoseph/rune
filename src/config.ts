@@ -148,6 +148,19 @@ const config = {
     return optional('RUNE_MCP_OAUTH_STORE_FILE') ?? join(this.LOGS_DIR, 'rune-mcp-oauth-store.json');
   },
 
+  /** Per-minute MCP daemon metrics history (JSONL) — written by the daemon's
+   *  metrics flusher (src/mcp/metrics-history.ts), read by the webview
+   *  monitoring endpoint and the MCP watchdog. */
+  get RUNE_MCP_METRICS_HISTORY_FILE() {
+    return join(this.LOGS_DIR, 'rune-mcp-metrics-history.jsonl');
+  },
+
+  /** MCP watchdog alert state — written by the main-process watchdog runner
+   *  (src/jobs/mcp-watchdog-runner.ts), read by the cockpit alert badge. */
+  get MCP_WATCHDOG_STATE_FILE() {
+    return join(this.LOGS_DIR, 'mcp-watchdog-state.json');
+  },
+
   /** Append-only audit log of backlog `+` add writes (09-expand-cockpit). */
   get BACKLOG_MUTATIONS_FILE() {
     return join(this.LOGS_DIR, 'backlog-mutations.jsonl');

@@ -3,6 +3,13 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const LATENCY_WINDOW_SIZE = 1_024;
 
+/** Per-tool timeout overrides — tools whose legitimate runtime exceeds the
+ *  global RUNE_MCP_TOOL_TIMEOUT_MS (e.g. agent-spawning tools). An entry here
+ *  wins over the env var for that tool only. */
+const TOOL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
+  generate_workout: 240_000,
+};
+
 export interface McpToolLatencySnapshot {
   p50: number | null;
   p95: number | null;
@@ -113,7 +120,8 @@ function timeoutResult(timeoutMs: number): CallToolResult {
 export function instrumentMcpTool(toolName: string, callback: McpToolCallback): McpToolCallback {
   return async (...args: unknown[]): Promise<CallToolResult> => {
     const startedAt = performance.now();
-    const timeoutMs = parseToolTimeoutMs();
+    // Still resolved at call time so env/test changes keep applying.
+    const timeoutMs = TOOL_TIMEOUT_OVERRIDES_MS[toolName] ?? parseToolTimeoutMs();
     let timer: NodeJS.Timeout | undefined;
     let timedOut = false;
 

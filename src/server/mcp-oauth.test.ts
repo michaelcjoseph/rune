@@ -50,7 +50,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse, Server } from 'node:http';
+import { readOAuthStore, writeOAuthStore } from './mcp-oauth-store.js';
 
 // ---------------------------------------------------------------------------
 // Config mock — vi.hoisted() so the factory sees it before any import is run.
@@ -829,5 +833,138 @@ describe('server/mcp-oauth (§7 MCP single-user OAuth)', () => {
     const after = factory({ gateSecret, userId: 'alice', tokenTtlMs: null, loadState: () => null });
     const req = { headers: { authorization: `Bearer ${access_token}` } } as unknown as IncomingMessage;
     await expect(after.verifyBearer(req)).resolves.toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Tests 15-18 — DCR client display metadata (clientName/createdAt) for the
+  // MCP monitoring redesign (Wave 0).
+  // -------------------------------------------------------------------------
+  it('15: DCR captures a sanitized client_name + createdAt into the persisted client record', async () => {
+    const factory = await requireMcpOAuth();
+    let saved: unknown = null;
+    const oauth = factory({
+      gateSecret: 'gate',
+      userId: 'alice',
+      tokenTtlMs: null,
+      saveState: (s) => { saved = JSON.parse(JSON.stringify(s)); },
+      loadState: () => saved as never,
+    });
+    const { server, port } = await startTestServer(oauth);
+    openServers.push(server);
+
+    // registerClient sends client_name: 'claude-app'.
+    await registerClient(port);
+
+    const state = saved as {
+      clients: Array<{ clientId: string; clientName?: string; createdAt?: string }>;
+    } | null;
+    expect(state).not.toBeNull();
+    expect(state!.clients).toHaveLength(1);
+    const client = state!.clients[0]!;
+    expect(client.clientName).toBe('claude-app');
+    expect(typeof client.createdAt).toBe('string');
+    expect(Number.isFinite(Date.parse(client.createdAt!))).toBe(true);
+  });
+
+  it('16: clientName/createdAt round-trip through the file store read filter', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rune-oauth-clientname-store-'));
+    try {
+      const file = join(dir, 'store.json');
+      writeOAuthStore(file, {
+        clients: [{
+          clientId: 'client-abc',
+          redirectUris: ['http://localhost:9999/cb'],
+          clientName: 'claude-app',
+          createdAt: '2026-07-06T12:00:00.000Z',
+        }],
+        tokens: [],
+      });
+
+      const loaded = readOAuthStore(file);
+      expect(loaded).not.toBeNull();
+      expect(loaded!.clients).toHaveLength(1);
+      expect(loaded!.clients[0]).toMatchObject({
+        clientId: 'client-abc',
+        clientName: 'claude-app',
+        createdAt: '2026-07-06T12:00:00.000Z',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('17: registration without client_name still succeeds and stores no name', async () => {
+    const factory = await requireMcpOAuth();
+    let saved: unknown = null;
+    const oauth = factory({
+      gateSecret: 'gate',
+      userId: 'alice',
+      tokenTtlMs: null,
+      saveState: (s) => { saved = JSON.parse(JSON.stringify(s)); },
+    });
+    const { server, port } = await startTestServer(oauth);
+    openServers.push(server);
+
+    const dcrBody = JSON.stringify({ redirect_uris: [REDIRECT_URI] });
+    const dcrRes = await rawReq({
+      host: '127.0.0.1',
+      port,
+      path: '/mcp/oauth/register',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(dcrBody).toString(),
+      },
+      body: dcrBody,
+    });
+    expect(dcrRes.status).toBe(201);
+    expect((JSON.parse(dcrRes.body) as { client_id?: string }).client_id).toEqual(expect.any(String));
+
+    const state = saved as {
+      clients: Array<{ clientName?: string; createdAt?: string }>;
+    } | null;
+    expect(state!.clients[0]!.clientName).toBeUndefined();
+    // createdAt is still recorded — it does not depend on client_name.
+    expect(typeof state!.clients[0]!.createdAt).toBe('string');
+  });
+
+  it('18: client_name is sanitized — control chars stripped, capped at 64 chars, non-strings dropped', async () => {
+    const factory = await requireMcpOAuth();
+    let saved: unknown = null;
+    const oauth = factory({
+      gateSecret: 'gate',
+      userId: 'alice',
+      tokenTtlMs: null,
+      saveState: (s) => { saved = JSON.parse(JSON.stringify(s)); },
+    });
+    const { server, port } = await startTestServer(oauth);
+    openServers.push(server);
+
+    const register = async (clientName: unknown) => {
+      const dcrBody = JSON.stringify({ redirect_uris: [REDIRECT_URI], client_name: clientName });
+      return rawReq({
+        host: '127.0.0.1',
+        port,
+        path: '/mcp/oauth/register',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(dcrBody).toString(),
+        },
+        body: dcrBody,
+      });
+    };
+
+    const noisy = `evil\u0000\u0007\u001bname ${'x'.repeat(100)}`;
+    expect((await register(noisy)).status).toBe(201);
+    expect((await register({ nested: 'object' })).status).toBe(201);
+
+    const state = saved as { clients: Array<{ clientName?: string }> } | null;
+    const [first, second] = state!.clients;
+    expect(first!.clientName).toBeDefined();
+    expect(first!.clientName!.length).toBeLessThanOrEqual(64);
+    expect(first!.clientName).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(first!.clientName!.startsWith('evilname')).toBe(true);
+    expect(second!.clientName).toBeUndefined();
   });
 });

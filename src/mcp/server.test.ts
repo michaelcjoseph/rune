@@ -131,14 +131,28 @@ beforeEach(() => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('createKBServer — repo plus KB search pins', () => {
-  it('exposes the existing kb_* tools plus repo_search for product chat', async () => {
+  it('exposes the kb_* tools plus repo_search plus the health tools for local stdio', async () => {
     const server = serverModule.createKBServer();
     const client = await connectClient(server);
 
     const names = await listedToolNames(client);
-    expect(names).toEqual(
-      ['kb_ingest', 'kb_lint', 'kb_query', 'kb_search', 'kb_stats', 'repo_search'],
-    );
+    expect(names).toEqual([
+      'generate_workout',
+      'health_doc',
+      'health_trends',
+      'kb_ingest',
+      'kb_lint',
+      'kb_query',
+      'kb_search',
+      'kb_stats',
+      'log_meal',
+      'log_workout_done',
+      'nutrition_log',
+      'repo_search',
+      'update_workout_plan',
+      'whoop_snapshot',
+      'workout_history',
+    ]);
 
     await client.close();
   });
@@ -355,6 +369,28 @@ describe('MCP server factory contract', () => {
     await client.close();
   });
 
+  it('health opts register exactly the nine health tools', async () => {
+    const createMcpServer = getFactory();
+    if (typeof createMcpServer !== 'function') {
+      expect.fail(`${renamedFactoryExport} is not exported — implementation pending`);
+    }
+
+    const HEALTH_TOOLS = (serverModule as Record<string, unknown>)['HEALTH_TOOLS'] as string[] | undefined;
+    if (!Array.isArray(HEALTH_TOOLS)) {
+      expect.fail('HEALTH_TOOLS is not exported — implementation pending');
+    }
+
+    const server = createMcpServer({ tools: HEALTH_TOOLS });
+    const client = await connectClient(server);
+
+    const names = await listedToolNames(client);
+    expect(names).toEqual(
+      [...HEALTH_TOOLS].sort(),
+    );
+
+    await client.close();
+  });
+
   it('admin opts register exactly the kb_* tools plus repo_search', async () => {
     const createMcpServer = getFactory();
     if (typeof createMcpServer !== 'function') {
@@ -491,6 +527,28 @@ describe('exported constants', () => {
     expect(names).toContain('kb_ingest');
     expect(names).toContain('kb_stats');
     expect(names).toContain('kb_lint');
+  });
+
+  it('HEALTH_TOOLS is exported and is exactly the nine health tools', () => {
+    const HEALTH_TOOLS = (serverModule as Record<string, unknown>)['HEALTH_TOOLS'];
+    expect(HEALTH_TOOLS, 'HEALTH_TOOLS must be exported').toBeDefined();
+    expect(Array.isArray(HEALTH_TOOLS)).toBe(true);
+
+    const names = HEALTH_TOOLS as string[];
+    expect(names).toHaveLength(9);
+    expect([...names].sort()).toEqual([
+      'generate_workout',
+      'health_doc',
+      'health_trends',
+      'log_meal',
+      'log_workout_done',
+      'nutrition_log',
+      'update_workout_plan',
+      'whoop_snapshot',
+      'workout_history',
+    ]);
+    // The health set never carries the admin kb_* surface.
+    expect(names.some((name) => name.startsWith('kb_'))).toBe(false);
   });
 
   it('APP_SURFACE_TOOLS and ADMIN_TOOLS are distinct sets', () => {

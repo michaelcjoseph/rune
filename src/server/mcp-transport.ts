@@ -48,12 +48,21 @@ export interface McpTransportOpts {
   verifyBearer?: (req: IncomingMessage) => boolean | Promise<boolean>;
 }
 
+/** Monitoring row for one live session — id truncated to 8 chars, ISO times. */
+export interface McpSessionStat {
+  id: string;
+  openedAt: string;
+  lastSeenAt: string;
+}
+
 /** The /mcp route handler plus the teardown for its live sessions. */
 export type McpRouteHandler = ((req: IncomingMessage, res: ServerResponse) => Promise<boolean>) & {
   /** Force-close every live session transport (idempotent). */
   closeAll: () => Promise<void>;
   /** Current live Streamable HTTP MCP sessions. */
   getActiveSessionCount: () => number;
+  /** Monitoring stats for the live sessions (ids truncated to 8 chars). */
+  getSessionStats: () => McpSessionStat[];
 };
 
 const MCP_PATH = '/mcp';
@@ -89,8 +98,12 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
   const transports = new Map<string, StreamableHTTPServerTransport>();
   /** Per-session idle timers (unref'd — never keep the process alive). */
   const idleTimers = new Map<string, NodeJS.Timeout>();
+  /** Per-session open/last-seen timestamps (ms epoch) for monitoring. */
+  const sessionMeta = new Map<string, { openedAt: number; lastSeenAt: number }>();
 
   function touchIdleTimer(sessionId: string, transport: StreamableHTTPServerTransport): void {
+    const meta = sessionMeta.get(sessionId);
+    if (meta) meta.lastSeenAt = Date.now();
     const existing = idleTimers.get(sessionId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
@@ -103,6 +116,7 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
 
   function dropSession(sessionId: string): void {
     transports.delete(sessionId);
+    sessionMeta.delete(sessionId);
     const timer = idleTimers.get(sessionId);
     if (timer) clearTimeout(timer);
     idleTimers.delete(sessionId);
@@ -174,6 +188,8 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
           transports.set(sid, transport);
+          const nowMs = Date.now();
+          sessionMeta.set(sid, { openedAt: nowMs, lastSeenAt: nowMs });
           touchIdleTimer(sid, transport);
         },
       });
@@ -199,11 +215,18 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
   handler.closeAll = async () => {
     const live = [...transports.values()];
     transports.clear();
+    sessionMeta.clear();
     for (const timer of idleTimers.values()) clearTimeout(timer);
     idleTimers.clear();
     await Promise.all(live.map((t) => t.close().catch(() => undefined)));
   };
   handler.getActiveSessionCount = () => transports.size;
+  handler.getSessionStats = () =>
+    [...sessionMeta.entries()].map(([id, meta]) => ({
+      id: id.slice(0, 8),
+      openedAt: new Date(meta.openedAt).toISOString(),
+      lastSeenAt: new Date(meta.lastSeenAt).toISOString(),
+    }));
 
   return handler;
 }

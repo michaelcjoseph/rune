@@ -11,10 +11,12 @@ import {
   refreshVaultIndex,
   type VaultIndexStatus,
 } from '../kb/vault-index.js';
-import { APP_SURFACE_TOOLS, CONTENT_TOOLS, createRuneMcpServer } from './server.js';
+import { APP_SURFACE_TOOLS, CONTENT_TOOLS, HEALTH_TOOLS, createRuneMcpServer } from './server.js';
+import { getMcpMetricsSnapshot } from './metrics.js';
+import { getBootId, startMcpMetricsFlush } from './metrics-history.js';
 import { createMcpOAuth } from '../server/mcp-oauth.js';
 import { readOAuthStore, writeOAuthStore } from '../server/mcp-oauth-store.js';
-import { mountMcpRoute, type McpRouteHandler } from '../server/mcp-transport.js';
+import { mountMcpRoute, type McpRouteHandler, type McpSessionStat } from '../server/mcp-transport.js';
 import { createLogger, flushLogger } from '../utils/logger.js';
 
 const log = createLogger('mcp-daemon');
@@ -33,8 +35,11 @@ export interface McpDaemonStatus {
   service: 'rune-mcp';
   status: 'ok' | 'starting' | 'degraded';
   uptime: number;
+  startedAt: string;
+  bootId: string;
   oauth: { configured: boolean };
   activeSessions: number;
+  sessions: McpSessionStat[];
   warmIndex: {
     ready: boolean;
     status: VaultIndexStatus['status'];
@@ -82,14 +87,21 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-function buildStatus(opts: StartMcpDaemonOptions, mcpHandler: McpRouteHandler): McpDaemonStatus {
+function buildStatus(
+  opts: StartMcpDaemonOptions,
+  mcpHandler: McpRouteHandler,
+  startedAt: string,
+): McpDaemonStatus {
   const warmIndex = getVaultIndexStatus();
   return {
     service: 'rune-mcp',
     status: opts.gateSecret && warmIndex.status !== 'failed' ? 'ok' : 'degraded',
     uptime: process.uptime(),
+    startedAt,
+    bootId: getBootId(),
     oauth: { configured: Boolean(opts.gateSecret) },
     activeSessions: mcpHandler.getActiveSessionCount(),
+    sessions: mcpHandler.getSessionStats(),
     warmIndex: {
       ready: warmIndex.ready,
       status: warmIndex.status,
@@ -115,6 +127,7 @@ function daemonBroadSearch(
 }
 
 export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDaemonHandle> {
+  const startedAt = new Date().toISOString();
   mkdirSync(dirname(opts.oauthStoreFile), { recursive: true });
   initKB();
   const refreshTimer = setInterval(() => {
@@ -139,7 +152,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
   const mcpHandler = mountMcpRoute({
     verifyBearer: oauth.verifyBearer,
     getServer: () => createRuneMcpServer({
-      tools: [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, 'refresh_vault_index', 'mcp_metrics_snapshot'],
+      tools: [...APP_SURFACE_TOOLS, ...CONTENT_TOOLS, ...HEALTH_TOOLS, 'refresh_vault_index', 'mcp_metrics_snapshot'],
       name: 'rune-mcp',
       kbQueryBroadSearch: daemonBroadSearch,
       getActiveSessionCount: () => mcpHandler.getActiveSessionCount(),
@@ -150,7 +163,7 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
     try {
       const path = (req.url ?? '').split('?')[0];
       if (req.method === 'GET' && path === '/health') {
-        json(res, 200, buildStatus(opts, mcpHandler));
+        json(res, 200, buildStatus(opts, mcpHandler, startedAt));
         return;
       }
       if (await oauth.handleOAuthRoute(req, res)) return;
@@ -169,6 +182,21 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
   });
 
   await listen(server, opts.host, opts.port);
+
+  // Metrics history flusher — started only once the HTTP surface is live so a
+  // failed boot never writes a record. Fail-safe: mkdir/append errors degrade
+  // to no persistence, never a crash.
+  try {
+    mkdirSync(dirname(config.RUNE_MCP_METRICS_HISTORY_FILE), { recursive: true });
+  } catch (err) {
+    log.error('Could not create MCP metrics history dir', { error: (err as Error).message });
+  }
+  const metricsFlush = startMcpMetricsFlush({
+    file: config.RUNE_MCP_METRICS_HISTORY_FILE,
+    getSnapshot: getMcpMetricsSnapshot,
+    getActiveSessionCount: () => mcpHandler.getActiveSessionCount(),
+  });
+
   let initialBuild: ReturnType<typeof setImmediate> | null = setImmediate(() => {
     initialBuild = null;
     try {
@@ -183,13 +211,14 @@ export async function startMcpDaemon(opts: StartMcpDaemonOptions): Promise<McpDa
     host: opts.host,
     port: actualPort,
     url: `http://${opts.host}:${actualPort}`,
-    getStatus: () => buildStatus(opts, mcpHandler),
+    getStatus: () => buildStatus(opts, mcpHandler, startedAt),
     async stop() {
       if (initialBuild) {
         clearImmediate(initialBuild);
         initialBuild = null;
       }
       clearInterval(refreshTimer);
+      metricsFlush.stop();
       await mcpHandler.closeAll();
       await closeServer(server);
     },

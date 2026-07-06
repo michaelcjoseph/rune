@@ -93,6 +93,10 @@ const MAX_CLIENTS = 20;
 export interface ClientRecord {
   clientId: string;
   redirectUris: string[];
+  /** Sanitized DCR `client_name` (display only, ≤64 chars) — monitoring UI. */
+  clientName?: string;
+  /** ISO timestamp of registration — monitoring UI. */
+  createdAt?: string;
 }
 
 interface CodeRecord {
@@ -116,6 +120,15 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function oauthError(res: ServerResponse, status: number, error: string, description: string): void {
   sendJson(res, status, { error, error_description: description });
+}
+
+/** Sanitize a DCR `client_name` for storage/display: string only, control
+ *  chars stripped, hard-truncated to 64 chars. Anything else -> undefined. */
+function sanitizeClientName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  // eslint-disable-next-line no-control-regex
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 64);
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 /** Minimal HTML escape for values echoed into the consent form. */
@@ -226,7 +239,15 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
     }
 
     const clientId = randomBytes(16).toString('base64url');
-    clients.set(clientId, { clientId, redirectUris: redirectUris as string[] });
+    // Display metadata for the monitoring UI: sanitized client_name (DCR is
+    // unauthenticated, so treat it as hostile input) + registration time.
+    const clientName = sanitizeClientName((body as { client_name?: unknown }).client_name);
+    clients.set(clientId, {
+      clientId,
+      redirectUris: redirectUris as string[],
+      createdAt: new Date(now()).toISOString(),
+      ...(clientName !== undefined ? { clientName } : {}),
+    });
     persist();
     log.info('Registered OAuth client', { clientId });
     sendJson(res, 201, {
@@ -235,6 +256,7 @@ export function createMcpOAuth(deps: McpOAuthDeps): McpOAuth {
       token_endpoint_auth_method: 'none',
       grant_types: ['authorization_code'],
       response_types: ['code'],
+      ...(clientName !== undefined ? { client_name: clientName } : {}),
     });
   }
 

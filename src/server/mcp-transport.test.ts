@@ -119,6 +119,7 @@ type McpRouteHandler = ((
 ) => Promise<boolean>) & {
   closeAll: () => Promise<void>;
   getActiveSessionCount: () => number;
+  getSessionStats: () => Array<{ id: string; openedAt: string; lastSeenAt: string }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -151,7 +152,9 @@ async function requireMcpTransport(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** Start a local transport-only HTTP harness and return the port. */
-async function startWithMcp(mcpOpts: McpTransportOpts): Promise<{ server: Server; port: number }> {
+async function startWithMcp(
+  mcpOpts: McpTransportOpts,
+): Promise<{ server: Server; port: number; mcpHandler: McpRouteHandler }> {
   const mod = await loadMcpTransport();
   if (!mod || typeof mod.mountMcpRoute !== 'function') {
     expect.fail(IMPL_PENDING);
@@ -174,7 +177,7 @@ async function startWithMcp(mcpOpts: McpTransportOpts): Promise<{ server: Server
   server.listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.on('listening', resolve));
   const port = (server.address() as { port: number }).port;
-  return { server, port };
+  return { server, port, mcpHandler };
 }
 
 /** Create and connect an SDK Client to the /mcp endpoint at the given port. */
@@ -419,5 +422,81 @@ describe('server/mcp-transport (§6 Streamable HTTP transport)', () => {
     });
 
     expect(result.status).toBe(401);
+  });
+
+  // -------------------------------------------------------------------------
+  // Session metadata (getSessionStats) — MCP monitoring redesign, Wave 0.
+  // -------------------------------------------------------------------------
+  it('7: getSessionStats reports truncated ids and ISO timestamps for live sessions', async () => {
+    await requireMcpTransport(); // red guard
+
+    const { server, port, mcpHandler } = await startWithMcp({ verifyBearer: () => true });
+    openServers.push(server);
+
+    expect(mcpHandler.getSessionStats()).toEqual([]);
+
+    const client = await connectMcpClient(port);
+    openClients.push(client);
+    await client.listTools();
+
+    const stats = mcpHandler.getSessionStats();
+    expect(stats).toHaveLength(1);
+    const stat = stats[0]!;
+    expect(stat.id).toHaveLength(8);
+    expect(Number.isFinite(Date.parse(stat.openedAt))).toBe(true);
+    expect(Number.isFinite(Date.parse(stat.lastSeenAt))).toBe(true);
+    expect(Date.parse(stat.lastSeenAt)).toBeGreaterThanOrEqual(Date.parse(stat.openedAt));
+  });
+
+  it('8: lastSeenAt advances on a subsequent request while openedAt stays fixed', async () => {
+    await requireMcpTransport(); // red guard
+
+    const { server, port, mcpHandler } = await startWithMcp({ verifyBearer: () => true });
+    openServers.push(server);
+
+    const client = await connectMcpClient(port);
+    openClients.push(client);
+    await client.listTools();
+
+    const before = mcpHandler.getSessionStats()[0]!;
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await client.listTools();
+
+    const after = mcpHandler.getSessionStats()[0]!;
+    expect(after.id).toBe(before.id);
+    expect(after.openedAt).toBe(before.openedAt);
+    expect(Date.parse(after.lastSeenAt)).toBeGreaterThan(Date.parse(before.lastSeenAt));
+  });
+
+  it('9: session metadata is removed on session eviction and on closeAll', async () => {
+    await requireMcpTransport(); // red guard
+
+    const { server, port, mcpHandler } = await startWithMcp({ verifyBearer: () => true });
+    openServers.push(server);
+
+    // Eviction path: a client DELETE (terminateSession) drops the metadata.
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await client.connect(transport);
+    openClients.push(client);
+    await client.listTools();
+    expect(mcpHandler.getSessionStats()).toHaveLength(1);
+
+    await transport.terminateSession();
+    // The server-side onclose fires asynchronously — poll briefly.
+    for (let i = 0; i < 40 && mcpHandler.getSessionStats().length > 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(mcpHandler.getSessionStats()).toEqual([]);
+
+    // closeAll path: a fresh session's metadata is cleared with the transports.
+    const client2 = await connectMcpClient(port);
+    openClients.push(client2);
+    await client2.listTools();
+    expect(mcpHandler.getSessionStats()).toHaveLength(1);
+
+    await mcpHandler.closeAll();
+    expect(mcpHandler.getSessionStats()).toEqual([]);
+    expect(mcpHandler.getActiveSessionCount()).toBe(0);
   });
 });

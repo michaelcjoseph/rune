@@ -62,6 +62,20 @@ export const ADMIN_TOOLS = [
 
 export const CONTENT_TOOLS = ['journal_range', 'follow_wikilinks', 'tag_date_query'] as const;
 
+/** Health/workout tools (MCP health expansion) — exposed both remotely
+ *  (daemon /mcp) and locally (stdio, alongside {@link ADMIN_TOOLS}). */
+export const HEALTH_TOOLS = [
+  'whoop_snapshot',
+  'health_trends',
+  'workout_history',
+  'nutrition_log',
+  'health_doc',
+  'generate_workout',
+  'log_workout_done',
+  'log_meal',
+  'update_workout_plan',
+] as const;
+
 const UTILITY_TOOLS = ['refresh_vault_index', 'mcp_metrics_snapshot'] as const;
 
 /** Union of every tool name the factory can register. */
@@ -69,6 +83,7 @@ export type ToolName =
   | (typeof APP_SURFACE_TOOLS)[number]
   | (typeof ADMIN_TOOLS)[number]
   | (typeof CONTENT_TOOLS)[number]
+  | (typeof HEALTH_TOOLS)[number]
   | (typeof UTILITY_TOOLS)[number];
 
 /** Lazy loader for the read-tools trio handler + deps modules (shared by
@@ -86,6 +101,21 @@ const lazyFollowWikilinksTool = () =>
 
 const lazyTagDateQueryTool = () =>
   Promise.all([import('./tools/tag-date-query.js'), import('./tools/tag-date-query-deps.js')]);
+
+const lazyHealthReadTools = () =>
+  Promise.all([import('./tools/health-read.js'), import('./tools/health-read-deps.js')]);
+
+const lazyGenerateWorkoutTool = () =>
+  Promise.all([import('./tools/generate-workout.js'), import('./tools/generate-workout-deps.js')]);
+
+const lazyLogWorkoutDoneTool = () =>
+  Promise.all([import('./tools/log-workout-done.js'), import('./tools/log-workout-done-deps.js')]);
+
+const lazyLogMealTool = () =>
+  Promise.all([import('./tools/log-meal.js'), import('./tools/log-meal-deps.js')]);
+
+const lazyUpdateWorkoutPlanTool = () =>
+  Promise.all([import('./tools/update-workout-plan.js'), import('./tools/update-workout-plan-deps.js')]);
 
 function daemonBroadSearch(
   query: string,
@@ -396,6 +426,141 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
     );
   },
 
+  whoop_snapshot: (server) => {
+    server.tool(
+      'whoop_snapshot',
+      "Today's Whoop health snapshot: recovery, sleep, strain, workouts. Syncs fresh data first when possible.",
+      {},
+      async () => {
+        const [{ whoopSnapshot }, { buildProductionHealthReadDeps }] = await lazyHealthReadTools();
+        return whoopSnapshot(buildProductionHealthReadDeps());
+      },
+    );
+  },
+
+  health_trends: (server) => {
+    server.tool(
+      'health_trends',
+      'Whoop recovery/sleep/strain history and averages over a date range (default: last 30 days, max 90).',
+      {
+        startDate: z.string().optional().describe('Inclusive start date in YYYY-MM-DD format (default: 30 days ago)'),
+        endDate: z.string().optional().describe('Inclusive end date in YYYY-MM-DD format (default: today)'),
+      },
+      async (input) => {
+        const [{ healthTrends }, { buildProductionHealthReadDeps }] = await lazyHealthReadTools();
+        return healthTrends(input, buildProductionHealthReadDeps());
+      },
+    );
+  },
+
+  workout_history: (server) => {
+    server.tool(
+      'workout_history',
+      'Completed workouts from the training log, newest first.',
+      {
+        days: z.number().int().min(1).max(365).optional().describe('How many days back to include (default 30)'),
+      },
+      async (input) => {
+        const [{ workoutHistory }, { buildProductionHealthReadDeps }] = await lazyHealthReadTools();
+        return workoutHistory(input, buildProductionHealthReadDeps());
+      },
+    );
+  },
+
+  nutrition_log: (server) => {
+    server.tool(
+      'nutrition_log',
+      'Recent meal notes from the nutrition log.',
+      {
+        days: z.number().int().min(1).max(90).optional().describe('How many days back to include (default 14)'),
+      },
+      async (input) => {
+        const [{ nutritionLog }, { buildProductionHealthReadDeps }] = await lazyHealthReadTools();
+        return nutritionLog(input, buildProductionHealthReadDeps());
+      },
+    );
+  },
+
+  health_doc: (server) => {
+    server.tool(
+      'health_doc',
+      'Read a health reference doc: the workout plan, goals, equipment list, or exercise preferences.',
+      {
+        doc: z.enum(['plan', 'goals', 'equipment', 'exercises']).describe('Which health reference doc to read'),
+      },
+      async (input) => {
+        const [{ healthDoc }, { buildProductionHealthReadDeps }] = await lazyHealthReadTools();
+        return healthDoc(input, buildProductionHealthReadDeps());
+      },
+    );
+  },
+
+  generate_workout: (server) => {
+    server.tool(
+      'generate_workout',
+      "Generate today's personalized workout via the workout-generator agent, using Whoop recovery, recent training load, equipment, and the weekly plan. Takes 1–3 minutes.",
+      {
+        location: z.enum(['home', 'gym']).optional().describe('Where the workout happens (default: inferred)'),
+        focus: z.enum(['mobility', 'endurance', 'strength', 'speed', 'power']).optional().describe('Training focus (default: inferred)'),
+        notes: z.string().max(500).optional().describe('Free-form constraints, e.g. "30min quick" or "sore hamstrings"'),
+      },
+      async (input) => {
+        const [{ generateWorkoutTool }, { buildProductionGenerateWorkoutDeps }] =
+          await lazyGenerateWorkoutTool();
+        return generateWorkoutTool(input, buildProductionGenerateWorkoutDeps());
+      },
+    );
+  },
+
+  log_workout_done: (server) => {
+    server.tool(
+      'log_workout_done',
+      "Log the last generated workout as completed in today's journal (the nightly pipeline parses it into the training log).",
+      {
+        notes: z.string().max(1000).optional().describe('Optional completion notes appended to the journal entry'),
+        confirm_stale: z.boolean().optional().describe('Set true to confirm logging a workout generated more than 48h ago'),
+      },
+      async (input) => {
+        const [{ logWorkoutDone }, { buildProductionLogWorkoutDoneDeps }] =
+          await lazyLogWorkoutDoneTool();
+        return logWorkoutDone(input, buildProductionLogWorkoutDoneDeps());
+      },
+    );
+  },
+
+  log_meal: (server) => {
+    server.tool(
+      'log_meal',
+      'Append a meal note to the nutrition log.',
+      {
+        description: z.string().min(3).max(500).describe('What was eaten'),
+        meal: z.string().max(40).optional().describe('Meal label, e.g. breakfast, lunch, dinner, snack'),
+        time: z.string().max(20).optional().describe('Time eaten, e.g. "12:30pm" (default: now)'),
+        date: z.string().optional().describe('YYYY-MM-DD date to log under (default: today)'),
+      },
+      async (input) => {
+        const [{ logMeal }, { buildProductionLogMealDeps }] = await lazyLogMealTool();
+        return logMeal(input, buildProductionLogMealDeps());
+      },
+    );
+  },
+
+  update_workout_plan: (server) => {
+    server.tool(
+      'update_workout_plan',
+      'Replace the weekly workout plan document. Read the current plan via health_doc first, then submit the COMPLETE edited document; every update becomes a git commit.',
+      {
+        content: z.string().min(50).max(64000).describe('The complete new plan document (markdown)'),
+        reason: z.string().min(3).max(200).describe('Why the plan is changing (recorded in the commit)'),
+      },
+      async (input) => {
+        const [{ updateWorkoutPlan }, { buildProductionUpdateWorkoutPlanDeps }] =
+          await lazyUpdateWorkoutPlanTool();
+        return updateWorkoutPlan(input, buildProductionUpdateWorkoutPlanDeps());
+      },
+    );
+  },
+
   log_conversation: (server) => {
     server.tool(
       'log_conversation',
@@ -454,7 +619,8 @@ export function createRuneMcpServer(opts: CreateRuneMcpServerOptions): McpServer
   return server;
 }
 
-/** The original stdio-entry server: the `kb_*` admin set, behavior unchanged. */
+/** The stdio-entry server: the `kb_*` admin set plus the health/workout
+ *  tools (MCP health expansion) so local Claude Code sessions get them too. */
 export function createKBServer(): McpServer {
-  return createRuneMcpServer({ tools: ADMIN_TOOLS });
+  return createRuneMcpServer({ tools: [...ADMIN_TOOLS, ...HEALTH_TOOLS] });
 }
