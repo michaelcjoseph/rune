@@ -2,10 +2,9 @@
 
 Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-plan.md) for verification.
 
-> **Test-first by default.** Every phase below opens with a **Tests (write first)** block.
-> Those tests mirror the matching [test-plan.md](test-plan.md) sections and must fail (red)
-> before any implementation task in the phase begins. A phase's implementation is done when
-> its test-plan sections pass.
+> **Test-first per task.** QA authors the tests that pin each task's contract (mirroring the
+> matching [test-plan.md](test-plan.md) sections) before the coder implements it; every task
+> lands green at closeout. Tests are not a separate up-front task list.
 >
 > Granularity here is the meaningful deliverable — not a granular sub-task. Per-task file
 > layout, schemas, and signatures are settled in `/work`'s Plan phase, against the spec.
@@ -13,14 +12,6 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 1 — Core state model
 
 > Depends on: nothing.
-
-### Tests (write first)
-
-- [ ] Write the test suite for **fix-attempt-terminal-states** — test-plan.md §1. Update
-  `fix-attempt-store.test.ts` for parse/round-trip of the new `fixed` / `failed` /
-  `parked-on-human` states (a terminal with `runId` stays valid; keep torn-line tolerance; do
-  not require `runId` on the guard-decline path).
-- [ ] Confirm the suite fails (red) before starting the implementation block.
 
 ### Core state model
 
@@ -33,22 +24,6 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 2 — Dispatch
 
 > Depends on: Phase 1.
-
-### Tests (write first)
-
-- [ ] Write the test suite for **single-product-guard** — test-plan.md §2. Prove accept plus
-  each reject (`unknown-product`, `not-repo-backed`, `not-single-product`), that expected cases
-  never throw, and that the injectable resolver exercises the divergent repo branch.
-- [ ] Write the test suite for **fix-project-scaffold-commit** — test-plan.md §3. Test in temp
-  git repos for files, task format, clean base-branch commit, unrelated dirty-file
-  preservation, and idempotent rerun (existing slug + SHA, no duplicate, no empty commit).
-- [ ] Write the test suite for **start-fix-run-dispatch** — test-plan.md §4. Cover the happy
-  path (`{ accepted: true, runId }`), `dispatch-rejected` on `createMutation` `!ok`, and each
-  expected guard/scaffold/commit failure returning `accepted: false` with a stable reason.
-- [ ] Write the test suite for **fix-decline-terminal-mapping** — test-plan.md §5.
-  `not-single-product` => `declined`; `dispatch-rejected` and the plumbing reasons =>
-  `handoff-failed`; an already-recorded terminal is not clobbered.
-- [ ] Confirm every suite above fails (red) before starting the implementation blocks.
 
 ### Guard
 
@@ -95,19 +70,6 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 
 > Depends on: Phase 2.
 
-### Tests (write first)
-
-- [ ] Write the test suite for **fix-attempt-terminal-reconciler** — test-plan.md §6. Feed
-  recorded run records for merged, parked, blocked, noop/partial, and failed, and assert the
-  mapping, the startup catch-up sweep, and idempotence (no overwrite of an existing terminal).
-- [ ] Write the test suite for **cockpit-fix-terminal-surface** — test-plan.md §7. Update
-  `product-deep-view-client.test.ts` for terminal renders, run-link retention, and
-  declined-with-reason render.
-- [ ] Write the test suite for **fix-run-logs-and-observability** — test-plan.md §8. Assert
-  every new failure path emits a reason-bearing line and no raw unsanitized host path reaches a
-  user-visible channel.
-- [ ] Confirm every suite above fails (red) before starting the implementation blocks.
-
 ### Reconciler
 
 - [ ] **fix-attempt-terminal-reconciler** — Reconcile each `proceeding` fix-attempt to a
@@ -139,11 +101,6 @@ Not started. See [spec.md](spec.md) for architecture and [test-plan.md](test-pla
 ## Phase 4 — Acceptance
 
 > Depends on: Phase 3.
-
-### Tests (write first)
-
-- [ ] _No code-test-required tasks — the acceptance test below is itself the deliverable; the
-  live gate is manual. See per-task strategy._
 
 ### Acceptance
 
