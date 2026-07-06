@@ -15,7 +15,7 @@ vi.mock('../config.js', () => ({
   default: { VAULT_DIR: tmpDir },
 }));
 
-const { readRecentWhoopDays } = await import('./whoop-recent.js');
+const { readRecentWhoopDays, readWhoopRange } = await import('./whoop-recent.js');
 
 function resetWhoopDir() {
   rmSync(WHOOP_DIR, { recursive: true, force: true });
@@ -185,6 +185,85 @@ describe('vault/whoop-recent', () => {
 
     it('returns [] for negative n', () => {
       expect(readRecentWhoopDays(-5)).toEqual([]);
+    });
+  });
+
+  describe('readWhoopRange', () => {
+    it('returns only days inside the inclusive range, newest-first', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeDay('2026-04-26.json', DAY_2026_04_26);
+      writeDay('2026-04-27.json', DAY_2026_04_27);
+
+      const result = readWhoopRange('2026-04-25', '2026-04-26');
+
+      expect(result.map((d) => d.date)).toEqual(['2026-04-26', '2026-04-25']);
+    });
+
+    it('includes both boundary dates', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeDay('2026-04-26.json', DAY_2026_04_26);
+      writeDay('2026-04-27.json', DAY_2026_04_27);
+
+      const result = readWhoopRange('2026-04-25', '2026-04-27');
+
+      expect(result.map((d) => d.date)).toEqual(['2026-04-27', '2026-04-26', '2026-04-25']);
+    });
+
+    it('returns parsed WhoopDailyData-shaped objects', () => {
+      writeDay('2026-04-27.json', DAY_2026_04_27);
+
+      const result = readWhoopRange('2026-04-27', '2026-04-27');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.sleep?.performance).toBe(90);
+      expect(result[0]!.recovery?.score).toBe(82);
+    });
+
+    it('returns [] when no files fall inside the range', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+
+      expect(readWhoopRange('2026-05-01', '2026-05-31')).toEqual([]);
+    });
+
+    it('returns [] when the directory does not exist', () => {
+      rmSync(WHOOP_DIR, { recursive: true, force: true });
+
+      expect(readWhoopRange('2026-04-01', '2026-04-30')).toEqual([]);
+    });
+
+    it('skips corrupt files inside the range without throwing', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeRaw('2026-04-26.json', '{not valid json');
+      writeDay('2026-04-27.json', DAY_2026_04_27);
+
+      const result = readWhoopRange('2026-04-25', '2026-04-27');
+
+      expect(result.map((d) => d.date)).toEqual(['2026-04-27', '2026-04-25']);
+    });
+
+    it('skips in-range files lacking a string date field', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeDay('2026-04-26.json', { sleep: DAY_2026_04_26.sleep });
+
+      const result = readWhoopRange('2026-04-25', '2026-04-26');
+
+      expect(result.map((d) => d.date)).toEqual(['2026-04-25']);
+    });
+
+    it('ignores non-day filenames inside the range window', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+      writeRaw('trends.md', '# Trends');
+      writeRaw('2026-04.json', '{"date":"2026-04"}');
+
+      const result = readWhoopRange('2026-01-01', '2026-12-31');
+
+      expect(result.map((d) => d.date)).toEqual(['2026-04-25']);
+    });
+
+    it('returns [] for an inverted range (start after end)', () => {
+      writeDay('2026-04-25.json', DAY_2026_04_25);
+
+      expect(readWhoopRange('2026-04-27', '2026-04-25')).toEqual([]);
     });
   });
 });
