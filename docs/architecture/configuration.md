@@ -34,9 +34,9 @@ Env vars are loaded from `.env.local` via `--env-file-if-exists` in npm scripts 
 - **`RUNE_MCP_OAUTH_STORE_FILE`** — OAuth client/token store for the standalone MCP daemon; defaults to `logs/rune-mcp-oauth-store.json`.
 - **`RUNE_MCP_HOST`** — bind host for the standalone MCP daemon; defaults to `127.0.0.1`.
 - **`RUNE_MCP_PORT`** — bind port for the standalone MCP daemon; defaults to `3848`.
-- **`RUNE_MCP_TOOL_TIMEOUT_MS`** — per-MCP-tool wall-clock timeout used by in-process metrics/instrumentation; defaults to `30000`, min `1`. Missing, malformed, or `<1` values fall back to the default. A timeout returns an MCP `isError:true` text result and is counted as both an error and timeout.
+- **`RUNE_MCP_TOOL_TIMEOUT_MS`** — per-MCP-tool wall-clock timeout used by in-process metrics/instrumentation; defaults to `30000`, min `1`. Missing, malformed, or `<1` values fall back to the default. A timeout returns an MCP `isError:true` text result and is counted as both an error and timeout. A per-tool entry in `TOOL_TIMEOUT_OVERRIDES_MS` (`src/mcp/metrics.ts`) wins over this env var for that tool alone — `generate_workout` overrides it to `240000`ms since it spawns an agent.
 
-Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journal_range`, `follow_wikilinks`, `tag_date_query`, `refresh_vault_index`, and `mcp_metrics_snapshot`. Their runtime caps are not env-configurable in this phase: journal ranges are capped at 31 days, wikilink traversal at depth 5 and 50 returned files, tag/date query output at 50 results, warm-corpus scans at 250,000 indexed lines, and metrics latency windows at 1,024 samples per tool.
+Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journal_range`, `follow_wikilinks`, `tag_date_query`, `refresh_vault_index`, and `mcp_metrics_snapshot`. Their runtime caps are not env-configurable in this phase: journal ranges are capped at 31 days, wikilink traversal at depth 5 and 50 returned files, tag/date query output at 50 results, warm-corpus scans at 250,000 indexed lines, and metrics latency windows at 1,024 samples per tool. The nine `HEALTH_TOOLS` (`whoop_snapshot`, `health_trends`, `workout_history`, `nutrition_log`, `health_doc`, `generate_workout`, `log_workout_done`, `log_meal`, `update_workout_plan` — MCP health expansion, contracts in `docs/architecture/subsystems.md`) are exposed on BOTH surfaces (local stdio + remote daemon), unlike the daemon-only W1 tools above.
 
 ## Resolver
 
@@ -85,6 +85,8 @@ Daemon-only W1 tools are documented in `docs/architecture/subsystems.md`: `journ
 - **`logs/feedback-processed.json`** — JSON Set of content-hash ids the learning loop has already post-mortemed (exactly-once); exposed via `config.FEEDBACK_PROCESSED_FILE`.
 - **`logs/mcp-oauth-store.json`** — legacy web-process `/mcp` OAuth state, 0600, atomic; exposed via `config.MCP_OAUTH_STORE_FILE`.
 - **`logs/rune-mcp-oauth-store.json`** — standalone MCP daemon OAuth state (clients + bearer tokens), 0600, atomic; exposed via `config.RUNE_MCP_OAUTH_STORE_FILE`. Revoke all = delete the file + restart the MCP daemon.
+- **`logs/rune-mcp-metrics-history.jsonl`** — per-minute cumulative MCP call-metrics history (MCP monitoring redesign), written solely by the daemon (`src/mcp/metrics-history.ts`), one record per flush tick (default 60s) even when idle, 14-day retention via daily atomic-rename compaction; exposed via `config.RUNE_MCP_METRICS_HISTORY_FILE`. Consumed by the webview monitoring endpoint (`GET /api/mcp/monitoring`) and the MCP watchdog.
+- **`logs/mcp-watchdog-state.json`** — MCP watchdog alert state (MCP monitoring redesign): streak counters, active alerts, per-alert-key notify cooldowns — current state, not an event history; written once per 60s tick by the main-process watchdog runner (`src/jobs/mcp-watchdog-runner.ts`); exposed via `config.MCP_WATCHDOG_STATE_FILE`. Tolerant read on both sides — a missing/corrupt file loads as a fresh default state.
 
 ---
 
