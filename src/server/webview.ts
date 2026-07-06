@@ -86,6 +86,12 @@ import {
 } from '../jobs/fix-attempt-store.js';
 import { startFixRun } from '../jobs/fix-run-handoff.js';
 import { readOAuthStore } from './mcp-oauth-store.js';
+import { deltaSeries } from '../mcp/metrics-history.js';
+import { readHistoryCached, bucketDaily, bucketHourly, perToolWindow } from './mcp-metrics-history-read.js';
+import { readRuneRunMetrics, type RuneRunMetrics } from './rune-run-metrics.js';
+// Types only — the watchdog store/runner live in src/jobs; the webview reads
+// the state FILE directly (tolerant read) so the modules stay decoupled.
+import type { McpAlert, McpAlertKind, McpWatchdogState } from '../jobs/mcp-watchdog.js';
 
 const log = createLogger('webview');
 
@@ -245,7 +251,23 @@ type McpMonitoring = {
     endpoint: string;
     checkedAt: string;
     error?: string;
+    /** Active watchdog alert rollup (MCP monitoring redesign) — cockpit badge. */
+    alerts?: { count: number; kinds: McpAlertKind[] };
   };
+};
+
+/** Parsed body of the daemon's GET /health (see daemon.ts buildStatus).
+ *  Every field is optional — the probe must tolerate any body shape. */
+type McpDaemonHealthBody = {
+  status?: string;
+  uptime?: number;
+  uptimeMs?: number;
+  startedAt?: string;
+  bootId?: string;
+  oauth?: { configured?: boolean };
+  activeSessions?: number;
+  sessions?: Array<{ id?: string; openedAt?: string; lastSeenAt?: string }>;
+  warmIndex?: { ready?: boolean; status?: string };
 };
 
 type CockpitProductWithMonitoring = ReturnType<typeof buildCockpitView>['products'][number] & {
@@ -565,15 +587,30 @@ function probeMcpDaemonHealth(): Promise<{
   endpoint: string;
   checkedAt: string;
   error?: string;
+  /** Parsed /health JSON body when the probe succeeded and the body parsed.
+   *  Callers that surface monitoring state must pick fields explicitly —
+   *  never pass the raw body through to a client payload. */
+  health?: McpDaemonHealthBody;
 }> {
   const endpoint = `http://${config.RUNE_MCP_HOST}:${config.RUNE_MCP_PORT}/health`;
   const checkedAt = new Date().toISOString();
   return new Promise((resolve) => {
     const req = httpRequest(endpoint, { method: 'GET', timeout: 500 }, (mcpRes) => {
-      mcpRes.resume();
+      let body = '';
+      mcpRes.setEncoding('utf8');
+      mcpRes.on('data', (chunk: string) => { body += chunk; });
       mcpRes.on('end', () => {
         if (mcpRes.statusCode === 200) {
-          resolve({ status: 'ok', endpoint, checkedAt });
+          let health: McpDaemonHealthBody | undefined;
+          try {
+            const parsed = JSON.parse(body) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              health = parsed as McpDaemonHealthBody;
+            }
+          } catch {
+            // Non-JSON 200 body — the probe still counts as ok, just without detail.
+          }
+          resolve({ status: 'ok', endpoint, checkedAt, ...(health ? { health } : {}) });
           return;
         }
         resolve({
@@ -599,16 +636,271 @@ function probeMcpDaemonHealth(): Promise<{
   });
 }
 
+/**
+ * Tolerant read of the MCP watchdog alert state (written by the main-process
+ * watchdog runner into config.MCP_WATCHDOG_STATE_FILE). Missing file, corrupt
+ * JSON, or an unexpected shape all read as "no state" — the cockpit and the
+ * monitoring endpoint degrade to an empty alert list, never an error.
+ */
+function readMcpWatchdogStateFile(): McpWatchdogState | null {
+  try {
+    const parsed = JSON.parse(readFileSync(config.MCP_WATCHDOG_STATE_FILE, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const state = parsed as McpWatchdogState;
+    if (!Array.isArray(state.active)) return null;
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+/** Active alerts from the watchdog state, shape-guarded and path-scrubbed —
+ *  alert messages reach HTTP responses, so scrub before surfacing. */
+function activeMcpAlerts(state: McpWatchdogState | null): McpAlert[] {
+  if (!state) return [];
+  return state.active
+    .filter((alert): alert is McpAlert => (
+      Boolean(alert) && typeof alert === 'object' &&
+      typeof (alert as McpAlert).kind === 'string' &&
+      typeof (alert as McpAlert).message === 'string'
+    ))
+    .map((alert) => ({ ...alert, message: scrubAbsolutePaths(alert.message) }));
+}
+
 async function attachMcpMonitoring(view: ReturnType<typeof buildCockpitView>): Promise<CockpitViewWithMonitoring> {
   const out = view as CockpitViewWithMonitoring;
   if (!out.available) return out;
   const runeMcp = out.products.find((product): product is CockpitProductWithMonitoring => product.name === 'rune-mcp');
   if (!runeMcp) return out;
+  const probe = await probeMcpDaemonHealth();
+  // Watchdog alert rollup rides on the same monitoring card. An active
+  // daemon-down alert flips the status to degraded even when this instant's
+  // probe succeeded — the watchdog's multi-tick view outranks one probe.
+  const alerts = activeMcpAlerts(readMcpWatchdogStateFile());
+  const kinds = alerts.map((alert) => alert.kind);
+  const daemonDown = kinds.includes('daemon-down');
   runeMcp.monitoring = {
     ...(runeMcp.monitoring ?? {}),
-    mcp: await probeMcpDaemonHealth(),
+    mcp: {
+      status: daemonDown ? 'degraded' : probe.status,
+      endpoint: probe.endpoint,
+      checkedAt: probe.checkedAt,
+      ...(probe.error !== undefined ? { error: probe.error } : {}),
+      alerts: { count: alerts.length, kinds },
+    },
   };
   return out;
+}
+
+/**
+ * GET /api/mcp/monitoring response (MCP monitoring redesign) — the single
+ * composed payload the cockpit monitoring panel renders. Every section
+ * degrades independently to `undefined` on its own failure; the endpoint
+ * ALWAYS answers 200, flipping `status` to 'degraded' with a scrubbed
+ * `error` when anything failed. The frontend builds against this exact type.
+ */
+export type McpMonitoringPayload = {
+  status: 'ok' | 'degraded';
+  checkedAt: string;
+  error?: string;
+  /** Parsed mcp_metrics_snapshot via the live daemon tool call. */
+  live?: {
+    generatedAt?: string;
+    totals: { calls: number; errors: number; timeouts: number };
+    tools: Record<string, {
+      calls: number;
+      errors: number;
+      timeouts: number;
+      latencyMs: {
+        p50: number | null;
+        p95: number | null;
+        p99: number | null;
+        sampleCount: number;
+        windowSize: number;
+      };
+    }>;
+    activeSessions: number;
+    warmIndex: { ready: boolean; status?: string };
+  };
+  /** Parsed daemon /health body. */
+  daemon?: {
+    status: string;
+    uptimeSec?: number;
+    startedAt?: string;
+    bootId?: string;
+    oauthConfigured?: boolean;
+    sessions: Array<{ id: string; openedAt: string; lastSeenAt: string }>;
+  };
+  /** Registered OAuth clients — display fields ONLY, never tokens/secrets/redirectUris. */
+  clients?: Array<{ clientId: string; clientName?: string; createdAt?: string }>;
+  /** Rollups over the daemon-written metrics history file (14d daily, 24h hourly). */
+  history?: {
+    callsPerDay: Array<{ date: string; calls: number; errors: number }>;
+    hourly: Array<{ ts: string; calls: number; errors: number; timeouts: number }>;
+    perTool24h: Record<string, { calls: number; errors: number }>;
+    collectedSince?: string;
+  };
+  /** Rune-side work-run metrics (supervision store + work-run index). */
+  runMetrics?: RuneRunMetrics;
+  /** Active MCP watchdog alerts (tolerant read of the state file). */
+  alerts?: { active: McpAlert[]; count: number };
+};
+
+const MCP_MONITORING_HISTORY_TTL_MS = 60_000;
+/** History flush cadence — windows widen by this so deltaSeries has its baseline record. */
+const MCP_HISTORY_FLUSH_INTERVAL_MS = 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+let mcpMonitoringHistoryCache: {
+  builtAt: number;
+  history: NonNullable<McpMonitoringPayload['history']>;
+} | null = null;
+
+/** Compose the history section from the daemon-written JSONL, cached ~60s
+ *  in-process — the file only gains one record per flush tick, so a fast
+ *  cockpit poll must not recompute 14 days of buckets each time. */
+function composeMcpMonitoringHistory(nowMs: number): NonNullable<McpMonitoringPayload['history']> {
+  if (mcpMonitoringHistoryCache && nowMs - mcpMonitoringHistoryCache.builtAt < MCP_MONITORING_HISTORY_TTL_MS) {
+    return mcpMonitoringHistoryCache.history;
+  }
+  // Widen by one flush interval: the first record in the window is
+  // baseline-only for deltaSeries, so without the widening the oldest
+  // interval of real traffic would be dropped.
+  const sinceMs = nowMs - 14 * DAY_MS - 2 * MCP_HISTORY_FLUSH_INTERVAL_MS;
+  const records = readHistoryCached(config.RUNE_MCP_METRICS_HISTORY_FILE, { sinceMs });
+  const deltas = deltaSeries(records);
+  const first = records[0];
+  const history: NonNullable<McpMonitoringPayload['history']> = {
+    callsPerDay: bucketDaily(deltas, nowMs, 14),
+    hourly: bucketHourly(deltas, nowMs, 24),
+    perTool24h: perToolWindow(deltas, nowMs, DAY_MS),
+    ...(first ? { collectedSince: first.ts } : {}),
+  };
+  mcpMonitoringHistoryCache = { builtAt: nowMs, history };
+  return history;
+}
+
+function toMonitoringLiveSection(
+  state: McpMetricsMonitoringState,
+): McpMonitoringPayload['live'] | undefined {
+  if (state.status !== 'ok' || !state.mcpMetrics || typeof state.mcpMetrics !== 'object') {
+    return undefined;
+  }
+  const snapshot = state.mcpMetrics as {
+    totals?: { calls?: number; errors?: number; timeouts?: number };
+    tools?: NonNullable<McpMonitoringPayload['live']>['tools'];
+    activeSessions?: number;
+    warmIndex?: { ready?: boolean; status?: string };
+  };
+  if (!snapshot.totals || typeof snapshot.totals !== 'object') return undefined;
+  const num = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+  return {
+    generatedAt: state.checkedAt,
+    totals: {
+      calls: num(snapshot.totals.calls),
+      errors: num(snapshot.totals.errors),
+      timeouts: num(snapshot.totals.timeouts),
+    },
+    tools: snapshot.tools && typeof snapshot.tools === 'object' ? snapshot.tools : {},
+    activeSessions: num(snapshot.activeSessions),
+    warmIndex: {
+      ready: Boolean(snapshot.warmIndex?.ready),
+      ...(typeof snapshot.warmIndex?.status === 'string' ? { status: snapshot.warmIndex.status } : {}),
+    },
+  };
+}
+
+function toMonitoringDaemonSection(health: McpDaemonHealthBody): McpMonitoringPayload['daemon'] {
+  const uptimeSec = typeof health.uptime === 'number' && Number.isFinite(health.uptime)
+    ? Math.round(health.uptime)
+    : typeof health.uptimeMs === 'number' && Number.isFinite(health.uptimeMs)
+      ? Math.round(health.uptimeMs / 1000)
+      : undefined;
+  return {
+    status: typeof health.status === 'string' ? health.status : 'unknown',
+    ...(uptimeSec !== undefined ? { uptimeSec } : {}),
+    ...(typeof health.startedAt === 'string' ? { startedAt: health.startedAt } : {}),
+    ...(typeof health.bootId === 'string' ? { bootId: health.bootId } : {}),
+    ...(typeof health.oauth?.configured === 'boolean' ? { oauthConfigured: health.oauth.configured } : {}),
+    sessions: Array.isArray(health.sessions)
+      ? health.sessions
+          .filter((s): s is { id: string; openedAt: string; lastSeenAt: string } => (
+            Boolean(s) && typeof s === 'object' &&
+            typeof s.id === 'string' && typeof s.openedAt === 'string' && typeof s.lastSeenAt === 'string'
+          ))
+          .map((s) => ({ id: s.id, openedAt: s.openedAt, lastSeenAt: s.lastSeenAt }))
+      : [],
+  };
+}
+
+/**
+ * GET /api/mcp/monitoring — one composed monitoring payload. Live daemon
+ * sections (tool snapshot, /health) fail when the daemon is down; the
+ * file-backed sections (history, runMetrics, alerts, clients) still populate,
+ * so the panel keeps rendering historical context during an outage. Always
+ * answers 200; failures surface as `status: 'degraded'` + a scrubbed error.
+ */
+async function handleApiMcpMonitoring(res: ServerResponse): Promise<void> {
+  const payload: McpMonitoringPayload = {
+    status: 'ok',
+    checkedAt: new Date().toISOString(),
+  };
+  const failures: string[] = [];
+
+  // Live tool snapshot — reuses the existing mcp_metrics_snapshot machinery
+  // (session reuse + one re-init retry). Its errors arrive pre-scrubbed.
+  const liveState = await callMcpMetricsSnapshotTool();
+  const live = toMonitoringLiveSection(liveState);
+  if (live) {
+    payload.live = live;
+  } else {
+    failures.push(liveState.error ?? 'mcp_metrics_snapshot unavailable');
+  }
+
+  // Daemon /health body.
+  const probe = await probeMcpDaemonHealth();
+  if (probe.status === 'ok' && probe.health) {
+    payload.daemon = toMonitoringDaemonSection(probe.health);
+  } else {
+    failures.push(probe.error ?? 'MCP daemon health unavailable');
+  }
+
+  // Registered OAuth clients — display fields only. readOAuthStore never
+  // throws (missing/corrupt store reads as null = no registered clients).
+  const store = readOAuthStore(config.RUNE_MCP_OAUTH_STORE_FILE);
+  payload.clients = (store?.clients ?? []).map((client) => ({
+    clientId: client.clientId,
+    ...(client.clientName !== undefined ? { clientName: client.clientName } : {}),
+    ...(client.createdAt !== undefined ? { createdAt: client.createdAt } : {}),
+  }));
+
+  // History rollups — file-backed, independent of the daemon being up.
+  try {
+    payload.history = composeMcpMonitoringHistory(Date.now());
+  } catch (err) {
+    failures.push(scrubAbsolutePaths((err as Error).message || 'metrics history unavailable'));
+  }
+
+  // Rune-side run metrics — wires the previously-dead reader with real config.
+  try {
+    payload.runMetrics = readRuneRunMetrics({
+      supervisedRunsFile: config.SUPERVISED_RUNS_FILE,
+      workRunsIndexFile: config.WORK_RUNS_INDEX_FILE,
+    });
+  } catch (err) {
+    failures.push(scrubAbsolutePaths((err as Error).message || 'run metrics unavailable'));
+  }
+
+  // Watchdog alerts — tolerant state-file read; missing state = no alerts.
+  const alerts = activeMcpAlerts(readMcpWatchdogStateFile());
+  payload.alerts = { active: alerts, count: alerts.length };
+
+  if (failures.length > 0) {
+    payload.status = 'degraded';
+    payload.error = scrubAbsolutePaths(failures.join('; '));
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
 }
 
 async function handleApiCockpit(res: ServerResponse): Promise<void> {
@@ -2726,6 +3018,11 @@ export function mountWebviewRoutes(
 
       if (req.method === 'GET' && pathname === '/api/mcp/tools/mcp_metrics_snapshot') {
         await handleApiMcpMetricsSnapshot(res);
+        return true;
+      }
+
+      if (req.method === 'GET' && pathname === '/api/mcp/monitoring') {
+        await handleApiMcpMonitoring(res);
         return true;
       }
 
