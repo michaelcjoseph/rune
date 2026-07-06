@@ -19,6 +19,10 @@ vi.mock('../jobs/work-run-release.js', () => ({
   requestWorkRunRelease: mockRequestWorkRunRelease,
   defaultReleaseRequestDeps: vi.fn(() => ({})),
 }));
+const mockRequestWorkRunAnswer = vi.fn();
+vi.mock('../jobs/work-run-answer.js', () => ({
+  requestWorkRunAnswer: mockRequestWorkRunAnswer,
+}));
 const mockRemoveRun = vi.fn();
 vi.mock('../jobs/supervision-store.js', () => ({
   removeRun: mockRemoveRun,
@@ -51,6 +55,7 @@ const { dispatchApprovalStatus } = await import('./approval-actions.js');
 describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () => {
   beforeEach(() => {
     mockRequestWorkRunRelease.mockReset();
+    mockRequestWorkRunAnswer.mockReset();
     mockRemoveRun.mockReset();
   });
 
@@ -95,5 +100,13 @@ describe('dispatchApprovalStatus — blocked-on-human inbox row (Phase 1c)', () 
     const result = await dispatchApprovalStatus('blocked-on-human:run-1', 'approved');
     expect(mockRemoveRun).not.toHaveBeenCalled();
     expect(result).toBe('error');
+  });
+
+  it('routes question answer approval ids to the answer runtime', async () => {
+    mockRequestWorkRunAnswer.mockResolvedValue({ kind: 'created', runId: 'run-1', mutationId: 'answer-1' });
+    const result = await dispatchApprovalStatus('work-run-answer:run-1:0', 'approved');
+    expect(mockRequestWorkRunAnswer).toHaveBeenCalledWith('run-1', '0');
+    expect(mockRequestWorkRunRelease).not.toHaveBeenCalled();
+    expect(result).toBe('ok');
   });
 });

@@ -253,6 +253,34 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).toMatch(/data-restart-server|restart server/i);
   });
 
+  it('renders parked question options as approval actions', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+    const html = renderHomeView(homePulse, {
+      operations: {
+        ...homeOperations,
+        approvals: [{
+          id: 'blocked-on-human:run-question-1',
+          type: 'blocked-on-human',
+          source: 'blocked-on-human',
+          productProject: 'rune/demo',
+          summary: 'Which implementation?',
+          age: 15,
+          actions: [
+            { id: 'work-run-answer:run-question-1:0', label: 'Small patch', action: 'approve' },
+            { id: 'work-run-answer:run-question-1:1', label: 'Full fix', action: 'approve' },
+          ],
+        }],
+        connectionStatus: 'connected',
+      },
+    });
+
+    expect(html).toContain('Which implementation?');
+    expect(html).toContain('Small patch');
+    expect(html).toContain('Full fix');
+    expect(html).toContain('work-run-answer:run-question-1:0');
+    expect(html).not.toMatch(/work-run-answer:run-question-1:0[\s\S]{0,180}data-approval-action=["']reject["']/i);
+  });
+
   it('counts blocked-on-human rows in the Home status pending count', async () => {
     const { renderHomeView } = await import('./home-view.js');
 

@@ -1234,15 +1234,19 @@
     const pp = String(row.productProject ?? '—');
     const summary = String(row.summary ?? '');
     const age = Number.isFinite(row.age) ? fmtAge(row.age * 1000) : '';
-    // blocked-on-human rows are queue-uneditable (dispatchApprovalStatus
-    // returns 'not-found' for that source) — render the buttons as disabled
-    // so a user click can't appear to do nothing.
-    const isBlocked = type === 'blocked-on-human';
-    const disabledAttr = isBlocked ? ' disabled' : '';
-    const approveBtn = `<button class="approval-btn approval-btn-approve" ` +
-      `data-approval-id="${escHtml(id)}" data-action="approve"${disabledAttr}>Approve</button>`;
-    const rejectBtn = `<button class="approval-btn approval-btn-reject" ` +
-      `data-approval-id="${escHtml(id)}" data-action="reject"${disabledAttr}>Reject</button>`;
+    const explicitActions = Array.isArray(row.actions) ? row.actions : [];
+    const actionBtns = explicitActions.length > 0
+      ? explicitActions.map((action) => {
+          const actionId = String(action?.id ?? '');
+          const actionKind = String(action?.action ?? 'approve');
+          if (!actionId) return '';
+          return `<button class="approval-btn approval-btn-approve" ` +
+            `data-approval-id="${escHtml(actionId)}" data-action="${escHtml(actionKind)}">${escHtml(action?.label ?? 'Select')}</button>`;
+        }).join('')
+      : `<button class="approval-btn approval-btn-approve" ` +
+        `data-approval-id="${escHtml(id)}" data-action="approve">Approve</button>` +
+        `<button class="approval-btn approval-btn-reject" ` +
+        `data-approval-id="${escHtml(id)}" data-action="reject">Reject</button>`;
     const openBtn = `<button class="approval-btn approval-btn-open" ` +
       `data-approval-id="${escHtml(id)}" data-action="open">Open</button>`;
     return `<div class="approval-row">` +
@@ -1252,7 +1256,7 @@
       `</div>` +
       `<div class="approval-row-summary">${escHtml(summary)}</div>` +
       `<div class="approval-row-meta"><span class="approval-row-age">${escHtml(age)}</span></div>` +
-      `<div class="approval-row-actions">${approveBtn}${rejectBtn}${openBtn}</div>` +
+      `<div class="approval-row-actions">${actionBtns}${openBtn}</div>` +
       `</div>`;
   }
   function handleApprovalsClick(e) {

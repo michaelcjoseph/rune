@@ -562,6 +562,37 @@ describe('TelegramSender', () => {
       const button = opts.reply_markup!.inline_keyboard[0]![0]!;
       expect(button.callback_data).toMatch(/^work-run-release:/);
     });
+
+    it('renders AskUserQuestion parks with answer buttons instead of Release', async () => {
+      sender.onMutationEvent(
+        workRunEvent('completed', {
+          parked: true,
+          operatorWorktreePath: '/tmp/worktrees/rune/demo',
+          pendingCheck: 'Answer required: Which implementation?',
+          parkedQuestion: {
+            source: 'ask-user-question',
+            question: 'Which implementation?',
+            askedAt: new Date().toISOString(),
+            options: [
+              { id: '0', label: 'Small patch', value: 'small' },
+              { id: '1', label: 'Full fix', value: 'full' },
+            ],
+          },
+        }),
+      );
+      await flush();
+
+      expect(bot.sendMessage).toHaveBeenCalledOnce();
+      const [, text, opts] = bot.sendMessage.mock.calls[0]! as [number, string, { reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } }];
+      expect(text).toContain('Which implementation?');
+      const buttons = opts.reply_markup!.inline_keyboard[0]!;
+      expect(buttons.map((button) => button.text)).toEqual(['Small patch', 'Full fix']);
+      expect(buttons.map((button) => button.callback_data)).toEqual([
+        'work-run-answer:abcd1234-5678-90ab-cdef-1234567890ab:0',
+        'work-run-answer:abcd1234-5678-90ab-cdef-1234567890ab:1',
+      ]);
+      expect(buttons.map((button) => button.callback_data).join(' ')).not.toContain('work-run-release');
+    });
   });
 
   describe('onOpEvent — classifier filter', () => {

@@ -185,6 +185,17 @@ function renderApprovalRow(row) {
   const error = row.error
     ? `<div class="home-approval-error" role="alert">${escHtml(row.error)}</div>`
     : '';
+  const explicitActions = Array.isArray(row.actions) ? row.actions : [];
+  const actionsHtml = explicitActions.length > 0
+    ? explicitActions.map(action => {
+        const actionId = action?.id || '';
+        const actionKind = action?.action || 'approve';
+        if (!actionId) return '';
+        return `<button type="button" data-approval-id="${attr(actionId)}" ` +
+          `data-approval-action="${attr(actionKind)}">${escHtml(action?.label || 'Select')}</button>`;
+      }).join('')
+    : `<button type="button" data-approval-id="${attr(id)}" data-approval-action="approve">Approve</button>` +
+      `<button type="button" data-approval-id="${attr(id)}" data-approval-action="reject">Reject</button>`;
   return `<article class="home-approval-row" data-approval-id="${attr(id)}">` +
     `<div class="home-approval-copy">` +
       `<strong>${escHtml(summary)}</strong>` +
@@ -192,8 +203,7 @@ function renderApprovalRow(row) {
       error +
     `</div>` +
     `<div class="home-approval-actions">` +
-      `<button type="button" data-approval-id="${attr(id)}" data-approval-action="approve">Approve</button>` +
-      `<button type="button" data-approval-id="${attr(id)}" data-approval-action="reject">Reject</button>` +
+      actionsHtml +
     `</div>` +
   `</article>`;
 }

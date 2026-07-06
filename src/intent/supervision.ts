@@ -82,6 +82,23 @@ export interface SupervisedRun {
    */
   parkedNudgedAt?: string;
   /**
+   * Structured operator question captured from a Claude `AskUserQuestion`
+   * tool_use. Present only for question-parks; sentinel/manual-check parks omit
+   * it and keep the existing Release/Dismiss behavior.
+   */
+  parkedQuestion?: {
+    source: 'ask-user-question';
+    question: string;
+    options: Array<{
+      id: string;
+      label: string;
+      value: string;
+      description?: string;
+    }>;
+    toolUseId?: string;
+    askedAt: string;
+  };
+  /**
    * Local-operator-only path to a preserved parked worktree, copied from a
    * parked terminal event whose applier intentionally kept the worktree alive.
    */

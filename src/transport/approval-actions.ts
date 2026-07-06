@@ -24,6 +24,7 @@ import { readPlaybookQueue, writePlaybookQueue } from '../jobs/playbook-extract.
 import { actionApprovedIntentProposal } from '../intent/journal-intent-consumer.js';
 import { realConsumerDeps } from '../intent/journal-intent-actions.js';
 import { requestWorkRunRelease, defaultReleaseRequestDeps } from '../jobs/work-run-release.js';
+import { requestWorkRunAnswer } from '../jobs/work-run-answer.js';
 import { removeRun } from '../jobs/supervision-store.js';
 import { VALID_SLUG } from '../intent/sandbox.js';
 import { createLogger } from '../utils/logger.js';
@@ -154,7 +155,7 @@ export async function dispatchApprovalStatus(id: string, status: ApprovalStatus)
   // `undefined` today, but accepting it is misleading). The blocked-on-human
   // branch is the only source that doesn't consume idx, and it's terminal
   // (always returns 'not-found') — so the early guard is safe to hoist.
-  if (parsed.source !== 'blocked-on-human' && (!Number.isSafeInteger(idx) || idx < 0)) {
+  if (parsed.source !== 'blocked-on-human' && parsed.source !== 'work-run-answer' && (!Number.isSafeInteger(idx) || idx < 0)) {
     return 'not-found';
   }
   switch (parsed.source) {
@@ -191,6 +192,26 @@ export async function dispatchApprovalStatus(id: string, status: ApprovalStatus)
         });
         return 'error';
       }
+    case 'work-run-answer': {
+      if (status !== 'approved') return 'not-found';
+      const split = parsed.payload.split(':');
+      if (split.length !== 2) return 'not-found';
+      const [runId, optionId] = split;
+      if (!runId || !optionId || !VALID_SLUG.test(runId) || !/^\d+$/.test(optionId)) return 'not-found';
+      try {
+        const outcome = await requestWorkRunAnswer(runId, optionId);
+        if (outcome.kind === 'created') return 'ok';
+        if (outcome.kind === 'error') return 'error';
+        return 'not-found';
+      } catch (err: unknown) {
+        log.error('work-run-answer failed', {
+          runId,
+          optionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return 'error';
+      }
+    }
     default:
       return 'not-found';
   }

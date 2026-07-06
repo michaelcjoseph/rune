@@ -93,6 +93,56 @@ function parkedOperatorWorktreePath(event: MutationEvent): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
+function parkedQuestionFromEvent(event: MutationEvent): SupervisedRun['parkedQuestion'] | undefined {
+  const data = event.data as Record<string, unknown> | undefined;
+  if (data?.['parked'] !== true) return undefined;
+  const value = data['parkedQuestion'];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const q = value as Record<string, unknown>;
+  if (q['source'] !== 'ask-user-question' || typeof q['question'] !== 'string' || !Array.isArray(q['options']) || typeof q['askedAt'] !== 'string') {
+    return undefined;
+  }
+  const options = q['options'].flatMap((raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const o = raw as Record<string, unknown>;
+    if (typeof o['id'] !== 'string' || typeof o['label'] !== 'string' || typeof o['value'] !== 'string') return [];
+    return [{
+      id: o['id'],
+      label: o['label'],
+      value: o['value'],
+      ...(typeof o['description'] === 'string' ? { description: o['description'] } : {}),
+    }];
+  });
+  if (options.length === 0) return undefined;
+  return {
+    source: 'ask-user-question',
+    question: q['question'],
+    options,
+    ...(typeof q['toolUseId'] === 'string' ? { toolUseId: q['toolUseId'] } : {}),
+    askedAt: q['askedAt'],
+  };
+}
+
+function buildTerminalSupervisedRun(
+  descriptor: MutationDescriptor,
+  status: SupervisedRun['status'],
+  event: MutationEvent,
+  nowIso: string,
+  lastChildAliveAt?: string,
+  lastOutputAt?: string,
+): SupervisedRun {
+  const run = buildSupervisedRun(
+    descriptor,
+    status,
+    nowIso,
+    lastChildAliveAt,
+    lastOutputAt,
+    parkedOperatorWorktreePath(event),
+  );
+  const question = parkedQuestionFromEvent(event);
+  return question ? { ...run, parkedQuestion: question } : run;
+}
+
 /** Best-effort wrapper around upsertRun — persistence failure logs but
  *  never crashes the mutation flow (the mutation log via appendMutationLine
  *  remains the source of truth for audit). */
@@ -230,6 +280,9 @@ export type MutationKind =
   // (the human already decided to release via the preflight). Payload:
   // `{ runId, confirmDirty }` (see src/jobs/work-run-release.ts).
   | 'work-run-release'
+  // Control mutation for answering a parked AskUserQuestion and resuming the
+  // original parked worktree. Payload: `{ runId, optionId }`.
+  | 'work-run-answer'
   | 'gen-eval-loop'
   | 'project-edit'
   | 'proposal-action'
@@ -407,16 +460,7 @@ export function writeRecoveredTerminalMutation(
   const supervisionStatus: SupervisedRun['status'] = parked
     ? 'blocked-on-human'
     : descriptor.status;
-  safeUpsertRun(
-    buildSupervisedRun(
-      descriptor,
-      supervisionStatus,
-      new Date().toISOString(),
-      undefined,
-      undefined,
-      parkedOperatorWorktreePath(event),
-    ),
-  );
+  safeUpsertRun(buildTerminalSupervisedRun(descriptor, supervisionStatus, event, new Date().toISOString()));
 
   (_bus ?? noopBus).publish({
     kind: 'mutation-event',
@@ -676,13 +720,13 @@ async function startApply(
           : descriptor.status;
         if (supervise) {
           safeUpsertRun(
-            buildSupervisedRun(
+            buildTerminalSupervisedRun(
               descriptor,
               supervisionStatus,
+              event,
               new Date().toISOString(),
               currentChildAliveAt,
               currentOutputAt,
-              parkedOperatorWorktreePath(event),
             ),
           );
         }

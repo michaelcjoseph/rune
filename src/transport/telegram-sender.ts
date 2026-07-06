@@ -99,10 +99,15 @@ function formatWorkRunTerminal(event: BusMutationEvent, opts: { suppressMergeCla
   // one step.
   if (data['parked'] === true) {
     const pendingCheck = typeof data['pendingCheck'] === 'string' ? data['pendingCheck'] : '';
+    const parkedQuestion = data['parkedQuestion'] && typeof data['parkedQuestion'] === 'object'
+      ? data['parkedQuestion'] as Record<string, unknown>
+      : null;
+    const question = parkedQuestion && typeof parkedQuestion['question'] === 'string' ? parkedQuestion['question'] : '';
     const worktree = typeof data['operatorWorktreePath'] === 'string' ? data['operatorWorktreePath'] : '';
     const command = typeof data['command'] === 'string' ? data['command'] : '';
     const parkedReason = typeof data['reason'] === 'string' ? data['reason'] : '';
     const lines = [`⏸️ ${slug} parked · needs you · id=${id}`];
+    if (question) lines.push(`❓ ${question}`);
     if (pendingCheck) lines.push(`📋 ${pendingCheck}`);
     if (worktree) lines.push(`📂 ${worktree}`);
     if (command) lines.push(`▶️ ${command}`);
@@ -328,7 +333,7 @@ export class TelegramSender implements MessageSender {
       // `orchestrated-work` and `work-run-release` terminals carry the same
       // outcome payload as work-run, so render them through the outcome-aware
       // formatter rather than the generic "/work --auto on <uuid>" fallback.
-      : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release' || event.mutationKind === 'orchestrated-work'
+      : event.mutationKind === 'work-run' || event.mutationKind === 'work-run-release' || event.mutationKind === 'work-run-answer' || event.mutationKind === 'orchestrated-work'
         ? formatWorkRunTerminal(event, { suppressMergeClaim: event.mutationKind === 'orchestrated-work' })
         : formatGenericTerminal(event);
     // Project 13 Phase 1c: a PARKED work-run terminal gets a one-tap Release
@@ -337,8 +342,21 @@ export class TelegramSender implements MessageSender {
     // (== this mutation id). A dirty worktree is gated by the release preflight,
     // so this clean-release tap is safe.
     const data = (event.data ?? {}) as Record<string, unknown>;
+    const parkedQuestion = data['parkedQuestion'] && typeof data['parkedQuestion'] === 'object'
+      ? data['parkedQuestion'] as Record<string, unknown>
+      : null;
+    const questionOptions = parkedQuestion && Array.isArray(parkedQuestion['options'])
+      ? parkedQuestion['options'].flatMap((raw) => {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+          const option = raw as Record<string, unknown>;
+          if (typeof option['id'] !== 'string' || typeof option['label'] !== 'string') return [];
+          return [{ label: option['label'], value: `work-run-answer:${event.mutationId}:${option['id']}` }];
+        })
+      : [];
     const releaseApproval =
-      event.mutationKind === 'work-run' && data['parked'] === true
+      (event.mutationKind === 'work-run' || event.mutationKind === 'work-run-answer') && data['parked'] === true && questionOptions.length > 0
+        ? { approval: { prompt: 'Answer this question to resume the parked run:', options: questionOptions } }
+        : event.mutationKind === 'work-run' && data['parked'] === true
         ? { approval: { prompt: 'Release this parked run?', options: [{ label: '🔓 Release', value: `work-run-release:${event.mutationId}` }] } }
         : undefined;
     void this.send(event.userId, text, releaseApproval).catch((err: unknown) => {

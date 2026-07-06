@@ -1688,6 +1688,7 @@ function handleApiWorkRunLive(res: ServerResponse, id: string): void {
     tasks: transcript.tasks,
     elapsedMs: elapsedSince(run.startedAt),
     worktreePath: run.operatorWorktreePath ?? worktreePathFor(run.product, target.slug, config.WORKTREE_ROOT),
+    parkedQuestion: run.parkedQuestion,
     agents: agents.length > 0 ? agents : [{ role: 'coder', active: true }],
     lastLogLines: transcript.lastLogLines,
     ts: new Date().toISOString(),
@@ -2412,6 +2413,9 @@ interface ApprovalRow {
   age: number;
   /** Same as `type` — the cockpit uses this for filtering / iconography. */
   source: 'intent-proposal' | 'playbook' | 'ask-twice' | 'blocked-on-human';
+  /** Optional explicit actions; used by question-parks to render answer options. */
+  actions?: Array<{ id: string; label: string; action: 'approve' | 'reject' }>;
+  question?: string;
 }
 
 function ageSeconds(iso: string | undefined, now: number): number {
@@ -2483,13 +2487,27 @@ function collectApprovals(): ApprovalRow[] {
     const runs = readAllRuns(config.SUPERVISED_RUNS_FILE);
     const visibility = getVisibility(runs, /* heartbeatIntervalMs */ 5 * 60_000, now);
     visibility.blocked.forEach((run) => {
+      const question = run.parkedQuestion;
       rows.push({
         id: `blocked-on-human:${run.id}`,
         type: 'blocked-on-human',
         source: 'blocked-on-human',
         productProject: `${run.product}/${run.project}`,
-        summary: `run ${run.id.slice(0, 8)} blocked-on-human`,
+        summary: question ? question.question.slice(0, 200) : `run ${run.id.slice(0, 8)} blocked-on-human`,
         age: ageSeconds(run.startedAt, now),
+        ...(question ? {
+          question: question.question,
+          actions: question.options.map((option) => ({
+            id: `work-run-answer:${run.id}:${option.id}`,
+            label: option.label,
+            action: 'approve' as const,
+          })),
+        } : {
+          actions: [
+            { id: `blocked-on-human:${run.id}`, label: 'Release', action: 'approve' as const },
+            { id: `blocked-on-human:${run.id}`, label: 'Dismiss', action: 'reject' as const },
+          ],
+        }),
       });
     });
   } catch (err) {

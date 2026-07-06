@@ -7,6 +7,7 @@ import { activeRuns } from '../transport/mutations.js';
 import { createWorktree, destroyWorktree, defaultRunGit, getProductConfig, type GitRunner } from './sandbox-runtime.js';
 import { parseStreamJsonLine, streamJsonToDisplay, createRingBuffer, createTranscriptSink, redactSecrets, type StreamJsonEnvelope, type TranscriptSink } from './work-run-transcript.js';
 import { parseWorkRunSentinel, type WorkRunSentinel } from './work-run-sentinel.js';
+import { parseAskUserQuestionEnvelope, pendingCheckForQuestion, type ParsedAskUserQuestion, type WorkRunParkedQuestion } from './work-run-question.js';
 import { upsertRun, readAllRuns } from './supervision-store.js';
 import { computeWorkProduct, finalizeWorkRun, parseTasks, type ExitFact, type ExitFacts, type WorkOutcome, type WorkProductFacts } from './work-run-classify.js';
 import { planCommitProgress, COMMIT_POLL_INTERVAL_MS, COMMIT_PING_THROTTLE_MS, type CommitPollState } from './work-run-commit-poll.js';
@@ -535,8 +536,23 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
         // "stop this" wins over a sentinel the agent happened to print on its
         // way down. That run flows through the ordinary classifier/finalizer
         // (which tears the worktree down) instead of parking.
-        if (streamResult.sentinel && !streamResult.exit.cancelled) {
+        if ((streamResult.sentinel || streamResult.askUserQuestion) && !streamResult.exit.cancelled) {
           parked = true;
+          const askedAt = new Date().toISOString();
+          const parkedQuestion: WorkRunParkedQuestion | undefined = streamResult.askUserQuestion
+            ? {
+                source: 'ask-user-question',
+                question: streamResult.askUserQuestion.question,
+                options: streamResult.askUserQuestion.options,
+                ...(streamResult.askUserQuestion.toolUseId ? { toolUseId: streamResult.askUserQuestion.toolUseId } : {}),
+                askedAt,
+              }
+            : undefined;
+          const pendingCheck = streamResult.sentinel
+            ? streamResult.sentinel.pendingCheck
+            : parkedQuestion
+              ? pendingCheckForQuestion(streamResult.askUserQuestion!)
+              : 'human input required';
           // 1. Durable parked record FIRST. Best-effort (a disk failure logs but
           //    never denies the park) — mutations.ts's terminal override is the
           //    second writer that re-asserts blocked-on-human regardless.
@@ -550,6 +566,7 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
                 startedAt: new Date(t0).toISOString(),
                 // Park time = the nudge baseline isParkedRun ages from.
                 lastHeartbeatAt: new Date().toISOString(),
+                ...(parkedQuestion ? { parkedQuestion } : {}),
               },
               config.SUPERVISED_RUNS_FILE,
             );
@@ -583,12 +600,16 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
           const parkedData: Record<string, unknown> = {
             parked: true,
             operatorWorktreePath: sandbox.worktree,
-            pendingCheck: streamResult.sentinel.pendingCheck,
+            pendingCheck,
             projectSlug,
             product,
           };
-          if (streamResult.sentinel.command) parkedData['command'] = streamResult.sentinel.command;
-          if (streamResult.sentinel.reason) parkedData['reason'] = streamResult.sentinel.reason;
+          if (parkedQuestion) parkedData['parkedQuestion'] = parkedQuestion;
+          if (streamResult.askUserQuestion?.malformed) {
+            parkedData['reason'] = 'AskUserQuestion payload could not be parsed; inspect transcript.';
+          }
+          if (streamResult.sentinel?.command) parkedData['command'] = streamResult.sentinel.command;
+          if (streamResult.sentinel?.reason) parkedData['reason'] = streamResult.sentinel.reason;
           yield term(descriptor.id, 'completed', parkedData);
           return;
         }
@@ -1044,6 +1065,8 @@ interface StreamResult {
    *  the run emitted none. The LAST valid sentinel wins. apply() reads this to
    *  decide whether to PARK the run. */
   sentinel: WorkRunSentinel | null;
+  /** Parsed Claude AskUserQuestion tool_use, if the run asked for operator input. */
+  askUserQuestion: ParsedAskUserQuestion | null;
 }
 
 /** Extract the raw (un-scrubbed) text a sentinel could ride on from a stream
@@ -1159,6 +1182,7 @@ async function* streamProcess(
   // `result` envelope ever arrives.
   let sentinel: WorkRunSentinel | null = null;
   let resultSentinelDecided = false;
+  let askUserQuestion: ParsedAskUserQuestion | null = null;
 
   function enqueue(event: MutationEvent) {
     queue.push(event);
@@ -1293,6 +1317,8 @@ async function* streamProcess(
         if (parsed) sentinel = parsed;
       }
     }
+    const parsedQuestion = parseAskUserQuestionEnvelope(envelope);
+    if (parsedQuestion) askUserQuestion = parsedQuestion;
     // Terminal-result watchdog (P0.2): the agent's `result` envelope means it
     // declared done — but `claude -p` won't exit while a backgrounded task is
     // still alive (the d0679453 wedge). Open a bounded drain window; if the
@@ -1500,6 +1526,7 @@ async function* streamProcess(
       ringBuffer: stdoutRing.items(),
       stderrTail: stderrTail.items(),
       sentinel,
+      askUserQuestion,
     };
   } finally {
     // Belt-and-suspenders: the close/error handlers above also clear the

@@ -2369,6 +2369,55 @@ describe('workRunApplier', () => {
       expect(mockDestroyWorktree).not.toHaveBeenCalled();
     });
 
+    it('an AskUserQuestion tool call parks with structured question options and skips finalizer', async () => {
+      const questionEnvelope = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'tool_use',
+            id: 'toolu_question',
+            name: 'AskUserQuestion',
+            input: { question: 'Which implementation?', options: ['Small patch', { label: 'Full fix', value: 'full', description: 'Handle all surfaces' }] },
+          }],
+        },
+      });
+
+      const { events } = await runApply({ stdoutLines: [questionEnvelope], id: 'mut-question' });
+
+      expect(finalizerHarness.runFinalizerSpy).not.toHaveBeenCalled();
+      expect(mockDestroyWorktree).not.toHaveBeenCalled();
+      const parkedUpsert = mockUpsertRun.mock.calls
+        .map((c) => c[0] as any)
+        .find((r) => r?.status === 'blocked-on-human');
+      expect(parkedUpsert?.parkedQuestion).toEqual(expect.objectContaining({
+        source: 'ask-user-question',
+        question: 'Which implementation?',
+        toolUseId: 'toolu_question',
+      }));
+      expect(parkedUpsert?.parkedQuestion.options).toEqual([
+        { id: '0', label: 'Small patch', value: 'Small patch' },
+        { id: '1', label: 'Full fix', value: 'full', description: 'Handle all surfaces' },
+      ]);
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal?.data as any)?.parkedQuestion?.question).toBe('Which implementation?');
+    });
+
+    it('a malformed AskUserQuestion still parks instead of classifying noop', async () => {
+      const malformedQuestion = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { options: [] } }],
+        },
+      });
+
+      const { events } = await runApply({ stdoutLines: [malformedQuestion], id: 'mut-question-bad' });
+
+      expect(finalizerHarness.runFinalizerSpy).not.toHaveBeenCalled();
+      const terminal = events.find((e) => e.kind === 'completed' || e.kind === 'failed');
+      expect((terminal?.data as any)?.parked).toBe(true);
+      expect((terminal?.data as any)?.reason).toMatch(/could not be parsed/i);
+    });
+
     it('cap rejects a new run when a parked (blocked-on-human) supervision record exists for the slug', () => {
       setupValidProject('06-webview');
       const nowIso = new Date().toISOString();
