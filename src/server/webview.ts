@@ -610,6 +610,19 @@ function probeMcpDaemonHealth(): Promise<{
           } catch {
             // Non-JSON 200 body — the probe still counts as ok, just without detail.
           }
+          // An HTTP 200 is not enough: the daemon self-reports `status`
+          // (e.g. "degraded" for missing OAuth config or a failed warm
+          // index) and the cockpit must not render "ok" over it.
+          if (health && typeof health.status === 'string' && health.status !== 'ok') {
+            resolve({
+              status: 'degraded',
+              endpoint,
+              checkedAt,
+              error: `MCP daemon self-reports status "${health.status}"`,
+              health,
+            });
+            return;
+          }
           resolve({ status: 'ok', endpoint, checkedAt, ...(health ? { health } : {}) });
           return;
         }
@@ -857,11 +870,14 @@ async function handleApiMcpMonitoring(res: ServerResponse): Promise<void> {
     failures.push(liveState.error ?? 'mcp_metrics_snapshot unavailable');
   }
 
-  // Daemon /health body.
+  // Daemon /health body. A self-degraded daemon still serves a body — keep
+  // the detail section (it names what is degraded) while the failure flips
+  // the overall payload status.
   const probe = await probeMcpDaemonHealth();
-  if (probe.status === 'ok' && probe.health) {
+  if (probe.health) {
     payload.daemon = toMonitoringDaemonSection(probe.health);
-  } else {
+  }
+  if (probe.status !== 'ok') {
     failures.push(probe.error ?? 'MCP daemon health unavailable');
   }
 

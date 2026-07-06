@@ -532,6 +532,25 @@ describe('GET /api/mcp/monitoring', () => {
     expect(res.body.clients).toHaveLength(1);
   });
 
+  it('treats a 200 /health body self-reporting degraded as degraded, keeping the daemon detail', async () => {
+    const daemon = await startFakeMcpDaemon();
+    const fixture = daemonHealthFixture as { status: string };
+    fixture.status = 'degraded';
+    try {
+      mockConfig.RUNE_MCP_PORT = daemon.port;
+      const res = await makeRequest(port, '/api/mcp/monitoring', { headers: authed });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('degraded');
+      expect(res.body.error).toContain('self-reports status "degraded"');
+      // The body still arrived — the detail section must not be dropped.
+      expect(res.body.daemon).toMatchObject({ status: 'degraded', bootId: 'boot-live' });
+    } finally {
+      fixture.status = 'ok';
+      await daemon.close();
+    }
+  });
+
   it('never leaks token values, redirect URIs, or absolute paths', async () => {
     const daemon = await startFakeMcpDaemon();
     let healthyRaw: string;

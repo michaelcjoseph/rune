@@ -182,7 +182,7 @@ describe('logWorkoutDone — failure paths', () => {
     expect(deps.commitAndPush).toHaveBeenCalledOnce();
   });
 
-  it('commit failure → isError distinguishing "logged but NOT durable" from clean success', async () => {
+  it('commit failure → isError saying the log is saved locally but not committed', async () => {
     const deps = makeDeps({
       commitAndPush: vi.fn().mockRejectedValue(new Error('push failed')),
     });
@@ -190,12 +190,12 @@ describe('logWorkoutDone — failure paths', () => {
     const result = await logWorkoutDone({}, deps);
 
     expect(result.isError).toBe(true);
-    // The append DID happen; the error must say so and flag non-durability.
+    // The append DID happen; the error must say so and flag the failed commit.
     expect(deps.appendToJournal).toHaveBeenCalledOnce();
     const text = result.content[0]!.text;
     expect(text).toMatch(/logged to the journal/i);
-    expect(text).toMatch(/NOT durable/);
-    expect(text).toMatch(/git|commit|push/i);
+    expect(text).toMatch(/saved locally.*not committed yet/);
+    expect(text).toMatch(/git commit\/push failed/);
   });
 
   it('unexpected deps throw (readLastWorkout) → resolves to isError, never throws', async () => {

@@ -171,7 +171,7 @@ describe('updateWorkoutPlan — behavior', () => {
     expect(writeOrder).toBeLessThan(commitOrder);
   });
 
-  it('commit failure → isError with the written-but-NOT-yet-durable wording', async () => {
+  it('commit failure → isError saying the write is saved locally but not committed', async () => {
     const deps = makeDeps({
       commitAndPush: vi.fn().mockRejectedValue(new Error('push failed')),
     });
@@ -180,7 +180,7 @@ describe('updateWorkoutPlan — behavior', () => {
 
     expect(result.isError).toBe(true);
     expect(deps.writePlan).toHaveBeenCalledOnce();
-    expect(result.content[0]!.text).toMatch(/written .*NOT yet durable \(git commit failed\)/);
+    expect(result.content[0]!.text).toMatch(/saved locally.*git commit\/push failed.*not committed yet/);
     expect(result.content[0]!.text).toContain('push failed');
   });
 

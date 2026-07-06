@@ -399,6 +399,25 @@ describe('nutritionLog', () => {
     expect(text).not.toContain('must not leak in');
   });
 
+  it('window is inclusive: "last N days" = N calendar dates including today', async () => {
+    // today = 2026-07-06, days = 7 → cutoff 2026-06-30 (not 06-29).
+    const md = [
+      '## Meal Notes',
+      '',
+      '### 2026-06-30',
+      '- exactly on the cutoff, kept',
+      '',
+      '### 2026-06-29',
+      '- one day too old, dropped',
+    ].join('\n');
+    const deps = makeDeps({ readVaultDoc: vi.fn(async () => md) });
+
+    const text = textOf(await nutritionLog({ days: 7 }, deps));
+
+    expect(text).toContain('### 2026-06-30');
+    expect(text).not.toContain('2026-06-29');
+  });
+
   it('returns the no-notes message when the file is missing', async () => {
     const result = await nutritionLog({}, makeDeps());
 

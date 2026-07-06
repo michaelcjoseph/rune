@@ -245,7 +245,9 @@ export async function nutritionLog(
     const nextH2 = /^##\s(?!#)/m.exec(body);
     if (nextH2 !== null) body = body.slice(0, nextH2.index);
 
-    const cutoff = shiftIsoDate(deps.getTodayDate(), -days);
+    // Inclusive window matching health_trends: "last N days" = N calendar
+    // dates including today, so the cutoff shifts by N-1.
+    const cutoff = shiftIsoDate(deps.getTodayDate(), -(days - 1));
     const sections: Array<{ date: string; start: number }> = [];
     for (const match of body.matchAll(MEAL_SECTION_RE)) {
       sections.push({ date: match[1]!, start: match.index });

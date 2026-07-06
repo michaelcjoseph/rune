@@ -111,7 +111,7 @@ export async function updateWorkoutPlan(
       await deps.commitAndPush(`update_workout_plan: ${reason}`);
     } catch (commitErr) {
       return err(
-        `Plan was written to health/plan.md but NOT yet durable (git commit failed): ${clean(errText(commitErr))}`,
+        `Plan was written to health/plan.md and is saved locally, but the git commit/push failed — it is not committed yet: ${clean(errText(commitErr))}`,
       );
     }
 

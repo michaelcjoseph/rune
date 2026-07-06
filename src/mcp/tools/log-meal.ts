@@ -98,7 +98,7 @@ export async function logMeal(
       await deps.commitAndPush(`log_meal: ${date} ${meal}`);
     } catch (commitErr) {
       return err(
-        `Meal note was written to health/nutrition.md but NOT yet durable (git commit failed): ${clean(errText(commitErr))}`,
+        `Meal note was written to health/nutrition.md and is saved locally, but the git commit/push failed — it is not committed yet: ${clean(errText(commitErr))}`,
       );
     }
 

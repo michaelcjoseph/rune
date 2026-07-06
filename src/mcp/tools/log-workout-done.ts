@@ -116,7 +116,7 @@ export async function logWorkoutDone(
       await deps.commitAndPush(`log_workout_done: ${tag} (${dateStr})`);
     } catch (commitErr) {
       return err(
-        `Workout was logged to the journal but the git commit/push FAILED — the log is NOT durable yet: ${clean(errText(commitErr))}`,
+        `Workout was logged to the journal and is saved locally, but the git commit/push failed — it is not committed yet: ${clean(errText(commitErr))}`,
       );
     }
 
