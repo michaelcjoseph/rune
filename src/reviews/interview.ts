@@ -3,9 +3,10 @@ import type { ReviewSession, ReviewType } from './session.js';
 import type { ReviewTypeHandler } from './orchestrator.js';
 import type { MessageSender } from '../transport/sender.js';
 import { askClaudeWithContext, askClaudeOneShot, runAgent, AGENT_NOT_FOUND_PREFIX, type ClaudeResult } from '../ai/claude.js';
-import { readVaultFile, vaultFileExists } from '../vault/files.js';
+import { readVaultFile, vaultFileExists, writeVaultFile } from '../vault/files.js';
 import { gitCommitAndPush } from '../vault/git.js';
 import { createLogger } from '../utils/logger.js';
+import { getTodayFilename } from '../utils/time.js';
 import { getPendingPlaybookDrafts } from '../jobs/playbook-extract.js';
 import { getPendingProposals, clearApprovedProposals } from '../jobs/proposal-queue.js';
 import { getPendingIntentProposals } from '../intent/intent-proposal-queue.js';
@@ -312,9 +313,16 @@ export function createInterviewHandler(config: InterviewReviewConfig): ReviewTyp
       const journalPath = `journals/${toScannerDate(session.targetDate)}.md`;
       const journalBefore = readVaultFile(journalPath);
       const sizeBefore = journalBefore?.length ?? 0;
+      const todayJournalPath = `journals/${getTodayFilename()}`;
+      const canRepairLateMiswrite = todayJournalPath !== journalPath;
+      const todayBefore = canRepairLateMiswrite ? (readVaultFile(todayJournalPath) ?? '') : null;
 
       const writerResult = await runAgent('review-writer', `review_type: ${config.type}
 target_date: ${toScannerDate(session.targetDate)}
+target_journal_path: ${journalPath}
+
+Write the review to \`${journalPath}\`, the journal for the scheduled review date. This is authoritative even if the review is being completed later. Do not write to today's journal unless today is the target date.
+
 approved_outline: ${session.outline}
 conversation_context: ${session.prepContext}`, undefined, undefined, true);
 
@@ -329,7 +337,23 @@ conversation_context: ${session.prepContext}`, undefined, undefined, true);
 
       const journalAfter = readVaultFile(journalPath);
       const sizeAfter = journalAfter?.length ?? 0;
-      const journalWritten = sizeAfter > sizeBefore;
+      let journalWritten = sizeAfter > sizeBefore;
+      let repairedLateMiswrite = false;
+      if (!journalWritten && canRepairLateMiswrite && todayBefore !== null) {
+        const todayAfter = readVaultFile(todayJournalPath) ?? '';
+        const misplacedReview = extractMiswrittenReview(todayBefore, todayAfter);
+        if (misplacedReview) {
+          writeVaultFile(todayJournalPath, todayBefore);
+          writeVaultFile(journalPath, appendReviewToJournal(journalBefore ?? '', misplacedReview));
+          journalWritten = true;
+          repairedLateMiswrite = true;
+          log.warn('Moved late review write-up from today journal to target journal', {
+            type: config.type,
+            from: todayJournalPath,
+            to: journalPath,
+          });
+        }
+      }
       if (!journalWritten) {
         log.error('review-writer did not modify journal', {
           type: config.type,
@@ -481,7 +505,9 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
       };
 
       const agentSummary = [
-        journalWritten
+        repairedLateMiswrite
+          ? 'Review written to scheduled journal after correcting a late-date write.'
+          : journalWritten
           ? 'Review written to journal.'
           : 'Review write-up returned but journal was not modified — outline preserved in logs/review-sessions.json.',
         summarize('projects', 'Project pages updated.', 'Project update failed.', 'Projects skipped (agent missing).'),
@@ -507,4 +533,34 @@ Reply ONLY with the JSON object, nothing else.`, undefined, `review:${config.typ
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function extractMiswrittenReview(before: string, after: string): string | null {
+  if (after.length <= before.length) return null;
+  if (!after.startsWith(before)) return null;
+  const appended = after.slice(before.length).trim();
+  if (!appended || !startsWithStructuredReviewHeading(appended)) return null;
+  return appended;
+}
+
+function startsWithStructuredReviewHeading(content: string): boolean {
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim() ?? '';
+  return (
+    /^## Week in Review\s*$/.test(firstLine) ||
+    /^# Q[1-4] \d{4} Review\s*$/.test(firstLine) ||
+    /^# \d{4} Yearly Review\s*$/.test(firstLine) ||
+    /^# [A-Z][a-z]+ \d{4} Review\s*$/.test(firstLine)
+  );
+}
+
+function appendReviewToJournal(existing: string, review: string): string {
+  const prefix =
+    existing.length === 0
+      ? ''
+      : existing.endsWith('\n\n')
+        ? ''
+        : existing.endsWith('\n')
+          ? '\n'
+          : '\n\n';
+  return `${existing}${prefix}${review.trim()}\n`;
 }

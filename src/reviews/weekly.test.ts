@@ -39,10 +39,15 @@ vi.mock('../ai/claude.js', () => ({
 
 vi.mock('../vault/files.js', () => ({
   readVaultFile: vi.fn(),
+  writeVaultFile: vi.fn(),
   listVaultFiles: vi.fn(() => []),
   // Default to "exists" so post-review enqueueTouchedFiles tests assert the
   // happy path. Tests that need to simulate a missing file override per-case.
   vaultFileExists: vi.fn(() => true),
+}));
+
+vi.mock('../utils/time.js', () => ({
+  getTodayFilename: vi.fn(() => '2026_04_13.md'),
 }));
 
 vi.mock('../vault/git.js', () => ({
@@ -72,7 +77,7 @@ vi.mock('../kb/queue.js', () => ({
 const { registerReviewHandler } = await import('./orchestrator.js');
 const { updateReviewSession } = await import('./session.js');
 const { askClaudeWithContext, askClaudeOneShot, runAgent } = await import('../ai/claude.js');
-const { readVaultFile, vaultFileExists } = await import('../vault/files.js');
+const { readVaultFile, vaultFileExists, writeVaultFile } = await import('../vault/files.js');
 const { gitCommitAndPush } = await import('../vault/git.js');
 const { enqueue: enqueueKB } = await import('../kb/queue.js');
 
@@ -82,6 +87,7 @@ const askClaudeCtxMock = askClaudeWithContext as ReturnType<typeof vi.fn>;
 const askClaudeOneShotMock = askClaudeOneShot as ReturnType<typeof vi.fn>;
 const runAgentMock = runAgent as ReturnType<typeof vi.fn>;
 const readVaultMock = readVaultFile as ReturnType<typeof vi.fn>;
+const writeVaultMock = writeVaultFile as ReturnType<typeof vi.fn>;
 const gitCommitMock = gitCommitAndPush as ReturnType<typeof vi.fn>;
 const enqueueKBMock = enqueueKB as ReturnType<typeof vi.fn>;
 const vaultFileExistsMock = vaultFileExists as ReturnType<typeof vi.fn>;
@@ -852,6 +858,46 @@ describe('reviews/weekly', () => {
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Project pages updated.'));
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('Psychology profile updated.'));
       expect(sender.send).toHaveBeenCalledWith(100, expect.stringContaining('JSON data updated.'));
+    });
+
+    it('moves a late review write-up from today journal to the scheduled target journal', async () => {
+      const session = approvalSession();
+      runAgentMock.mockResolvedValue({ text: 'Review written.', error: null });
+      askClaudeOneShotMock.mockResolvedValue({
+        text: '{"projects": false, "psychology": false, "json_updates": false}',
+        error: null,
+      });
+      readVaultMock.mockImplementation((p: string) => {
+        if (p === 'journals/2026_04_10.md') return 'Target day notes\n';
+        if (p === 'journals/2026_04_13.md') {
+          const todayReads = readVaultMock.mock.calls.filter((call) => call[0] === p).length;
+          return todayReads === 1
+            ? 'Late day notes\n'
+            : [
+              'Late day notes',
+              '',
+              '## Week in Review',
+              '- Review content written late',
+              '',
+            ].join('\n');
+        }
+        return null;
+      });
+
+      await weeklyHandler.handleMessage(session, 'yes', sender);
+
+      const writerPrompt = runAgentMock.mock.calls.find((call) => call[0] === 'review-writer')?.[1] as string;
+      expect(writerPrompt).toContain('target_journal_path: journals/2026_04_10.md');
+      expect(writerPrompt).toContain('Do not write to today\'s journal unless today is the target date');
+      expect(writeVaultMock).toHaveBeenCalledWith('journals/2026_04_13.md', 'Late day notes\n');
+      expect(writeVaultMock).toHaveBeenCalledWith(
+        'journals/2026_04_10.md',
+        'Target day notes\n\n## Week in Review\n- Review content written late\n',
+      );
+      expect(sender.send).toHaveBeenCalledWith(
+        100,
+        expect.stringContaining('Review written to scheduled journal after correcting a late-date write.'),
+      );
     });
 
     it('reports failed post agents in summary', async () => {
