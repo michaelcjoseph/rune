@@ -96,7 +96,7 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 
 ## Key Conventions
 
-- **TypeScript** with `tsx` runner — no build step for dev or prod. **ESM** (`"type": "module"`) — all imports use `.js` extensions.
+- **TypeScript** runs directly through `node --import ./scripts/register-ts.mjs` (a local `module.registerHooks()` loader) — no build step for dev or prod. **ESM** (`"type": "module"`) — all imports use `.js` extensions.
 - All timestamps use `America/Chicago` (`src/utils/time.ts`). Config reads from env vars; defaults in `src/config.ts`.
 - **Claude CLI spawning is centralized in `src/ai/claude.ts`** — never spawn `claude` directly elsewhere. `CLAUDE_BIN`, `registerActiveProcess`, and `unregisterActiveProcess` keep binary resolution + shutdown tracking centralized for external spawners. Codex spawns go through `src/ai/codex.ts`.
 - **Message delivery uses the `MessageSender` interface** (`src/transport/sender.ts`) — handlers and commands never import `TelegramBot` directly for sending; bot is only passed where needed for file downloads (photo handler).
@@ -123,7 +123,7 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 ## Running
 
 ```bash
-npm run dev          # tsx watch mode
+npm run dev          # node --watch + local TS loader
 npm run start        # production
 npm run mcp:start    # standalone MCP daemon
 npm run build        # type-check only (no emit)
@@ -171,7 +171,7 @@ Runtime agents are spawned by Rune via `runAgent()`; dev-tooling agents are used
 
 ## MCP Server
 
-- **Local (`rune-kb`)** — the KB is exposed as a stdio MCP server registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+- **Local (`rune-kb`)** — the KB is exposed as a stdio MCP server registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone: `node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/mcp/index.ts`.
 - **Remote (`/mcp` Claude App connector)** — standalone daemon serving App-surface plus W1 content/utility tools (kb_* admin tools never remotely reachable) over Streamable HTTP with single-user OAuth 2.1. → `docs/architecture/subsystems.md`.
 
 ## Reference

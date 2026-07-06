@@ -3,26 +3,27 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=.env.local src/index.ts",
-    "start": "NODE_ENV=production tsx --env-file-if-exists=.env.local src/index.ts",
-    "mcp:start": "NODE_ENV=production tsx --env-file-if-exists=.env.local src/mcp/daemon.ts",
+    "dev": "node --watch --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/index.ts",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/index.ts",
+    "mcp:start": "NODE_ENV=production node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/mcp/daemon.ts",
     "build": "tsc --noEmit",
-    "cli": "tsx --env-file-if-exists=.env.local cli/rune.ts",
+    "cli": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs cli/rune.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "evals": "tsx --env-file-if-exists=.env.local scripts/run-evals.ts",
-    "intent-scan": "tsx --env-file-if-exists=.env.local scripts/run-intent-scan.ts",
-    "library-backfill": "tsx --env-file-if-exists=.env.local scripts/library-backfill.ts",
-    "dispatch-review": "tsx --env-file-if-exists=.env.local scripts/dispatch-review.ts",
-    "acceptance:rebrand": "node --env-file-if-exists=.env.local --import tsx scripts/run-rune-rebrand-acceptance.ts",
-    "acceptance:orchestrated": "tsx --env-file-if-exists=.env.local src/jobs/__acceptance__/orchestrated-live.acceptance.ts",
-    "acceptance:cockpit-real": "tsx --env-file-if-exists=.env.local src/server/__acceptance__/cockpit-real-product.acceptance.ts"
+    "evals": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-evals.ts",
+    "intent-scan": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-intent-scan.ts",
+    "library-backfill": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/library-backfill.ts",
+    "dispatch-review": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/dispatch-review.ts",
+    "acceptance:rebrand": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs scripts/run-rune-rebrand-acceptance.ts",
+    "acceptance:orchestrated": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/jobs/__acceptance__/orchestrated-live.acceptance.ts",
+    "acceptance:cockpit-real": "node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/server/__acceptance__/cockpit-real-product.acceptance.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.15.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "esbuild": "^0.27.7",
     "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.67.0",
     "ws": "^8.20.0"

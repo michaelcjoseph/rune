@@ -435,10 +435,10 @@ export const workRunApplier: MutationApplier<WorkRunPayload> = {
       }
 
       // cwd = sandbox.worktree (NOT PROJECT_ROOT) — the whole point of
-      // Fix 1. Spawning into the live tree triggers tsx watch to SIGTERM
+      // Fix 1. Spawning into the live tree can trigger node --watch to SIGTERM
       // the parent when the agent edits Rune's own source files. The
       // worktree lives under `<WORKTREE_ROOT>/<product>/<project>`, outside
-      // PROJECT_ROOT/src, so tsx watch ignores it.
+      // PROJECT_ROOT/src, so the dev watcher ignores it.
       //
       // The pre-worktree version passed `--add-dir docs/projects/<dirName>`
       // as a relative path; that worked because cwd was PROJECT_ROOT. The

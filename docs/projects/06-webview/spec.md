@@ -615,7 +615,7 @@ RUNE_ALLOWED_HOSTS=localhost,127.0.0.1,mac-mini.tail-xxxx.ts.net
 ## Open Questions
 
 - [ ] **Cookie vs URL token for WS auth.** Cookie keeps the URL clean and survives reconnects automatically. URL-query token is simpler but logs in browser history. Recommend cookie; pick during Phase B.
-- [ ] **Static-asset hot reload during dev.** `tsx watch` doesn't reload static files. Probably fine — page refresh is enough — but if iteration friction shows up, add a `?cache-bust=<mtime>` to script tags.
+- [ ] **Static-asset hot reload during dev.** `node --watch` doesn't reload static files. Probably fine — page refresh is enough — but if iteration friction shows up, add a `?cache-bust=<mtime>` to script tags.
 - [ ] **`OBSIDIAN_VAULT_NAME` default.** Defaulting to `basename($VAULT_DIR)` works only if the Obsidian vault is registered with that exact name. If your registered vault name differs, set the env var explicitly. Document in CLAUDE.md.
 - [ ] **Message-history persistence across refresh.** v1 says no (refresh = empty chat, session preserved). If the empty-chat-on-refresh experience is too jarring, v1.1 stores the last N exchanges per session in `logs/webview-history-<userId>.jsonl` and replays on connect.
 - [ ] **Do we want a "send to TG too" hint on the webview?** Currently both surfaces always echo. If you ever want webview-only messages (e.g., debugging), add a toggle. Not in v1.

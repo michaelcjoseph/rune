@@ -276,6 +276,7 @@ One file per slash command:
 
 - **`cli/rune.ts`** — CLI entry point for local interactive use.
 - **`scripts/run-evals.ts`** (+ `.test.ts`) — Dev tool: parse eval YAMLs, invoke agents via `runAgent()`, report pass/fail.
+- **`scripts/register-ts.mjs`** (+ `.test.ts`) — Local Node runtime TypeScript loader using `module.registerHooks()`: resolves repo-local `.js` ESM imports to sibling `.ts`/`.tsx`/`.mts`/`.cts` files and transforms TypeScript through `esbuild` for app/script entrypoints.
 - **`scripts/run-intent-scan.ts`** — CLI entry point for intent-scan job (`npm run intent-scan`).
 - **`scripts/library-backfill.ts`** — CLI entry point for bulk library-to-KB backfill (`npm run library-backfill`).
 - **`policies/model-policy.json`** — Declarative model registry + routing rules (aliases, providers, role-defaults, global-fallback). Committed config. Carries fable (anthropic/claude) and gpt-5.5 (openai/codex) with product-team roleDefaults: judgment roles → fable; artifact roles → gpt-5.5.

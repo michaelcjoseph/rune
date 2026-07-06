@@ -17,8 +17,8 @@ You are the test specialist for Rune, a TypeScript/Node.js server. You write and
 
 Rune is a single-process server (Telegram bot + HTTP server + cron scheduler + knowledge base engine). It uses:
 
-- TypeScript with `tsx` runner, ESM (`"type": "module"`), `.js` extensions on all imports
-- No build step — `tsx` runs TypeScript directly
+- TypeScript with the local `node --import ./scripts/register-ts.mjs` loader, ESM (`"type": "module"`), `.js` extensions on all imports
+- No build step — Node runs TypeScript directly through the local `module.registerHooks()` loader
 - All AI operations spawn `claude` CLI as child processes via `src/ai/claude.ts`
 - Vault file I/O through `src/vault/files.ts` (paths relative to vault root)
 - Structured JSON logging via `createLogger()` from `src/utils/logger.ts`

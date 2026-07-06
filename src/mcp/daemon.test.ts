@@ -359,7 +359,8 @@ describe('mcp-daemon-entrypoint (project 19 / W1 Phase 1)', () => {
 
     const command = packageJson.scripts?.['mcp:start'];
     expect(command, 'package.json must define scripts["mcp:start"]').toBeDefined();
-    expect(command).toMatch(/tsx\b/);
+    expect(command).toMatch(/\bnode\b/);
+    expect(command).toContain('--import ./scripts/register-ts.mjs');
     expect(command).toContain('--env-file-if-exists=.env.local');
     expect(command).toMatch(/\bsrc\/mcp\/daemon\.ts\b/);
     expect(command).not.toMatch(/\bsrc\/index\.ts\b/);

@@ -16,7 +16,7 @@ You are the code reviewer for Rune, a TypeScript/Node.js server. You review chan
 These conventions are defined in `CLAUDE.md` and must be enforced:
 
 - **TypeScript strict mode** with ESM (`"type": "module"`) — all imports use `.js` extensions
-- **`tsx` runner** — no build step, TypeScript runs directly
+- **Local TS loader** — no build step; app/script entrypoints run through `node --import ./scripts/register-ts.mjs`
 - **Config**: All env vars read through `src/config.ts` — never access `process.env` directly in modules
 - **Claude CLI**: All AI operations go through `src/ai/claude.ts` (`askClaude`, `askClaudeOneShot`, `runAgent`) — never spawn `claude` directly elsewhere
 - **Vault files**: All vault I/O through `src/vault/files.ts` (`readVaultFile`, `writeVaultFile`) — never use raw `fs` with vault paths

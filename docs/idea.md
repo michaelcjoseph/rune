@@ -67,8 +67,8 @@ The server reads and writes to an Obsidian vault synced via iCloud. A `knowledge
 ### Stack
 
 - TypeScript with ESM (`"type": "module"` in package.json)
-- All imports use `.js` extensions (even for `.ts` files — this is how ESM + TypeScript works with tsx)
-- `tsx` as the runtime — no build step, runs TypeScript directly
+- All imports use `.js` extensions (even for `.ts` files — the local TS loader maps repo-local `.js` specifiers to source files)
+- `node --import ./scripts/register-ts.mjs` as the runtime — no build step, runs TypeScript directly through `module.registerHooks()`
 - Strict TypeScript config (`strict: true`, `target: ES2022`, `module: Node16`)
 
 ### Dependencies
@@ -78,7 +78,7 @@ Production (only two):
 - `node-cron` — cron scheduler with timezone support
 
 Dev:
-- `tsx` — direct TypeScript execution
+- `esbuild` — TypeScript transform used by the local runtime loader
 - `typescript` — type checking
 - `@types/node`, `@types/node-cron`, `@types/node-telegram-bot-api`
 
@@ -86,8 +86,8 @@ Dev:
 
 ```json
 {
-  "dev": "tsx watch src/index.ts",
-  "start": "tsx src/index.ts",
+  "dev": "node --watch --import ./scripts/register-ts.mjs src/index.ts",
+  "start": "node --import ./scripts/register-ts.mjs src/index.ts",
   "build": "tsc --noEmit"
 }
 ```
@@ -593,7 +593,7 @@ Catch uncaught exceptions and unhandled rejections — log them and persist sess
 7. **ESM with .js extensions** — All TypeScript imports use `.js` extensions.
 8. **Structured JSON logging** — Every log entry has component tag, level, timestamp.
 9. **Git commits at key moments** — After `/fresh`, `/journal`, morning prep, nightly processing. Not on timers.
-10. **No build step** — `tsx` runs TypeScript directly in dev and production.
+10. **No build step** — Node runs TypeScript directly in dev and production through `scripts/register-ts.mjs`.
 
 ---
 

@@ -2660,7 +2660,7 @@ export function mountWebviewRoutes(
     if (req.method === 'GET' && pathname === '/') {
       // In dev (config.IS_PRODUCTION === false) re-read index.html on every
       // request so static-markup edits show up on a plain browser refresh —
-      // tsx watch only restarts on .ts changes, not on .html, so without
+      // node --watch restarts on imported source changes, not on .html, so without
       // this dev-mode bypass an edit to index.html requires restarting
       // `npm run dev` to take effect. Prod serves the mount-time cache;
       // a failed pre-load falls back to a fresh read via serveIndexHtml

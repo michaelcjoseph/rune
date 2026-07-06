@@ -71,8 +71,13 @@ function absolutizeMcpArg(arg: string): string {
  *  PROJECT_ROOT-absolute paths. */
 const FALLBACK_MCP_SERVERS = {
   'rune-kb': {
-    command: 'npx',
-    args: ['tsx', `--env-file-if-exists=${join(PROJECT_ROOT, '.env.local')}`, join(PROJECT_ROOT, 'src', 'mcp', 'index.ts')],
+    command: 'node',
+    args: [
+      `--env-file-if-exists=${join(PROJECT_ROOT, '.env.local')}`,
+      '--import',
+      join(PROJECT_ROOT, 'scripts', 'register-ts.mjs'),
+      join(PROJECT_ROOT, 'src', 'mcp', 'index.ts'),
+    ],
     cwd: PROJECT_ROOT,
   },
 };

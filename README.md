@@ -138,7 +138,7 @@ knowledge/
 Sources go in, wiki pages come out. The wiki-compiler agent reads raw sources, identifies entities/concepts/topics, creates or updates wiki pages with `[[wikilinks]]`, and maintains the index. No embeddings or vector DB — search uses a two-layer approach: the LLM reads the compact index to find relevant pages, then ripgrep does full-text search for additional matches.
 
 **MCP exposure.** The KB is reachable two ways:
-- **Local stdio (`rune-kb`)** — registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone entry: `npx tsx --env-file-if-exists=.env.local src/mcp/index.ts`.
+- **Local stdio (`rune-kb`)** — registered in `.claude/settings.json`, so any Claude Code session on the machine can use `kb_query`, `kb_search`, `kb_ingest`, `kb_stats`, `kb_lint`. Standalone entry: `node --env-file-if-exists=.env.local --import ./scripts/register-ts.mjs src/mcp/index.ts`.
 - **Remote (`/mcp` Claude App connector)** — a single-user OAuth 2.1 endpoint (RFC 8414 + RFC 9728) serving the six App-surface tools (`kb_query`, `vault_search`, `log_idea`, `crm_lookup`, `get_priorities`, `log_conversation`). The admin `kb_*` tools are never remotely reachable. Mounted only when `RUNE_HTTP_SECRET` is set. See [`docs/architecture/subsystems.md`](docs/architecture/subsystems.md).
 
 ## Vault Content Model
@@ -246,7 +246,7 @@ FAMILY_NAMES=Alice,Bob                   # enables /family
 ### Run
 
 ```bash
-npm run dev               # development (tsx watch, hot reload)
+npm run dev               # development (node --watch + local TS loader)
 npm run start             # production
 npm run build             # type-check only (no emit)
 npm run test              # vitest run

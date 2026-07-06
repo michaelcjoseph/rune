@@ -124,13 +124,15 @@ describe('getProjectMcpArgs — cwd-independent rune-kb config', () => {
 
     const inline = args[2]!;
     const cfg = JSON.parse(inline) as {
-      mcpServers: Record<string, { cwd?: string; args?: string[] }>;
+      mcpServers: Record<string, { command?: string; cwd?: string; args?: string[] }>;
     };
     const server = cfg.mcpServers['rune-kb'];
     expect(server).toBeDefined();
+    expect(server!.command).toBe('node');
     expect(server!.cwd).toBe('/tmp/test-project');
 
     const joinedArgs = (server!.args ?? []).join(' ');
+    expect(joinedArgs).toContain('/tmp/test-project/scripts/register-ts.mjs');
     expect(joinedArgs).toContain('/tmp/test-project/src/mcp/index.ts');
     expect(joinedArgs).toContain('--env-file-if-exists=/tmp/test-project/.env.local');
     // No relative entrypoint survives (the bug that broke MCP from a foreign cwd).

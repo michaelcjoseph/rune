@@ -482,9 +482,9 @@ describe('workRunApplier', () => {
   describe('apply — spawn args', () => {
     it('spawns claude with cwd=sandbox.worktree (NOT PROJECT_ROOT) for self-edit isolation', async () => {
       // The root cause of the 2026-05-27 incident: spawning into PROJECT_ROOT
-      // means an agent editing Rune's source files triggers tsx watch to
+      // means an agent editing Rune's source files can trigger node --watch to
       // SIGTERM the parent. Running inside a worktree breaks the loop —
-      // tsx watch only watches PROJECT_ROOT, not the worktree under
+      // the dev watcher ignores the worktree under
       // .worktrees/<product>/<project>.
       setupValidProject('06-webview');
       const fakeChild = makeFakeChild({ exitCode: 0 });

@@ -46,7 +46,7 @@ async function executable(path: string, body: string): Promise<void> {
 }
 
 function runAcceptance(scriptPath: string, env: NodeJS.ProcessEnv) {
-  return spawnSync(process.execPath, ['--import', 'tsx', scriptPath], {
+  return spawnSync(process.execPath, ['--import', './scripts/register-ts.mjs', scriptPath], {
     cwd: dirname(dirname(scriptPath)),
     env,
     encoding: 'utf8',
@@ -63,6 +63,7 @@ function makeMovedCheckout(): { home: string; checkout: string; scriptPath: stri
   mkdirSync(checkout, { recursive: true });
   mkdirSync(join(checkout, 'scripts'), { recursive: true });
   cpSync(join(PROJECT_ROOT, 'scripts', 'run-rune-rebrand-acceptance.ts'), join(checkout, SCRIPT_RELATIVE_PATH));
+  cpSync(join(PROJECT_ROOT, 'scripts', 'register-ts.mjs'), join(checkout, 'scripts', 'register-ts.mjs'));
   cpSync(join(PROJECT_ROOT, 'src'), join(checkout, 'src'), { recursive: true });
   cpSync(join(PROJECT_ROOT, '.claude'), join(checkout, '.claude'), { recursive: true });
   cpSync(join(PROJECT_ROOT, 'policies'), join(checkout, 'policies'), { recursive: true });

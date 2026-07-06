@@ -231,7 +231,7 @@ function assertEnvResolution(): void {
     "console.log(JSON.stringify({projectRoot:PROJECT_ROOT,logsDir:config.LOGS_DIR,workspaceDir:config.WORKSPACE_DIR}));",
   ].join('');
   const defaults = parseJsonObject(
-    commandOk('config defaults', 'node', ['--import', 'tsx', '--eval', code], { env: baseEnv }).stdout,
+    commandOk('config defaults', 'node', ['--import', './scripts/register-ts.mjs', '--eval', code], { env: baseEnv }).stdout,
     'config defaults',
   );
   assert(defaults.logsDir === join(String(defaults.projectRoot), 'logs'), `unset RUNE_LOGS_DIR must default to repo logs/: ${JSON.stringify(defaults)}`);
@@ -255,7 +255,7 @@ function assertEnvResolution(): void {
     RUNE_WORKSPACE_DIR: overrideWorkspace,
   };
   const overrides = parseJsonObject(
-    commandOk('config overrides', 'node', ['--import', 'tsx', '--eval', code], { env: overrideEnv }).stdout,
+    commandOk('config overrides', 'node', ['--import', './scripts/register-ts.mjs', '--eval', code], { env: overrideEnv }).stdout,
     'config overrides',
   );
   assert(overrides.logsDir === overrideLogs, `RUNE_LOGS_DIR override was ignored: ${JSON.stringify(overrides)}`);
