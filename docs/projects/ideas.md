@@ -6,33 +6,10 @@ below it.
 
 ## User-authored
 
-- Improve design of MCP monitoring in cockpit
-- Expand MCP functionality
-- Install tools to improve agent performance
-  - https://colbymchenry.github.io/codegraph/ (for each product repo)
-  - https://github.com/cursor/plugins/blob/683cdbda983ea8be4b766ac3fe94b7b88e7f75ad/cursor-team-kit/agents/thermo-nuclear-code-quality-review.md (code review skill)
-  - https://smartcommit.labrun.app/ (better commits)
-  - code mode https://blog.cloudflare.com/code-mode-mcp/
-  - https://www.rtk-ai.app/#install
-  - https://browser-use.com
-- Symlink mirror agents between .claude and .agents (dotagents.sentry.dev)
 - As part of nightly processing, Rune should read vault notes and add items to 
   - ideas for the correct product
   - bugs for the correct product
   - research / writing topics 
-- Engagement-driven writing lessons (extends project 12)
-  - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just Michael's feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what Michael corrected. Closes the loop from "Michael's taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
-- Research agent
-  - Coud potentially be done via Claude Cowork writing to the pkms
-  - quarterly and annual SEC reports ingestion of companies I'm following
-  - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
-  - Monitor and ingest X posts for relevant topics and report them to me daily
-- Socratic method interview agent to pair with writer
-  - Interviews me as part of the writing process for any topic
-  - Finished interviews lead to new writing content for the writing agent
-  - Interviews can be multiple sessions. We can decide when a topic is done and ready to be written about
-  - One session can also spin up new research tasks that feed into the next interview
-- set up child developmental agent support to help with monitoring progress and planning weekly
 - Default to an ELI5 / first-principles posture when I talk to Rune
   - **Premise:** When I talk to Rune it should default to an ELI5, first-principles posture — strip jargon and unnecessary detail, build the explanation up from fundamentals — so a conversation gets past surface complexity and reasons from the ground. Intended as always-on, every chat.
   - **Where it has to live:** the conversational system prompt, assembled in `src/bot/handlers/text.ts`. A note here in `ideas.md` does NOT change behavior — the posture only takes effect once it's written into that prompt. (Same dead-zone lesson as the agent-lessons → role-memory move: a behavior change parked in a doc nothing loads is inert.)
@@ -75,6 +52,20 @@ below it.
   - **Risk, recurring re-dispatch:** the FixAttempt store plus stable ids must prevent re-running the same bug nightly.
   - **Risk, auto-merge trust:** bounded by the green-gate and branch-first landing, but a real trust escalation; per-product validation commands must be trustworthy.
   - **Phases (test-first):** (1) sensor enrichment + confirm failure detail is captured (de-risks everything); (2) bugs.json schema + rich bugs.md parser + reconciliation scan (stable ids); (3) triage classification (bug/idea, fail-closed) + structured bug authoring, route bugs to bugs.json/bugs.md, ideas unchanged; (4) implement startFixRun as the gen-eval bug executor (bug-report prompt) + extend FixAttemptState; (5) Option A gated auto-merge wiring + escalation surfacing; (6) nightly bug-drain step + auto-approve bugs, end-to-end acceptance (a real bugs.md bug fixed to a merged branch with no human start-gate).
+- Research agent
+  - Coud potentially be done via Claude Cowork writing to the pkms
+  - quarterly and annual SEC reports ingestion of companies I'm following
+  - Monitor and ingest research papers on topics of interest for my KB (quantum, space, AI, etc)
+  - Monitor and ingest X posts for relevant topics and report them to me daily
+- Professor agent
+  - Assigns me "homework" and study material (could be based off what the Research agent does)
+  - Interviews me in a Socratic method style to help me learn the material and also pull out my own insights on a topic
+  - These interviews and insights drive additions to my world view and playbook (material for writing agent)
+  - Interviews can be multiple sessions. We can decide when a topic is done
+  - One session can also spin up new research tasks that feed into future lesson plans and tasks for research agent
+- Engagement-driven writing lessons (extends project 12)
+  - Once the writer role's feedback-driven memory loop (project 12) works, drive lessons from real content-engagement results, not just personal feedback. Pipe back performance signals the publishing channel exposes (views, reads, completion, shares, replies) so the wrap-up step proposes `memory.md` entries from outcomes, and the writer learns what actually landed with the audience rather than only what was corrected pre-publishing. Closes the loop from "personal taste" to "the audience's response." Accepted direction (not an open question); builds directly on project 12's SOUL + memory + wrap-up-write pattern.
+- set up child developmental agent support to help with monitoring progress and planning weekly
 - Expand autonomous bug fix lane to run in parallel for all product repos
 - Multi-repo orchestrated project coordinator
   - **Goal:** support a single product/project plan whose deliverables span multiple product repositories by coordinating a sequence of existing single-repo orchestrated runs, one run per target product/repo, instead of forcing one run to silently operate inside the wrong worktree.
@@ -83,6 +74,14 @@ below it.
   - **Reuse:** keep `createWorktree`, `runProjectOrchestration`, team-task workflow, validation commands, gated merge, supervision, and cockpit run state single-repo at the child-run level. Add a parent coordinator that owns partitioning, child-run sequencing, aggregate status, and cockpit visibility.
   - **Key decisions before implementation:** task metadata format for target product/repo; whether partitioning happens at planning time or dispatch time; how a parent run resumes if one child succeeds and a later child fails or parks; how task checkboxes are updated without a child run claiming tasks from another repo; merge ordering and rollback/hold policy across repos; cockpit display for parent versus child runs.
   - **Non-goal for the first guardrail fix:** do not make a single child run write to multiple repos. The safer capability is multi-run coordination over existing single-repo execution.
+- Install tools to improve agent performance
+  - https://colbymchenry.github.io/codegraph/ (for each product repo)
+  - https://github.com/cursor/plugins/blob/683cdbda983ea8be4b766ac3fe94b7b88e7f75ad/cursor-team-kit/agents/thermo-nuclear-code-quality-review.md (code review skill)
+  - https://smartcommit.labrun.app/ (better commits)
+  - code mode https://blog.cloudflare.com/code-mode-mcp/
+  - https://www.rtk-ai.app/#install
+  - https://browser-use.com
+- Symlink mirror agents between .claude and .agents (dotagents.sentry.dev)
 
 ## Loop-filed
 
@@ -91,15 +90,3 @@ below it.
      parses only the lines under this section header so user-authored ideas above
      never collide with loop-filed dedupe. -->
 
-- **Make wiki-compiler robust to recurring failures** — wiki-compiler agent fails 7+ times in 7 days
-- **Make observation-triage agent robust to failing inputs** — observation-triage agent fails 5+ times in 7d
-- **Make lenny-sync robust to repeated failures** — lenny-sync agent fails 3 times in 7 days
-- **Stabilize recurring agent-call failure bursts** — Agent-call failures recurring in bursts over 7 days
-
-- **Fix recurring wiki-compiler agent failures** — wiki-compiler agent fails 4+ times in 7 days
-- **Fix observation-triage agent repeated failures** — observation-triage agent fails 3 times in 7 days
-
-- **Harden wiki-linter against repeated failures** — wiki-linter fails 19+ times in 7 days
-- **Diagnose recurring wiki-compiler failures** — wiki-compiler fails 4+ times in 7d
-
-- **Fix wiki-linter agent's repeated call failures** — wiki-linter agent fails 26 agent-calls in 24h
