@@ -359,6 +359,61 @@ const runeRunMetrics = {
   },
 };
 
+// Full /api/mcp/monitoring payload shape (McpMonitoringPayload).
+const mcpMonitoringPayload = {
+  status: 'degraded',
+  checkedAt: '2026-07-06T15:20:05.000Z',
+  live: mcpMetricsSnapshot,
+  daemon: {
+    status: 'ok',
+    uptimeSec: 273_906, // 3d 4h
+    startedAt: '2026-07-03T11:00:00.000Z',
+    oauthConfigured: true,
+    sessions: [
+      {
+        id: 'sess-abc123def456',
+        openedAt: '2026-07-06T14:20:05.000Z',
+        lastSeenAt: '2026-07-06T15:19:05.000Z',
+      },
+    ],
+  },
+  clients: [
+    { clientId: 'client-claude-app', clientName: 'Claude App', createdAt: '2026-06-30T09:00:00.000Z' },
+  ],
+  history: {
+    callsPerDay: Array.from({ length: 14 }, (_, index) => ({
+      date: new Date(Date.UTC(2026, 5, 23 + index)).toISOString().slice(0, 10),
+      calls: 10 + index,
+      errors: index % 4,
+    })),
+    // 24 hourly buckets: calls sum 186, errors sum 5 (2.7% error rate), timeouts sum 2.
+    hourly: Array.from({ length: 24 }, (_, index) => ({
+      ts: `2026-07-06T${String(index).padStart(2, '0')}:00:00.000Z`,
+      calls: 5 + (index % 7),
+      errors: index % 5 === 0 ? 1 : 0,
+      timeouts: index % 12 === 0 ? 1 : 0,
+    })),
+    perTool24h: {
+      kb_query: { calls: 96, errors: 6 },
+      vault_search: { calls: 12, errors: 0 },
+    },
+    collectedSince: '2026-06-23T00:00:00.000Z',
+  },
+  runMetrics: runeRunMetrics,
+  alerts: {
+    active: [
+      {
+        kind: 'error-rate',
+        key: 'error-rate:kb_query',
+        message: 'kb_query error rate above 10% in the last hour',
+        firstDetectedAt: '2026-07-06T14:50:00.000Z',
+        lastDetectedAt: '2026-07-06T15:20:00.000Z',
+      },
+    ],
+    count: 1,
+  },
+};
+
 describe('Product deep view UI (cockpit redesign Phase 6)', () => {
   // Per-product chat/planning state is retained at module scope (so it survives
   // navigate-away-and-back). Clear it between tests so they stay isolated.
@@ -1023,13 +1078,72 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     expect(html).toMatch(/sample count[\s\S]{0,120}13|13[\s\S]{0,120}samples?/i);
   });
 
-  it('polls the MCP metrics snapshot tool exactly once per second while internal Monitoring is visible', async () => {
+  it('renders the full MCP monitoring payload: alerts, health strip, KPI tiles, history chart, tools, sessions', async () => {
+    const { renderProductDeepView } = await import('./product-deep-view.js');
+
+    const html = renderProductDeepView(
+      productView({
+        name: 'rune-mcp',
+        class: 'internal',
+        containerCapabilities: monitoringCapabilities,
+        activeRun: undefined,
+      }),
+      { activeSidePanel: 'monitoring', monitoring: mcpMonitoringPayload },
+    );
+
+    expect(html).toMatch(/data-monitoring-mode=["']live["']/i);
+    expect(html).toMatch(/data-monitoring-state=["']degraded["']/i);
+
+    // Alert banner: kind + message + since.
+    expect(html).toMatch(/deep-monitoring-alert/);
+    expect(html).toContain('error-rate');
+    expect(html).toContain('kb_query error rate above 10% in the last hour');
+    expect(html).toMatch(/since /i);
+
+    // Health strip: uptime, sessions, warm index, clients, checked time.
+    expect(html).toMatch(/daemon up 3d 4h/i);
+    expect(html).toMatch(/2 active sessions/i);
+    expect(html).toMatch(/warm index ready/i);
+    expect(html).toMatch(/1 client\b/);
+    expect(html).toMatch(/last updated/i);
+
+    // KPI tiles are computed from the 24h history when present.
+    expect(html).toMatch(/data-monitoring-kpi=["']calls-24h["']/);
+    expect(html).toMatch(/186[\s\S]{0,160}calls · 24h/);
+    expect(html).toMatch(/data-monitoring-kpi=["']error-rate-24h["']/);
+    expect(html).toMatch(/deep-monitoring-kpi--warn/);
+    expect(html).toContain('2.7%');
+    expect(html).toMatch(/88ms[\s\S]{0,200}p95 latency|p95 latency[\s\S]{0,200}88ms/i);
+    expect(html).toMatch(/data-monitoring-kpi=["']timeouts-24h["']/);
+
+    // Charts render as inline SVG; history present means no collecting notice.
+    expect(html).toContain('<svg');
+    expect(html).toMatch(/data-monitoring-chart=["']calls-per-day["']/);
+    expect(html).not.toMatch(/data-empty-state=["']monitoring-history["']/);
+
+    // Per-tool table: 24h counts from perTool24h, sorted by calls descending.
+    expect(html).toMatch(/data-monitoring-tool=["']kb_query["'][\s\S]{0,80}kb_query[\s\S]{0,40}96 calls/);
+    const kbIdx = html.indexOf('data-monitoring-tool="kb_query"');
+    const vaultIdx = html.indexOf('data-monitoring-tool="vault_search"');
+    expect(kbIdx).toBeGreaterThan(-1);
+    expect(vaultIdx).toBeGreaterThan(kbIdx);
+
+    // Sessions & clients.
+    expect(html).toMatch(/data-monitoring-session=["']sess-abc123def456["']/);
+    expect(html).toContain('Claude App');
+    expect(html).toContain('created 2026-06-30');
+
+    // Run metrics keep rendering from the payload.
+    expect(html).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
+  });
+
+  it('polls the MCP monitoring endpoint every five seconds while internal Monitoring is visible', async () => {
     vi.useFakeTimers();
     try {
       const { createProductDeepView } = await import('./product-deep-view.js');
       const root = makeRoot();
-      const snapshotCallCount = () => fetchJson.mock.calls
-        .filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length;
+      const monitoringCallCount = () => fetchJson.mock.calls
+        .filter(([url]) => url === '/api/mcp/monitoring').length;
       const fetchJson = vi.fn(async (url: string) => {
         if (url === '/api/products/rune-mcp') {
           return productView({
@@ -1039,7 +1153,10 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
             activeRun: undefined,
           });
         }
-        if (url === '/api/mcp/tools/mcp_metrics_snapshot') return mcpMetricsSnapshot;
+        // No runMetrics in the payload → the view falls back to /api/state.
+        if (url === '/api/mcp/monitoring') {
+          return { status: 'ok', checkedAt: '2026-06-29T15:00:00.000Z', live: mcpMetricsSnapshot };
+        }
         if (url === '/api/state') {
           return {
             inFlight: [],
@@ -1060,26 +1177,27 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/metrics');
       expect(fetchJson).not.toHaveBeenCalledWith('/api/metrics');
       expect(fetchJson).not.toHaveBeenCalledWith('/logs/mcp-metrics.json');
-      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/monitoring');
 
-      await vi.advanceTimersByTimeAsync(2500);
-      expect(snapshotCallCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(12_500);
+      expect(monitoringCallCount()).toBe(0);
 
       await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
       await Promise.resolve();
 
-      expect(fetchJson).toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+      expect(fetchJson).toHaveBeenCalledWith('/api/mcp/monitoring');
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
       expect(root.innerHTML).toMatch(/data-active-side-panel=["']monitoring["']/i);
       expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,180}21|21[\s\S]{0,180}kb_query/i);
       expect(root.innerHTML).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
-      expect(snapshotCallCount()).toBe(1);
+      expect(monitoringCallCount()).toBe(1);
 
-      await vi.advanceTimersByTimeAsync(999);
-      expect(snapshotCallCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(snapshotCallCount()).toBe(2);
-      await vi.advanceTimersByTimeAsync(3000);
-      expect(snapshotCallCount()).toBe(5);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(monitoringCallCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(monitoringCallCount()).toBe(2);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(monitoringCallCount()).toBe(5);
 
       view.close();
     } finally {
@@ -1119,14 +1237,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
             activeRun: undefined,
           });
         }
-        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+        if (url === '/api/mcp/monitoring') {
           const callIndex = fetchJson.mock.calls
-            .filter(([calledUrl]) => calledUrl === '/api/mcp/tools/mcp_metrics_snapshot').length;
+            .filter(([calledUrl]) => calledUrl === '/api/mcp/monitoring').length;
           return {
             status: 'ok',
-            sourceTool: 'mcp_metrics_snapshot',
             checkedAt: `2026-06-29T15:20:0${callIndex}.000Z`,
-            mcpMetrics: callIndex === 1
+            live: callIndex === 1
               ? snapshotFor(10, 2)
               : snapshotFor(11, 3),
           };
@@ -1149,7 +1266,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}10|10[\s\S]{0,120}total calls/i);
       expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,120}2 calls/i);
 
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5000);
 
       expect(root.innerHTML).toMatch(/total calls[\s\S]{0,120}11|11[\s\S]{0,120}total calls/i);
       expect(root.innerHTML).toMatch(/kb_query[\s\S]{0,120}3 calls/i);
@@ -1181,14 +1298,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
             activeRun: undefined,
           });
         }
-        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+        if (url === '/api/mcp/monitoring') {
           const callIndex = fetchJson.mock.calls
-            .filter(([calledUrl]) => calledUrl === '/api/mcp/tools/mcp_metrics_snapshot').length;
+            .filter(([calledUrl]) => calledUrl === '/api/mcp/monitoring').length;
           return {
             status: 'ok',
-            sourceTool: 'mcp_metrics_snapshot',
             checkedAt: `2026-06-29T15:20:0${callIndex}.000Z`,
-            mcpMetrics: callIndex === 1 ? snapshotFor(10, 2) : snapshotFor(11, 3),
+            live: callIndex === 1 ? snapshotFor(10, 2) : snapshotFor(11, 3),
           };
         }
         if (url === '/api/state') return { inFlight: [], mutations: { active: [] } };
@@ -1205,7 +1321,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       // the real DOM discarding a freshly-created textarea's contents and focus.
       root.chatInput.value = 'half-written question I have not sent yet';
 
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5000);
 
       // The scoped repaint must leave the composer untouched...
       expect(root.chatInput.value).toBe('half-written question I have not sent yet');
@@ -1222,7 +1338,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     vi.useFakeTimers();
     try {
       const firstPollAt = new Date('2026-06-29T15:20:05.000Z');
-      const secondPollAt = new Date('2026-06-29T15:20:06.000Z');
+      const secondPollAt = new Date('2026-06-29T15:20:10.000Z');
       const fmtExpectedTime = (date: Date) =>
         date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       vi.setSystemTime(firstPollAt);
@@ -1239,9 +1355,11 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
             activeRun: undefined,
           });
         }
-        if (url === '/api/mcp/tools/mcp_metrics_snapshot') {
+        if (url === '/api/mcp/monitoring') {
           metricsCalls += 1;
-          if (metricsCalls === 1) return mcpMetricsSnapshot;
+          if (metricsCalls === 1) {
+            return { status: 'ok', checkedAt: firstPollAt.toISOString(), live: mcpMetricsSnapshot };
+          }
           throw new Error('MCP daemon unavailable');
         }
         if (url === '/api/state') {
@@ -1261,12 +1379,15 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(root.innerHTML).toContain(fmtExpectedTime(firstPollAt));
 
       vi.setSystemTime(secondPollAt);
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5000);
 
       expect(root.innerHTML).toMatch(/data-monitoring-state=["']degraded["']|>\s*degraded\s*</i);
       expect(root.innerHTML).toMatch(/last updated/i);
       expect(root.innerHTML).toContain(fmtExpectedTime(secondPollAt));
       expect(root.innerHTML).toMatch(/MCP daemon unavailable/i);
+      // The failed poll keeps the last-good data on screen, marked stale.
+      expect(root.innerHTML).toMatch(/deep-monitoring-stale/);
+      expect(root.innerHTML).toMatch(/kb_query/);
 
       view.close();
     } finally {
@@ -1274,13 +1395,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     }
   });
 
-  it('stops MCP metrics snapshot polling when Monitoring is hidden or the view is unmounted', async () => {
+  it('stops MCP monitoring polling when Monitoring is hidden or the view is unmounted', async () => {
     vi.useFakeTimers();
     try {
       const { createProductDeepView } = await import('./product-deep-view.js');
       const root = makeRoot();
-      const snapshotCallCount = () => fetchJson.mock.calls
-        .filter(([url]) => url === '/api/mcp/tools/mcp_metrics_snapshot').length;
+      const monitoringCallCount = () => fetchJson.mock.calls
+        .filter(([url]) => url === '/api/mcp/monitoring').length;
       const fetchJson = vi.fn(async (url: string) => {
         if (url === '/api/products/rune-mcp') {
           return productView({
@@ -1290,7 +1411,9 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
             activeRun: undefined,
           });
         }
-        if (url === '/api/mcp/tools/mcp_metrics_snapshot') return mcpMetricsSnapshot;
+        if (url === '/api/mcp/monitoring') {
+          return { status: 'ok', checkedAt: '2026-06-29T15:00:00.000Z', live: mcpMetricsSnapshot };
+        }
         if (url === '/api/state') {
           return {
             inFlight: [],
@@ -1308,23 +1431,23 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       const view = createProductDeepView({ root, product: 'rune-mcp', fetchJson });
       await view.load();
       await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(snapshotCallCount()).toBe(3);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(monitoringCallCount()).toBe(3);
 
       await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'runs' });
-      const snapshotCallsAfterHide = snapshotCallCount();
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(snapshotCallCount()).toBe(snapshotCallsAfterHide);
+      const monitoringCallsAfterHide = monitoringCallCount();
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(monitoringCallCount()).toBe(monitoringCallsAfterHide);
 
       await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
-      expect(snapshotCallCount()).toBe(snapshotCallsAfterHide + 1);
-      await vi.advanceTimersByTimeAsync(1000);
-      const snapshotCallsBeforeUnmount = snapshotCallCount();
-      expect(snapshotCallsBeforeUnmount).toBe(snapshotCallsAfterHide + 2);
+      expect(monitoringCallCount()).toBe(monitoringCallsAfterHide + 1);
+      await vi.advanceTimersByTimeAsync(5000);
+      const monitoringCallsBeforeUnmount = monitoringCallCount();
+      expect(monitoringCallsBeforeUnmount).toBe(monitoringCallsAfterHide + 2);
 
       view.close();
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(snapshotCallCount()).toBe(snapshotCallsBeforeUnmount);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(monitoringCallCount()).toBe(monitoringCallsBeforeUnmount);
     } finally {
       vi.useRealTimers();
     }
@@ -1342,7 +1465,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
           activeRun: undefined,
         });
       }
-      if (url === '/api/mcp/tools/mcp_metrics_snapshot') throw new Error('MCP daemon unavailable');
+      if (url === '/api/mcp/monitoring') throw new Error('MCP daemon unavailable');
       if (url === '/api/state') {
         return {
           inFlight: [],
@@ -1361,11 +1484,13 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
     await view.load();
     await root.clickClosest('[data-side-panel-tab]', { sidePanelTab: 'monitoring' });
 
-    expect(fetchJson).toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
+    expect(fetchJson).toHaveBeenCalledWith('/api/mcp/monitoring');
     expect(root.innerHTML).toMatch(/data-surface=["']monitoring["']/i);
     expect(root.innerHTML).toMatch(/data-monitoring-mode=["']live["']/i);
     expect(root.innerHTML).toMatch(/data-monitoring-state=["']degraded["']|>\s*degraded\s*</i);
-    expect(root.innerHTML).toMatch(/mcp_metrics_snapshot/i);
+    expect(root.innerHTML).toMatch(/MCP daemon unavailable/i);
+    expect(root.innerHTML).toMatch(/deep-monitoring-stale/);
+    // Run metrics come from cockpit state, so they render even with the daemon down.
     expect(root.innerHTML).toMatch(/active runs?[\s\S]{0,120}2|2[\s\S]{0,120}active runs?/i);
     expect(root.innerHTML).not.toMatch(/data-empty-state=["']monitoring["']/i);
 
@@ -1397,6 +1522,7 @@ describe('Product deep view UI (cockpit redesign Phase 6)', () => {
       expect(root.innerHTML).toMatch(/data-active-side-panel=["']monitoring["']/i);
       expect(root.innerHTML).toMatch(/data-surface=["']monitoring["']/i);
       expect(root.innerHTML).toMatch(/data-monitoring-mode=["']stubbed["']|data-monitoring-state=["']stubbed["']|monitoring[^<]{0,160}(empty|not available|later)/i);
+      expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/monitoring');
       expect(fetchJson).not.toHaveBeenCalledWith('/api/mcp/tools/mcp_metrics_snapshot');
 
       view.close();

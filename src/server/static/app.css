@@ -646,7 +646,10 @@ body[data-view="product"] #product-root {
 .deep-backlog-item,
 .deep-run-row,
 .deep-live-run,
-.deep-op-row {
+.deep-op-row,
+.deep-monitoring-tool,
+.deep-monitoring-session,
+.deep-monitoring-failure {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
@@ -749,6 +752,10 @@ body[data-view="product"] #product-root {
   border-color: var(--warning-border);
   background: var(--warning-bg);
 }
+.home-mcp-status--alert {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
 .deep-action,
 .deep-panel button {
   font: inherit;
@@ -850,6 +857,146 @@ body[data-view="product"] #product-root {
 }
 .deep-warnings li {
   overflow-wrap: anywhere;
+}
+/* Monitoring panel — MCP daemon health, KPI tiles, charts, sessions. All
+ * colors are semantic tokens from :root; charts scale to panel width. */
+.pill-monitoring-ok { background: var(--success-bg); color: var(--success); }
+.pill-monitoring-degraded { background: var(--warning-bg); color: var(--warning); }
+.pill-monitoring-down { background: var(--error-bg); color: var(--error); }
+.deep-monitoring-body {
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+  min-width: 0;
+}
+.deep-monitoring-body--stale {
+  opacity: .6;
+}
+.deep-monitoring-stale {
+  border: 1px solid var(--warning-border);
+  border-radius: 6px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  padding: .45rem .55rem;
+  font-size: .78rem;
+  overflow-wrap: anywhere;
+}
+.deep-monitoring-alert {
+  border: 1px solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  padding: .55rem .65rem;
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  font-size: .78rem;
+}
+.deep-monitoring-alert-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .25rem .5rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.deep-monitoring-alert-row strong {
+  color: var(--error);
+}
+.deep-monitoring-alert-since {
+  color: var(--text2);
+  font-size: .72rem;
+}
+.deep-monitoring-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .75rem;
+  color: var(--text2);
+  font-size: .75rem;
+}
+.deep-monitoring-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: .5rem;
+}
+.deep-monitoring-kpi {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .5rem .55rem;
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  min-width: 0;
+}
+.deep-monitoring-kpi-value {
+  font-size: 1.2rem;
+  font-weight: 650;
+  color: var(--text);
+  line-height: 1.2;
+}
+.deep-monitoring-kpi-label {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text2);
+}
+.deep-monitoring-kpi--warn {
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+}
+.deep-monitoring-kpi--warn .deep-monitoring-kpi-value {
+  color: var(--warning);
+}
+.deep-monitoring-kpi--alert {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+.deep-monitoring-kpi--alert .deep-monitoring-kpi-value {
+  color: var(--error);
+}
+.deep-monitoring-kpi svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  margin-top: .25rem;
+}
+.deep-monitoring-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.deep-monitoring-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: .4rem;
+}
+.deep-monitoring-metric {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: .5rem;
+  font-size: .78rem;
+  color: var(--text2);
+  min-width: 0;
+}
+.deep-monitoring-metric strong {
+  color: var(--text);
+}
+.deep-monitoring-tools,
+.deep-monitoring-sessions,
+.deep-monitoring-failures {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.deep-monitoring-tool-errors--nonzero {
+  color: var(--error);
+}
+.deep-panel--monitoring h4 {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text2);
 }
 .deep-chat-transcript {
   flex: 1 1 auto;

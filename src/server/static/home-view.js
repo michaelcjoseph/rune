@@ -66,13 +66,45 @@ function renderActiveRun(product) {
     `</button>`;
 }
 
+function fmtUptime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${total}s`;
+}
+
 function renderMcpMonitoring(product) {
   const mcp = product?.monitoring?.mcp;
   if (!mcp?.status) return '';
   const status = mcp.status === 'ok' ? 'ok' : 'degraded';
+  const alertCount = Number.isFinite(mcp.alerts?.count) ? mcp.alerts.count : 0;
+  const variant = alertCount > 0 ? 'alert' : status;
   const label = status === 'ok' ? 'MCP daemon ok' : 'MCP daemon degraded';
-  const detail = mcp.error || mcp.endpoint || mcp.checkedAt || '';
-  return `<div class="home-mcp-status home-mcp-status--${escHtml(status)}" data-mcp-status="${escHtml(status)}">` +
+  const bits = [];
+  const uptimeSec = Number.isFinite(mcp.uptimeSec) ? mcp.uptimeSec
+    : Number.isFinite(mcp.daemon?.uptimeSec) ? mcp.daemon.uptimeSec
+    : null;
+  if (uptimeSec !== null) bits.push(`up ${fmtUptime(uptimeSec)}`);
+  const sessions = Number.isFinite(mcp.sessions) ? mcp.sessions
+    : Number.isFinite(mcp.activeSessions) ? mcp.activeSessions
+    : Array.isArray(mcp.sessions) ? mcp.sessions.length
+    : null;
+  if (sessions !== null) bits.push(fmtCount(sessions, 'session', 'sessions'));
+  if (alertCount > 0) {
+    const kinds = Array.isArray(mcp.alerts?.kinds) && mcp.alerts.kinds.length > 0
+      ? ` (${mcp.alerts.kinds.join(', ')})`
+      : '';
+    bits.push(`${alertCount} active ${alertCount === 1 ? 'alert' : 'alerts'}${kinds}`);
+  }
+  if (mcp.error) bits.push(mcp.error);
+  // Graceful with the old minimal payload shape (status/endpoint/checkedAt only).
+  const detail = bits.length > 0 ? bits.join(' · ') : (mcp.endpoint || mcp.checkedAt || '');
+  return `<div class="home-mcp-status home-mcp-status--${escHtml(variant)}" data-mcp-status="${escHtml(status)}"` +
+    (alertCount > 0 ? ` data-mcp-alerts="${escHtml(alertCount)}"` : '') + `>` +
     `<strong>${escHtml(label)}</strong>` +
     (detail ? `<span>${escHtml(detail)}</span>` : '<span>Health check returned no detail</span>') +
   `</div>`;

@@ -471,6 +471,50 @@ describe('Home view UI (cockpit redesign Phase 5)', () => {
     expect(html).not.toMatch(/>\s*<\/(?:section|div|article)>/i);
   });
 
+  it('renders MCP daemon uptime/session detail on the home card and an alert variant when alerts are active', async () => {
+    const { renderHomeView } = await import('./home-view.js');
+    const mcpProduct = (mcp: Record<string, unknown>) => ({
+      name: 'rune-mcp',
+      class: 'internal',
+      repoBacked: true,
+      counts: { activeProjects: 0, openBugs: 0, openIdeas: 0, backlogWarnings: 0 },
+      attention: [],
+      monitoring: { mcp },
+    });
+
+    const okHtml = renderHomeView({
+      available: true,
+      products: [mcpProduct({
+        status: 'ok',
+        checkedAt: '2026-07-06T12:00:00.000Z',
+        uptimeSec: 3 * 86_400 + 4 * 3600, // 3d 4h
+        sessions: 1,
+      })],
+    });
+    expect(okHtml).toMatch(/data-mcp-status=["']ok["']/i);
+    expect(okHtml).toMatch(/home-mcp-status--ok/);
+    expect(okHtml).toMatch(/MCP daemon ok/i);
+    expect(okHtml).toMatch(/up 3d 4h/i);
+    expect(okHtml).toMatch(/1 session\b/i);
+    expect(okHtml).not.toMatch(/home-mcp-status--alert|home-mcp-status--degraded/);
+
+    const alertHtml = renderHomeView({
+      available: true,
+      products: [mcpProduct({
+        status: 'degraded',
+        checkedAt: '2026-07-06T12:00:00.000Z',
+        uptimeSec: 90,
+        sessions: 0,
+        alerts: { count: 2, kinds: ['error-rate', 'timeout'] },
+      })],
+    });
+    expect(alertHtml).toMatch(/home-mcp-status--alert/);
+    expect(alertHtml).toMatch(/data-mcp-status=["']degraded["']/i);
+    expect(alertHtml).toMatch(/2 active alerts/i);
+    expect(alertHtml).toMatch(/error-rate/);
+    expect(alertHtml).not.toMatch(/>\s*<\/(?:section|div|article)>/i);
+  });
+
   it('renders the product roster as internal and external classes with exact Phase 4 membership', async () => {
     const { renderHomeView } = await import('./home-view.js');
     const product = (name: string, productClass: 'internal' | 'external') => ({

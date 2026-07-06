@@ -1,4 +1,5 @@
 import { createRunFeedSubscription as defaultCreateRunFeedSubscription } from './run-feed-client.js';
+import { renderBarChart, renderSparkline } from './monitoring-charts.js';
 
 function escHtml(value) {
   return String(value ?? '')
@@ -60,6 +61,32 @@ function fmtDurationMs(ms) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function fmtUptime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${total}s`;
+}
+
+function fmtRelative(iso) {
+  const at = iso ? new Date(iso).getTime() : NaN;
+  if (!Number.isFinite(at)) return '';
+  const deltaSec = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (deltaSec < 45) return 'just now';
+  if (deltaSec < 3600) return `${Math.max(1, Math.round(deltaSec / 60))}m ago`;
+  if (deltaSec < 86_400) return `${Math.round(deltaSec / 3600)}h ago`;
+  return `${Math.round(deltaSec / 86_400)}d ago`;
+}
+
+function shortId(id) {
+  const text = String(id || '');
+  return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 }
 
 function itemTitle(item) {
@@ -450,6 +477,10 @@ function renderOperations(operations) {
   `</section>`;
 }
 
+// Monitoring poll cadence. 5s is plenty for daemon health + aggregated history
+// (the old 1s cadence hammered the daemon for data that changes slowly).
+const MONITORING_POLL_MS = 5000;
+
 function monitoringMode(view) {
   const capability = view?.containerCapabilities?.monitoring;
   if (capability === 'enabled') return 'live';
@@ -500,14 +531,160 @@ function renderRecentFailures(failures) {
     `</div>`;
 }
 
-function renderMonitoringMeta(monitoring) {
-  const rows = [];
-  const checkedAt = monitoring?.checkedAt || monitoring?.lastUpdatedAt;
-  if (checkedAt) rows.push(`Last updated ${fmtClock(checkedAt)}`);
-  if (monitoring?.error) rows.push(monitoring.error);
-  return rows.length
-    ? `<div class="deep-monitoring-source">${rows.map(escHtml).join(' - ')}</div>`
+function renderMonitoringAlerts(alerts) {
+  const active = list(alerts?.active);
+  const count = Number.isFinite(alerts?.count) ? alerts.count : active.length;
+  if (count <= 0) return '';
+  const rows = active.map(alert =>
+    `<div class="deep-monitoring-alert-row" data-monitoring-alert="${attr(alert?.kind || 'alert')}">` +
+      `<strong>${escHtml(alert?.kind || 'alert')}</strong>` +
+      `<span>${escHtml(alert?.message || '')}</span>` +
+      (alert?.firstDetectedAt
+        ? `<span class="deep-monitoring-alert-since">since ${escHtml(fmtClock(alert.firstDetectedAt))}</span>`
+        : '') +
+    `</div>`
+  ).join('');
+  return `<div class="deep-monitoring-alert" role="alert" data-monitoring-alert-count="${attr(count)}">` +
+    (rows || `<div class="deep-monitoring-alert-row"><strong>${escHtml(String(count))} active alert${count === 1 ? '' : 's'}</strong></div>`) +
+  `</div>`;
+}
+
+function renderMonitoringHealth(monitoring, live) {
+  const daemon = monitoring.daemon;
+  const clients = list(monitoring.clients);
+  const sessions = Number.isFinite(live.activeSessions)
+    ? live.activeSessions
+    : list(daemon?.sessions).length;
+  const warmState = live.warmIndex
+    ? (live.warmIndex.ready ? 'ready' : (live.warmIndex.status || 'warming'))
     : '';
+  const items = [
+    daemon && Number.isFinite(daemon.uptimeSec) ? `daemon up ${fmtUptime(daemon.uptimeSec)}` : (daemon?.status ? `daemon ${daemon.status}` : ''),
+    `${fmtNumber(sessions)} active sessions`,
+    warmState ? `warm index ${warmState}` : '',
+    clients.length > 0 ? `${clients.length} client${clients.length === 1 ? '' : 's'}` : '',
+    monitoring.checkedAt ? `last updated ${fmtClock(monitoring.checkedAt)}` : '',
+  ].filter(Boolean);
+  return `<div class="deep-monitoring-health">` +
+    items.map(item => `<span>${escHtml(item)}</span>`).join('') +
+  `</div>`;
+}
+
+function renderMonitoringKpis(live, history) {
+  const hourly = list(history?.hourly).filter(row => row && typeof row === 'object');
+  const hasHourly = hourly.length > 0;
+  const sum = key => hourly.reduce((acc, row) => acc + (Number.isFinite(row[key]) ? row[key] : 0), 0);
+  const calls = hasHourly ? sum('calls') : (Number.isFinite(live.totals?.calls) ? live.totals.calls : 0);
+  const errors = hasHourly ? sum('errors') : (Number.isFinite(live.totals?.errors) ? live.totals.errors : 0);
+  const timeouts = hasHourly ? sum('timeouts') : (Number.isFinite(live.totals?.timeouts) ? live.totals.timeouts : 0);
+  const errorRate = calls > 0 ? (errors / calls) * 100 : 0;
+  const tools = live.tools && typeof live.tools === 'object' ? Object.values(live.tools) : [];
+  const p95Values = tools
+    .map(metrics => metrics?.latencyMs?.p95)
+    .filter(value => Number.isFinite(value));
+  const p95 = p95Values.length > 0 ? Math.max(...p95Values) : null;
+  const rateModifier = errorRate >= 10 ? ' deep-monitoring-kpi--alert' : errorRate >= 2 ? ' deep-monitoring-kpi--warn' : '';
+  const sparkline = hasHourly
+    ? renderSparkline(hourly.map(row => (Number.isFinite(row.calls) ? row.calls : 0)), {
+        width: 120,
+        height: 24,
+        ariaLabel: 'Hourly MCP calls over the last 24 hours',
+      })
+    : '';
+  const tile = (kpi, value, label, { modifier = '', extra = '' } = {}) =>
+    `<div class="deep-monitoring-kpi${modifier}" data-monitoring-kpi="${attr(kpi)}">` +
+      `<span class="deep-monitoring-kpi-value">${escHtml(value)}</span>` +
+      `<span class="deep-monitoring-kpi-label">${escHtml(label)}</span>` +
+      extra +
+    `</div>`;
+  return `<div class="deep-monitoring-kpis">` +
+    tile('calls-24h', fmtNumber(calls), hasHourly ? 'calls · 24h' : 'total calls', { extra: sparkline }) +
+    tile('error-rate-24h', `${(Math.round(errorRate * 10) / 10).toFixed(1)}%`, hasHourly ? 'error rate · 24h' : 'error rate', { modifier: rateModifier }) +
+    tile('p95-latency', p95 === null ? 'n/a' : `${fmtNumber(p95)}ms`, 'p95 latency') +
+    tile('timeouts-24h', fmtNumber(timeouts), hasHourly ? 'timeouts · 24h' : 'timeouts') +
+  `</div>`;
+}
+
+function renderMonitoringHistoryChart(history) {
+  const points = list(history?.callsPerDay);
+  if (points.length === 0) {
+    return `<div class="deep-empty-state" data-empty-state="monitoring-history">` +
+      `<strong>Collecting metrics history</strong>` +
+      `<p>Charts appear after a few minutes.</p>` +
+    `</div>`;
+  }
+  return `<div class="deep-monitoring-chart" data-monitoring-chart="calls-per-day">` +
+    renderBarChart(points, {
+      valueKey: 'calls',
+      overlayKey: 'errors',
+      ariaLabel: 'MCP calls per day over the last 14 days, errors overlaid',
+    }) +
+  `</div>`;
+}
+
+function renderMonitoringTools(live, history) {
+  const liveTools = live.tools && typeof live.tools === 'object' ? live.tools : {};
+  const perTool = history?.perTool24h && typeof history.perTool24h === 'object' ? history.perTool24h : null;
+  const names = [...new Set([...Object.keys(liveTools), ...(perTool ? Object.keys(perTool) : [])])];
+  const rows = names.map(name => {
+    const liveMetrics = liveTools[name] || {};
+    const day = perTool?.[name];
+    return {
+      name,
+      calls: Number.isFinite(day?.calls) ? day.calls : (Number.isFinite(liveMetrics.calls) ? liveMetrics.calls : 0),
+      errors: Number.isFinite(day?.errors) ? day.errors : (Number.isFinite(liveMetrics.errors) ? liveMetrics.errors : 0),
+      latency: liveMetrics.latencyMs || {},
+    };
+  }).sort((a, b) => b.calls - a.calls);
+  const html = rows.map(row =>
+    `<article class="deep-monitoring-tool" data-monitoring-tool="${attr(row.name)}">` +
+      `<div class="deep-row-head"><strong>${escHtml(row.name)}</strong><span>${escHtml(fmtNumber(row.calls))} calls</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span class="deep-monitoring-tool-errors${row.errors > 0 ? ' deep-monitoring-tool-errors--nonzero' : ''}">${escHtml(fmtNumber(row.errors))} errors</span>` +
+        `<span>p50 ${escHtml(fmtNumber(row.latency.p50))}ms</span>` +
+        `<span>p95 ${escHtml(fmtNumber(row.latency.p95))}ms</span>` +
+      `</div>` +
+    `</article>`
+  ).join('');
+  return `<div class="deep-monitoring-tools">${html || '<p class="muted">No MCP tool calls yet</p>'}</div>`;
+}
+
+function renderMonitoringSessions(monitoring) {
+  const sessions = list(monitoring.daemon?.sessions);
+  const clients = list(monitoring.clients);
+  if (sessions.length === 0 && clients.length === 0) return '';
+  const sessionRows = sessions.map(session =>
+    `<article class="deep-monitoring-session" data-monitoring-session="${attr(session?.id || '')}">` +
+      `<div class="deep-row-head"><strong>${escHtml(shortId(session?.id))}</strong><span>session</span></div>` +
+      `<div class="deep-run-meta">` +
+        `<span>opened ${escHtml(fmtRelative(session?.openedAt) || 'unknown')}</span>` +
+        `<span>last seen ${escHtml(fmtRelative(session?.lastSeenAt) || 'unknown')}</span>` +
+      `</div>` +
+    `</article>`
+  ).join('');
+  const clientRows = clients.map(client =>
+    `<article class="deep-monitoring-session deep-monitoring-session--client" data-monitoring-client="${attr(client?.clientId || '')}">` +
+      `<div class="deep-row-head"><strong>${escHtml(client?.clientName || client?.clientId || 'client')}</strong><span>client</span></div>` +
+      (typeof client?.createdAt === 'string'
+        ? `<div class="deep-run-meta"><span>created ${escHtml(client.createdAt.slice(0, 10))}</span></div>`
+        : '') +
+    `</article>`
+  ).join('');
+  return `<h4>Sessions &amp; clients</h4>` +
+    `<div class="deep-monitoring-sessions">${sessionRows}${clientRows}</div>`;
+}
+
+function renderMonitoringRunMetrics(runMetrics) {
+  return `<h4>Rune run metrics</h4>` +
+    `<div class="deep-monitoring-grid">` +
+      `${renderMetricRow('active runs', fmtNumber(runMetrics.activeRuns))}` +
+      `${renderMetricRow('parked', fmtNumber(runMetrics.parkedRuns))}` +
+      `${renderMetricRow('recent failures', Array.isArray(runMetrics.recentFailures) ? String(runMetrics.recentFailures.length) : fmtNumber(runMetrics.recentFailures))}` +
+      `${renderMetricRow('p95 runtime', Number.isFinite(runMetrics.runtimeMs?.p95) ? fmtDurationMs(runMetrics.runtimeMs.p95) : 'n/a')}` +
+      `${renderMetricRow('sample count', fmtNumber(runMetrics.runtimeMs?.sampleCount))}` +
+    `</div>` +
+    `${renderTerminalOutcomes(runMetrics.terminalOutcomes)}` +
+    `${renderRecentFailures(runMetrics.recentFailures)}`;
 }
 
 function renderMonitoring(view, monitoring = {}) {
@@ -522,43 +699,35 @@ function renderMonitoring(view, monitoring = {}) {
     `</section>`;
   }
 
-  const mcp = monitoring.mcpMetrics || {};
+  // Accept both the /api/mcp/monitoring payload (live/daemon/history/...) and
+  // the legacy snapshot shape ({ mcpMetrics }) so pre-switch callers keep working.
+  const live = (monitoring.live && typeof monitoring.live === 'object' ? monitoring.live : monitoring.mcpMetrics) || {};
+  const history = monitoring.history && typeof monitoring.history === 'object' ? monitoring.history : null;
   const runMetrics = monitoring.runMetrics || {};
   const status = monitoring.status || 'ok';
-  const tools = mcp.tools && typeof mcp.tools === 'object' ? mcp.tools : {};
-  const toolRows = Object.entries(tools).map(([name, metrics]) => {
-    const latency = metrics?.latencyMs || {};
-    return `<article class="deep-monitoring-tool" data-monitoring-tool="${attr(name)}">` +
-      `<div class="deep-row-head"><strong>${escHtml(name)}</strong><span>${escHtml(fmtNumber(metrics?.calls))} calls</span></div>` +
-      `<div class="deep-run-meta">` +
-        `<span>${escHtml(fmtNumber(metrics?.errors))} errors</span>` +
-        `<span>${escHtml(fmtNumber(metrics?.timeouts))} timeouts</span>` +
-        `<span>p95 ${escHtml(fmtNumber(latency.p95))}ms</span>` +
-      `</div>` +
-    `</article>`;
-  }).join('');
-  const warmReady = mcp.warmIndex?.ready ? 'ready' : 'warming';
-  return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="live" data-monitoring-state="${attr(status)}">` +
-    `<div class="deep-panel-head"><h3>Monitoring</h3><span>${escHtml(status)}</span></div>` +
-    `<div class="deep-monitoring-source">MCP call metrics via ${escHtml(monitoring.sourceTool || 'mcp_metrics_snapshot')}</div>` +
-    `${renderMonitoringMeta(monitoring)}` +
-    `<div class="deep-monitoring-grid">` +
-      `${renderMetricRow('total calls', fmtNumber(mcp.totals?.calls))}` +
-      `${renderMetricRow('timeouts', fmtNumber(mcp.totals?.timeouts))}` +
-      `${renderMetricRow('active sessions', fmtNumber(mcp.activeSessions))}` +
-      `${renderMetricRow('warm index', warmReady)}` +
+  const stale = monitoring.stale === true;
+  const pillClass = status === 'ok' ? 'pill-monitoring-ok'
+    : status === 'down' ? 'pill-monitoring-down'
+    : 'pill-monitoring-degraded';
+  // A failed poll keeps rendering the last-good data (dimmed) with a stale
+  // notice — the panel must never blank out on a transient daemon blip.
+  const staleNotice = (stale || monitoring.error)
+    ? `<div class="deep-monitoring-stale" data-monitoring-stale>` +
+        escHtml([monitoring.error, stale ? 'showing last known data' : ''].filter(Boolean).join(' — ')) +
+      `</div>`
+    : '';
+  return `<section class="deep-panel deep-panel--monitoring" data-surface="monitoring" data-monitoring-mode="live" data-monitoring-state="${attr(status)}"${stale ? ' data-monitoring-stale-data="true"' : ''}>` +
+    `<div class="deep-panel-head"><h3>Monitoring</h3><span class="status-pill ${pillClass}">${escHtml(status)}</span></div>` +
+    renderMonitoringAlerts(monitoring.alerts) +
+    staleNotice +
+    `<div class="deep-monitoring-body${stale ? ' deep-monitoring-body--stale' : ''}">` +
+      renderMonitoringHealth(monitoring, live) +
+      renderMonitoringKpis(live, history) +
+      renderMonitoringHistoryChart(history) +
+      renderMonitoringTools(live, history) +
+      renderMonitoringSessions(monitoring) +
+      renderMonitoringRunMetrics(runMetrics) +
     `</div>` +
-    `<div class="deep-monitoring-tools">${toolRows || '<p class="muted">No MCP tool calls yet</p>'}</div>` +
-    `<h4>Rune run metrics</h4>` +
-    `<div class="deep-monitoring-grid">` +
-      `${renderMetricRow('active runs', fmtNumber(runMetrics.activeRuns))}` +
-      `${renderMetricRow('parked', fmtNumber(runMetrics.parkedRuns))}` +
-      `${renderMetricRow('recent failures', Array.isArray(runMetrics.recentFailures) ? String(runMetrics.recentFailures.length) : fmtNumber(runMetrics.recentFailures))}` +
-      `${renderMetricRow('p95 runtime', Number.isFinite(runMetrics.runtimeMs?.p95) ? fmtDurationMs(runMetrics.runtimeMs.p95) : 'n/a')}` +
-      `${renderMetricRow('sample count', fmtNumber(runMetrics.runtimeMs?.sampleCount))}` +
-    `</div>` +
-    `${renderTerminalOutcomes(runMetrics.terminalOutcomes)}` +
-    `${renderRecentFailures(runMetrics.recentFailures)}` +
   `</section>`;
 }
 
@@ -1072,37 +1241,46 @@ export function createProductDeepView({
 
   async function refreshMonitoring(checkedAt = new Date().toISOString()) {
     if (!current || activeSidePanel !== 'monitoring' || monitoringMode(current) !== 'live') return;
-    const [mcpMetricsResult, state] = await Promise.all([
-      loadJson('/api/mcp/tools/mcp_metrics_snapshot')
-        .then(value => ({ ok: true, value }))
-        .catch(error => ({ ok: false, error })),
-      loadJson('/api/state').catch(() => null),
-    ]);
-    const metricsState = mcpMetricsResult.ok && mcpMetricsResult.value && typeof mcpMetricsResult.value === 'object'
-      ? mcpMetricsResult.value
-      : {};
-    const wrappedMcpMetrics = metricsState && Object.prototype.hasOwnProperty.call(metricsState, 'mcpMetrics');
-    monitoring = {
-      sourceTool: typeof metricsState.sourceTool === 'string' ? metricsState.sourceTool : 'mcp_metrics_snapshot',
-      status: mcpMetricsResult.ok ? (metricsState.status || 'ok') : 'degraded',
-      checkedAt: typeof metricsState.checkedAt === 'string' ? metricsState.checkedAt : checkedAt,
-      ...(mcpMetricsResult.ok
-        ? { mcpMetrics: wrappedMcpMetrics ? metricsState.mcpMetrics : mcpMetricsResult.value }
-        : { error: mcpMetricsResult.error?.message || String(mcpMetricsResult.error) }),
-      ...(mcpMetricsResult.ok && metricsState.error ? { error: metricsState.error } : {}),
-      runMetrics: metricsState.runMetrics || runMetricsFromState(state),
-    };
+    const result = await loadJson('/api/mcp/monitoring')
+      .then(value => ({ ok: true, value }))
+      .catch(error => ({ ok: false, error }));
+    if (result.ok && result.value && typeof result.value === 'object') {
+      const payload = result.value;
+      monitoring = {
+        ...payload,
+        status: payload.status || 'ok',
+        checkedAt: typeof payload.checkedAt === 'string' ? payload.checkedAt : checkedAt,
+        stale: false,
+      };
+    } else {
+      // Keep the last-good payload (rendered dimmed with a stale notice) so a
+      // transient daemon blip never blanks the panel.
+      monitoring = {
+        ...(monitoring && typeof monitoring === 'object' ? monitoring : {}),
+        status: 'degraded',
+        checkedAt,
+        error: result.error?.message || String(result.error),
+        stale: true,
+      };
+    }
+    // Run metrics come from cockpit state, not the daemon — fall back to the
+    // state-derived counts whenever the payload carries none (including when
+    // the monitoring endpoint itself is down).
+    if (!monitoring.runMetrics) {
+      const state = await loadJson('/api/state').catch(() => null);
+      monitoring = { ...monitoring, runMetrics: runMetricsFromState(state) };
+    }
     renderMonitoringPanel();
   }
 
   function scheduleMonitoringPoll() {
     if (monitoringPoller || activeSidePanel !== 'monitoring' || !current || monitoringMode(current) !== 'live') return;
-    const scheduledAt = new Date(Date.now() + 1000).toISOString();
+    const scheduledAt = new Date(Date.now() + MONITORING_POLL_MS).toISOString();
     monitoringPoller = setTimeout(async () => {
       monitoringPoller = null;
       await refreshMonitoring(scheduledAt);
       scheduleMonitoringPoll();
-    }, 1000);
+    }, MONITORING_POLL_MS);
   }
 
   function syncMonitoringPoll() {
