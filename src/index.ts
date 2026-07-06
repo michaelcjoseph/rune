@@ -29,6 +29,7 @@ import { createBot, wireHandlers } from './bot/telegram.js';
 import { startHttpServer } from './server/http.js';
 import { startScheduler, stopScheduler } from './jobs/scheduler.js';
 import { startStallCheck, stopStallCheck } from './jobs/stall-check-runner.js';
+import { startMcpWatchdog, stopMcpWatchdog } from './jobs/mcp-watchdog-runner.js';
 import {
   defaultTerminalWorkRunReconcilerDeps,
   startTerminalWorkRunReconciler,
@@ -239,6 +240,7 @@ void cleanupOrphanWorktrees({
 const server = startHttpServer({ webview, isReady: () => ready });
 startScheduler({ bus });
 startStallCheck(bus);
+startMcpWatchdog(bus);
 try {
   startTerminalWorkRunReconciler(await defaultTerminalWorkRunReconcilerDeps());
 } catch (err) {
@@ -264,6 +266,7 @@ async function shutdown() {
   log.info('Shutting down...');
   stopScheduler();
   stopStallCheck();
+  stopMcpWatchdog();
   stopTerminalWorkRunReconciler();
   stopPlanningExpiry();
   stopWatcher();
