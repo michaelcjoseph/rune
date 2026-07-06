@@ -428,7 +428,7 @@ describe('planning-roles — runDownstreamPlan approval split (project 20 test-p
     });
     expect(artifact.spec).toContain('PM-authored spec from the interview');
     expect(artifact.techSpec).toContain('Critiqued before context seed');
-    expect(artifact.tasks).toContain('Tests (write first)');
+    expect(artifact.tasks).toContain('Test strategy: `code-tests-required`');
     expect(artifact.testPlan).toContain('p1-core');
     expect(artifact.context).toContain('PM-authored streak spec');
   });

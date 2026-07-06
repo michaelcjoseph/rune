@@ -30,7 +30,7 @@ function sampleArtifact(): SpecArtifact {
     product: 'aura',
     title: 'Seat-based pricing tiers',
     spec: 'Add seat-based pricing tiers to Aura.',
-    tasks: '## Phase 1\n### Tests (write first)\n- [ ] ...\n### Implementation\n- [ ] ...',
+    tasks: '## Phase 1\n### Implementation\n- [ ] ...\n  - Test strategy: `code-tests-required`',
     testPlan: '## 1. Pricing tiers\n- [ ] tiers compute correctly',
   };
 }
@@ -176,9 +176,9 @@ describe('Planner — scaffolding the approved plan (test-plan §9)', () => {
     expect(brief).toContain(art.testPlan); // → test-plan.md
   });
 
-  it('carries the per-phase Tests (write first) block into the brief', () => {
+  it('carries per-task test strategy metadata into the brief', () => {
     const approved = approvedSessionWithDownstream();
-    expect(buildSetupWriterBrief(approved)).toContain('Tests (write first)');
+    expect(buildSetupWriterBrief(approved)).toContain('Test strategy: `code-tests-required`');
   });
 
   it('refuses to build a scaffold brief before the plan is approved', () => {

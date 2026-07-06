@@ -376,7 +376,7 @@ describe('project-orchestrator — closeout', () => {
     expect(h.state.finalizeCalled).toBe(false);
   });
 
-  it('auto-closes the repeated "Confirm red before implementation." gate without role review dead-looping', async () => {
+  it('runs a legacy "Confirm red before implementation." line through the normal role workflow', async () => {
     const tasksMd = [
       '# Tasks',
       '',
@@ -393,17 +393,19 @@ describe('project-orchestrator — closeout', () => {
     expect(res.kind).toBe('finalized');
     expect(h.state.tasksMd).toContain('- [x] Confirm red before implementation.');
     expect(h.state.tasksMd).toContain('- [x] Build the run feed');
-    expect(readSpec).toHaveBeenCalledTimes(1);
-    expect(workflow).toHaveBeenCalledTimes(1);
-    expect(workflow.mock.calls[0]?.[0].text).toBe('Build the run feed');
+    expect(readSpec).toHaveBeenCalledTimes(2);
+    expect(workflow).toHaveBeenCalledTimes(2);
+    expect(workflow.mock.calls.map((call) => call[0].text)).toEqual([
+      'Confirm red before implementation.',
+      'Build the run feed',
+    ]);
     expect(h.state.commits).toEqual([
       'sha-confirm-red-before-implementation',
       'sha-build-the-run-feed',
     ]);
-    expect(h.state.contextMd).not.toMatch(/Confirm red|TDD|bookkeeping|dead-loop/i);
   });
 
-  it('does not let a role-gate failure on a later task re-select an already auto-closed confirm-red gate', async () => {
+  it('blocks without ticking when a legacy "Confirm red before implementation." task fails role review', async () => {
     const tasksMd = [
       '# Tasks',
       '',
@@ -411,11 +413,6 @@ describe('project-orchestrator — closeout', () => {
       '- [ ] Confirm red before implementation.',
       '- [ ] Build the run feed',
     ].join('\n');
-    // Model the ACTUAL round-cap dead-loop terminal the bug is about: the
-    // team-task workflow's `block()` returns outcome 'blocked' /
-    // loopExitReason 'hard-budget' with this exact blockedReason (see
-    // team-task-workflow.ts round-cap exit), not a 'failed'/'operational'
-    // shape. The orchestrator takes the plain-blocked path on this reason text.
     const h = makeHarness({
       runTaskWorkflow: async (task) => ({
         taskId: task.id,
@@ -433,9 +430,9 @@ describe('project-orchestrator — closeout', () => {
 
     expect(res.kind).toBe('blocked');
     expect(String((res as Extract<OrchestrationResult, { kind: 'blocked' }>).reason)).toMatch(/round cap/i);
-    expect(h.state.tasksMd).toContain('- [x] Confirm red before implementation.');
+    expect(h.state.tasksMd).toContain('- [ ] Confirm red before implementation.');
     expect(h.state.tasksMd).toContain('- [ ] Build the run feed');
-    expect(h.state.commits).toEqual(['sha-confirm-red-before-implementation']);
+    expect(h.state.commits).toEqual([]);
   });
 });
 

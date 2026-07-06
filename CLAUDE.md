@@ -105,7 +105,7 @@ Plus `pages/psychology.md` (living profile, `psychology-updater` with scope grad
 - **Autonomous codebase operations go through the mutation pipeline** (`src/transport/mutations.ts`) — register a `MutationApplier`, call `createMutation()`; never spawn Claude CLI for project work directly. Supervision writes are fail-safe (errors logged, never propagated).
 - Model selection is policy-driven (`src/intent/model-policy.ts`, `policies/model-policy.json`) — which model runs an agent is declared, not hardcoded. A missing policy falls back to `def.model ?? config.AGENT_MODEL`.
 - Session locks prevent concurrent CLI writes to the same session ID. Git commits happen at key moments (morning prep, `/fresh`, nightly), not on timers.
-- Project work is **test-first**: every phase of a `docs/projects/*/tasks.md` opens with a **Tests (write first)** block whose tests go red before implementation. See `docs/projects/templates/`.
+- Project work is **test-first**: QA authors required tests at the start of each task before the coder implements it; each task lands green before closeout. See `docs/projects/templates/`.
 - **User-reachability is the definition of done.** A task is complete only when a user can trigger it from a real surface (cockpit, Telegram, cron, CLI) and observe its outcome — not when its tests pass against a pure module. Before drafting `tasks.md`/`test-plan.md` for a new project or phase, run through `docs/projects/templates/planning-checklist.md`. The retrospective at `docs/projects/08-intent-layer/agent-lessons.md` is the case study.
 
 ### Invariants (any change must preserve these)

@@ -9,9 +9,10 @@
  * pure, testable serialization between the two.
  *
  * Tasks carry an optional `phase` label from the tech lead; `sizedTasksToMarkdown`
- * groups them into milestone sections (first-seen order), each with its own
- * "Tests (write first)" block — the multi-phase `tasks.md` shape the legacy
- * single-shot planner produced. Unlabeled tasks collapse into a default phase.
+ * groups them into milestone sections (first-seen order). Each planned task is
+ * rendered once, annotated with its test strategy so the per-task QA-first role
+ * workflow can author tests before coder work starts. Unlabeled tasks collapse
+ * into a default phase.
  */
 
 import type { SpecArtifact } from './planner.js';
@@ -22,7 +23,7 @@ type PlannedOutcome = Extract<PlanningRolesOutcome, { kind: 'planned' }>;
 
 /** Human label for each test strategy, for the rendered task/test docs. */
 const STRATEGY_LABEL: Record<TestStrategy, string> = {
-  'code-tests-required': 'Tests required (write first)',
+  'code-tests-required': 'Code tests required (QA first)',
   'docs-or-config-only': 'Docs / config only (reviewed no-code-test rationale)',
   'tests-as-deliverable': 'Tests as deliverable',
   'manual-live-gate': 'Manual/live release gates',
@@ -51,27 +52,17 @@ function groupByPhase(tasks: readonly SizedTask[]): Array<{ phase: string; tasks
 
 /**
  * Render the sized tasks into a phased `tasks.md` body. Tasks are grouped by
- * their tech-lead `phase` label into milestone sections (first-seen order), each
- * opening with a "Tests (write first)" block listing that phase's
- * `code-tests-required` tasks, then an Implementation checklist annotated with
- * each task's test strategy and designer flag — the metadata the orchestrator's
- * QA-first and designer-routing gates read. The orchestration loop walks the
- * checklist linearly, so phase headings are organizational, not load-bearing.
+ * their tech-lead `phase` label into milestone sections (first-seen order), then
+ * an Implementation checklist annotated with each task's test strategy and
+ * designer flag — the metadata the orchestrator's QA-first and designer-routing
+ * gates read. The orchestration loop walks the checklist linearly, so phase
+ * headings are organizational, not load-bearing.
  */
 export function sizedTasksToMarkdown(tasks: readonly SizedTask[]): string {
   const lines: string[] = ['# Tasks', ''];
 
   for (const { phase, tasks: phaseTasks } of groupByPhase(tasks)) {
-    lines.push(`## ${phase}`, '', '### Tests (write first)', '');
-    const testFirst = phaseTasks.filter((t) => t.testStrategy === 'code-tests-required');
-    if (testFirst.length > 0) {
-      for (const t of testFirst) {
-        lines.push(`- [ ] Tests for **${t.id}**: ${t.text}`);
-      }
-    } else {
-      lines.push('- [ ] _No code-test-required tasks — see per-task strategy below._');
-    }
-    lines.push('', '### Implementation', '');
+    lines.push(`## ${phase}`, '', '### Implementation', '');
 
     for (const t of phaseTasks) {
       const designer = t.designerNeeded ? ' _(designer review)_' : '';

@@ -94,20 +94,19 @@ describe('orch-closeout — selected checkbox', () => {
   });
 
   it('ticks the section-scoped task when the same text repeats across phases (project-14 regression)', () => {
-    // The "Confirm red before implementation." boilerplate repeats verbatim in every
-    // phase, so text alone is non-unique. Closeout must tick the box in the SELECTED
-    // task's section rather than refusing as ambiguous (the bug that blocked the
-    // 2026-06-16 project-14 run).
+    // Repeated task text can appear across phases, so text alone is non-unique.
+    // Closeout must tick the box in the SELECTED task's section rather than
+    // refusing as ambiguous (the bug that blocked the 2026-06-16 project-14 run).
     const md = [
       '# Tasks',
       '## Phase 10',
-      '- [ ] Confirm red before implementation.',
+      '- [ ] Manual release gate',
       '## Phase 11',
-      '- [ ] Confirm red before implementation.',
+      '- [ ] Manual release gate',
     ].join('\n');
     const res = markSelectedTaskComplete(md, {
-      id: 'confirm-red-before-implementation',
-      text: 'Confirm red before implementation.',
+      id: 'manual-release-gate',
+      text: 'Manual release gate',
       section: 'Phase 11',
     });
     expect(res.ok).toBe(true);
@@ -116,9 +115,9 @@ describe('orch-closeout — selected checkbox', () => {
         [
           '# Tasks',
           '## Phase 10',
-          '- [ ] Confirm red before implementation.',
+          '- [ ] Manual release gate',
           '## Phase 11',
-          '- [x] Confirm red before implementation.',
+          '- [x] Manual release gate',
         ].join('\n'),
       );
     }
@@ -130,11 +129,11 @@ describe('orch-closeout — selected checkbox', () => {
     const md = [
       '# Tasks',
       '## Phase 10',
-      '- [x] Confirm red before implementation.',
+      '- [x] Manual release gate',
       '## Phase 11',
-      '- [ ] Confirm red before implementation.',
+      '- [ ] Manual release gate',
       '## Phase 12',
-      '- [ ] Confirm red before implementation.',
+      '- [ ] Manual release gate',
     ].join('\n');
     const sel = selectNextTask(md);
     if (sel.kind !== 'task') throw new Error('expected a task');
@@ -144,7 +143,7 @@ describe('orch-closeout — selected checkbox', () => {
     if (res.ok) {
       // Phase 11 ticked (checked count 1 → 2); Phase 12 stays open.
       expect((res.content.match(/- \[x\]/g) ?? []).length).toBe(2);
-      expect(res.content).toContain('## Phase 12\n- [ ] Confirm red before implementation.');
+      expect(res.content).toContain('## Phase 12\n- [ ] Manual release gate');
     }
   });
 

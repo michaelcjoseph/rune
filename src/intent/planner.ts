@@ -35,8 +35,8 @@ export interface SpecArtifact {
   title: string;
   /** The scoped spec — scaffolded into `spec.md`. */
   spec: string;
-  /** The phased task breakdown — scaffolded into `tasks.md`; each phase opens with a
-   *  Tests (write first) block. */
+  /** The phased task breakdown — scaffolded into `tasks.md`; each task carries
+   *  its own test strategy metadata. */
   tasks: string;
   /** The test plan — scaffolded into `test-plan.md`. */
   testPlan: string;

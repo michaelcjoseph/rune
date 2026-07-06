@@ -9,11 +9,11 @@
  *
  * Matching mirrors `selectNextTask` exactly — same section tracking, same
  * first-unchecked-in-document-order rule — so the line closeout ticks is provably
- * the same line selection picked. This is what keeps verbatim-repeated boilerplate
- * (e.g. the per-phase "Confirm red before implementation.") from being ambiguous:
- * the section scope disambiguates across phases, and first-match disambiguates
- * within one. (Before this, closeout keyed on text alone and refused as `ambiguous`
- * when boilerplate repeated — the bug that blocked the 2026-06-16 project-14 run.)
+ * the same line selection picked. This is what keeps repeated task text from
+ * being ambiguous: the section scope disambiguates across phases, and first-match
+ * disambiguates within one. (Before this, closeout keyed on text alone and
+ * refused as `ambiguous` when boilerplate repeated — the bug that blocked the
+ * 2026-06-16 project-14 run.)
  *
  * This is the pure SEMANTIC half of closeout (test-plan §3 "Define task closeout
  * semantics"). The effectful half — the closeout commit, clean-worktree

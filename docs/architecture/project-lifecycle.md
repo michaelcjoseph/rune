@@ -60,7 +60,7 @@ The branch is `rune-work/<slug>` cut at the repo HEAD `baseSha`; `node_modules` 
 
 # Phase C — Per-task loop (repeats until no `- [ ]` remains)
 
-`selectNextTask` returns the first unchecked `- [ ]` line in document order; id = slug of the task text (stable across line moves). The verbatim `"Confirm red before implementation."` task short-circuits to a synthetic ready-for-closeout with no role work.
+`selectNextTask` returns the first unchecked `- [ ]` line in document order; id = slug of the task text (stable across line moves). Every unchecked line is a real task that enters the per-task role workflow; test-first behavior is handled inside C2b, where QA authors required tests before coder work.
 
 ## C1 — Task selection
 `src/intent/orch-task-select.ts` `selectNextTask`, driven by the loop in `project-orchestrator.ts` `runProjectOrchestration`. Loop is bounded by `taskCount+1` so a closeout that fails to tick can't spin. Cancellation is checked before each selection and before the finalizer.

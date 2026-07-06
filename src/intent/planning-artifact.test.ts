@@ -37,15 +37,15 @@ const QA_PROJECT_EXEMPLAR = [
 ].join('\n');
 
 describe('sizedTasksToMarkdown', () => {
-  it('emits a Tests (write first) block listing the code-tests-required tasks', () => {
+  it('renders each planned task once without a standalone write-first test block', () => {
     const md = sizedTasksToMarkdown(TASKS);
-    expect(md).toContain('### Tests (write first)');
-    expect(md).toContain('Tests for **p1-core**');
-    expect(md).toContain('Tests for **p2-card**');
-    // The docs-only task is not a write-first test target.
-    expect(md).not.toContain('Tests for **p3-docs**');
-    // The manual/live gate is not an automatable write-first test target.
-    expect(md).not.toContain('Tests for **p4-live-gate**');
+    expect(md).not.toContain('### Tests (write first)');
+    expect(md).not.toContain('Tests for **');
+    expect((md.match(/^- \[ \] \*\*/gm) ?? []).length).toBe(TASKS.length);
+    expect(md).toContain('**p1-core** — Streak core');
+    expect(md).toContain('**p2-card** — Home card');
+    expect(md).toContain('**p3-docs** — README');
+    expect(md).toContain('**p4-live-gate** — Operator verifies the live streak card before release');
   });
 
   it('annotates each task with its test strategy and flags designer-needed', () => {
@@ -64,8 +64,7 @@ describe('sizedTasksToMarkdown', () => {
     expect(md).toContain('## Phase 3 - Release');
     // Phase 1 heading comes before Phase 2.
     expect(md.indexOf('## Phase 1 - Core')).toBeLessThan(md.indexOf('## Phase 2 - UI'));
-    // Each phase carries its own Tests (write first) block.
-    expect((md.match(/### Tests \(write first\)/g) ?? []).length).toBe(3);
+    expect((md.match(/### Implementation/g) ?? []).length).toBe(3);
     // p2-card and p3-docs live under Phase 2, after the Phase 2 heading.
     expect(md.indexOf('**p2-card**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
     expect(md.indexOf('**p3-docs**')).toBeGreaterThan(md.indexOf('## Phase 2 - UI'));
@@ -85,7 +84,7 @@ describe('sizedTasksToMarkdown', () => {
 describe('deriveTestPlan', () => {
   it('groups tasks by test strategy', () => {
     const plan = deriveTestPlan(TASKS);
-    expect(plan).toContain('Tests required (write first)');
+    expect(plan).toContain('Code tests required (QA first)');
     expect(plan).toContain('Docs / config only');
     expect(plan).toContain('**p3-docs**: README');
     expect(plan).toContain('Manual/live release gates');
