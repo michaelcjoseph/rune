@@ -63,6 +63,79 @@ export type DeltaPoint = {
   tools: Record<string, { calls: number; errors: number }>;
 };
 
+/**
+ * Read history records from a JSONL file, oldest-first. Tolerant by design:
+ * missing file → `[]`; corrupt or shape-invalid lines are skipped. When
+ * `sinceMs` is set, only records with `ts >= sinceMs` are returned — callers
+ * computing deltas should widen the window by one flush interval, since
+ * {@link deltaSeries} needs the preceding record as a baseline.
+ */
+export function readMcpMetricsHistory(file: string, opts?: { sinceMs?: number }): McpMetricsHistoryRecord[] {
+  let raw: string;
+  try {
+    raw = readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  const records: McpMetricsHistoryRecord[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const record = parsed as McpMetricsHistoryRecord;
+    if (typeof record.ts !== 'string' || typeof record.bootId !== 'string') continue;
+    if (typeof record.totals !== 'object' || record.totals === null) continue;
+    if (typeof record.tools !== 'object' || record.tools === null) continue;
+    const tsMs = Date.parse(record.ts);
+    if (!Number.isFinite(tsMs)) continue;
+    if (opts?.sinceMs !== undefined && tsMs < opts.sinceMs) continue;
+    records.push(record);
+  }
+  return records;
+}
+
+/**
+ * Restart-aware per-interval deltas between consecutive records. A bootId
+ * change or any total-counter regression marks a restart boundary, where the
+ * newer record's own cumulative values ARE the delta (everything it counted
+ * accrued after the restart). Emits one point per consecutive pair — the
+ * first record in the input is baseline-only.
+ */
+export function deltaSeries(records: McpMetricsHistoryRecord[]): DeltaPoint[] {
+  const points: DeltaPoint[] = [];
+  for (let i = 1; i < records.length; i++) {
+    const prev = records[i - 1];
+    const cur = records[i];
+    if (prev === undefined || cur === undefined) continue;
+    const restarted = cur.bootId !== prev.bootId
+      || cur.totals.calls < prev.totals.calls
+      || cur.totals.errors < prev.totals.errors
+      || cur.totals.timeouts < prev.totals.timeouts;
+    const base = restarted ? undefined : prev;
+    const tools: DeltaPoint['tools'] = {};
+    for (const [name, tool] of Object.entries(cur.tools)) {
+      const prevTool = base?.tools[name];
+      const calls = Math.max(0, tool.calls - (prevTool?.calls ?? 0));
+      const errors = Math.max(0, tool.errors - (prevTool?.errors ?? 0));
+      if (calls > 0 || errors > 0) tools[name] = { calls, errors };
+    }
+    points.push({
+      ts: cur.ts,
+      intervalMs: Math.max(0, Date.parse(cur.ts) - Date.parse(prev.ts)),
+      calls: Math.max(0, cur.totals.calls - (base?.totals.calls ?? 0)),
+      errors: Math.max(0, cur.totals.errors - (base?.totals.errors ?? 0)),
+      timeouts: Math.max(0, cur.totals.timeouts - (base?.totals.timeouts ?? 0)),
+      tools,
+    });
+  }
+  return points;
+}
+
 export interface StartMcpMetricsFlushOpts {
   file: string;
   getSnapshot: () => McpMetricsSnapshot;
