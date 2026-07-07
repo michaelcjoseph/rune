@@ -8,9 +8,16 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
+vi.mock('node:fs', () => ({
+  readFileSync: vi.fn(() => {
+    throw new Error('not mocked');
+  }),
+}));
+
 const { execFileSync } = await import('node:child_process');
+const { readFileSync } = await import('node:fs');
 const searchModule = await import('./search.js');
-const { searchVault } = searchModule;
+const { searchVault, rankWikiPages, searchInFiles } = searchModule;
 const searchRepo = (searchModule as unknown as {
   searchRepo?: (query: string, options: { repoPath: string; maxResults?: number }) => Array<{
     file: string;
@@ -20,6 +27,17 @@ const searchRepo = (searchModule as unknown as {
 }).searchRepo;
 
 const execMock = execFileSync as unknown as ReturnType<typeof vi.fn>;
+const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+
+/** Mock `rg -il` per term: args[1][4] is the fixed-string term. */
+function mockFileListsByTerm(filesByTerm: Record<string, string[]>): void {
+  execMock.mockImplementation((_bin: string, args: string[]) => {
+    const term = args[4]!;
+    const files = filesByTerm[term];
+    if (!files || files.length === 0) throw new Error('no matches');
+    return Buffer.from(files.join('\n') + '\n');
+  });
+}
 
 describe('kb/search', () => {
   beforeEach(() => {
@@ -135,5 +153,127 @@ describe('kb/search', () => {
       expect.arrayContaining(['/test/vault']),
       expect.any(Object),
     );
+  });
+});
+
+describe('rankWikiPages', () => {
+  beforeEach(() => {
+    execMock.mockReset();
+    readFileMock.mockReset();
+    readFileMock.mockImplementation(() => {
+      throw new Error('not mocked');
+    });
+  });
+
+  it('a rare term outweighs a generic term matching many files', () => {
+    mockFileListsByTerm({
+      genestoux: ['/test/vault/knowledge/wiki/entities/julien-genestoux.md'],
+      notes: [
+        '/test/vault/knowledge/wiki/topics/noise-a.md',
+        '/test/vault/knowledge/wiki/topics/noise-b.md',
+        '/test/vault/knowledge/wiki/topics/noise-c.md',
+      ],
+    });
+
+    const ranked = rankWikiPages(['notes', 'genestoux']);
+
+    expect(ranked[0]!.file).toBe('knowledge/wiki/entities/julien-genestoux.md');
+    expect(ranked[0]!.score).toBeCloseTo(1);
+    expect(ranked[1]!.score).toBeCloseTo(1 / 3);
+    expect(ranked).toHaveLength(4);
+  });
+
+  it('distinct-term coverage accumulates per file', () => {
+    mockFileListsByTerm({
+      peter: [
+        '/test/vault/knowledge/wiki/entities/peter-watts.md',
+        '/test/vault/knowledge/wiki/entities/peter-roth.md',
+      ],
+      watts: [
+        '/test/vault/knowledge/wiki/entities/peter-watts.md',
+        '/test/vault/knowledge/wiki/topics/energy-units.md',
+      ],
+    });
+
+    const ranked = rankWikiPages(['peter', 'watts']);
+
+    expect(ranked[0]).toMatchObject({
+      file: 'knowledge/wiki/entities/peter-watts.md',
+      matchedTerms: ['peter', 'watts'],
+    });
+    expect(ranked[0]!.score).toBeCloseTo(1);
+  });
+
+  it('caps at maxResults and skips terms whose rg call fails', () => {
+    mockFileListsByTerm({
+      // 'missing' is absent → its rg call throws and is skipped
+      common: Array.from({ length: 12 }, (_, i) => `/test/vault/knowledge/wiki/topics/t${i}.md`),
+    });
+
+    const ranked = rankWikiPages(['missing', 'common'], { maxResults: 5 });
+    expect(ranked).toHaveLength(5);
+  });
+
+  it('applies the frontmatter type filter to the ranked list', () => {
+    mockFileListsByTerm({
+      relay: [
+        '/test/vault/knowledge/wiki/topics/relay-topic.md',
+        '/test/vault/knowledge/wiki/entities/relay.md',
+      ],
+    });
+    readFileMock.mockImplementation((path: string) => {
+      if (String(path).includes('entities/relay.md')) return '---\ntype: entity\n---\nbody';
+      return '---\ntype: topic\n---\nbody';
+    });
+
+    const ranked = rankWikiPages(['relay'], { type: 'entity' });
+
+    expect(ranked).toEqual([
+      expect.objectContaining({ file: 'knowledge/wiki/entities/relay.md' }),
+    ]);
+  });
+
+  it('returns [] for empty terms without spawning rg', () => {
+    expect(rankWikiPages([])).toEqual([]);
+    expect(execMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('searchInFiles', () => {
+  beforeEach(() => {
+    execMock.mockReset();
+  });
+
+  it('fetches match lines from the given vault-relative files', () => {
+    const rgOutput = JSON.stringify({
+      type: 'match',
+      data: {
+        path: { text: '/test/vault/knowledge/wiki/entities/x.md' },
+        line_number: 7,
+        lines: { text: 'the matching line' },
+      },
+    });
+    execMock.mockReturnValue(Buffer.from(rgOutput));
+
+    const results = searchInFiles('pattern', ['knowledge/wiki/entities/x.md'], { maxPerFile: 2 });
+
+    expect(results).toEqual([
+      { file: 'knowledge/wiki/entities/x.md', line: 7, content: 'the matching line' },
+    ]);
+    expect(execMock).toHaveBeenCalledWith(
+      'rg',
+      expect.arrayContaining(['--max-count', '2', '/test/vault/knowledge/wiki/entities/x.md']),
+      expect.any(Object),
+    );
+  });
+
+  it('returns [] for an empty file list without spawning rg', () => {
+    expect(searchInFiles('pattern', [])).toEqual([]);
+    expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it('drops file paths that escape the vault', () => {
+    expect(searchInFiles('pattern', ['../../etc/passwd'])).toEqual([]);
+    expect(execMock).not.toHaveBeenCalled();
   });
 });

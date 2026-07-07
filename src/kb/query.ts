@@ -1,6 +1,6 @@
 import { runAgent } from '../ai/claude.js';
 import { readVaultFile } from '../vault/files.js';
-import { searchVault, searchWithFilter } from './search.js';
+import { rankWikiPages, searchInFiles, searchVault, searchWithFilter } from './search.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('kb-query');
@@ -55,22 +55,34 @@ const STOPWORDS = new Set([
   'tell', 'explain', 'define', 'describe', 'compare', 'know', 'mean', 'use',
 ]);
 
-/** Distill a natural-language question into a ripgrep alternation of its
- *  content-bearing terms (`paul|graham`). A raw question almost never appears
- *  verbatim in page text, so searching it literally resolves nothing — the
- *  alternation is what gives the deterministic retrieval real recall. Returns
- *  null when no content-bearing term survives (callers fall back to the raw
- *  question). */
-function searchPatternFor(question: string): string | null {
+/** Distill a natural-language question into its content-bearing terms.
+ *  A raw question almost never appears verbatim in page text, so searching it
+ *  literally resolves nothing — the terms are what give the deterministic
+ *  retrieval real recall. Returns [] when nothing content-bearing survives
+ *  (callers fall back to the raw question). */
+function contentTerms(question: string): string[] {
   const terms = question
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
-  if (terms.length === 0) return null;
-  return [...new Set(terms)]
-    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|');
+  return [...new Set(terms)];
+}
+
+/** Ripgrep alternation of the given terms (`paul|graham`), regex-escaped. */
+function alternationOf(terms: string[]): string {
+  return terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+}
+
+/** Cap on any single matched line quoted into the prompt — the broad-term
+ *  alternation can hit enormous single-line files (minified JSON stores,
+ *  long journal lines), which would otherwise blow up the prompt. */
+const MAX_SNIPPET_CHARS = 300;
+
+function clipSnippet(content: string): string {
+  return content.length > MAX_SNIPPET_CHARS
+    ? `${content.slice(0, MAX_SNIPPET_CHARS)}…`
+    : content;
 }
 
 /** Wiki page slug for a vault-relative path: basename minus `.md`. */
@@ -114,14 +126,41 @@ export async function queryKB(
 ): Promise<{ success: boolean; answer: string }> {
   log.info('Querying KB', { question: question.slice(0, 100) });
 
-  // Filtered wiki search for targeted results
+  // Candidate resolution. With content terms, pages are RANKED by weighted
+  // distinct-term coverage (rare terms dominate — see rankWikiPages) and
+  // snippets are fetched from those ranked files; an unranked alternation
+  // search would return whatever files ripgrep walks first, which for a long
+  // multi-clause question is mostly noise. Without content terms (an
+  // all-stopword question), fall back to the raw-question filtered search.
   const typeFilter = inferTypeFilter(question);
-  const searchPattern = searchPatternFor(question) ?? question;
-  const filteredResults = searchWithFilter(
-    searchPattern,
-    typeFilter ? { type: typeFilter } : undefined,
-    { maxResults: 10 },
-  );
+  const terms = contentTerms(question);
+  const searchPattern = terms.length > 0 ? alternationOf(terms) : question;
+  const matchesByFile = new Map<string, string[]>();
+  let candidateFiles: string[];
+  if (terms.length > 0) {
+    const ranked = rankWikiPages(terms, {
+      ...(typeFilter ? { type: typeFilter } : {}),
+      maxResults: 10,
+    });
+    candidateFiles = ranked.map((r) => r.file);
+    for (const hit of searchInFiles(searchPattern, candidateFiles, { maxPerFile: 2 })) {
+      const list = matchesByFile.get(hit.file) ?? [];
+      list.push(hit.content);
+      matchesByFile.set(hit.file, list);
+    }
+  } else {
+    const filteredResults = searchWithFilter(
+      question,
+      typeFilter ? { type: typeFilter } : undefined,
+      { maxResults: 10 },
+    );
+    candidateFiles = [...new Set(filteredResults.map((r) => r.file))];
+    for (const r of filteredResults) {
+      const list = matchesByFile.get(r.file) ?? [];
+      list.push(r.content);
+      matchesByFile.set(r.file, list);
+    }
+  }
 
   // Broader vault search for additional context
   const vaultResults = deps.searchVault
@@ -138,8 +177,7 @@ export async function queryKB(
   let candidateContext = '';
   let bodiesContext = '';
   let indexFallbackContext = '';
-  if (filteredResults.length > 0) {
-    const candidateFiles = [...new Set(filteredResults.map((r) => r.file))];
+  if (candidateFiles.length > 0) {
     const indexContent = readVaultFileSafe('knowledge/index.md');
     const summaries = indexContent
       ? extractIndexSummaries(indexContent, candidateFiles.map(slugOf))
@@ -148,9 +186,8 @@ export async function queryKB(
       const slug = slugOf(file);
       const summary = summaries.get(slug.toLowerCase());
       const header = summary ? `- [[${slug}]] (${file}) — ${summary}` : `- [[${slug}]] (${file})`;
-      const matches = filteredResults
-        .filter((r) => r.file === file)
-        .map((r) => `  - match: "${r.content}"`);
+      const matches = (matchesByFile.get(file) ?? [])
+        .map((content) => `  - match: "${clipSnippet(content)}"`);
       return [header, ...matches].join('\n');
     });
     candidateContext = `\n\nPre-resolved candidate wiki pages (deterministic index search, type: ${typeFilter || 'all'}):\n${candidateLines.join('\n')}`;
@@ -180,7 +217,7 @@ export async function queryKB(
   }
 
   const vaultContext = vaultResults.length > 0
-    ? `\n\nBroader vault search results:\n${vaultResults.map((r) => `- ${r.file}: ${r.content}`).join('\n')}`
+    ? `\n\nBroader vault search results:\n${vaultResults.map((r) => `- ${r.file}: ${clipSnippet(r.content)}`).join('\n')}`
     : '';
 
   const prompt = `Answer the following question using ONLY the pre-retrieved knowledge base and vault context below.

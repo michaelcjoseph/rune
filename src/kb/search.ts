@@ -147,6 +147,130 @@ export function searchRepo(
   }
 }
 
+export interface RankedWikiPage {
+  /** Vault-relative path (knowledge/wiki/<category>/<slug>.md). */
+  file: string;
+  score: number;
+  matchedTerms: string[];
+}
+
+/**
+ * Rank wiki pages by weighted distinct-term coverage. Each term is matched
+ * with a fast `rg -il` file-list search over knowledge/wiki; a term's weight
+ * is 1 / (number of files it matches), so rare, distinctive terms dominate
+ * and near-ubiquitous words contribute almost nothing. This is what keeps a
+ * long multi-clause question's generic words ("notes", "conversations") from
+ * drowning its rare ones ("calldata", a person's surname) — an unweighted
+ * alternation search returns whatever files ripgrep walks first.
+ */
+export function rankWikiPages(
+  terms: string[],
+  opts?: { type?: string; maxResults?: number },
+): RankedWikiPage[] {
+  const maxResults = opts?.maxResults ?? 10;
+  const wikiDir = join(config.VAULT_DIR, 'knowledge', 'wiki');
+  const scores = new Map<string, { score: number; matchedTerms: string[] }>();
+
+  for (const term of terms) {
+    let output: string;
+    try {
+      output = execFileSync(
+        'rg',
+        ['-il', '--glob', '*.md', '--fixed-strings', term, wikiDir],
+        { timeout: 10_000, maxBuffer: 1024 * 1024 },
+      ).toString();
+    } catch {
+      continue; // no matches for this term, or rg unavailable
+    }
+    const files = output.split('\n').filter(Boolean);
+    if (files.length === 0) continue;
+    const weight = 1 / files.length;
+    for (const filePath of files) {
+      const relative = filePath.startsWith(config.VAULT_DIR)
+        ? filePath.slice(config.VAULT_DIR.length + 1)
+        : filePath;
+      const entry = scores.get(relative) ?? { score: 0, matchedTerms: [] };
+      entry.score += weight;
+      entry.matchedTerms.push(term);
+      scores.set(relative, entry);
+    }
+  }
+
+  const ranked = [...scores.entries()]
+    .map(([file, entry]) => ({ file, ...entry }))
+    .sort((a, b) => b.score - a.score);
+
+  if (!opts?.type) return ranked.slice(0, maxResults);
+
+  const filtered: RankedWikiPage[] = [];
+  for (const page of ranked) {
+    if (parseFrontmatter(page.file)?.type !== opts.type) continue;
+    filtered.push(page);
+    if (filtered.length >= maxResults) break;
+  }
+  return filtered;
+}
+
+/**
+ * Fetch matching lines from a specific set of vault-relative files (used to
+ * pull snippets for already-ranked candidate pages, rather than whatever
+ * files a vault-wide search happens to visit first).
+ */
+export function searchInFiles(
+  pattern: string,
+  files: string[],
+  options?: { maxPerFile?: number },
+): SearchResult[] {
+  if (files.length === 0) return [];
+  const maxPerFile = options?.maxPerFile ?? 2;
+  const resolvedRoot = resolve(config.VAULT_DIR);
+  const targets: string[] = [];
+  for (const file of files) {
+    const full = resolve(join(config.VAULT_DIR, file));
+    if (full !== resolvedRoot && !full.startsWith(resolvedRoot + sep)) continue;
+    targets.push(full);
+  }
+  if (targets.length === 0) return [];
+
+  try {
+    const output = execFileSync(
+      'rg',
+      ['--json', '-i', '--max-count', String(maxPerFile), pattern, ...targets],
+      { timeout: 10_000, maxBuffer: 1024 * 1024 },
+    ).toString();
+
+    const results: SearchResult[] = [];
+    for (const line of output.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as {
+          type: string;
+          data?: {
+            path?: { text?: string };
+            line_number?: number;
+            lines?: { text?: string };
+          };
+        };
+        if (parsed.type !== 'match' || !parsed.data) continue;
+        const filePath = parsed.data.path?.text || '';
+        const relative = filePath.startsWith(config.VAULT_DIR)
+          ? filePath.slice(config.VAULT_DIR.length + 1)
+          : filePath;
+        results.push({
+          file: relative,
+          line: parsed.data.line_number || 0,
+          content: (parsed.data.lines?.text || '').trim(),
+        });
+      } catch {
+        // Skip unparseable lines
+      }
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Parse YAML frontmatter from a markdown file.
  * Returns undefined if no frontmatter found.

@@ -94,6 +94,17 @@ vi.mock('../kb/search.js', () => ({
   searchWithFilter: vi.fn().mockReturnValue([]),
 }));
 
+const logWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock('../utils/logger.js', () => ({
+  flushLogger: vi.fn(async () => {}),
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: logWarnSpy,
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 // ---------------------------------------------------------------------------
 // Static imports (after vi.mock hoisting)
 // ---------------------------------------------------------------------------
@@ -498,5 +509,38 @@ describe('server/mcp-transport (§6 Streamable HTTP transport)', () => {
     await mcpHandler.closeAll();
     expect(mcpHandler.getSessionStats()).toEqual([]);
     expect(mcpHandler.getActiveSessionCount()).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 10 — a stale session id (e.g. from before a daemon restart) is
+  // rejected with 404 AND leaves a warn log. The log matters operationally:
+  // without it, a post-restart client on a dead session surfaces client-side
+  // as an opaque tool failure with zero server-side trace.
+  // -------------------------------------------------------------------------
+  it('10: unknown mcp-session-id → 404 with a warn log', async () => {
+    await requireMcpTransport();
+
+    const { server, port } = await startWithMcp({ verifyBearer: () => true });
+    openServers.push(server);
+    logWarnSpy.mockClear();
+
+    const result = await rawReq({
+      host: '127.0.0.1',
+      port,
+      path: '/mcp',
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'mcp-session-id': 'deadbeef-0000-4000-8000-000000000000',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+
+    expect(result.status).toBe(404);
+    expect(result.body).toContain('Unknown MCP session');
+    expect(logWarnSpy).toHaveBeenCalledWith(
+      'Unknown MCP session rejected',
+      expect.objectContaining({ sessionId: 'deadbeef', method: 'POST' }),
+    );
   });
 });
