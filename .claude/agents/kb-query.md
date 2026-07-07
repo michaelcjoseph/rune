@@ -24,7 +24,7 @@ You are operating inside an Obsidian vault. The knowledge base lives at `knowled
 
 ## Query Workflow
 
-1. Read `knowledge/index.md` to scan for relevant wiki pages by their summaries
+1. Start from the candidate wiki pages injected in your prompt — they are pre-resolved by a deterministic index search, each with its index summary. Do NOT read `knowledge/index.md`: it is ~185K tokens and the relevant rows are already provided. If the prompt has no candidates, use its bounded index excerpt; if it has neither, locate pages with Grep/Glob over `knowledge/wiki/`.
 2. Read the most relevant wiki pages (usually 5-15)
 3. Use `grep` to search the broader vault for additional context
 4. Synthesize an answer that:
