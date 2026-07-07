@@ -478,20 +478,57 @@ function buildOrchestrationDeps(args: {
     // Task-scoped closeout checks: run the product's validation commands. (For
     // v1 these are the same fast checks the finalizer gate uses.) No commands ⇒
     // pass — the project-level finalizer gate still owns the full merge gate.
-    runCloseoutChecks: async () => {
+    runCloseoutChecks: async (task) => {
       const validation = await defaultRunValidationCommands(
         args.validationCommands,
         sandbox.worktree,
         config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
       );
       if (validation.ok) return true;
+      const scrub = (text: string): string => redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
+      const command = scrub(validation.command);
+      const outputTail = scrub(validation.result.outputTail);
+      const outcome = validation.result.timedOut ? 'timed out' : `exit ${validation.result.exitCode}`;
+      // Durable artifact in the run dir — the worktree (and with it the diff
+      // that caused the red suite) is GC'd, so this file is the only place the
+      // failing output survives. Best-effort: never blocks the red verdict.
+      try {
+        const runDir = join(args.workRunsDir, descriptor.id);
+        mkdirSync(runDir, { recursive: true });
+        appendFileSync(
+          join(runDir, CLOSEOUT_VALIDATION_FAILURE_FILE),
+          `=== closeout validation failure @ ${new Date().toISOString()} ===\n` +
+            `task: ${task.id} — ${task.text}\n` +
+            `command: ${command}\n` +
+            `outcome: ${outcome}\n\n` +
+            `${outputTail || '(no output captured)'}\n\n`,
+          'utf8',
+        );
+      } catch (err) {
+        log.error('orchestrated-work-runner: closeout validation artifact write failed', {
+          id: descriptor.id,
+          error: (err as Error).message,
+        });
+      }
       log.warn('orchestrated-work-runner: closeout validation command failed', {
         id: descriptor.id,
         projectSlug,
         product,
-        command: redactSecrets(scrubAbsolutePaths(scrubPathsInText(validation.command))),
+        command,
         exitCode: validation.result.exitCode,
         timedOut: validation.result.timedOut,
+        outputTail: outputTail.slice(-CLOSEOUT_LOG_TAIL_CHARS),
+      });
+      args.emit?.({
+        kind: 'activity',
+        data: {
+          event: 'closeout-validation-failed',
+          taskId: task.id,
+          command,
+          exitCode: validation.result.exitCode,
+          timedOut: validation.result.timedOut,
+          line: `closeout validation failed: ${command} (${outcome}) — output tail saved to ${CLOSEOUT_VALIDATION_FAILURE_FILE}`,
+        },
       });
       return false;
     },
@@ -672,6 +709,12 @@ export async function fileTerminalBugsToBacklog(opts: {
 const ORCHESTRATED_TASK_RECORDS_FILE = 'task-records.jsonl';
 const ORCHESTRATED_CURSOR_FILE = 'cursor.json';
 const ORCHESTRATED_NOTIFICATION_PUBLICATIONS_FILE = 'notification-publications.jsonl';
+// Durable evidence for a failed closeout validation: the sandbox worktree is
+// GC'd on a blocked run, so the failing command's output tail written here is
+// the only post-mortem trace of WHICH test failed. Append-mode so a future
+// closeout repair loop can record multiple attempts.
+const CLOSEOUT_VALIDATION_FAILURE_FILE = 'closeout-validation-failure.txt';
+const CLOSEOUT_LOG_TAIL_CHARS = 2_000;
 
 type OrchestratedNotificationPublicationKind = 'closeout-progress' | 'merge-success';
 type OrchestratedNotificationPublicationStatus = 'published' | 'skipped' | 'error';

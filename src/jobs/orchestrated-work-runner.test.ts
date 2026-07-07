@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PROJECT_ROOT } from '../config.js';
 import type { GitRunner } from './sandbox-runtime.js';
 import type {
   FinalizerEffects,
@@ -50,7 +51,7 @@ const mockRunFinalizer = vi.hoisted(() =>
 const mockRunGate = vi.hoisted(() => vi.fn(async (): Promise<GateResult> => ({ ok: true })));
 type MockValidationCommandListResult =
   | { ok: true }
-  | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean } };
+  | { ok: false; command: string; result: { exitCode: number | null; timedOut: boolean; outputTail: string } };
 const mockRunValidationCommands = vi.hoisted(() =>
   vi.fn(async (
     _commands: readonly string[],
@@ -1245,7 +1246,14 @@ describe('orchestratedWorkApplier', () => {
       mockRunValidationCommands.mockResolvedValueOnce({
         ok: false,
         command: 'npm test',
-        result: { exitCode: 1, timedOut: false },
+        result: {
+          exitCode: 1,
+          timedOut: false,
+          outputTail:
+            'FAIL src/streak.test.ts > renders the card\n' +
+            'AssertionError: expected 3 to be 2\n' +
+            ` at ${PROJECT_ROOT}/src/streak.test.ts:42`,
+        },
       });
 
       const runGit = vi.fn(async (gitArgs: string[]) => {
@@ -1306,6 +1314,28 @@ describe('orchestratedWorkApplier', () => {
         expect(progress).toEqual([]);
         expect(tasksAtDestroy).toContain('- [ ] Build the streak core');
         expect(destroyed).toBe(true);
+
+        // The failing output survives the worktree GC: a durable, path-scrubbed
+        // artifact in the run dir names the failing test.
+        const artifactPath = join(artifactsDir, runId, 'closeout-validation-failure.txt');
+        expect(existsSync(artifactPath)).toBe(true);
+        const artifact = readFileSync(artifactPath, 'utf8');
+        expect(artifact).toContain('npm test');
+        expect(artifact).toContain('FAIL src/streak.test.ts > renders the card');
+        expect(artifact).toContain('Build the streak core');
+        expect(artifact).not.toContain(PROJECT_ROOT);
+
+        // The failure is also visible live + in the transcript via an activity event.
+        expect(events).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'activity',
+            data: expect.objectContaining({
+              event: 'closeout-validation-failed',
+              taskId: 'build-the-streak-core',
+              line: expect.stringContaining('closeout-validation-failure.txt'),
+            }),
+          }),
+        ]));
       } finally {
         if (priorProductsFile === undefined) delete process.env['PRODUCTS_CONFIG_FILE'];
         else process.env['PRODUCTS_CONFIG_FILE'] = priorProductsFile;

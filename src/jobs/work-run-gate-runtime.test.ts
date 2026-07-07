@@ -25,6 +25,7 @@ import { defaultRunGit } from './sandbox-runtime.js';
 import {
   runGate,
   runValidationCommands,
+  MAX_VALIDATION_OUTPUT_TAIL_CHARS,
   type GateRuntimeOpts,
   type GateRuntimeIO,
   type ValidationCommandResult,
@@ -128,7 +129,7 @@ afterEach(() => {
 describe('runGate — test before mutating main (P1.5)', () => {
   it('a RED gate (validation fails) leaves the base-branch ref AND working tree byte-for-byte unchanged', async () => {
     const before = baseState();
-    const io = gateIO({ exitCode: 1, timedOut: false });
+    const io = gateIO({ exitCode: 1, timedOut: false, outputTail: '' });
 
     // RED now: runGate throws notImplemented. GREEN when the impl runs the
     // failing validation in the integration worktree and returns tests-red.
@@ -148,7 +149,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
 
   it('even a GREEN gate does NOT merge: the gate only decides — the merge is the finalizer\'s post-gate step', async () => {
     const before = baseState();
-    const io = gateIO({ exitCode: 0, timedOut: false });
+    const io = gateIO({ exitCode: 0, timedOut: false, outputTail: '' });
 
     // RED now: notImplemented. GREEN when the impl validates in the integration
     // worktree, finds everything clean, and returns { ok: true } — having
@@ -170,7 +171,7 @@ describe('runGate — test before mutating main (P1.5)', () => {
         _command: string,
         _cwd: string,
         _timeoutMs: number,
-      ): Promise<ValidationCommandResult> => ({ exitCode: 0, timedOut: false }),
+      ): Promise<ValidationCommandResult> => ({ exitCode: 0, timedOut: false, outputTail: '' }),
     );
     const io: GateRuntimeIO = { runGit: defaultRunGit, runValidationCommand };
 
@@ -220,5 +221,36 @@ describe('runValidationCommands', () => {
       command: 'node -e setTimeout(()=>{},1000)',
       result: { timedOut: true },
     });
+  });
+
+  // Command strings are split on whitespace (argv-array spawn, no shell), so
+  // the `-e` payloads below deliberately contain no spaces.
+  it("captures the failing command's stdout and stderr in outputTail", async () => {
+    const command = 'node -e console.error("ERR-MARKER");console.log("OUT-MARKER");process.exit(7)';
+    const listResult = await runValidationCommands([command], tmpRoot, 5_000);
+    expect(listResult).toMatchObject({
+      ok: false,
+      command,
+      result: { exitCode: 7, timedOut: false },
+    });
+    if (listResult.ok) throw new Error('expected a failed validation');
+    expect(listResult.result.outputTail).toContain('ERR-MARKER');
+    expect(listResult.result.outputTail).toContain('OUT-MARKER');
+  });
+
+  it('bounds outputTail to MAX_VALIDATION_OUTPUT_TAIL_CHARS keeping the end', async () => {
+    const command = 'node -e process.stdout.write("x".repeat(30000)+"TAIL-END");process.exit(1)';
+    const listResult = await runValidationCommands([command], tmpRoot, 5_000);
+    if (listResult.ok) throw new Error('expected a failed validation');
+    expect(listResult.result.outputTail.length).toBe(MAX_VALIDATION_OUTPUT_TAIL_CHARS);
+    expect(listResult.result.outputTail.endsWith('TAIL-END')).toBe(true);
+  });
+
+  it('a timed-out command still captures the partial output tail', async () => {
+    const command = 'node -e process.stdout.write("EARLY-MARKER");setTimeout(()=>{},120000)';
+    const listResult = await runValidationCommands([command], tmpRoot, 1_000);
+    if (listResult.ok) throw new Error('expected a failed validation');
+    expect(listResult.result.timedOut).toBe(true);
+    expect(listResult.result.outputTail).toContain('EARLY-MARKER');
   });
 });
