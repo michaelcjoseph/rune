@@ -122,7 +122,7 @@ D3 runs entirely in a **throwaway detached integration worktree** at `baseBranch
 | State | Meaning | Trigger |
 |---|---|---|
 | **completed / finalized** | merged to `main`, project marked Done | D3 green + merge/push landed |
-| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, or merge-gate refusal |
+| **held** | branch-complete, branch + worktree preserved, no merge; a later Start auto-reclaims a **clean** preserved worktree (`createWorktree` removes + re-adds it), while a **dirty** one refuses with commit-or-discard guidance — uncommitted work is never auto-destroyed | non-reversible high/critical finding, operational failure, or merge-gate refusal |
 | **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; closeout repair exhaustion (WIP-committed); `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
 | **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, or loop non-convergence |
 | **failed** | hard failure | worktree-create error, orchestration throw, user cancel |

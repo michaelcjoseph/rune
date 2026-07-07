@@ -926,8 +926,10 @@ describe('createWorktree', () => {
     ).rejects.toThrow(new RegExp(expectedPath.replace(/\//g, '\\/'), 'i'));
   });
 
-  it('throws before shelling out when the worktree path already exists on disk', async () => {
+  it('throws when the existing path is NOT a registered worktree (the orphan sweep owns it)', async () => {
     const configPath = writeProductsJson(tmpDir);
+    // Blanket empty stdout → the registration probe sees no registered
+    // worktrees, so the original orphan-dir throw is preserved.
     const runGit = makeRunGit();
 
     // Use the actual tmp dir as the worktree root so the path will exist
@@ -943,10 +945,76 @@ describe('createWorktree', () => {
         productsConfigPath: configPath,
         runGit,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/already exists/);
 
-    // runGit must not have been called
-    expect(runGit).not.toHaveBeenCalled();
+    // Only the registration probe ran — never a worktree add or remove.
+    const gitSubcommands = runGit.mock.calls.map((call) => call[0]);
+    expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(false);
+    expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
+  });
+
+  it('reclaims a clean preserved (registered) worktree: removes it, then proceeds', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = tmpDir;
+    const existingPath = join(worktreeRoot, 'aura', '01-growth');
+    mkdirSync(existingPath, { recursive: true });
+
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'worktree' && args.includes('--porcelain')) {
+        return { stdout: porcelainListing(existingPath), stderr: '' };
+      }
+      if (args[0] === 'status') return { stdout: '', stderr: '' }; // clean
+      return { stdout: '', stderr: '' };
+    });
+
+    const spec = await createWorktree({
+      product: 'aura',
+      project: '01-growth',
+      worktreeRoot,
+      productsConfigPath: configPath,
+      runGit,
+    });
+
+    expect(spec.worktree).toBe(existingPath);
+    const gitSubcommands = runGit.mock.calls.map((call) => call[0]);
+    const removeIndex = gitSubcommands.findIndex(
+      (args) => args[0] === 'worktree' && args[1] === 'remove' && args[2] === '--force' && args[3] === existingPath,
+    );
+    const addIndex = gitSubcommands.findIndex(
+      (args) => args[0] === 'worktree' && args[1] === 'add',
+    );
+    expect(removeIndex).toBeGreaterThanOrEqual(0);
+    expect(addIndex).toBeGreaterThan(removeIndex);
+  });
+
+  it('refuses to reclaim a dirty preserved worktree and never destroys it', async () => {
+    const configPath = writeProductsJson(tmpDir);
+    const worktreeRoot = tmpDir;
+    const existingPath = join(worktreeRoot, 'aura', '01-growth');
+    mkdirSync(existingPath, { recursive: true });
+
+    const runGit = vi.fn<GitRunner>(async (args: string[]) => {
+      if (args[0] === 'worktree' && args.includes('--porcelain')) {
+        return { stdout: porcelainListing(existingPath), stderr: '' };
+      }
+      if (args[0] === 'status') return { stdout: ' M src/foo.ts\n', stderr: '' }; // dirty
+      return { stdout: '', stderr: '' };
+    });
+
+    await expect(
+      createWorktree({
+        product: 'aura',
+        project: '01-growth',
+        worktreeRoot,
+        productsConfigPath: configPath,
+        runGit,
+      }),
+    ).rejects.toThrow(/uncommitted changes/);
+
+    // Fail-closed: nothing was removed, nothing was added.
+    const gitSubcommands = runGit.mock.calls.map((call) => call[0]);
+    expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'remove')).toBe(false);
+    expect(gitSubcommands.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(false);
   });
 });
 
