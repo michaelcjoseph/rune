@@ -96,7 +96,7 @@ Ordered so every commit is finalizer-ready:
 4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
 5. `verifyCleanWorktree` — `git status --porcelain` empty.
 
-Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → bounded coder repair loop** (2 re-runs with the failing output tail as gate feedback), still red after 3 attempts → best-effort WIP commit (`rune(<product>): WIP — closeout blocked — <task>`) + operational **hold** (branch + worktree preserved); worktree not clean → **hold**.
+Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → bounded coder repair loop** (2 re-runs with the failing output tail as gate feedback), still red after 3 attempts → best-effort WIP commit (`rune(<product>): WIP — closeout blocked — <task>`) + **parked** (`blocked-on-human`; branch + worktree preserved, releasable via the standard release path — release cold-finalizes and removes the worktree so a later Start can re-dispatch); worktree not clean → **hold**.
 
 ## C4 — Advance / loop
 Re-read `tasks.md`; ticked task skipped, next selected. No `- [ ]` remaining = **branch-complete** → Phase D.
@@ -122,8 +122,8 @@ D3 runs entirely in a **throwaway detached integration worktree** at `baseBranch
 | State | Meaning | Trigger |
 |---|---|---|
 | **completed / finalized** | merged to `main`, project marked Done | D3 green + merge/push landed |
-| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, closeout repair exhaustion (WIP-committed), or merge-gate refusal |
-| **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
+| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, or merge-gate refusal |
+| **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; closeout repair exhaustion (WIP-committed); `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
 | **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, or loop non-convergence |
 | **failed** | hard failure | worktree-create error, orchestration throw, user cancel |
 

@@ -21,8 +21,9 @@
  * skipped. An unavailable finalizer holds (records the payload, no self-merge).
  * A failed closeout CHECK is the one repairable stop: the failing validation
  * output feeds back to the coder as gate feedback for up to CLOSEOUT_REPAIR_CAP
- * whole-workflow re-runs; exhaustion WIP-commits the worktree and holds
- * (branch + worktree preserved) instead of failing destructively.
+ * whole-workflow re-runs; exhaustion WIP-commits the worktree and PARKS
+ * blocked-on-human (branch + worktree preserved, releasable via the standard
+ * release path) instead of failing destructively.
  *
  * Pure over its INJECTED effects: it reads/writes project state, runs the
  * workflow, commits, and finalizes only through `OrchestrationDeps`, so the whole
@@ -254,18 +255,40 @@ export async function runProjectOrchestration(
     }
     if (closeout.kind === 'blocked') {
       if (closeout.closeoutFailure !== undefined) {
-        // Preserve the work BEFORE the terminal: a held run keeps branch and
-        // worktree, and the WIP commit survives even a later manual worktree
-        // cleanup — the resume path checks the branch tip back out.
+        // Preserve the work BEFORE the terminal: the WIP commit survives even a
+        // later worktree cleanup — the resume path checks the branch tip back out.
         const wip = await commitWipSafely(deps, task);
         const attempts = 1 + CLOSEOUT_REPAIR_CAP;
-        return buildOperationalHold(
-          deps,
-          wip === null
-            ? `closeout checks failed after ${attempts} attempts`
-            : `closeout checks failed after ${attempts} attempts; WIP preserved as ${wip.sha.slice(0, 7)}`,
-          taskRecords,
-        );
+        const reason = wip === null
+          ? `closeout checks failed after ${attempts} attempts`
+          : `closeout checks failed after ${attempts} attempts; WIP preserved as ${wip.sha.slice(0, 7)}`;
+        // PARK (blocked-on-human), do not hold: a held terminal writes a
+        // `completed` supervision row the release path cannot see, and its
+        // preserved worktree stays git-registered — never swept by the orphan
+        // sweep — so the next Start for this project would die on
+        // `createWorktree: target path already exists`. Parking keeps the run
+        // visibly blocked and releasable: release cold-finalizes the clean
+        // worktree (classify partial; the merge gate refuses on
+        // tasks-remaining), removes the worktree, and frees the project slot
+        // for a re-dispatch that resumes the branch tip. (Distinct from the
+        // Phase 14 removal of EVIDENCE-driven per-task parks — this is a
+        // Rune-owned closeout terminal, not a task-evidence conversion.)
+        if (deps.worktreePath !== undefined) {
+          return {
+            kind: 'blocked',
+            reason,
+            task,
+            parked: {
+              status: 'blocked-on-human',
+              branch: deps.branch,
+              worktreePath: deps.worktreePath,
+              preserveBranch: true,
+              preserveWorktree: true,
+            },
+          };
+        }
+        // No worktree path wired (fixture-only) — preserved hold fallback.
+        return buildOperationalHold(deps, reason, taskRecords);
       }
       return buildOperationalHold(deps, closeout.reason, taskRecords);
     }

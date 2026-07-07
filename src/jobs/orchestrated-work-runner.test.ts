@@ -1350,7 +1350,7 @@ describe('orchestratedWorkApplier', () => {
       }
     });
 
-    it('exhausts closeout repair, WIP-commits the worktree, and holds with the worktree preserved', async () => {
+    it('exhausts closeout repair, WIP-commits the worktree, and parks blocked-on-human with the worktree preserved', async () => {
       const runId = 'mut-closeout-validation-exhausts';
       const artifactsDir = mkdtempSync(join(tmpdir(), 'orch-closeout-validation-exhausts-'));
       const productsFile = join(artifactsDir, 'products.json');
@@ -1432,12 +1432,24 @@ describe('orchestratedWorkApplier', () => {
         const terminal = events.find((event) => event.kind === 'completed' || event.kind === 'failed');
         const terminalData = (terminal?.data ?? {}) as Record<string, unknown>;
 
-        // Exhaustion is a preserved operational hold, not a destructive failure.
+        // Exhaustion is a PARKED (blocked-on-human) terminal, not a destructive
+        // failure and not a held one: parked keeps the run releasable via the
+        // standard blocked-on-human release path, which is what clears the
+        // preserved worktree so a later Start can re-dispatch.
         expect(terminal?.kind).toBe('completed');
-        expect(terminalData['held']).toBe(true);
-        expect(String(terminalData['reason'])).toMatch(/closeout checks failed after 3 attempts/);
+        expect(terminalData['parked']).toBe(true);
+        expect(terminalData['held']).toBeUndefined();
+        expect(String(terminalData['reason'])).toMatch(
+          /orchestration parked on "Build the streak core": closeout checks failed after 3 attempts/,
+        );
         expect(String(terminalData['reason'])).toContain('WIP preserved as wipsha1');
+        expect(terminalData['preserveWorktree']).toBe(true);
         expect(destroyed).toBe(false);
+        // The supervision row is blocked-on-human — visible to release/approvals.
+        expect(mockUpsertRun).toHaveBeenCalledWith(
+          expect.objectContaining({ id: runId, status: 'blocked-on-human' }),
+          expect.anything(),
+        );
 
         // Repair attempts surfaced (1..3), then the WIP preservation commit —
         // and never a closeout commit.

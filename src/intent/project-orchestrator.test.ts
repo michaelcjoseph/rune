@@ -1866,7 +1866,7 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect((h.state.tasksMd.match(/- \[x\]/g) ?? []).length).toBe(2);
   });
 
-  it('exhausts the repair budget, WIP-commits, and holds with branch and worktree preserved', async () => {
+  it('exhausts the repair budget, WIP-commits, and PARKS blocked-on-human with branch and worktree preserved', async () => {
     let workflowRuns = 0;
     const commitWip = vi.fn(async () => ({ sha: 'wipsha1234', subject: 'wip subject' }));
     const h = makeHarness({
@@ -1883,28 +1883,55 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(workflowRuns).toBe(1 + CLOSEOUT_REPAIR_CAP);
     expect(commitWip).toHaveBeenCalledTimes(1);
     expect(commitWip).toHaveBeenCalledWith(expect.objectContaining({ id: 'build-the-streak-core' }));
-    expectOperationalHold(res, {
-      reason: /closeout checks failed after 3 attempts; WIP preserved as wipsha1/,
-      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+    // Parked, NOT held: a held terminal is invisible to the release path and
+    // its preserved git-registered worktree blocks the project's next Start.
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      task: { id: 'build-the-streak-core' },
+      parked: {
+        status: 'blocked-on-human',
+        branch: 'rune-work/14-x',
+        worktreePath: '/tmp/rune-worktrees/aura/14-x',
+        preserveBranch: true,
+        preserveWorktree: true,
+      },
     });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts; WIP preserved as wipsha1/,
+    );
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
     expect(h.state.commits).toEqual([]);
     expect(h.state.finalizeCalled).toBe(false);
     expect(closeoutProgressEvents(h.state.events)).toEqual([]);
   });
 
-  it('still holds on exhaustion when no commitWip dep is wired (fixtures compile without it)', async () => {
+  it('still parks on exhaustion when no commitWip dep is wired (fixtures compile without it)', async () => {
     const h = makeHarness({
       worktreePath: '/tmp/rune-worktrees/aura/14-x',
       runCloseoutChecks: async () => redCloseout(),
     });
     const res = await runProjectOrchestration(h.deps);
 
-    expectOperationalHold(res, {
-      reason: /closeout checks failed after 3 attempts$/,
-      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      parked: { status: 'blocked-on-human', preserveWorktree: true },
     });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts$/,
+    );
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
+  });
+
+  it('falls back to a preserved operational hold when no worktreePath is wired', async () => {
+    const h = makeHarness({ runCloseoutChecks: async () => redCloseout() });
+    const res = await runProjectOrchestration(h.deps);
+
+    const raw = res as unknown as Record<string, unknown>;
+    expect(raw['kind']).toBe('held');
+    expect(String(raw['reason'] ?? '')).toMatch(/closeout checks failed after 3 attempts$/);
+    expect(raw['preserveBranch']).toBe(true);
+    expect(raw['preserveWorktree']).toBe(true);
+    expect(raw).not.toHaveProperty('parked');
   });
 
   it('routes a non-ready repair attempt through the existing blocked handling', async () => {
@@ -1933,7 +1960,7 @@ describe('project-orchestrator — closeout repair loop', () => {
     expect(h.state.tasksMd).toContain('- [ ] Build the streak core');
   });
 
-  it('swallows a commitWip throw — the hold itself must land', async () => {
+  it('swallows a commitWip throw — the park itself must land', async () => {
     const h = makeHarness({
       worktreePath: '/tmp/rune-worktrees/aura/14-x',
       runCloseoutChecks: async () => redCloseout(),
@@ -1943,10 +1970,13 @@ describe('project-orchestrator — closeout repair loop', () => {
     });
     const res = await runProjectOrchestration(h.deps);
 
-    expectOperationalHold(res, {
-      reason: /closeout checks failed after 3 attempts$/,
-      worktreePath: '/tmp/rune-worktrees/aura/14-x',
+    expect(res).toMatchObject({
+      kind: 'blocked',
+      parked: { status: 'blocked-on-human' },
     });
+    expect(String((res as { reason?: string }).reason ?? '')).toMatch(
+      /closeout checks failed after 3 attempts$/,
+    );
   });
 });
 
