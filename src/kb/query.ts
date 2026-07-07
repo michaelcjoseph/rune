@@ -16,6 +16,11 @@ export interface QueryKBDeps {
     query: string,
     options?: { directory?: string; maxResults?: number },
   ) => SearchResult[] | Promise<SearchResult[]>;
+  /** Agent timeout override in ms — default undefined (runAgent falls back to
+   *  config.CLAUDE_TIMEOUT_MS, 30 min). MCP callers size this under their
+   *  TOOL_TIMEOUT_OVERRIDES_MS wrapper ceiling so the agent's own timeout
+   *  kills the child and surfaces cleanly instead of orphaning it. */
+  agentTimeoutMs?: number;
 }
 
 /** Infer a wiki page type filter from the question phrasing. */
@@ -67,7 +72,7 @@ Follow the query workflow:
 3. Search the vault with grep for additional context from personal notes
 4. Synthesize an answer with [[wikilink]] citations to your sources${filteredContext}${vaultContext}`;
 
-  const result = await runAgent('kb-query', prompt, undefined, undefined, true);
+  const result = await runAgent('kb-query', prompt, deps.agentTimeoutMs, undefined, true);
 
   if (result.error) {
     log.error('Query failed', { error: result.error });

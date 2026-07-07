@@ -216,7 +216,12 @@ describe('kb_query daemon warm-route boundary', () => {
     });
 
     expect(queryKBMock).toHaveBeenCalledTimes(1);
-    expect(queryKBMock.mock.calls[0]).toEqual(['admin stdio question']);
+    // Cold path: no broad-search dep, but the MCP agent timeout still applies
+    // (150s under the 180s kb_query wrapper override).
+    expect(queryKBMock.mock.calls[0]).toEqual([
+      'admin stdio question',
+      { agentTimeoutMs: 150_000 },
+    ]);
 
     await client.close();
   });
@@ -243,6 +248,7 @@ describe('kb_query daemon warm-route boundary', () => {
         query: string,
         options?: { directory?: string; maxResults?: number },
       ) => Array<{ file: string; line: number; content: string }>;
+      agentTimeoutMs?: number;
     } | undefined;
     let routedHits: Array<{ file: string; line: number; content: string }> | undefined;
     queryKBMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -264,6 +270,7 @@ describe('kb_query daemon warm-route boundary', () => {
     expect(result.isError).toBeFalsy();
     expect(queryKBMock.mock.calls[0]?.[0]).toBe('daemon not ready question');
     expect(capturedDeps?.searchVault).toEqual(expect.any(Function));
+    expect(capturedDeps?.agentTimeoutMs).toBe(150_000);
     expect(routedHits).toEqual(coldHit);
     expect(searchVaultMock).toHaveBeenCalledWith('fallback marker', { maxResults: 3 });
     expect(queryVaultIndexMock).not.toHaveBeenCalled();
@@ -303,6 +310,7 @@ describe('kb_query daemon warm-route boundary', () => {
         query: string,
         options?: { directory?: string; maxResults?: number },
       ) => Array<{ file: string; line: number; content: string }>;
+      agentTimeoutMs?: number;
     } | undefined;
     let routedHits: Array<{ file: string; line: number; content: string }> | undefined;
     queryKBMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -324,6 +332,7 @@ describe('kb_query daemon warm-route boundary', () => {
     expect(result.isError).toBeFalsy();
     expect(queryKBMock.mock.calls[0]?.[0]).toBe('daemon ready question');
     expect(capturedDeps?.searchVault).toEqual(expect.any(Function));
+    expect(capturedDeps?.agentTimeoutMs).toBe(150_000);
     expect(routedHits).toEqual(warmHit);
     expect(queryVaultIndexMock).toHaveBeenCalledWith('warm marker', { maxResults: 5 });
     expect(searchVaultMock).not.toHaveBeenCalled();

@@ -23,6 +23,7 @@ type QueryKBWithDeps = (
       query: string,
       options?: { directory?: string; maxResults?: number },
     ) => Array<{ file: string; line: number; content: string }>;
+    agentTimeoutMs?: number;
   },
 ) => Promise<{ success: boolean; answer: string }>;
 
@@ -65,6 +66,22 @@ describe('kb/query', () => {
     const prompt = agentMock.mock.calls[0]?.[1] as string;
     expect(prompt).toContain('WARM_DAEMON_CONTEXT');
     expect(prompt).not.toContain('COLD_CONTEXT');
+  });
+
+  it('threads deps.agentTimeoutMs to runAgent as its timeout arg', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await (queryKB as QueryKBWithDeps)('bounded question', { agentTimeoutMs: 150_000 });
+
+    expect(agentMock).toHaveBeenCalledWith(
+      'kb-query',
+      expect.any(String),
+      150_000,
+      undefined,
+      true,
+    );
   });
 
   it('infers entity type filter for "who is" questions', async () => {

@@ -150,6 +150,11 @@ function warmIndexAgeMs(status: ReturnType<typeof daemonIndexStatus>): number | 
   return Math.max(0, Date.now() - timestamp);
 }
 
+/** 150s leaves headroom under the 180s kb_query TOOL_TIMEOUT_OVERRIDES_MS
+ *  wrapper timeout, so the agent's own timeout SIGTERMs the child and
+ *  surfaces its error instead of the wrapper orphaning a live agent. */
+const KB_QUERY_AGENT_TIMEOUT_MS = 150_000;
+
 /** Every tool the factory knows how to register, keyed by tool name. */
 const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpServerOptions) => void> = {
   kb_query: (server, opts) => {
@@ -161,8 +166,8 @@ const TOOL_REGISTRY: Record<ToolName, (server: McpServer, opts: CreateRuneMcpSer
         const broadSearch = opts.kbQueryBroadSearch
           ?? (opts.name === 'rune-mcp' ? daemonBroadSearch : undefined);
         const result = broadSearch
-          ? await queryKB(question, { searchVault: broadSearch })
-          : await queryKB(question);
+          ? await queryKB(question, { searchVault: broadSearch, agentTimeoutMs: KB_QUERY_AGENT_TIMEOUT_MS })
+          : await queryKB(question, { agentTimeoutMs: KB_QUERY_AGENT_TIMEOUT_MS });
         return {
           content: [{ type: 'text' as const, text: result.answer }],
           isError: !result.success,

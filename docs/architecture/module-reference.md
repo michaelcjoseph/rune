@@ -110,7 +110,7 @@ One file per slash command:
 - **`ingest.ts`** — Copy source to raw/ → spawn wiki-compiler agent → entity-link touched pages. `determineRawDir()` routes by path (see `reviews-kb-vault.md` → KB raw-source routing).
 - **`index-integrity.ts`** — Deterministic `knowledge/index.md` repair: scans `knowledge/wiki/**/*.md`, detects missing wiki links, and appends conservative summary lines under category headings without LLM calls.
 - **`entity-extract.ts`** — `linkEntities()`: build alias map from JSON stores + `FAMILY_NAMES`, wikilink bare mentions in reference sections, append to `related:` frontmatter.
-- **`query.ts`** — Build context → spawn kb-query agent → synthesized answer.
+- **`query.ts`** — Build context → spawn kb-query agent → synthesized answer. `QueryKBDeps.agentTimeoutMs` bounds the agent spawn (MCP callers pass 150s under the 180s `kb_query` wrapper override; Telegram `/kb` omits it and keeps the `CLAUDE_TIMEOUT_MS` default).
 - **`lint.ts`** — Spawn wiki-linter agent → health report.
 - **`search.ts`** — ripgrep-based full-text search across vault + wiki; `searchVault`'s `directory` option is containment-guarded against the vault root (defense-in-depth — `vault_search` made it remotely reachable, project 16).
 - **`queue.ts`** — JSON-file ingestion queue (enqueue/dequeue/clear).
