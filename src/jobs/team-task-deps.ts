@@ -307,6 +307,13 @@ const REVIEWER_INSTRUCTION = [
   'clear that finding. For a fail outcome without findings, include a verdict-',
   'level `suggestedChange` that tells the coder what to change.',
   '',
+  'Test-deletion guardrail: when the diff deletes or weakens a test (a deleted',
+  'test file, a removed or skipped case, an assertion gutted to keep it green),',
+  'pass it ONLY when the `## Coder handoff notes` below justify the removal —',
+  'an external/live dependency the sandbox cannot run, or a demonstrated flake.',
+  'An unjustified test deletion or weakening is a fail outcome (ordinary',
+  'quality, not an objection class): name the test and require it restored.',
+  '',
   'Respond with EXACTLY ONE fenced ```reviewer-verdict block containing JSON,',
   'and nothing after the fence. The verdict must carry exactly one `outcome`',
   'value: pass, pass-with-warnings, or fail:',
@@ -349,6 +356,12 @@ const TL_DIFF_REVIEW_INSTRUCTION = [
   'clear that finding. For a fail outcome without findings, include a verdict-',
   'level `suggestedChange` that tells the coder what to change.',
   '',
+  'Test-deletion guardrail: a diff that deletes or weakens a test (deleted test',
+  'file, removed or skipped case, gutted assertion) passes only when the',
+  '`## Coder handoff notes` below justify it — an external/live dependency the',
+  'sandbox cannot run, or a demonstrated flake. Unjustified deletion or',
+  'weakening of a test is a fail outcome: name the test and require it restored.',
+  '',
   'Respond with EXACTLY ONE fenced ```tl-diff-review block containing JSON:',
   '```tl-diff-review',
   '{"outcome": "pass", "findings": [{"class": "data-integrity", "severity": "low", "location": "<file:line>", "rationale": "<why>", "suggestedChange": "<concrete change that clears this finding>", "reversible": true}], "notes": "<short reason>", "suggestedChange": "<concrete change for non-finding fail, omit when not needed>"}',
@@ -376,6 +389,19 @@ const CODER_EXEC_INSTRUCTION = [
   'You are the coder. Implement EXACTLY the selected task below — nothing more.',
   'QA\'s tests already pin the contract; make them pass. Follow the conventions',
   'in the repo\'s CLAUDE.md. Do not commit; leave your changes in the worktree.',
+  '',
+  'Before you finish: run EVERY command in the `## Validation commands` section',
+  'below from the worktree root and iterate (fix → re-run) until ALL exit 0.',
+  'Full-suite green is your definition of done — a diff that breaks a sibling',
+  'test is not done even when the QA tests pass; closeout re-runs the same',
+  'commands and hard-blocks on red. If no validation commands are listed, skip',
+  'this step.',
+  'Last resort: a test that CANNOT pass in this sandbox (external/live',
+  'dependency) or is demonstrably flaky may be removed — prefer converting it',
+  'to the manual-live-gate strategy over deleting it. Record every removal as',
+  'a final output line `TEST-REMOVED: <path> — <reason>`; the reviewer and',
+  'tech lead fail unexplained test deletions. NEVER remove or weaken a test',
+  'because your implementation fails it.',
 ].join('\n');
 
 const QA_DIFF_REVALIDATION_INSTRUCTION = [
@@ -686,6 +712,12 @@ export interface BuildTeamTaskDepsArgs {
   sandbox: SandboxSpec;
   productsConfigPath: string;
   models: TeamRoleModels;
+  /** The product's `validationCommands` (products.json), rendered into the
+   *  coder prompt so the coder self-gates on full-suite green before handback;
+   *  closeout re-runs the same commands as the confirming backstop. Optional
+   *  so fixture callers compile; absent/empty ⇒ no validation section in the
+   *  coder body (prior behavior). */
+  validationCommands?: string[];
   /** Optional activity sink; production uses this to attribute artifact
    * executor output with the invoking role/model before it reaches the
    * mutation stream. */
@@ -727,6 +759,14 @@ function tailNote(output: string): string[] {
   const trimmed = output.trim();
   if (trimmed === '') return [];
   return [trimmed.slice(-300)];
+}
+
+/** The coder's handoff notes rendered for the reviewer/tech-lead bodies —
+ *  the artifact channel the test-deletion guardrail reads TEST-REMOVED
+ *  justifications from. Empty string when there are no notes. */
+function formatCoderHandoffNotes(notes: string[] | undefined): string {
+  if (notes === undefined || notes.length === 0) return '';
+  return `## Coder handoff notes\n\n${scrubPathsInText(notes.map((note) => `- ${note}`).join('\n'))}`;
 }
 
 function formatRejectionFeedback(
@@ -830,6 +870,7 @@ export function buildProductionTeamTaskDeps(
 ): TeamTaskDeps {
   const seams: TeamTaskSeams = { ...defaultSeams, ...seamOverrides };
   const { sandbox, productsConfigPath, models } = args;
+  const validationCommands = args.validationCommands ?? [];
   const projectExemplarsDir = join(PROJECT_ROOT, 'docs', 'projects', sandbox.project, 'examples');
   const judge = makeJudge(seams, projectExemplarsDir);
 
@@ -971,6 +1012,13 @@ export function buildProductionTeamTaskDeps(
         `## Project context\n\n${scrubPathsInText(context)}`,
         '',
         `## QA tests\n\n${testsBlock}`,
+        ...(validationCommands.length > 0
+          ? [
+              '',
+              '## Validation commands (run all from the worktree root; drive green before handback)\n\n' +
+                validationCommands.join('\n'),
+            ]
+          : []),
         ...(feedbackBlock !== '' ? ['', feedbackBlock] : []),
         ...(findingsBlock !== ''
           ? [
@@ -1041,9 +1089,10 @@ export function buildProductionTeamTaskDeps(
     // `reviewerProvider` from ReviewerInput is intentionally unused here: the
     // provider identity is baked into `models.reviewer` at construction time
     // (resolved distinct-from-coder); the workflow's Gate 0 is the authority.
-    reviewer: async ({ diff, spec, tests, task, context, findingsLedger }) => {
+    reviewer: async ({ diff, spec, tests, task, context, findingsLedger, coderHandoffNotes }) => {
       const testsBlock = Array.isArray(tests) ? tests.join('\n') : tests;
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       if (models.reviewer === null) {
         // Deliberate belt-and-suspenders: Gate 0 normally blocks first, but a
         // reviewer verdict must never be fabricable without a resolved
@@ -1060,20 +1109,23 @@ export function buildProductionTeamTaskDeps(
         `## Tests\n\n${testsBlock}`,
         '',
         `## Project context\n\n${scrubPathsInText(context)}`,
+        ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const reply = await judge('reviewer', models.reviewer, REVIEWER_INSTRUCTION, body);
       return parseReviewerVerdict(reply);
     },
 
-    techLeadReviewDiff: async ({ task, diff, spec, context, findingsLedger }) => {
+    techLeadReviewDiff: async ({ task, diff, spec, context, findingsLedger, coderHandoffNotes }) => {
       const findingsBlock = scrubPathsInText(formatFindingsLedger(findingsLedger));
+      const handoffNotesBlock = formatCoderHandoffNotes(coderHandoffNotes);
       const body = [
         `## Task\n\n${task.text}`,
         '',
         `## Diff\n\n${diff}`,
         ...(spec !== undefined ? ['', `## Spec\n\n${spec}`] : []),
         ...(context !== undefined ? ['', `## Project context / tree-state evidence\n\n${scrubPathsInText(context)}`] : []),
+        ...(handoffNotesBlock !== '' ? ['', handoffNotesBlock] : []),
         ...(findingsBlock !== '' ? ['', findingsBlock] : []),
       ].join('\n');
       const reply = await judge('tech-lead', models.techLead, TL_DIFF_REVIEW_INSTRUCTION, body);
@@ -1118,6 +1170,10 @@ export interface TaskWorkflowRunnerArgs {
    *  for the process lifetime (loadModelPolicy caches per path; a mid-run
    *  policy edit needs a restart to apply). */
   modelPolicyPath: string;
+  /** The product's `validationCommands`, forwarded into the coder prompt so
+   *  the coder drives the full suite green before handback. Production passes
+   *  the list `buildOrchestrationDeps` already resolved for closeout. */
+  validationCommands?: string[];
   /** Inner per-task round cap; defaults to {@link DEFAULT_ROUND_CAP}. */
   cap?: number;
   /** Optional live activity sink forwarded into runTeamTaskWorkflow. */
@@ -1275,6 +1331,9 @@ export function createProductionTaskWorkflowRunner(
         sandbox: args.sandbox,
         productsConfigPath: args.productsConfigPath,
         models,
+        ...(args.validationCommands !== undefined
+          ? { validationCommands: args.validationCommands }
+          : {}),
         ...(args.emit !== undefined ? { emit: args.emit } : {}),
       },
       seamOverrides,

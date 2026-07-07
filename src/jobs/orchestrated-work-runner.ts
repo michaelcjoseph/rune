@@ -411,6 +411,7 @@ function buildOrchestrationDeps(args: {
     sandbox,
     productsConfigPath: config.PRODUCTS_CONFIG_FILE,
     modelPolicyPath: config.MODEL_POLICY_FILE,
+    validationCommands: args.validationCommands,
     cap: ORCHESTRATED_ROUND_CAP,
     ...(args.emit !== undefined ? { emit: args.emit } : {}),
   });

@@ -18,7 +18,7 @@ Charters load via `composeRoleContext(role, instruction)` (`src/roles/loader.ts`
 
 Two structural facts to hold onto:
 
-- **The green suite is gated twice** — once per task at closeout (C3), once at the final merge (D3). Both run the product's `validationCommands` (for `rune`: `npm run build` + `npm test`). A task whose deliverable is a deliberately-red test suite cannot clear either gate.
+- **The green suite runs three times** — the coder self-gate in-loop (the coder runs the product's `validationCommands` in its worktree and iterates fix → re-run until green before handing back), once per task at closeout (C3, a confirming re-run), and once at the final merge (D3). All three run the product's `validationCommands` (for `rune`: `npm run build` + `npm test`); C3 and D3 are the mechanical gates. A task whose deliverable is a deliberately-red test suite cannot clear either mechanical gate.
 - **Exactly one human gate** in the whole lifecycle: `/approve` (A5). Everything downstream of it is automated and adds zero approval points (project-20 invariant, asserted in tests). The manual live-release gate some project `tasks.md` files carry is a Definition-of-Done note, not a pipeline gate.
 
 ---
@@ -74,13 +74,15 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 | a | reviewer-independence pre-gate | orchestrator | (implicit) | a reviewer provider distinct from the coder's exists → pass; null → terminal `block` (fail-closed, no rounds) |
 | b | QA writes tests | qa | — | tests authored pinning the task contract (or a `no-code-test-rationale`) |
 | c | tech-lead test-intent | tech-lead | **`test-intent`** | verdict `approved===true`; FAIL → loop back to QA (≤ cap) then `block` |
-| d | coder implements | coder | — | diff produced to satisfy the QA tests; executor throw → `failed` |
+| d | coder implements | coder | — | diff produced to satisfy the QA tests AND drive the product `validationCommands` green in the worktree (coder self-gate, prompt-enforced); executor throw → `failed` |
 | e | coder self-review | coder | — | **exactly one** fix-it pass over its own diff (`runSelfReview`); throw → `failed` |
 | f | QA re-validate (conditional) | qa | `implementation-diff` | only if self-review changed diff behavior; `approved===true` else terminal `block` |
 | g | reviewer review | reviewer (cross-provider) | **`reviewer-verdict`** | max finding severity ≤ low (`low`→pass-with-warnings; `medium/high/critical`→fail→objection loop); malformed verdict → terminal `failed` |
 | h | tech-lead diff review | tech-lead | **`implementation-diff`** | pass/pass-with-warnings; runs **every** round regardless of reviewer outcome; fail → objection loop |
 | i | designer review (conditional) | designer | **`design-review`** | only if `task.designerNeeded` — production `toSizedTask` hardcodes this **false**, so the stage is inert in the orchestrated path today |
 | — | round-exit decision | orchestrator | — | all gates pass + all prior ledger findings verified + open severity ≤ low → `ready-for-closeout` |
+
+**Test-deletion guardrail:** gates g and h fail a diff that deletes or weakens a test unless the coder's handoff notes (threaded into both bodies as `## Coder handoff notes`) justify it — a sandbox-impossible external/live dependency or a demonstrated flake, recorded as `TEST-REMOVED: <path> — <reason>`; a test that is red because the implementation fails it may never be removed.
 
 **Objection loop:** findings above `low` thread back as `rejectionFeedback` (+ a severity-sorted findings ledger) into the next coder round, up to 3 rounds (`ORCHESTRATED_ROUND_CAP`; hard budget 4). Terminals: `all-low` or stagnation (severity flat ≥3 rounds, no non-reversible high/critical) → closeout; a non-reversible high/critical residue at cap → **held**; unresolved reversible feedback at cap → **block**. Every rejection also drafts a best-effort gate-learning lesson into the counterpart role's `agents/<role>/memory.md` (never blocks the retry). There is no per-task human park and no PM-wrapup call from `runGated` — per-task terminals are machine-owned `ready-for-closeout` / `block` / `failed`.
 
@@ -89,7 +91,7 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 Ordered so every commit is finalizer-ready:
 
 1. Compute **both** the context update and the checkbox tick (`markSelectedTaskComplete`, ticks exactly the selected task by text+section, refuses a stale match) **before** writing either.
-2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1.**
+2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with the failing output tail.
 3. Persist context, then the tick.
 4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
 5. `verifyCleanWorktree` — `git status --porcelain` empty.

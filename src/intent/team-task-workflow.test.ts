@@ -356,16 +356,21 @@ describe('team-task-workflow — reviewer independence', () => {
 
   it('passes diff/spec/tests/task/context to the reviewer, NOT coder hidden reasoning', async () => {
     let reviewerInput: Record<string, unknown> | undefined;
+    let techLeadDiffInput: Record<string, unknown> | undefined;
     const deps = makeDeps({
       coder: async () => ({
         diff: 'THE-DIFF',
-        handoffNotes: ['note'],
+        handoffNotes: ['TEST-REMOVED: src/live.test.ts — external live dependency'],
         // A coder seam must not surface hidden reasoning to the reviewer; even if
         // present on the coder result, it must never reach the reviewer input.
       }),
       reviewer: async (input) => {
         reviewerInput = input as unknown as Record<string, unknown>;
         return cleanVerdict;
+      },
+      techLeadReviewDiff: async (input) => {
+        techLeadDiffInput = input as unknown as Record<string, unknown>;
+        return { outcome: 'pass', findings: [] };
       },
     });
     await runTeamTaskWorkflow(codeTask, INPUT, deps);
@@ -374,6 +379,14 @@ describe('team-task-workflow — reviewer independence', () => {
     expect(reviewerInput).toHaveProperty('tests');
     expect(reviewerInput).toHaveProperty('task');
     expect(reviewerInput).toHaveProperty('context');
+    // Handoff notes ARE the artifact channel (the test-deletion guardrail reads
+    // TEST-REMOVED justifications from them) — reasoning stays excluded.
+    expect(reviewerInput?.['coderHandoffNotes']).toEqual([
+      'TEST-REMOVED: src/live.test.ts — external live dependency',
+    ]);
+    expect(techLeadDiffInput?.['coderHandoffNotes']).toEqual([
+      'TEST-REMOVED: src/live.test.ts — external live dependency',
+    ]);
     expect(reviewerInput).not.toHaveProperty('coderReasoning');
     expect(reviewerInput).not.toHaveProperty('hiddenReasoning');
   });

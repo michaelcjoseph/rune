@@ -1227,6 +1227,7 @@ describe('orchestratedWorkApplier', () => {
       const priorProductsFile = process.env['PRODUCTS_CONFIG_FILE'];
       const gitCalls: string[][] = [];
       let tasksAtDestroy = '';
+      let capturedRunnerArgs: Record<string, unknown> | undefined;
 
       mkdirSync(repoPath, { recursive: true });
       writeFileSync(
@@ -1284,16 +1285,19 @@ describe('orchestratedWorkApplier', () => {
         workRunsDir: artifactsDir,
         workRunsIndexFile: join(artifactsDir, 'index.jsonl'),
         runGit,
-        createTaskWorkflowRunner: () => async (task) => ({
-          taskId: task.id,
-          outcome: 'ready-for-closeout',
-          rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
-          findingsLedger: [],
-          loopExitReason: 'all-low',
-          objectionOpen: false,
-          handoffNotes: [`completed ${task.text}`],
-          reviewerVerdict: { pass: true, objections: [] },
-        }),
+        createTaskWorkflowRunner: (runnerArgs) => {
+          capturedRunnerArgs = runnerArgs as unknown as Record<string, unknown>;
+          return async (task) => ({
+            taskId: task.id,
+            outcome: 'ready-for-closeout',
+            rolesInvoked: ['qa', 'coder', 'reviewer', 'tech-lead'],
+            findingsLedger: [],
+            loopExitReason: 'all-low',
+            objectionOpen: false,
+            handoffNotes: [`completed ${task.text}`],
+            reviewerVerdict: { pass: true, objections: [] },
+          });
+        },
       });
 
       try {
@@ -1306,6 +1310,10 @@ describe('orchestratedWorkApplier', () => {
           const data = (event.data ?? {}) as Record<string, unknown>;
           return event.kind === 'progress' && data['event'] === 'closeout-commit';
         });
+
+        // The product's validationCommands reach the task-workflow runner (the
+        // coder's full-suite self-gate), not only the closeout gate.
+        expect(capturedRunnerArgs?.['validationCommands']).toEqual(['npm test']);
 
         expect(terminal?.kind).toBe('failed');
         expect(String(((terminal?.data ?? {}) as Record<string, unknown>)['reason'])).toContain('closeout checks failed');

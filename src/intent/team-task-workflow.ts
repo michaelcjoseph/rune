@@ -184,6 +184,10 @@ export interface ReviewerInput {
   context: string;
   reviewerProvider: DispatchProvider;
   findingsLedger?: FindingsLedgerEntry[];
+  /** The coder's factual handoff notes for THIS round — part of the artifact
+   *  (facts, never hidden reasoning); carries the TEST-REMOVED justifications
+   *  the test-deletion guardrail keys on. */
+  coderHandoffNotes?: string[];
 }
 
 export type WorkflowActivityEvent = {
@@ -232,6 +236,9 @@ export interface TeamTaskDeps {
     spec?: string;
     context?: string;
     findingsLedger?: FindingsLedgerEntry[];
+    /** Coder handoff notes for THIS round — carries the TEST-REMOVED
+     *  justifications the test-deletion guardrail keys on. */
+    coderHandoffNotes?: string[];
   }) => Promise<GateReviewVerdict>;
   designer: (input: {
     task: SizedTask;
@@ -531,6 +538,9 @@ async function runGated(
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
         : {}),
+      ...(coder.handoffNotes.length > 0
+        ? { coderHandoffNotes: coder.handoffNotes }
+        : {}),
     });
     lastReviewer = normalizeReviewerVerdict(rawReviewerVerdict);
     mergeFindingsIntoLedger(
@@ -590,6 +600,9 @@ async function runGated(
       context: input.contextMd,
       ...(roundFindingsLedger.length > 0
         ? { findingsLedger: roundFindingsLedger }
+        : {}),
+      ...(coder.handoffNotes.length > 0
+        ? { coderHandoffNotes: coder.handoffNotes }
         : {}),
     }));
     mergeFindingsIntoLedger(

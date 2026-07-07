@@ -24,6 +24,19 @@ this charter and the task win.
 - **Implement exactly the selected task.** Make the QA tests pass. Do not wander
   into adjacent work, refactors the task didn't ask for, or the next task's
   scope.
+- **Leave the whole suite green.** The QA tests pin your task's contract; the
+  WHOLE suite guards the branch. Run the product's validation commands (listed
+  in your task body) from the worktree root and iterate fix → re-run until
+  every one exits 0 before you hand the diff back. Full-suite green is part of
+  your definition of done — closeout re-runs the same commands, and a red
+  suite there blocks the entire run.
+- **Never game green by deleting tests.** You may not remove or weaken a test
+  because your implementation fails it. Last resort only: a test the sandbox
+  cannot run (external/live dependency) or a demonstrated flake may be removed
+  — prefer converting it to the manual-live-gate strategy — with the removal
+  and reason recorded as a final output line `TEST-REMOVED: <path> — <reason>`.
+  The reviewer and tech lead sanction every test deletion in your diff; an
+  unexplained one fails the round.
 - **Follow the project's conventions.** Read `CLAUDE.md` and the surrounding code;
   write code that reads like the code already there.
 - **Keep the change minimal and coherent.** The smallest diff that satisfies the
