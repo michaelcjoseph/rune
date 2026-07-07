@@ -91,12 +91,12 @@ A single task runs through these ordered sub-gates. Verdicts emit `role-verdict`
 Ordered so every commit is finalizer-ready:
 
 1. Compute **both** the context update and the checkbox tick (`markSelectedTaskComplete`, ticks exactly the selected task by text+section, refuses a stale match) **before** writing either.
-2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with the failing output tail.
+2. **`runCloseoutChecks`** — run the product `validationCommands` in the worktree (bounded by `WORK_RUN_GATE_COMMAND_TIMEOUT_MS`). **Green-suite gate #1** (a confirming re-run — the coder already drove these green in-loop); on failure the run dir gets `closeout-validation-failure.txt` with the failing output tail, and the scrubbed tail feeds back to the coder as `GateRejectionFeedback` (qa→coder, `implementation-diff`) for up to `CLOSEOUT_REPAIR_CAP` (2) whole-workflow repair re-runs.
 3. Persist context, then the tick.
 4. `commitCloseout` — `git add -A` + commit `rune(<product>): closeout — <task>`.
 5. `verifyCleanWorktree` — `git status --porcelain` empty.
 
-Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → `blocked` (stops the run)**; worktree not clean → **hold**.
+Advance → build a `TaskRunRecord`, append `task-records.jsonl`, write resumable `cursor.json`. Failure dispositions: context-rejected/stale-tick → operational **hold**; **`closeout checks failed` → bounded coder repair loop** (2 re-runs with the failing output tail as gate feedback), still red after 3 attempts → best-effort WIP commit (`rune(<product>): WIP — closeout blocked — <task>`) + operational **hold** (branch + worktree preserved); worktree not clean → **hold**.
 
 ## C4 — Advance / loop
 Re-read `tasks.md`; ticked task skipped, next selected. No `- [ ]` remaining = **branch-complete** → Phase D.
@@ -122,9 +122,9 @@ D3 runs entirely in a **throwaway detached integration worktree** at `baseBranch
 | State | Meaning | Trigger |
 |---|---|---|
 | **completed / finalized** | merged to `main`, project marked Done | D3 green + merge/push landed |
-| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, or merge-gate refusal |
+| **held** | branch-complete, branch + worktree preserved, no merge | non-reversible high/critical finding, operational failure, closeout repair exhaustion (WIP-committed), or merge-gate refusal |
 | **parked** | preserved, waits for **explicit human release** (never auto-releases) | finalizer/mapping park flags; `PARKED_RUN_NUDGE_AFTER_MS` fires a one-time staleness nudge |
-| **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, `closeout checks failed`, or loop non-convergence |
+| **blocked → failed** | durable stop, task not skipped | task didn't reach closeout, or loop non-convergence |
 | **failed** | hard failure | worktree-create error, orchestration throw, user cancel |
 
 Cross-cutting supervision (`jobs/stall-check-runner.ts`, 30s tick): `checkStalledRuns` kills child-dead runs (5min); `planQuietNudges` then `planQuietCancel` handle alive-but-silent runs (keyed on `lastOutputAt`); `planMaxRuntimeKills` enforces `WORK_RUN_MAX_RUNTIME_MS` regardless of liveness (fail-toward-kill). A system cancel is honored at the next task boundary. → `subsystems.md` for the supervision-store field-merge invariants.

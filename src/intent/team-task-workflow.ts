@@ -955,7 +955,7 @@ function normalizeDiffForBehavior(diff: string): string {
   return diff.replace(/\r\n?/g, '\n').trim();
 }
 
-function buildGateRejectionFeedback(input: {
+export function buildGateRejectionFeedback(input: {
   rejectingRole: RoleName;
   counterpartRole: RoleName;
   artifact: GateRejectedArtifact;

@@ -19,6 +19,10 @@
  *
  * A blocked/failed/objection-open task stops the run durably — it is never
  * skipped. An unavailable finalizer holds (records the payload, no self-merge).
+ * A failed closeout CHECK is the one repairable stop: the failing validation
+ * output feeds back to the coder as gate feedback for up to CLOSEOUT_REPAIR_CAP
+ * whole-workflow re-runs; exhaustion WIP-commits the worktree and holds
+ * (branch + worktree preserved) instead of failing destructively.
  *
  * Pure over its INJECTED effects: it reads/writes project state, runs the
  * workflow, commits, and finalizes only through `OrchestrationDeps`, so the whole
@@ -38,11 +42,13 @@ import {
   type FinalizerAdapter,
   type FinalizerHandoff,
 } from './finalizer-handoff.js';
-import type {
-  FindingSourceGate,
-  ObjectionFinding,
-  ObjectionSeverity,
-  TaskEvidence,
+import {
+  buildGateRejectionFeedback,
+  type FindingSourceGate,
+  type GateRejectionFeedback,
+  type ObjectionFinding,
+  type ObjectionSeverity,
+  type TaskEvidence,
 } from './team-task-workflow.js';
 import type { CancelReason } from '../transport/mutations.js';
 
@@ -55,6 +61,23 @@ export interface CloseoutCommit {
   sha: string;
   subject: string;
 }
+
+/** Repair re-runs after the initial attempt when closeout checks fail (total
+ *  workflow attempts per task = 1 + CLOSEOUT_REPAIR_CAP). */
+export const CLOSEOUT_REPAIR_CAP = 2;
+
+/** The failing closeout-validation facts, scrubbed by the runner adapter before
+ *  they reach the orchestrator (safe for the cross-provider coder prompt). */
+export interface CloseoutCheckFailure {
+  command: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  outputTail: string;
+}
+
+export type CloseoutCheckResult =
+  | { ok: true }
+  | { ok: false; failure: CloseoutCheckFailure };
 
 export interface OrchestrationRunCursor {
   runId: string;
@@ -113,9 +136,11 @@ export interface OrchestrationDeps {
   readSpec: () => Promise<string>;
 
   // --- per-task workflow (wraps team-task-workflow in production) ---
+  /** `rejectionFeedback` is set only on closeout-repair re-runs — the failing
+   *  validation output threaded back to the coder as gate feedback. */
   runTaskWorkflow: (
     task: SelectedTask,
-    ctx: { handoff: string; contextMd: string; rejectionFeedback?: undefined },
+    ctx: { handoff: string; contextMd: string; rejectionFeedback?: GateRejectionFeedback },
   ) => Promise<TaskEvidence>;
 
   // --- closeout effects ---
@@ -123,8 +148,11 @@ export interface OrchestrationDeps {
   curateContext: (current: string, evidence: TaskEvidence) => ContextUpdate;
   writeContextMd: (content: string) => Promise<void>;
   writeTasksMd: (content: string) => Promise<void>;
-  runCloseoutChecks: (task: SelectedTask) => Promise<boolean>;
+  runCloseoutChecks: (task: SelectedTask) => Promise<CloseoutCheckResult>;
   commitCloseout: (task: SelectedTask) => Promise<CloseoutCommit>;
+  /** Optional best-effort WIP preservation commit when closeout repair exhausts.
+   *  Returns null when there is nothing to commit or the commit fails. */
+  commitWip?: (task: SelectedTask) => Promise<CloseoutCommit | null>;
   verifyCleanWorktree: () => Promise<boolean>;
 
   // --- finalizer ---
@@ -196,47 +224,48 @@ export async function runProjectOrchestration(
 
     const spec = await deps.readSpec();
     const assembled = assembleTaskContext({ task, contextMd, spec });
-    const evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd);
-    const cancelledAfterWorkflow = cancellationResult(deps, task);
-    if (cancelledAfterWorkflow) return cancelledAfterWorkflow;
+    let evidence = await runTaskWorkflow(deps, task, assembled.handoff, contextMd, 1);
+    // Sentinel only for definite assignment — every loop path assigns or returns.
+    let closeout: CloseoutResult = { kind: 'blocked', reason: 'closeout not attempted' };
+    for (let attempt = 1; attempt <= 1 + CLOSEOUT_REPAIR_CAP; attempt++) {
+      const cancelledAfterWorkflow = cancellationResult(deps, task);
+      if (cancelledAfterWorkflow) return cancelledAfterWorkflow;
 
-    if (evidence.outcome !== 'ready-for-closeout') {
-      if (hasNonReversibleSevereTerminalFinding(evidence)) {
-        const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
-          missingWriter: 'ok',
-        });
-        if (terminalBugRecording.kind === 'blocked') {
-          return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
-        }
-        return buildFindingHold(
-          deps,
-          evidence.blockedReason ??
-            evidence.failureReason ??
-            'non-reversible high/critical terminal finding must hold the branch',
-          taskRecords,
-        );
+      if (evidence.outcome !== 'ready-for-closeout') {
+        return resolveNonCloseoutEvidence(deps, task, evidence, taskRecords);
       }
-      if (isOperationalTerminal(evidence)) {
+
+      // --- Rune-owned closeout ---
+      closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
+      if (closeout.kind === 'ok' || closeout.closeoutFailure === undefined) break;
+      if (attempt === 1 + CLOSEOUT_REPAIR_CAP) break; // repair budget exhausted
+      // Bounded coder repair: a failed check persists nothing (the check runs
+      // before the context/tick writes), so re-running the workflow with the
+      // failing validation output as gate feedback and re-entering closeout
+      // fresh needs no rollback.
+      evidence = await runTaskWorkflow(
+        deps,
+        task,
+        assembled.handoff,
+        contextMd,
+        attempt + 1,
+        buildCloseoutRepairFeedback(closeout.closeoutFailure),
+      );
+    }
+    if (closeout.kind === 'blocked') {
+      if (closeout.closeoutFailure !== undefined) {
+        // Preserve the work BEFORE the terminal: a held run keeps branch and
+        // worktree, and the WIP commit survives even a later manual worktree
+        // cleanup — the resume path checks the branch tip back out.
+        const wip = await commitWipSafely(deps, task);
+        const attempts = 1 + CLOSEOUT_REPAIR_CAP;
         return buildOperationalHold(
           deps,
-          evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
+          wip === null
+            ? `closeout checks failed after ${attempts} attempts`
+            : `closeout checks failed after ${attempts} attempts; WIP preserved as ${wip.sha.slice(0, 7)}`,
           taskRecords,
         );
-      }
-      const parked = maybeParkedRun(deps, evidence);
-      return {
-        kind: 'blocked',
-        reason: evidence.blockedReason ?? evidence.failureReason ?? 'task did not reach closeout',
-        task,
-        ...(parked !== undefined ? { parked } : {}),
-      };
-    }
-
-    // --- Rune-owned closeout ---
-    const closeout = await performCloseout(deps, task, tasksMd, contextMd, evidence);
-    if (closeout.kind === 'blocked') {
-      if (closeout.reason === 'closeout checks failed') {
-        return { kind: 'blocked', reason: closeout.reason, task };
       }
       return buildOperationalHold(deps, closeout.reason, taskRecords);
     }
@@ -307,22 +336,25 @@ function cancellationResult(
   };
 }
 
-/** Run one task through the workflow once. The workflow owns the per-task
- * convergence loop internally; the orchestrator never re-invokes the whole
- * workflow for an already-terminal task evidence result. */
+/** Run one task through the workflow. The workflow owns the per-task
+ * convergence loop internally; the orchestrator re-invokes the whole workflow
+ * ONLY for closeout-check repair (bounded by CLOSEOUT_REPAIR_CAP), threading
+ * the failing validation output back as gate feedback. */
 async function runTaskWorkflow(
   deps: OrchestrationDeps,
   task: SelectedTask,
   handoff: string,
   contextMd: string,
+  attemptNumber: number,
+  rejectionFeedback?: GateRejectionFeedback,
 ): Promise<TaskEvidence> {
-  emitAttemptStart(deps, task, 1);
-  return deps.runTaskWorkflow(task, { handoff, contextMd, rejectionFeedback: undefined });
+  emitAttemptStart(deps, task, attemptNumber);
+  return deps.runTaskWorkflow(task, { handoff, contextMd, rejectionFeedback });
 }
 
 type CloseoutResult =
   | { kind: 'ok'; commitSha: string; tasksMd: string }
-  | { kind: 'blocked'; reason: string };
+  | { kind: 'blocked'; reason: string; closeoutFailure?: CloseoutCheckFailure };
 
 /** Perform the closeout sequence for one passed task. The order keeps the branch
  *  finalizer-ready: compute context/tick → closeout checks → persist context
@@ -352,8 +384,9 @@ async function performCloseout(
 
   // 3. Task-scoped closeout checks. Run these before persisting the tick so a
   // validation failure leaves the task visibly unchecked in the live worktree.
-  if (!(await deps.runCloseoutChecks(task))) {
-    return { kind: 'blocked', reason: 'closeout checks failed' };
+  const checks = await deps.runCloseoutChecks(task);
+  if (!checks.ok) {
+    return { kind: 'blocked', reason: 'closeout checks failed', closeoutFailure: checks.failure };
   }
 
   // Both transforms succeeded and validation passed → persist them together
@@ -620,6 +653,83 @@ function acceptanceField(
 function isOperationalTerminal(evidence: TaskEvidence): boolean {
   const reason = evidence.blockedReason ?? evidence.failureReason ?? '';
   return /\boperational\b|malformed|unparseable/i.test(reason);
+}
+
+/** Terminal routing for task evidence that did not reach ready-for-closeout:
+ *  non-reversible severe finding → finding hold; operational failure →
+ *  operational hold; anything else → plain blocked (no per-task park). */
+async function resolveNonCloseoutEvidence(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+  evidence: TaskEvidence,
+  taskRecords: TaskRunRecord[],
+): Promise<OrchestrationResult> {
+  if (hasNonReversibleSevereTerminalFinding(evidence)) {
+    const terminalBugRecording = await recordTerminalBugs(deps, evidence, {
+      missingWriter: 'ok',
+    });
+    if (terminalBugRecording.kind === 'blocked') {
+      return buildOperationalHold(deps, terminalBugRecording.reason, taskRecords);
+    }
+    return buildFindingHold(
+      deps,
+      evidence.blockedReason ??
+        evidence.failureReason ??
+        'non-reversible high/critical terminal finding must hold the branch',
+      taskRecords,
+    );
+  }
+  if (isOperationalTerminal(evidence)) {
+    return buildOperationalHold(
+      deps,
+      evidence.blockedReason ?? evidence.failureReason ?? 'operational task failure',
+      taskRecords,
+    );
+  }
+  const parked = maybeParkedRun(deps, evidence);
+  return {
+    kind: 'blocked',
+    reason: evidence.blockedReason ?? evidence.failureReason ?? 'task did not reach closeout',
+    task,
+    ...(parked !== undefined ? { parked } : {}),
+  };
+}
+
+/** Included prompt tail is bounded; the FULL tail is already persisted to
+ *  closeout-validation-failure.txt by the runner adapter. Keep-the-end. */
+const CLOSEOUT_FEEDBACK_TAIL_CHARS = 4_000;
+
+/** The closeout gate is the product validation suite — QA's artifact domain —
+ *  so the repair feedback is qa-attributed; the reason self-describes as
+ *  closeout validation so it cannot read as an AI-role verdict. Routed to the
+ *  coder via rejectedRole = counterpartRole. */
+function buildCloseoutRepairFeedback(failure: CloseoutCheckFailure): GateRejectionFeedback {
+  const outcome = failure.timedOut ? 'timed out' : `exited ${failure.exitCode ?? 'unknown'}`;
+  const tail = failure.outputTail.slice(-CLOSEOUT_FEEDBACK_TAIL_CHARS).trim();
+  return buildGateRejectionFeedback({
+    rejectingRole: 'qa',
+    counterpartRole: 'coder',
+    artifact: 'implementation-diff',
+    reason:
+      `closeout validation failed: \`${failure.command}\` ${outcome}.` +
+      (tail !== '' ? `\nFailing output tail:\n${tail}` : ''),
+    actionableNotes: [
+      `Re-run \`${failure.command}\` from the worktree root and drive it green before handing back.`,
+      'Fix the implementation — do not delete or weaken a failing test without a TEST-REMOVED justification.',
+    ],
+  });
+}
+
+async function commitWipSafely(
+  deps: OrchestrationDeps,
+  task: SelectedTask,
+): Promise<CloseoutCommit | null> {
+  if (deps.commitWip === undefined) return null;
+  try {
+    return await deps.commitWip(task);
+  } catch {
+    return null; // preservation is best-effort; the hold itself must land
+  }
 }
 
 function buildOperationalHold(

@@ -485,7 +485,7 @@ function buildOrchestrationDeps(args: {
         sandbox.worktree,
         config.WORK_RUN_GATE_COMMAND_TIMEOUT_MS,
       );
-      if (validation.ok) return true;
+      if (validation.ok) return { ok: true };
       const scrub = (text: string): string => redactSecrets(scrubAbsolutePaths(scrubPathsInText(text)));
       const command = scrub(validation.command);
       const outputTail = scrub(validation.result.outputTail);
@@ -531,7 +531,17 @@ function buildOrchestrationDeps(args: {
           line: `closeout validation failed: ${command} (${outcome}) — output tail saved to ${CLOSEOUT_VALIDATION_FAILURE_FILE}`,
         },
       });
-      return false;
+      // Already-scrubbed payload — the orchestrator threads it into the coder
+      // repair prompt (cross-provider) and the exhaustion hold reason.
+      return {
+        ok: false,
+        failure: {
+          command,
+          exitCode: validation.result.exitCode,
+          timedOut: validation.result.timedOut,
+          outputTail,
+        },
+      };
     },
 
     commitCloseout: async (task: SelectedTask): Promise<CloseoutCommit> => {
@@ -544,6 +554,37 @@ function buildOrchestrationDeps(args: {
       await runGit(['commit', '-m', message], { cwd });
       const { stdout } = await runGit(['rev-parse', 'HEAD'], { cwd });
       return { sha: stdout.trim(), subject: message };
+    },
+    // Best-effort WIP preservation when the closeout repair loop exhausts: the
+    // held run keeps branch + worktree, but only a commit on the stable branch
+    // survives a later manual worktree cleanup and is what the resume path
+    // checks back out. Null (nothing to commit / commit failed) never blocks
+    // the hold.
+    commitWip: async (task: SelectedTask): Promise<CloseoutCommit | null> => {
+      const message = `rune(${product}): WIP — closeout blocked — ${task.text}`.slice(0, 200);
+      try {
+        const { stdout } = await runGit(['status', '--porcelain'], { cwd });
+        if (stdout.trim() === '') return null; // nothing to preserve
+        await runGit(['add', '-A'], { cwd });
+        await runGit(['commit', '-m', message], { cwd });
+        const { stdout: sha } = await runGit(['rev-parse', 'HEAD'], { cwd });
+        args.emit?.({
+          kind: 'activity',
+          data: {
+            event: 'closeout-wip-commit',
+            taskId: task.id,
+            commitSha: sha.trim(),
+            line: `WIP preserved for ${task.text}: ${sha.trim().slice(0, 7)}`,
+          },
+        });
+        return { sha: sha.trim(), subject: message };
+      } catch (err) {
+        log.warn('orchestrated-work-runner: WIP commit failed', {
+          id: descriptor.id,
+          error: (err as Error).message,
+        });
+        return null;
+      }
     },
     verifyCleanWorktree: async (): Promise<boolean> => {
       const { stdout } = await runGit(['status', '--porcelain'], { cwd });
