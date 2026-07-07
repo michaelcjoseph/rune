@@ -147,6 +147,13 @@ export function mountMcpRoute(opts?: McpTransportOpts): McpRouteHandler {
       if (sessionId !== undefined) {
         const transport = transports.get(sessionId);
         if (!transport) {
+          // Expected after a daemon restart (sessions are process-local; the
+          // client re-initializes on the next call) — but log it, because a
+          // silent 404 here surfaces client-side as an opaque tool failure.
+          log.warn('Unknown MCP session rejected', {
+            sessionId: sessionId.slice(0, 8),
+            method: req.method ?? 'unknown',
+          });
           reject(res, 404, 'Unknown MCP session');
           return true;
         }
