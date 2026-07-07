@@ -8,6 +8,7 @@ const LATENCY_WINDOW_SIZE = 1_024;
  *  wins over the env var for that tool only. */
 const TOOL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
   generate_workout: 240_000,
+  kb_query: 180_000,
 };
 
 export interface McpToolLatencySnapshot {

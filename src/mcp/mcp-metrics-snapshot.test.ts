@@ -15,6 +15,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 const queryKBMock = vi.hoisted(() => vi.fn());
+const ingestSourceMock = vi.hoisted(() => vi.fn());
 const searchVaultMock = vi.hoisted(() => vi.fn());
 const queryVaultIndexMock = vi.hoisted(() => vi.fn());
 const getVaultIndexStatusMock = vi.hoisted(() => vi.fn());
@@ -22,7 +23,7 @@ const getVaultIndexStatusMock = vi.hoisted(() => vi.fn());
 vi.mock('../kb/engine.js', () => ({
   initKB: vi.fn(),
   queryKB: queryKBMock,
-  ingestSource: vi.fn().mockResolvedValue({ output: 'ok', success: true }),
+  ingestSource: ingestSourceMock,
   lintKB: vi.fn().mockResolvedValue({ report: 'ok', success: true }),
   getKBStats: vi.fn().mockReturnValue({
     totalPages: 0,
@@ -180,6 +181,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env['RUNE_MCP_TOOL_TIMEOUT_MS'] = '5';
   queryKBMock.mockResolvedValue({ answer: 'mocked answer', success: true });
+  ingestSourceMock.mockResolvedValue({ output: 'ok', success: true });
   searchVaultMock.mockReturnValue([]);
   queryVaultIndexMock.mockReturnValue([]);
   setReadyWarmIndexStatus();
@@ -325,28 +327,59 @@ describe('mcp_metrics_snapshot MCP tool', () => {
 
   it('counts a call exceeding RUNE_MCP_TOOL_TIMEOUT_MS as both an error and a timeout', async () => {
     const factory = await loadFactory();
+    const server = requireServerWithTools(factory, ['kb_ingest', 'mcp_metrics_snapshot']);
+    const client = await connectClient(server);
+
+    try {
+      ingestSourceMock.mockImplementationOnce(
+        () => new Promise((resolve) => {
+          setTimeout(() => resolve({ output: 'late ingest', success: true }), 20);
+        }),
+      );
+
+      const timedOut = await client.callTool({
+        name: 'kb_ingest',
+        arguments: { sourcePath: 'library/slow-source.md' },
+      });
+
+      expect(timedOut.isError).toBe(true);
+      const snapshot = await readMetrics(client);
+      const kbIngestMetrics = requireToolMetrics(snapshot, 'kb_ingest');
+      expect(kbIngestMetrics).toMatchObject({
+        calls: 1,
+        errors: 1,
+        timeouts: 1,
+      });
+      expectLatencyShape(kbIngestMetrics);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('kb_query outlives a shorter RUNE_MCP_TOOL_TIMEOUT_MS via its TOOL_TIMEOUT_OVERRIDES_MS entry', async () => {
+    const factory = await loadFactory();
     const server = requireServerWithTools(factory, ['kb_query', 'mcp_metrics_snapshot']);
     const client = await connectClient(server);
 
     try {
       queryKBMock.mockImplementationOnce(
         () => new Promise((resolve) => {
-          setTimeout(() => resolve({ answer: 'late answer', success: true }), 20);
+          setTimeout(() => resolve({ answer: 'slow but real answer', success: true }), 20);
         }),
       );
 
-      const timedOut = await client.callTool({
+      const result = await client.callTool({
         name: 'kb_query',
         arguments: { question: 'slow call' },
       });
 
-      expect(timedOut.isError).toBe(true);
+      expect(result.isError).toBeFalsy();
       const snapshot = await readMetrics(client);
       const kbQueryMetrics = requireToolMetrics(snapshot, 'kb_query');
       expect(kbQueryMetrics).toMatchObject({
         calls: 1,
-        errors: 1,
-        timeouts: 1,
+        errors: 0,
+        timeouts: 0,
       });
       expectLatencyShape(kbQueryMetrics);
     } finally {
