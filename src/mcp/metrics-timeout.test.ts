@@ -4,9 +4,9 @@
  *
  * The override map (TOOL_TIMEOUT_OVERRIDES_MS) is module-private, so these
  * tests pin its behavior through instrumentMcpTool with fake timers: a tool
- * with an override (generate_workout → 240s) must survive both the 30s
- * global default and any RUNE_MCP_TOOL_TIMEOUT_MS env value, while every
- * other tool still times out at the global/env value.
+ * with an override (generate_workout → 240s, kb_query → 180s) must survive
+ * both the 30s global default and any RUNE_MCP_TOOL_TIMEOUT_MS env value,
+ * while every other tool still times out at the global/env value.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +15,7 @@ import { getMcpMetricsSnapshot, instrumentMcpTool } from './metrics.js';
 
 const GLOBAL_DEFAULT_MS = 30_000;
 const GENERATE_WORKOUT_OVERRIDE_MS = 240_000;
+const KB_QUERY_OVERRIDE_MS = 180_000;
 
 const ORIGINAL_ENV_TIMEOUT = process.env['RUNE_MCP_TOOL_TIMEOUT_MS'];
 
@@ -113,9 +114,52 @@ describe('per-tool timeout override (generate_workout)', () => {
   });
 });
 
+describe('per-tool timeout override (kb_query — spawns the kb-query agent)', () => {
+  it('does NOT time out at the 30s global default, but does at 180s with an isError result', async () => {
+    const wrapped = instrumentMcpTool('kb_query', neverSettles);
+    const call = startTracked(wrapped());
+
+    await vi.advanceTimersByTimeAsync(GLOBAL_DEFAULT_MS);
+    expect(call.isSettled()).toBe(false);
+
+    // A comfortable margin past the default, still under the override.
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(call.isSettled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(KB_QUERY_OVERRIDE_MS - GLOBAL_DEFAULT_MS - 100_000);
+    const result = await call.promise;
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(`timed out after ${KB_QUERY_OVERRIDE_MS}ms`);
+
+    const metrics = getMcpMetricsSnapshot().tools['kb_query'];
+    expect(metrics).toBeDefined();
+    expect(metrics!.timeouts).toBeGreaterThanOrEqual(1);
+    expect(metrics!.errors).toBeGreaterThanOrEqual(1);
+  });
+
+  it('wins over a shorter RUNE_MCP_TOOL_TIMEOUT_MS env value', async () => {
+    process.env['RUNE_MCP_TOOL_TIMEOUT_MS'] = '50';
+
+    const wrapped = instrumentMcpTool('kb_query', neverSettles);
+    const call = startTracked(wrapped());
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(call.isSettled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(GLOBAL_DEFAULT_MS);
+    expect(call.isSettled()).toBe(false);
+
+    // Drain the override timer so the test leaves no dangling fake timer.
+    await vi.advanceTimersByTimeAsync(KB_QUERY_OVERRIDE_MS);
+    const result = await call.promise;
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain(`timed out after ${KB_QUERY_OVERRIDE_MS}ms`);
+  });
+});
+
 describe('non-overridden tools keep the global/env timeout', () => {
   it('a different tool name times out at the 30s global default', async () => {
-    const wrapped = instrumentMcpTool('kb_query', neverSettles);
+    const wrapped = instrumentMcpTool('vault_search', neverSettles);
     const call = startTracked(wrapped());
 
     await vi.advanceTimersByTimeAsync(GLOBAL_DEFAULT_MS - 1);
@@ -127,7 +171,7 @@ describe('non-overridden tools keep the global/env timeout', () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(`timed out after ${GLOBAL_DEFAULT_MS}ms`);
 
-    const metrics = getMcpMetricsSnapshot().tools['kb_query'];
+    const metrics = getMcpMetricsSnapshot().tools['vault_search'];
     expect(metrics).toBeDefined();
     expect(metrics!.timeouts).toBeGreaterThanOrEqual(1);
   });

@@ -10,11 +10,13 @@ vi.mock('../vault/files.js', () => ({ readVaultFile: vi.fn() }));
 
 const { runAgent } = await import('../ai/claude.js');
 const { searchVault, searchWithFilter } = await import('./search.js');
+const { readVaultFile } = await import('../vault/files.js');
 const { queryKB } = await import('./query.js');
 
 const agentMock = runAgent as unknown as ReturnType<typeof vi.fn>;
 const searchMock = searchVault as unknown as ReturnType<typeof vi.fn>;
 const filterMock = searchWithFilter as unknown as ReturnType<typeof vi.fn>;
+const vaultFileMock = readVaultFile as unknown as ReturnType<typeof vi.fn>;
 
 type QueryKBWithDeps = (
   question: string,
@@ -23,6 +25,7 @@ type QueryKBWithDeps = (
       query: string,
       options?: { directory?: string; maxResults?: number },
     ) => Array<{ file: string; line: number; content: string }>;
+    agentTimeoutMs?: number;
   },
 ) => Promise<{ success: boolean; answer: string }>;
 
@@ -44,8 +47,29 @@ describe('kb/query', () => {
     agentMock.mockResolvedValue({ text: 'answer', error: null });
 
     await queryKB('test query');
-    expect(searchMock).toHaveBeenCalledWith('test query', { maxResults: 10 });
+    expect(searchMock).toHaveBeenCalledWith('test|query', { maxResults: 10 });
     expect(agentMock).toHaveBeenCalledWith('kb-query', expect.stringContaining('relevant'), undefined, undefined, true);
+  });
+
+  it('searches with a stopword-stripped term alternation, not the raw question', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('Who is Paul Graham and what does he know about startups?');
+
+    expect(filterMock).toHaveBeenCalledWith('paul|graham|startups', { type: 'entity' }, { maxResults: 10 });
+    expect(searchMock).toHaveBeenCalledWith('paul|graham|startups', { maxResults: 10 });
+  });
+
+  it('falls back to the raw question when only stopwords remain', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('who is it?');
+
+    expect(searchMock).toHaveBeenCalledWith('who is it?', { maxResults: 10 });
   });
 
   it('uses an injected broad vault search provider for daemon warm-index routing', async () => {
@@ -60,11 +84,182 @@ describe('kb/query', () => {
       searchVault: injectedBroadSearch,
     });
 
-    expect(injectedBroadSearch).toHaveBeenCalledWith('daemon broad topic', { maxResults: 10 });
+    expect(injectedBroadSearch).toHaveBeenCalledWith('daemon|broad|topic', { maxResults: 10 });
     expect(searchMock).not.toHaveBeenCalled();
     const prompt = agentMock.mock.calls[0]?.[1] as string;
     expect(prompt).toContain('WARM_DAEMON_CONTEXT');
     expect(prompt).not.toContain('COLD_CONTEXT');
+  });
+
+  it('injects index-row summaries and pre-fetched page bodies for the candidates', async () => {
+    filterMock.mockReturnValue([
+      { file: 'knowledge/wiki/entities/test-page.md', line: 3, content: 'first matched line' },
+      { file: 'knowledge/wiki/entities/test-page.md', line: 9, content: 'second matched line' },
+      { file: 'knowledge/wiki/concepts/other-page.md', line: 1, content: 'other matched line' },
+    ]);
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/index.md') {
+        return '# Knowledge Base Index\n\n## Entities\n\n- [[test-page]] — a short summary of the test page\n\n## Concepts\n\n- [[unrelated-page]] — should not appear\n';
+      }
+      if (path === 'knowledge/wiki/entities/test-page.md') return 'TEST_PAGE_BODY full content';
+      if (path === 'knowledge/wiki/concepts/other-page.md') return 'OTHER_PAGE_BODY details';
+      return null;
+    });
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('candidate question');
+
+    expect(vaultFileMock).toHaveBeenCalledWith('knowledge/index.md');
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('Pre-resolved candidate wiki pages');
+    expect(prompt).toContain('- [[test-page]] (knowledge/wiki/entities/test-page.md) — a short summary of the test page');
+    expect(prompt).toContain('- [[other-page]] (knowledge/wiki/concepts/other-page.md)');
+    expect(prompt).toContain('match: "first matched line"');
+    expect(prompt).toContain('match: "second matched line"');
+    expect(prompt).not.toContain('should not appear');
+    expect(prompt).toContain('=== knowledge/wiki/entities/test-page.md ([[test-page]]) ===');
+    expect(prompt).toContain('TEST_PAGE_BODY full content');
+    expect(prompt).toContain('OTHER_PAGE_BODY details');
+    // Single-pass synthesis instructions replaced the agent-side retrieval workflow.
+    expect(prompt).toContain('you have no tools');
+    expect(prompt).not.toContain('Read knowledge/index.md to find relevant wiki pages');
+    expect(prompt).not.toContain('Search the vault with grep');
+  });
+
+  it('caps each pre-fetched body and stops at the page limit', async () => {
+    filterMock.mockReturnValue(
+      Array.from({ length: 10 }, (_, i) => ({
+        file: `knowledge/wiki/topics/page-${i}.md`,
+        line: 1,
+        content: `hit ${i}`,
+      })),
+    );
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/index.md') return null;
+      if (path === 'knowledge/wiki/topics/page-0.md') return `${'B'.repeat(8_000)}BEYOND_PAGE_CAP`;
+      if (path.startsWith('knowledge/wiki/topics/page-')) return `BODY_OF_${path}`;
+      return null;
+    });
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('many candidates');
+
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('[page body truncated]');
+    expect(prompt).not.toContain('BEYOND_PAGE_CAP');
+    expect(prompt).toContain('BODY_OF_knowledge/wiki/topics/page-7.md');
+    expect(prompt).not.toContain('BODY_OF_knowledge/wiki/topics/page-8.md');
+    // Un-fetched pages remain listed as candidates.
+    expect(prompt).toContain('- [[page-8]] (knowledge/wiki/topics/page-8.md)');
+  });
+
+  it('stops pre-fetching bodies when the total budget is exhausted', async () => {
+    filterMock.mockReturnValue(
+      Array.from({ length: 8 }, (_, i) => ({
+        file: `knowledge/wiki/topics/big-${i}.md`,
+        line: 1,
+        content: `hit ${i}`,
+      })),
+    );
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockImplementation((path: string) => {
+      if (path === 'knowledge/index.md') return null;
+      return 'C'.repeat(8_000); // six of these exhaust the 48k total budget
+    });
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('big pages');
+
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('=== knowledge/wiki/topics/big-5.md');
+    expect(prompt).not.toContain('=== knowledge/wiki/topics/big-6.md');
+  });
+
+  it('lists a candidate without a body when its page read fails', async () => {
+    filterMock.mockReturnValue([
+      { file: 'knowledge/wiki/entities/ghost.md', line: 1, content: 'ghost hit' },
+    ]);
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockImplementation(() => {
+      throw new Error('read failed');
+    });
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    const result = await queryKB('ghost question');
+
+    expect(result.success).toBe(true);
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('- [[ghost]] (knowledge/wiki/entities/ghost.md)');
+    expect(prompt).not.toContain('Pre-fetched wiki page bodies');
+  });
+
+  it('kb-query SOUL declares the tool-less frontmatter the single-pass prompt promises', async () => {
+    // The prompt tells the agent "you have no tools" — pin the real SOUL file
+    // so a future edit can't silently restore retrieval tools.
+    const { readFileSync } = await import('node:fs');
+    const soul = readFileSync(new URL('../../.claude/agents/kb-query.md', import.meta.url), 'utf8');
+    const frontmatter = soul.split('---')[1] ?? '';
+    expect(frontmatter).toMatch(/^tools: \[\]$/m);
+  });
+
+  it('falls back to a bounded index excerpt when the deterministic search finds nothing', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockReturnValue('## Entities\n- [[INDEX_EXCERPT_MARKER]] — visible in fallback\n');
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('no candidates question');
+
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('No candidate pages were pre-resolved');
+    expect(prompt).toContain('INDEX_EXCERPT_MARKER');
+    expect(prompt).not.toContain('[index excerpt truncated]');
+  });
+
+  it('truncates the fallback index excerpt at the cap', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockReturnValue(`${'A'.repeat(20_000)}ZZZ_BEYOND_CAP`);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await queryKB('huge index question');
+
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('[index excerpt truncated]');
+    expect(prompt).not.toContain('ZZZ_BEYOND_CAP');
+  });
+
+  it('still succeeds when the index is unreadable', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    vaultFileMock.mockImplementation(() => {
+      throw new Error('index read failed');
+    });
+    agentMock.mockResolvedValue({ text: 'answer without index', error: null });
+
+    const result = await queryKB('degraded question');
+
+    expect(result).toEqual({ success: true, answer: 'answer without index' });
+    const prompt = agentMock.mock.calls[0]?.[1] as string;
+    expect(prompt).not.toContain('No candidate pages were pre-resolved');
+  });
+
+  it('threads deps.agentTimeoutMs to runAgent as its timeout arg', async () => {
+    filterMock.mockReturnValue([]);
+    searchMock.mockReturnValue([]);
+    agentMock.mockResolvedValue({ text: 'answer', error: null });
+
+    await (queryKB as QueryKBWithDeps)('bounded question', { agentTimeoutMs: 150_000 });
+
+    expect(agentMock).toHaveBeenCalledWith(
+      'kb-query',
+      expect.any(String),
+      150_000,
+      undefined,
+      true,
+    );
   });
 
   it('infers entity type filter for "who is" questions', async () => {
@@ -74,7 +269,7 @@ describe('kb/query', () => {
 
     await queryKB('who is Vitalik Buterin?');
     expect(filterMock).toHaveBeenCalledWith(
-      'who is Vitalik Buterin?',
+      'vitalik|buterin',
       { type: 'entity' },
       { maxResults: 10 },
     );

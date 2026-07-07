@@ -644,6 +644,31 @@ Body.`);
       const def = loadAgentDef('trigger-test');
       expect(def.triggers).toEqual(['double quoted', 'single quoted', 'unquoted trigger']);
     });
+
+    it('flags an inline empty tools list (tools: []) as an explicitly tool-less agent', async () => {
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: toolless-agent
+tools: []
+---
+
+Synthesis only.`);
+      const def = loadAgentDef('toolless-agent');
+      expect(def.tools).toEqual([]);
+      expect(def.noTools).toBe(true);
+    });
+
+    it('does NOT flag an omitted tools field as tool-less', async () => {
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: no-tools-key
+---
+
+Body.`);
+      const def = loadAgentDef('no-tools-key');
+      expect(def.tools).toEqual([]);
+      expect(def.noTools).toBeUndefined();
+    });
   });
 
   describe('runAgent', () => {
@@ -682,6 +707,28 @@ Body.`);
       expect(prompt).toContain('do stuff');
 
       expect(result.text).toBe('agent result');
+    });
+
+    it('embeds tools: [] in the agents JSON and omits --allowedTools for a tool-less agent', async () => {
+      const readFileMock = readFileSync as unknown as ReturnType<typeof vi.fn>;
+      readFileMock.mockImplementationOnce(() => `---
+name: toolless-runner
+description: "synthesis-only test agent"
+model: sonnet
+tools: []
+---
+
+Synthesize from provided context only.`);
+      spawnMock.mockReturnValue(createChild({ stdout: streamResultLine('ok') }));
+      await runAgent('toolless-runner', 'question');
+
+      const args = spawnMock.mock.calls[0]![1] as string[];
+      const agentsJson = JSON.parse(args[args.indexOf('--agents') + 1]!);
+      // The empty tools list must ride inside the agents JSON — that is what
+      // strips the subagent's toolset (effective under skip-permissions),
+      // unlike --allowedTools, which must be absent.
+      expect(agentsJson['toolless-runner'].tools).toEqual([]);
+      expect(args).not.toContain('--allowedTools');
     });
 
     it('passes the frontmatter model: as an explicit pin through the policy resolver', async () => {

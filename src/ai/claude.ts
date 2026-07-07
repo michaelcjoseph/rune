@@ -679,6 +679,13 @@ export async function askHaikuOneShot(prompt: string, timeoutMs?: number): Promi
 export interface AgentDef {
   prompt: string;
   tools: string[];
+  /** True when the frontmatter declares the inline form `tools: []` — an
+   *  explicitly TOOL-LESS agent (single-pass synthesis, no retrieval). The
+   *  empty list is forwarded inside the --agents JSON, which strips every
+   *  tool from the subagent at the availability level (effective even under
+   *  --dangerously-skip-permissions). Distinct from an OMITTED tools field,
+   *  which leaves the CLI's default toolset. */
+  noTools?: boolean;
   /** Claude model override for this agent (e.g. 'sonnet', 'haiku'). When set,
    *  takes precedence over config.AGENT_MODEL so individual agents can opt into
    *  a lighter or more instruction-following model without a global setting change. */
@@ -739,6 +746,9 @@ export function loadAgentDef(agentName: string): AgentDef {
 
   // Parse tools from frontmatter (simple YAML list extraction)
   const tools = parseYamlListField(frontmatter, 'tools');
+  // Inline `tools: []` (which the block-list parser can't see and the scalar
+  // parser reads as the literal string "[]") declares a tool-less agent.
+  const noTools = tools.length === 0 && parseYamlScalarField(frontmatter, 'tools') === '[]';
   const triggers = parseYamlListField(frontmatter, 'triggers');
 
   const model = parseYamlScalarField(frontmatter, 'model');
@@ -751,6 +761,7 @@ export function loadAgentDef(agentName: string): AgentDef {
   const def: AgentDef = {
     prompt: body,
     tools,
+    ...(noTools ? { noTools } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(cron !== undefined ? { cron } : {}),
@@ -858,7 +869,10 @@ export async function runAgent(agentName: string, prompt: string, timeoutMs?: nu
   // which makes `--agent <name>` fall through to filesystem discovery and fail
   // ("Available agents: ..."). Always send a description (frontmatter value, or
   // the agent name as a stub) so the inline definition actually registers.
-  const agentsJson = JSON.stringify({ [agentName]: { description: def.description ?? agentName, prompt: def.prompt } });
+  // A `tools: []` frontmatter (def.noTools) rides inside the agents JSON: the
+  // CLI strips every tool from a subagent whose inline definition carries an
+  // empty tools list, making the run a single synthesis pass.
+  const agentsJson = JSON.stringify({ [agentName]: { description: def.description ?? agentName, prompt: def.prompt, ...(def.noTools ? { tools: [] } : {}) } });
   // Both builders go through readVaultFile, which swallows read errors and
   // returns null — they each return '' on missing/empty. No try/catch needed.
   const learningsBlock = buildLearningsPrompt();
