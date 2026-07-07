@@ -1406,6 +1406,8 @@ body[data-view="product"] #product-root {
 .pill-inprogress { background: var(--info-bg); color: var(--accent); }
 .pill-spec { background: var(--bg3); color: var(--text2); }
 .pill-default { background: var(--bg3); color: var(--text2); }
+.pill-failed { background: var(--error-bg); color: var(--error); }
+.pill-warn { background: var(--warning-bg); color: var(--warning); }
 
 /* Cockpit panel (product/project registry view) */
 #cockpit-content { display: flex; flex-direction: column; gap: .5rem; }
